@@ -439,39 +439,6 @@ function sectionMergePayload(values) {
   };
 }
 
-function shellQuote(value) {
-  return `'${String(value).replaceAll("'", `'"'"'`)}'`;
-}
-
-function bridgeProposalCommand(dataset, values) {
-  const sectionKey = String(dataset.sectionKey || "").trim();
-  if (!LOGICAL_SESSION_PATTERN.test(sectionKey)) throw new Error("section_key_must_be_a_safe_logical_identifier");
-  const proposalKind = String(values.proposalKind || "");
-  if (!new Set(["proposal", "delivery"]).has(proposalKind)) throw new Error("invalid_agent_proposal_kind");
-  const fields = {
-    paperId: canonicalUuid(dataset.paperId, "paper_id"),
-    workItemId: canonicalUuid(values.workItemId, "work_item_id"),
-    parentRevisionId: canonicalUuid(dataset.parentRevisionId, "parent_revision_id"),
-    artifactManifestId: canonicalUuid(values.artifactManifestId, "artifact_manifest_id"),
-    artifactManifestHash: canonicalDigest(values.artifactManifestHash, "artifact_manifest_hash"),
-    payloadHash: canonicalDigest(values.payloadHash, "payload_hash")
-  };
-  canonicalUuid(dataset.bindingId, "binding_id");
-  if (!String(dataset.agentId || "").trim()) throw new Error("agent_id_is_required");
-  return [
-    "node tools/paper-raid-agent-bridge/src/cli.mjs submit-proposal",
-    "  --config paper-raid-agent-bridge.local.json",
-    `  --paper-id ${shellQuote(fields.paperId)}`,
-    `  --work-item-id ${shellQuote(fields.workItemId)}`,
-    `  --section-key ${shellQuote(sectionKey)}`,
-    `  --parent-revision-id ${shellQuote(fields.parentRevisionId)}`,
-    `  --proposal-kind ${shellQuote(proposalKind)}`,
-    `  --payload-hash ${shellQuote(fields.payloadHash)}`,
-    `  --artifact-manifest-id ${shellQuote(fields.artifactManifestId)}`,
-    `  --artifact-manifest-hash ${shellQuote(fields.artifactManifestHash)}`
-  ].join(" \\\n");
-}
-
 function safeInteger(value, field) {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed)) throw new Error(`${field}_must_be_a_safe_integer`);
@@ -491,8 +458,23 @@ function canonicalHttpsUrl(value, field) {
 async function semanticDigest(value, field) {
   const clean = String(value || "").trim();
   if (!clean) throw new Error(`${field}_is_required`);
-  if (DIGEST_PATTERN.test(clean.toLowerCase())) return clean.toLowerCase();
   return sha256Label(new TextEncoder().encode(clean));
+}
+
+async function preserveDisclosure(form, paperId, hashField, textField) {
+  const existing = form.elements[hashField];
+  const existingHash = String(existing && existing.value || "").trim();
+  if (existingHash) return canonicalDigest(existingHash, hashField);
+  const input = form.elements[textField];
+  const plainText = String(input && input.value || "").trim();
+  if (!plainText) throw new Error(`${textField}_is_required`);
+  const mediaType = "text/plain; charset=utf-8";
+  const receipt = await uploadCasArtifact(
+    paperId,
+    new Blob([plainText], { type: mediaType }),
+    mediaType
+  );
+  return canonicalDigest(receipt.digest, hashField);
 }
 
 function selectedValues(select) {
@@ -570,6 +552,26 @@ async function runRecordPayload(values) {
   };
 }
 
+function figureLineagePayload(values) {
+  const figureKey = String(values.figureKey || "").trim();
+  if (!LOGICAL_SESSION_PATTERN.test(figureKey)) {
+    throw new Error("figure_key_must_be_a_safe_logical_identifier");
+  }
+  const runRecordIds = [...new Set(
+    values.runRecordIds.map(value => canonicalUuid(value, "run_record_id"))
+  )];
+  if (runRecordIds.length === 0 || runRecordIds.length !== values.runRecordIds.length) {
+    throw new Error("figure_lineage_requires_distinct_authoritative_runs");
+  }
+  return {
+    figure_lineage_id: uuid(),
+    figure_key: figureKey,
+    figure_manifest_id: canonicalUuid(values.figureManifestId, "figure_manifest_id"),
+    run_record_ids: runRecordIds,
+    transform_hash: canonicalDigest(values.transformHash, "transform_hash")
+  };
+}
+
 async function claimRecordPayload(values) {
   const kind = String(values.claimKind || "");
   if (!new Set(["main", "numeric", "figure", "supporting", "limitation"]).has(kind)) {
@@ -609,6 +611,8 @@ function canonicalJson(value) {
 
 const CONTRIBUTION_LEDGER_NAMESPACE = "0870ff5a-7cfb-5bf0-8511-3f08c0626152";
 const CONTRIBUTION_LEDGER_SCHEMA = "hepta.paper_raid.contribution_ledger.v1";
+const ACCEPTED_ARTIFACT_MILESTONE_XP = 100;
+const ACCEPTED_REVIEW_MILESTONE_XP = 150;
 const CREDIT_ROLES = new Set([
   "conceptualization", "data_curation", "formal_analysis", "funding_acquisition",
   "investigation", "methodology", "project_administration", "resources", "software",
@@ -654,6 +658,30 @@ function normalizedCreditRoles(values) {
   return roles.sort();
 }
 
+function normalizedContributionRefs(values, field) {
+  if (!Array.isArray(values) || values.length > 256) {
+    throw new Error(`${field}_must_contain_at_most_256_values`);
+  }
+  const refs = values.map(value => canonicalUuid(value, field)).sort();
+  if (refs.some((value, index) => index > 0 && refs[index - 1] === value)) {
+    throw new Error(`${field}_must_not_contain_duplicates`);
+  }
+  return refs;
+}
+
+function contributionRefs(node) {
+  return {
+    accepted_artifact_manifest_ids: Array.from(
+      node.querySelectorAll(".contribution-artifact-ref"),
+      reference => reference.dataset.manifestId
+    ),
+    accepted_section_review_ids: Array.from(
+      node.querySelectorAll(".contribution-review-ref"),
+      reference => reference.dataset.reviewId
+    )
+  };
+}
+
 async function contributionLedgerBudget(paperId, revisionId, authors) {
   const canonicalPaperId = canonicalUuid(paperId, "paper_id");
   const canonicalRevisionId = canonicalUuid(revisionId, "revision_id");
@@ -665,18 +693,31 @@ async function contributionLedgerBudget(paperId, revisionId, authors) {
     const playerId = canonicalUuid(author.player_id, "author_player_id");
     if (seen.has(playerId)) throw new Error("contribution_ledger_author_is_duplicated");
     seen.add(playerId);
+    const artifacts = normalizedContributionRefs(
+      author.accepted_artifact_manifest_ids,
+      "accepted_artifact_manifest_id"
+    );
+    const reviews = normalizedContributionRefs(
+      author.accepted_section_review_ids,
+      "accepted_section_review_id"
+    );
     return {
       player_id: playerId,
       credit_roles: normalizedCreditRoles(author.credit_roles),
-      accepted_artifact_manifest_ids: [],
-      accepted_section_review_ids: []
+      accepted_artifact_manifest_ids: artifacts,
+      accepted_section_review_ids: reviews
     };
   }).sort((left, right) => left.player_id < right.player_id ? -1 : left.player_id > right.player_id ? 1 : 0);
   const contributionLedgerId = await uuidV5(
     CONTRIBUTION_LEDGER_NAMESPACE,
     `${CONTRIBUTION_LEDGER_SCHEMA}\n${canonicalPaperId}\n${canonicalRevisionId}`
   );
-  const frozenEntries = requestEntries.map(entry => ({ ...entry, contribution_points: 0 }));
+  const frozenEntries = requestEntries.map(entry => ({
+    ...entry,
+    contribution_points:
+      (entry.accepted_artifact_manifest_ids.length > 0 ? ACCEPTED_ARTIFACT_MILESTONE_XP : 0) +
+      (entry.accepted_section_review_ids.length > 0 ? ACCEPTED_REVIEW_MILESTONE_XP : 0)
+  }));
   const ledgerRecord = {
     schema: CONTRIBUTION_LEDGER_SCHEMA,
     contribution_ledger_id: contributionLedgerId,
@@ -697,7 +738,8 @@ function frozenLedgerAuthors(form) {
     credit_roles: Array.from(
       author.querySelectorAll(".ledger-credit-role"),
       role => role.dataset.role
-    )
+    ),
+    ...contributionRefs(author)
   }));
   if (authors.some(author => author.credit_roles.length === 0)) {
     throw new Error("frozen_release_credit_roles_are_missing");
@@ -716,7 +758,8 @@ function promoteReleaseAuthors(form) {
       display_name: displayName,
       credit_roles: normalizedCreditRoles(
         fieldset.elements.credit_roles.value.split(",").map(value => value.trim()).filter(Boolean)
-      )
+      ),
+      ...contributionRefs(fieldset)
     };
   });
   if (authors.length < 3 || authors.length > 5 ||
@@ -742,9 +785,11 @@ function safeLogicalFilename(name, fallback) {
   return safe && safe !== "." && safe !== ".." ? safe : fallback;
 }
 
-async function uploadCasArtifact(paperId, file, mediaType) {
-  if (!file || file.size < 1 || file.size > 32 * 1024 * 1024) {
-    throw new Error("artifact_size_must_be_1_to_33554432_bytes");
+async function uploadCasArtifact(paperId, file, mediaType, allowEmpty = false) {
+  if (!file || (!allowEmpty && file.size < 1) || file.size > 32 * 1024 * 1024) {
+    throw new Error(allowEmpty
+      ? "artifact_size_must_be_0_to_33554432_bytes"
+      : "artifact_size_must_be_1_to_33554432_bytes");
   }
   const digest = await sha256Label(await file.arrayBuffer());
   const response = await mutation(
@@ -771,7 +816,12 @@ async function uploadAndRegisterManifest(values) {
   if (requiredRunIds.length === 0) throw new Error("artifact_manifest_requires_run_lineage");
   const uploaded = [];
   for (const item of values.objects) {
-    const stored = await uploadCasArtifact(values.paperId, item.file, item.mediaType);
+    const stored = await uploadCasArtifact(
+      values.paperId,
+      item.file,
+      item.mediaType,
+      item.allowEmpty === true
+    );
     uploaded.push({ ...item, stored });
   }
   const objects = uploaded
@@ -803,10 +853,12 @@ async function uploadAndRegisterManifest(values) {
     required_run_ids: requiredRunIds,
     schema: "paper-raid.artifact-bundle.v1"
   };
+  const manifestId = uuid();
+  const expectedSourceManifestSha256 = await neutralBundleRawSha256(sourceBundle);
   const payload = {
-    manifest_id: uuid(),
+    manifest_id: manifestId,
     expected_paper_version: positiveInteger(values.paperVersion, "paper_version"),
-    expected_source_manifest_sha256: await neutralBundleRawSha256(sourceBundle),
+    expected_source_manifest_sha256: expectedSourceManifestSha256,
     source_bundle: sourceBundle,
     storage_locations: objects.map(object => {
       const stored = uploaded.find(item => item.logicalPath === object.logical_path).stored;
@@ -821,7 +873,197 @@ async function uploadAndRegisterManifest(values) {
   const response = await sendCommand("register_artifact", values.paperId, null, payload);
   const result = await responseValue(response);
   if (!response.ok) throw new Error(result && result.error ? result.error : "artifact_manifest_registration_failed");
-  return result;
+  return authoritativeArtifactRegistration(result, {
+    manifestId,
+    paperId: values.paperId,
+    sourceBundleId: sourceBundle.bundle_id,
+    expectedSourceManifestSha256,
+    requiredRunIds,
+    uploaded
+  });
+}
+
+function authoritativeArtifactRegistration(result, expected) {
+  if (!result || typeof result !== "object") {
+    throw new Error("artifact_manifest_registration_receipt_is_missing");
+  }
+  const manifestId = canonicalUuid(result.manifest_id, "registered_manifest_id");
+  const paperId = canonicalUuid(result.paper_project_id, "registered_paper_id");
+  const expectedPaperId = canonicalUuid(expected.paperId, "paper_id");
+  const manifestHash = canonicalDigest(result.manifest_hash, "registered_manifest_hash");
+  const expectedManifestHash = `sha256:${expected.expectedSourceManifestSha256}`;
+  if (manifestId !== canonicalUuid(expected.manifestId, "expected_manifest_id") ||
+      paperId !== expectedPaperId ||
+      result.source_bundle_id !== expected.sourceBundleId ||
+      result.source_manifest_sha256 !== expected.expectedSourceManifestSha256 ||
+      manifestHash !== expectedManifestHash ||
+      result.object_count !== expected.uploaded.length ||
+      result.version !== 1 ||
+      !Array.isArray(result.required_run_ids) ||
+      result.required_run_ids.length !== expected.requiredRunIds.length ||
+      result.required_run_ids.some((value, index) => value !== expected.requiredRunIds[index])) {
+    throw new Error("artifact_manifest_registration_receipt_is_not_authoritative_or_exact");
+  }
+  return {
+    manifestId,
+    manifestHash,
+    sourceBundleId: result.source_bundle_id,
+    objects: expected.uploaded.map(item => ({
+      logicalPath: item.logicalPath,
+      role: item.role,
+      digest: canonicalDigest(item.stored.digest, `${item.role}_digest`),
+      uri: item.stored.uri,
+      size: item.stored.size
+    }))
+  };
+}
+
+async function createAuthoritativeRunFromArtifacts(form) {
+  const runLabel = String(form.elements.run_label.value || "").trim();
+  if (!LOGICAL_SESSION_PATTERN.test(runLabel)) {
+    throw new Error("run_label_must_be_a_safe_logical_identifier");
+  }
+  const pathLabel = safeLogicalFilename(runLabel, "run");
+  const stdoutFile = form.elements.stdout_file.files[0];
+  const stderrFile = form.elements.stderr_file.files[0];
+  const outputFile = form.elements.output_file.files[0];
+  const metricsFile = form.elements.metrics_file.files[0];
+  const status = String(form.elements.status.value || "");
+  if (!new Set(["succeeded", "failed", "cancelled"]).has(status)) {
+    throw new Error("invalid_run_status");
+  }
+  const common = {
+    paperId: form.dataset.paperId,
+    paperVersion: form.dataset.paperVersion,
+    challengeId: form.dataset.challengeId,
+    requiredRunIds: [runLabel]
+  };
+  const logs = await uploadAndRegisterManifest({
+    ...common,
+    bundleKind: `${pathLabel}-logs`,
+    objects: [
+      {
+        file: stdoutFile,
+        mediaType: "text/plain; charset=utf-8",
+        role: "run_stdout",
+        allowEmpty: true,
+        logicalPath: `runs/${pathLabel}/logs/stdout-${safeLogicalFilename(stdoutFile && stdoutFile.name, "stdout.txt")}`
+      },
+      {
+        file: stderrFile,
+        mediaType: "text/plain; charset=utf-8",
+        role: "run_stderr",
+        allowEmpty: true,
+        logicalPath: `runs/${pathLabel}/logs/stderr-${safeLogicalFilename(stderrFile && stderrFile.name, "stderr.txt")}`
+      }
+    ]
+  });
+  const outputs = status === "succeeded" ? await uploadAndRegisterManifest({
+    ...common,
+    bundleKind: `${pathLabel}-outputs`,
+    objects: [
+      {
+        file: outputFile,
+        mediaType: form.elements.output_media_type.value,
+        role: "run_output",
+        logicalPath: `runs/${pathLabel}/outputs/result-${safeLogicalFilename(outputFile && outputFile.name, "output.bin")}`
+      },
+      {
+        file: metricsFile,
+        mediaType: form.elements.metrics_media_type.value,
+        role: "run_metrics",
+        logicalPath: `runs/${pathLabel}/outputs/metrics-${safeLogicalFilename(metricsFile && metricsFile.name, "metrics.json")}`
+      }
+    ]
+  }) : null;
+  if (outputs && (logs.manifestId === outputs.manifestId || logs.manifestHash === outputs.manifestHash)) {
+    throw new Error("run_logs_and_outputs_must_be_distinct_authoritative_manifests");
+  }
+  const metrics = outputs && outputs.objects.find(object => object.role === "run_metrics");
+  if (outputs && !metrics) throw new Error("registered_outputs_manifest_is_missing_metrics");
+  const payload = await runRecordPayload({
+    experimentPlanId: form.elements.experiment_plan_id.value,
+    status,
+    seed: form.elements.seed.value,
+    parameters: form.elements.parameters.value,
+    logsManifestId: logs.manifestId,
+    outputsManifestId: outputs ? outputs.manifestId : null,
+    metrics: metrics ? metrics.digest : "",
+    failure: form.elements.failure.value
+  });
+  const response = await sendCommand("create_run_record", form.dataset.paperId, null, payload);
+  const result = await responseValue(response);
+  if (!response.ok) throw new Error(result && result.error ? result.error : "run_record_creation_failed");
+  if (!result || canonicalUuid(result.run_record_id, "registered_run_record_id") !== payload.run_record_id ||
+      result.logs_manifest_id !== logs.manifestId ||
+      result.outputs_manifest_id !== (outputs ? outputs.manifestId : null) ||
+      result.metrics_hash !== (metrics ? metrics.digest : null) ||
+      result.failure_hash !== payload.failure_hash || result.status !== status) {
+    throw new Error("run_record_receipt_is_not_authoritative_or_exact");
+  }
+  return {
+    runRecordId: payload.run_record_id,
+    logsManifestId: logs.manifestId,
+    logsManifestHash: logs.manifestHash,
+    outputsManifestId: outputs ? outputs.manifestId : null,
+    outputsManifestHash: outputs ? outputs.manifestHash : null
+  };
+}
+
+async function createAuthoritativeFigureLineage(form) {
+  const runRecordIds = selectedValues(form.elements.run_record_ids);
+  const figureKey = String(form.elements.figure_key.value || "").trim();
+  if (!LOGICAL_SESSION_PATTERN.test(figureKey)) {
+    throw new Error("figure_key_must_be_a_safe_logical_identifier");
+  }
+  const pathKey = safeLogicalFilename(figureKey, "figure");
+  const figureFile = form.elements.figure_file.files[0];
+  const lineageFile = form.elements.lineage_file.files[0];
+  const manifest = await uploadAndRegisterManifest({
+    paperId: form.dataset.paperId,
+    paperVersion: form.dataset.paperVersion,
+    challengeId: form.dataset.challengeId,
+    bundleKind: `${pathKey}-figure`,
+    requiredRunIds: runRecordIds,
+    objects: [
+      {
+        file: figureFile,
+        mediaType: "image/svg+xml",
+        role: "figure_render",
+        logicalPath: `figures/${pathKey}/render-${safeLogicalFilename(figureFile && figureFile.name, "figure.svg")}`
+      },
+      {
+        file: lineageFile,
+        mediaType: form.elements.lineage_media_type.value,
+        role: "figure_transform",
+        logicalPath: `figures/${pathKey}/lineage-${safeLogicalFilename(lineageFile && lineageFile.name, "lineage.json")}`
+      }
+    ]
+  });
+  const transform = manifest.objects.find(object => object.role === "figure_transform");
+  if (!transform) throw new Error("registered_figure_manifest_is_missing_transform_lineage");
+  const payload = figureLineagePayload({
+    figureKey,
+    figureManifestId: manifest.manifestId,
+    runRecordIds,
+    transformHash: transform.digest
+  });
+  const response = await sendCommand("create_figure_lineage", form.dataset.paperId, null, payload);
+  const result = await responseValue(response);
+  if (!response.ok) throw new Error(result && result.error ? result.error : "figure_lineage_creation_failed");
+  if (!result || canonicalUuid(result.figure_lineage_id, "registered_figure_lineage_id") !== payload.figure_lineage_id ||
+      result.figure_manifest_id !== manifest.manifestId ||
+      result.transform_hash !== transform.digest ||
+      !Array.isArray(result.run_record_ids) ||
+      result.run_record_ids.length !== runRecordIds.length ||
+      result.run_record_ids.some((value, index) => value !== runRecordIds[index])) {
+    throw new Error("figure_lineage_receipt_is_not_authoritative_or_exact");
+  }
+  return {
+    figureLineageId: payload.figure_lineage_id,
+    figureManifestId: manifest.manifestId,
+    figureManifestHash: manifest.manifestHash
+  };
 }
 
 async function recordProductEvent(eventName, values = {}) {
@@ -1306,78 +1548,10 @@ function boundedInteger(value, field, maximum) {
   return parsed;
 }
 
-async function evaluationDraftPayload(form) {
-  const values = form.elements;
-  const metric = String(values.metric_key.value || "").trim();
-  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(metric)) {
-    throw new Error("metric_key_must_be_a_safe_logical_identifier");
-  }
-  const preset = String(values.tolerance_preset.value || "");
-  let rule;
-  if (preset === "absolute") {
-    rule = {
-      kind: "absolute",
-      metric,
-      max_delta_micros: nonNegativeInteger(values.absolute_delta.value, "absolute_delta")
-    };
-  } else if (preset === "relative") {
-    rule = {
-      kind: "relative",
-      metric,
-      max_delta_bps: boundedInteger(values.relative_delta.value, "relative_delta", 10000)
-    };
-  } else if (preset === "statistical") {
-    rule = {
-      kind: "statistical",
-      metric,
-      minimum_interval_overlap_bps: boundedInteger(
-        values.interval_overlap.value,
-        "interval_overlap",
-        10000
-      ),
-      maximum_effect_delta_micros: nonNegativeInteger(values.effect_delta.value, "effect_delta"),
-      minimum_p_value_micros: boundedInteger(values.p_value.value, "p_value", 1000000)
-    };
-  } else {
-    throw new Error("unsupported_tolerance_preset");
-  }
-  return {
-    evaluation_id: uuid(),
-    supersedes_evaluation_id: null,
-    tolerance_policy: {
-      schema: "hepta.paper_raid.tolerance_policy.v1",
-      version: "1",
-      rules: [rule]
-    },
-    reference_metrics_micros: {
-      [metric]: safeInteger(values.reference_metric.value, "reference_metric")
-    },
-    score_components: {
-      method_rigor_bps: boundedInteger(values.method_rigor_bps.value, "method_rigor_bps", 2500),
-      experiment_statistics_bps: boundedInteger(
-        values.experiment_statistics_bps.value,
-        "experiment_statistics_bps",
-        1500
-      ),
-      reproducibility_bps: boundedInteger(values.reproducibility_bps.value, "reproducibility_bps", 1500),
-      evidence_citations_bps: boundedInteger(values.evidence_citations_bps.value, "evidence_citations_bps", 1500),
-      value_originality_bps: boundedInteger(values.value_originality_bps.value, "value_originality_bps", 1500),
-      argument_expression_bps: boundedInteger(values.argument_expression_bps.value, "argument_expression_bps", 1000),
-      ethics_transparency_bps: boundedInteger(values.ethics_transparency_bps.value, "ethics_transparency_bps", 500)
-    },
-    hard_gates: {
-      citations_and_data_authentic: values.citations_and_data_authentic.checked,
-      failed_runs_disclosed: values.failed_runs_disclosed.checked,
-      all_authors_consented: values.all_authors_consented.checked,
-      core_claims_have_evidence: values.core_claims_have_evidence.checked,
-      artifact_lineage_complete: values.artifact_lineage_complete.checked,
-      license_ethics_coi_complete: values.license_ethics_coi_complete.checked
-    },
-    evaluator_coi_attestation_hash: await plainTextDigest(
-      values.coi_statement.value,
-      "evaluator_coi_statement"
-    )
-  };
+function requiredBoolean(value, field) {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw new Error(`${field}_must_be_explicitly_confirmed`);
 }
 
 async function evaluationAttestationPayload(form, verdict) {
@@ -1390,60 +1564,6 @@ async function evaluationAttestationPayload(form, verdict) {
     coi_attestation_hash: await plainTextDigest(
       form.elements.coi_statement.value,
       "reviewer_coi_statement"
-    )
-  };
-}
-
-async function reproductionPayload(form) {
-  const observed = {};
-  for (const input of form.querySelectorAll(".observed-metric")) {
-    const metric = String(input.dataset.metric || "");
-    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(metric) || metric in observed) {
-      throw new Error("invalid_or_duplicate_observed_metric");
-    }
-    observed[metric] = safeInteger(input.value, `observed_${metric}`);
-  }
-  if (Object.keys(observed).length < 1) throw new Error("observed_metrics_are_required");
-  const statisticalEvidence = {};
-  for (const fieldset of form.querySelectorAll(".statistical-metric")) {
-    const metric = String(fieldset.dataset.metric || "");
-    if (!(metric in observed) || metric in statisticalEvidence) {
-      throw new Error("invalid_or_duplicate_statistical_metric");
-    }
-    statisticalEvidence[metric] = {
-      interval_overlap_bps: boundedInteger(
-        fieldset.elements.interval_overlap_bps.value,
-        `interval_overlap_${metric}`,
-        10000
-      ),
-      effect_delta_micros: safeInteger(
-        fieldset.elements.effect_delta_micros.value,
-        `effect_delta_${metric}`
-      ),
-      p_value_micros: boundedInteger(
-        fieldset.elements.p_value_micros.value,
-        `p_value_${metric}`,
-        1000000
-      )
-    };
-  }
-  return {
-    reproduction_id: uuid(),
-    supersedes_reproduction_id: null,
-    observed_metrics_micros: observed,
-    statistical_evidence: statisticalEvidence,
-    seed_set_hash: await plainTextDigest(form.elements.seed_statement.value, "seed_statement"),
-    environment_hash: await plainTextDigest(
-      form.elements.environment_statement.value,
-      "environment_statement"
-    ),
-    run_manifest_hash: await plainTextDigest(
-      form.elements.run_manifest_statement.value,
-      "run_manifest_statement"
-    ),
-    coi_attestation_hash: await plainTextDigest(
-      form.elements.coi_statement.value,
-      "reproducer_coi_statement"
     )
   };
 }
@@ -1489,6 +1609,20 @@ async function signServerFrame(command, frame, signer = humanSigner) {
   };
 }
 
+async function signReviewConfirmationFrame(command, frame, signer = humanSigner) {
+  const signedFrame = await signServerFrame(command, frame, signer);
+  const contextSigningBytes = base64ToBytes(frame.receipt_context_signing_bytes);
+  const contextSignature = await crypto.subtle.sign(
+    "Ed25519",
+    signer.privateKey,
+    contextSigningBytes,
+  );
+  return {
+    signedFrame,
+    receiptContextSignature: bytesToBase64(contextSignature),
+  };
+}
+
 async function signHumanPayload(command, resourceId, childId, payload) {
   if (!humanSigner) throw new Error("import_your_encrypted_human_key_bundle_first");
   const frameResponse = await mutation("/api/onboarding/human/signing-frame", {
@@ -1504,6 +1638,202 @@ async function signHumanPayload(command, resourceId, childId, payload) {
   const frame = await responseValue(frameResponse);
   if (!frameResponse.ok) throw new Error(frame && frame.error ? frame.error : "signing_frame_failed");
   return signServerFrame(command, frame, humanSigner);
+}
+
+function validateReviewConfirmationFrame(frame, command, paperId, receiptId, request) {
+  const frameKeys = [
+    "schema", "receipt_context", "receipt_context_signing_bytes",
+    "command", "resource_id", "child_id", "payload",
+    "signing_bytes", "signing_key_id", "signing_public_key", "signing_public_key_hash",
+  ];
+  const contextKeys = [
+    "schema", "receipt_id", "receipt_hash", "task_id", "assignment_id",
+    "assignment_version", "paper_project_id", "submission_id", "evaluation_id", "kind",
+    "bundle_hash", "release_candidate_hash", "paper_bundle_hash", "artifact_manifest_hash",
+    "evaluator_version", "agent_id", "agent_key_id", "input_root", "output_root",
+    "metrics_hash", "candidate_passed", "seed_set_hash", "environment_hash",
+    "run_manifest_hash", "logs_hash", "completed_at_unix",
+  ];
+  if (
+    !exactKeys(frame, frameKeys) ||
+    frame.schema !== "hepta.paper_raid.review_receipt_confirmation_frame.v1" ||
+    !exactKeys(frame.receipt_context, contextKeys) ||
+    frame.receipt_context.schema !== "hepta.paper_raid.review_receipt_confirmation_context.v1" ||
+    frame.receipt_context.receipt_id !== receiptId ||
+    frame.receipt_context.paper_project_id !== paperId ||
+    frame.receipt_context.kind !== (command === "create_paper_evaluation_draft" ? "evaluate" : "reproduce") ||
+    frame.command !== command ||
+    frame.resource_id !== paperId ||
+    (command === "create_paper_evaluation_draft"
+      ? frame.child_id !== null || typeof frame.receipt_context.candidate_passed !== "boolean"
+      : frame.child_id !== frame.receipt_context.evaluation_id || frame.receipt_context.candidate_passed !== null)
+  ) {
+    throw new Error("review_receipt_confirmation_frame_mismatch");
+  }
+  let contextSigningClaim;
+  let contextSigningText;
+  try {
+    contextSigningText = new TextDecoder("utf-8", { fatal: true }).decode(
+      base64ToBytes(frame.receipt_context_signing_bytes),
+    );
+    contextSigningClaim = JSON.parse(contextSigningText);
+  } catch (_) {
+    throw new Error("review_receipt_confirmation_context_signing_bytes_invalid");
+  }
+  const expectedContextSigningClaim = {
+    schema: "hepta.paper_raid.review_receipt_confirmation_context_signing.v1",
+    receipt_context: frame.receipt_context,
+    command: frame.command,
+    resource_id: frame.resource_id,
+    child_id: frame.child_id,
+    upstream_signing_bytes: frame.signing_bytes,
+    signing_key_id: frame.signing_key_id,
+    signing_public_key_hash: frame.signing_public_key_hash,
+  };
+  if (
+    canonicalJson(contextSigningClaim) !== contextSigningText ||
+    canonicalJson(contextSigningClaim) !== canonicalJson(expectedContextSigningClaim)
+  ) {
+    throw new Error("review_receipt_confirmation_context_mismatch");
+  }
+  for (const field of [
+    "receipt_hash", "bundle_hash", "release_candidate_hash", "paper_bundle_hash",
+    "artifact_manifest_hash", "input_root", "output_root", "metrics_hash", "seed_set_hash",
+    "environment_hash", "run_manifest_hash", "logs_hash",
+  ]) {
+    if (!DIGEST_PATTERN.test(String(frame.receipt_context[field] || ""))) {
+      throw new Error(`review_receipt_${field}_is_invalid`);
+    }
+  }
+  const coiField = command === "create_paper_evaluation_draft"
+    ? "evaluator_coi_attestation_hash"
+    : "coi_attestation_hash";
+  if (frame.payload[coiField] !== request.coi_attestation_hash) {
+    throw new Error("review_receipt_coi_attestation_mismatch");
+  }
+  if (command === "create_paper_evaluation_draft") {
+    const observable = request.observable_hard_gates;
+    const observedGates = {
+      citations_and_data_authentic: frame.payload.hard_gates.citations_and_data_authentic,
+      failed_runs_disclosed: frame.payload.hard_gates.failed_runs_disclosed,
+      core_claims_have_evidence: frame.payload.hard_gates.core_claims_have_evidence,
+      license_ethics_coi_complete: frame.payload.hard_gates.license_ethics_coi_complete,
+    };
+    if (
+      canonicalJson(frame.payload.score_components) !== canonicalJson(request.score_components) ||
+      canonicalJson(observedGates) !== canonicalJson(observable) ||
+      typeof frame.payload.hard_gates.all_authors_consented !== "boolean" ||
+      typeof frame.payload.hard_gates.artifact_lineage_complete !== "boolean"
+    ) {
+      throw new Error("review_receipt_human_judgment_frame_mismatch");
+    }
+  }
+}
+
+async function confirmReviewReceipt(form) {
+  if (!humanSigner) throw new Error("import_your_encrypted_human_key_bundle_first");
+  const paperId = canonicalUuid(form.dataset.paperId, "paper_id");
+  const receiptId = canonicalUuid(form.dataset.receiptId, "receipt_id");
+  const command = form.dataset.kind === "evaluate"
+    ? "create_paper_evaluation_draft"
+    : form.dataset.kind === "reproduce"
+      ? "submit_reproduction"
+      : null;
+  if (!command) throw new Error("unsupported_review_receipt_kind");
+  const coiAttestationHash = await plainTextDigest(
+    form.elements.coi_statement.value,
+    "review_coi_statement"
+  );
+  const frameRequest = { coi_attestation_hash: coiAttestationHash };
+  if (command === "create_paper_evaluation_draft") {
+    frameRequest.score_components = {
+      method_rigor_bps: boundedInteger(
+        form.elements.method_rigor_bps.value,
+        "method_rigor_bps",
+        2500,
+      ),
+      experiment_statistics_bps: boundedInteger(
+        form.elements.experiment_statistics_bps.value,
+        "experiment_statistics_bps",
+        1500,
+      ),
+      reproducibility_bps: boundedInteger(
+        form.elements.reproducibility_bps.value,
+        "reproducibility_bps",
+        1500,
+      ),
+      evidence_citations_bps: boundedInteger(
+        form.elements.evidence_citations_bps.value,
+        "evidence_citations_bps",
+        1500,
+      ),
+      value_originality_bps: boundedInteger(
+        form.elements.value_originality_bps.value,
+        "value_originality_bps",
+        1500,
+      ),
+      argument_expression_bps: boundedInteger(
+        form.elements.argument_expression_bps.value,
+        "argument_expression_bps",
+        1000,
+      ),
+      ethics_transparency_bps: boundedInteger(
+        form.elements.ethics_transparency_bps.value,
+        "ethics_transparency_bps",
+        500,
+      ),
+    };
+    frameRequest.observable_hard_gates = {
+      citations_and_data_authentic: requiredBoolean(
+        form.elements.gate_citations_and_data_authentic.value,
+        "citations_and_data_authentic",
+      ),
+      failed_runs_disclosed: requiredBoolean(
+        form.elements.gate_failed_runs_disclosed.value,
+        "failed_runs_disclosed",
+      ),
+      core_claims_have_evidence: requiredBoolean(
+        form.elements.gate_core_claims_have_evidence.value,
+        "core_claims_have_evidence",
+      ),
+      license_ethics_coi_complete: requiredBoolean(
+        form.elements.gate_license_ethics_coi_complete.value,
+        "license_ethics_coi_complete",
+      ),
+    };
+  }
+  const frameResponse = await mutation(
+    `/api/review/papers/${encodeURIComponent(paperId)}/receipts/${encodeURIComponent(receiptId)}/signing-frame`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", "accept": "application/json" },
+      body: JSON.stringify(frameRequest)
+    }
+  );
+  const frame = await responseValue(frameResponse);
+  if (!frameResponse.ok) {
+    throw new Error(frame && frame.error ? frame.error : "review_receipt_signing_frame_failed");
+  }
+  validateReviewConfirmationFrame(frame, command, paperId, receiptId, frameRequest);
+  const signed = await signReviewConfirmationFrame(command, frame, humanSigner);
+  const signature = signed.signedFrame.payload[humanSignatureField(command)];
+  if (typeof signature !== "string" || !signature) {
+    throw new Error("review_receipt_human_signature_missing");
+  }
+  if (typeof signed.receiptContextSignature !== "string" || !signed.receiptContextSignature) {
+    throw new Error("review_receipt_context_signature_missing");
+  }
+  return mutation(
+    `/api/review/papers/${encodeURIComponent(paperId)}/receipts/${encodeURIComponent(receiptId)}/confirm`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", "accept": "application/json" },
+      body: JSON.stringify({
+        signature,
+        receipt_context_signature: signed.receiptContextSignature,
+      })
+    }
+  );
 }
 
 function bindLocalSigning() {
@@ -1854,6 +2184,113 @@ function bindGuidedPaperActions() {
     });
   }
 
+  for (const form of document.querySelectorAll(".run-artifact-wizard-form")) {
+    const status = form.elements.status;
+    const successFields = form.querySelectorAll(".run-artifact-success-field");
+    const failureFields = form.querySelectorAll(".run-artifact-failure-field");
+    const updateArtifactOutcomeFields = () => {
+      const succeeded = status.value === "succeeded";
+      for (const field of successFields) field.hidden = !succeeded;
+      for (const field of failureFields) field.hidden = succeeded;
+      form.elements.output_file.required = succeeded;
+      form.elements.output_media_type.required = succeeded;
+      form.elements.metrics_file.required = succeeded;
+      form.elements.metrics_media_type.required = succeeded;
+      form.elements.failure.required = !succeeded;
+    };
+    status.addEventListener("change", updateArtifactOutcomeFields);
+    updateArtifactOutcomeFields();
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      const output = form.querySelector("output");
+      const button = form.querySelector("button");
+      button.disabled = true;
+      try {
+        show(output, "Hashing and preserving the exact run logs, outputs, and metrics…", true);
+        const receipt = await createAuthoritativeRunFromArtifacts(form);
+        form.dataset.runRecordId = receipt.runRecordId;
+        form.dataset.logsManifestId = receipt.logsManifestId;
+        form.dataset.logsManifestHash = receipt.logsManifestHash;
+        if (receipt.outputsManifestId) {
+          form.dataset.outputsManifestId = receipt.outputsManifestId;
+          form.dataset.outputsManifestHash = receipt.outputsManifestHash;
+        } else {
+          delete form.dataset.outputsManifestId;
+          delete form.dataset.outputsManifestHash;
+        }
+        show(output, "Run artifacts and the exact outcome are authoritatively registered.", true);
+        window.setTimeout(() => window.location.reload(), 450);
+      } catch (error) {
+        show(output, error.message, false);
+      } finally {
+        button.disabled = false;
+      }
+    });
+  }
+
+  for (const form of document.querySelectorAll(".figure-lineage-wizard-form")) {
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      const output = form.querySelector("output");
+      const button = form.querySelector("button");
+      button.disabled = true;
+      try {
+        show(output, "Hashing and preserving the figure plus its transform lineage…", true);
+        const receipt = await createAuthoritativeFigureLineage(form);
+        form.dataset.figureLineageId = receipt.figureLineageId;
+        form.dataset.figureManifestId = receipt.figureManifestId;
+        form.dataset.figureManifestHash = receipt.figureManifestHash;
+        show(output, "Figure artifact and authoritative run lineage are registered.", true);
+        window.setTimeout(() => window.location.reload(), 450);
+      } catch (error) {
+        show(output, error.message, false);
+      } finally {
+        button.disabled = false;
+      }
+    });
+  }
+
+  for (const form of document.querySelectorAll(".role-resource-action-form")) {
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      const actionKind = String(form.dataset.actionKind || "");
+      let action;
+      if (actionKind === "evidence_assessment") {
+        action = {
+          kind: "evidence_assessment",
+          evidence_card_id: canonicalUuid(
+            form.elements.evidence_card_id.value,
+            "evidence_card_id"
+          )
+        };
+      } else if (actionKind === "captain_checkpoint") {
+        action = { kind: "captain_checkpoint" };
+      } else {
+        show(form.querySelector("output"), "unsupported_role_resource_action", false);
+        return;
+      }
+      await submitGuidedCommand(
+        form,
+        "create_role_resource_action",
+        canonicalUuid(form.dataset.paperId, "paper_id"),
+        null,
+        {
+          action_id: uuid(),
+          expected_resource_version: positiveInteger(
+            form.dataset.resourceVersion,
+            "resource_version"
+          ),
+          action,
+          idempotency_key: uuid()
+        },
+        null,
+        actionKind === "evidence_assessment"
+          ? "Evidence assessed; role focus and shared progress were updated authoritatively."
+          : "Team checkpoint recorded from fresh Evidence and Experiment progress."
+      );
+    });
+  }
+
   for (const form of document.querySelectorAll(".paper-phase-form")) {
     form.addEventListener("submit", async event => {
       event.preventDefault();
@@ -1951,10 +2388,20 @@ function bindGuidedPaperActions() {
   for (const form of document.querySelectorAll(".create-evidence-card-form")) {
     form.addEventListener("submit", async event => {
       event.preventDefault();
+      const button = form.querySelector("button");
+      const output = form.querySelector("output");
+      button.disabled = true;
       try {
+        const sourceFile = form.elements.source_file.files[0];
+        show(output, "Hashing and preserving the exact source snapshot…", true);
+        const receipt = await uploadCasArtifact(
+          form.dataset.paperId,
+          sourceFile,
+          form.elements.source_media_type.value
+        );
         const payload = evidenceVerificationPayload({
           sourceUri: form.elements.source_uri.value,
-          sourceHash: form.elements.source_hash.value,
+          sourceHash: receipt.digest,
           locator: form.elements.locator.value,
           license: form.elements.license.value
         });
@@ -1967,7 +2414,9 @@ function bindGuidedPaperActions() {
           "Verified evidence recorded with your exact local signature."
         );
       } catch (error) {
-        show(form.querySelector("output"), error.message, false);
+        show(output, error.message, false);
+      } finally {
+        button.disabled = false;
       }
     });
   }
@@ -2109,35 +2558,6 @@ function bindGuidedPaperActions() {
         );
       } catch (error) {
         show(form.querySelector("output"), error.message, false);
-      }
-    });
-  }
-
-  for (const form of document.querySelectorAll(".bridge-proposal-task-form")) {
-    const button = form.querySelector(".copy-bridge-proposal");
-    button.addEventListener("click", async () => {
-      const output = form.querySelector("output");
-      button.disabled = true;
-      try {
-        await requireActiveAgentBinding(form.dataset.bindingId);
-        const artifactManifest = form.elements.artifact_manifest_id.selectedOptions[0];
-        if (!artifactManifest) throw new Error("artifact_manifest_is_required");
-        const command = bridgeProposalCommand(form.dataset, {
-          workItemId: form.elements.work_item_id.value,
-          artifactManifestId: artifactManifest.value,
-          artifactManifestHash: artifactManifest.dataset.artifactManifestHash,
-          proposalKind: form.elements.proposal_kind.value,
-          payloadHash: form.elements.payload_hash.value
-        });
-        if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
-          throw new Error("clipboard_unavailable_copy_the_rendered_command_manually");
-        }
-        await navigator.clipboard.writeText(command);
-        show(output, `${command}\n\nCopied. Run on the Agent host; no signature returns to this textarea.`, true);
-      } catch (error) {
-        show(output, error.message, false);
-      } finally {
-        button.disabled = false;
       }
     });
   }
@@ -2342,21 +2762,34 @@ function bindGuidedPaperActions() {
             form.elements.research_protocol_snapshot_hash.value,
             "research_protocol_snapshot_hash"
           ),
-          ethics_disclosure_hash: canonicalDigest(
-            form.elements.ethics_disclosure_hash.value,
-            "ethics_disclosure_hash"
+          ethics_disclosure_hash: await preserveDisclosure(
+            form,
+            form.dataset.paperId,
+            "ethics_disclosure_hash",
+            "ethics_disclosure_text"
           ),
-          coi_disclosure_hash: canonicalDigest(
-            form.elements.coi_disclosure_hash.value,
-            "coi_disclosure_hash"
+          coi_disclosure_hash: await preserveDisclosure(
+            form,
+            form.dataset.paperId,
+            "coi_disclosure_hash",
+            "coi_disclosure_text"
           ),
+          contribution_ledger_id: budget.contributionLedgerId,
           contribution_ledger_hash: budget.ledgerHash,
-          ai_disclosure_hash: canonicalDigest(
-            form.elements.ai_disclosure_hash.value,
-            "ai_disclosure_hash"
+          ai_disclosure_hash: await preserveDisclosure(
+            form,
+            form.dataset.paperId,
+            "ai_disclosure_hash",
+            "ai_disclosure_text"
           ),
           license: form.elements.license.value.trim(),
-          authors
+          authors: authors.map(author => ({
+            author_order: author.author_order,
+            participant_slot: author.participant_slot,
+            player_id: author.player_id,
+            display_name: author.display_name,
+            credit_roles: author.credit_roles
+          }))
         };
         promoteAttempted = true;
         const response = await sendCommand(
@@ -2500,7 +2933,19 @@ function bindGuidedPaperActions() {
   }
 }
 
+const PARTY_CODE_V1_PATTERN = /^PR1-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 function bindQueueForms() {
+  for (const button of document.querySelectorAll(".generate-party-code")) {
+    button.addEventListener("click", () => {
+      const form = button.closest("form.queue-form");
+      const input = form?.elements?.party_code;
+      if (!input) return;
+      input.value = `PR1-${uuid()}`;
+      input.focus();
+      input.select();
+    });
+  }
   for (const form of document.querySelectorAll(".queue-form")) {
     form.addEventListener("submit", async event => {
       event.preventDefault();
@@ -2519,13 +2964,22 @@ function bindQueueForms() {
           form.querySelectorAll('input[name="roles"]:checked'),
           input => input.value,
         );
-        if (roles.length < 1 || roles.length > 5 || new Set(roles).size !== roles.length) {
-          throw new Error("roles_must_be_1_to_5_distinct_values");
+        if (roles.length < 1 || roles.length > 3 || new Set(roles).size !== roles.length) {
+          throw new Error("roles_must_be_1_to_3_distinct_values");
         }
         if (authorizedRoles.length === 0 || roles.some(role => !authorizedRoles.includes(role))) {
           throw new Error("selected_role_is_not_authorized_for_this_identity");
         }
         const availability = new TextEncoder().encode(form.elements.availability.value);
+        const partyCodeInput = form.elements.party_code;
+        const partyCode = String(partyCodeInput?.value || "").trim();
+        if (partyCode && !PARTY_CODE_V1_PATTERN.test(partyCode)) {
+          throw new Error("party_code_must_be_pr1_uuid_v4");
+        }
+        const partyCodeHash = partyCode
+          ? await sha256Label(new TextEncoder().encode(partyCode))
+          : null;
+        if (partyCodeInput) partyCodeInput.value = "";
         const payload = {
           ticket_id: uuid(),
           challenge_id: form.dataset.challengeId,
@@ -2533,6 +2987,7 @@ function bindQueueForms() {
           roles,
           availability_hash: await sha256Label(availability)
         };
+        if (partyCodeHash) payload.party_code_hash = partyCodeHash;
         const response = await sendCommand("queue_matchmaking", null, null, payload);
         const value = await responseValue(response);
         show(output, value, response.ok);
@@ -2621,14 +3076,12 @@ function challengeClockState(deadlineAt, graceExpiresAt, nowMs = Date.now()) {
   }
   return {
     state: "expired",
-    text: "Grace elapsed · Captain may record expired / 宽限已结束，队长可登记超时",
+    text: "Grace elapsed · canonical expiry sync pending / 宽限已结束，等待自动同步超时终局",
   };
 }
 
 function bindChallengeCountdowns() {
   for (const element of document.querySelectorAll(".challenge-countdown")) {
-    const panel = element.closest(".challenge-ruleset-panel");
-    const expiredControl = panel && panel.querySelector(".expired-outcome-control");
     let timer = null;
     const update = () => {
       const clock = challengeClockState(
@@ -2637,7 +3090,6 @@ function bindChallengeCountdowns() {
       );
       element.dataset.state = clock.state;
       element.textContent = clock.text;
-      if (expiredControl) expiredControl.hidden = clock.state !== "expired";
       if (clock.state === "expired" || clock.state === "unavailable") {
         window.clearInterval(timer);
       }
@@ -2653,7 +3105,6 @@ function bindChallengeOutcomeForms() {
   const allowed = Object.freeze({
     failed: new Set(["quality_gate_failed", "preregistered_result_failed", "integrity_failure"]),
     abandoned: new Set(["team_withdrawal", "resource_unavailable", "challenge_infeasible"]),
-    expired: new Set(["grace_window_elapsed"]),
   });
   for (const form of document.querySelectorAll(".challenge-outcome-form")) {
     form.addEventListener("submit", async event => {
@@ -2729,20 +3180,27 @@ function bindReviewQueue() {
 }
 
 function bindReviewRaid() {
-  for (const form of document.querySelectorAll(".review-evaluation-draft-form")) {
+  for (const form of document.querySelectorAll(".review-receipt-confirm-form")) {
     form.addEventListener("submit", async event => {
       event.preventDefault();
+      const button = form.querySelector("button");
+      const output = form.querySelector("output");
+      button.disabled = true;
       try {
-        await submitSignedGuidedCommand(
-          form,
-          "create_paper_evaluation_draft",
-          canonicalUuid(form.dataset.paperId, "paper_id"),
-          null,
-          await evaluationDraftPayload(form),
-          "Immutable evaluation draft signed and frozen."
+        const response = await confirmReviewReceipt(form);
+        const value = await responseValue(response);
+        show(
+          output,
+          response.ok
+            ? "Server-verified execution receipt signed and consumed."
+            : value,
+          response.ok
         );
+        if (response.ok) window.setTimeout(() => window.location.reload(), 400);
       } catch (error) {
-        show(form.querySelector("output"), error.message, false);
+        show(output, error.message, false);
+      } finally {
+        button.disabled = false;
       }
     });
   }
@@ -2782,23 +3240,6 @@ function bindReviewRaid() {
           },
           null,
           "Two-reviewer quorum verified; evaluation finalized."
-        );
-      } catch (error) {
-        show(form.querySelector("output"), error.message, false);
-      }
-    });
-  }
-  for (const form of document.querySelectorAll(".review-reproduction-form")) {
-    form.addEventListener("submit", async event => {
-      event.preventDefault();
-      try {
-        await submitSignedGuidedCommand(
-          form,
-          "submit_reproduction",
-          canonicalUuid(form.dataset.paperId, "paper_id"),
-          canonicalUuid(form.dataset.evaluationId, "evaluation_id"),
-          await reproductionPayload(form),
-          "Independent reproduction signed and recorded."
         );
       } catch (error) {
         show(form.querySelector("output"), error.message, false);
@@ -3062,7 +3503,8 @@ const PHASE_LABELS = Object.freeze({
   experimenting: "Experiment / 实验",
   drafting: "Draft / 起草",
   integrity_review: "Integrity review / 完整性审查",
-  reproducing: "Reproduce / 复现",
+  reproducing: "Reproduction readiness / 复现准备",
+  reproduction_readiness: "Reproduction readiness / 复现准备",
   author_approval: "Author approval / 作者批准",
   integrity_hold: "Integrity hold / 完整性挂起",
   submission_ready: "Author Raid complete / 作者远征完成",
@@ -3195,6 +3637,27 @@ function renderLiveRaid(card, value) {
   while (eventList.children.length > 12) eventList.firstElementChild.remove();
 }
 
+function invalidateStalePlayerForms(card, connection, output) {
+  if (card.dataset.authorityState === "stale") return;
+  card.dataset.authorityState = "stale";
+  connection.dataset.state = "stale-authority";
+  connection.textContent = "Authoritative state changed · reloading / 权威状态已变化，正在刷新";
+  const paperId = card.dataset.paperId;
+  for (const form of document.querySelectorAll(`form[data-paper-id="${CSS.escape(paperId)}"]`)) {
+    form.dataset.authorityState = "stale";
+    for (const control of form.elements) control.disabled = true;
+  }
+  show(output, "A teammate changed the Raid. Old controls are disabled; loading the current objective and actions…", false);
+  let reloadStarted = false;
+  const reloadCurrentAuthority = () => {
+    if (reloadStarted) return;
+    reloadStarted = true;
+    window.location.reload();
+  };
+  recordProductEvent("stale_ui_reload", { paperId }).finally(reloadCurrentAuthority);
+  window.setTimeout(reloadCurrentAuthority, 400);
+}
+
 function createLiveRaidSync(card) {
   const paperId = card.dataset.paperId;
   const button = card.querySelector(".timeline-refresh");
@@ -3206,6 +3669,8 @@ function createLiveRaidSync(card) {
   let running = false;
   let failures = 0;
   let wasDisconnected = false;
+  let authoritySynchronized = false;
+  let synchronizedPhase = null;
   const schedule = delay => {
     window.clearTimeout(timer);
     timer = window.setTimeout(() => sync.run(false), delay);
@@ -3224,6 +3689,14 @@ function createLiveRaidSync(card) {
           after_sequence: "0"
         });
         const value = await fetchTimelineValue(paperId, discoveryQuery);
+        const currentPhase = paperRoomPhase(value);
+        const newHeptaEvents = Array.isArray(value && value.hepta_events)
+          ? value.hepta_events.length
+          : 0;
+        if (authoritySynchronized && (newHeptaEvents > 0 || currentPhase !== synchronizedPhase)) {
+          invalidateStalePlayerForms(card, connection, output);
+          return;
+        }
         const nextHepta = nextHeptaCursor(value.hepta_events, cursor.hepta);
         const discoveredSessions = reconcileNakamaSessions(value.research_sessions, nakamaSessions);
         const archiveResults = await Promise.all(Array.from(discoveredSessions, async ([sessionId, state]) => {
@@ -3249,6 +3722,8 @@ function createLiveRaidSync(card) {
         }
         value.nakama_archives = archives;
         renderLiveRaid(card, value);
+        authoritySynchronized = true;
+        synchronizedPhase = currentPhase;
         cursor.hepta = nextHepta;
         nakamaSessions = nextSessions;
         sessionStorage.setItem(liveCursorKey(paperId), JSON.stringify({ hepta: cursor.hepta }));
@@ -3280,7 +3755,6 @@ function createLiveRaidSync(card) {
     }
   };
   button.addEventListener("click", async () => {
-    try { await recordProductEvent("replay_started", { paperId }); } catch (_) {}
     sync.run(true);
   });
   document.addEventListener("visibilitychange", () => {

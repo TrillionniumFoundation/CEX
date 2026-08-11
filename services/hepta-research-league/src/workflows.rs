@@ -1365,7 +1365,9 @@ async fn get_trnm_finality(
                 .ok_or_else(|| {
                     ApiError::not_found(
                         "trnm_finality_not_found",
-                        format!("TRNM command {command_id} is still pending finality"),
+                        format!(
+                            "No TRNM finality projection is available for command {command_id}; pending versus unavailable is not inferred"
+                        ),
                     )
                 })
         })
@@ -1908,6 +1910,26 @@ mod tests {
         assert!(response
             .failures
             .contains(&"nakama_research_authority_missing"));
+    }
+
+    #[tokio::test]
+    async fn missing_finality_projection_is_unknown_and_never_manufactures_pending() {
+        let command_id = Uuid::new_v4();
+        let state = AppState::new(crate::SecurityConfig::new("operator", "nakama"));
+
+        let error = get_trnm_finality(State(state), Path(command_id))
+            .await
+            .expect_err("missing finality projection must fail closed");
+
+        assert_eq!(error.status, StatusCode::NOT_FOUND);
+        assert_eq!(error.code, "trnm_finality_not_found");
+        assert_eq!(
+            error.message,
+            format!(
+                "No TRNM finality projection is available for command {command_id}; pending versus unavailable is not inferred"
+            )
+        );
+        assert!(!error.message.contains("still pending"));
     }
 
     #[tokio::test]

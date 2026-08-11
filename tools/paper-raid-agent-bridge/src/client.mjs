@@ -8,6 +8,7 @@ import {
 } from "./canonical.mjs";
 
 const MAX_JSON_BYTES = 2 * 1024 * 1024;
+const MAX_REVIEW_OBJECT_BYTES = 16 * 1024 * 1024;
 const USER_AGENT = "paper-raid-agent-bridge/0.2";
 
 export const AGENT_BRIDGE_ENDPOINTS = Object.freeze({
@@ -16,7 +17,10 @@ export const AGENT_BRIDGE_ENDPOINTS = Object.freeze({
   binding: "/api/agent-bridge/binding",
   health: "/api/agent-bridge/health",
   inbox: "/api/agent-bridge/inbox",
+  delivery_drafts: "/api/agent-bridge/delivery-drafts",
   proposals: "/api/agent-bridge/proposals",
+  review_objects: "/api/agent-bridge/review-objects",
+  review_receipts: "/api/agent-bridge/review-receipts",
 });
 
 export class BridgeHttpError extends Error {
@@ -39,6 +43,54 @@ async function jsonResponse(response) {
   } catch {
     throw new BridgeHttpError("agent_bridge_returned_non_json", response.status);
   }
+}
+
+async function byteResponse(response, { expectedBytes, maxBytes }) {
+  if (
+    !Number.isSafeInteger(expectedBytes) ||
+    expectedBytes < 1 ||
+    !Number.isSafeInteger(maxBytes) ||
+    maxBytes < expectedBytes ||
+    maxBytes > MAX_REVIEW_OBJECT_BYTES
+  ) {
+    throw new Error("review object byte bounds are invalid");
+  }
+  const contentLength = response.headers.get("content-length");
+  if (
+    contentLength !== null &&
+    (!/^\d+$/.test(contentLength) || Number(contentLength) !== expectedBytes)
+  ) {
+    throw new BridgeHttpError("agent_bridge_review_object_size_mismatch", response.status);
+  }
+  if (!response.body || typeof response.body.getReader !== "function") {
+    throw new BridgeHttpError("agent_bridge_review_object_body_missing", response.status);
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let length = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = Buffer.from(value);
+      length += chunk.length;
+      if (length > maxBytes || length > expectedBytes) {
+        await reader.cancel().catch(() => {});
+        throw new BridgeHttpError(
+          "agent_bridge_review_object_size_mismatch",
+          response.status,
+        );
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = Buffer.concat(chunks, length);
+  if (bytes.length !== expectedBytes) {
+    throw new BridgeHttpError("agent_bridge_review_object_size_mismatch", response.status);
+  }
+  return bytes;
 }
 
 function assertEndpointPath(path) {
@@ -116,7 +168,7 @@ export class AgentBridgeClient {
     this.fetch = fetchImplementation;
   }
 
-  async #sendExact(request, attempts) {
+  async #sendExact(request, attempts, parseResponse = jsonResponse) {
     let response;
     let value;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -128,7 +180,7 @@ export class AgentBridgeClient {
           redirect: "error",
           signal: AbortSignal.timeout(this.timeoutMs),
         });
-        value = await jsonResponse(response);
+        value = await parseResponse(response);
         break;
       } catch (error) {
         if (
@@ -184,5 +236,29 @@ export class AgentBridgeClient {
   ) {
     const exact = createSignedRequest(identity, state, request);
     return this.#sendExact(exact, retryLostResponse ? 2 : 1);
+  }
+
+  async signedBytes(
+    identity,
+    state,
+    request,
+    {
+      expectedBytes,
+      maxBytes = MAX_REVIEW_OBJECT_BYTES,
+      retryLostResponse = true,
+    } = {},
+  ) {
+    if (request.method?.toUpperCase() !== "GET" || request.body != null) {
+      throw new Error("review object download must be a bodyless signed GET");
+    }
+    if (request.path !== AGENT_BRIDGE_ENDPOINTS.review_objects) {
+      throw new Error("binary Agent Bridge reads are restricted to review objects");
+    }
+    const exact = createSignedRequest(identity, state, request);
+    return this.#sendExact(
+      exact,
+      retryLostResponse ? 2 : 1,
+      response => byteResponse(response, { expectedBytes, maxBytes }),
+    );
   }
 }

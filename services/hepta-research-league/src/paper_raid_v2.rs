@@ -81,12 +81,19 @@ pub(crate) struct PaperRaidMemory {
         HashMap<(String, u64), SignedAuthorizationSetConsumptionReceiptV1>,
     pub(crate) research_session_completions:
         HashMap<(String, u64), SignedNakamaCompletionReceiptV1>,
+    contribution_ledger_reservations: HashMap<Uuid, ContributionLedgerReservation>,
     nakama_control_commands: HashMap<Uuid, nakama_control_v2::StoredControlCommand>,
     nakama_control_idempotency: HashMap<(String, String), Uuid>,
     collaboration: collaboration_v3::CollaborationMemory,
     pub(crate) review: review_v4::ReviewMemory,
     idempotency: HashMap<String, MemoryIdempotencyRecord>,
     events: Vec<EventEnvelope>,
+}
+
+#[derive(Clone)]
+struct ContributionLedgerReservation {
+    paper_project_id: Uuid,
+    release_candidate_hash: String,
 }
 
 #[cfg(test)]
@@ -631,6 +638,8 @@ pub struct PaperProject {
     pub outcome_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_resources: Option<RoleResourceStateV1>,
     pub current_revision_id: Option<Uuid>,
     pub release_candidate_revision_id: Option<Uuid>,
     pub version: u64,
@@ -812,6 +821,7 @@ pub struct PromoteReleaseCandidateRequest {
     pub research_protocol_snapshot_hash: String,
     pub ethics_disclosure_hash: String,
     pub coi_disclosure_hash: String,
+    pub contribution_ledger_id: Uuid,
     pub contribution_ledger_hash: String,
     pub ai_disclosure_hash: String,
     pub license: String,
@@ -3074,6 +3084,7 @@ async fn rotate_agent_binding_key(
         &request.new_key_signature,
     )
     .map_err(|message| ApiError::forbidden("invalid_agent_binding_key_rotation", message))?;
+    let now = Utc::now();
     if state.pool.is_none() {
         let mut memory = state.paper_raid.write().await;
         if let Some(replay) =
@@ -4398,18 +4409,17 @@ async fn ensure_paper_finality_v2_source_unsealed_memory(
     )
 }
 
+type ChallengeRulesetSnapshotOutcome = (
+    PaperChallengeRulesetSnapshotV1,
+    String,
+    Option<DateTime<Utc>>,
+    Option<DateTime<Utc>>,
+);
+
 fn snapshot_challenge_ruleset(
     challenge: &ResearchChallenge,
     started_at: DateTime<Utc>,
-) -> Result<
-    (
-        PaperChallengeRulesetSnapshotV1,
-        String,
-        Option<DateTime<Utc>>,
-        Option<DateTime<Utc>>,
-    ),
-    ApiError,
-> {
+) -> Result<ChallengeRulesetSnapshotOutcome, ApiError> {
     let challenge_snapshot_hash = crate::challenge_snapshot_hash(challenge)?;
     let (enforcement, ruleset, deadline_at, grace_expires_at) =
         if let Some(ruleset) = &challenge.ruleset {
@@ -4487,15 +4497,7 @@ async fn snapshot_open_challenge_ruleset(
     state: &AppState,
     challenge_id: Uuid,
     started_at: DateTime<Utc>,
-) -> Result<
-    (
-        PaperChallengeRulesetSnapshotV1,
-        String,
-        Option<DateTime<Utc>>,
-        Option<DateTime<Utc>>,
-    ),
-    ApiError,
-> {
+) -> Result<ChallengeRulesetSnapshotOutcome, ApiError> {
     let challenge = state
         .inspect(|league| {
             league
@@ -4538,9 +4540,8 @@ async fn create_paper(
         &request.idempotency_key,
         &request_hash,
     )?;
-    let now = Utc::now();
-
     if state.pool.is_none() {
+        let now = Utc::now();
         let challenge_id = {
             let memory = state.paper_raid.read().await;
             if let Some(replay) =
@@ -4558,6 +4559,7 @@ async fn create_paper(
         };
         let (ruleset_snapshot, ruleset_snapshot_hash, deadline_at, grace_expires_at) =
             snapshot_open_challenge_ruleset(&state, challenge_id, now).await?;
+        let role_resources = role_resource_state_from_snapshot(&ruleset_snapshot, now)?;
         let mut memory = state.paper_raid.write().await;
         if let Some(replay) =
             memory_replay(&memory, OPERATION, &request.idempotency_key, &request_hash)?
@@ -4600,6 +4602,7 @@ async fn create_paper(
             outcome: PaperChallengeOutcomeV1::InProgress,
             outcome_reason: None,
             terminal_at: None,
+            role_resources,
             current_revision_id: None,
             release_candidate_revision_id: None,
             version: 1,
@@ -4643,6 +4646,7 @@ async fn create_paper(
     if let Some(replay) = replay {
         return decode_stored(replay);
     }
+    let now = collaboration_v3::postgres_transaction_now(&mut tx).await?;
     let team_row = sqlx::query(
         "select challenge_id, status, record_json from hepta_research_teams
          where team_id = $1 for share",
@@ -4663,6 +4667,7 @@ async fn create_paper(
     let challenge_id: Uuid = team_row.get("challenge_id");
     let (ruleset_snapshot, ruleset_snapshot_hash, deadline_at, grace_expires_at) =
         snapshot_open_challenge_ruleset(&state, challenge_id, now).await?;
+    let role_resources = role_resource_state_from_snapshot(&ruleset_snapshot, now)?;
     let paper = PaperProject {
         paper_project_id: request.paper_project_id,
         team_id: request.team_id,
@@ -4677,6 +4682,7 @@ async fn create_paper(
         outcome: PaperChallengeOutcomeV1::InProgress,
         outcome_reason: None,
         terminal_at: None,
+        role_resources,
         current_revision_id: None,
         release_candidate_revision_id: None,
         version: 1,
@@ -4762,6 +4768,13 @@ async fn get_paper(
 ) -> Result<Json<PaperProject>, ApiError> {
     let path = format!("/v2/hepta/papers/{paper_id}");
     let assertion = require_member_read_assertion(&headers, &state, "get_paper_project_v2", &path)?;
+    collaboration_v3::ensure_automatic_challenge_expiry_materialized(
+        &state,
+        paper_id,
+        &assertion,
+        Utc::now(),
+    )
+    .await?;
     if state.pool.is_none() {
         let memory = state.paper_raid.read().await;
         let paper = memory.papers.get(&paper_id).cloned().ok_or_else(|| {
@@ -4772,6 +4785,7 @@ async fn get_paper(
             .get(&paper.team_id)
             .ok_or_else(|| ApiError::internal("paper research team record is missing"))?;
         assert_team_actor_memory(&memory, team, &assertion)?;
+        collaboration_v3::validate_paper_role_resources(&paper)?;
         return Ok(Json(paper));
     }
     let pool = state.pool.as_ref().expect("checked PostgreSQL pool");
@@ -4789,6 +4803,7 @@ async fn get_paper(
     let team_id: Uuid = row.get("team_id");
     assert_team_actor_postgres(&mut tx, team_id, &assertion).await?;
     let paper = decode_record(row.get("record_json"), "paper project")?;
+    collaboration_v3::validate_paper_role_resources(&paper)?;
     tx.commit().await.map_err(ApiError::database)?;
     Ok(Json(paper))
 }
@@ -4818,12 +4833,12 @@ fn validate_requested_terminal_outcome(
             Ok(())
         }
         PaperChallengeOutcomeV1::Expired => {
-            let grace_expires_at = paper.grace_expires_at.ok_or_else(|| {
-                ApiError::conflict(
+            if paper.grace_expires_at.is_none() {
+                return Err(ApiError::conflict(
                     "legacy_challenge_has_no_deadline",
                     "legacy-unranked paper projects have no authoritative deadline to expire",
-                )
-            })?;
+                ));
+            }
             if !grace_elapsed {
                 return Err(ApiError::conflict(
                     "paper_challenge_not_expired",
@@ -4862,6 +4877,16 @@ async fn transition_paper_outcome(
         &request_hash,
     )?;
     let now = Utc::now();
+
+    // Canonical automatic expiry is authorized and committed before the
+    // Captain's manual command can acquire the aggregate mutation lock. At or
+    // after the grace boundary this makes the immutable automatic reason and
+    // grace-based terminal timestamp win every race; the manual request then
+    // observes a terminal/version conflict instead of supplying its own fact.
+    collaboration_v3::ensure_automatic_challenge_expiry_materialized(
+        &state, paper_id, &assertion, now,
+    )
+    .await?;
 
     if state.pool.is_none() {
         let mut memory = state.paper_raid.write().await;
@@ -4931,6 +4956,7 @@ async fn transition_paper_outcome(
     if let Some(replay) = replay {
         return decode_stored(replay);
     }
+    let now = collaboration_v3::postgres_transaction_now(&mut tx).await?;
     crate::paper_chain_finality_v2::lock_paper_finality_v2_source_unsealed_postgres(
         &mut tx, paper_id,
     )
@@ -5289,8 +5315,13 @@ fn author_phase_gate_facts_memory(
         .filter(|item| item.paper_project_id == paper.paper_project_id)
         .collect::<Vec<_>>();
     AuthorPhaseGateFacts {
-        work_item: !work_items.is_empty(),
-        work_item_count: work_items.len() as u32,
+        work_item: work_items
+            .iter()
+            .any(|item| item.status != WorkItemStatus::Cancelled),
+        work_item_count: work_items
+            .iter()
+            .filter(|item| item.status != WorkItemStatus::Cancelled)
+            .count() as u32,
         accepted_work_item_count: work_items
             .iter()
             .filter(|item| item.status == WorkItemStatus::Accepted)
@@ -5331,8 +5362,8 @@ async fn author_phase_gate_facts_postgres(
 ) -> Result<AuthorPhaseGateFacts, ApiError> {
     let row = sqlx::query(
         "select
-           exists(select 1 from hepta_paper_work_items where paper_project_id=$1) as work_item,
-           (select count(*) from hepta_paper_work_items where paper_project_id=$1) as work_item_count,
+           exists(select 1 from hepta_paper_work_items where paper_project_id=$1 and status<>'cancelled') as work_item,
+           (select count(*) from hepta_paper_work_items where paper_project_id=$1 and status<>'cancelled') as work_item_count,
            (select count(*) from hepta_paper_work_items where paper_project_id=$1 and status='accepted') as accepted_work_item_count,
            exists(select 1 from hepta_paper_work_items where paper_project_id=$1)
              and not exists(
@@ -5578,6 +5609,7 @@ async fn transition_paper(
     if let Some(replay) = replay {
         return decode_stored(replay);
     }
+    let now = collaboration_v3::postgres_transaction_now(&mut tx).await?;
     crate::paper_chain_finality_v2::lock_paper_finality_v2_source_unsealed_postgres(
         &mut tx, paper_id,
     )
@@ -5594,7 +5626,7 @@ async fn transition_paper(
         ApiError::not_found("paper_project_not_found", "paper project does not exist")
     })?;
     let mut paper: PaperProject = decode_record(row.get("record_json"), "paper project")?;
-    ensure_paper_gameplay_active(&paper, Utc::now())?;
+    ensure_paper_gameplay_active(&paper, now)?;
     assert_team_actor_postgres(&mut tx, paper.team_id, &assertion).await?;
     let team_row =
         sqlx::query("select record_json from hepta_research_teams where team_id=$1 for share")
@@ -5632,7 +5664,7 @@ async fn transition_paper(
     ensure_author_phase_gate(&paper, request.next_phase, phase_gate_facts)?;
     paper.phase = request.next_phase;
     paper.version += 1;
-    paper.updated_at = Utc::now();
+    paper.updated_at = now;
     let record_json = serde_json::to_value(&paper)
         .map_err(|error| ApiError::internal(format!("encode paper project: {error}")))?;
     let updated = sqlx::query(
@@ -6650,6 +6682,167 @@ fn validate_release_authors(
     Ok(())
 }
 
+fn validate_contribution_ledger_id(contribution_ledger_id: Uuid) -> Result<(), ApiError> {
+    if contribution_ledger_id.is_nil() {
+        return Err(ApiError::bad_request(
+            "nil_contribution_ledger_id",
+            "contribution_ledger_id must not be the nil UUID",
+        ));
+    }
+    Ok(())
+}
+
+fn reserve_contribution_ledger_id_memory(
+    memory: &mut PaperRaidMemory,
+    contribution_ledger_id: Uuid,
+    paper_id: Uuid,
+    release_candidate_hash: &str,
+) -> Result<(), ApiError> {
+    validate_contribution_ledger_id(contribution_ledger_id)?;
+    if let Some(existing) = memory
+        .contribution_ledger_reservations
+        .get(&contribution_ledger_id)
+    {
+        if existing.paper_project_id == paper_id
+            && existing.release_candidate_hash == release_candidate_hash
+        {
+            return Ok(());
+        }
+        return Err(ApiError::conflict(
+            "contribution_ledger_id_reserved",
+            "contribution_ledger_id is already reserved by another Paper release candidate",
+        ));
+    }
+    if memory
+        .review
+        .contribution_ledgers
+        .get(&contribution_ledger_id)
+        .is_some_and(|ledger| {
+            ledger.paper_project_id != paper_id
+                || ledger.release_candidate_hash != release_candidate_hash
+        })
+    {
+        return Err(ApiError::conflict(
+            "contribution_ledger_id_reserved",
+            "contribution_ledger_id is already owned by another frozen contribution ledger",
+        ));
+    }
+    memory.contribution_ledger_reservations.insert(
+        contribution_ledger_id,
+        ContributionLedgerReservation {
+            paper_project_id: paper_id,
+            release_candidate_hash: release_candidate_hash.to_string(),
+        },
+    );
+    Ok(())
+}
+
+fn require_contribution_ledger_reservation_memory(
+    memory: &PaperRaidMemory,
+    contribution_ledger_id: Uuid,
+    paper_id: Uuid,
+    release_candidate_hash: &str,
+) -> Result<(), ApiError> {
+    validate_contribution_ledger_id(contribution_ledger_id)?;
+    match memory
+        .contribution_ledger_reservations
+        .get(&contribution_ledger_id)
+    {
+        Some(reservation)
+            if reservation.paper_project_id == paper_id
+                && reservation.release_candidate_hash == release_candidate_hash =>
+        {
+            Ok(())
+        }
+        Some(_) => Err(ApiError::conflict(
+            "contribution_ledger_id_ownership_mismatch",
+            "contribution_ledger_id is reserved by another Paper release candidate",
+        )),
+        None => Err(ApiError::conflict(
+            "contribution_ledger_id_not_reserved",
+            "contribution_ledger_id must be atomically reserved during release-candidate promotion",
+        )),
+    }
+}
+
+async fn reserve_contribution_ledger_id_postgres(
+    tx: &mut Transaction<'_, Postgres>,
+    contribution_ledger_id: Uuid,
+    paper_id: Uuid,
+    release_candidate_hash: &str,
+    now: DateTime<Utc>,
+) -> Result<(), ApiError> {
+    validate_contribution_ledger_id(contribution_ledger_id)?;
+    let inserted = sqlx::query(
+        "insert into hepta_paper_contribution_ledger_reservations
+         (contribution_ledger_id,paper_project_id,release_candidate_hash,created_at)
+         values ($1,$2,$3,$4) on conflict do nothing",
+    )
+    .bind(contribution_ledger_id)
+    .bind(paper_id)
+    .bind(release_candidate_hash)
+    .bind(now)
+    .execute(&mut **tx)
+    .await
+    .map_err(ApiError::database)?;
+    if inserted.rows_affected() == 1 {
+        return Ok(());
+    }
+    let existing = sqlx::query(
+        "select paper_project_id,release_candidate_hash
+         from hepta_paper_contribution_ledger_reservations
+         where contribution_ledger_id=$1 for key share",
+    )
+    .bind(contribution_ledger_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(ApiError::database)?;
+    if existing.is_some_and(|row| {
+        row.get::<Uuid, _>("paper_project_id") == paper_id
+            && row.get::<String, _>("release_candidate_hash") == release_candidate_hash
+    }) {
+        return Ok(());
+    }
+    Err(ApiError::conflict(
+        "contribution_ledger_id_reserved",
+        "contribution_ledger_id is already reserved by another Paper release candidate",
+    ))
+}
+
+async fn require_contribution_ledger_reservation_postgres(
+    tx: &mut Transaction<'_, Postgres>,
+    contribution_ledger_id: Uuid,
+    paper_id: Uuid,
+    release_candidate_hash: &str,
+) -> Result<(), ApiError> {
+    validate_contribution_ledger_id(contribution_ledger_id)?;
+    let row = sqlx::query(
+        "select paper_project_id,release_candidate_hash
+         from hepta_paper_contribution_ledger_reservations
+         where contribution_ledger_id=$1 for key share",
+    )
+    .bind(contribution_ledger_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(ApiError::database)?;
+    match row {
+        Some(row)
+            if row.get::<Uuid, _>("paper_project_id") == paper_id
+                && row.get::<String, _>("release_candidate_hash") == release_candidate_hash =>
+        {
+            Ok(())
+        }
+        Some(_) => Err(ApiError::conflict(
+            "contribution_ledger_id_ownership_mismatch",
+            "contribution_ledger_id is reserved by another Paper release candidate",
+        )),
+        None => Err(ApiError::conflict(
+            "contribution_ledger_id_not_reserved",
+            "contribution_ledger_id must be atomically reserved during release-candidate promotion",
+        )),
+    }
+}
+
 async fn promote_release_candidate(
     State(state): State<AppState>,
     Path((paper_id, revision_id)): Path<(Uuid, Uuid)>,
@@ -6658,6 +6851,7 @@ async fn promote_release_candidate(
 ) -> Result<(StatusCode, Json<PromoteReleaseCandidateResponse>), ApiError> {
     const OPERATION: &str = "promote_paper_release_candidate_v2";
     validate_idempotency_key(&request.idempotency_key)?;
+    validate_contribution_ledger_id(request.contribution_ledger_id)?;
     validate_contract_text_api("title", &request.title)?;
     validate_contract_text_api("abstract_text", &request.abstract_text)?;
     validate_contract_text_api("license", &request.license)?;
@@ -6703,7 +6897,6 @@ async fn promote_release_candidate(
         let paper = memory.papers.get(&paper_id).cloned().ok_or_else(|| {
             ApiError::not_found("paper_project_not_found", "paper project does not exist")
         })?;
-        ensure_paper_gameplay_active(&paper, now)?;
         if paper.version != request.expected_paper_version {
             return Err(version_conflict(
                 "paper project",
@@ -6711,6 +6904,7 @@ async fn promote_release_candidate(
                 paper.version,
             ));
         }
+        ensure_paper_gameplay_active(&paper, now)?;
         if paper.phase != PaperPhase::AuthorApproval
             || paper.current_revision_id != Some(revision_id)
         {
@@ -6764,6 +6958,22 @@ async fn promote_release_candidate(
                 "paper revision is not the expected draft version for this project",
             ));
         }
+        let contribution_entries = review_v4::authoritative_contribution_entries_memory(
+            &memory,
+            paper_id,
+            &request.authors,
+        )?;
+        let authoritative_contribution_hash = review_v4::contribution_ledger_hash(
+            request.contribution_ledger_id,
+            paper_id,
+            &contribution_entries,
+        )?;
+        if request.contribution_ledger_hash != authoritative_contribution_hash {
+            return Err(ApiError::conflict(
+                "contribution_ledger_hash_mismatch",
+                "release candidate must bind the complete authoritative contribution ledger",
+            ));
+        }
         let section_materialization_root = validated_revision_materialization_root(&revision)?;
         let candidate = PaperReleaseCandidateV2 {
             schema: PAPER_RELEASE_CANDIDATE_V2.to_string(),
@@ -6793,8 +7003,15 @@ async fn promote_release_candidate(
         };
         let release_hash = paper_release_candidate_hash(&candidate)
             .map_err(|message| ApiError::bad_request("invalid_release_candidate", message))?;
+        let mut next = memory.clone();
+        reserve_contribution_ledger_id_memory(
+            &mut next,
+            request.contribution_ledger_id,
+            paper_id,
+            &release_hash,
+        )?;
         let updated_revision = {
-            let revision = memory
+            let revision = next
                 .revisions
                 .get_mut(&revision_id)
                 .expect("revision exists");
@@ -6806,7 +7023,7 @@ async fn promote_release_candidate(
             revision.clone()
         };
         let paper_version = {
-            let paper = memory.papers.get_mut(&paper_id).expect("paper exists");
+            let paper = next.papers.get_mut(&paper_id).expect("paper exists");
             paper.release_candidate_revision_id = Some(revision_id);
             paper.version += 1;
             paper.updated_at = now;
@@ -6818,7 +7035,7 @@ async fn promote_release_candidate(
             paper_version,
         };
         push_memory_event(
-            &mut memory,
+            &mut next,
             OPERATION,
             &request.idempotency_key,
             "hepta.paper_raid.release_candidate.promoted.v2",
@@ -6828,17 +7045,19 @@ async fn promote_release_candidate(
                 "paper_project_id": paper_id,
                 "revision_id": revision_id,
                 "release_candidate_hash": response.release_candidate_hash,
+                "contribution_ledger_id": request.contribution_ledger_id,
                 "roster_version": team.roster_version,
             }),
         )?;
         memory_remember(
-            &mut memory,
+            &mut next,
             OPERATION,
             &request.idempotency_key,
             request_hash,
             StatusCode::OK,
             &response,
         )?;
+        *memory = next;
         return Ok((StatusCode::OK, Json(response)));
     }
 
@@ -6864,7 +7083,6 @@ async fn promote_release_candidate(
         ApiError::not_found("paper_project_not_found", "paper project does not exist")
     })?;
     let mut paper: PaperProject = decode_record(paper_row.get("record_json"), "paper project")?;
-    ensure_paper_gameplay_active(&paper, now)?;
     let paper_version = u64::try_from(paper_row.get::<i64, _>("version"))
         .map_err(|_| ApiError::internal("paper version is invalid"))?;
     if paper_version != request.expected_paper_version {
@@ -6874,6 +7092,7 @@ async fn promote_release_candidate(
             paper_version,
         ));
     }
+    ensure_paper_gameplay_active(&paper, now)?;
     if paper.phase != PaperPhase::AuthorApproval
         || paper.current_revision_id != Some(revision_id)
         || paper.release_candidate_revision_id.is_some()
@@ -6950,6 +7169,20 @@ async fn promote_release_candidate(
             "paper revision is not the expected draft version",
         ));
     }
+    let contribution_entries =
+        review_v4::authoritative_contribution_entries_postgres(&mut tx, paper_id, &request.authors)
+            .await?;
+    let authoritative_contribution_hash = review_v4::contribution_ledger_hash(
+        request.contribution_ledger_id,
+        paper_id,
+        &contribution_entries,
+    )?;
+    if request.contribution_ledger_hash != authoritative_contribution_hash {
+        return Err(ApiError::conflict(
+            "contribution_ledger_hash_mismatch",
+            "release candidate must bind the complete authoritative contribution ledger",
+        ));
+    }
     let section_materialization_root = validated_revision_materialization_root(&revision)?;
     let candidate = PaperReleaseCandidateV2 {
         schema: PAPER_RELEASE_CANDIDATE_V2.to_string(),
@@ -6979,6 +7212,14 @@ async fn promote_release_candidate(
     };
     let release_hash = paper_release_candidate_hash(&candidate)
         .map_err(|message| ApiError::bad_request("invalid_release_candidate", message))?;
+    reserve_contribution_ledger_id_postgres(
+        &mut tx,
+        request.contribution_ledger_id,
+        paper_id,
+        &release_hash,
+        now,
+    )
+    .await?;
     revision.status = PaperRevisionStatus::ReleaseCandidate;
     revision.release_candidate = Some(candidate);
     revision.release_candidate_hash = Some(release_hash.clone());
@@ -7049,6 +7290,7 @@ async fn promote_release_candidate(
             "paper_project_id": paper.paper_project_id,
             "revision_id": revision_id,
             "release_candidate_hash": response.release_candidate_hash,
+            "contribution_ledger_id": request.contribution_ledger_id,
             "roster_version": team.roster_version,
         }),
     )
@@ -7687,9 +7929,8 @@ async fn finalize_paper(
         &request.idempotency_key,
         &request_hash,
     )?;
-    let now = Utc::now();
-
     if state.pool.is_none() {
+        let now = Utc::now();
         let mut memory = state.paper_raid.write().await;
         if let Some(replay) =
             memory_replay(&memory, OPERATION, &request.idempotency_key, &request_hash)?
@@ -7711,7 +7952,6 @@ async fn finalize_paper(
         let paper = memory.papers.get(&paper_id).cloned().ok_or_else(|| {
             ApiError::not_found("paper_project_not_found", "paper project does not exist")
         })?;
-        ensure_paper_gameplay_active(&paper, now)?;
         if paper.version != request.expected_paper_version {
             return Err(version_conflict(
                 "paper project",
@@ -7719,6 +7959,7 @@ async fn finalize_paper(
                 paper.version,
             ));
         }
+        ensure_paper_gameplay_active(&paper, now)?;
         if paper.phase != PaperPhase::AuthorApproval
             || paper.current_revision_id != Some(request.revision_id)
             || paper.release_candidate_revision_id != Some(request.revision_id)
@@ -7876,6 +8117,7 @@ async fn finalize_paper(
     if let Some(replay) = replay {
         return decode_stored(replay);
     }
+    let now = collaboration_v3::postgres_transaction_now(&mut tx).await?;
     crate::paper_chain_finality_v2::lock_paper_finality_v2_source_unsealed_postgres(
         &mut tx, paper_id,
     )
@@ -7892,7 +8134,6 @@ async fn finalize_paper(
         ApiError::not_found("paper_project_not_found", "paper project does not exist")
     })?;
     let mut paper: PaperProject = decode_record(paper_row.get("record_json"), "paper project")?;
-    ensure_paper_gameplay_active(&paper, now)?;
     let paper_version = u64::try_from(paper_row.get::<i64, _>("version"))
         .map_err(|_| ApiError::internal("paper version is invalid"))?;
     if paper_version != request.expected_paper_version {
@@ -7902,6 +8143,7 @@ async fn finalize_paper(
             paper_version,
         ));
     }
+    ensure_paper_gameplay_active(&paper, now)?;
     if paper.phase != PaperPhase::AuthorApproval
         || paper.current_revision_id != Some(request.revision_id)
         || paper.release_candidate_revision_id != Some(request.revision_id)

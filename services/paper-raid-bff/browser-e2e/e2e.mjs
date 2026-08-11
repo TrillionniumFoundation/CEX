@@ -15,7 +15,8 @@ const phaseLabels = Object.freeze({
   experimenting: "Experiment / 实验",
   drafting: "Draft / 起草",
   integrity_review: "Integrity review / 完整性审查",
-  reproducing: "Reproduce / 复现",
+  reproducing: "Reproduction readiness / 复现准备",
+  reproduction_readiness: "Reproduction readiness / 复现准备",
   author_approval: "Author approval / 作者批准",
   integrity_hold: "Integrity hold / 完整性挂起",
   submission_ready: "Author Raid complete / 作者远征完成",
@@ -208,6 +209,14 @@ async function runContext(browser, index) {
         );
         assert.deepEqual(roleChoices.map(choice => choice.value), authorized);
         assert.ok(roleChoices.some(choice => choice.checked));
+        const partyCode = queueForm.locator('input[name="party_code"]');
+        await partyCode.waitFor();
+        await queueForm.locator(".generate-party-code").click();
+        assert.match(
+          await partyCode.inputValue(),
+          /^PR1-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+        );
+        await partyCode.fill("");
       }
       const rotation = page.locator(".agent-rotation-form");
       await rotation.waitFor();
@@ -271,17 +280,19 @@ async function runContext(browser, index) {
         ".create-run-record-form",
         ".input-manifest-wizard-form",
         ".draft-manifest-wizard-form",
+        ".run-artifact-wizard-form",
+        ".figure-lineage-wizard-form",
+        ".role-resource-action-form",
         ".acquire-section-lease-form",
-        ".bridge-proposal-task-form",
+        ".bridge-inbox-task",
         ".human-proposal-decision-form",
         ".create-section-revision-form",
         ".section-review-form",
         ".merge-section-form",
         ".freeze-contribution-ledger-form",
-        ".review-evaluation-draft-form",
+        ".review-receipt-confirm-form",
         ".review-attestation-form",
         ".review-finalize-form",
-        ".review-reproduction-form",
       ]) {
         const guidedForms = page.locator(selector);
         for (let formIndex = 0; formIndex < await guidedForms.count(); formIndex += 1) {
@@ -327,10 +338,13 @@ async function runContext(browser, index) {
         ],
       );
       const finalityStatus = await page.locator(".hero .status").first().textContent();
-      assert.match(finalityStatus || "", /(pending_finality|verified_finality)/);
       assert.match(
         finalityStatus || "",
-        /(Verification pending \/ 等待终局验证|Verified scientific finality \/ 科学终局已验证)/,
+        /(pending_finality|verified_finality|unknown_finality|unavailable_finality|error_finality)/,
+      );
+      assert.match(
+        finalityStatus || "",
+        /(Verification pending \/ 等待终局验证|Verified scientific finality \/ 科学终局已验证|Finality unknown \/ 终局状态未知|Finality temporarily unavailable \/ 终局暂不可用|Finality verification error \/ 终局验证错误)/,
       );
       assert.equal(await page.locator(".eligibility-grid li").count(), 4);
       await page.locator('.live-connection[data-state="live"]').waitFor({ timeout: 15000 });

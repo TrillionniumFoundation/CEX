@@ -1,0 +1,38 @@
+{
+  "bomFormat": "CycloneDX",
+  "components": [
+    {
+      "bom-ref": "file:/paper-raid-accessctl",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ],
+      "name": "/paper-raid-accessctl",
+      "type": "file"
+    }
+  ],
+  "metadata": {
+    "component": {
+      "bom-ref": "pkg:cargo/paper-raid-bff@0.1.0?binary=paper-raid-accessctl",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "paper-raid-accessctl",
+      "purl": "pkg:cargo/paper-raid-bff@0.1.0?binary=paper-raid-accessctl",
+      "type": "application",
+      "version": "0.1.0"
+    },
+    "properties": [
+      {
+        "name": "org.trillionnium.release-state",
+        "value": "unbound-must-regenerate-from-release-binary"
+      }
+    ]
+  },
+  "specVersion": "1.5",
+  "version": 1
+}

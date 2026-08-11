@@ -6,10 +6,26 @@ import { generateIdentity, importIdentity, loadIdentity } from "./identity.mjs";
 import { loadConfig } from "./config.mjs";
 import { inboxFingerprint } from "./inbox.mjs";
 import {
+  actionableDeliveryCandidates,
+  deliveryCandidateKey,
+  deliveryCandidates,
+  formatDeliveryCandidate,
+  proposalInput,
+  workResult,
+} from "./work.mjs";
+import {
+  actionableReviewTasks,
+  formatReviewTask,
+  reviewTaskKey,
+} from "./review.mjs";
+import {
   bridgeHealth,
   getBinding,
   getInbox,
   pairAgent,
+  prepareDeliveryDraft,
+  executeAndSubmitReviewTask,
+  recoverPendingReviewReceipt,
   signResearchSessionAction,
   submitAgentProposal,
 } from "./operations.mjs";
@@ -24,11 +40,8 @@ Usage:
   paper-raid-agent-bridge binding --config FILE
   paper-raid-agent-bridge health --config FILE [--status healthy|degraded|offline]
   paper-raid-agent-bridge inbox --config FILE [--watch]
-  paper-raid-agent-bridge submit-proposal --config FILE \\
-    --paper-id UUID --work-item-id UUID --section-key KEY \\
-    --parent-revision-id UUID --proposal-kind proposal|delivery \\
-    --payload-hash sha256:HEX --artifact-manifest-id UUID \\
-    --artifact-manifest-hash sha256:HEX
+  paper-raid-agent-bridge prepare-delivery --config FILE --input FILE
+  paper-raid-agent-bridge work --config FILE [--watch] [--auto]
   paper-raid-agent-bridge sign-action --config FILE --input FILE
 
 The pair command reads its one-time code only from a silent TTY prompt or
@@ -41,7 +54,7 @@ function parseArguments(argv) {
   for (let index = 0; index < rest.length; index += 1) {
     const name = rest[index];
     if (!name.startsWith("--")) throw new Error(`unexpected argument ${name}`);
-    if (["--watch", "--help"].includes(name)) {
+    if (["--watch", "--auto", "--help"].includes(name)) {
       if (flags.has(name)) throw new Error(`duplicate flag ${name}`);
       flags.set(name, true);
       continue;
@@ -160,6 +173,129 @@ export async function readPairingCodeFromInput(
   return readPipedLine(input);
 }
 
+export async function chooseDeliveryCandidate(
+  candidates,
+  input = process.stdin,
+  errorOutput = process.stderr,
+) {
+  if (!Array.isArray(candidates) || candidates.length === 0) return null;
+  for (const [index, candidate] of candidates.entries()) {
+    errorOutput.write(`${formatDeliveryCandidate(candidate, index)}\n`);
+  }
+  const reader = createInterface({
+    input,
+    output: errorOutput,
+    crlfDelay: Infinity,
+    terminal: Boolean(input.isTTY),
+  });
+  const answer = await new Promise((resolveAnswer, rejectAnswer) => {
+    reader.question(
+      "Select one delivery to sign and submit, or 0 to cancel: ",
+      resolveAnswer,
+    );
+    reader.once("error", rejectAnswer);
+  }).finally(() => reader.close());
+  const selected = Number(String(answer).trim());
+  if (!Number.isSafeInteger(selected) || selected < 0 || selected > candidates.length) {
+    throw new Error("delivery selection is outside the displayed range");
+  }
+  return selected === 0 ? null : candidates[selected - 1];
+}
+
+export async function chooseWorkCandidate(
+  candidates,
+  input = process.stdin,
+  errorOutput = process.stderr,
+) {
+  if (!Array.isArray(candidates) || candidates.length === 0) return null;
+  for (const [index, candidate] of candidates.entries()) {
+    const line = candidate.work_kind === "review"
+      ? formatReviewTask(candidate.value, index)
+      : formatDeliveryCandidate(candidate.value, index);
+    errorOutput.write(`${line}\n`);
+  }
+  const reader = createInterface({
+    input,
+    output: errorOutput,
+    crlfDelay: Infinity,
+    terminal: Boolean(input.isTTY),
+  });
+  const answer = await new Promise((resolveAnswer, rejectAnswer) => {
+    reader.question(
+      "Select one local task to confirm and submit, or 0 to cancel: ",
+      resolveAnswer,
+    );
+    reader.once("error", rejectAnswer);
+  }).finally(() => reader.close());
+  const selected = Number(String(answer).trim());
+  if (!Number.isSafeInteger(selected) || selected < 0 || selected > candidates.length) {
+    throw new Error("work selection is outside the displayed range");
+  }
+  return selected === 0 ? null : candidates[selected - 1];
+}
+
+function combinedWorkItems(inbox, acknowledgedDeliveries, acknowledgedReviews) {
+  const deliveries = acknowledgedDeliveries === undefined
+    ? deliveryCandidates(inbox)
+    : actionableDeliveryCandidates(inbox, acknowledgedDeliveries);
+  const reviews = acknowledgedReviews === undefined
+    ? actionableReviewTasks(inbox)
+    : actionableReviewTasks(inbox, acknowledgedReviews);
+  return [
+    ...deliveries.map(value => Object.freeze({ work_kind: "delivery", value })),
+    ...reviews.map(value => Object.freeze({ work_kind: "review", value })),
+  ];
+}
+
+async function submitWorkItem(config, identity, candidate) {
+  if (candidate.work_kind === "review") {
+    return executeAndSubmitReviewTask(config, identity, candidate.value);
+  }
+  return submitAgentProposal(config, identity, proposalInput(candidate.value));
+}
+
+async function workOnce(config, identity, flags) {
+  const recovered = await recoverPendingReviewReceipt(config, identity);
+  if (recovered !== null) {
+    output(workResult("recovered", {
+      recoveredTaskId: recovered.task_id,
+      result: recovered,
+    }));
+    return null;
+  }
+  const inbox = await getInbox(config, identity);
+  const candidates = combinedWorkItems(inbox);
+  if (candidates.length === 0) {
+    output(workResult("idle"));
+    return inbox;
+  }
+  let candidate;
+  if (flags.has("--auto")) {
+    if (candidates.length !== 1) {
+      output(workResult("awaiting_local_selection", {
+        candidateCount: candidates.length,
+      }));
+      return inbox;
+    }
+    candidate = candidates[0];
+  } else {
+    candidate = await chooseWorkCandidate(candidates);
+    if (!candidate) {
+      output(workResult("cancelled_locally", {
+        candidateCount: candidates.length,
+      }));
+      return inbox;
+    }
+  }
+  const result = await submitWorkItem(config, identity, candidate);
+  output(workResult("submitted", {
+    candidateCount: candidates.length,
+    candidate: candidate.value,
+    result,
+  }));
+  return inbox;
+}
+
 export async function main(argv) {
   const { command, flags } = parseArguments(argv);
   if (!command || command === "help" || flags.has("--help")) {
@@ -239,32 +375,85 @@ export async function main(argv) {
       );
     }
   }
-  if (command === "submit-proposal") {
-    allowed(flags, [
-      "--config",
-      "--paper-id",
-      "--work-item-id",
-      "--section-key",
-      "--parent-revision-id",
-      "--proposal-kind",
-      "--payload-hash",
-      "--artifact-manifest-id",
-      "--artifact-manifest-hash",
-    ]);
+  if (command === "prepare-delivery") {
+    allowed(flags, ["--config", "--input"]);
     const { config, identity } = await configured(flags);
-    output(
-      await submitAgentProposal(config, identity, {
-        paper_id: required(flags, "--paper-id"),
-        work_item_id: required(flags, "--work-item-id"),
-        section_key: required(flags, "--section-key"),
-        parent_revision_id: required(flags, "--parent-revision-id"),
-        proposal_kind: required(flags, "--proposal-kind"),
-        payload_hash: required(flags, "--payload-hash"),
-        artifact_manifest_id: required(flags, "--artifact-manifest-id"),
-        artifact_manifest_hash: required(flags, "--artifact-manifest-hash"),
-      }),
-    );
+    const input = await readSafeJson(resolve(required(flags, "--input")), {
+      privateFile: false,
+      ownerOnly: false,
+      maxBytes: 64 * 1024,
+    });
+    output(await prepareDeliveryDraft(config, identity, input));
     return;
+  }
+  if (command === "work") {
+    allowed(flags, ["--config", "--watch", "--auto"]);
+    const { config, identity } = await configured(flags);
+    if (!flags.has("--watch")) {
+      await workOnce(config, identity, flags);
+      return;
+    }
+    const recovered = await recoverPendingReviewReceipt(config, identity);
+    if (recovered !== null) {
+      output(workResult("recovered", {
+        recoveredTaskId: recovered.task_id,
+        result: recovered,
+      }));
+    }
+    let previous = null;
+    const acknowledgedDeliveries = new Set();
+    const acknowledgedReviews = new Set();
+    for (;;) {
+      const inbox = await getInbox(config, identity);
+      const fingerprint = inboxFingerprint(inbox);
+      if (fingerprint !== previous) {
+        const candidates = combinedWorkItems(
+          inbox,
+          acknowledgedDeliveries,
+          acknowledgedReviews,
+        );
+        if (candidates.length === 0) {
+          output(workResult("idle"));
+        } else {
+          let candidate;
+          if (flags.has("--auto")) {
+            candidate = candidates.length === 1 ? candidates[0] : null;
+            if (!candidate) {
+              output(workResult("awaiting_local_selection", {
+                candidateCount: candidates.length,
+              }));
+            }
+          } else {
+            candidate = await chooseWorkCandidate(candidates);
+            if (!candidate) {
+              output(workResult("cancelled_locally", {
+                candidateCount: candidates.length,
+              }));
+            }
+          }
+          if (candidate) {
+            const candidateKey = candidate.work_kind === "review"
+              ? reviewTaskKey(candidate.value)
+              : deliveryCandidateKey(candidate.value);
+            const result = await submitWorkItem(config, identity, candidate);
+            output(workResult("submitted", {
+              candidateCount: candidates.length,
+              candidate: candidate.value,
+              result,
+            }));
+            if (candidate.work_kind === "review") {
+              acknowledgedReviews.add(candidateKey);
+            } else {
+              acknowledgedDeliveries.add(candidateKey);
+            }
+          }
+        }
+        previous = fingerprint;
+      }
+      await new Promise(resolveTimer =>
+        setTimeout(resolveTimer, config.poll_interval_ms),
+      );
+    }
   }
   if (command === "sign-action") {
     allowed(flags, ["--config", "--input"]);

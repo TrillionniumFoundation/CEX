@@ -1875,6 +1875,19 @@ fn validate_source_candidate_v2<'a, R: FinalitySourceSelectorV2>(
         .map(|set| set.roster_version)
         .max();
     let appeal = resolve_appeal_facts(facts, evaluation)?;
+    let consumer_resolution_id = crate::paper_raid_v2::effective_finality_resolution_id(
+        evaluation,
+        &facts.evaluations,
+        &facts.reproductions,
+        &facts.appeals,
+        &facts.resolutions,
+    )?;
+    if consumer_resolution_id != appeal.resolution_id {
+        return Err(ApiError::conflict(
+            "paper_trnm_consumer_resolution_binding_mismatch",
+            "Finality V2 and Consumer Finality disagree on the exact effective Appeal resolution",
+        ));
+    }
     let legacy = PaperTrnmCommandBindingV1 {
         schema: PAPER_TRNM_COMMAND_BINDING_SCHEMA_V1.to_string(),
         paper_project_id: facts.paper.paper_project_id,
@@ -2151,85 +2164,178 @@ fn resolve_appeal_facts(
     facts: &PaperFinalityFactsV2,
     evaluation: &PaperEvaluation,
 ) -> Result<ResolvedAppealFactsV2, ApiError> {
-    let lineage = evaluation_lineage(facts, evaluation)?;
+    let mut lineage = evaluation_lineage(facts, evaluation)?;
+    lineage.reverse();
     let lineage_ids = lineage
         .iter()
         .map(|record| record.evaluation_id)
         .collect::<HashSet<_>>();
-    let lineage_appeals = facts
-        .appeals
-        .iter()
-        .filter(|appeal| lineage_ids.contains(&appeal.evaluation_id))
-        .collect::<Vec<_>>();
-    let lineage_appeal_ids = lineage_appeals
-        .iter()
-        .map(|appeal| appeal.appeal_id)
-        .collect::<HashSet<_>>();
-
-    if facts.resolutions.iter().any(|resolution| {
-        resolution.superseding_evaluation_id == Some(evaluation.evaluation_id)
-            && !lineage_appeal_ids.contains(&resolution.appeal_id)
+    let root = lineage.first().copied().ok_or_else(|| {
+        ApiError::conflict(
+            "paper_trnm_evaluation_lineage_missing",
+            "final evaluation lineage has no root",
+        )
+    })?;
+    if root.version != 1 || root.supersedes_evaluation_id.is_some() {
+        return Err(ApiError::conflict(
+            "paper_trnm_appeal_lineage_mismatch",
+            "final evaluation lineage must begin at one version-1 root",
+        ));
+    }
+    if facts.evaluations.iter().any(|record| {
+        record.submission_id == evaluation.submission_id
+            && !lineage_ids.contains(&record.evaluation_id)
     }) {
         return Err(ApiError::conflict(
             "paper_trnm_appeal_lineage_mismatch",
-            "a resolution outside the final evaluation lineage claims the latest evaluation",
+            "the final submission contains an evaluation outside the single exact root-to-leaf lineage",
         ));
     }
 
-    let mut resolved = Vec::with_capacity(lineage_appeals.len());
-    for appeal in lineage_appeals {
-        let resolutions = facts
-            .resolutions
-            .iter()
-            .filter(|resolution| resolution.appeal_id == appeal.appeal_id)
-            .collect::<Vec<_>>();
-        if resolutions.is_empty() {
-            return Err(ApiError::conflict(
-                "paper_chain_finality_open_appeal",
-                "an unresolved Appeal anywhere in the final evaluation lineage holds Paper scientific finality",
-            ));
-        }
-        if resolutions.len() != 1 || resolutions[0].evaluation_id != appeal.evaluation_id {
+    let exact_appeal = |evaluation_id: Uuid| -> Result<Option<&PaperAppeal>, ApiError> {
+        let mut matching = facts.appeals.iter().filter(|appeal| {
+            appeal.paper_project_id == evaluation.paper_project_id
+                && appeal.evaluation_id == evaluation_id
+        });
+        let appeal = matching.next();
+        if matching.next().is_some() {
             return Err(ApiError::conflict(
                 "paper_trnm_appeal_lineage_ambiguous",
-                "Appeal resolution lineage is missing, duplicated, or bound to another evaluation",
+                "an evaluation in the final lineage has more than one Appeal",
             ));
         }
-        resolved.push((appeal, resolutions[0]));
+        Ok(appeal)
+    };
+    let exact_resolution = |appeal_id: Uuid| -> Result<Option<&PaperAppealResolution>, ApiError> {
+        let mut matching = facts.resolutions.iter().filter(|resolution| {
+            resolution.paper_project_id == evaluation.paper_project_id
+                && resolution.appeal_id == appeal_id
+        });
+        let resolution = matching.next();
+        if matching.next().is_some() {
+            return Err(ApiError::conflict(
+                "paper_trnm_appeal_lineage_ambiguous",
+                "an Appeal in the final lineage has more than one resolution",
+            ));
+        }
+        Ok(resolution)
+    };
+
+    let panel = |record: &PaperEvaluation| {
+        std::iter::once(record.evaluator_player_id)
+            .chain(
+                record
+                    .reviewer_attestations
+                    .iter()
+                    .map(|attestation| attestation.reviewer_player_id),
+            )
+            .collect::<HashSet<_>>()
+    };
+    let mut activated_at = root.created_at;
+    let mut activation_resolution_ids = HashSet::new();
+    let mut latest_activation = None;
+    for pair in lineage.windows(2) {
+        let parent = pair[0];
+        let child = pair[1];
+        let parent_panel = panel(parent);
+        let child_panel = panel(child);
+        if child.supersedes_evaluation_id != Some(parent.evaluation_id)
+            || child.submission_id != parent.submission_id
+            || child.release_candidate_hash != parent.release_candidate_hash
+            || child.paper_bundle_hash != parent.paper_bundle_hash
+            || child.version
+                != parent.version.checked_add(1).ok_or_else(|| {
+                    ApiError::conflict(
+                        "paper_trnm_appeal_lineage_mismatch",
+                        "evaluation version overflowed in the final lineage",
+                    )
+                })?
+            || parent_panel.len() != 3
+            || child_panel.len() != 3
+            || !parent_panel.is_disjoint(&child_panel)
+        {
+            return Err(ApiError::conflict(
+                "paper_trnm_appeal_lineage_mismatch",
+                "each replacement must be the next same-submission version with a disjoint review panel",
+            ));
+        }
+        let appeal = exact_appeal(parent.evaluation_id)?.ok_or_else(|| {
+            ApiError::conflict(
+                "paper_trnm_appeal_lineage_mismatch",
+                "each non-final evaluation replacement requires its exact parent Appeal",
+            )
+        })?;
+        let resolution = exact_resolution(appeal.appeal_id)?.ok_or_else(|| {
+            ApiError::conflict(
+                "paper_chain_finality_open_appeal",
+                "an unresolved Appeal anywhere in the final evaluation lineage holds Paper scientific finality",
+            )
+        })?;
+        if appeal.release_candidate_hash != parent.release_candidate_hash
+            || appeal.created_at < activated_at
+            || child.created_at < appeal.created_at
+            || resolution.evaluation_id != parent.evaluation_id
+            || resolution.release_candidate_hash != parent.release_candidate_hash
+            || resolution.outcome != AppealOutcome::Upheld
+            || resolution.superseding_evaluation_id != Some(child.evaluation_id)
+            || resolution.created_at < appeal.created_at
+            || resolution.created_at < child.created_at
+        {
+            return Err(ApiError::conflict(
+                "paper_trnm_appeal_lineage_mismatch",
+                "every intermediate generation must be activated by its exact chronological upheld Appeal resolution",
+            ));
+        }
+        activation_resolution_ids.insert(resolution.resolution_id);
+        activated_at = resolution.created_at;
+        latest_activation = Some((appeal, resolution));
     }
 
-    if resolved.len() > 1 {
+    if facts.resolutions.iter().any(|resolution| {
+        resolution
+            .superseding_evaluation_id
+            .is_some_and(|child_id| lineage_ids.contains(&child_id))
+            && !activation_resolution_ids.contains(&resolution.resolution_id)
+    }) {
         return Err(ApiError::conflict(
-            "paper_trnm_appeal_lineage_ambiguous",
-            "Paper finality supports exactly one resolved Appeal in an evaluation lineage",
+            "paper_trnm_appeal_lineage_mismatch",
+            "a resolution outside the exact parent chain claims an evaluation in the final lineage",
         ));
     }
 
-    if let Some((appeal, resolution)) = resolved.first().copied() {
-        let status = match resolution.outcome {
-            AppealOutcome::Denied
-                if appeal.evaluation_id == evaluation.evaluation_id
-                    && evaluation.supersedes_evaluation_id.is_none()
-                    && resolution.superseding_evaluation_id.is_none() =>
-            {
-                PaperTrnmAppealStatusV2::ResolvedDenied
-            }
-            AppealOutcome::Upheld
-                if appeal.evaluation_id != evaluation.evaluation_id
-                    && evaluation.supersedes_evaluation_id == Some(appeal.evaluation_id)
-                    && resolution.superseding_evaluation_id == Some(evaluation.evaluation_id) =>
-            {
-                PaperTrnmAppealStatusV2::ResolvedUpheld
-            }
-            _ => {
-                return Err(ApiError::conflict(
-                    "paper_trnm_appeal_lineage_mismatch",
-                    "only a denied final evaluation or an exact upheld direct replacement can reach Paper finality",
-                ));
-            }
-        };
+    if let Some(appeal) = exact_appeal(evaluation.evaluation_id)? {
+        let resolution = exact_resolution(appeal.appeal_id)?.ok_or_else(|| {
+            ApiError::conflict(
+                "paper_chain_finality_open_appeal",
+                "an unresolved Appeal on the final evaluation holds Paper scientific finality",
+            )
+        })?;
+        if appeal.release_candidate_hash != evaluation.release_candidate_hash
+            || appeal.created_at < activated_at
+            || resolution.evaluation_id != evaluation.evaluation_id
+            || resolution.release_candidate_hash != evaluation.release_candidate_hash
+            || resolution.outcome != AppealOutcome::Denied
+            || resolution.superseding_evaluation_id.is_some()
+            || resolution.created_at < appeal.created_at
+            || resolution.created_at < evaluation.created_at
+        {
+            return Err(ApiError::conflict(
+                "paper_trnm_appeal_lineage_mismatch",
+                "the final generation may terminate only in one exact chronological denied resolution",
+            ));
+        }
         return Ok(ResolvedAppealFactsV2 {
-            status,
+            status: PaperTrnmAppealStatusV2::ResolvedDenied,
+            appeal_id: Some(appeal.appeal_id),
+            appealed_evaluation_id: Some(evaluation.evaluation_id),
+            resolution_id: Some(resolution.resolution_id),
+            resolution_hash: Some(resolution.decision_hash.clone()),
+        });
+    }
+
+    if let Some((appeal, resolution)) = latest_activation {
+        return Ok(ResolvedAppealFactsV2 {
+            status: PaperTrnmAppealStatusV2::ResolvedUpheld,
             appeal_id: Some(appeal.appeal_id),
             appealed_evaluation_id: Some(appeal.evaluation_id),
             resolution_id: Some(resolution.resolution_id),
@@ -2240,7 +2346,7 @@ fn resolve_appeal_facts(
     if evaluation.supersedes_evaluation_id.is_some() {
         return Err(ApiError::conflict(
             "paper_trnm_appeal_lineage_mismatch",
-            "an evaluation replacement can reach finality only through its exact upheld Appeal",
+            "an evaluation replacement can reach finality only through its exact upheld Appeal lineage",
         ));
     }
     Ok(ResolvedAppealFactsV2 {
@@ -2256,12 +2362,19 @@ fn evaluation_lineage<'a>(
     facts: &'a PaperFinalityFactsV2,
     latest: &'a PaperEvaluation,
 ) -> Result<Vec<&'a PaperEvaluation>, ApiError> {
-    let by_id = facts
+    let mut by_id = HashMap::new();
+    for record in facts
         .evaluations
         .iter()
         .filter(|record| record.submission_id == latest.submission_id)
-        .map(|record| (record.evaluation_id, record))
-        .collect::<HashMap<_, _>>();
+    {
+        if by_id.insert(record.evaluation_id, record).is_some() {
+            return Err(ApiError::conflict(
+                "paper_trnm_evaluation_lineage_ambiguous",
+                "evaluation identity is duplicated in the final submission lineage",
+            ));
+        }
+    }
     let mut lineage = Vec::new();
     let mut seen = HashSet::new();
     let mut current = latest;
@@ -2504,11 +2617,10 @@ pub(crate) fn validate_binding_v2(binding: &PaperTrnmCommandBindingV2) -> Result
                 || binding.appealed_evaluation_id != Some(binding.evaluation_id)
                 || binding.appeal_resolution_id.is_none()
                 || binding.appeal_resolution_hash.is_none()
-                || binding.evaluation_supersedes_evaluation_id.is_some()
             {
                 return Err(ApiError::conflict(
                     "paper_trnm_v2_appeal_inconsistent",
-                    "resolved_denied must bind the final evaluation and complete resolution",
+                    "resolved_denied must bind the final evaluation and its complete terminal resolution",
                 ));
             }
         }

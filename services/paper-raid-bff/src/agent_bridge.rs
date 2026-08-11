@@ -2,17 +2,29 @@ use std::{collections::HashSet, time::Duration};
 
 use axum::{
     body::{Body, Bytes},
-    extract::{OriginalUri, Path, State},
+    extract::{OriginalUri, Path, Query, State},
     http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Response},
 };
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{
+    engine::general_purpose::{STANDARD as BASE64, URL_SAFE_NO_PAD},
+    Engine as _,
+};
 use chrono::{DateTime, TimeZone, Utc};
+use ed25519_dalek::VerifyingKey;
 use hepta_paper_raid_contracts::{
     agent_bridge_request_proof_hash, agent_capability_disclosure_hash, canonical_json_bytes,
+    decode_digest, frozen_review_bundle_hash, frozen_review_input_root,
+    parse_challenge_dataset_manifest, parse_challenge_evaluator_manifest,
+    review_execution_metrics_hash, review_execution_receipt_hash, review_execution_receipt_id,
     sha256_digest, validate_agent_bridge_canonical_query, verify_agent_binding_proof_v3,
-    verify_agent_bridge_request_proof, AgentBindingProofClaimV3, AgentBridgeRequestProofV1,
-    AgentCapabilityDisclosureV1, AGENT_BINDING_PROOF_V3, AGENT_BRIDGE_REQUEST_PROOF_V1,
+    verify_agent_bridge_request_proof, verify_frozen_review_authority, verify_frozen_review_bundle,
+    verify_review_execution_receipt_signature, AgentBindingProofClaimV3, AgentBridgeRequestProofV1,
+    AgentCapabilityDisclosureV1, ChallengeDatasetManifestV1, ChallengeEvaluatorManifestV1,
+    FrozenReviewAuthorityV1, FrozenReviewBundleV1, FrozenReviewExecutionPlanV1,
+    FrozenReviewInputObjectV1, FrozenReviewObjectV1, ReviewEvaluationExecutionResultV1,
+    ReviewExecutionReceiptV1, ReviewReproductionExecutionResultV1, AGENT_BINDING_PROOF_V3,
+    RESOLVED_FROZEN_REVIEW_BUNDLE_V1, REVIEW_EXECUTION_RECEIPT_V1,
 };
 use rand::{rngs::OsRng, RngCore};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -31,16 +43,26 @@ use crate::{
 };
 
 const PAIRING_GRANT_TTL_SECONDS: i64 = 300;
+const DELIVERY_DRAFT_TTL_SECONDS: i64 = 15 * 60;
+const MAX_PENDING_DELIVERY_DRAFTS: i64 = 64;
+const MAX_DISCOVERED_INBOX_PAPERS: usize = 64;
 const AGENT_PROOF_CLOCK_SKEW_SECONDS: i64 = 5;
 const AGENT_REPLAY_WAIT_ATTEMPTS: usize = 40;
 const AGENT_REPLAY_WAIT_INTERVAL: Duration = Duration::from_millis(50);
 const MAX_PAIR_BODY_BYTES: usize = 128 * 1024;
 const MAX_AGENT_BODY_BYTES: usize = 2 * 1024 * 1024;
+const MAX_REVIEW_OBJECT_BYTES: usize = 16 * 1024 * 1024;
+const JSON_SAFE_U64_MAX: u64 = 9_007_199_254_740_991;
 const PAIR_CODE_PREFIX: &str = "prg1.";
 const GLOBAL_PAIR_PRINCIPAL: &[u8] = b"paper-raid-bff/agent-pair/global/v1";
 const GLOBAL_REQUEST_PRINCIPAL: &[u8] = b"paper-raid-bff/agent-request/global/v1";
 const PAIR_BUCKET_DOMAIN: &[u8] = b"paper-raid-bff/agent-pair/fixed-bucket/v1\0";
 const REQUEST_BUCKET_DOMAIN: &[u8] = b"paper-raid-bff/agent-request/fixed-bucket/v1\0";
+const DELIVERY_PROPOSAL_ID_DOMAIN: &str = "hepta.paper_raid.agent_bridge.delivery_proposal_id.v1";
+const DELIVERY_IDEMPOTENCY_KEY_DOMAIN: &str =
+    "hepta.paper_raid.agent_bridge.delivery_idempotency_key.v1";
+const REVIEW_TASK_ID_DOMAIN: &str = "hepta.paper_raid.agent_bridge.review_task_id.v1";
+const REVIEW_EVALUATION_ID_DOMAIN: &str = "hepta.paper_raid.agent_bridge.review_evaluation_id.v1";
 
 const HEADER_SCHEMA: &str = "x-paper-raid-agent-schema";
 const HEADER_BINDING_ID: &str = "x-paper-raid-agent-binding-id";
@@ -63,6 +85,17 @@ const AGENT_HEADER_NAMES: [&str; 9] = [
     HEADER_BODY_SHA256,
     HEADER_SIGNATURE,
 ];
+
+fn identity_supports_agent_bridge(identity: &AlphaIdentity) -> bool {
+    [
+        AlphaIdentityScope::Author,
+        AlphaIdentityScope::Evaluator,
+        AlphaIdentityScope::Reviewer,
+        AlphaIdentityScope::Reproducer,
+    ]
+    .into_iter()
+    .any(|scope| identity.has_scope(scope))
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -117,9 +150,45 @@ struct InboxRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ReviewObjectQuery {
+    assignment_id: Uuid,
+    bundle_hash: String,
+    digest: String,
+    object_key: String,
+    task_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewReceiptRequest {
+    schema: String,
+    idempotency_key: Uuid,
+    receipt: ReviewExecutionReceiptV1,
+    output: Value,
+    environment: Value,
+    run_manifest: Value,
+    logs: Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeliveryDraftRequest {
+    schema: String,
+    delivery_draft_id: Uuid,
+    paper_id: Uuid,
+    work_item_id: Uuid,
+    section_key: String,
+    artifact_manifest_id: Uuid,
+    payload_hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ProposalRequest {
     schema: String,
     paper_id: Uuid,
+    #[serde(default)]
+    delivery_draft_id: Option<Uuid>,
     payload: Value,
 }
 
@@ -143,6 +212,56 @@ struct BridgeMapping {
     agent_id: String,
     agent_key_id: String,
     capability_disclosure_hash: String,
+}
+
+#[derive(Clone, Copy)]
+struct BridgeOwner<'a> {
+    binding_id: Uuid,
+    subject_id: &'a str,
+    player_id: Uuid,
+    agent_id: &'a str,
+}
+
+#[derive(Debug, Clone)]
+struct DeliveryContext {
+    expected_work_version: u64,
+    lease_id: Uuid,
+    lease_fencing_token: u64,
+    lease_expires_at: DateTime<Utc>,
+    parent_revision_id: Uuid,
+    artifact_manifest_hash: String,
+}
+
+#[derive(Debug, Clone)]
+struct DeliveryDraft {
+    delivery_draft_id: Uuid,
+    binding_id: Uuid,
+    paper_id: Uuid,
+    work_item_id: Uuid,
+    expected_work_version: u64,
+    section_key: String,
+    lease_id: Uuid,
+    lease_fencing_token: u64,
+    parent_revision_id: Uuid,
+    artifact_manifest_id: Uuid,
+    artifact_manifest_hash: String,
+    payload_hash: String,
+    state: String,
+    proposal_body_hash: Option<String>,
+    proposal_id: Option<Uuid>,
+    proposal_idempotency_key: Option<Uuid>,
+    proposal_signed_at_unix: Option<i64>,
+    created_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+}
+
+struct DeliveryProposalClaim<'a> {
+    request_payload: &'a Value,
+    proposal_body_hash: &'a str,
+    proposal_id: Uuid,
+    proposal_idempotency_key: Uuid,
+    proposal_signed_at_unix: i64,
+    claimed_at: DateTime<Utc>,
 }
 
 struct VerifiedAgentRequest {
@@ -175,7 +294,7 @@ pub async fn create_pairing_grant(
     };
     let response = async {
         let _: EmptyGrantRequest = decode_json(&body, 1024)?;
-        if !session.identity.has_scope(AlphaIdentityScope::Author) {
+        if !identity_supports_agent_bridge(&session.identity) {
             return Err(AppError::Forbidden);
         }
         let now = Utc::now();
@@ -246,7 +365,7 @@ pub async fn pairing_grant_status(
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
     let session = state.session(&headers).await?;
-    if !session.identity.has_scope(AlphaIdentityScope::Author) {
+    if !identity_supports_agent_bridge(&session.identity) {
         return Err(AppError::Forbidden);
     }
     let row = sqlx::query(
@@ -369,7 +488,7 @@ pub async fn pair_agent(State(state): State<AppState>, body: Bytes) -> Result<Re
         .identity_for_agent_bridge(&grant.subject_id)
         .await?
         .ok_or(AppError::Forbidden)?;
-    if identity.player_id != grant.player_id || !identity.has_scope(AlphaIdentityScope::Author) {
+    if identity.player_id != grant.player_id || !identity_supports_agent_bridge(&identity) {
         return Err(AppError::Forbidden);
     }
     let binding_value = validate_binding_request(&request.binding_request, &identity)?;
@@ -477,6 +596,905 @@ pub async fn agent_health(
     complete_agent_request(&state, &verified, StatusCode::OK, &value).await
 }
 
+pub async fn agent_delivery_draft(
+    State(state): State<AppState>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AppError> {
+    let verified = verify_agent_request(&state, Method::POST, &uri, &headers, &body).await?;
+    if let Some(response) = replay_response(&verified) {
+        return Ok(response);
+    }
+    let request: DeliveryDraftRequest = decode_json(&body, 64 * 1024)?;
+    if request.schema != "hepta.paper_raid.agent_bridge.delivery_draft_request.v1"
+        || !valid_section_key(&request.section_key)
+        || decode_digest(&request.payload_hash).is_err()
+    {
+        return Err(AppError::Invalid(
+            "invalid Agent delivery draft request".into(),
+        ));
+    }
+    let now = Utc::now();
+    let room = state
+        .hepta
+        .get_paper_room(&verified.identity, request.paper_id)
+        .await?;
+    let context = resolve_delivery_context(
+        &room,
+        &verified.mapping,
+        request.work_item_id,
+        &request.section_key,
+        request.artifact_manifest_id,
+        now,
+    )?
+    .ok_or_else(|| {
+        AppError::Conflict("delivery_context_not_authoritative_or_no_longer_current".into())
+    })?;
+    let expires_at = std::cmp::min(
+        now + chrono::Duration::seconds(DELIVERY_DRAFT_TTL_SECONDS),
+        context.lease_expires_at,
+    );
+    if expires_at <= now {
+        return Err(AppError::Conflict("section_lease_expired".into()));
+    }
+
+    let mut tx = state.pool.begin().await?;
+    expire_delivery_drafts(&mut tx, verified.mapping.binding_id, now).await?;
+    let same_draft_exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM paper_raid_bff_agent_delivery_drafts \
+         WHERE delivery_draft_id=$1 AND binding_id=$2)",
+    )
+    .bind(request.delivery_draft_id)
+    .bind(verified.mapping.binding_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !same_draft_exists {
+        let pending = sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM paper_raid_bff_agent_delivery_drafts \
+             WHERE binding_id=$1 AND state='pending' AND expires_at>$2",
+        )
+        .bind(verified.mapping.binding_id)
+        .bind(now)
+        .fetch_one(&mut *tx)
+        .await?;
+        if pending >= MAX_PENDING_DELIVERY_DRAFTS {
+            return Err(AppError::Conflict(
+                "too_many_pending_agent_delivery_drafts".into(),
+            ));
+        }
+    }
+    let lease_fencing_token = i64::try_from(context.lease_fencing_token).map_err(|_| {
+        AppError::Invalid("section lease fencing token exceeds PostgreSQL range".into())
+    })?;
+    let expected_work_version = i64::try_from(context.expected_work_version)
+        .map_err(|_| AppError::Invalid("work item version exceeds PostgreSQL range".into()))?;
+    let refreshed = sqlx::query(
+        "UPDATE paper_raid_bff_agent_delivery_drafts SET \
+            lease_id=$1,lease_fencing_token=$2,parent_revision_id=$3, \
+            artifact_manifest_hash=$4,state='pending',created_at=$5,expires_at=$6, \
+            expected_work_version=$14, \
+            proposal_body_hash=NULL,proposal_id=NULL,proposal_idempotency_key=NULL, \
+            proposal_signed_at_unix=NULL,submitting_at=NULL,consumed_at=NULL, \
+            invalidated_at=NULL,updated_at=$5 \
+         WHERE delivery_draft_id=$7 AND binding_id=$8 AND paper_id=$9 \
+           AND work_item_id=$10 AND section_key=$11 AND artifact_manifest_id=$12 \
+           AND payload_hash=$13 AND state IN ('pending','expired','invalidated')",
+    )
+    .bind(context.lease_id)
+    .bind(lease_fencing_token)
+    .bind(context.parent_revision_id)
+    .bind(&context.artifact_manifest_hash)
+    .bind(now)
+    .bind(expires_at)
+    .bind(request.delivery_draft_id)
+    .bind(verified.mapping.binding_id)
+    .bind(request.paper_id)
+    .bind(request.work_item_id)
+    .bind(&request.section_key)
+    .bind(request.artifact_manifest_id)
+    .bind(&request.payload_hash)
+    .bind(expected_work_version)
+    .execute(&mut *tx)
+    .await?;
+    if refreshed.rows_affected() == 0 {
+        sqlx::query(
+            "INSERT INTO paper_raid_bff_agent_delivery_drafts ( \
+                delivery_draft_id,binding_id,paper_id,work_item_id,section_key, \
+                lease_id,lease_fencing_token,parent_revision_id,artifact_manifest_id, \
+                artifact_manifest_hash,payload_hash,state,created_at,expires_at,updated_at, \
+                expected_work_version \
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12,$13,$12,$14) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(request.delivery_draft_id)
+        .bind(verified.mapping.binding_id)
+        .bind(request.paper_id)
+        .bind(request.work_item_id)
+        .bind(&request.section_key)
+        .bind(context.lease_id)
+        .bind(lease_fencing_token)
+        .bind(context.parent_revision_id)
+        .bind(request.artifact_manifest_id)
+        .bind(&context.artifact_manifest_hash)
+        .bind(&request.payload_hash)
+        .bind(now)
+        .bind(expires_at)
+        .bind(expected_work_version)
+        .execute(&mut *tx)
+        .await?;
+    }
+    let draft = load_delivery_draft_tx(
+        &mut tx,
+        request.delivery_draft_id,
+        verified.mapping.binding_id,
+        request.paper_id,
+        now,
+    )
+    .await?
+    .ok_or_else(|| AppError::Conflict("delivery_draft_id_already_consumed_or_mismatched".into()))?;
+    bridge_audit(
+        &mut tx,
+        Some(&verified.mapping.subject_id),
+        Some(verified.mapping.binding_id),
+        "delivery_draft_declared",
+        "succeeded",
+        json!({
+            "delivery_draft_id": draft.delivery_draft_id,
+            "paper_id": draft.paper_id,
+            "work_item_id": draft.work_item_id,
+            "section_key": draft.section_key,
+        }),
+    )
+    .await?;
+    tx.commit().await?;
+    let value = json!({
+        "schema": "hepta.paper_raid.agent_bridge.delivery_draft_result.v1",
+        "candidate": delivery_candidate_value(&draft),
+    });
+    complete_agent_request(&state, &verified, StatusCode::OK, &value).await
+}
+
+fn valid_section_key(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    matches!(bytes.next(), Some(first) if first.is_ascii_alphanumeric())
+        && value.len() <= 128
+        && bytes
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+}
+
+fn record_uuid(record: &Value, field: &str) -> Option<Uuid> {
+    record
+        .get(field)
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
+}
+
+fn record_time(record: &Value, field: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(record.get(field)?.as_str()?)
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
+}
+
+fn resolve_delivery_context(
+    room: &Value,
+    mapping: &BridgeMapping,
+    work_item_id: Uuid,
+    section_key: &str,
+    artifact_manifest_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<Option<DeliveryContext>, AppError> {
+    if !valid_section_key(section_key) {
+        return Ok(None);
+    }
+    let paper = room
+        .get("paper")
+        .and_then(Value::as_object)
+        .ok_or(AppError::Upstream)?;
+    let phase = paper
+        .get("phase")
+        .and_then(Value::as_str)
+        .ok_or(AppError::Upstream)?;
+    if !matches!(phase, "drafting" | "reproducing") {
+        return Ok(None);
+    }
+    let work_items = room
+        .get("work_items")
+        .and_then(Value::as_array)
+        .ok_or(AppError::Upstream)?;
+    let work = work_items.iter().find(|item| {
+        record_uuid(item, "work_item_id") == Some(work_item_id)
+            && record_uuid(item, "assigned_binding_id") == Some(mapping.binding_id)
+            && record_uuid(item, "assigned_player_id") == Some(mapping.player_id)
+            && matches!(
+                item.get("status").and_then(Value::as_str),
+                Some("planned" | "in_progress" | "review")
+            )
+    });
+    let Some(work) = work else {
+        return Ok(None);
+    };
+    let Some(expected_work_version) = work.get("version").and_then(Value::as_u64) else {
+        return Ok(None);
+    };
+    if expected_work_version == 0 || expected_work_version > JSON_SAFE_U64_MAX {
+        return Ok(None);
+    }
+    let heads = room
+        .get("section_heads")
+        .and_then(Value::as_array)
+        .ok_or(AppError::Upstream)?;
+    let Some(head) = heads
+        .iter()
+        .find(|item| item.get("section_key").and_then(Value::as_str) == Some(section_key))
+    else {
+        return Ok(None);
+    };
+    let Some(parent_revision_id) = record_uuid(head, "current_head_revision_id") else {
+        return Ok(None);
+    };
+    let Some(head_fencing_token) = head.get("fencing_token").and_then(Value::as_u64) else {
+        return Ok(None);
+    };
+    if head_fencing_token == 0 || head_fencing_token > JSON_SAFE_U64_MAX {
+        return Ok(None);
+    }
+    let leases = room
+        .get("leases")
+        .and_then(Value::as_array)
+        .ok_or(AppError::Upstream)?;
+    let mut active_leases = leases.iter().filter_map(|item| {
+        let expires_at = record_time(item, "expires_at")?;
+        (item.get("section_key").and_then(Value::as_str) == Some(section_key)
+            && item.get("status").and_then(Value::as_str) == Some("active")
+            && record_uuid(item, "holder_binding_id") == Some(mapping.binding_id)
+            && record_uuid(item, "holder_player_id") == Some(mapping.player_id)
+            && item.get("fencing_token").and_then(Value::as_u64) == Some(head_fencing_token)
+            && expires_at > now)
+            .then_some((item, expires_at))
+    });
+    let Some((lease, lease_expires_at)) = active_leases.next() else {
+        return Ok(None);
+    };
+    if active_leases.next().is_some() {
+        return Err(AppError::Upstream);
+    }
+    let Some(lease_id) = record_uuid(lease, "lease_id") else {
+        return Ok(None);
+    };
+    let manifests = room
+        .get("artifact_manifests")
+        .and_then(Value::as_array)
+        .ok_or(AppError::Upstream)?;
+    let Some(manifest) = manifests
+        .iter()
+        .find(|item| record_uuid(item, "manifest_id") == Some(artifact_manifest_id))
+    else {
+        return Ok(None);
+    };
+    let Some(artifact_manifest_hash) = manifest.get("manifest_hash").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    if decode_digest(artifact_manifest_hash).is_err() {
+        return Ok(None);
+    }
+    let proposals = room
+        .get("proposals")
+        .and_then(Value::as_array)
+        .ok_or(AppError::Upstream)?;
+    if proposals.iter().any(|proposal| {
+        record_uuid(proposal, "binding_id") == Some(mapping.binding_id)
+            && record_uuid(proposal, "work_item_id") == Some(work_item_id)
+            && proposal.get("section_key").and_then(Value::as_str) == Some(section_key)
+            && record_uuid(proposal, "parent_revision_id") == Some(parent_revision_id)
+            && record_uuid(proposal, "artifact_manifest_id") == Some(artifact_manifest_id)
+            && matches!(
+                proposal.get("status").and_then(Value::as_str),
+                Some("submitted" | "accepted")
+            )
+    }) {
+        return Ok(None);
+    }
+    Ok(Some(DeliveryContext {
+        expected_work_version,
+        lease_id,
+        lease_fencing_token: head_fencing_token,
+        lease_expires_at,
+        parent_revision_id,
+        artifact_manifest_hash: artifact_manifest_hash.to_string(),
+    }))
+}
+
+fn discover_inbox_paper_ids(raids: &[Value]) -> Result<(Vec<Uuid>, bool), AppError> {
+    const ACTIVE_AUTHOR_PHASES: &[&str] = &[
+        "forming",
+        "preregistering",
+        "researching",
+        "experimenting",
+        "drafting",
+        "integrity_review",
+        "reproducing",
+        "author_approval",
+        "integrity_hold",
+    ];
+    let mut paper_ids = Vec::new();
+    let mut seen = HashSet::new();
+    let mut truncated = false;
+    for raid in raids {
+        if raid.get("team_status").and_then(Value::as_str) == Some("archived") {
+            continue;
+        }
+        let Some(paper) = raid.get("paper").filter(|paper| !paper.is_null()) else {
+            continue;
+        };
+        let Some(phase) = paper.get("phase").and_then(Value::as_str) else {
+            return Err(AppError::Upstream);
+        };
+        if !ACTIVE_AUTHOR_PHASES.contains(&phase) {
+            continue;
+        }
+        let paper_id = paper
+            .get("paper_project_id")
+            .and_then(Value::as_str)
+            .ok_or(AppError::Upstream)
+            .and_then(|value| Uuid::parse_str(value).map_err(|_| AppError::Upstream))?;
+        if !seen.insert(paper_id) {
+            continue;
+        }
+        if paper_ids.len() == MAX_DISCOVERED_INBOX_PAPERS {
+            truncated = true;
+            continue;
+        }
+        paper_ids.push(paper_id);
+    }
+    Ok((paper_ids, truncated))
+}
+
+async fn recoverable_inbox_paper_ids(
+    state: &AppState,
+    binding_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<(Vec<Uuid>, bool), AppError> {
+    let mut paper_ids = sqlx::query_scalar::<_, Uuid>(
+        "SELECT paper_id FROM paper_raid_bff_agent_delivery_drafts \
+         WHERE binding_id=$1 AND state IN ('submitting','consumed') AND expires_at>$2 \
+         GROUP BY paper_id ORDER BY min(created_at),paper_id LIMIT 65",
+    )
+    .bind(binding_id)
+    .bind(now)
+    .fetch_all(&state.pool)
+    .await?;
+    let truncated = paper_ids.len() > MAX_DISCOVERED_INBOX_PAPERS;
+    paper_ids.truncate(MAX_DISCOVERED_INBOX_PAPERS);
+    Ok((paper_ids, truncated))
+}
+
+fn merge_discovered_paper_ids(recovery: Vec<Uuid>, active: Vec<Uuid>) -> (Vec<Uuid>, bool) {
+    let mut merged = Vec::with_capacity(MAX_DISCOVERED_INBOX_PAPERS);
+    let mut seen = HashSet::new();
+    let mut truncated = false;
+    for paper_id in recovery.into_iter().chain(active) {
+        if !seen.insert(paper_id) {
+            continue;
+        }
+        if merged.len() == MAX_DISCOVERED_INBOX_PAPERS {
+            truncated = true;
+            continue;
+        }
+        merged.push(paper_id);
+    }
+    (merged, truncated)
+}
+
+fn merge_review_tasks_into_author_papers(
+    papers: &mut Vec<Value>,
+    review_value: &Value,
+) -> Result<(), AppError> {
+    let review_papers = review_value
+        .get("papers")
+        .and_then(Value::as_array)
+        .ok_or(AppError::Upstream)?;
+    for review_paper in review_papers {
+        let review_paper_id = review_paper
+            .get("paper_id")
+            .and_then(Value::as_str)
+            .ok_or(AppError::Upstream)?;
+        let review_tasks = review_paper
+            .get("review_tasks")
+            .cloned()
+            .ok_or(AppError::Upstream)?;
+        if let Some(author_paper) = papers
+            .iter_mut()
+            .find(|paper| paper.get("paper_id").and_then(Value::as_str) == Some(review_paper_id))
+        {
+            author_paper
+                .as_object_mut()
+                .ok_or(AppError::Internal)?
+                .insert("review_tasks".to_string(), review_tasks);
+        } else {
+            papers.push(json!({
+                "paper_id": review_paper_id,
+                "review_tasks": review_tasks,
+            }));
+        }
+    }
+    for paper in papers.iter_mut() {
+        let object = paper.as_object_mut().ok_or(AppError::Internal)?;
+        object.entry("review_tasks".to_string()).or_insert_with(|| {
+            json!({
+                "schema": "hepta.paper_raid.agent_bridge.review_tasks.v1",
+                "status": "unavailable",
+                "reason_code": "target_paper_author_forbidden_or_unassigned",
+                "items": [],
+            })
+        });
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StoredReviewTaskState {
+    state: String,
+    attempt: u64,
+}
+
+fn projected_review_task_attempt(
+    stored: Option<&StoredReviewTaskState>,
+) -> Result<(u64, &'static str), AppError> {
+    let Some(stored) = stored else {
+        return Ok((1, "pending"));
+    };
+    if stored.attempt == 0 || stored.attempt > JSON_SAFE_U64_MAX {
+        return Err(AppError::Upstream);
+    }
+    match stored.state.as_str() {
+        "pending" => Ok((stored.attempt, "submitting")),
+        "consumed" => Ok((stored.attempt, "consumed")),
+        "invalidated" => stored
+            .attempt
+            .checked_add(1)
+            .filter(|attempt| *attempt <= JSON_SAFE_U64_MAX)
+            .map(|attempt| (attempt, "pending"))
+            .ok_or_else(|| AppError::Conflict("review task attempt budget exhausted".into())),
+        _ => Err(AppError::Upstream),
+    }
+}
+
+async fn stored_review_task_state(
+    state: &AppState,
+    task_id: Uuid,
+) -> Result<Option<StoredReviewTaskState>, AppError> {
+    let row = sqlx::query(
+        "SELECT state,attempt FROM paper_raid_bff_review_execution_receipts
+         WHERE task_id=$1 ORDER BY attempt DESC LIMIT 1",
+    )
+    .bind(task_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    row.map(|row| {
+        let attempt = row.try_get::<i64, _>("attempt")?;
+        Ok(StoredReviewTaskState {
+            state: row.try_get("state")?,
+            attempt: u64::try_from(attempt).map_err(|_| AppError::Upstream)?,
+        })
+    })
+    .transpose()
+}
+
+fn same_authority_object(
+    object: &FrozenReviewObjectV1,
+    path: &str,
+    digest: &str,
+    size: u64,
+    media_type: &str,
+    role: &str,
+) -> bool {
+    object.logical_path == path
+        && object.digest == digest
+        && object.size_bytes == size
+        && object.media_type == media_type
+        && object.role == role
+        && object.download_path == "/api/agent-bridge/review-objects"
+}
+
+fn resolved_transport_path(role: &str, media_type: &str) -> Result<&'static str, AppError> {
+    match (role, media_type) {
+        ("frozen_evaluator", "text/x-python; charset=utf-8") => Ok("evaluator/main.py"),
+        ("evaluator_support", "text/x-python; charset=utf-8") => Ok("evaluator/baseline.py"),
+        ("candidate", "application/json") => Ok("inputs/candidate.json"),
+        ("dataset", "application/json") => Ok("inputs/dataset.json"),
+        ("dataset", "text/csv; charset=utf-8") => Ok("inputs/dataset.csv"),
+        _ => Err(AppError::Upstream),
+    }
+}
+
+fn resolved_transport_object(
+    authority: &FrozenReviewObjectV1,
+    resolved_role: &str,
+) -> Result<FrozenReviewObjectV1, AppError> {
+    let mut resolved = authority.clone();
+    resolved.role = resolved_role.to_string();
+    resolved.logical_path =
+        resolved_transport_path(resolved_role, &authority.media_type)?.to_string();
+    Ok(resolved)
+}
+
+fn resolve_manifest_members(
+    authority: &FrozenReviewAuthorityV1,
+    evaluator: &ChallengeEvaluatorManifestV1,
+    dataset: &ChallengeDatasetManifestV1,
+) -> Result<Vec<FrozenReviewObjectV1>, AppError> {
+    if evaluator.pack_id != dataset.pack_id
+        || dataset.objects.len() != 1
+        || evaluator
+            .objects
+            .iter()
+            .filter(|member| member.path != evaluator.entrypoint)
+            .count()
+            > 1
+    {
+        return Err(AppError::Upstream);
+    }
+    let mut resolved = Vec::new();
+    let mut resolved_paths = HashSet::new();
+    let mut resolved_digests = HashSet::new();
+    for member in &evaluator.objects {
+        let role = if member.path == evaluator.entrypoint {
+            "frozen_evaluator"
+        } else {
+            "evaluator_support"
+        };
+        let matches = authority
+            .artifact_objects
+            .iter()
+            .filter(|object| {
+                same_authority_object(
+                    object,
+                    &member.path,
+                    &member.sha256,
+                    member.size,
+                    &member.media_type,
+                    role,
+                )
+            })
+            .collect::<Vec<_>>();
+        if matches.len() != 1
+            || !resolved_paths.insert(member.path.as_str())
+            || !resolved_digests.insert(member.sha256.as_str())
+        {
+            return Err(AppError::Upstream);
+        }
+        resolved.push(resolved_transport_object(matches[0], role)?);
+    }
+    for member in &dataset.objects {
+        let matches = authority
+            .artifact_objects
+            .iter()
+            .filter(|object| {
+                same_authority_object(
+                    object,
+                    &member.path,
+                    &member.sha256,
+                    member.size,
+                    &member.media_type,
+                    "dataset",
+                )
+            })
+            .collect::<Vec<_>>();
+        if matches.len() != 1
+            || !resolved_paths.insert(member.path.as_str())
+            || !resolved_digests.insert(member.sha256.as_str())
+        {
+            return Err(AppError::Upstream);
+        }
+        resolved.push(resolved_transport_object(matches[0], "dataset")?);
+    }
+    let candidates = authority
+        .artifact_objects
+        .iter()
+        .filter(|object| object.role == "candidate")
+        .collect::<Vec<_>>();
+    if candidates.len() != 1
+        || !resolved_paths.insert(candidates[0].logical_path.as_str())
+        || !resolved_digests.insert(candidates[0].digest.as_str())
+    {
+        return Err(AppError::Upstream);
+    }
+    resolved.push(resolved_transport_object(candidates[0], "candidate")?);
+    if authority.artifact_objects.iter().any(|object| {
+        matches!(
+            object.role.as_str(),
+            "frozen_evaluator" | "evaluator_support" | "dataset" | "input" | "candidate"
+        ) && !resolved_paths.contains(object.logical_path.as_str())
+    }) {
+        return Err(AppError::Upstream);
+    }
+    resolved.sort_by(|left, right| {
+        (left.object_key.as_str(), left.logical_path.as_str())
+            .cmp(&(right.object_key.as_str(), right.logical_path.as_str()))
+    });
+    Ok(resolved)
+}
+
+/// Resolve Hepta's assignment/release authority against the exact challenge-manifest bytes.
+///
+/// The Consumer BFF owns CAS transport, but does not own scientific truth: every resolved member
+/// must already be present byte-for-byte in Hepta's release ArtifactManifest authority.  The
+/// resulting hash covers the Hepta authority hash, both manifest digest pins, and the exact member
+/// set.  Any substitution therefore changes or invalidates the transport envelope.
+pub(crate) async fn resolve_frozen_review_bundle(
+    state: &AppState,
+    hepta_bundle: &Value,
+) -> Result<Value, AppError> {
+    let authority_value = hepta_bundle
+        .get("frozen_review_authority")
+        .cloned()
+        .ok_or(AppError::Upstream)?;
+    let authority: FrozenReviewAuthorityV1 =
+        serde_json::from_value(authority_value).map_err(|_| AppError::Upstream)?;
+    verify_frozen_review_authority(&authority).map_err(|_| AppError::Upstream)?;
+
+    let paper_id = authority.paper_project_id.to_string();
+    let submission_id = authority.submission_id.to_string();
+    if hepta_bundle.get("paper_project_id").and_then(Value::as_str) != Some(paper_id.as_str())
+        || hepta_bundle.get("submission_id").and_then(Value::as_str) != Some(submission_id.as_str())
+        || hepta_bundle
+            .get("release_candidate_hash")
+            .and_then(Value::as_str)
+            != Some(authority.release_candidate_hash.as_str())
+        || hepta_bundle
+            .get("paper_bundle_hash")
+            .and_then(Value::as_str)
+            != Some(authority.paper_bundle_hash.as_str())
+    {
+        return Err(AppError::Upstream);
+    }
+    let assignments = hepta_bundle
+        .get("my_assignments")
+        .and_then(Value::as_array)
+        .ok_or(AppError::Upstream)?;
+    let assignment_id = authority.assignment_id.to_string();
+    if assignments.len() != 1
+        || assignments[0].get("assignment_id").and_then(Value::as_str)
+            != Some(assignment_id.as_str())
+        || assignments[0]
+            .get("paper_project_id")
+            .and_then(Value::as_str)
+            != Some(paper_id.as_str())
+        || assignments[0].get("submission_id").and_then(Value::as_str)
+            != Some(submission_id.as_str())
+        || assignments[0].get("version").and_then(Value::as_u64)
+            != Some(authority.assignment_version)
+        || assignments[0].get("expires_at").and_then(Value::as_str)
+            != Some(authority.expires_at.as_str())
+        || !matches!(
+            assignments[0].get("status").and_then(Value::as_str),
+            Some("claimed" | "pinned")
+        )
+    {
+        return Err(AppError::Upstream);
+    }
+
+    let evaluator_bytes = state
+        .cas
+        .get(&authority.evaluator_manifest_hash, "application/json")
+        .await?;
+    let dataset_bytes = state
+        .cas
+        .get(&authority.dataset_manifest_hash, "application/json")
+        .await?;
+    let evaluator =
+        parse_challenge_evaluator_manifest(&evaluator_bytes, &authority.evaluator_manifest_hash)
+            .map_err(|_| AppError::Upstream)?;
+    let dataset =
+        parse_challenge_dataset_manifest(&dataset_bytes, &authority.dataset_manifest_hash)
+            .map_err(|_| AppError::Upstream)?;
+    let resolved = resolve_manifest_members(&authority, &evaluator, &dataset)?;
+    let entrypoint = resolved
+        .iter()
+        .find(|object| object.role == "frozen_evaluator")
+        .ok_or(AppError::Upstream)?;
+    let evaluator_version = entrypoint.digest.clone();
+    let mut descriptor = FrozenReviewBundleV1 {
+        schema: RESOLVED_FROZEN_REVIEW_BUNDLE_V1.to_string(),
+        bundle_hash: String::new(),
+        authority: authority.clone(),
+        authority_hash: authority.authority_hash.clone(),
+        assignment_id: authority.assignment_id,
+        paper_project_id: authority.paper_project_id,
+        submission_id: authority.submission_id,
+        review_round: authority.review_round,
+        slot: authority.slot.clone(),
+        assignment_version: authority.assignment_version,
+        expires_at: authority.expires_at.clone(),
+        release_candidate_hash: authority.release_candidate_hash.clone(),
+        paper_bundle_hash: authority.paper_bundle_hash.clone(),
+        artifact_manifest_hash: authority.artifact_manifest_hash.clone(),
+        evaluator_manifest_hash: authority.evaluator_manifest_hash.clone(),
+        dataset_manifest_hash: authority.dataset_manifest_hash.clone(),
+        objects: resolved,
+        execution: FrozenReviewExecutionPlanV1 {
+            schema: "hepta.paper_raid.review_execution_plan.v1".to_string(),
+            kind: authority.execution_policy.kind.clone(),
+            adapter: authority.execution_policy.adapter.clone(),
+            evaluator_version,
+            entrypoint: "evaluator/main.py".to_string(),
+            timeout_ms: authority.execution_policy.timeout_ms,
+            seed: authority.execution_policy.seed,
+        },
+    };
+    descriptor.bundle_hash =
+        frozen_review_bundle_hash(&descriptor).map_err(|_| AppError::Upstream)?;
+    verify_frozen_review_bundle(&descriptor).map_err(|_| AppError::Upstream)?;
+    let mut resolved_bundle = hepta_bundle.clone();
+    resolved_bundle
+        .as_object_mut()
+        .ok_or(AppError::Upstream)?
+        .insert(
+            "resolved_frozen_review_bundle".to_string(),
+            serde_json::to_value(descriptor).map_err(|_| AppError::Internal)?,
+        );
+    Ok(resolved_bundle)
+}
+
+fn review_task_projection(
+    bundle: &Value,
+    state: Option<&StoredReviewTaskState>,
+) -> Result<Option<Value>, AppError> {
+    let descriptor_value = bundle
+        .get("resolved_frozen_review_bundle")
+        .cloned()
+        .ok_or(AppError::Upstream)?;
+    let descriptor: FrozenReviewBundleV1 =
+        serde_json::from_value(descriptor_value.clone()).map_err(|_| AppError::Upstream)?;
+    let evaluation_id = if descriptor.execution.kind == "reproduce" {
+        bundle
+            .get("evaluation")
+            .and_then(|value| value.get("evaluation_id"))
+            .and_then(Value::as_str)
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .ok_or(AppError::Upstream)?
+    } else if descriptor.execution.kind == "evaluate" {
+        review_evaluation_id(descriptor.assignment_id, &descriptor.bundle_hash)
+    } else {
+        return Ok(None);
+    };
+    let task_id = review_task_id(
+        descriptor.assignment_id,
+        &descriptor.bundle_hash,
+        &descriptor.execution.kind,
+        Some(evaluation_id),
+    );
+    let (attempt, state) = projected_review_task_attempt(state)?;
+    Ok(Some(json!({
+        "schema": "hepta.paper_raid.agent_bridge.review_task.v1",
+        "task_id": task_id,
+        "paper_id": descriptor.paper_project_id,
+        "evaluation_id": evaluation_id,
+        "assignment_id": descriptor.assignment_id,
+        "role": descriptor.slot,
+        "kind": descriptor.execution.kind,
+        "attempt": attempt,
+        "fencing_token": descriptor.assignment_version,
+        "state": state,
+        "bundle": descriptor_value,
+    })))
+}
+
+async fn agent_review_inbox_value(
+    state: &AppState,
+    verified: &VerifiedAgentRequest,
+    requested_papers: &[Uuid],
+) -> Result<Value, AppError> {
+    let queue = state.hepta.list_review_queue(&verified.identity).await?;
+    let items = queue.as_array().ok_or(AppError::Upstream)?;
+    let requested = requested_papers.iter().copied().collect::<HashSet<_>>();
+    let mut papers = Vec::new();
+    for item in items {
+        let paper_id = item
+            .get("paper_project_id")
+            .and_then(Value::as_str)
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .ok_or(AppError::Upstream)?;
+        if !requested.is_empty() && !requested.contains(&paper_id) {
+            continue;
+        }
+        let hepta_bundle = match state
+            .hepta
+            .get_paper_review_bundle(&verified.identity, paper_id)
+            .await
+        {
+            Ok(bundle) => bundle,
+            Err(_) => {
+                papers.push(json!({
+                    "paper_id": paper_id,
+                    "review_tasks": {
+                        "schema": "hepta.paper_raid.agent_bridge.review_tasks.v1",
+                        "status": "unavailable",
+                        "reason_code": "frozen_review_objects_unavailable",
+                        "items": [],
+                    }
+                }));
+                continue;
+            }
+        };
+        let bundle = match resolve_frozen_review_bundle(state, &hepta_bundle).await {
+            Ok(bundle) => bundle,
+            Err(_) => {
+                papers.push(json!({
+                    "paper_id": paper_id,
+                    "review_tasks": {
+                        "schema": "hepta.paper_raid.agent_bridge.review_tasks.v1",
+                        "status": "unavailable",
+                        "reason_code": "frozen_review_manifest_resolution_failed",
+                        "items": [],
+                    }
+                }));
+                continue;
+            }
+        };
+        let descriptor = bundle
+            .get("resolved_frozen_review_bundle")
+            .ok_or(AppError::Upstream)?;
+        let assignment_id = descriptor
+            .get("assignment_id")
+            .and_then(Value::as_str)
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .ok_or(AppError::Upstream)?;
+        let bundle_hash = descriptor
+            .get("bundle_hash")
+            .and_then(Value::as_str)
+            .ok_or(AppError::Upstream)?;
+        let kind = descriptor
+            .get("execution")
+            .and_then(|value| value.get("kind"))
+            .and_then(Value::as_str)
+            .ok_or(AppError::Upstream)?;
+        let task_state = match kind {
+            "reproduce" => {
+                let evaluation_id = bundle
+                    .get("evaluation")
+                    .and_then(|value| value.get("evaluation_id"))
+                    .and_then(Value::as_str)
+                    .and_then(|value| Uuid::parse_str(value).ok())
+                    .ok_or(AppError::Upstream)?;
+                let task_id = review_task_id(assignment_id, bundle_hash, kind, Some(evaluation_id));
+                stored_review_task_state(state, task_id).await?
+            }
+            "evaluate" => {
+                let evaluation_id = review_evaluation_id(assignment_id, bundle_hash);
+                let task_id = review_task_id(assignment_id, bundle_hash, kind, Some(evaluation_id));
+                stored_review_task_state(state, task_id).await?
+            }
+            // Reviewer assignments are human attestation work.  They may resolve and read the
+            // same frozen bundle, but must never be projected as an executable Agent task.
+            "review" => None,
+            _ => return Err(AppError::Upstream),
+        };
+        let task = review_task_projection(&bundle, task_state.as_ref())?;
+        papers.push(json!({
+            "paper_id": paper_id,
+            "review_tasks": {
+                "schema": "hepta.paper_raid.agent_bridge.review_tasks.v1",
+                "status": if task.is_some() { "available" } else { "unavailable" },
+                "reason_code": if task.is_some() { Value::Null } else { json!("human_attestation_only") },
+                "items": task.into_iter().collect::<Vec<_>>(),
+            }
+        }));
+    }
+    Ok(json!({
+        "schema": "hepta.paper_raid.agent_bridge.inbox.v2",
+        "binding_id": verified.mapping.binding_id,
+        "assurance": "self_declared_unverified",
+        "discovery": {
+            "mode": if requested_papers.is_empty() { "review_assignments" } else { "explicit_paper_ids" },
+            "truncated": false,
+            "max_papers": MAX_DISCOVERED_INBOX_PAPERS,
+        },
+        "papers": papers,
+    }))
+}
+
 pub async fn agent_inbox(
     State(state): State<AppState>,
     OriginalUri(uri): OriginalUri,
@@ -489,21 +1507,89 @@ pub async fn agent_inbox(
     }
     let request: InboxRequest = decode_json(&body, 64 * 1024)?;
     if request.schema != "hepta.paper_raid.agent_bridge.inbox_request.v1"
-        || request.paper_ids.is_empty()
         || request.paper_ids.len() > 64
     {
         return Err(AppError::Invalid("invalid Agent inbox request".into()));
     }
-    let unique: HashSet<Uuid> = request.paper_ids.iter().copied().collect();
+    let has_author_scope = verified.identity.has_scope(AlphaIdentityScope::Author);
+    let has_review_scope = [
+        AlphaIdentityScope::Evaluator,
+        AlphaIdentityScope::Reviewer,
+        AlphaIdentityScope::Reproducer,
+    ]
+    .into_iter()
+    .any(|scope| verified.identity.has_scope(scope));
+    let unique = request.paper_ids.iter().copied().collect::<HashSet<_>>();
     if unique.len() != request.paper_ids.len() {
         return Err(AppError::Invalid(
             "Agent inbox paper_ids must be unique".into(),
         ));
     }
-    let mut papers = Vec::with_capacity(request.paper_ids.len());
+    let review_value = if has_review_scope {
+        Some(agent_review_inbox_value(&state, &verified, &request.paper_ids).await?)
+    } else {
+        None
+    };
+    if !has_author_scope {
+        let value = review_value.ok_or(AppError::Forbidden)?;
+        return complete_agent_request(&state, &verified, StatusCode::OK, &value).await;
+    }
+    let automatic_discovery = request.paper_ids.is_empty();
+    let mut discovery_truncated = false;
+    let mut paper_ids = request.paper_ids;
+    let now = Utc::now();
+    if paper_ids.is_empty() {
+        let raid_state = state
+            .hepta
+            .get_player_raid_state(&verified.identity)
+            .await?;
+        let raids = raid_state
+            .get("raids")
+            .and_then(Value::as_array)
+            .ok_or(AppError::Upstream)?;
+        let (active, active_truncated) = discover_inbox_paper_ids(raids)?;
+        let (recovery, recovery_truncated) =
+            recoverable_inbox_paper_ids(&state, verified.mapping.binding_id, now).await?;
+        let (merged, merge_truncated) = merge_discovered_paper_ids(recovery, active);
+        paper_ids = merged;
+        discovery_truncated = active_truncated || recovery_truncated || merge_truncated;
+    } else if has_review_scope {
+        // A mixed Author+Review identity may explicitly ask for a Paper on which it only has an
+        // independent review assignment.  Never route that Paper through Author Room authority.
+        let raid_state = state
+            .hepta
+            .get_player_raid_state(&verified.identity)
+            .await?;
+        let raids = raid_state
+            .get("raids")
+            .and_then(Value::as_array)
+            .ok_or(AppError::Upstream)?;
+        let (active, active_truncated) = discover_inbox_paper_ids(raids)?;
+        let (recovery, recovery_truncated) =
+            recoverable_inbox_paper_ids(&state, verified.mapping.binding_id, now).await?;
+        let allowed = active.into_iter().chain(recovery).collect::<HashSet<_>>();
+        paper_ids.retain(|paper_id| allowed.contains(paper_id));
+        discovery_truncated = active_truncated || recovery_truncated;
+    }
+    let unique: HashSet<Uuid> = paper_ids.iter().copied().collect();
+    if unique.len() != paper_ids.len() {
+        return Err(AppError::Invalid(
+            "Agent inbox paper_ids must be unique".into(),
+        ));
+    }
+    let mut papers = Vec::with_capacity(paper_ids.len());
     let binding_id = verified.mapping.binding_id.to_string();
     let player_id = verified.mapping.player_id.to_string();
-    for paper_id in request.paper_ids {
+    sqlx::query(
+        "UPDATE paper_raid_bff_agent_delivery_drafts \
+         SET state='expired',invalidated_at=$1,updated_at=$1 \
+         WHERE binding_id=$2 AND state='pending' AND expires_at<=$1",
+    )
+    .bind(now)
+    .bind(verified.mapping.binding_id)
+    .execute(&state.pool)
+    .await?;
+    for paper_id in paper_ids {
         let room = state
             .hepta
             .get_paper_room(&verified.identity, paper_id)
@@ -541,96 +1627,1038 @@ pub async fn agent_inbox(
                 )
             })
             .collect::<Result<_, _>>()?;
-        let leases: Vec<Value> = room
-            .get("leases")
+        let proposals: Vec<Value> = room
+            .get("proposals")
             .and_then(Value::as_array)
             .ok_or(AppError::Upstream)?
             .iter()
-            .filter(|lease| {
-                lease.get("holder_binding_id").and_then(Value::as_str) == Some(binding_id.as_str())
-                    && lease.get("holder_player_id").and_then(Value::as_str)
-                        == Some(player_id.as_str())
+            .filter(|proposal| {
+                proposal.get("binding_id").and_then(Value::as_str) == Some(binding_id.as_str())
+                    && proposal.get("agent_id").and_then(Value::as_str)
+                        == Some(verified.mapping.agent_id.as_str())
             })
-            .map(|lease| {
+            .map(|proposal| {
                 project_fields(
-                    lease,
+                    proposal,
                     &[
-                        "lease_id",
-                        "paper_project_id",
+                        "proposal_id",
+                        "work_item_id",
                         "section_key",
-                        "holder_player_id",
-                        "holder_binding_id",
-                        "fencing_token",
+                        "parent_revision_id",
+                        "artifact_manifest_id",
                         "status",
                         "version",
-                        "expires_at",
                     ],
                 )
             })
             .collect::<Result<_, _>>()?;
-        let leased_sections: HashSet<&str> = leases
-            .iter()
-            .filter_map(|lease| lease.get("section_key").and_then(Value::as_str))
-            .collect();
-        let section_heads: Vec<Value> = room
-            .get("section_heads")
-            .and_then(Value::as_array)
-            .ok_or(AppError::Upstream)?
-            .iter()
-            .filter(|head| {
-                head.get("section_key")
-                    .and_then(Value::as_str)
-                    .is_some_and(|section| leased_sections.contains(section))
+        let drafts =
+            load_recoverable_delivery_drafts(&state, verified.mapping.binding_id, paper_id, now)
+                .await?;
+        let mut candidate_items = Vec::new();
+        for draft in &drafts {
+            let current_context = resolve_delivery_context(
+                &room,
+                &verified.mapping,
+                draft.work_item_id,
+                &draft.section_key,
+                draft.artifact_manifest_id,
+                now,
+            )?;
+            let current_context_matches = current_context
+                .as_ref()
+                .is_some_and(|context| delivery_draft_matches_context(draft, context));
+            let recoverable_after_submit =
+                if matches!(draft.state.as_str(), "submitting" | "consumed") {
+                    if !delivery_recovery_pins_are_canonical(draft) {
+                        return Err(AppError::Internal);
+                    }
+                    room_contains_exact_delivery_proposal(&room, draft)?
+                } else {
+                    false
+                };
+            if current_context_matches || recoverable_after_submit {
+                candidate_items.push(delivery_candidate_value(draft));
+            }
+        }
+        candidate_items.sort_by_key(|item| {
+            item.get("delivery_draft_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        });
+        let delivery_candidates = if candidate_items.is_empty() {
+            unavailable_delivery_candidates(if drafts.is_empty() {
+                "no_agent_declared_delivery_draft"
+            } else {
+                "delivery_draft_stale_or_invalid"
             })
-            .map(|head| {
-                project_fields(
-                    head,
-                    &[
-                        "paper_project_id",
-                        "section_key",
-                        "base_paper_revision_id",
-                        "current_head_revision_id",
-                        "fencing_token",
-                        "version",
-                    ],
-                )
+        } else {
+            json!({
+                "schema": "hepta.paper_raid.agent_bridge.delivery_candidates.v1",
+                "status": "available",
+                "reason_code": Value::Null,
+                "items": candidate_items,
             })
-            .collect::<Result<_, _>>()?;
-        let artifact_manifests: Vec<Value> = room
-            .get("artifact_manifests")
-            .and_then(Value::as_array)
-            .ok_or(AppError::Upstream)?
-            .iter()
-            .map(|manifest| {
-                project_fields(
-                    manifest,
-                    &[
-                        "manifest_id",
-                        "paper_project_id",
-                        "manifest_hash",
-                        "version",
-                    ],
-                )
-            })
-            .collect::<Result<_, _>>()?;
+        };
         papers.push(json!({
             "paper_id": paper_id,
             "phase": paper.get("phase").cloned().unwrap_or(Value::Null),
             "tasks": tasks,
-            "delivery_candidates": {
-                "artifact_manifests": artifact_manifests,
-                "section_heads": section_heads,
-                "leases": leases,
-            }
+            "proposals": proposals,
+            "delivery_candidates": delivery_candidates,
         }));
+    }
+    if let Some(review_value) = review_value {
+        merge_review_tasks_into_author_papers(&mut papers, &review_value)?;
     }
     let value = json!({
         "schema": "hepta.paper_raid.agent_bridge.inbox.v2",
         "binding_id": verified.mapping.binding_id,
         "assurance": "self_declared_unverified",
+        "discovery": {
+            "mode": if has_review_scope { "mixed_author_and_review" } else if automatic_discovery { "active_raids" } else { "explicit_paper_ids" },
+            "truncated": discovery_truncated,
+            "max_papers": MAX_DISCOVERED_INBOX_PAPERS,
+        },
         "papers": papers
     });
     complete_agent_request(&state, &verified, StatusCode::OK, &value).await
+}
+
+pub async fn agent_review_object(
+    State(state): State<AppState>,
+    OriginalUri(uri): OriginalUri,
+    Query(query): Query<ReviewObjectQuery>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AppError> {
+    let verified = verify_agent_request(&state, Method::GET, &uri, &headers, &body).await?;
+    if !matches!(
+        query.digest.strip_prefix("sha256:"),
+        Some(raw) if raw.len() == 64
+    ) {
+        return Err(AppError::Invalid("review object digest is invalid".into()));
+    }
+    let paper_id = {
+        let queue = state.hepta.list_review_queue(&verified.identity).await?;
+        let assignment_id_text = query.assignment_id.to_string();
+        queue
+            .as_array()
+            .and_then(|items| {
+                items.iter().find_map(|item| {
+                    item.get("my_assignments")
+                        .and_then(Value::as_array)
+                        .is_some_and(|assignments| {
+                            assignments.iter().any(|assignment| {
+                                assignment.get("assignment_id").and_then(Value::as_str)
+                                    == Some(assignment_id_text.as_str())
+                            })
+                        })
+                        .then(|| {
+                            item.get("paper_project_id")
+                                .and_then(Value::as_str)
+                                .and_then(|value| Uuid::parse_str(value).ok())
+                        })
+                        .flatten()
+                })
+            })
+            .ok_or(AppError::Forbidden)?
+    };
+    let hepta_bundle = state
+        .hepta
+        .get_paper_review_bundle(&verified.identity, paper_id)
+        .await?;
+    let bundle = resolve_frozen_review_bundle(&state, &hepta_bundle).await?;
+    let descriptor = bundle
+        .get("resolved_frozen_review_bundle")
+        .ok_or(AppError::Upstream)?;
+    let kind = descriptor
+        .get("execution")
+        .and_then(|value| value.get("kind"))
+        .and_then(Value::as_str)
+        .ok_or(AppError::Upstream)?;
+    let evaluation_id = if kind == "reproduce" {
+        bundle
+            .get("evaluation")
+            .and_then(|value| value.get("evaluation_id"))
+            .and_then(Value::as_str)
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .ok_or(AppError::Upstream)?
+    } else if kind == "evaluate" {
+        review_evaluation_id(query.assignment_id, &query.bundle_hash)
+    } else {
+        return Err(AppError::Upstream);
+    };
+    if query.task_id
+        != review_task_id(
+            query.assignment_id,
+            &query.bundle_hash,
+            kind,
+            Some(evaluation_id),
+        )
+    {
+        return Err(AppError::Forbidden);
+    }
+    let media_type = crate::app::authorized_review_artifact_media(
+        &bundle,
+        query.assignment_id,
+        &query.bundle_hash,
+        &query.object_key,
+        &query.digest,
+    )?;
+    state.cas.validate_media_type(&media_type)?;
+    if let Some((status, bytes)) = verified.replay.as_ref() {
+        if *status != StatusCode::OK.as_u16() {
+            return Err(AppError::Conflict(
+                "review_object_replay_status_changed".into(),
+            ));
+        }
+        return crate::app::review_artifact_response(bytes.clone(), &media_type);
+    }
+    let bytes = state.cas.get(&query.digest, &media_type).await?;
+    complete_agent_raw_request(&state, &verified, StatusCode::OK, &bytes).await?;
+    crate::app::review_artifact_response(bytes, &media_type)
+}
+
+pub async fn agent_review_receipt(
+    State(state): State<AppState>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AppError> {
+    let verified = verify_agent_request(&state, Method::POST, &uri, &headers, &body).await?;
+    if let Some(response) = replay_response(&verified) {
+        return Ok(response);
+    }
+    let request: ReviewReceiptRequest = decode_json(&body, MAX_AGENT_BODY_BYTES)?;
+    if request.schema != "hepta.paper_raid.agent_bridge.review_receipt_request.v1"
+        || request.idempotency_key != request.receipt.receipt_id
+    {
+        return Err(AppError::Invalid("invalid review receipt request".into()));
+    }
+    let receipt = request.receipt;
+    if receipt.schema != REVIEW_EXECUTION_RECEIPT_V1
+        || receipt.binding_id != verified.mapping.binding_id
+        || receipt.agent_id != verified.mapping.agent_id
+        || receipt.agent_key_id != verified.mapping.agent_key_id
+        || receipt.attempt == 0
+        || receipt.attempt > JSON_SAFE_U64_MAX
+    {
+        return Err(AppError::Forbidden);
+    }
+    let public_key_text = verified
+        .authoritative_binding
+        .get("agent_public_key")
+        .and_then(Value::as_str)
+        .ok_or(AppError::Upstream)?;
+    let public_key_bytes = BASE64
+        .decode(public_key_text)
+        .map_err(|_| AppError::Upstream)?;
+    let public_key_array: [u8; 32] = public_key_bytes
+        .try_into()
+        .map_err(|_| AppError::Upstream)?;
+    let verifying_key =
+        VerifyingKey::from_bytes(&public_key_array).map_err(|_| AppError::Upstream)?;
+    if sha256_digest(verifying_key.as_bytes()) != receipt.signing_public_key_hash {
+        return Err(AppError::Forbidden);
+    }
+    verify_review_execution_receipt_signature(&receipt, &verifying_key)
+        .map_err(|_| AppError::Forbidden)?;
+    let hepta_bundle = state
+        .hepta
+        .get_paper_review_bundle(&verified.identity, receipt.paper_project_id)
+        .await?;
+    let bundle = resolve_frozen_review_bundle(&state, &hepta_bundle).await?;
+    let descriptor_value = bundle
+        .get("resolved_frozen_review_bundle")
+        .cloned()
+        .ok_or(AppError::Upstream)?;
+    let descriptor: FrozenReviewBundleV1 =
+        serde_json::from_value(descriptor_value).map_err(|_| AppError::Upstream)?;
+    let evaluation_id = if descriptor.execution.kind == "reproduce" {
+        bundle
+            .get("evaluation")
+            .and_then(|value| value.get("evaluation_id"))
+            .and_then(Value::as_str)
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .ok_or(AppError::Upstream)?
+    } else if descriptor.execution.kind == "evaluate" {
+        review_evaluation_id(descriptor.assignment_id, &descriptor.bundle_hash)
+    } else {
+        return Err(AppError::Upstream);
+    };
+    let expected_task_id = review_task_id(
+        descriptor.assignment_id,
+        &descriptor.bundle_hash,
+        &descriptor.execution.kind,
+        Some(evaluation_id),
+    );
+    let expected_receipt_id = review_execution_receipt_id(
+        receipt.binding_id,
+        expected_task_id,
+        descriptor.assignment_id,
+        &descriptor.bundle_hash,
+        receipt.attempt,
+        receipt.fencing_token,
+    )
+    .map_err(|_| AppError::Forbidden)?;
+    let input_objects_value = request
+        .run_manifest
+        .get("input_objects")
+        .cloned()
+        .ok_or_else(|| AppError::Invalid("review run manifest has no input objects".into()))?;
+    let input_objects: Vec<FrozenReviewInputObjectV1> = serde_json::from_value(input_objects_value)
+        .map_err(|_| AppError::Invalid("review run manifest input objects are invalid".into()))?;
+    let expected_input_objects = descriptor
+        .objects
+        .iter()
+        .map(|object| FrozenReviewInputObjectV1 {
+            object_key: object.object_key.clone(),
+            logical_path: object.logical_path.clone(),
+            role: object.role.clone(),
+            digest: object.digest.clone(),
+            size_bytes: object.size_bytes,
+        })
+        .collect::<Vec<_>>();
+    if input_objects != expected_input_objects {
+        return Err(AppError::Forbidden);
+    }
+    let expected_input_root =
+        frozen_review_input_root(&input_objects).map_err(|_| AppError::Upstream)?;
+    let expected_metrics_hash = review_execution_metrics_hash(&receipt)
+        .map_err(|_| AppError::Invalid("review receipt metrics are invalid".into()))?;
+    let output_root = hepta_paper_raid_contracts::canonical_json_sha256(&request.output)
+        .map_err(|_| AppError::Invalid("review output is not canonicalizable".into()))?;
+    let environment_hash = hepta_paper_raid_contracts::canonical_json_sha256(&request.environment)
+        .map_err(|_| AppError::Invalid("review environment is not canonicalizable".into()))?;
+    let run_manifest_hash =
+        hepta_paper_raid_contracts::canonical_json_sha256(&request.run_manifest)
+            .map_err(|_| AppError::Invalid("review run manifest is not canonicalizable".into()))?;
+    let logs_hash = hepta_paper_raid_contracts::canonical_json_sha256(&request.logs)
+        .map_err(|_| AppError::Invalid("review logs are not canonicalizable".into()))?;
+    let seed_set_hash =
+        hepta_paper_raid_contracts::canonical_json_sha256(&vec![descriptor.execution.seed])
+            .map_err(|_| AppError::Internal)?;
+    let expected_expiry = DateTime::parse_from_rfc3339(&descriptor.expires_at)
+        .map_err(|_| AppError::Upstream)?
+        .timestamp();
+    let now = Utc::now().timestamp();
+    if receipt.receipt_id != expected_receipt_id
+        || receipt.task_id != expected_task_id
+        || receipt.assignment_id != descriptor.assignment_id
+        || receipt.paper_project_id != descriptor.paper_project_id
+        || receipt.submission_id != descriptor.submission_id
+        || receipt.evaluation_id != evaluation_id
+        || receipt.kind != descriptor.execution.kind
+        || receipt.fencing_token != descriptor.assignment_version
+        || receipt.bundle_hash != descriptor.bundle_hash
+        || receipt.evaluator_version != descriptor.execution.evaluator_version
+        || receipt.input_root != expected_input_root
+        || receipt.metrics_hash != expected_metrics_hash
+        || receipt.output_root != output_root
+        || receipt.environment_hash != environment_hash
+        || receipt.run_manifest_hash != run_manifest_hash
+        || receipt.logs_hash != logs_hash
+        || receipt.seed_set_hash != seed_set_hash
+        || receipt.completed_at_unix > now + AGENT_PROOF_CLOCK_SKEW_SECONDS
+        || receipt.completed_at_unix > expected_expiry
+    {
+        return Err(AppError::Forbidden);
+    }
+    if !review_output_matches_receipt(&request.output, &receipt)
+        || request.run_manifest.get("adapter").and_then(Value::as_str)
+            != Some(descriptor.execution.adapter.as_str())
+        || request
+            .run_manifest
+            .get("entrypoint")
+            .and_then(Value::as_str)
+            != Some(descriptor.execution.entrypoint.as_str())
+        || request.run_manifest.get("seed").and_then(Value::as_u64)
+            != Some(descriptor.execution.seed)
+    {
+        return Err(AppError::Forbidden);
+    }
+    for (field, expected) in [
+        ("task_id", json!(receipt.task_id)),
+        ("assignment_id", json!(receipt.assignment_id)),
+        ("paper_project_id", json!(receipt.paper_project_id)),
+        ("submission_id", json!(receipt.submission_id)),
+        ("kind", json!(&receipt.kind)),
+        ("attempt", json!(receipt.attempt)),
+        ("fencing_token", json!(receipt.fencing_token)),
+        ("bundle_hash", json!(&receipt.bundle_hash)),
+        ("evaluator_version", json!(&receipt.evaluator_version)),
+        ("input_root", json!(&receipt.input_root)),
+        ("output_root", json!(&receipt.output_root)),
+        ("metrics_hash", json!(&receipt.metrics_hash)),
+        ("seed_set_hash", json!(&receipt.seed_set_hash)),
+        ("environment_hash", json!(&receipt.environment_hash)),
+        ("logs_hash", json!(&receipt.logs_hash)),
+        ("started_at_unix", json!(receipt.started_at_unix)),
+        ("completed_at_unix", json!(receipt.completed_at_unix)),
+    ] {
+        if request.run_manifest.get(field) != Some(&expected) {
+            return Err(AppError::Forbidden);
+        }
+    }
+    let receipt_hash = review_execution_receipt_hash(&receipt)
+        .map_err(|_| AppError::Invalid("review receipt cannot be canonicalized".into()))?;
+    let receipt_json = serde_json::to_value(&receipt).map_err(|_| AppError::Internal)?;
+    let request_json = json!({
+        "schema": request.schema,
+        "idempotency_key": request.idempotency_key,
+        "receipt": receipt_json,
+        "output": request.output,
+        "environment": request.environment,
+        "run_manifest": request.run_manifest,
+        "logs": request.logs,
+    });
+    let mut tx = state.pool.begin().await?;
+    let attempt =
+        i64::try_from(receipt.attempt).map_err(|_| AppError::Invalid("attempt overflow".into()))?;
+    let latest = sqlx::query(
+        "SELECT state,attempt FROM paper_raid_bff_review_execution_receipts
+         WHERE task_id=$1 ORDER BY attempt DESC LIMIT 1 FOR UPDATE",
+    )
+    .bind(receipt.task_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let latest = latest
+        .map(|row| {
+            let stored_attempt = row.try_get::<i64, _>("attempt")?;
+            Ok::<StoredReviewTaskState, AppError>(StoredReviewTaskState {
+                state: row.try_get("state")?,
+                attempt: u64::try_from(stored_attempt).map_err(|_| AppError::Upstream)?,
+            })
+        })
+        .transpose()?;
+    let existing = sqlx::query(
+        "SELECT receipt_id,receipt_hash,receipt,state
+         FROM paper_raid_bff_review_execution_receipts
+         WHERE task_id=$1 AND attempt=$2 FOR UPDATE",
+    )
+    .bind(receipt.task_id)
+    .bind(attempt)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let inserted = if existing.is_some() {
+        false
+    } else {
+        let (expected_attempt, _) = projected_review_task_attempt(latest.as_ref())?;
+        if receipt.attempt != expected_attempt {
+            return Err(AppError::Conflict(
+                "review receipt attempt is stale or was not projected".into(),
+            ));
+        }
+        sqlx::query(
+            "INSERT INTO paper_raid_bff_review_execution_receipts (
+                receipt_id,task_id,binding_id,assignment_id,paper_id,submission_id,evaluation_id,
+                kind,attempt,fencing_token,bundle_hash,receipt_hash,receipt,state,created_at,updated_at
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,'pending',now(),now())
+             -- One canonical receipt simultaneously owns receipt_id and (task_id,attempt).
+             -- Omitting the arbiter makes an identical concurrent first insert idempotent
+             -- regardless of which of those two unique indexes PostgreSQL checks first.
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(receipt.receipt_id)
+        .bind(receipt.task_id)
+        .bind(receipt.binding_id)
+        .bind(receipt.assignment_id)
+        .bind(receipt.paper_project_id)
+        .bind(receipt.submission_id)
+        .bind(receipt.evaluation_id)
+        .bind(&receipt.kind)
+        .bind(attempt)
+        .bind(i64::try_from(receipt.fencing_token).map_err(|_| AppError::Invalid("fencing overflow".into()))?)
+        .bind(&receipt.bundle_hash)
+        .bind(&receipt_hash)
+        .bind(&request_json)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected()
+            == 1
+    };
+    let stored = sqlx::query(
+        "SELECT receipt_id,receipt_hash,receipt,state
+         FROM paper_raid_bff_review_execution_receipts
+         WHERE task_id=$1 AND attempt=$2 FOR UPDATE",
+    )
+    .bind(receipt.task_id)
+    .bind(attempt)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| {
+        AppError::Conflict("review_receipt_conflict_did_not_resolve_to_task_attempt".into())
+    })?;
+    if stored.get::<Uuid, _>("receipt_id") != receipt.receipt_id
+        || stored.get::<String, _>("receipt_hash") != receipt_hash
+        || stored.get::<Value, _>("receipt") != request_json
+    {
+        return Err(AppError::Conflict(
+            "review_task_attempt_already_has_different_receipt".into(),
+        ));
+    }
+    bridge_audit(
+        &mut tx,
+        Some(&verified.mapping.subject_id),
+        Some(verified.mapping.binding_id),
+        "review_execution_receipt",
+        "succeeded",
+        json!({
+            "receipt_id": receipt.receipt_id,
+            "task_id": receipt.task_id,
+            "assignment_id": receipt.assignment_id,
+            "paper_id": receipt.paper_project_id,
+            "kind": receipt.kind,
+            "receipt_hash": receipt_hash,
+            "storage_disposition": if inserted { "accepted" } else { "replayed" },
+        }),
+    )
+    .await?;
+    tx.commit().await?;
+    let value = json!({
+        "schema": "hepta.paper_raid.agent_bridge.review_receipt_result.v1",
+        "receipt_id": receipt.receipt_id,
+        "task_id": receipt.task_id,
+        "attempt": receipt.attempt,
+        "receipt_hash": receipt_hash,
+        "status": "stored",
+    });
+    complete_agent_request(&state, &verified, StatusCode::OK, &value).await
+}
+
+fn review_output_matches_receipt(output: &Value, receipt: &ReviewExecutionReceiptV1) -> bool {
+    match receipt.kind.as_str() {
+        "evaluate" => serde_json::from_value::<ReviewEvaluationExecutionResultV1>(output.clone())
+            .is_ok_and(|evaluation| {
+                evaluation.reference_metrics_micros == receipt.observed_metrics_micros
+                    && Some(evaluation.candidate_passed) == receipt.candidate_passed
+                    && receipt.statistical_evidence
+                        == json!({
+                            "schema": "hepta.paper_raid.statistical_evidence.none.v1",
+                            "reason": "frozen_evaluator_did_not_emit_statistical_evidence",
+                        })
+            }),
+        "reproduce" => serde_json::from_value::<ReviewReproductionExecutionResultV1>(
+            output.clone(),
+        )
+        .is_ok_and(|reproduction| {
+            reproduction.observed_metrics_micros == receipt.observed_metrics_micros
+                && serde_json::to_value(reproduction.statistical_evidence)
+                    .is_ok_and(|evidence| evidence == receipt.statistical_evidence)
+                && receipt.candidate_passed.is_none()
+        }),
+        _ => false,
+    }
+}
+
+async fn complete_agent_raw_request(
+    state: &AppState,
+    verified: &VerifiedAgentRequest,
+    status: StatusCode,
+    body: &[u8],
+) -> Result<(), AppError> {
+    if body.len() > MAX_REVIEW_OBJECT_BYTES {
+        return Err(AppError::Upstream);
+    }
+    let updated = sqlx::query(
+        "UPDATE paper_raid_bff_agent_request_uses
+         SET response_status=$1,response_body=$2,completed_at=now()
+         WHERE binding_id=$3 AND nonce=$4 AND request_hash=$5 AND response_status IS NULL",
+    )
+    .bind(i32::from(status.as_u16()))
+    .bind(body)
+    .bind(verified.mapping.binding_id)
+    .bind(verified.claim.nonce)
+    .bind(verified.request_hash.as_slice())
+    .execute(&state.pool)
+    .await?;
+    if updated.rows_affected() != 1 {
+        return Err(AppError::Conflict(
+            "agent_raw_response_already_completed".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn unavailable_delivery_candidates(reason_code: &str) -> Value {
+    // Never infer a candidate from independent room collections. A candidate
+    // exists only after this Agent declares one short-lived delivery draft and
+    // the BFF revalidates its complete tuple against current Hepta authority.
+    json!({
+        "schema": "hepta.paper_raid.agent_bridge.delivery_candidates.v1",
+        "status": "unavailable",
+        "reason_code": reason_code,
+        "items": [],
+    })
+}
+
+fn delivery_draft_matches_context(draft: &DeliveryDraft, context: &DeliveryContext) -> bool {
+    draft.expected_work_version == context.expected_work_version
+        && draft.lease_id == context.lease_id
+        && draft.lease_fencing_token == context.lease_fencing_token
+        && draft.parent_revision_id == context.parent_revision_id
+        && draft.artifact_manifest_hash == context.artifact_manifest_hash
+        && draft.expires_at <= context.lease_expires_at
+}
+
+fn delivery_candidate_value(draft: &DeliveryDraft) -> Value {
+    json!({
+        "schema": "hepta.paper_raid.agent_bridge.delivery_candidate.v1",
+        "delivery_draft_id": draft.delivery_draft_id,
+        "binding_id": draft.binding_id,
+        "paper_id": draft.paper_id,
+        "work_item_id": draft.work_item_id,
+        "expected_work_version": draft.expected_work_version,
+        "section_key": draft.section_key,
+        "lease_id": draft.lease_id,
+        "lease_fencing_token": draft.lease_fencing_token,
+        "parent_revision_id": draft.parent_revision_id,
+        "proposal_kind": "delivery",
+        "payload_hash": draft.payload_hash,
+        "artifact_manifest_id": draft.artifact_manifest_id,
+        "artifact_manifest_hash": draft.artifact_manifest_hash,
+        "delivery_state": draft.state,
+        "declared_at_unix": draft.created_at.timestamp(),
+        "expires_at_unix": draft.expires_at.timestamp(),
+    })
+}
+
+fn delivery_recovery_pins_are_canonical(draft: &DeliveryDraft) -> bool {
+    draft
+        .proposal_body_hash
+        .as_deref()
+        .is_some_and(|hash| decode_digest(hash).is_ok())
+        && draft.proposal_id
+            == Some(delivery_proposal_id(
+                draft.binding_id,
+                draft.delivery_draft_id,
+            ))
+        && draft.proposal_idempotency_key
+            == Some(delivery_idempotency_key(
+                draft.binding_id,
+                draft.delivery_draft_id,
+            ))
+        && draft.proposal_signed_at_unix == Some(draft.created_at.timestamp())
+}
+
+fn room_contains_exact_delivery_proposal(
+    room: &Value,
+    draft: &DeliveryDraft,
+) -> Result<bool, AppError> {
+    let expected = draft.proposal_id.ok_or(AppError::Internal)?;
+    let proposals = room
+        .get("proposals")
+        .and_then(Value::as_array)
+        .ok_or(AppError::Upstream)?;
+    let matches: Vec<&Value> = proposals
+        .iter()
+        .filter(|proposal| record_uuid(proposal, "proposal_id") == Some(expected))
+        .collect();
+    if matches.len() > 1 {
+        return Err(AppError::Upstream);
+    }
+    match matches.first() {
+        Some(proposal) => {
+            validate_delivery_proposal_record(proposal, draft)?;
+            Ok(matches!(
+                proposal.get("status").and_then(Value::as_str),
+                Some("submitted" | "accepted" | "rework" | "rejected" | "superseded")
+            ))
+        }
+        None => Ok(false),
+    }
+}
+
+fn delivery_draft_from_row(row: &sqlx::postgres::PgRow) -> Result<DeliveryDraft, AppError> {
+    let lease_fencing_token =
+        u64::try_from(row.get::<i64, _>("lease_fencing_token")).map_err(|_| AppError::Internal)?;
+    let expected_work_version = u64::try_from(row.get::<i64, _>("expected_work_version"))
+        .map_err(|_| AppError::Internal)?;
+    if lease_fencing_token == 0
+        || lease_fencing_token > JSON_SAFE_U64_MAX
+        || expected_work_version == 0
+        || expected_work_version > JSON_SAFE_U64_MAX
+    {
+        return Err(AppError::Internal);
+    }
+    Ok(DeliveryDraft {
+        delivery_draft_id: row.get("delivery_draft_id"),
+        binding_id: row.get("binding_id"),
+        paper_id: row.get("paper_id"),
+        work_item_id: row.get("work_item_id"),
+        expected_work_version,
+        section_key: row.get("section_key"),
+        lease_id: row.get("lease_id"),
+        lease_fencing_token,
+        parent_revision_id: row.get("parent_revision_id"),
+        artifact_manifest_id: row.get("artifact_manifest_id"),
+        artifact_manifest_hash: row.get("artifact_manifest_hash"),
+        payload_hash: row.get("payload_hash"),
+        state: row.get("state"),
+        proposal_body_hash: row.try_get("proposal_body_hash").ok(),
+        proposal_id: row.try_get("proposal_id").ok(),
+        proposal_idempotency_key: row.try_get("proposal_idempotency_key").ok(),
+        proposal_signed_at_unix: row.try_get("proposal_signed_at_unix").ok(),
+        created_at: row.get("created_at"),
+        expires_at: row.get("expires_at"),
+    })
+}
+
+async fn expire_delivery_drafts(
+    tx: &mut Transaction<'_, Postgres>,
+    binding_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE paper_raid_bff_agent_delivery_drafts \
+         SET state='expired',invalidated_at=$1,updated_at=$1 \
+         WHERE binding_id=$2 AND state='pending' AND expires_at<=$1",
+    )
+    .bind(now)
+    .bind(binding_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn load_delivery_draft_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    delivery_draft_id: Uuid,
+    binding_id: Uuid,
+    paper_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<Option<DeliveryDraft>, AppError> {
+    sqlx::query(
+        "SELECT delivery_draft_id,binding_id,paper_id,work_item_id,expected_work_version,section_key, \
+                lease_id,lease_fencing_token,parent_revision_id,artifact_manifest_id, \
+                artifact_manifest_hash,payload_hash,state,proposal_body_hash,proposal_id, \
+                proposal_idempotency_key,proposal_signed_at_unix,created_at,expires_at \
+         FROM paper_raid_bff_agent_delivery_drafts \
+         WHERE delivery_draft_id=$1 AND binding_id=$2 AND paper_id=$3 \
+           AND state='pending' AND expires_at>$4 FOR UPDATE",
+    )
+    .bind(delivery_draft_id)
+    .bind(binding_id)
+    .bind(paper_id)
+    .bind(now)
+    .fetch_optional(&mut **tx)
+    .await?
+    .map(|row| delivery_draft_from_row(&row))
+    .transpose()
+}
+
+async fn load_recoverable_delivery_drafts(
+    state: &AppState,
+    binding_id: Uuid,
+    paper_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<Vec<DeliveryDraft>, AppError> {
+    sqlx::query(
+        "SELECT delivery_draft_id,binding_id,paper_id,work_item_id,expected_work_version,section_key, \
+                lease_id,lease_fencing_token,parent_revision_id,artifact_manifest_id, \
+                artifact_manifest_hash,payload_hash,state,proposal_body_hash,proposal_id, \
+                proposal_idempotency_key,proposal_signed_at_unix,created_at,expires_at \
+         FROM paper_raid_bff_agent_delivery_drafts \
+         WHERE binding_id=$1 AND paper_id=$2 \
+           AND state IN ('pending','submitting','consumed') AND expires_at>$3 \
+         ORDER BY created_at,delivery_draft_id LIMIT 64",
+    )
+    .bind(binding_id)
+    .bind(paper_id)
+    .bind(now)
+    .fetch_all(&state.pool)
+    .await?
+    .into_iter()
+    .map(|row| delivery_draft_from_row(&row))
+    .collect()
+}
+
+async fn load_delivery_draft_for_proposal(
+    state: &AppState,
+    delivery_draft_id: Uuid,
+    binding_id: Uuid,
+    paper_id: Uuid,
+) -> Result<Option<DeliveryDraft>, AppError> {
+    sqlx::query(
+        "SELECT delivery_draft_id,binding_id,paper_id,work_item_id,expected_work_version,section_key, \
+                lease_id,lease_fencing_token,parent_revision_id,artifact_manifest_id, \
+                artifact_manifest_hash,payload_hash,state,proposal_body_hash,proposal_id, \
+                proposal_idempotency_key,proposal_signed_at_unix,created_at,expires_at \
+         FROM paper_raid_bff_agent_delivery_drafts \
+         WHERE delivery_draft_id=$1 AND binding_id=$2 AND paper_id=$3",
+    )
+    .bind(delivery_draft_id)
+    .bind(binding_id)
+    .bind(paper_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .map(|row| delivery_draft_from_row(&row))
+    .transpose()
+}
+
+fn delivery_proposal_pin_matches(
+    draft: &DeliveryDraft,
+    proposal_body_hash: &str,
+    proposal_id: Uuid,
+    proposal_idempotency_key: Uuid,
+    proposal_signed_at_unix: i64,
+) -> bool {
+    draft.proposal_body_hash.as_deref() == Some(proposal_body_hash)
+        && draft.proposal_id == Some(proposal_id)
+        && draft.proposal_idempotency_key == Some(proposal_idempotency_key)
+        && draft.proposal_signed_at_unix == Some(proposal_signed_at_unix)
+}
+
+fn delivery_draft_authority_pins_match(expected: &DeliveryDraft, locked: &DeliveryDraft) -> bool {
+    expected.delivery_draft_id == locked.delivery_draft_id
+        && expected.binding_id == locked.binding_id
+        && expected.paper_id == locked.paper_id
+        && expected.work_item_id == locked.work_item_id
+        && expected.expected_work_version == locked.expected_work_version
+        && expected.section_key == locked.section_key
+        && expected.lease_id == locked.lease_id
+        && expected.lease_fencing_token == locked.lease_fencing_token
+        && expected.parent_revision_id == locked.parent_revision_id
+        && expected.artifact_manifest_id == locked.artifact_manifest_id
+        && expected.artifact_manifest_hash == locked.artifact_manifest_hash
+        && expected.payload_hash == locked.payload_hash
+        && expected.created_at == locked.created_at
+        && expected.expires_at == locked.expires_at
+}
+
+fn delivery_request_payload_matches_draft(payload: &Value, draft: &DeliveryDraft) -> bool {
+    record_uuid(payload, "work_item_id") == Some(draft.work_item_id)
+        && payload.get("section_key").and_then(Value::as_str) == Some(draft.section_key.as_str())
+        && record_uuid(payload, "parent_revision_id") == Some(draft.parent_revision_id)
+        && record_uuid(payload, "lease_id") == Some(draft.lease_id)
+        && payload.get("lease_fencing_token").and_then(Value::as_u64)
+            == Some(draft.lease_fencing_token)
+        && payload.get("expected_work_version").and_then(Value::as_u64)
+            == Some(draft.expected_work_version)
+        && payload.get("proposal_kind").and_then(Value::as_str) == Some("delivery")
+        && payload.get("payload_hash").and_then(Value::as_str) == Some(draft.payload_hash.as_str())
+        && record_uuid(payload, "artifact_manifest_id") == Some(draft.artifact_manifest_id)
+        && record_uuid(payload, "binding_id") == Some(draft.binding_id)
+}
+
+fn delivery_claim_matches_locked_snapshot(
+    expected_draft: &DeliveryDraft,
+    locked_draft: &DeliveryDraft,
+    request_payload: &Value,
+    proposal_body_hash: &str,
+    proposal_id: Uuid,
+    proposal_idempotency_key: Uuid,
+    proposal_signed_at_unix: i64,
+) -> bool {
+    delivery_draft_authority_pins_match(expected_draft, locked_draft)
+        && delivery_request_payload_matches_draft(request_payload, locked_draft)
+        && decode_digest(proposal_body_hash).is_ok()
+        && proposal_id
+            == delivery_proposal_id(locked_draft.binding_id, locked_draft.delivery_draft_id)
+        && proposal_idempotency_key
+            == delivery_idempotency_key(locked_draft.binding_id, locked_draft.delivery_draft_id)
+        && proposal_signed_at_unix == locked_draft.created_at.timestamp()
+}
+
+async fn claim_delivery_draft_for_proposal(
+    state: &AppState,
+    expected_draft: &DeliveryDraft,
+    claim: &DeliveryProposalClaim<'_>,
+) -> Result<(DeliveryDraft, bool), AppError> {
+    let mut tx = state.pool.begin().await?;
+    let row = sqlx::query(
+        "SELECT delivery_draft_id,binding_id,paper_id,work_item_id,expected_work_version,section_key, \
+                lease_id,lease_fencing_token,parent_revision_id,artifact_manifest_id, \
+                artifact_manifest_hash,payload_hash,state,proposal_body_hash,proposal_id, \
+                proposal_idempotency_key,proposal_signed_at_unix,created_at,expires_at \
+         FROM paper_raid_bff_agent_delivery_drafts \
+         WHERE delivery_draft_id=$1 AND binding_id=$2 AND paper_id=$3 FOR UPDATE",
+    )
+    .bind(expected_draft.delivery_draft_id)
+    .bind(expected_draft.binding_id)
+    .bind(expected_draft.paper_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| AppError::Conflict("delivery_draft_missing_or_expired".into()))?;
+    let mut draft = delivery_draft_from_row(&row)?;
+    let is_recovery = matches!(draft.state.as_str(), "submitting" | "consumed");
+    if !delivery_claim_matches_locked_snapshot(
+        expected_draft,
+        &draft,
+        claim.request_payload,
+        claim.proposal_body_hash,
+        claim.proposal_id,
+        claim.proposal_idempotency_key,
+        claim.proposal_signed_at_unix,
+    ) {
+        return Err(AppError::Conflict(
+            "delivery_draft_claim_stale_or_mismatched".into(),
+        ));
+    }
+    match draft.state.as_str() {
+        "pending" => {
+            if draft.expires_at <= claim.claimed_at {
+                return Err(AppError::Conflict(
+                    "delivery_draft_missing_or_expired".into(),
+                ));
+            }
+            let claimed = sqlx::query(
+                "UPDATE paper_raid_bff_agent_delivery_drafts SET \
+                    state='submitting',proposal_body_hash=$1,proposal_id=$2, \
+                    proposal_idempotency_key=$3,proposal_signed_at_unix=$4, \
+                    submitting_at=$5,updated_at=$5 \
+                 WHERE delivery_draft_id=$6 AND binding_id=$7 AND paper_id=$8 \
+                   AND state='pending' AND expires_at>$5",
+            )
+            .bind(claim.proposal_body_hash)
+            .bind(claim.proposal_id)
+            .bind(claim.proposal_idempotency_key)
+            .bind(claim.proposal_signed_at_unix)
+            .bind(claim.claimed_at)
+            .bind(expected_draft.delivery_draft_id)
+            .bind(expected_draft.binding_id)
+            .bind(expected_draft.paper_id)
+            .execute(&mut *tx)
+            .await?;
+            if claimed.rows_affected() != 1 {
+                return Err(AppError::Conflict("delivery_draft_claim_conflict".into()));
+            }
+            draft.state = "submitting".into();
+            draft.proposal_body_hash = Some(claim.proposal_body_hash.to_string());
+            draft.proposal_id = Some(claim.proposal_id);
+            draft.proposal_idempotency_key = Some(claim.proposal_idempotency_key);
+            draft.proposal_signed_at_unix = Some(claim.proposal_signed_at_unix);
+        }
+        "submitting" | "consumed" => {
+            if !delivery_proposal_pin_matches(
+                &draft,
+                claim.proposal_body_hash,
+                claim.proposal_id,
+                claim.proposal_idempotency_key,
+                claim.proposal_signed_at_unix,
+            ) {
+                return Err(AppError::Conflict(
+                    "delivery_draft_already_claimed_by_different_proposal".into(),
+                ));
+            }
+        }
+        _ => {
+            return Err(AppError::Conflict(
+                "delivery_draft_missing_or_expired".into(),
+            ))
+        }
+    }
+    tx.commit().await?;
+    Ok((draft, is_recovery))
+}
+
+async fn consume_claimed_delivery_draft(
+    state: &AppState,
+    draft: &DeliveryDraft,
+    proposal_body_hash: &str,
+) -> Result<(), AppError> {
+    let updated = sqlx::query(
+        "UPDATE paper_raid_bff_agent_delivery_drafts SET \
+            state='consumed',consumed_at=COALESCE(consumed_at,now()),updated_at=now() \
+         WHERE delivery_draft_id=$1 AND binding_id=$2 AND state='submitting' \
+           AND proposal_body_hash=$3 AND proposal_id=$4 \
+           AND proposal_idempotency_key=$5 AND proposal_signed_at_unix=$6",
+    )
+    .bind(draft.delivery_draft_id)
+    .bind(draft.binding_id)
+    .bind(proposal_body_hash)
+    .bind(draft.proposal_id.ok_or(AppError::Internal)?)
+    .bind(draft.proposal_idempotency_key.ok_or(AppError::Internal)?)
+    .bind(draft.proposal_signed_at_unix.ok_or(AppError::Internal)?)
+    .execute(&state.pool)
+    .await?;
+    if updated.rows_affected() == 1 {
+        return Ok(());
+    }
+    let current = load_delivery_draft_for_proposal(
+        state,
+        draft.delivery_draft_id,
+        draft.binding_id,
+        draft.paper_id,
+    )
+    .await?
+    .ok_or(AppError::Internal)?;
+    if current.state == "consumed"
+        && delivery_proposal_pin_matches(
+            &current,
+            proposal_body_hash,
+            draft.proposal_id.ok_or(AppError::Internal)?,
+            draft.proposal_idempotency_key.ok_or(AppError::Internal)?,
+            draft.proposal_signed_at_unix.ok_or(AppError::Internal)?,
+        )
+    {
+        return Ok(());
+    }
+    Err(AppError::Conflict(
+        "delivery_draft_consumption_conflict".into(),
+    ))
+}
+
+fn validate_delivery_proposal_record(
+    proposal: &Value,
+    draft: &DeliveryDraft,
+) -> Result<(), AppError> {
+    let expected_proposal_id = draft.proposal_id.ok_or(AppError::Internal)?;
+    let expected_signed_at = draft.proposal_signed_at_unix.ok_or(AppError::Internal)?;
+    let exact = record_uuid(proposal, "proposal_id") == Some(expected_proposal_id)
+        && record_uuid(proposal, "paper_project_id") == Some(draft.paper_id)
+        && record_uuid(proposal, "work_item_id") == Some(draft.work_item_id)
+        && proposal.get("section_key").and_then(Value::as_str) == Some(draft.section_key.as_str())
+        && record_uuid(proposal, "parent_revision_id") == Some(draft.parent_revision_id)
+        && record_uuid(proposal, "lease_id") == Some(draft.lease_id)
+        && proposal.get("lease_fencing_token").and_then(Value::as_u64)
+            == Some(draft.lease_fencing_token)
+        && proposal
+            .get("expected_work_version")
+            .and_then(Value::as_u64)
+            == Some(draft.expected_work_version)
+        && proposal.get("proposal_kind").and_then(Value::as_str) == Some("delivery")
+        && proposal.get("payload_hash").and_then(Value::as_str)
+            == Some(draft.payload_hash.as_str())
+        && record_uuid(proposal, "artifact_manifest_id") == Some(draft.artifact_manifest_id)
+        && proposal
+            .get("artifact_manifest_hash")
+            .and_then(Value::as_str)
+            == Some(draft.artifact_manifest_hash.as_str())
+        && record_uuid(proposal, "binding_id") == Some(draft.binding_id)
+        && proposal.get("signed_at_unix").and_then(Value::as_i64) == Some(expected_signed_at)
+        && proposal
+            .get("version")
+            .and_then(Value::as_u64)
+            .is_some_and(|version| version > 0);
+    if exact {
+        Ok(())
+    } else {
+        Err(AppError::Upstream)
+    }
+}
+
+fn validate_delivery_proposal_response(
+    proposal: &Value,
+    draft: &DeliveryDraft,
+    request_payload: &Value,
+    authoritative_binding: &Value,
+) -> Result<(), AppError> {
+    validate_delivery_proposal_record(proposal, draft)?;
+    if proposal.get("status").and_then(Value::as_str) != Some("submitted") {
+        return Err(AppError::Upstream);
+    }
+    for field in ["agent_id", "agent_key_id", "signature"] {
+        if proposal.get(field) != request_payload.get(field) {
+            return Err(AppError::Upstream);
+        }
+    }
+    if proposal.get("agent_public_key") != authoritative_binding.get("agent_public_key") {
+        return Err(AppError::Upstream);
+    }
+    Ok(())
 }
 
 fn project_fields(record: &Value, fields: &[&str]) -> Result<Value, AppError> {
@@ -670,6 +2698,23 @@ pub async fn agent_proposal(
         .and_then(Value::as_str)
         .and_then(|value| Uuid::parse_str(value).ok())
         .ok_or_else(|| AppError::Invalid("proposal idempotency_key must be a UUID".into()))?;
+    let proposal_id = record_uuid(&request.payload, "proposal_id")
+        .ok_or_else(|| AppError::Invalid("proposal_id must be a UUID".into()))?;
+    let proposal_signed_at_unix = request
+        .payload
+        .get("signed_at_unix")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| AppError::Invalid("proposal signed_at_unix must be an integer".into()))?;
+    let proposal_kind = request
+        .payload
+        .get("proposal_kind")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::Invalid("proposal_kind is required".into()))?;
+    if proposal_kind != "delivery" {
+        return Err(AppError::Invalid(
+            "Agent Bridge proposals require a delivery-bound Agent Proposal V2".into(),
+        ));
+    }
     for (field, expected) in [
         ("binding_id", verified.mapping.binding_id.to_string()),
         ("agent_id", verified.mapping.agent_id.clone()),
@@ -679,33 +2724,111 @@ pub async fn agent_proposal(
             return Err(AppError::Forbidden);
         }
     }
-    let command = BrowserCommand {
-        command: CommandName::SubmitAgentProposal,
-        resource_id: Some(request.paper_id),
-        child_id: None,
-        session_id: None,
-        idempotency_key,
-        payload: request.payload,
-    };
-    let upstream = state
-        .hepta
-        .forward_command(&verified.identity, &command)
-        .await?;
-    if !(200..300).contains(&upstream.status) {
-        return Err(AppError::Upstream);
-    }
-    let proposal = upstream.json()?;
-    let value = json!({
-        "schema": "hepta.paper_raid.agent_bridge.proposal_result.v2",
-        "proposal": proposal
-    });
-    complete_agent_request(
+    let proposal_body_hash = verified.claim.body_hash.clone();
+    let delivery_draft_id = request
+        .delivery_draft_id
+        .ok_or_else(|| AppError::Invalid("delivery proposals require delivery_draft_id".into()))?;
+    let now = Utc::now();
+    let draft = load_delivery_draft_for_proposal(
         &state,
-        &verified,
-        StatusCode::from_u16(upstream.status).map_err(|_| AppError::Internal)?,
-        &value,
+        delivery_draft_id,
+        verified.mapping.binding_id,
+        request.paper_id,
     )
-    .await
+    .await?
+    .ok_or_else(|| AppError::Conflict("delivery_draft_missing_or_expired".into()))?;
+    if !delivery_request_payload_matches_draft(&request.payload, &draft) {
+        return Err(AppError::Forbidden);
+    }
+    if proposal_id != delivery_proposal_id(draft.binding_id, draft.delivery_draft_id)
+        || idempotency_key != delivery_idempotency_key(draft.binding_id, draft.delivery_draft_id)
+        || proposal_signed_at_unix != draft.created_at.timestamp()
+    {
+        return Err(AppError::Forbidden);
+    }
+    if draft.state == "pending" {
+        let room = state
+            .hepta
+            .get_paper_room(&verified.identity, request.paper_id)
+            .await?;
+        let context = resolve_delivery_context(
+            &room,
+            &verified.mapping,
+            draft.work_item_id,
+            &draft.section_key,
+            draft.artifact_manifest_id,
+            now,
+        )?
+        .ok_or_else(|| AppError::Conflict("delivery_draft_is_no_longer_current".into()))?;
+        if !delivery_draft_matches_context(&draft, &context) {
+            return Err(AppError::Conflict(
+                "delivery_draft_authoritative_context_changed".into(),
+            ));
+        }
+    } else if !matches!(draft.state.as_str(), "submitting" | "consumed")
+        || !delivery_proposal_pin_matches(
+            &draft,
+            &proposal_body_hash,
+            proposal_id,
+            idempotency_key,
+            proposal_signed_at_unix,
+        )
+    {
+        return Err(AppError::Conflict(
+            "delivery_draft_already_claimed_by_different_proposal".into(),
+        ));
+    }
+    let delivery_claim = DeliveryProposalClaim {
+        request_payload: &request.payload,
+        proposal_body_hash: &proposal_body_hash,
+        proposal_id,
+        proposal_idempotency_key: idempotency_key,
+        proposal_signed_at_unix,
+        claimed_at: now,
+    };
+    let (delivery_draft, is_recovery) =
+        claim_delivery_draft_for_proposal(&state, &draft, &delivery_claim).await?;
+    let submission = async {
+        let command = BrowserCommand {
+            command: CommandName::SubmitAgentProposal,
+            resource_id: Some(request.paper_id),
+            child_id: None,
+            session_id: None,
+            idempotency_key,
+            payload: request.payload.clone(),
+        };
+        let upstream = state
+            .hepta
+            .forward_command(&verified.identity, &command)
+            .await?;
+        if !(200..300).contains(&upstream.status) {
+            return Err(AppError::Upstream);
+        }
+        let proposal = upstream.json()?;
+        validate_delivery_proposal_response(
+            &proposal,
+            &delivery_draft,
+            &request.payload,
+            &verified.authoritative_binding,
+        )?;
+        consume_claimed_delivery_draft(&state, &delivery_draft, &proposal_body_hash).await?;
+        let value = json!({
+            "schema": "hepta.paper_raid.agent_bridge.proposal_result.v2",
+            "proposal": proposal
+        });
+        complete_agent_request(
+            &state,
+            &verified,
+            StatusCode::from_u16(upstream.status).map_err(|_| AppError::Internal)?,
+            &value,
+        )
+        .await
+    }
+    .await;
+    if is_recovery {
+        state.metrics.observe_bridge_recovery(submission.is_ok());
+    }
+    submission
 }
 
 fn decode_json<T: DeserializeOwned>(body: &[u8], max_bytes: usize) -> Result<T, AppError> {
@@ -745,6 +2868,59 @@ fn pairing_code_hash_for_admission(value: &str) -> Result<[u8; 32], AppError> {
 
 fn digest_bytes(value: &[u8]) -> [u8; 32] {
     Sha256::digest(value).into()
+}
+
+fn deterministic_uuid(domain: &str, fields: &[String]) -> Uuid {
+    let mut hasher = Sha256::new();
+    hasher.update(domain.as_bytes());
+    hasher.update([0]);
+    hasher.update(fields.join("\0").as_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(bytes)
+}
+
+fn delivery_proposal_id(binding_id: Uuid, delivery_draft_id: Uuid) -> Uuid {
+    deterministic_uuid(
+        DELIVERY_PROPOSAL_ID_DOMAIN,
+        &[binding_id.to_string(), delivery_draft_id.to_string()],
+    )
+}
+
+fn delivery_idempotency_key(binding_id: Uuid, delivery_draft_id: Uuid) -> Uuid {
+    deterministic_uuid(
+        DELIVERY_IDEMPOTENCY_KEY_DOMAIN,
+        &[binding_id.to_string(), delivery_draft_id.to_string()],
+    )
+}
+
+fn review_task_id(
+    assignment_id: Uuid,
+    bundle_hash: &str,
+    kind: &str,
+    evaluation_id: Option<Uuid>,
+) -> Uuid {
+    deterministic_uuid(
+        REVIEW_TASK_ID_DOMAIN,
+        &[
+            assignment_id.to_string(),
+            bundle_hash.to_string(),
+            kind.to_string(),
+            evaluation_id
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+        ],
+    )
+}
+
+fn review_evaluation_id(assignment_id: Uuid, bundle_hash: &str) -> Uuid {
+    deterministic_uuid(
+        REVIEW_EVALUATION_ID_DOMAIN,
+        &[assignment_id.to_string(), bundle_hash.to_string()],
+    )
 }
 
 fn fixed_bucket(domain: &[u8], digest: &[u8; 32]) -> [u8; 32] {
@@ -1023,20 +3199,11 @@ fn validate_exact_binding(
     Ok(())
 }
 
-fn mapping_repair_owner_matches(
-    binding_id: Uuid,
-    subject_id: &str,
-    player_id: Uuid,
-    agent_id: &str,
-    expected_binding_id: Uuid,
-    expected_subject_id: &str,
-    expected_player_id: Uuid,
-    expected_agent_id: &str,
-) -> bool {
-    binding_id == expected_binding_id
-        && subject_id == expected_subject_id
-        && player_id == expected_player_id
-        && agent_id == expected_agent_id
+fn mapping_repair_owner_matches(actual: BridgeOwner<'_>, expected: BridgeOwner<'_>) -> bool {
+    actual.binding_id == expected.binding_id
+        && actual.subject_id == expected.subject_id
+        && actual.player_id == expected.player_id
+        && actual.agent_id == expected.agent_id
 }
 
 async fn persist_pairing_result(
@@ -1082,15 +3249,21 @@ async fn persist_pairing_result(
     .bind(request.binding_id)
     .fetch_one(&mut *tx)
     .await?;
+    let stored_subject_id: String = row.get("subject_id");
+    let stored_agent_id: String = row.get("agent_id");
     if !mapping_repair_owner_matches(
-        row.get("binding_id"),
-        &row.get::<String, _>("subject_id"),
-        row.get("player_id"),
-        &row.get::<String, _>("agent_id"),
-        request.binding_id,
-        &grant.subject_id,
-        grant.player_id,
-        &request.agent_id,
+        BridgeOwner {
+            binding_id: row.get("binding_id"),
+            subject_id: &stored_subject_id,
+            player_id: row.get("player_id"),
+            agent_id: &stored_agent_id,
+        },
+        BridgeOwner {
+            binding_id: request.binding_id,
+            subject_id: &grant.subject_id,
+            player_id: grant.player_id,
+            agent_id: &request.agent_id,
+        },
     ) {
         return Err(AppError::Conflict("pairing_binding_conflict".into()));
     }
@@ -1179,12 +3352,9 @@ async fn verify_agent_request(
     let candidate_hash = digest_bytes(candidate.as_bytes());
     admit_agent_request_global(state, &candidate_hash).await?;
     reject_unknown_agent_headers(headers)?;
-    if uri.query().is_some() {
-        return Err(AppError::Forbidden);
-    }
-    let canonical_query = "";
+    let canonical_query = uri.query().unwrap_or("");
     validate_agent_bridge_canonical_query(canonical_query).map_err(|_| AppError::Forbidden)?;
-    if !canonical_query.is_empty() {
+    if uri.path() != "/api/agent-bridge/review-objects" && !canonical_query.is_empty() {
         return Err(AppError::Forbidden);
     }
     let body_hash = sha256_digest(body);
@@ -1514,7 +3684,7 @@ fn replay_response(verified: &VerifiedAgentRequest) -> Option<Response> {
         .map(|(status, body)| private_bytes(*status, body.clone()))
 }
 
-async fn bridge_audit(
+pub(crate) async fn bridge_audit(
     tx: &mut Transaction<'_, Postgres>,
     subject_id: Option<&str>,
     binding_id: Option<Uuid>,
@@ -1577,6 +3747,7 @@ fn with_rotated_csrf(mut response: Response, csrf: String) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hepta_paper_raid_contracts::AGENT_BRIDGE_REQUEST_PROOF_V1;
 
     #[test]
     fn pairing_codes_are_canonical_random_and_hash_only_ready() {
@@ -1616,6 +3787,139 @@ mod tests {
     }
 
     #[test]
+    fn review_attempt_projection_is_monotonic_and_fail_closed() {
+        assert_eq!(projected_review_task_attempt(None).unwrap(), (1, "pending"));
+        assert_eq!(
+            projected_review_task_attempt(Some(&StoredReviewTaskState {
+                state: "pending".into(),
+                attempt: 2,
+            }))
+            .unwrap(),
+            (2, "submitting")
+        );
+        assert_eq!(
+            projected_review_task_attempt(Some(&StoredReviewTaskState {
+                state: "consumed".into(),
+                attempt: 2,
+            }))
+            .unwrap(),
+            (2, "consumed")
+        );
+        assert_eq!(
+            projected_review_task_attempt(Some(&StoredReviewTaskState {
+                state: "invalidated".into(),
+                attempt: 2,
+            }))
+            .unwrap(),
+            (3, "pending")
+        );
+        assert!(projected_review_task_attempt(Some(&StoredReviewTaskState {
+            state: "invalidated".into(),
+            attempt: JSON_SAFE_U64_MAX,
+        }))
+        .is_err());
+        assert!(projected_review_task_attempt(Some(&StoredReviewTaskState {
+            state: "invented".into(),
+            attempt: 1,
+        }))
+        .is_err());
+    }
+
+    fn output_binding_receipt(
+        kind: &str,
+        candidate_passed: Option<bool>,
+        statistical_evidence: Value,
+    ) -> ReviewExecutionReceiptV1 {
+        ReviewExecutionReceiptV1 {
+            schema: REVIEW_EXECUTION_RECEIPT_V1.to_string(),
+            receipt_id: Uuid::from_u128(1),
+            task_id: Uuid::from_u128(2),
+            binding_id: Uuid::from_u128(3),
+            assignment_id: Uuid::from_u128(4),
+            paper_project_id: Uuid::from_u128(5),
+            submission_id: Uuid::from_u128(6),
+            evaluation_id: Uuid::from_u128(7),
+            kind: kind.to_string(),
+            attempt: 1,
+            fencing_token: 1,
+            bundle_hash: format!("sha256:{}", "1".repeat(64)),
+            evaluator_version: "fixture-v1".to_string(),
+            input_root: format!("sha256:{}", "2".repeat(64)),
+            output_root: format!("sha256:{}", "3".repeat(64)),
+            metrics_hash: format!("sha256:{}", "4".repeat(64)),
+            observed_metrics_micros: [("accuracy".to_string(), 900_000)].into(),
+            statistical_evidence,
+            candidate_passed,
+            seed_set_hash: format!("sha256:{}", "5".repeat(64)),
+            environment_hash: format!("sha256:{}", "6".repeat(64)),
+            run_manifest_hash: format!("sha256:{}", "7".repeat(64)),
+            logs_hash: format!("sha256:{}", "8".repeat(64)),
+            started_at_unix: 1,
+            completed_at_unix: 2,
+            agent_id: "agent.fixture".to_string(),
+            agent_key_id: format!("sha256:{}", "9".repeat(64)),
+            signing_public_key_hash: format!("sha256:{}", "9".repeat(64)),
+            signature: String::new(),
+        }
+    }
+
+    #[test]
+    fn review_output_binding_is_kind_typed_and_rejects_mixed_fields() {
+        let none = json!({
+            "schema": "hepta.paper_raid.statistical_evidence.none.v1",
+            "reason": "frozen_evaluator_did_not_emit_statistical_evidence",
+        });
+        let evaluation_receipt = output_binding_receipt("evaluate", Some(true), none.clone());
+        let evaluation = json!({
+            "reference_metrics_micros": {"accuracy": 900_000},
+            "tolerance_policy_version": "1",
+            "tolerance_rules": [{
+                "kind": "absolute",
+                "metric": "accuracy",
+                "max_delta_micros": 1000,
+            }],
+            "candidate_passed": true,
+        });
+        assert!(review_output_matches_receipt(
+            &evaluation,
+            &evaluation_receipt
+        ));
+        let mut mixed_evaluation = evaluation.clone();
+        mixed_evaluation["observed_metrics_micros"] = json!({"accuracy": 900_000});
+        assert!(!review_output_matches_receipt(
+            &mixed_evaluation,
+            &evaluation_receipt
+        ));
+        let mut wrong_evidence = evaluation_receipt.clone();
+        wrong_evidence.statistical_evidence = json!({});
+        assert!(!review_output_matches_receipt(&evaluation, &wrong_evidence));
+
+        let reproduction_evidence = json!({
+            "accuracy": {
+                "interval_overlap_bps": 9_500,
+                "effect_delta_micros": 50,
+                "p_value_micros": 50_000,
+            }
+        });
+        let reproduction_receipt =
+            output_binding_receipt("reproduce", None, reproduction_evidence.clone());
+        let reproduction = json!({
+            "observed_metrics_micros": {"accuracy": 900_000},
+            "statistical_evidence": reproduction_evidence,
+        });
+        assert!(review_output_matches_receipt(
+            &reproduction,
+            &reproduction_receipt
+        ));
+        let mut mixed_reproduction = reproduction;
+        mixed_reproduction["candidate_passed"] = json!(true);
+        assert!(!review_output_matches_receipt(
+            &mixed_reproduction,
+            &reproduction_receipt
+        ));
+    }
+
+    #[test]
     fn agent_bridge_request_frame_matches_the_frozen_node_vector() {
         let claim = AgentBridgeRequestProofV1 {
             schema: AGENT_BRIDGE_REQUEST_PROOF_V1.to_string(),
@@ -1634,6 +3938,28 @@ mod tests {
             agent_bridge_request_proof_hash(&claim).unwrap(),
             "sha256:a4016d74baab0315d849fbe120c238188860cee326324eba34c7a8e21745f062"
         );
+
+        let mut key_tamper = claim.clone();
+        key_tamper.agent_key_id = format!("sha256:{}", "cc".repeat(32));
+        assert_ne!(
+            agent_bridge_request_proof_hash(&key_tamper).unwrap(),
+            agent_bridge_request_proof_hash(&claim).unwrap()
+        );
+
+        let mut review_object = claim.clone();
+        review_object.http_method = "GET".into();
+        review_object.canonical_path = "/api/agent-bridge/review-objects".into();
+        review_object.canonical_query = "assignment_id=33333333-3333-4333-8333-333333333333&object_key=object-0000&task_id=44444444-4444-4444-8444-444444444444".into();
+        review_object.body_hash = sha256_digest(&[]);
+        assert!(agent_bridge_request_proof_hash(&review_object).is_ok());
+
+        let mut review_receipt = claim.clone();
+        review_receipt.canonical_path = "/api/agent-bridge/review-receipts".into();
+        assert!(agent_bridge_request_proof_hash(&review_receipt).is_ok());
+
+        review_receipt.http_method = "GET".into();
+        review_receipt.body_hash = sha256_digest(&[]);
+        assert!(agent_bridge_request_proof_hash(&review_receipt).is_err());
     }
 
     #[test]
@@ -1655,38 +3981,703 @@ mod tests {
     }
 
     #[test]
+    fn automatic_inbox_discovery_ignores_history_and_bounds_active_raids() {
+        let active: Vec<Value> = (1_u128..=70)
+            .map(|value| {
+                json!({
+                    "team_status": "locked",
+                    "paper": {
+                        "paper_project_id": Uuid::from_u128(value),
+                        "phase": "drafting"
+                    }
+                })
+            })
+            .chain([
+                json!({
+                    "team_status": "archived",
+                    "paper": {"paper_project_id": "not-a-uuid", "phase": "drafting"}
+                }),
+                json!({
+                    "team_status": "locked",
+                    "paper": {"paper_project_id": Uuid::from_u128(71), "phase": "submission_ready"}
+                }),
+            ])
+            .collect();
+        let (paper_ids, truncated) = discover_inbox_paper_ids(&active).unwrap();
+        assert_eq!(paper_ids.len(), MAX_DISCOVERED_INBOX_PAPERS);
+        assert!(truncated);
+        assert_eq!(paper_ids[0], Uuid::from_u128(1));
+        assert_eq!(paper_ids[63], Uuid::from_u128(64));
+
+        let malformed = [json!({
+            "team_status": "locked",
+            "paper": {"paper_project_id": "not-a-uuid", "phase": "drafting"}
+        })];
+        assert!(discover_inbox_paper_ids(&malformed).is_err());
+    }
+
+    #[test]
+    fn automatic_inbox_discovery_prioritizes_ambiguous_delivery_recovery() {
+        let recovery = vec![Uuid::from_u128(70), Uuid::from_u128(1)];
+        let active: Vec<Uuid> = (1_u128..=70).map(Uuid::from_u128).collect();
+        let (merged, truncated) = merge_discovered_paper_ids(recovery, active);
+        assert_eq!(merged.len(), MAX_DISCOVERED_INBOX_PAPERS);
+        assert_eq!(merged[0], Uuid::from_u128(70));
+        assert_eq!(merged[1], Uuid::from_u128(1));
+        assert!(truncated);
+    }
+
+    fn review_object(
+        key: &str,
+        path: &str,
+        role: &str,
+        digest_byte: char,
+        media_type: &str,
+    ) -> FrozenReviewObjectV1 {
+        FrozenReviewObjectV1 {
+            object_key: key.to_string(),
+            logical_path: path.to_string(),
+            role: role.to_string(),
+            digest: format!("sha256:{}", digest_byte.to_string().repeat(64)),
+            size_bytes: 7,
+            media_type: media_type.to_string(),
+            download_path: "/api/agent-bridge/review-objects".to_string(),
+        }
+    }
+
+    fn manifest_member(
+        path: &str,
+        digest_byte: char,
+        media_type: &str,
+    ) -> hepta_paper_raid_contracts::ChallengeManifestObjectV1 {
+        let digest = format!("sha256:{}", digest_byte.to_string().repeat(64));
+        hepta_paper_raid_contracts::ChallengeManifestObjectV1 {
+            cas_uri: format!("cas://sha256/{}", &digest[7..]),
+            media_type: media_type.to_string(),
+            path: path.to_string(),
+            sha256: digest,
+            size: 7,
+        }
+    }
+
+    fn review_authority() -> FrozenReviewAuthorityV1 {
+        let mut authority = FrozenReviewAuthorityV1 {
+            schema: hepta_paper_raid_contracts::FROZEN_REVIEW_AUTHORITY_V1.to_string(),
+            authority_hash: String::new(),
+            assignment_id: Uuid::from_u128(1),
+            paper_project_id: Uuid::from_u128(2),
+            submission_id: Uuid::from_u128(3),
+            review_round: 1,
+            slot: "evaluator".to_string(),
+            assignment_version: 1,
+            expires_at: "2026-08-12T00:00:00Z".to_string(),
+            release_candidate_hash: format!("sha256:{}", "1".repeat(64)),
+            paper_bundle_hash: format!("sha256:{}", "2".repeat(64)),
+            artifact_manifest_hash: format!("sha256:{}", "3".repeat(64)),
+            evaluator_manifest_hash: format!("sha256:{}", "4".repeat(64)),
+            dataset_manifest_hash: format!("sha256:{}", "5".repeat(64)),
+            artifact_objects: vec![
+                review_object(
+                    "object-0000",
+                    "evaluator.py",
+                    "frozen_evaluator",
+                    'a',
+                    "text/x-python; charset=utf-8",
+                ),
+                review_object(
+                    "object-0001",
+                    "dataset/claims.json",
+                    "dataset",
+                    'b',
+                    "application/json",
+                ),
+                review_object(
+                    "object-0002",
+                    "inputs/candidate.json",
+                    "candidate",
+                    'c',
+                    "application/json",
+                ),
+            ],
+            execution_policy: hepta_paper_raid_contracts::FrozenReviewExecutionPolicyV1 {
+                schema: "hepta.paper_raid.review_execution_policy.v1".to_string(),
+                kind: "evaluate".to_string(),
+                adapter: "python3-stdlib-v1".to_string(),
+                timeout_ms: 30_000,
+                seed: 7,
+            },
+        };
+        authority.authority_hash =
+            hepta_paper_raid_contracts::frozen_review_authority_hash(&authority).unwrap();
+        authority
+    }
+
+    #[test]
+    fn manifest_resolution_rejects_substitution_extra_members_and_wrong_pack() {
+        let authority = review_authority();
+        let evaluator = ChallengeEvaluatorManifestV1 {
+            entrypoint: "evaluator.py".to_string(),
+            frozen: true,
+            objects: vec![manifest_member(
+                "evaluator.py",
+                'a',
+                "text/x-python; charset=utf-8",
+            )],
+            pack_id: "pack-fixture-v1".to_string(),
+            runtime: "python3-stdlib".to_string(),
+            schema: "hepta.challenge_pack.evaluator_manifest.v1".to_string(),
+        };
+        let dataset = ChallengeDatasetManifestV1 {
+            objects: vec![manifest_member(
+                "dataset/claims.json",
+                'b',
+                "application/json",
+            )],
+            pack_id: evaluator.pack_id.clone(),
+            schema: "hepta.challenge_pack.dataset_manifest.v1".to_string(),
+        };
+        let resolved = resolve_manifest_members(&authority, &evaluator, &dataset).unwrap();
+        assert_eq!(resolved.len(), 3);
+        assert_eq!(resolved[0].logical_path, "evaluator/main.py");
+        assert_eq!(resolved[1].logical_path, "inputs/dataset.json");
+        assert_eq!(resolved[2].logical_path, "inputs/candidate.json");
+        assert_eq!(authority.artifact_objects[0].logical_path, "evaluator.py");
+        assert_eq!(
+            authority.artifact_objects[1].logical_path,
+            "dataset/claims.json"
+        );
+
+        let mut with_support = authority.clone();
+        with_support.artifact_objects.push(review_object(
+            "object-0003",
+            "baseline.py",
+            "evaluator_support",
+            'd',
+            "text/x-python; charset=utf-8",
+        ));
+        let mut evaluator_with_support = evaluator.clone();
+        evaluator_with_support.objects.push(manifest_member(
+            "baseline.py",
+            'd',
+            "text/x-python; charset=utf-8",
+        ));
+        let support_resolved =
+            resolve_manifest_members(&with_support, &evaluator_with_support, &dataset).unwrap();
+        assert_eq!(support_resolved.len(), 4);
+        assert_eq!(support_resolved[3].logical_path, "evaluator/baseline.py");
+
+        let mut with_input = authority.clone();
+        with_input.artifact_objects.push(review_object(
+            "object-0003",
+            "inputs/objects/parameters.json",
+            "input",
+            'd',
+            "application/json",
+        ));
+        assert!(resolve_manifest_members(&with_input, &evaluator, &dataset).is_err());
+
+        let mut substituted = evaluator.clone();
+        substituted.objects[0].sha256 = format!("sha256:{}", "d".repeat(64));
+        substituted.objects[0].cas_uri = format!("cas://sha256/{}", "d".repeat(64));
+        assert!(resolve_manifest_members(&authority, &substituted, &dataset).is_err());
+
+        let mut extra = authority.clone();
+        extra.artifact_objects.push(review_object(
+            "object-0003",
+            "other.py",
+            "frozen_evaluator",
+            'd',
+            "text/x-python; charset=utf-8",
+        ));
+        assert!(resolve_manifest_members(&extra, &evaluator, &dataset).is_err());
+
+        let mut wrong_pack = dataset.clone();
+        wrong_pack.pack_id = "other-pack-v1".to_string();
+        assert!(resolve_manifest_members(&authority, &evaluator, &wrong_pack).is_err());
+    }
+
+    #[test]
+    fn mixed_inbox_keeps_author_delivery_and_cross_paper_review_tasks_side_by_side() {
+        let author_paper = Uuid::from_u128(10);
+        let review_paper = Uuid::from_u128(11);
+        let mut papers = vec![json!({
+            "paper_id": author_paper,
+            "tasks": [{"work_item_id": Uuid::from_u128(12)}],
+            "delivery_candidates": {"status":"available"},
+        })];
+        let review = json!({
+            "papers": [
+                {"paper_id": review_paper, "review_tasks": {"status":"available","items":[{"task_id":Uuid::from_u128(13)}]}},
+            ]
+        });
+        merge_review_tasks_into_author_papers(&mut papers, &review).unwrap();
+        assert_eq!(papers.len(), 2);
+        assert!(papers[0].get("tasks").is_some());
+        assert_eq!(
+            papers[0]
+                .get("review_tasks")
+                .and_then(|value| value.get("status"))
+                .and_then(Value::as_str),
+            Some("unavailable")
+        );
+        assert_eq!(
+            papers[0]
+                .get("review_tasks")
+                .and_then(|value| value.get("reason_code"))
+                .and_then(Value::as_str),
+            Some("target_paper_author_forbidden_or_unassigned")
+        );
+        assert_eq!(
+            papers[1]
+                .get("review_tasks")
+                .and_then(|value| value.get("status"))
+                .and_then(Value::as_str),
+            Some("available")
+        );
+        assert!(papers[1].get("tasks").is_none());
+    }
+
+    #[test]
+    fn delivery_projection_never_guesses_across_independent_room_records() {
+        let projection = unavailable_delivery_candidates("no_agent_declared_delivery_draft");
+        assert_eq!(
+            projection.get("schema").and_then(Value::as_str),
+            Some("hepta.paper_raid.agent_bridge.delivery_candidates.v1")
+        );
+        assert_eq!(
+            projection.get("status").and_then(Value::as_str),
+            Some("unavailable")
+        );
+        assert_eq!(
+            projection
+                .get("items")
+                .and_then(Value::as_array)
+                .map(Vec::is_empty),
+            Some(true)
+        );
+        let encoded = serde_json::to_string(&projection).unwrap();
+        assert!(!encoded.contains("artifact_manifests"));
+        assert!(!encoded.contains("section_heads"));
+        assert!(!encoded.contains("leases"));
+    }
+
+    #[test]
+    fn delivery_context_requires_one_exact_live_authoritative_tuple() {
+        let binding_id = Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
+        let player_id = Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap();
+        let paper_id = Uuid::parse_str("33333333-3333-4333-8333-333333333333").unwrap();
+        let work_item_id = Uuid::parse_str("44444444-4444-4444-8444-444444444444").unwrap();
+        let manifest_id = Uuid::parse_str("55555555-5555-4555-8555-555555555555").unwrap();
+        let lease_id = Uuid::parse_str("66666666-6666-4666-8666-666666666666").unwrap();
+        let parent_id = Uuid::parse_str("77777777-7777-4777-8777-777777777777").unwrap();
+        let mapping = BridgeMapping {
+            binding_id,
+            subject_id: "subject.fixture".into(),
+            player_id,
+            agent_id: "agent.fixture".into(),
+            agent_key_id: format!("sha256:{}", "a".repeat(64)),
+            capability_disclosure_hash: format!("sha256:{}", "b".repeat(64)),
+        };
+        let now = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
+        let mut room = json!({
+            "paper": {"paper_project_id": paper_id, "phase": "drafting"},
+            "work_items": [{
+                "work_item_id": work_item_id,
+                "assigned_binding_id": binding_id,
+                "assigned_player_id": player_id,
+                "status": "in_progress",
+                "version": 3
+            }],
+            "section_heads": [{
+                "section_key": "methods",
+                "current_head_revision_id": parent_id,
+                "fencing_token": 9
+            }],
+            "leases": [{
+                "lease_id": lease_id,
+                "section_key": "methods",
+                "holder_binding_id": binding_id,
+                "holder_player_id": player_id,
+                "fencing_token": 9,
+                "status": "active",
+                "expires_at": "2027-01-15T08:01:00Z"
+            }],
+            "artifact_manifests": [{
+                "manifest_id": manifest_id,
+                "manifest_hash": format!("sha256:{}", "c".repeat(64))
+            }],
+            "proposals": []
+        });
+        let context =
+            resolve_delivery_context(&room, &mapping, work_item_id, "methods", manifest_id, now)
+                .unwrap()
+                .expect("exact live delivery context");
+        assert_eq!(context.lease_id, lease_id);
+        assert_eq!(context.parent_revision_id, parent_id);
+        assert_eq!(context.lease_fencing_token, 9);
+        assert_eq!(context.expected_work_version, 3);
+
+        room["leases"][0]["holder_binding_id"] = json!(Uuid::new_v4());
+        assert!(resolve_delivery_context(
+            &room,
+            &mapping,
+            work_item_id,
+            "methods",
+            manifest_id,
+            now,
+        )
+        .unwrap()
+        .is_none());
+    }
+
+    #[test]
+    fn delivery_response_must_match_every_pinned_authoritative_field() {
+        let created_at = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
+        let draft = DeliveryDraft {
+            delivery_draft_id: Uuid::from_u128(1),
+            binding_id: Uuid::from_u128(2),
+            paper_id: Uuid::from_u128(3),
+            work_item_id: Uuid::from_u128(4),
+            expected_work_version: 3,
+            section_key: "methods".into(),
+            lease_id: Uuid::from_u128(5),
+            lease_fencing_token: 7,
+            parent_revision_id: Uuid::from_u128(6),
+            artifact_manifest_id: Uuid::from_u128(7),
+            artifact_manifest_hash: format!("sha256:{}", "a".repeat(64)),
+            payload_hash: format!("sha256:{}", "b".repeat(64)),
+            state: "submitting".into(),
+            proposal_body_hash: Some(format!("sha256:{}", "c".repeat(64))),
+            proposal_id: Some(Uuid::from_u128(8)),
+            proposal_idempotency_key: Some(Uuid::from_u128(9)),
+            proposal_signed_at_unix: Some(created_at.timestamp()),
+            created_at,
+            expires_at: created_at + chrono::Duration::minutes(15),
+        };
+        let response = json!({
+            "proposal_id": draft.proposal_id,
+            "paper_project_id": draft.paper_id,
+            "work_item_id": draft.work_item_id,
+            "section_key": draft.section_key,
+            "parent_revision_id": draft.parent_revision_id,
+            "lease_id": draft.lease_id,
+            "lease_fencing_token": draft.lease_fencing_token,
+            "expected_work_version": draft.expected_work_version,
+            "proposal_kind": "delivery",
+            "payload_hash": draft.payload_hash,
+            "artifact_manifest_id": draft.artifact_manifest_id,
+            "artifact_manifest_hash": draft.artifact_manifest_hash,
+            "binding_id": draft.binding_id,
+            "agent_id": "agent.fixture",
+            "agent_key_id": "key.fixture",
+            "agent_public_key": "public.fixture",
+            "signature": "signature.fixture",
+            "signed_at_unix": draft.proposal_signed_at_unix,
+            "status": "submitted",
+            "version": 1
+        });
+        let payload = json!({
+            "agent_id": "agent.fixture",
+            "agent_key_id": "key.fixture",
+            "signature": "signature.fixture"
+        });
+        let binding = json!({"agent_public_key": "public.fixture"});
+        validate_delivery_proposal_response(&response, &draft, &payload, &binding).unwrap();
+        for (field, tampered) in [
+            ("lease_id", json!(Uuid::from_u128(10))),
+            ("lease_fencing_token", json!(8)),
+            ("expected_work_version", json!(4)),
+            ("artifact_manifest_id", json!(Uuid::from_u128(10))),
+            (
+                "artifact_manifest_hash",
+                json!(format!("sha256:{}", "d".repeat(64))),
+            ),
+            ("payload_hash", json!(format!("sha256:{}", "e".repeat(64)))),
+            ("status", json!("accepted")),
+        ] {
+            let mut changed = response.clone();
+            changed[field] = tampered;
+            assert!(
+                validate_delivery_proposal_response(&changed, &draft, &payload, &binding).is_err()
+            );
+        }
+        let mut changed_payload = payload.clone();
+        changed_payload["signature"] = json!("other.signature");
+        assert!(
+            validate_delivery_proposal_response(&response, &draft, &changed_payload, &binding)
+                .is_err()
+        );
+        let changed_binding = json!({"agent_public_key": "other.public"});
+        assert!(
+            validate_delivery_proposal_response(&response, &draft, &payload, &changed_binding)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn delivery_claim_rechecks_locked_epoch_and_manifest_after_a_concurrent_refresh() {
+        let created_at = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
+        let binding_id = Uuid::from_u128(2);
+        let delivery_draft_id = Uuid::from_u128(1);
+        let expected = DeliveryDraft {
+            delivery_draft_id,
+            binding_id,
+            paper_id: Uuid::from_u128(3),
+            work_item_id: Uuid::from_u128(4),
+            expected_work_version: 3,
+            section_key: "methods".into(),
+            lease_id: Uuid::from_u128(5),
+            lease_fencing_token: 7,
+            parent_revision_id: Uuid::from_u128(6),
+            artifact_manifest_id: Uuid::from_u128(7),
+            artifact_manifest_hash: format!("sha256:{}", "a".repeat(64)),
+            payload_hash: format!("sha256:{}", "b".repeat(64)),
+            state: "pending".into(),
+            proposal_body_hash: None,
+            proposal_id: None,
+            proposal_idempotency_key: None,
+            proposal_signed_at_unix: None,
+            created_at,
+            expires_at: created_at + chrono::Duration::minutes(15),
+        };
+        let payload = json!({
+            "proposal_id": delivery_proposal_id(binding_id, delivery_draft_id),
+            "work_item_id": expected.work_item_id,
+            "section_key": expected.section_key,
+            "parent_revision_id": expected.parent_revision_id,
+            "lease_id": expected.lease_id,
+            "lease_fencing_token": expected.lease_fencing_token,
+            "expected_work_version": expected.expected_work_version,
+            "proposal_kind": "delivery",
+            "payload_hash": expected.payload_hash,
+            "artifact_manifest_id": expected.artifact_manifest_id,
+            "binding_id": expected.binding_id,
+            "signed_at_unix": expected.created_at.timestamp(),
+            "idempotency_key": delivery_idempotency_key(binding_id, delivery_draft_id)
+        });
+        let body_hash = format!("sha256:{}", "c".repeat(64));
+        assert!(delivery_claim_matches_locked_snapshot(
+            &expected,
+            &expected,
+            &payload,
+            &body_hash,
+            delivery_proposal_id(binding_id, delivery_draft_id),
+            delivery_idempotency_key(binding_id, delivery_draft_id),
+            expected.created_at.timestamp(),
+        ));
+        assert!(!delivery_claim_matches_locked_snapshot(
+            &expected,
+            &expected,
+            &payload,
+            &body_hash,
+            Uuid::from_u128(99),
+            delivery_idempotency_key(binding_id, delivery_draft_id),
+            expected.created_at.timestamp(),
+        ));
+        assert!(!delivery_claim_matches_locked_snapshot(
+            &expected,
+            &expected,
+            &payload,
+            &body_hash,
+            delivery_proposal_id(binding_id, delivery_draft_id),
+            Uuid::from_u128(99),
+            expected.created_at.timestamp(),
+        ));
+        assert!(!delivery_claim_matches_locked_snapshot(
+            &expected,
+            &expected,
+            &payload,
+            &body_hash,
+            delivery_proposal_id(binding_id, delivery_draft_id),
+            delivery_idempotency_key(binding_id, delivery_draft_id),
+            expected.created_at.timestamp() + 1,
+        ));
+
+        let mut refreshed = expected.clone();
+        refreshed.expected_work_version += 1;
+        refreshed.lease_fencing_token += 1;
+        refreshed.created_at += chrono::Duration::seconds(1);
+        refreshed.expires_at += chrono::Duration::seconds(1);
+        assert!(!delivery_claim_matches_locked_snapshot(
+            &expected,
+            &refreshed,
+            &payload,
+            &body_hash,
+            delivery_proposal_id(binding_id, delivery_draft_id),
+            delivery_idempotency_key(binding_id, delivery_draft_id),
+            expected.created_at.timestamp(),
+        ));
+        let mut changed_manifest_hash = expected.clone();
+        changed_manifest_hash.artifact_manifest_hash = format!("sha256:{}", "d".repeat(64));
+        assert!(!delivery_claim_matches_locked_snapshot(
+            &expected,
+            &changed_manifest_hash,
+            &payload,
+            &body_hash,
+            delivery_proposal_id(binding_id, delivery_draft_id),
+            delivery_idempotency_key(binding_id, delivery_draft_id),
+            expected.created_at.timestamp(),
+        ));
+
+        let mut replaced_manifest = payload.clone();
+        replaced_manifest["artifact_manifest_id"] = json!(Uuid::from_u128(8));
+        assert!(!delivery_request_payload_matches_draft(
+            &replaced_manifest,
+            &expected
+        ));
+        assert!(!delivery_claim_matches_locked_snapshot(
+            &expected,
+            &expected,
+            &replaced_manifest,
+            &body_hash,
+            delivery_proposal_id(binding_id, delivery_draft_id),
+            delivery_idempotency_key(binding_id, delivery_draft_id),
+            expected.created_at.timestamp(),
+        ));
+    }
+
+    #[test]
+    fn delivery_restart_pins_match_the_frozen_node_derivation() {
+        let binding_id = Uuid::parse_str("66666666-6666-4666-8666-666666666666").unwrap();
+        let delivery_draft_id = Uuid::parse_str("77777777-7777-4777-8777-777777777777").unwrap();
+        assert_eq!(
+            delivery_proposal_id(binding_id, delivery_draft_id).to_string(),
+            "01ac1203-13fb-52b8-84a9-e6d6c7df213c"
+        );
+        assert_eq!(
+            delivery_idempotency_key(binding_id, delivery_draft_id).to_string(),
+            "34626bcd-0a56-5a6e-9c18-f2c41ba3c84f"
+        );
+
+        let created_at = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
+        let mut draft = DeliveryDraft {
+            delivery_draft_id,
+            binding_id,
+            paper_id: Uuid::from_u128(3),
+            work_item_id: Uuid::from_u128(4),
+            expected_work_version: 3,
+            section_key: "methods".into(),
+            lease_id: Uuid::from_u128(5),
+            lease_fencing_token: 7,
+            parent_revision_id: Uuid::from_u128(6),
+            artifact_manifest_id: Uuid::from_u128(7),
+            artifact_manifest_hash: format!("sha256:{}", "a".repeat(64)),
+            payload_hash: format!("sha256:{}", "b".repeat(64)),
+            state: "submitting".into(),
+            proposal_body_hash: Some(format!("sha256:{}", "c".repeat(64))),
+            proposal_id: Some(delivery_proposal_id(binding_id, delivery_draft_id)),
+            proposal_idempotency_key: Some(delivery_idempotency_key(binding_id, delivery_draft_id)),
+            proposal_signed_at_unix: Some(created_at.timestamp()),
+            created_at,
+            expires_at: created_at + chrono::Duration::minutes(15),
+        };
+        assert!(delivery_recovery_pins_are_canonical(&draft));
+        assert_eq!(
+            delivery_candidate_value(&draft)
+                .get("delivery_state")
+                .and_then(Value::as_str),
+            Some("submitting")
+        );
+        draft.proposal_signed_at_unix = Some(created_at.timestamp() + 1);
+        assert!(!delivery_recovery_pins_are_canonical(&draft));
+    }
+
+    #[test]
+    fn exact_authoritative_proposal_reprojects_a_claimed_delivery() {
+        let created_at = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
+        let binding_id = Uuid::from_u128(2);
+        let delivery_draft_id = Uuid::from_u128(1);
+        let draft = DeliveryDraft {
+            delivery_draft_id,
+            binding_id,
+            paper_id: Uuid::from_u128(3),
+            work_item_id: Uuid::from_u128(4),
+            expected_work_version: 3,
+            section_key: "methods".into(),
+            lease_id: Uuid::from_u128(5),
+            lease_fencing_token: 7,
+            parent_revision_id: Uuid::from_u128(6),
+            artifact_manifest_id: Uuid::from_u128(7),
+            artifact_manifest_hash: format!("sha256:{}", "a".repeat(64)),
+            payload_hash: format!("sha256:{}", "b".repeat(64)),
+            state: "submitting".into(),
+            proposal_body_hash: Some(format!("sha256:{}", "c".repeat(64))),
+            proposal_id: Some(delivery_proposal_id(binding_id, delivery_draft_id)),
+            proposal_idempotency_key: Some(delivery_idempotency_key(binding_id, delivery_draft_id)),
+            proposal_signed_at_unix: Some(created_at.timestamp()),
+            created_at,
+            expires_at: created_at + chrono::Duration::minutes(15),
+        };
+        let proposal = json!({
+            "proposal_id": draft.proposal_id,
+            "paper_project_id": draft.paper_id,
+            "work_item_id": draft.work_item_id,
+            "section_key": draft.section_key,
+            "parent_revision_id": draft.parent_revision_id,
+            "lease_id": draft.lease_id,
+            "lease_fencing_token": draft.lease_fencing_token,
+            "expected_work_version": draft.expected_work_version,
+            "proposal_kind": "delivery",
+            "payload_hash": draft.payload_hash,
+            "artifact_manifest_id": draft.artifact_manifest_id,
+            "artifact_manifest_hash": draft.artifact_manifest_hash,
+            "binding_id": draft.binding_id,
+            "signed_at_unix": draft.proposal_signed_at_unix,
+            "status": "submitted",
+            "version": 1
+        });
+        let room = json!({"proposals": [proposal.clone()]});
+        assert!(room_contains_exact_delivery_proposal(&room, &draft).unwrap());
+        let mut accepted = proposal.clone();
+        accepted["status"] = json!("accepted");
+        assert!(
+            room_contains_exact_delivery_proposal(&json!({"proposals": [accepted]}), &draft)
+                .unwrap()
+        );
+        let mut reviewed = proposal.clone();
+        reviewed["status"] = json!("rejected");
+        assert!(
+            room_contains_exact_delivery_proposal(&json!({"proposals": [reviewed]}), &draft)
+                .unwrap()
+        );
+        let mut invalid = proposal;
+        invalid["status"] = json!("unknown");
+        assert!(
+            !room_contains_exact_delivery_proposal(&json!({"proposals": [invalid]}), &draft)
+                .unwrap()
+        );
+        let changed = json!({"proposals": []});
+        assert!(!room_contains_exact_delivery_proposal(&changed, &draft).unwrap());
+    }
+
+    #[test]
     fn same_owner_binding_can_repair_key_continuity_but_identity_changes_cannot() {
         let binding_id = Uuid::new_v4();
         let player_id = Uuid::new_v4();
-        assert!(mapping_repair_owner_matches(
+        let actual = BridgeOwner {
             binding_id,
-            "subject-a",
+            subject_id: "subject-a",
             player_id,
-            "agent-a",
-            binding_id,
-            "subject-a",
-            player_id,
-            "agent-a",
+            agent_id: "agent-a",
+        };
+        assert!(mapping_repair_owner_matches(actual, actual,));
+        assert!(!mapping_repair_owner_matches(
+            actual,
+            BridgeOwner {
+                binding_id,
+                subject_id: "subject-b",
+                player_id,
+                agent_id: "agent-a",
+            },
         ));
         assert!(!mapping_repair_owner_matches(
-            binding_id,
-            "subject-a",
-            player_id,
-            "agent-a",
-            binding_id,
-            "subject-b",
-            player_id,
-            "agent-a",
-        ));
-        assert!(!mapping_repair_owner_matches(
-            binding_id,
-            "subject-a",
-            player_id,
-            "agent-a",
-            binding_id,
-            "subject-a",
-            player_id,
-            "agent-b",
+            actual,
+            BridgeOwner {
+                binding_id,
+                subject_id: "subject-a",
+                player_id,
+                agent_id: "agent-b",
+            },
         ));
 
         let old_key = format!("sha256:{}", "11".repeat(32));

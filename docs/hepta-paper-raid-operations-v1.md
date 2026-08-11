@@ -69,6 +69,31 @@ idempotency records, Nakama completion roots, and TRNM receipt projections.
 Then replay expired leases through the normal worker path. See
 `docs/hepta-failure-recovery-runbook.md` for the fail-closed invariants.
 
+Before enabling author-approval or evaluation writes, readiness must verify the
+0047 contribution-authority catalog: the promotion-time reservation table and
+global primary key, the one-accepted-proposal-per-artifact partial unique index,
+the full `entries_json` column, every validated relational/JSON parity and
+reservation constraint, and all four enabled-always row/TRUNCATE immutability
+triggers. Readiness also requires exact ordered columns, owner, tablespace,
+plain permanent heap storage, disabled RLS with no policies, and exact
+table-scoped constraint definitions. A
+missing, invalid, partial, unvalidated, disabled, miswired, or non-canonical
+trigger function is a release blocker. Migration 0047 also aborts if it finds
+a pre-0047 release candidate without a frozen contribution ledger: the old
+candidate never persisted its caller-selected global ledger ID, so the upgrade
+must not invent one. Finish or explicitly retire that candidate under the old
+authority before retrying the migration.
+
+Never repair contribution ownership by deleting references, choosing an author,
+or truncating a ledger to 256 records. The authoritative ledger freezes every
+accepted artifact and approving review, however many exist, while only the
+0/100/150/250 explanatory points are milestone-capped. A restore is acceptable
+only if every non-nil ledger ID retains its exact Paper/release reservation and
+the loader-recomputed canonical hash equals the frozen relational hash. Any
+reservation collision, missing load-time reservation, permissive constraint, or
+`record_json`/`entries_json` drift must remain fail-closed before RaidScore is derived;
+operator review is required.
+
 The BFF restart/revocation gate is:
 
 ```bash
@@ -100,7 +125,20 @@ Paper finality begins as `pending_finality`. The canonical Chain path now
 supports typed Paper-bound ingress and locally verified Receipt V2 evidence;
 only that exact, trust-anchor-pinned path may advance a Paper to
 `verified_finality`. A BFF label, mock receipt, local fallback or status rewrite
-must never advance it. Verified finality also does not imply ranking, score,
+must never advance it. If the authoritative review/finality projection cannot
+be read, the BFF must expose `unknown_finality`, `unavailable_finality`, or
+`error_finality` under
+`hepta.paper_raid.bff_finality_availability.v1`, with every eligibility bit
+false. These availability states must never reuse the authoritative
+`hepta.paper_raid.consumer_finality.v2` schema, and malformed authoritative
+projections must fail closed; the BFF must not manufacture `pending_finality`.
+Pending V2 projections carry null effective bindings. Verified V2 projections
+must carry the exact effective evaluation and reproduction UUIDs plus the
+terminal denial or latest upheld activation resolution UUID when an Appeal
+exists; AAR compares all three against the sealed review lineage. Migration
+0048 refuses to silently infer these fields for an existing V1 projection, so
+operators must re-verify that immutable receipt rather than migrate ambiguity.
+Verified finality also does not imply ranking, score,
 reward or economic eligibility: those four gates remain independently false
 until their dedicated release policies are satisfied. Integration remains
 `runnable=false` while the current candidate lock or its terminal soak evidence

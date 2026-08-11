@@ -47,8 +47,12 @@ for _ in $(seq 1 30); do
 done
 nc -z 127.0.0.1 "$port"
 
+# Every PostgreSQL-backed test below shares this one disposable database and
+# several tests reset it destructively. Serialize test cases at the libtest
+# harness boundary; concurrency exercised inside an individual test remains
+# intact.
 HEPTA_TEST_DATABASE_URL="$database_url" \
-  flock -n "$cargo_gate" cargo test --locked -p hepta-research-league
+  flock -n "$cargo_gate" cargo test --locked -p hepta-research-league -- --test-threads=1
 
 bash services/paper-raid-bff/scripts/check-postgres.sh
 

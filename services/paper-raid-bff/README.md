@@ -109,6 +109,29 @@ PAPER_RAID_BFF_MUTATION_QUOTA_WINDOW_SECONDS=<explicit-seconds>
 PAPER_RAID_BFF_MUTATION_QUOTA_ACCOUNT_LIMIT=<explicit-count>
 ```
 
+The database activation authority treats SQL `NULL` as hostile unless the
+field is explicitly nullable. Its v3 row validator is declared `CALLED ON
+NULL INPUT`, the table parity `CHECK` wraps the validator in
+`COALESCE(..., FALSE)`, and runtime schema readiness requires the installed
+validator to remain non-`STRICT`. Active rows may therefore use `NULL` only
+for both revocation fields; a required approval field encoded as JSON `null`,
+or a tampered `STRICT` validator, fails closed. V3 stores and revalidates the
+exact root-provisioned local approval and runtime-ACL evidence bytes. It pins
+the activation UUID, deployment, positive monotonic sequence, nonce digest,
+60–86400 second TTL, database name/OID and PostgreSQL cluster system
+identifier. Unique receipt/nonce and deployment+cluster+sequence keys plus
+immutable revocation tombstones reject remint, downgrade and cross-cluster
+replay. BFF startup, `/ready`, and product middleware execute one PostgreSQL
+statement that compares the exhaustive v3 table/constraint/index/trigger and
+function-attribute catalog, the exact migration-owned function bodies, every
+configured pin, the revalidated authority row and raw-byte digests, the live
+cluster identity, revocation/expiry state, and the canonical runtime ACL under
+one statement snapshot. The separate schema status helper is diagnostic only
+and can never authorize a product request.
+The root-owned local receipt is the authority; no remote/public issuer is
+implemented. Real `pg_control_system()` privilege/readback and trigger
+behavior remain mandatory dynamic activation evidence.
+
 In invite mode `/ready` separates database/schema reachability from cohort
 provisioning. It reports `access_directory_reachable`,
 `access_directory_within_capacity`, `access_audit_append_only`,
@@ -141,12 +164,27 @@ when exhausted.
 `paper-raid-accessctl` is a host/operator binary, not an Axum route. Run it only
 from a root/operator shell with a mode-0600 environment or secret file. It
 requires `PAPER_RAID_BFF_IDENTITY_MODE=invite_alpha`, the dedicated
-`PAPER_RAID_ACCESS_DATABASE_URL`, `PAPER_RAID_ACCESS_OPERATOR_SUBJECT`, and the
-configured retention policy ID. It deliberately has no fallback to
+`PAPER_RAID_ACCESS_DATABASE_URL`, and `PAPER_RAID_ACCESS_OPERATOR_SUBJECT`.
+Only `prune` additionally requires the configured retention policy ID. It
+deliberately has no fallback to
 `PAPER_RAID_BFF_DATABASE_URL`, and the resident BFF never reads the operator
-DSN. The operator DSN is a schema-owner/migration credential because the CLI
-runs the idempotent BFF migrations before each command; it must not be placed
-in the BFF runtime environment.
+DSN. Routine commands never run migrations. Initial schema activation and
+explicit idempotent upgrades use only the closed `schema-migrate` command with
+a schema-owner DSN; routine commands should use a narrower operator data role.
+Neither credential belongs in the BFF runtime environment.
+
+The separately pinned operator image is built with `Dockerfile.accessctl` and
+contains exactly `/paper-raid-accessctl`; it does not reuse the resident BFF
+image. The committed accessctl SBOM is deliberately unbound while b5 protects
+the active candidate. Packaging must first build the current binary and
+export it independently twice from the pinned `runtime-binary-export` target,
+then run
+`scripts/bind-accessctl-runtime-sbom.sh services/paper-raid-bff/docker/accessctl.sbom.cdx.json FIRST_BINARY SECOND_BINARY`
+from a clean committed tree. The binder requires byte-identical binaries,
+replaces the zero runtime digest with their exact SHA-256, and changes the
+release state to `bound-release-binary`. The Dockerfile and
+release-provenance verifier both reject an unregenerated or mismatched SBOM,
+so this static slice cannot be activated or described as a built image.
 
 In `invite_alpha`, BFF startup performs only a read-only schema-presence check
 and fails closed until the operator CLI has provisioned it. Its separate
@@ -158,12 +196,14 @@ Alpha startup migration behavior remains unchanged for compatibility.
 Representative invocations are:
 
 ```bash
+paper-raid-accessctl schema-migrate
 paper-raid-accessctl batch-create --label cohort-a --max-issued 50 \
   --expires-at 2026-09-01T00:00:00Z
 paper-raid-accessctl invite-issue --batch-id <uuid> --subject alpha-author-08 \
   --display-name 'Author Eight' --nakama-user-id <uuid> --player-id <uuid> \
   --scopes author --author-roles evidence --expires-at 2026-08-20T00:00:00Z \
   --credential-expires-at 2026-09-20T00:00:00Z
+paper-raid-accessctl invite-reissue --subject alpha-author-08
 paper-raid-accessctl invite-revoke --invite-id <uuid>
 paper-raid-accessctl batch-pause --batch-id <uuid>
 paper-raid-accessctl batch-resume --batch-id <uuid>
@@ -182,6 +222,42 @@ values; it does not create an upstream Nakama account or a Hepta research fact.
 The operator must provision and verify those external identifiers through the
 existing private control planes before delivering the one-time credential.
 This keeps the access CLI from becoming a second game or match authority.
+`invite-reissue` is the bounded recovery path when an issued invitation's
+one-time value was not delivered: it accepts only a known subject whose
+account is still `invited` and invitation is still `issued`, atomically
+replaces the stored digest, and does not increment the batch issue count or
+consume capacity again. Operator-subject provenance is still an Alpha blocker:
+the current opaque subject is supplied by a trusted host environment rather
+than an independently attested operator identity provider.
+
+### Bounded operator metrics
+
+The BFF exposes Prometheus text at `GET /metrics` only when the immediate TCP
+peer is loopback. The production entrypoint supplies the peer address to Axum;
+non-loopback callers receive `404`. In the X230 Alpha profile Docker port-NAT
+does not preserve a loopback peer address inside the container, so a host curl
+to the consumer publish remains denied. A future pinned operator collector
+must share the BFF container's network namespace and scrape
+`http://127.0.0.1:7020/metrics`; this sidecar topology is not activated by the
+current release. `/metrics` has no credential and must never be proxied through
+the consumer edge.
+
+Metrics are process-local operational signals, not research authority. They
+use fixed route templates, method/status classes, fixed latency buckets, and
+small enumerated outcome labels. Player, subject, Paper, team, challenge,
+Agent, binding, invitation, credential, digest, IP, user-agent, and free-form
+reason values are never labels or sample values. The exported families cover
+HTTP count/latency, aggregate Hepta/finality failures, queue depth and ETA
+availability, Bridge pairing/submission/recovery, stale-authority UI reloads,
+invite authentication/redemption outcomes, and aggregate login/first-action
+funnel events. Counters reset on BFF restart; Prometheus provides durable
+retention.
+
+Metrics health is deliberately absent from `/ready`: a broken scraper must
+alert, but it cannot change the truth of PostgreSQL, Hepta, Nakama, CAS,
+identity, or Agent Bridge readiness. The static
+`scripts/check-observability-boundary.sh` gate rejects raw URL-path labels,
+identifier labels, non-loopback exposure, and readiness coupling.
 
 Every batch and invitation expiry is explicit; `never` must be written when
 the operator deliberately wants no expiry. Credential expiry is independently
@@ -194,12 +270,92 @@ access audit is append-only under a database trigger and is not pruned by this
 command; any future archival/deletion procedure requires a separately reviewed
 policy and privileged path. Batch pause/revoke applies to outstanding
 invitations; already redeemed accounts are managed explicitly with
-suspend/close. Account export contains directory and
-lifecycle metadata but never credential hashes or secret material. The access
+suspend/close. `account-export` keeps the same command and preserves its
+directory/lifecycle fields, but `paper-raid-bff.account-export.v2` is only a
+BFF-local access-directory projection. Its machine-readable `export_boundary`
+sets `global_account_export_complete=false`, enumerates the included account,
+scope, author-role, credential-lifecycle, invite and access-audit records, and
+continues to exclude credential/invite hashes and all secret material.
+The v2 boundary states that included rows come from one read-only,
+repeatable-read PostgreSQL snapshot. The audit row for the current export is
+written only after that snapshot and is explicitly not included in the output.
+Access-audit rows expose their audit ID, a closed projected action, and an
+operator-provenance status. The raw host-self-declared operator subject is
+omitted and represented as `unverified_host_assertion_redacted`; unknown
+actions are replaced with `redacted_unverified`. Metadata is reconstructed
+only from a closed action/schema whitelist. Unknown or legacy metadata is
+omitted and marked `redacted_unverified`; raw JSON is never passed through.
+`contains_secret_material=false` applies only to these reconstructed export
+fields, not to omitted authorities or an unbounded global subject access
+request.
+
+The same boundary explicitly closes every omitted component instead of
+silently implying a global export. BFF sessions/request-security state, Agent
+Bridge rows, product telemetry, full invite-batch records, quota/retention
+metadata, schema metadata and global operator-command audit are `not_queried`;
+they are resident BFF data but outside this account-scoped access-directory
+command. Hepta and Nakama are `not_supported`
+because they are separate authorities and accessctl performs no
+cross-authority or network read. CAS reachability, CAS bytes and backups are
+also `not_supported`; they require separately reviewed inventory paths that do
+not exist here. These statuses describe command capability, not data absence,
+retention, deletion, anonymization or legal completeness. The access
 credential survives suspension but never has its expiry extended; rotate it
 explicitly after reactivation when it has expired. The access schema is
-BFF-local and contains no Paper facts, Agent secrets, signatures,
-scores, rankings, rewards, or legacy state.
+BFF-local and contains no Paper facts, Agent secrets, signatures, scores,
+rankings, rewards, or legacy state.
+
+### Host-local command audit
+
+Every supported or rejected routine accessctl invocation records a host-local
+command attempt after connecting to an already activated schema. Identity-mode
+rejection and bounded argument rejection are therefore auditable. Routine
+commands never auto-migrate; a missing capability returns
+`schema_activation_required`. `schema-migrate` is the only activation
+ceremony. On first activation its attempt audit is truthfully `unavailable`
+because the table does not yet exist, while its result is recorded after the
+schema becomes ready. Readiness verifies the exact three-value outcome
+constraint, validator function bytes/properties, typed attempt/event linkage,
+the unique attempt/event index, and the exact append-only trigger/function;
+the capability marker alone never proves this boundary.
+
+For every successful business command, its per-object audit rows and
+`operator_command_result` row are inserted in the same database transaction as
+the business mutation. A one-time invitation or credential is not printed
+until that transaction is confirmed committed. Attempt and result audit IDs
+are deterministically derived from `attempt_id + event`; inserts are followed
+by exact readback, so retrying after an acknowledgement loss cannot create a
+second command result. A failed command writes its bounded result in a
+separate transaction after the failed business transaction is gone.
+
+The two append-only actions are exactly `operator_command_attempt` and
+`operator_command_result`. Their metadata schema contains only a generated
+attempt UUID and closed `command_code`/`command_state`/`reason_code` values; it contains no
+arguments, subjects, account/batch/invitation identifiers, credentials,
+secrets, paths, free text or exception details. The database outcome is the
+closed set `succeeded | denied | indeterminate`: `succeeded` means the attempt
+record or committed command result succeeded; `denied` means the transaction
+is known not committed; `indeterminate` is reserved for a commit
+acknowledgement whose exact result row cannot be proved by exact readback.
+An absent, mismatched, or unavailable post-COMMIT read is not evidence of
+rollback and therefore remains `unknown`. The same rule applies to the
+attempt/result audit transaction itself and is exposed as
+`audit_status=unknown` with a bounded `*_audit_commit_unknown` code. A denied result distinguishes `command_rejected`,
+`unsupported_command`, and `database_operation_failed` through its bounded
+reason code. Other statement/transaction errors report
+`command_state=not_committed`; only the commit-acknowledgement case reports
+`command_state=unknown`.
+
+If the attempt audit cannot commit, the business command is not run. A
+successful business transaction cannot exist without its exact success result
+row. When the database cannot prove the commit either way, accessctl emits no
+normal or one-time-secret result; operators use `invite-reissue` for a lost
+issued-invitation delivery and explicit credential rotation for an active
+account. Missing access-database configuration, connection, or activated
+schema means the audit table is not trusted or reachable; accessctl truthfully
+returns `audit_status=unavailable` without claiming an audit row. All failure
+output is bounded JSON and omits the underlying exception. No operator network
+route is added.
 
 ## Agent Bridge v2
 
@@ -229,8 +385,8 @@ the same subject/player/Agent/binding after Hepta's dual-signed key rotation;
 different owners or Agent IDs remain conflicts. The old key fails signed calls
 until that re-pair, and only Hepta's currently active key can restore service.
 
-After pairing, the Agent has only four dedicated endpoints: `GET
-/api/agent-bridge/binding` and `POST` health, inbox and proposals. Every request
+After pairing, the Agent has only five dedicated endpoints: `GET
+/api/agent-bridge/binding` and `POST` health, inbox, delivery-drafts and proposals. Every request
 uses the nine frozen `x-paper-raid-agent-*` headers and an Ed25519
 `hepta.paper_raid.agent_bridge_request_proof.v1` over the exact method, path,
 canonical query, raw HTTP body SHA-256, binding/key identity, nonce and at-most
@@ -250,10 +406,40 @@ self-declared, inbox reads only owner-visible Papers and tasks assigned to that
 player/binding, and proposal forwarding is fixed to `submit_agent_proposal`.
 No Agent request can select an upstream route or assertion operation.
 
-This is a Bridge-assisted proposal workflow, not autonomous play: the browser
-selects an assigned work item and registered manifest, while the local Agent
-signs and submits the bounded proposal. The copied command includes both the
-manifest UUID and Hepta's authoritative `artifact_manifest_hash`.
+The proposal transport is Bridge-driven rather than command-copy assisted. An
+empty Bridge `paper_ids` list asks the BFF to discover the paired player's
+Papers from Hepta's authoritative raid state. The inbox supplies assigned work
+and prior proposals, plus a versioned `delivery_candidates` projection. The
+client consumes only exact candidate items projected by the BFF; it never joins
+tasks, leases, section heads, or manifests locally.
+
+The Bridge declares one short-lived delivery intent through the signed
+`delivery-drafts` endpoint after its local Agent produces an output manifest.
+The request names only Paper, assigned work item, section, manifest and payload
+digest; the BFF derives the current work version, parent, active holder lease
+and positive fencing token, and authoritative manifest digest from Hepta. It
+persists the resulting control binding for at most 15 minutes and revalidates
+every field against Hepta before inbox projection and again before proposal
+forwarding. A changed work version, head, lease, assignment, phase, manifest or
+existing submitted delivery makes the draft unavailable. Bridge forwarding is
+delivery-only and signs Agent Proposal V2 over the exact lease/fence/work epoch
+and artifact manifest ID/hash; historical V1 verification is not a BFF mutation
+path. Before the first forward, the BFF requires the proposal ID, Hepta
+idempotency key and signed timestamp to equal the frozen deterministic
+derivation from the binding, draft and declaration time, then atomically pins
+the exact canonical body hash while moving `pending -> submitting`. The claim
+holds the draft row lock and rechecks the complete Paper/work version/section/
+lease fence/head/manifest/payload snapshot plus all deterministic proposal
+derivations, so a concurrent draft refresh cannot poison the newer row with an
+older request. If the
+BFF dies after Hepta commits but before local consumption/response completion,
+an exact authoritative proposal readback permits the still-live `submitting`
+(or already `consumed`) draft to be reprojected. A restarted Bridge recreates
+the same body and Hepta idempotently returns the same proposal; only an exact
+field-for-field upstream response can move the draft to `consumed`. Changed
+proposal bytes or an unrelated 2xx response fail closed. No
+task/lease/head/manifest Cartesian product is inferred. `work --auto` remains
+restricted to exactly one explicit current or recovery item.
 
 Agent Bridge quota defaults can be overridden explicitly with:
 
@@ -270,10 +456,23 @@ PAPER_RAID_BFF_AGENT_REQUEST_QUOTA_BINDING_LIMIT=240
 successful read of the configured immutable CAS canary, and valid
 trust/config. It also reports `agent_bridge_schema_ready` and
 `agent_bridge_integrity_ok`; readiness never requires an already-paired row.
-It reports `finality=paper_scoped_projection`: a fresh Paper is
-`pending_finality`, while a verified Receipt V2 is projected as
-`verified_finality`. Ranking, score, reward and economic eligibility remain
-independently fail-closed and are never inferred from finality alone.
+It reports `finality=paper_scoped_projection`. Hepta may authoritatively expose
+`pending_finality` or, after a verified Receipt V2, `verified_finality`. When
+the review aggregate is absent, conflicted, or unavailable, both the initial
+Paper Room and ancillary live timeline preserve that fact as
+`unknown_finality`, `unavailable_finality`, or `error_finality` under the non-authoritative
+`hepta.paper_raid.bff_finality_availability.v1` schema; it never reuses the
+authoritative consumer-finality schema or rewrites uncertainty as pending. The
+normal UI names these states distinctly, displays the bounded reason code, and
+keeps every eligibility bit locked.
+Successful Hepta projections are strictly parsed as
+`hepta.paper_raid.consumer_finality.v2`; malformed status/schema/timestamps and
+missing, noncanonical, or mismatched effective evaluation/reproduction/
+Appeal-resolution bindings are rejected fail-closed. Pending projections must
+carry three null bindings; verified projections must match the AAR's exact
+effective causal chain field by field. Ranking, score,
+reward and economic eligibility remain independently fail-closed and are never
+inferred from finality alone.
 
 P1, P3 and P5 command routes are exact-whitelisted. Contribution ledgers,
 evaluations, tolerance-aware reproductions, Appeals and independent
@@ -341,7 +540,18 @@ The browser alpha is a same-origin, external-script flow:
    missing players/roles and an honest ETA (`0` only when a compatible team is
    ready; otherwise unknown). Matching uses the exact availability bucket and
    a deterministic Captain/Evidence/Experiment role solver rather than plain
-   FIFO-three selection.
+   FIFO-three selection. An optional premade trio uses a browser-generated
+   lowercase `PR1-<UUIDv4>` code: the browser hashes it before submission and
+   clears the raw input, while Hepta accepts only the canonical digest. Public
+   tickets never mix with private-party tickets, different party digests never
+   mix, two party members wait for the exact third, and a fourth live ticket is
+   rejected. A joining member is also rejected before insertion if the party's
+   exact availability window drifts or its partial role preferences can no
+   longer cover all three distinct roles; any queued member can cancel and
+   rejoin with corrected preferences. Ticket responses reveal only
+   `private_party: true|false`; the
+   party digest is absent from player read models, Room/outbox events, logs and
+   metrics. It is affinity only and grants no identity or gameplay authority.
 6. `/league/formation/<proposal-or-team-id>` renders either the proposal or
    formal Team and exposes typed materialization, human-signed readiness,
    locking and Paper creation controls. Protocol JSON is confined to the
@@ -356,6 +566,25 @@ The browser alpha is a same-origin, external-script flow:
    reviews and authorship consent frames are constructed from current Hepta
    facts and signed by the imported human key locally. Protocol editors remain
    available only under closed Developer Tools.
+   The Room uses Hepta's typed `player_phase`; the stored V1 compatibility
+   value `reproducing` is displayed and evidenced only as
+   `reproduction_readiness`. Independent reproduction remains a Review Raid
+   action and is never presented as Author work.
+   The Experiment path includes browser-native run and figure wizards: exact
+   stdout/stderr plus successful output/metrics bytes become verified
+   CAS-backed manifests and one exact RunRecord; failed and cancelled runs
+   retain their logs and plain-language failure fact without inventing output.
+   An SVG plus its transform description becomes a verified figure manifest
+   and FigureLineage bound only to selected authoritative room runs. Manifest
+   IDs, hashes, and record IDs are generated and checked by the browser
+   workflow rather than entered by a player.
+   Release promotion derives each author's same-Paper accepted Agent artifacts
+   and approving section reviews from the authoritative Room, applies the
+   capped 100/150 provisional milestone budget, and freezes that exact ledger
+   hash into the candidate. Duplicate records cannot multiply either
+   milestone; malformed or drifting Room facts lock promotion/repair instead
+   of silently budgeting zero. These points do not unlock ranking, rewards or
+   economic eligibility.
    The Room also renders the immutable ChallengeRuleset snapshot as player
    rules: template, product difficulty, version, duration/grace, every victory
    requirement and every phase gate. The authoritative deadline drives a live
@@ -363,15 +592,84 @@ The browser alpha is a same-origin, external-script flow:
    terminal time are read back as game facts. Captain-only failed/abandoned
    controls post typed reason codes through `/api/papers/<paper-id>/outcome`;
    the BFF re-reads Hepta and derives the Paper locator and aggregate version.
-   Expired remains hidden and is rejected server-side until the snapshotted
-   grace deadline has elapsed. Players never enter JSON, UUIDs, versions or
-   hashes for these actions.
+   Expiry is not a Captain action. Once the snapshotted grace deadline has
+   elapsed, Hepta materializes the canonical terminal fact idempotently on the
+   next authorized Room/state/event read; the normal UI offers no manual
+   expired form. Players never enter JSON, UUIDs, versions or hashes for these
+   actions.
+   When the frozen ruleset allocates role resources, the same normal Room
+   renders the actor-scoped remaining focus, shared run budget and explicit
+   Evidence/Captain actions. Evidence chooses an unassessed authoritative
+   EvidenceCard; Captain can checkpoint only after fresh Evidence and
+   Experiment progress. Experiment RunRecord creation consumes its role focus
+   and the shared run budget inside Hepta's authoritative transaction. A
+   disclosed retained failure may refund focus but never run budget. These
+   resources affect pacing only: ranking, score, reward and economic
+   eligibility remain false.
    A canonical three-role roster is enforced end to end: Captain owns phase
    checkpoints and cross-player work orchestration; Evidence owns evidence,
    citation and claim mutations; Experiment owns preregistration and retained
    runs. Artifact, section, revision and consent actions stay collaborative.
    The normal UI renders only actions authorized for the current role; legacy
    noncanonical teams retain their original permissive behavior.
+   Terminal Author Raids also render an `After Action Report v1` from the
+   existing Paper Room, review and finality authorities. It explains retained
+   success/failure/cancellation facts, recorded role-resource actions, frozen
+   CRediT/milestone entries and any provisional RaidScore while keeping
+   ranking, reward, score and economic eligibility visibly locked. Missing,
+   unavailable, cross-Paper, duplicated or malformed Room/review authority
+   makes the entire report render one safe unavailable card; it never mixes a
+   malformed child card with contribution rows or provisional XP. Production
+   AAR input is limited to private sealed wrappers constructed only by the
+   operation/path/body-bound Hepta `/room` and `/review-state` reads; raw
+   `Value` fixture sealing is test-only. The projection binds the
+   single ledger to the Paper's unique current release revision, candidate hash,
+   candidate-bound ledger hash and frozen CRediT roster. It recomputes the
+   complete canonically ordered scientific reference vectors without imposing
+   an artificial 256-reference ceiling; rendering remains count-only and the
+   milestone XP budget remains capped. It binds the current submission and
+   canonical frozen PaperBundle material, recomputes tolerance-policy,
+   reference-metric, hard-gate, PaperScore and evaluation-signing hashes,
+   derives evaluation status from the exact two-reviewer quorum, and accepts
+   RaidScore XP only after those facts agree. The sealed review boundary also
+   parses exact typed assignment and reproduction records, enforces canonical
+   UUID/timestamp/status lifecycles and rejects duplicate live round/slot or
+   round/player leases. Hepta `/review-state` includes only open and expired
+   evaluation-draft authority: pinned and released evaluator/reviewer leases
+   must bind that exact draft, while finalized drafts remain omitted and each
+   finalized evaluation still requires its consumed evaluator/two-reviewer
+   assignment set. Every reproduction binds its exact evaluation, tolerance
+   rules and active reproducer assignment.
+   Historical superseded records remain explainable through a unique monotonic
+   lineage; duplicates, cross-Paper records and unlinked records close the whole
+   AAR. Open and denied Appeals keep the
+   appealed evaluation effective; an upheld resolution selects only its exact
+   same-submission/same-release superseding evaluation and score. A child
+   evaluation—and any child Appeal or resolution—cannot become authoritative
+   before the parent's upheld resolution. Verified finality additionally
+   requires the unique latest reproduction for the effective evaluation to be
+   reproduced and temporally prior to verification. Role-resource
+   balances and exact failed-run refunds are replayed from the frozen
+   allocation; every complete typed RunRecord must bind one
+   `action_id == subject_id == run_record_id` action by the unique Experiment
+   actor. Evaluation, Appeal, resolution and verified-finality timestamps must
+   be canonical and monotonic; verified finality must follow the effective
+   evaluation and, when present, its effective resolution. The verified
+   Consumer-finality V2 evaluation, reproduction, and resolution UUIDs must
+   equal those derived AAR authorities exactly; timestamp ordering alone is
+   insufficient. Successful, failed
+   and abandoned outcomes must precede the grace boundary, while expiry
+   requires both `terminal_at == grace_expires_at` and the immutable
+   `challenge_grace_deadline_elapsed` reason. The BFF rebuilds review signing
+   frames and hashes and checks canonical signature/key encodings, but does not
+   claim to reverify evaluator, reviewer, Appeal or resolution Ed25519
+   signatures locally. Active-key ownership and signature verification remain
+   Hepta write-time responsibilities before its authenticated read model
+   crosses the sealed BFF boundary. This is a
+   read-only projection: durable role mastery, challenge unlocks, immutable
+   gameplay replay and automatic rematch remain unavailable. The timeline `Sync now`
+   control is only live/archive catch-up and is no longer labelled as replay
+   telemetry.
 8. `/league/review` is the assignment-scoped independent Review Raid surface.
    It renders typed evaluator draft, two-reviewer attestation, quorum/finalize
    and reproduction actions from a frozen review bundle. Every signature frame
@@ -441,6 +739,21 @@ scanner rejects an injected sentinel fixture. Both builds explicitly disable Bui
 and SBOM attestations (`--provenance=false --sbom=false`) because provenance is
 carried by immutable OCI labels and the independently generated, checked-in
 SBOM; this keeps the loaded single-platform image identity deterministic.
+
+To retain a verified local image for the eight-image release staging chain,
+use an explicit, previously unused tag:
+
+```bash
+scripts/build-paper-raid-bff-image.sh \
+  --image-ref trnm/paper-raid-bff:<release-id>
+```
+
+The staging builder runs the same two-build immutable image gate, requires the
+result to be `linux/amd64`, and creates the requested local tag only after every
+SBOM, rootfs, provenance, reproducibility, sentinel, and runtime check passes.
+It refuses to replace an existing tag and never pushes. Direct
+`scripts/check-image.sh` use remains disposable and removes its internal gate
+tags on exit.
 
 Regenerate the tracked runtime SBOM only from a clean commit with
 `scripts/generate-runtime-sbom.sh services/paper-raid-bff/docker/sbom.cdx.json`.

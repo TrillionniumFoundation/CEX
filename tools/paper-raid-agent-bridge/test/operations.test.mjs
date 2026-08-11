@@ -3,8 +3,8 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import {
-  AGENT_BINDING_PROOF_SCHEMA,
   AGENT_PROPOSAL_SCHEMA,
+  AGENT_BINDING_PROOF_SCHEMA,
   agentBindingProofFrame,
   agentCapabilityDisclosureHash,
   agentProposalFrame,
@@ -13,10 +13,13 @@ import {
   HEALTH_REPORT_SCHEMA,
   INBOX_REQUEST_SCHEMA,
   bridgeHealth,
+  createDeliveryDraftRequest,
   createProposalRequest,
   getBinding,
   getInbox,
   pairAgent,
+  prepareDeliveryDraft,
+  stableDeliveryDraftId,
   submitAgentProposal,
 } from "../src/operations.mjs";
 import { loadBridgeState, saveBridgeState } from "../src/state.mjs";
@@ -323,7 +326,7 @@ test("binding, health, and inbox use only dedicated proof-authenticated endpoint
   }
 });
 
-test("proposal endpoint carries exact Hepta payload plus independent request proof", async t => {
+test("legacy non-delivery Agent Proposal V1 is not a Bridge mutation bypass", async t => {
   const item = await fixture(t, "proposal");
   const state = await saveBridgeState(
     item.statePath,
@@ -336,56 +339,129 @@ test("proposal endpoint carries exact Hepta payload plus independent request pro
     work_item_id: "88888888-8888-4888-8888-888888888888",
     section_key: "methods",
     parent_revision_id: "99999999-9999-4999-8999-999999999999",
-    proposal_kind: "delivery",
+    proposal_kind: "proposal",
     payload_hash: `sha256:${"aa".repeat(32)}`,
     artifact_manifest_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     artifact_manifest_hash: `sha256:${"bb".repeat(32)}`,
   };
-  const exact = createProposalRequest(state, item.identity, input, {
-    nowUnix: NOW + 10,
-    proposalId: PROPOSAL_ID,
-    idempotencyKey: IDEMPOTENCY_ID,
-  });
-  assert.equal(
-    item.identity.verify(
-      agentProposalFrame({
-        schema: AGENT_PROPOSAL_SCHEMA,
-        proposal_id: exact.payload.proposal_id,
-        paper_project_id: exact.paper_id,
-        work_item_id: exact.payload.work_item_id,
-        section_key: exact.payload.section_key,
-        parent_revision_id: exact.payload.parent_revision_id,
-        proposal_kind: exact.payload.proposal_kind,
-        payload_hash: exact.payload.payload_hash,
-        artifact_manifest_hash: input.artifact_manifest_hash,
-        agent_id: exact.payload.agent_id,
-        binding_id: exact.payload.binding_id,
-        agent_key_id: exact.payload.agent_key_id,
-        signed_at_unix: exact.payload.signed_at_unix,
-      }),
-      exact.payload.signature,
-    ),
-    true,
+  assert.throws(
+    () => createProposalRequest(state, item.identity, input),
+    /Proposal V2 requires a delivery_draft_id-bound delivery/,
   );
-  let seen;
-  const fetchImplementation = async (url, init) => {
-    seen = {
-      path: new URL(url).pathname,
-      body: JSON.parse(init.body),
-      headers: headersObject(init.headers),
-    };
-    return jsonResponse({ proposal_id: PROPOSAL_ID }, 201);
+  await assert.rejects(
+    submitAgentProposal(item.config, item.identity, input),
+    /Proposal V2 requires a delivery_draft_id-bound delivery/,
+  );
+});
+
+test("delivery draft is a stable Agent declaration and drives deterministic proposal recovery", async t => {
+  const item = await fixture(t, "delivery-draft");
+  const state = await saveBridgeState(
+    item.statePath,
+    item.identity,
+    item.binding,
+    NOW,
+  );
+  const draftInput = {
+    paper_id: PAPER_ID,
+    work_item_id: "88888888-8888-4888-8888-888888888888",
+    section_key: "methods",
+    artifact_manifest_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    payload_hash: `sha256:${"aa".repeat(32)}`,
   };
-  const result = await submitAgentProposal(item.config, item.identity, input, {
-    nowUnix: NOW + 10,
-    proposalId: PROPOSAL_ID,
-    idempotencyKey: IDEMPOTENCY_ID,
-    fetchImplementation,
+  const deliveryDraftId = stableDeliveryDraftId(state, draftInput);
+  const exactDraft = createDeliveryDraftRequest(state, draftInput);
+  assert.equal(exactDraft.delivery_draft_id, deliveryDraftId);
+  let seenDraft;
+  const draftResult = await prepareDeliveryDraft(item.config, item.identity, draftInput, {
+    nowUnix: NOW + 5,
+    fetchImplementation: async (url, init) => {
+      seenDraft = {
+        path: new URL(url).pathname,
+        body: JSON.parse(init.body),
+      };
+      return jsonResponse({
+        schema: "hepta.paper_raid.agent_bridge.delivery_draft_result.v1",
+        candidate: { delivery_draft_id: deliveryDraftId },
+      });
+    },
   });
-  assert.deepEqual(result, { proposal_id: PROPOSAL_ID });
-  assert.equal(seen.path, "/api/agent-bridge/proposals");
-  assert.deepEqual(seen.body, exact);
-  assert.equal(typeof seen.headers["x-paper-raid-agent-signature"], "string");
-  assert.equal("cookie" in seen.headers, false);
-  assert.equal("authorization" in seen.headers, false);
+  assert.equal(seenDraft.path, "/api/agent-bridge/delivery-drafts");
+  assert.deepEqual(seenDraft.body, exactDraft);
+  assert.equal(draftResult.candidate.delivery_draft_id, deliveryDraftId);
+
+  const proposalInput = {
+    ...draftInput,
+    delivery_draft_id: deliveryDraftId,
+    declared_at_unix: NOW + 5,
+    parent_revision_id: "99999999-9999-4999-8999-999999999999",
+    lease_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    lease_fencing_token: 9,
+    expected_work_version: 3,
+    proposal_kind: "delivery",
+    artifact_manifest_hash: `sha256:${"bb".repeat(32)}`,
+  };
+  const first = createProposalRequest(state, item.identity, proposalInput, {
+    nowUnix: NOW + 10,
+  });
+  const recovered = createProposalRequest(state, item.identity, proposalInput, {
+    nowUnix: NOW + 11,
+  });
+  assert.equal(first.delivery_draft_id, deliveryDraftId);
+  assert.equal(first.payload.proposal_id, recovered.payload.proposal_id);
+  assert.equal(first.payload.idempotency_key, recovered.payload.idempotency_key);
+  assert.equal(first.payload.signed_at_unix, NOW + 5);
+  assert.deepEqual(first, recovered);
+  assert.equal(item.identity.verify(agentProposalFrame({
+    schema: AGENT_PROPOSAL_SCHEMA,
+    proposal_id: first.payload.proposal_id,
+    paper_project_id: first.paper_id,
+    work_item_id: first.payload.work_item_id,
+    section_key: first.payload.section_key,
+    parent_revision_id: first.payload.parent_revision_id,
+    lease_id: first.payload.lease_id,
+    lease_fencing_token: first.payload.lease_fencing_token,
+    expected_work_version: first.payload.expected_work_version,
+    proposal_kind: first.payload.proposal_kind,
+    payload_hash: first.payload.payload_hash,
+    artifact_manifest_id: first.payload.artifact_manifest_id,
+    artifact_manifest_hash: proposalInput.artifact_manifest_hash,
+    agent_id: first.payload.agent_id,
+    binding_id: first.payload.binding_id,
+    agent_key_id: first.payload.agent_key_id,
+    signed_at_unix: first.payload.signed_at_unix,
+  }), first.payload.signature), true);
+  assert.throws(
+    () => createProposalRequest(state, item.identity, {
+      ...proposalInput,
+      lease_fencing_token: 0,
+    }),
+    /lease_fencing_token is invalid/,
+  );
+  assert.throws(
+    () => createProposalRequest(state, item.identity, proposalInput, {
+      proposalId: PROPOSAL_ID,
+    }),
+    /proposal_id is fixed by delivery_draft_id/,
+  );
+  assert.throws(
+    () => createProposalRequest(state, item.identity, proposalInput, {
+      idempotencyKey: IDEMPOTENCY_ID,
+    }),
+    /idempotency_key is fixed by delivery_draft_id/,
+  );
+  assert.throws(
+    () => createProposalRequest(state, item.identity, {
+      ...proposalInput,
+      proposal_kind: "proposal",
+    }),
+    /Proposal V2 requires a delivery_draft_id-bound delivery/,
+  );
+  assert.throws(
+    () => createProposalRequest(state, item.identity, {
+      ...proposalInput,
+      delivery_draft_id: undefined,
+    }),
+    /Proposal V2 requires a delivery_draft_id-bound delivery/,
+  );
 });

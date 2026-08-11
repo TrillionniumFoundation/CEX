@@ -16,13 +16,16 @@ use uuid::Uuid;
 
 use super::collaboration_v3::{insert_room_event_postgres, push_room_event_memory};
 use super::*;
+use crate::paper_chain_finality_v1::{PaperChainFinalityProjectionV2, PaperChainFinalityStatusV1};
 use crate::paper_raid_contracts::{
-    canonical_json_sha256, paper_appeal_resolution_signing_bytes, paper_appeal_signing_bytes,
-    paper_evaluation_signing_bytes, paper_reproduction_signing_bytes,
-    paper_review_attestation_signing_bytes, sha256_digest, PaperAppealResolutionSigningV1,
-    PaperAppealSigningV1, PaperEvaluationSigningV1, PaperReproductionSigningV1,
-    PaperReviewAttestationSigningV1, PAPER_APPEAL_RESOLUTION_V1, PAPER_APPEAL_V1,
-    PAPER_EVALUATION_V1, PAPER_REPRODUCTION_V1, PAPER_REVIEW_ATTESTATION_V1,
+    canonical_json_sha256, frozen_review_authority_hash, paper_appeal_resolution_signing_bytes,
+    paper_appeal_signing_bytes, paper_evaluation_signing_bytes, paper_reproduction_signing_bytes,
+    paper_review_attestation_signing_bytes, sha256_digest, verify_frozen_review_authority,
+    FrozenReviewAuthorityV1, FrozenReviewExecutionPolicyV1, FrozenReviewObjectV1,
+    PaperAppealResolutionSigningV1, PaperAppealSigningV1, PaperEvaluationSigningV1,
+    PaperReproductionSigningV1, PaperReviewAttestationSigningV1, FROZEN_REVIEW_AUTHORITY_V1,
+    PAPER_APPEAL_RESOLUTION_V1, PAPER_APPEAL_V1, PAPER_EVALUATION_V1, PAPER_REPRODUCTION_V1,
+    PAPER_REVIEW_ATTESTATION_V1, REVIEW_OBJECT_DOWNLOAD_PATH_V1,
 };
 
 pub const PAPER_REVIEW_PROTOCOL_V4: &str = "hepta.paper_raid.review.v4";
@@ -42,12 +45,23 @@ const ACCEPTED_ARTIFACT_MILESTONE_XP: u64 = 100;
 const ACCEPTED_REVIEW_MILESTONE_XP: u64 = 150;
 const ACCEPTED_AUTHOR_RAID_BASE_XP: u64 = 300;
 
+/// Read the exact microsecond-precision value PostgreSQL will persist so an
+/// immutable JSON projection and its relational `timestamptz` remain equal.
+async fn postgres_contribution_ledger_now(
+    tx: &mut Transaction<'_, Postgres>,
+) -> Result<DateTime<Utc>, ApiError> {
+    sqlx::query_scalar("select clock_timestamp()")
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(ApiError::database)
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct ReviewMemory {
     assignments: HashMap<Uuid, ReviewAssignment>,
     evaluation_drafts: HashMap<Uuid, PaperEvaluationDraft>,
     draft_attestations: HashMap<Uuid, EvaluationDraftAttestation>,
-    contribution_ledgers: HashMap<Uuid, ContributionLedger>,
+    pub(super) contribution_ledgers: HashMap<Uuid, ContributionLedger>,
     pub(crate) evaluations: HashMap<Uuid, PaperEvaluation>,
     pub(crate) reproductions: HashMap<Uuid, PaperReproduction>,
     pub(crate) appeals: HashMap<Uuid, PaperAppeal>,
@@ -166,6 +180,7 @@ pub struct PaperReviewBundleV1 {
     #[serde(flatten)]
     pub submission: JointPaperSubmission,
     pub my_assignments: Vec<ReviewAssignment>,
+    pub frozen_review_authority: FrozenReviewAuthorityV1,
     pub evaluation_quorum: Option<EvaluationDraftQuorum>,
     pub evaluation: Option<PaperEvaluation>,
 }
@@ -742,8 +757,12 @@ pub struct ResolvePaperAppealRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PaperReviewReadModel {
-    pub finality: ConsumerPaperFinalityV1,
+    pub finality: ConsumerPaperFinalityV2,
     pub assignments: Vec<ReviewAssignment>,
+    /// Open and expired draft authority needed to interpret pinned assignment
+    /// lifecycles. Finalized drafts are omitted because their assignments are
+    /// consumed against the immutable `evaluations` authority below.
+    pub evaluation_drafts: Vec<PaperEvaluationDraft>,
     pub contribution_ledgers: Vec<ContributionLedger>,
     pub evaluations: Vec<PaperEvaluation>,
     pub reproductions: Vec<PaperReproduction>,
@@ -752,12 +771,15 @@ pub struct PaperReviewReadModel {
     pub raid_scores: Vec<RaidScore>,
 }
 
-pub const CONSUMER_PAPER_FINALITY_SCHEMA_V1: &str = "hepta.paper_raid.consumer_finality.v1";
+pub const CONSUMER_PAPER_FINALITY_SCHEMA_V2: &str = "hepta.paper_raid.consumer_finality.v2";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ConsumerPaperFinalityV1 {
+pub struct ConsumerPaperFinalityV2 {
     pub schema: String,
     pub status: PaperChainFinalityStatusV1,
+    pub effective_evaluation_id: Option<Uuid>,
+    pub effective_reproduction_id: Option<Uuid>,
+    pub effective_appeal_resolution_id: Option<Uuid>,
     pub ranking_eligible: bool,
     pub reward_eligible: bool,
     pub score_eligible: bool,
@@ -765,11 +787,14 @@ pub struct ConsumerPaperFinalityV1 {
     pub verified_at: Option<DateTime<Utc>>,
 }
 
-impl ConsumerPaperFinalityV1 {
+impl ConsumerPaperFinalityV2 {
     fn pending() -> Self {
         Self {
-            schema: CONSUMER_PAPER_FINALITY_SCHEMA_V1.to_string(),
+            schema: CONSUMER_PAPER_FINALITY_SCHEMA_V2.to_string(),
             status: PaperChainFinalityStatusV1::PendingFinality,
+            effective_evaluation_id: None,
+            effective_reproduction_id: None,
+            effective_appeal_resolution_id: None,
             ranking_eligible: false,
             reward_eligible: false,
             score_eligible: false,
@@ -778,10 +803,13 @@ impl ConsumerPaperFinalityV1 {
         }
     }
 
-    fn from_projection(projection: PaperChainFinalityProjectionV1) -> Self {
+    fn from_projection(projection: PaperChainFinalityProjectionV2) -> Self {
         Self {
-            schema: CONSUMER_PAPER_FINALITY_SCHEMA_V1.to_string(),
+            schema: CONSUMER_PAPER_FINALITY_SCHEMA_V2.to_string(),
             status: projection.status,
+            effective_evaluation_id: Some(projection.evaluation_id),
+            effective_reproduction_id: Some(projection.reproduction_id),
+            effective_appeal_resolution_id: projection.appeal_resolution_id,
             ranking_eligible: projection.ranking_eligible,
             reward_eligible: projection.reward_eligible,
             score_eligible: projection.score_eligible,
@@ -1144,10 +1172,10 @@ fn review_assignment_active(assignment: &ReviewAssignment, now: DateTime<Utc>) -
     }
 }
 
-fn latest_review_evaluation<'a>(
+fn latest_review_evaluation(
     paper_id: Uuid,
-    evaluations: &'a [PaperEvaluation],
-) -> Option<&'a PaperEvaluation> {
+    evaluations: &[PaperEvaluation],
+) -> Option<&PaperEvaluation> {
     evaluations
         .iter()
         .filter(|evaluation| evaluation.paper_project_id == paper_id)
@@ -1165,6 +1193,446 @@ fn evaluation_has_open_appeal(
                 .iter()
                 .any(|resolution| resolution.appeal_id == appeal.appeal_id)
     })
+}
+
+fn activated_evaluation_at(
+    paper_id: Uuid,
+    evaluation_id: Uuid,
+    evaluations: &[PaperEvaluation],
+    appeals: &[PaperAppeal],
+    resolutions: &[PaperAppealResolution],
+) -> Option<DateTime<Utc>> {
+    activated_evaluation_at_ignoring_prepared_child(
+        paper_id,
+        evaluation_id,
+        evaluations,
+        appeals,
+        resolutions,
+        None,
+    )
+}
+
+fn activated_evaluation_at_ignoring_prepared_child(
+    paper_id: Uuid,
+    evaluation_id: Uuid,
+    evaluations: &[PaperEvaluation],
+    appeals: &[PaperAppeal],
+    resolutions: &[PaperAppealResolution],
+    prepared_child: Option<&PaperEvaluation>,
+) -> Option<DateTime<Utc>> {
+    let mut by_id = HashMap::new();
+    for evaluation in evaluations
+        .iter()
+        .filter(|evaluation| evaluation.paper_project_id == paper_id)
+    {
+        if by_id.insert(evaluation.evaluation_id, evaluation).is_some() {
+            return None;
+        }
+    }
+
+    let mut reverse_lineage = Vec::new();
+    let mut visited = HashSet::new();
+    let mut current = *by_id.get(&evaluation_id)?;
+    let ignored_prepared_child_id = match prepared_child {
+        Some(child)
+            if child.evaluation_id != current.evaluation_id
+                && child.paper_project_id == current.paper_project_id
+                && child.submission_id == current.submission_id
+                && child.supersedes_evaluation_id == Some(current.evaluation_id) =>
+        {
+            Some(child.evaluation_id)
+        }
+        Some(_) => return None,
+        None => None,
+    };
+    loop {
+        if !visited.insert(current.evaluation_id) {
+            return None;
+        }
+        reverse_lineage.push(current);
+        let Some(parent_id) = current.supersedes_evaluation_id else {
+            break;
+        };
+        current = *by_id.get(&parent_id)?;
+    }
+    reverse_lineage.reverse();
+
+    let root = *reverse_lineage.first()?;
+    if root.version != 1
+        || root.supersedes_evaluation_id.is_some()
+        || panel_members(root).len() != 3
+    {
+        return None;
+    }
+    if evaluations.iter().any(|candidate| {
+        candidate.paper_project_id == paper_id
+            && candidate.submission_id == root.submission_id
+            && !visited.contains(&candidate.evaluation_id)
+            && Some(candidate.evaluation_id) != ignored_prepared_child_id
+    }) {
+        return None;
+    }
+    let mut activated_at = root.created_at;
+    let mut activation_resolution_ids = HashSet::new();
+    for pair in reverse_lineage.windows(2) {
+        let parent = pair[0];
+        let child = pair[1];
+        let parent_panel = panel_members(parent);
+        let child_panel = panel_members(child);
+        if child.supersedes_evaluation_id != Some(parent.evaluation_id)
+            || child.submission_id != parent.submission_id
+            || child.release_candidate_hash != parent.release_candidate_hash
+            || child.paper_bundle_hash != parent.paper_bundle_hash
+            || child.version != parent.version.checked_add(1)?
+            || parent_panel.len() != 3
+            || child_panel.len() != 3
+            || !parent_panel.is_disjoint(&child_panel)
+        {
+            return None;
+        }
+
+        let mut matching_appeals = appeals.iter().filter(|appeal| {
+            appeal.paper_project_id == paper_id && appeal.evaluation_id == parent.evaluation_id
+        });
+        let appeal = matching_appeals.next()?;
+        if matching_appeals.next().is_some()
+            || appeal.release_candidate_hash != parent.release_candidate_hash
+            || appeal.created_at < activated_at
+            || child.created_at < appeal.created_at
+        {
+            return None;
+        }
+
+        let mut matching_resolutions = resolutions.iter().filter(|resolution| {
+            resolution.paper_project_id == paper_id && resolution.appeal_id == appeal.appeal_id
+        });
+        let resolution = matching_resolutions.next()?;
+        if matching_resolutions.next().is_some()
+            || resolution.evaluation_id != parent.evaluation_id
+            || resolution.release_candidate_hash != parent.release_candidate_hash
+            || resolution.outcome != AppealOutcome::Upheld
+            || resolution.superseding_evaluation_id != Some(child.evaluation_id)
+            || resolution.created_at < appeal.created_at
+            || resolution.created_at < child.created_at
+        {
+            return None;
+        }
+        activation_resolution_ids.insert(resolution.resolution_id);
+        activated_at = resolution.created_at;
+    }
+    if resolutions.iter().any(|resolution| {
+        resolution.paper_project_id == paper_id
+            && resolution
+                .superseding_evaluation_id
+                .is_some_and(|child_id| visited.contains(&child_id))
+            && !activation_resolution_ids.contains(&resolution.resolution_id)
+    }) {
+        return None;
+    }
+    Some(activated_at)
+}
+
+fn ensure_appealed_evaluation_activated_for_resolution(
+    evaluation: &PaperEvaluation,
+    prepared_child: Option<&PaperEvaluation>,
+    evaluations: &[PaperEvaluation],
+    appeals: &[PaperAppeal],
+    resolutions: &[PaperAppealResolution],
+) -> Result<(), ApiError> {
+    activated_evaluation_at_ignoring_prepared_child(
+        evaluation.paper_project_id,
+        evaluation.evaluation_id,
+        evaluations,
+        appeals,
+        resolutions,
+        prepared_child,
+    )
+    .map(|_| ())
+    .ok_or_else(|| {
+        ApiError::conflict(
+            "paper_evaluation_not_activated",
+            "the appealed evaluation requires an exact active lineage; only its unique direct prepared replacement may remain pending activation",
+        )
+    })
+}
+
+fn ensure_evaluation_activated(
+    evaluation: &PaperEvaluation,
+    evaluations: &[PaperEvaluation],
+    appeals: &[PaperAppeal],
+    resolutions: &[PaperAppealResolution],
+) -> Result<(), ApiError> {
+    activated_evaluation_at(
+        evaluation.paper_project_id,
+        evaluation.evaluation_id,
+        evaluations,
+        appeals,
+        resolutions,
+    )
+    .map(|_| ())
+    .ok_or_else(|| {
+        ApiError::conflict(
+            "paper_evaluation_not_activated",
+            "the evaluation requires an exact root-to-leaf upheld Appeal lineage before downstream mutation",
+        )
+    })
+}
+
+struct HistoricalEvaluationAuthority<'a> {
+    evaluation: &'a PaperEvaluation,
+    activated_at: DateTime<Utc>,
+    mutation_closed_at: Option<DateTime<Utc>>,
+}
+
+fn historical_evaluation_authority<'a>(
+    effective_evaluation: &PaperEvaluation,
+    historical_evaluation_id: Uuid,
+    evaluations: &'a [PaperEvaluation],
+    appeals: &[PaperAppeal],
+    resolutions: &[PaperAppealResolution],
+) -> Option<HistoricalEvaluationAuthority<'a>> {
+    activated_evaluation_at(
+        effective_evaluation.paper_project_id,
+        effective_evaluation.evaluation_id,
+        evaluations,
+        appeals,
+        resolutions,
+    )?;
+    let by_id = evaluations
+        .iter()
+        .filter(|candidate| candidate.paper_project_id == effective_evaluation.paper_project_id)
+        .map(|candidate| (candidate.evaluation_id, candidate))
+        .collect::<HashMap<_, _>>();
+    let mut current = *by_id.get(&effective_evaluation.evaluation_id)?;
+    let mut direct_child = None;
+    loop {
+        if current.evaluation_id == historical_evaluation_id {
+            let activated_at = if let Some(parent_id) = current.supersedes_evaluation_id {
+                let parent = *by_id.get(&parent_id)?;
+                let mut matching_appeals = appeals.iter().filter(|appeal| {
+                    appeal.paper_project_id == effective_evaluation.paper_project_id
+                        && appeal.evaluation_id == parent.evaluation_id
+                });
+                let appeal = matching_appeals.next()?;
+                if matching_appeals.next().is_some() {
+                    return None;
+                }
+                let mut matching_resolutions = resolutions.iter().filter(|resolution| {
+                    resolution.paper_project_id == effective_evaluation.paper_project_id
+                        && resolution.appeal_id == appeal.appeal_id
+                });
+                let resolution = matching_resolutions.next()?;
+                if matching_resolutions.next().is_some()
+                    || resolution.evaluation_id != parent.evaluation_id
+                    || resolution.outcome != AppealOutcome::Upheld
+                    || resolution.superseding_evaluation_id != Some(current.evaluation_id)
+                {
+                    return None;
+                }
+                resolution.created_at
+            } else {
+                current.created_at
+            };
+            return Some(HistoricalEvaluationAuthority {
+                evaluation: current,
+                activated_at,
+                mutation_closed_at: direct_child.map(|child: &PaperEvaluation| child.created_at),
+            });
+        }
+        direct_child = Some(current);
+        current = *by_id.get(&current.supersedes_evaluation_id?)?;
+    }
+}
+
+fn validate_reproduction_activation(
+    effective_evaluation: &PaperEvaluation,
+    reproduction: &PaperReproduction,
+    evaluations: &[PaperEvaluation],
+    appeals: &[PaperAppeal],
+    resolutions: &[PaperAppealResolution],
+) -> Result<(), ApiError> {
+    if reproduction.paper_project_id != effective_evaluation.paper_project_id
+        || !evaluations.iter().any(|candidate| {
+            candidate.paper_project_id == effective_evaluation.paper_project_id
+                && candidate.evaluation_id == reproduction.evaluation_id
+        })
+    {
+        return Err(ApiError::conflict(
+            "paper_finality_reproduction_lineage_missing",
+            "Paper reproduction references an evaluation outside the exact authority",
+        ));
+    }
+    let authority = historical_evaluation_authority(
+        effective_evaluation,
+        reproduction.evaluation_id,
+        evaluations,
+        appeals,
+        resolutions,
+    )
+    .ok_or_else(|| {
+        ApiError::conflict(
+            "paper_finality_reproduction_before_activation",
+            "Paper reproduction belongs to an evaluation outside the exact activated lineage",
+        )
+    })?;
+    if reproduction.release_candidate_hash != authority.evaluation.release_candidate_hash
+        || reproduction.paper_bundle_hash != authority.evaluation.paper_bundle_hash
+        || reproduction.tolerance_policy_hash != authority.evaluation.tolerance_policy_hash
+    {
+        return Err(ApiError::conflict(
+            "paper_finality_reproduction_authority_mismatch",
+            "Paper reproduction scientific authority does not match its exact evaluation",
+        ));
+    }
+    if reproduction.created_at < authority.activated_at {
+        return Err(ApiError::conflict(
+            "paper_finality_reproduction_before_activation",
+            "Paper reproduction predates its evaluation's exact upheld Appeal activation",
+        ));
+    }
+    if authority
+        .mutation_closed_at
+        .is_some_and(|closed_at| reproduction.created_at >= closed_at)
+    {
+        return Err(ApiError::conflict(
+            "paper_finality_historical_reproduction_after_mutation_closed",
+            "Historical evaluation reproduction must predate preparation of its direct replacement",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn effective_finality_resolution_id(
+    evaluation: &PaperEvaluation,
+    evaluations: &[PaperEvaluation],
+    reproductions: &[PaperReproduction],
+    appeals: &[PaperAppeal],
+    resolutions: &[PaperAppealResolution],
+) -> Result<Option<Uuid>, ApiError> {
+    let activated_at = activated_evaluation_at(
+        evaluation.paper_project_id,
+        evaluation.evaluation_id,
+        evaluations,
+        appeals,
+        resolutions,
+    )
+    .ok_or_else(|| {
+        ApiError::conflict(
+            "paper_finality_evaluation_not_activated",
+            "effective evaluation is not the leaf of an exact root-to-leaf upheld Appeal lineage",
+        )
+    })?;
+    for reproduction in reproductions
+        .iter()
+        .filter(|record| record.paper_project_id == evaluation.paper_project_id)
+    {
+        validate_reproduction_activation(
+            evaluation,
+            reproduction,
+            evaluations,
+            appeals,
+            resolutions,
+        )?;
+    }
+    if evaluation.created_at > activated_at {
+        return Err(ApiError::conflict(
+            "paper_finality_evaluation_activation_regressed",
+            "effective evaluation activation predates its immutable evaluation record",
+        ));
+    }
+    let exact_appeal = |evaluation_id: Uuid| -> Result<Option<&PaperAppeal>, ApiError> {
+        let mut matching = appeals.iter().filter(|appeal| {
+            appeal.paper_project_id == evaluation.paper_project_id
+                && appeal.evaluation_id == evaluation_id
+        });
+        let appeal = matching.next();
+        if matching.next().is_some() {
+            return Err(ApiError::conflict(
+                "paper_finality_appeal_binding_ambiguous",
+                "effective evaluation has more than one Appeal binding",
+            ));
+        }
+        Ok(appeal)
+    };
+    let exact_resolution = |appeal_id: Uuid| -> Result<Option<&PaperAppealResolution>, ApiError> {
+        let mut matching = resolutions.iter().filter(|resolution| {
+            resolution.paper_project_id == evaluation.paper_project_id
+                && resolution.appeal_id == appeal_id
+        });
+        let resolution = matching.next();
+        if matching.next().is_some() {
+            return Err(ApiError::conflict(
+                "paper_finality_resolution_binding_ambiguous",
+                "effective Appeal has more than one resolution binding",
+            ));
+        }
+        Ok(resolution)
+    };
+
+    if let Some(appeal) = exact_appeal(evaluation.evaluation_id)? {
+        let resolution = exact_resolution(appeal.appeal_id)?.ok_or_else(|| {
+            ApiError::conflict(
+                "paper_chain_finality_open_appeal",
+                "an unresolved Appeal holds Paper Chain finality",
+            )
+        })?;
+        if appeal.release_candidate_hash != evaluation.release_candidate_hash
+            || resolution.evaluation_id != evaluation.evaluation_id
+            || resolution.release_candidate_hash != evaluation.release_candidate_hash
+            || resolution.outcome != AppealOutcome::Denied
+            || resolution.superseding_evaluation_id.is_some()
+            || resolution.created_at < appeal.created_at
+            || resolution.created_at < evaluation.created_at
+        {
+            return Err(ApiError::conflict(
+                "paper_finality_resolution_binding_mismatch",
+                "effective evaluation may bind only its exact chronological terminal denial",
+            ));
+        }
+        return Ok(Some(resolution.resolution_id));
+    }
+
+    let Some(parent_id) = evaluation.supersedes_evaluation_id else {
+        return Ok(None);
+    };
+    let parent = evaluations
+        .iter()
+        .find(|candidate| {
+            candidate.paper_project_id == evaluation.paper_project_id
+                && candidate.evaluation_id == parent_id
+        })
+        .ok_or_else(|| {
+            ApiError::conflict(
+                "paper_finality_evaluation_lineage_missing",
+                "effective replacement evaluation lost its parent binding",
+            )
+        })?;
+    let appeal = exact_appeal(parent_id)?.ok_or_else(|| {
+        ApiError::conflict(
+            "paper_finality_appeal_binding_missing",
+            "effective replacement evaluation lost its activating Appeal",
+        )
+    })?;
+    let resolution = exact_resolution(appeal.appeal_id)?.ok_or_else(|| {
+        ApiError::conflict(
+            "paper_chain_finality_open_appeal",
+            "effective replacement evaluation has no activating Appeal resolution",
+        )
+    })?;
+    if appeal.release_candidate_hash != parent.release_candidate_hash
+        || resolution.evaluation_id != parent_id
+        || resolution.release_candidate_hash != parent.release_candidate_hash
+        || resolution.outcome != AppealOutcome::Upheld
+        || resolution.superseding_evaluation_id != Some(evaluation.evaluation_id)
+        || resolution.created_at < appeal.created_at
+        || resolution.created_at < evaluation.created_at
+    {
+        return Err(ApiError::conflict(
+            "paper_finality_resolution_binding_mismatch",
+            "effective replacement evaluation lost its exact chronological upheld activation",
+        ));
+    }
+    Ok(Some(resolution.resolution_id))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1216,7 +1684,16 @@ fn claimable_review_vacancies(
             );
         }
     }
-    if let Some(evaluation) = latest {
+    if let Some(evaluation) = latest.filter(|evaluation| {
+        activated_evaluation_at(
+            paper_id,
+            evaluation.evaluation_id,
+            evaluations,
+            appeals,
+            resolutions,
+        )
+        .is_some()
+    }) {
         let reports: Vec<_> = reproductions
             .iter()
             .filter(|report| report.evaluation_id == evaluation.evaluation_id)
@@ -1328,7 +1805,7 @@ fn is_author(context: &ReviewPaperContext, player_id: Uuid) -> bool {
 fn has_review_assignment<'a>(
     paper_id: Uuid,
     player_id: Uuid,
-    assignments: impl Iterator<Item = &'a ReviewAssignment>,
+    mut assignments: impl Iterator<Item = &'a ReviewAssignment>,
     now: DateTime<Utc>,
 ) -> bool {
     assignments.any(|assignment| {
@@ -2419,6 +2896,39 @@ async fn claim_review_assignment(
     Ok((StatusCode::CREATED, Json(assignment)))
 }
 
+type ChallengeReviewObjectHashes = (String, String);
+
+async fn paper_challenge_review_object_hashes(
+    state: &AppState,
+    paper_id: Uuid,
+) -> Result<Option<ChallengeReviewObjectHashes>, ApiError> {
+    let challenge_id = if let Some(pool) = &state.pool {
+        sqlx::query_scalar(
+            "select challenge_id from hepta_paper_projects where paper_project_id=$1",
+        )
+        .bind(paper_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(ApiError::database)?
+    } else {
+        let memory = state.paper_raid.read().await;
+        memory.papers.get(&paper_id).map(|paper| paper.challenge_id)
+    };
+    let Some(challenge_id) = challenge_id else {
+        return Ok(None);
+    };
+    state
+        .inspect(|league| {
+            Ok(league.challenges.get(&challenge_id).map(|challenge| {
+                (
+                    challenge.evaluator_manifest_hash.clone(),
+                    challenge.dataset_manifest_hash.clone(),
+                )
+            }))
+        })
+        .await
+}
+
 async fn get_paper_review_bundle(
     State(state): State<AppState>,
     Path(paper_id): Path<Uuid>,
@@ -2428,6 +2938,10 @@ async fn get_paper_review_bundle(
     let assertion =
         require_member_read_assertion(&headers, &state, "get_paper_review_bundle_v1", &path)?;
     let now = Utc::now();
+    // Resolve this before acquiring the Paper memory guard or PostgreSQL
+    // review transaction. `AppState::inspect` reads the durable league-state
+    // row for PostgreSQL and the in-process authority for the memory backend.
+    let challenge_object_hashes = paper_challenge_review_object_hashes(&state, paper_id).await?;
     if state.pool.is_none() {
         let memory = state.paper_raid.read().await;
         active_registered_player_memory(&memory, &assertion)?;
@@ -2461,27 +2975,40 @@ async fn get_paper_review_bundle(
             .cloned()
             .collect::<Vec<_>>();
         project_evaluation_draft_expirations(&mut drafts, &mut assignments, now)?;
-        if !is_author(&context, assertion.player_id)
-            && !has_review_assignment(paper_id, assertion.player_id, assignments.iter(), now)
+        if is_author(&context, assertion.player_id)
+            || !has_review_assignment(paper_id, assertion.player_id, assignments.iter(), now)
         {
             return Err(ApiError::forbidden(
                 "review_bundle_access_denied",
-                "review bundle is limited to authors and assigned review actors",
+                "review bundle is limited to active independent review assignments; it never grants Author Room access",
             ));
         }
-        return Ok(Json(make_paper_review_bundle(
+        let artifact_manifest = exact_frozen_review_manifest(
+            memory.collaboration.artifact_manifests.values(),
+            &submission,
+        )?;
+        let (evaluator_version, dataset_version) = challenge_object_hashes.ok_or_else(|| {
+            ApiError::conflict(
+                "frozen_evaluator_unavailable",
+                "the Paper challenge has no immutable evaluator manifest authority",
+            )
+        })?;
+        return Ok(Json(make_paper_review_bundle(PaperReviewBundleInput {
             submission,
-            assertion.player_id,
+            player_id: assertion.player_id,
             assignments,
+            artifact_manifest,
+            evaluator_version: &evaluator_version,
+            dataset_version: &dataset_version,
             drafts,
-            memory
+            draft_attestations: memory
                 .review
                 .draft_attestations
                 .values()
                 .filter(|record| record.paper_project_id == paper_id)
                 .cloned()
                 .collect(),
-            memory
+            evaluations: memory
                 .review
                 .evaluations
                 .values()
@@ -2489,7 +3016,7 @@ async fn get_paper_review_bundle(
                 .cloned()
                 .collect(),
             now,
-        )?));
+        })?));
     }
 
     let pool = state.pool.as_ref().expect("checked PostgreSQL pool");
@@ -2521,14 +3048,44 @@ async fn get_paper_review_bundle(
     )
     .await?;
     project_evaluation_draft_expirations(&mut drafts, &mut assignments, now)?;
-    if !is_author(&context, assertion.player_id)
-        && !has_review_assignment(paper_id, assertion.player_id, assignments.iter(), now)
+    if is_author(&context, assertion.player_id)
+        || !has_review_assignment(paper_id, assertion.player_id, assignments.iter(), now)
     {
         return Err(ApiError::forbidden(
             "review_bundle_access_denied",
-            "review bundle is limited to authors and assigned review actors",
+            "review bundle is limited to active independent review assignments; it never grants Author Room access",
         ));
     }
+    let manifest_row = sqlx::query(
+        "select record_json from hepta_artifact_manifests
+         where paper_project_id=$1 and manifest_hash=$2 for share",
+    )
+    .bind(paper_id)
+    .bind(
+        &submission
+            .paper_bundle
+            .release_candidate
+            .artifact_manifest_hash,
+    )
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(ApiError::database)?
+    .ok_or_else(|| {
+        ApiError::conflict(
+            "frozen_review_manifest_unavailable",
+            "the frozen release candidate does not resolve to one exact ArtifactManifest",
+        )
+    })?;
+    let artifact_manifest: ArtifactManifest = decode_record(
+        manifest_row.get("record_json"),
+        "frozen review artifact manifest",
+    )?;
+    let (evaluator_version, dataset_version) = challenge_object_hashes.ok_or_else(|| {
+        ApiError::conflict(
+            "frozen_evaluator_unavailable",
+            "the Paper challenge has no immutable evaluator manifest authority",
+        )
+    })?;
     let draft_attestations = load_review_records(
         &mut tx,
         "hepta_paper_evaluation_draft_attestations",
@@ -2543,28 +3100,214 @@ async fn get_paper_review_bundle(
         "paper evaluation",
     )
     .await?;
-    let response = make_paper_review_bundle(
+    let response = make_paper_review_bundle(PaperReviewBundleInput {
         submission,
-        assertion.player_id,
+        player_id: assertion.player_id,
         assignments,
+        artifact_manifest,
+        evaluator_version: &evaluator_version,
+        dataset_version: &dataset_version,
         drafts,
         draft_attestations,
         evaluations,
         now,
-    )?;
+    })?;
     tx.commit().await.map_err(ApiError::database)?;
     Ok(Json(response))
 }
 
-fn make_paper_review_bundle(
+fn exact_frozen_review_manifest<'a>(
+    manifests: impl Iterator<Item = &'a ArtifactManifest>,
+    submission: &JointPaperSubmission,
+) -> Result<ArtifactManifest, ApiError> {
+    let expected_hash = &submission
+        .paper_bundle
+        .release_candidate
+        .artifact_manifest_hash;
+    let matches = manifests
+        .filter(|manifest| {
+            manifest.paper_project_id == submission.paper_project_id
+                && manifest.manifest_hash == *expected_hash
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        return Err(ApiError::conflict(
+            "frozen_review_manifest_unavailable",
+            "the frozen release candidate must resolve to exactly one ArtifactManifest",
+        ));
+    }
+    Ok(matches[0].clone())
+}
+
+fn make_frozen_review_authority(
+    submission: &JointPaperSubmission,
+    assignment: &ReviewAssignment,
+    manifest: &ArtifactManifest,
+    evaluator_manifest_hash: &str,
+    dataset_manifest_hash: &str,
+    now: DateTime<Utc>,
+) -> Result<FrozenReviewAuthorityV1, ApiError> {
+    if assignment.paper_project_id != submission.paper_project_id
+        || assignment.submission_id != submission.submission_id
+        || !review_assignment_active(assignment, now)
+        || manifest.paper_project_id != submission.paper_project_id
+        || manifest.manifest_hash
+            != submission
+                .paper_bundle
+                .release_candidate
+                .artifact_manifest_hash
+    {
+        return Err(ApiError::forbidden(
+            "frozen_review_assignment_mismatch",
+            "the active assignment, submission, and immutable manifest do not share one exact scope",
+        ));
+    }
+    let location_by_path = manifest
+        .storage_locations
+        .iter()
+        .map(|location| (location.logical_path.as_str(), location))
+        .collect::<HashMap<_, _>>();
+    if location_by_path.len() != manifest.storage_locations.len()
+        || manifest.objects.len() != manifest.storage_locations.len()
+    {
+        return Err(ApiError::conflict(
+            "frozen_review_object_mapping_invalid",
+            "the frozen manifest does not have a one-to-one object/CAS mapping",
+        ));
+    }
+    let mut objects = Vec::with_capacity(manifest.objects.len());
+    for (index, object) in manifest.objects.iter().enumerate() {
+        let location = location_by_path
+            .get(object.logical_path.as_str())
+            .ok_or_else(|| {
+                ApiError::conflict(
+                    "frozen_review_object_mapping_invalid",
+                    "one frozen object has no exact CAS mapping",
+                )
+            })?;
+        let digest = format!("sha256:{}", object.sha256);
+        if location.sha256 != object.sha256
+            || location.uri != format!("cas://sha256/{}", object.sha256)
+            || !matches!(
+                location.acl,
+                ArtifactAcl::Reviewers | ArtifactAcl::PublicAfterRelease
+            )
+        {
+            return Err(ApiError::forbidden(
+                "frozen_review_object_not_disclosed",
+                "every frozen review object must have one reviewer-readable immutable CAS location",
+            ));
+        }
+        if !matches!(
+            object.role.as_str(),
+            "frozen_evaluator" | "evaluator_support" | "candidate" | "dataset" | "input"
+        ) {
+            // The release ArtifactManifest also contains human-readable paper, bibliography,
+            // evidence, and audit objects.  Those remain committed by artifact_manifest_hash but
+            // are not executable challenge-manifest members and must not enter the Bridge bundle.
+            continue;
+        }
+        objects.push(FrozenReviewObjectV1 {
+            object_key: format!("object-{index:04}"),
+            logical_path: object.logical_path.clone(),
+            role: object.role.clone(),
+            digest,
+            size_bytes: object.size,
+            media_type: object.media_type.clone(),
+            download_path: REVIEW_OBJECT_DOWNLOAD_PATH_V1.to_string(),
+        });
+    }
+    let trusted_evaluators = objects
+        .iter()
+        .filter(|object| object.role == "frozen_evaluator")
+        .count();
+    let trusted_datasets = objects
+        .iter()
+        .filter(|object| object.role == "dataset")
+        .count();
+    let candidates = objects
+        .iter()
+        .filter(|object| object.role == "candidate")
+        .count();
+    if trusted_evaluators == 0 || trusted_datasets == 0 || candidates != 1 {
+        return Err(ApiError::conflict(
+            "frozen_review_objects_unavailable",
+            "review resolution requires evaluator, dataset, and exactly one candidate members in the release ArtifactManifest",
+        ));
+    }
+    let kind = match assignment.slot {
+        ReviewAssignmentSlot::Evaluator => "evaluate",
+        ReviewAssignmentSlot::Reviewer1 | ReviewAssignmentSlot::Reviewer2 => "review",
+        ReviewAssignmentSlot::Reproducer => "reproduce",
+    };
+    let seed_bytes = assignment.assignment_id.as_bytes();
+    let seed = u64::from_be_bytes(
+        seed_bytes[..8]
+            .try_into()
+            .expect("UUID prefix is eight bytes"),
+    ) & 9_007_199_254_740_991;
+    let mut authority = FrozenReviewAuthorityV1 {
+        schema: FROZEN_REVIEW_AUTHORITY_V1.to_string(),
+        authority_hash: String::new(),
+        assignment_id: assignment.assignment_id,
+        paper_project_id: assignment.paper_project_id,
+        submission_id: assignment.submission_id,
+        review_round: assignment.review_round,
+        slot: assignment.slot.as_str().to_string(),
+        assignment_version: assignment.version,
+        expires_at: assignment
+            .expires_at
+            .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
+        release_candidate_hash: submission.release_candidate_hash.clone(),
+        paper_bundle_hash: submission.paper_bundle_hash.clone(),
+        artifact_manifest_hash: manifest.manifest_hash.clone(),
+        evaluator_manifest_hash: evaluator_manifest_hash.to_string(),
+        dataset_manifest_hash: dataset_manifest_hash.to_string(),
+        artifact_objects: objects,
+        execution_policy: FrozenReviewExecutionPolicyV1 {
+            schema: "hepta.paper_raid.review_execution_policy.v1".to_string(),
+            kind: kind.to_string(),
+            adapter: "python3-stdlib-v1".to_string(),
+            timeout_ms: 30_000,
+            seed,
+        },
+    };
+    authority.authority_hash = frozen_review_authority_hash(&authority)
+        .map_err(|error| ApiError::internal(format!("hash frozen review authority: {error}")))?;
+    verify_frozen_review_authority(&authority)
+        .map_err(|error| ApiError::internal(format!("verify frozen review authority: {error}")))?;
+    Ok(authority)
+}
+
+struct PaperReviewBundleInput<'a> {
     submission: JointPaperSubmission,
     player_id: Uuid,
-    mut assignments: Vec<ReviewAssignment>,
-    mut drafts: Vec<PaperEvaluationDraft>,
+    assignments: Vec<ReviewAssignment>,
+    artifact_manifest: ArtifactManifest,
+    evaluator_version: &'a str,
+    dataset_version: &'a str,
+    drafts: Vec<PaperEvaluationDraft>,
     draft_attestations: Vec<EvaluationDraftAttestation>,
     evaluations: Vec<PaperEvaluation>,
     now: DateTime<Utc>,
+}
+
+fn make_paper_review_bundle(
+    input: PaperReviewBundleInput<'_>,
 ) -> Result<PaperReviewBundleV1, ApiError> {
+    let PaperReviewBundleInput {
+        submission,
+        player_id,
+        mut assignments,
+        artifact_manifest,
+        evaluator_version,
+        dataset_version,
+        mut drafts,
+        draft_attestations,
+        evaluations,
+        now,
+    } = input;
     project_evaluation_draft_expirations(&mut drafts, &mut assignments, now)?;
     let mut my_assignments = assignments
         .iter()
@@ -2610,9 +3353,24 @@ fn make_paper_review_bundle(
                 evaluation.evaluation_id,
             )
         });
+    if my_assignments.len() != 1 {
+        return Err(ApiError::conflict(
+            "review_assignment_scope_ambiguous",
+            "one review bundle request must resolve to exactly one active assignment",
+        ));
+    }
+    let frozen_review_authority = make_frozen_review_authority(
+        &submission,
+        &my_assignments[0],
+        &artifact_manifest,
+        evaluator_version,
+        dataset_version,
+        now,
+    )?;
     Ok(PaperReviewBundleV1 {
         submission,
         my_assignments,
+        frozen_review_authority,
         evaluation_quorum,
         evaluation,
     })
@@ -2735,17 +3493,7 @@ fn normalize_string_set(field: &'static str, values: &[String]) -> Result<Vec<St
     Ok(result)
 }
 
-fn normalize_uuid_set(
-    field: &'static str,
-    values: &[Uuid],
-    maximum: usize,
-) -> Result<Vec<Uuid>, ApiError> {
-    if values.len() > maximum {
-        return Err(ApiError::bad_request(
-            "contribution_reference_limit",
-            format!("{field} exceeds the {maximum} item limit"),
-        ));
-    }
+fn normalize_uuid_set(field: &'static str, values: &[Uuid]) -> Result<Vec<Uuid>, ApiError> {
     let mut result = values.to_vec();
     result.sort();
     if result.windows(2).any(|pair| pair[0] == pair[1]) {
@@ -2757,7 +3505,29 @@ fn normalize_uuid_set(
     Ok(result)
 }
 
-fn contribution_ledger_hash(
+fn duplicate_contribution_reference_kind(entries: &[CreditContribution]) -> Option<&'static str> {
+    let mut artifacts = HashSet::new();
+    let mut reviews = HashSet::new();
+    for entry in entries {
+        if entry
+            .accepted_artifact_manifest_ids
+            .iter()
+            .any(|identifier| !artifacts.insert(*identifier))
+        {
+            return Some("artifact manifest");
+        }
+        if entry
+            .accepted_section_review_ids
+            .iter()
+            .any(|identifier| !reviews.insert(*identifier))
+        {
+            return Some("section review");
+        }
+    }
+    None
+}
+
+pub(super) fn contribution_ledger_hash(
     contribution_ledger_id: Uuid,
     paper_id: Uuid,
     entries: &[CreditContribution],
@@ -2771,6 +3541,104 @@ fn contribution_ledger_hash(
         }),
         "contribution ledger",
     )
+}
+
+fn validate_canonical_contribution_entries(entries: &[CreditContribution]) -> Result<(), ApiError> {
+    if !(3..=5).contains(&entries.len()) {
+        return Err(ApiError::internal(
+            "frozen contribution ledger must contain exactly 3-5 authors",
+        ));
+    }
+    let mut sorted = entries.to_vec();
+    sorted.sort_by_key(|entry| entry.player_id);
+    if sorted != entries
+        || sorted
+            .windows(2)
+            .any(|pair| pair[0].player_id == pair[1].player_id)
+    {
+        return Err(ApiError::internal(
+            "frozen contribution ledger author entries are not canonical and unique",
+        ));
+    }
+    if duplicate_contribution_reference_kind(entries).is_some() {
+        return Err(ApiError::internal(
+            "frozen contribution ledger credits one reference to multiple authors",
+        ));
+    }
+    for entry in entries {
+        let roles = normalize_string_set("credit_roles", &entry.credit_roles).map_err(|_| {
+            ApiError::internal("frozen contribution ledger credit roles are not canonical")
+        })?;
+        let artifacts = normalize_uuid_set(
+            "accepted_artifact_manifest_ids",
+            &entry.accepted_artifact_manifest_ids,
+        )
+        .map_err(|_| {
+            ApiError::internal("frozen contribution ledger artifact references are not canonical")
+        })?;
+        let reviews = normalize_uuid_set(
+            "accepted_section_review_ids",
+            &entry.accepted_section_review_ids,
+        )
+        .map_err(|_| {
+            ApiError::internal("frozen contribution ledger review references are not canonical")
+        })?;
+        if roles != entry.credit_roles
+            || artifacts != entry.accepted_artifact_manifest_ids
+            || reviews != entry.accepted_section_review_ids
+            || entry.contribution_points
+                != milestone_contribution_points(artifacts.len(), reviews.len())
+        {
+            return Err(ApiError::internal(
+                "frozen contribution ledger entry disagrees with canonical milestone semantics",
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_loaded_contribution_ledger(
+    ledger: ContributionLedger,
+    relational_id: Uuid,
+    relational_paper_id: Uuid,
+    relational_release_candidate_hash: &str,
+    relational_ledger_hash: &str,
+    relational_entries: &serde_json::Value,
+    relational_version: u64,
+    relational_created_at: DateTime<Utc>,
+) -> Result<ContributionLedger, ApiError> {
+    let encoded_entries = serde_json::to_value(&ledger.entries).map_err(|error| {
+        ApiError::internal(format!("encode frozen contribution entries: {error}"))
+    })?;
+    if ledger.schema != CONTRIBUTION_LEDGER_SCHEMA_V1
+        || ledger.contribution_ledger_id.is_nil()
+        || ledger.contribution_ledger_id != relational_id
+        || ledger.paper_project_id != relational_paper_id
+        || ledger.release_candidate_hash != relational_release_candidate_hash
+        || ledger.ledger_hash != relational_ledger_hash
+        || encoded_entries != *relational_entries
+        || ledger.version != relational_version
+        // PostgreSQL timestamptz has microsecond precision while the JSON
+        // envelope may retain additional chrono nanoseconds.
+        || ledger.created_at.timestamp_micros() != relational_created_at.timestamp_micros()
+    {
+        return Err(ApiError::internal(
+            "contribution ledger relational columns disagree with record_json",
+        ));
+    }
+    validate_canonical_contribution_entries(&ledger.entries)?;
+    let canonical_hash = contribution_ledger_hash(
+        ledger.contribution_ledger_id,
+        ledger.paper_project_id,
+        &ledger.entries,
+    )?;
+    if canonical_hash != relational_ledger_hash {
+        return Err(ApiError::internal(
+            "contribution ledger canonical hash disagrees with frozen relational authority",
+        ));
+    }
+    Ok(ledger)
 }
 
 fn milestone_contribution_points(artifact_count: usize, review_count: usize) -> u64 {
@@ -2832,12 +3700,10 @@ fn contribution_entry_skeletons(
         let artifacts = normalize_uuid_set(
             "accepted_artifact_manifest_ids",
             &input.accepted_artifact_manifest_ids,
-            256,
         )?;
         let reviews = normalize_uuid_set(
             "accepted_section_review_ids",
             &input.accepted_section_review_ids,
-            256,
         )?;
         // Contribution points are milestone-capped. Splitting one logical
         // artifact or review into many records must never mint more XP.
@@ -2851,108 +3717,355 @@ fn contribution_entry_skeletons(
         });
     }
     entries.sort_by_key(|entry| entry.player_id);
+    if let Some(kind) = duplicate_contribution_reference_kind(&entries) {
+        return Err(ApiError::bad_request(
+            "duplicate_contribution_reference",
+            format!("one {kind} identifier may be credited to only one author"),
+        ));
+    }
     Ok(entries)
 }
 
-fn validate_contribution_refs_memory(
-    memory: &PaperRaidMemory,
+fn authoritative_contribution_entries_from_records(
     paper_id: Uuid,
-    entries: &[CreditContribution],
-) -> Result<(), ApiError> {
-    for entry in entries {
-        for artifact_id in &entry.accepted_artifact_manifest_ids {
-            let same_paper = memory
-                .collaboration
-                .artifact_manifests
-                .get(artifact_id)
-                .is_some_and(|manifest| manifest.paper_project_id == paper_id);
-            let accepted = memory.collaboration.proposals.values().any(|proposal| {
-                proposal.paper_project_id == paper_id
-                    && proposal.artifact_manifest_id == *artifact_id
-                    && proposal.status == AgentProposalStatus::Accepted
-                    && memory.collaboration.decisions.values().any(|decision| {
-                        decision.proposal_id == proposal.proposal_id
-                            && decision.player_id == entry.player_id
-                            && decision.decision == HumanDecisionKind::Accept
-                    })
-            });
-            if !same_paper || !accepted {
-                return Err(ApiError::conflict(
-                    "artifact_not_accepted_by_contributor",
-                    "artifact must be same-paper and accepted by the credited player",
-                ));
-            }
-        }
-        for review_id in &entry.accepted_section_review_ids {
-            if memory
-                .collaboration
-                .section_reviews
-                .get(review_id)
-                .is_none_or(|review| {
-                    review.paper_project_id != paper_id
-                        || review.reviewer_player_id != entry.player_id
-                        || review.verdict != SectionReviewVerdict::Approve
-                })
-            {
-                return Err(ApiError::conflict(
-                    "review_not_accepted_contribution",
-                    "review must be an approving same-paper review by the credited player",
-                ));
-            }
+    authors: &[crate::paper_raid_contracts::PaperReleaseAuthorV2],
+    artifact_manifests: &[ArtifactManifest],
+    proposals: &[AgentProposal],
+    decisions: &[HumanDecision],
+    section_reviews: &[SectionReview],
+) -> Result<Vec<CreditContribution>, ApiError> {
+    if !(3..=5).contains(&authors.len()) {
+        return Err(ApiError::conflict(
+            "release_author_roster_mismatch",
+            "authoritative contribution derivation requires the frozen 3-5 author roster",
+        ));
+    }
+
+    let mut entries = HashMap::new();
+    for author in authors {
+        let roles = normalize_string_set("release_credit_roles", &author.credit_roles)?;
+        if entries
+            .insert(
+                author.player_id,
+                CreditContribution {
+                    player_id: author.player_id,
+                    credit_roles: roles,
+                    accepted_artifact_manifest_ids: Vec::new(),
+                    accepted_section_review_ids: Vec::new(),
+                    contribution_points: 0,
+                },
+            )
+            .is_some()
+        {
+            return Err(ApiError::conflict(
+                "release_author_roster_mismatch",
+                "frozen release candidate contains a duplicate author",
+            ));
         }
     }
-    Ok(())
+
+    let mut manifest_ids = HashSet::new();
+    for manifest in artifact_manifests {
+        if manifest.paper_project_id != paper_id || !manifest_ids.insert(manifest.manifest_id) {
+            return Err(ApiError::internal(
+                "authoritative contribution manifest set is cross-paper or duplicated",
+            ));
+        }
+    }
+
+    let mut proposal_ids = HashSet::new();
+    for proposal in proposals {
+        if proposal.paper_project_id != paper_id || !proposal_ids.insert(proposal.proposal_id) {
+            return Err(ApiError::internal(
+                "authoritative contribution proposal set is cross-paper or duplicated",
+            ));
+        }
+    }
+    let mut decisions_by_proposal: HashMap<Uuid, Vec<&HumanDecision>> = HashMap::new();
+    let mut decision_ids = HashSet::new();
+    for decision in decisions {
+        if decision.paper_project_id != paper_id || !decision_ids.insert(decision.decision_id) {
+            return Err(ApiError::internal(
+                "authoritative contribution decision set is cross-paper or duplicated",
+            ));
+        }
+        if !proposal_ids.contains(&decision.proposal_id) {
+            return Err(ApiError::internal(
+                "authoritative contribution decision references an unknown proposal",
+            ));
+        }
+        decisions_by_proposal
+            .entry(decision.proposal_id)
+            .or_default()
+            .push(decision);
+    }
+
+    let mut credited_manifest_ids = HashSet::new();
+    for proposal in proposals {
+        if proposal.status != AgentProposalStatus::Accepted {
+            continue;
+        }
+        if !manifest_ids.contains(&proposal.artifact_manifest_id) {
+            return Err(ApiError::internal(
+                "accepted Agent proposal references a missing same-paper artifact manifest",
+            ));
+        }
+        let accepted_by = match decisions_by_proposal
+            .get(&proposal.proposal_id)
+            .map(Vec::as_slice)
+        {
+            Some([decision]) if decision.decision == HumanDecisionKind::Accept => {
+                decision.player_id
+            }
+            _ => {
+                return Err(ApiError::internal(
+                    "accepted Agent proposal must have exactly one matching human acceptance",
+                ));
+            }
+        };
+        if !credited_manifest_ids.insert(proposal.artifact_manifest_id) {
+            return Err(ApiError::conflict(
+                "artifact_contribution_duplicated",
+                "one accepted artifact manifest can be credited to only one author globally",
+            ));
+        }
+        entries
+            .get_mut(&accepted_by)
+            .ok_or_else(|| {
+                ApiError::internal(
+                    "accepted Agent proposal was decided by a player outside the frozen author roster",
+                )
+            })?
+            .accepted_artifact_manifest_ids
+            .push(proposal.artifact_manifest_id);
+    }
+
+    let mut review_ids = HashSet::new();
+    for review in section_reviews {
+        if review.paper_project_id != paper_id || !review_ids.insert(review.review_id) {
+            return Err(ApiError::internal(
+                "authoritative contribution review set is cross-paper or duplicated",
+            ));
+        }
+        if review.verdict != SectionReviewVerdict::Approve {
+            continue;
+        }
+        entries
+            .get_mut(&review.reviewer_player_id)
+            .ok_or_else(|| {
+                ApiError::internal(
+                    "approving section review belongs to a player outside the frozen author roster",
+                )
+            })?
+            .accepted_section_review_ids
+            .push(review.review_id);
+    }
+
+    let mut result = entries.into_values().collect::<Vec<_>>();
+    for entry in &mut result {
+        entry.accepted_artifact_manifest_ids.sort();
+        entry.accepted_artifact_manifest_ids.dedup();
+        entry.accepted_section_review_ids.sort();
+        entry.accepted_section_review_ids.dedup();
+        entry.contribution_points = milestone_contribution_points(
+            entry.accepted_artifact_manifest_ids.len(),
+            entry.accepted_section_review_ids.len(),
+        );
+    }
+    result.sort_by_key(|entry| entry.player_id);
+    Ok(result)
 }
 
-async fn validate_contribution_refs_postgres(
+pub(super) fn authoritative_contribution_entries_memory(
+    memory: &PaperRaidMemory,
+    paper_id: Uuid,
+    authors: &[crate::paper_raid_contracts::PaperReleaseAuthorV2],
+) -> Result<Vec<CreditContribution>, ApiError> {
+    let artifact_manifests = memory
+        .collaboration
+        .artifact_manifests
+        .values()
+        .filter(|manifest| manifest.paper_project_id == paper_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    let proposals = memory
+        .collaboration
+        .proposals
+        .values()
+        .filter(|proposal| proposal.paper_project_id == paper_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    let decisions = memory
+        .collaboration
+        .decisions
+        .values()
+        .filter(|decision| decision.paper_project_id == paper_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    let section_reviews = memory
+        .collaboration
+        .section_reviews
+        .values()
+        .filter(|review| review.paper_project_id == paper_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    authoritative_contribution_entries_from_records(
+        paper_id,
+        authors,
+        &artifact_manifests,
+        &proposals,
+        &decisions,
+        &section_reviews,
+    )
+}
+
+pub(super) async fn authoritative_contribution_entries_postgres(
     tx: &mut Transaction<'_, Postgres>,
     paper_id: Uuid,
-    entries: &[CreditContribution],
+    authors: &[crate::paper_raid_contracts::PaperReleaseAuthorV2],
+) -> Result<Vec<CreditContribution>, ApiError> {
+    let artifact_rows = sqlx::query(
+        "select manifest_id,paper_project_id,manifest_hash,version,record_json
+         from hepta_artifact_manifests where paper_project_id=$1 for share",
+    )
+    .bind(paper_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(ApiError::database)?;
+    let mut artifact_manifests = Vec::with_capacity(artifact_rows.len());
+    for row in artifact_rows {
+        let manifest: ArtifactManifest =
+            decode_record(row.get("record_json"), "artifact manifest")?;
+        let version = u64::try_from(row.get::<i64, _>("version"))
+            .map_err(|_| ApiError::internal("artifact manifest version is negative"))?;
+        if manifest.manifest_id != row.get::<Uuid, _>("manifest_id")
+            || manifest.paper_project_id != row.get::<Uuid, _>("paper_project_id")
+            || manifest.manifest_hash != row.get::<String, _>("manifest_hash")
+            || manifest.version != version
+        {
+            return Err(ApiError::internal(
+                "artifact manifest relational columns disagree with record_json",
+            ));
+        }
+        artifact_manifests.push(manifest);
+    }
+
+    let proposal_rows = sqlx::query(
+        "select proposal_id,paper_project_id,artifact_manifest_id,status,version,record_json
+         from hepta_agent_proposals where paper_project_id=$1 for share",
+    )
+    .bind(paper_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(ApiError::database)?;
+    let mut proposals = Vec::with_capacity(proposal_rows.len());
+    for row in proposal_rows {
+        let proposal: AgentProposal = decode_record(row.get("record_json"), "Agent proposal")?;
+        let version = u64::try_from(row.get::<i64, _>("version"))
+            .map_err(|_| ApiError::internal("Agent proposal version is negative"))?;
+        let status = row.get::<String, _>("status");
+        let expected_status = match &proposal.status {
+            AgentProposalStatus::Submitted => "submitted",
+            AgentProposalStatus::Accepted => "accepted",
+            AgentProposalStatus::Rework => "rework",
+            AgentProposalStatus::Rejected => "rejected",
+            AgentProposalStatus::Superseded => "superseded",
+        };
+        if proposal.proposal_id != row.get::<Uuid, _>("proposal_id")
+            || proposal.paper_project_id != row.get::<Uuid, _>("paper_project_id")
+            || proposal.artifact_manifest_id != row.get::<Uuid, _>("artifact_manifest_id")
+            || expected_status != status
+            || proposal.version != version
+        {
+            return Err(ApiError::internal(
+                "Agent proposal relational columns disagree with record_json",
+            ));
+        }
+        proposals.push(proposal);
+    }
+
+    let decision_rows = sqlx::query(
+        "select decision_id,paper_project_id,proposal_id,player_id,decision,version,record_json
+         from hepta_human_decisions where paper_project_id=$1 for share",
+    )
+    .bind(paper_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(ApiError::database)?;
+    let mut decisions = Vec::with_capacity(decision_rows.len());
+    for row in decision_rows {
+        let decision: HumanDecision = decode_record(row.get("record_json"), "human decision")?;
+        let version = u64::try_from(row.get::<i64, _>("version"))
+            .map_err(|_| ApiError::internal("human decision version is negative"))?;
+        let contract_decision = match &decision.decision {
+            HumanDecisionKind::Accept => "accept",
+            HumanDecisionKind::Rework => "rework",
+            HumanDecisionKind::Reject => "reject",
+        };
+        if decision.decision_id != row.get::<Uuid, _>("decision_id")
+            || decision.paper_project_id != row.get::<Uuid, _>("paper_project_id")
+            || decision.proposal_id != row.get::<Uuid, _>("proposal_id")
+            || decision.player_id != row.get::<Uuid, _>("player_id")
+            || contract_decision != row.get::<String, _>("decision")
+            || decision.version != version
+        {
+            return Err(ApiError::internal(
+                "human decision relational columns disagree with record_json",
+            ));
+        }
+        decisions.push(decision);
+    }
+
+    let review_rows = sqlx::query(
+        "select review_id,paper_project_id,reviewer_player_id,verdict,version,record_json
+         from hepta_section_reviews where paper_project_id=$1 for share",
+    )
+    .bind(paper_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(ApiError::database)?;
+    let mut section_reviews = Vec::with_capacity(review_rows.len());
+    for row in review_rows {
+        let review: SectionReview = decode_record(row.get("record_json"), "section review")?;
+        let version = u64::try_from(row.get::<i64, _>("version"))
+            .map_err(|_| ApiError::internal("section review version is negative"))?;
+        let verdict = match &review.verdict {
+            SectionReviewVerdict::Approve => "approve",
+            SectionReviewVerdict::Rework => "rework",
+            SectionReviewVerdict::Reject => "reject",
+        };
+        if review.review_id != row.get::<Uuid, _>("review_id")
+            || review.paper_project_id != row.get::<Uuid, _>("paper_project_id")
+            || review.reviewer_player_id != row.get::<Uuid, _>("reviewer_player_id")
+            || verdict != row.get::<String, _>("verdict")
+            || review.version != version
+        {
+            return Err(ApiError::internal(
+                "section review relational columns disagree with record_json",
+            ));
+        }
+        section_reviews.push(review);
+    }
+
+    authoritative_contribution_entries_from_records(
+        paper_id,
+        authors,
+        &artifact_manifests,
+        &proposals,
+        &decisions,
+        &section_reviews,
+    )
+}
+
+fn require_complete_authoritative_contribution_entries(
+    submitted: &[CreditContribution],
+    authoritative: &[CreditContribution],
 ) -> Result<(), ApiError> {
-    for entry in entries {
-        for artifact_id in &entry.accepted_artifact_manifest_ids {
-            let accepted = sqlx::query_scalar::<_, bool>(
-                "select exists(
-                    select 1 from hepta_artifact_manifests m
-                    join hepta_agent_proposals p on p.artifact_manifest_id=m.manifest_id
-                      and p.paper_project_id=m.paper_project_id and p.status='accepted'
-                    join hepta_human_decisions d on d.proposal_id=p.proposal_id
-                      and d.paper_project_id=p.paper_project_id and d.decision='accept'
-                    where m.manifest_id=$1 and m.paper_project_id=$2 and d.player_id=$3
-                 )",
-            )
-            .bind(artifact_id)
-            .bind(paper_id)
-            .bind(entry.player_id)
-            .fetch_one(&mut **tx)
-            .await
-            .map_err(ApiError::database)?;
-            if !accepted {
-                return Err(ApiError::conflict(
-                    "artifact_not_accepted_by_contributor",
-                    "artifact must be same-paper and accepted by the credited player",
-                ));
-            }
-        }
-        for review_id in &entry.accepted_section_review_ids {
-            let accepted = sqlx::query_scalar::<_, bool>(
-                "select exists(select 1 from hepta_section_reviews
-                   where review_id=$1 and paper_project_id=$2
-                     and reviewer_player_id=$3 and verdict='approve')",
-            )
-            .bind(review_id)
-            .bind(paper_id)
-            .bind(entry.player_id)
-            .fetch_one(&mut **tx)
-            .await
-            .map_err(ApiError::database)?;
-            if !accepted {
-                return Err(ApiError::conflict(
-                    "review_not_accepted_contribution",
-                    "review must be an approving same-paper review by the credited player",
-                ));
-            }
-        }
+    if submitted != authoritative {
+        return Err(ApiError::conflict(
+            "contribution_ledger_entries_mismatch",
+            "submitted contribution entries must exactly equal the complete authoritative milestone set",
+        ));
     }
     Ok(())
 }
@@ -2965,6 +4078,7 @@ async fn create_contribution_ledger(
 ) -> Result<(StatusCode, Json<ContributionLedger>), ApiError> {
     const OPERATION: &str = "create_contribution_ledger_v1";
     validate_idempotency_key(&request.idempotency_key)?;
+    validate_contribution_ledger_id(request.contribution_ledger_id)?;
     validate_digest("release_candidate_hash", &request.release_candidate_hash)?;
     let body_hash = request_hash(&request)?;
     let path = format!("/v2/hepta/papers/{paper_id}/contribution-ledgers");
@@ -2977,7 +4091,6 @@ async fn create_contribution_ledger(
         &request.idempotency_key,
         &body_hash,
     )?;
-    let now = Utc::now();
 
     if state.pool.is_none() {
         let mut memory = state.paper_raid.write().await;
@@ -2990,6 +4103,12 @@ async fn create_contribution_ledger(
         let context = review_context_memory(&next, paper_id)?;
         assert_team_actor_memory(&next, &context.team, &assertion)?;
         validate_contribution_context(&context, &request)?;
+        require_contribution_ledger_reservation_memory(
+            &next,
+            request.contribution_ledger_id,
+            paper_id,
+            &request.release_candidate_hash,
+        )?;
         if next
             .review
             .contribution_ledgers
@@ -3002,8 +4121,13 @@ async fn create_contribution_ledger(
             ));
         }
         let entries = contribution_entry_skeletons(&context, &request.entries)?;
-        validate_contribution_refs_memory(&next, paper_id, &entries)?;
-        let ledger = make_contribution_ledger(&context, &request, entries, now)?;
+        let authoritative = authoritative_contribution_entries_memory(
+            &next,
+            paper_id,
+            &context.release_candidate.authors,
+        )?;
+        require_complete_authoritative_contribution_entries(&entries, &authoritative)?;
+        let ledger = make_contribution_ledger(&context, &request, authoritative, Utc::now())?;
         if next
             .review
             .contribution_ledgers
@@ -3045,24 +4169,42 @@ async fn create_contribution_ledger(
     let context = review_context_postgres(&mut tx, paper_id).await?;
     assert_team_actor_postgres(&mut tx, context.team.team_id, &assertion).await?;
     validate_contribution_context(&context, &request)?;
+    require_contribution_ledger_reservation_postgres(
+        &mut tx,
+        request.contribution_ledger_id,
+        paper_id,
+        &request.release_candidate_hash,
+    )
+    .await?;
     let entries = contribution_entry_skeletons(&context, &request.entries)?;
-    validate_contribution_refs_postgres(&mut tx, paper_id, &entries).await?;
-    let ledger = make_contribution_ledger(&context, &request, entries, now)?;
+    let authoritative = authoritative_contribution_entries_postgres(
+        &mut tx,
+        paper_id,
+        &context.release_candidate.authors,
+    )
+    .await?;
+    require_complete_authoritative_contribution_entries(&entries, &authoritative)?;
+    let storage_now = postgres_contribution_ledger_now(&mut tx).await?;
+    let ledger = make_contribution_ledger(&context, &request, authoritative, storage_now)?;
     let result = sqlx::query(
         "insert into hepta_paper_contribution_ledgers
          (contribution_ledger_id,paper_project_id,release_candidate_hash,ledger_hash,
-          version,record_json,created_at)
-         values ($1,$2,$3,$4,1,$5::jsonb,$6)",
+          version,entries_json,record_json,created_at)
+         values ($1,$2,$3,$4,1,$5::jsonb,$6::jsonb,$7)",
     )
     .bind(ledger.contribution_ledger_id)
     .bind(paper_id)
     .bind(&ledger.release_candidate_hash)
     .bind(&ledger.ledger_hash)
     .bind(
+        serde_json::to_value(&ledger.entries)
+            .map_err(|error| ApiError::internal(format!("encode contribution entries: {error}")))?,
+    )
+    .bind(
         serde_json::to_value(&ledger)
             .map_err(|error| ApiError::internal(format!("encode contribution ledger: {error}")))?,
     )
-    .bind(now)
+    .bind(ledger.created_at)
     .execute(&mut *tx)
     .await;
     if let Err(error) = result {
@@ -3211,7 +4353,7 @@ fn load_contribution_ledger_memory(
     paper_id: Uuid,
     release_candidate_hash: &str,
 ) -> Result<ContributionLedger, ApiError> {
-    memory
+    let ledger = memory
         .review
         .contribution_ledgers
         .values()
@@ -3225,7 +4367,25 @@ fn load_contribution_ledger_memory(
                 "contribution_ledger_required",
                 "evaluation requires the frozen contribution ledger",
             )
-        })
+        })?;
+    require_contribution_ledger_reservation_memory(
+        memory,
+        ledger.contribution_ledger_id,
+        ledger.paper_project_id,
+        &ledger.release_candidate_hash,
+    )?;
+    let entries = serde_json::to_value(&ledger.entries)
+        .map_err(|error| ApiError::internal(format!("encode contribution entries: {error}")))?;
+    validate_loaded_contribution_ledger(
+        ledger.clone(),
+        ledger.contribution_ledger_id,
+        ledger.paper_project_id,
+        &ledger.release_candidate_hash,
+        &ledger.ledger_hash,
+        &entries,
+        ledger.version,
+        ledger.created_at,
+    )
 }
 
 async fn load_contribution_ledger_postgres(
@@ -3234,7 +4394,9 @@ async fn load_contribution_ledger_postgres(
     release_candidate_hash: &str,
 ) -> Result<ContributionLedger, ApiError> {
     let row = sqlx::query(
-        "select record_json from hepta_paper_contribution_ledgers
+        "select contribution_ledger_id,paper_project_id,release_candidate_hash,ledger_hash,
+                entries_json,version,created_at,record_json
+         from hepta_paper_contribution_ledgers
          where paper_project_id=$1 and release_candidate_hash=$2 for share",
     )
     .bind(paper_id)
@@ -3248,7 +4410,29 @@ async fn load_contribution_ledger_postgres(
             "evaluation requires the frozen contribution ledger",
         )
     })?;
-    decode_record(row.get("record_json"), "contribution ledger")
+    let ledger: ContributionLedger = decode_record(row.get("record_json"), "contribution ledger")?;
+    let contribution_ledger_id: Uuid = row.get("contribution_ledger_id");
+    let relational_paper_id: Uuid = row.get("paper_project_id");
+    let relational_release_hash: String = row.get("release_candidate_hash");
+    require_contribution_ledger_reservation_postgres(
+        tx,
+        contribution_ledger_id,
+        relational_paper_id,
+        &relational_release_hash,
+    )
+    .await?;
+    let version = u64::try_from(row.get::<i64, _>("version"))
+        .map_err(|_| ApiError::internal("contribution ledger version is negative"))?;
+    validate_loaded_contribution_ledger(
+        ledger,
+        contribution_ledger_id,
+        relational_paper_id,
+        &relational_release_hash,
+        &row.get::<String, _>("ledger_hash"),
+        &row.get::<serde_json::Value, _>("entries_json"),
+        version,
+        row.get("created_at"),
+    )
 }
 
 fn draft_request_as_evaluation_request(
@@ -4077,11 +5261,11 @@ fn exact_active_assignment<'a>(
     review_round: u64,
     player_id: Uuid,
     slot: ReviewAssignmentSlot,
-    assignments: impl Iterator<Item = &'a ReviewAssignment>,
+    mut assignments: impl Iterator<Item = &'a ReviewAssignment>,
     now: DateTime<Utc>,
 ) -> Result<&'a ReviewAssignment, ApiError> {
     assignments
-        .filter(|assignment| {
+        .find(|assignment| {
             assignment.paper_project_id == paper_id
                 && assignment.submission_id == submission_id
                 && assignment.review_round == review_round
@@ -4089,7 +5273,6 @@ fn exact_active_assignment<'a>(
                 && assignment.slot == slot
                 && review_assignment_active(assignment, now)
         })
-        .next()
         .ok_or_else(|| {
             ApiError::forbidden(
                 "evaluation_draft_assignment_mismatch",
@@ -4769,6 +5952,16 @@ async fn submit_evaluation_draft_attestation(
                 "review attestation must bind the exact immutable draft hash",
             ));
         }
+        if next.review.draft_attestations.values().any(|record| {
+            record.evaluation_id == evaluation_id
+                && (record.attestation.reviewer_player_id == request.reviewer_player_id
+                    || record.attestation_id == request.attestation_id)
+        }) {
+            return Err(ApiError::conflict(
+                "evaluation_draft_attestation_exists",
+                "reviewer slot, reviewer, or attestation identity is already immutable",
+            ));
+        }
         let (assignment_id, slot) = {
             let assignment = active_reviewer_assignment(
                 &draft,
@@ -4865,6 +6058,25 @@ async fn submit_evaluation_draft_attestation(
         return Err(ApiError::conflict(
             "evaluation_draft_hash_mismatch",
             "review attestation must bind the exact immutable draft hash",
+        ));
+    }
+    let immutable_conflict = sqlx::query_scalar::<_, bool>(
+        "select exists(
+           select 1 from hepta_paper_evaluation_draft_attestations
+           where evaluation_id=$1
+             and (reviewer_player_id=$2 or attestation_id=$3)
+         )",
+    )
+    .bind(evaluation_id)
+    .bind(request.reviewer_player_id)
+    .bind(request.attestation_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(ApiError::database)?;
+    if immutable_conflict {
+        return Err(ApiError::conflict(
+            "evaluation_draft_attestation_exists",
+            "reviewer slot, reviewer, or attestation identity is already immutable",
         ));
     }
     let assignments = load_review_assignments_postgres(&mut tx, paper_id).await?;
@@ -6233,6 +7445,20 @@ async fn create_paper_reproduction(
             .ok_or_else(|| {
                 ApiError::not_found("paper_evaluation_not_found", "evaluation does not exist")
             })?;
+        let evaluations = next
+            .review
+            .evaluations
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let appeals = next.review.appeals.values().cloned().collect::<Vec<_>>();
+        let resolutions = next
+            .review
+            .resolutions
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        ensure_evaluation_activated(&evaluation, &evaluations, &appeals, &resolutions)?;
         let version = reproduction_version_memory(&next, evaluation_id, &request)?;
         let (report, frame) = prepare_reproduction(&context, &evaluation, &request, version, now)?;
         enforce_reproducer_assignment(
@@ -6313,6 +7539,23 @@ async fn create_paper_reproduction(
         ApiError::not_found("paper_evaluation_not_found", "evaluation does not exist")
     })?;
     let evaluation: PaperEvaluation = decode_record(row.get("record_json"), "paper evaluation")?;
+    let evaluations: Vec<PaperEvaluation> = load_review_records(
+        &mut tx,
+        "hepta_paper_evaluations",
+        paper_id,
+        "paper evaluation",
+    )
+    .await?;
+    let appeals: Vec<PaperAppeal> =
+        load_review_records(&mut tx, "hepta_paper_appeals", paper_id, "paper Appeal").await?;
+    let resolutions: Vec<PaperAppealResolution> = load_review_records(
+        &mut tx,
+        "hepta_paper_appeal_resolutions",
+        paper_id,
+        "Appeal resolution",
+    )
+    .await?;
+    ensure_evaluation_activated(&evaluation, &evaluations, &appeals, &resolutions)?;
     let version = reproduction_version_postgres(&mut tx, evaluation_id, &request).await?;
     let (report, frame) = prepare_reproduction(&context, &evaluation, &request, version, now)?;
     let assignments = load_review_assignments_postgres(&mut tx, paper_id).await?;
@@ -6528,6 +7771,20 @@ async fn create_paper_appeal(
             .ok_or_else(|| {
                 ApiError::not_found("paper_evaluation_not_found", "evaluation does not exist")
             })?;
+        let evaluations = next
+            .review
+            .evaluations
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let appeals = next.review.appeals.values().cloned().collect::<Vec<_>>();
+        let resolutions = next
+            .review
+            .resolutions
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        ensure_evaluation_activated(&evaluation, &evaluations, &appeals, &resolutions)?;
         if next
             .review
             .appeals
@@ -6610,6 +7867,23 @@ async fn create_paper_appeal(
         ApiError::not_found("paper_evaluation_not_found", "evaluation does not exist")
     })?;
     let evaluation: PaperEvaluation = decode_record(row.get("record_json"), "paper evaluation")?;
+    let evaluations: Vec<PaperEvaluation> = load_review_records(
+        &mut tx,
+        "hepta_paper_evaluations",
+        paper_id,
+        "paper evaluation",
+    )
+    .await?;
+    let appeals: Vec<PaperAppeal> =
+        load_review_records(&mut tx, "hepta_paper_appeals", paper_id, "paper Appeal").await?;
+    let resolutions: Vec<PaperAppealResolution> = load_review_records(
+        &mut tx,
+        "hepta_paper_appeal_resolutions",
+        paper_id,
+        "Appeal resolution",
+    )
+    .await?;
+    ensure_evaluation_activated(&evaluation, &evaluations, &appeals, &resolutions)?;
     let (appeal, frame) = prepare_appeal(&context, &evaluation, &request, now)?;
     let (player, key) = active_player_key_postgres(
         &mut tx,
@@ -6686,6 +7960,64 @@ async fn create_paper_appeal(
     Ok((StatusCode::CREATED, Json(appeal)))
 }
 
+fn prepared_replacement_for_resolution<'a>(
+    evaluation: &PaperEvaluation,
+    evaluations: impl Iterator<Item = &'a PaperEvaluation>,
+) -> Result<Option<&'a PaperEvaluation>, ApiError> {
+    let mut prepared = evaluations.filter(|candidate| {
+        candidate.paper_project_id == evaluation.paper_project_id
+            && candidate.submission_id == evaluation.submission_id
+            && candidate.supersedes_evaluation_id == Some(evaluation.evaluation_id)
+    });
+    let replacement = prepared.next();
+    if prepared.next().is_some() {
+        return Err(ApiError::conflict(
+            "superseding_evaluation_ambiguous",
+            "Appeal resolution requires at most one exact prepared replacement evaluation",
+        ));
+    }
+    Ok(replacement)
+}
+
+fn validate_resolution_replacement(
+    evaluation: &PaperEvaluation,
+    superseding: Option<&PaperEvaluation>,
+    outcome: AppealOutcome,
+    requested_superseding_evaluation_id: Option<Uuid>,
+) -> Result<(), ApiError> {
+    match outcome {
+        AppealOutcome::Upheld => {
+            let replacement = superseding.ok_or_else(|| {
+                ApiError::conflict(
+                    "superseding_evaluation_required",
+                    "upheld Appeal requires the immutable superseding evaluation",
+                )
+            })?;
+            if requested_superseding_evaluation_id != Some(replacement.evaluation_id)
+                || replacement.supersedes_evaluation_id != Some(evaluation.evaluation_id)
+                || replacement.paper_project_id != evaluation.paper_project_id
+                || replacement.submission_id != evaluation.submission_id
+                || replacement.release_candidate_hash != evaluation.release_candidate_hash
+                || replacement.paper_bundle_hash != evaluation.paper_bundle_hash
+            {
+                return Err(ApiError::conflict(
+                    "invalid_superseding_evaluation",
+                    "upheld Appeal must reference the exact same-release prepared replacement evaluation",
+                ));
+            }
+        }
+        AppealOutcome::Denied => {
+            if requested_superseding_evaluation_id.is_some() || superseding.is_some() {
+                return Err(ApiError::conflict(
+                    "denied_appeal_cannot_supersede",
+                    "denied Appeal must not omit or reference an already prepared replacement evaluation",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn prepare_resolution(
     context: &ReviewPaperContext,
     appeal: &PaperAppeal,
@@ -6714,35 +8046,12 @@ fn prepare_resolution(
             "resolver must be distinct from authors, appellant, evaluator, and reviewers",
         ));
     }
-    match request.outcome {
-        AppealOutcome::Upheld => {
-            let replacement = superseding.ok_or_else(|| {
-                ApiError::conflict(
-                    "superseding_evaluation_required",
-                    "upheld Appeal requires the immutable superseding evaluation",
-                )
-            })?;
-            if request.superseding_evaluation_id != Some(replacement.evaluation_id)
-                || replacement.supersedes_evaluation_id != Some(evaluation.evaluation_id)
-                || replacement.paper_project_id != evaluation.paper_project_id
-                || replacement.release_candidate_hash != evaluation.release_candidate_hash
-                || replacement.paper_bundle_hash != evaluation.paper_bundle_hash
-            {
-                return Err(ApiError::conflict(
-                    "invalid_superseding_evaluation",
-                    "upheld Appeal must reference the exact same-release superseding evaluation",
-                ));
-            }
-        }
-        AppealOutcome::Denied => {
-            if request.superseding_evaluation_id.is_some() || superseding.is_some() {
-                return Err(ApiError::conflict(
-                    "denied_appeal_cannot_supersede",
-                    "denied Appeal must not reference a superseding evaluation",
-                ));
-            }
-        }
-    }
+    validate_resolution_replacement(
+        evaluation,
+        superseding,
+        request.outcome.clone(),
+        request.superseding_evaluation_id,
+    )?;
     let signing = PaperAppealResolutionSigningV1 {
         schema: PAPER_APPEAL_RESOLUTION_V1.to_string(),
         resolution_id: request.resolution_id,
@@ -6850,9 +8159,28 @@ async fn resolve_paper_appeal(
             .get(&appeal.evaluation_id)
             .cloned()
             .ok_or_else(|| ApiError::internal("appealed evaluation record is missing"))?;
-        let superseding = request
-            .superseding_evaluation_id
-            .and_then(|id| next.review.evaluations.get(&id));
+        let superseding =
+            prepared_replacement_for_resolution(&evaluation, next.review.evaluations.values())?;
+        let evaluations = next
+            .review
+            .evaluations
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let appeals = next.review.appeals.values().cloned().collect::<Vec<_>>();
+        let resolutions = next
+            .review
+            .resolutions
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        ensure_appealed_evaluation_activated_for_resolution(
+            &evaluation,
+            superseding,
+            &evaluations,
+            &appeals,
+            &resolutions,
+        )?;
         let (resolution, frame) =
             prepare_resolution(&context, &appeal, &evaluation, superseding, &request, now)?;
         let (player, key) = active_player_key_memory(
@@ -6932,35 +8260,48 @@ async fn resolve_paper_appeal(
     .map_err(ApiError::database)?;
     let evaluation: PaperEvaluation =
         decode_record(eval_row.get("record_json"), "paper evaluation")?;
-    let superseding = if let Some(id) = request.superseding_evaluation_id {
-        let row = sqlx::query(
-            "select record_json from hepta_paper_evaluations where evaluation_id=$1 for share",
-        )
-        .bind(id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(ApiError::database)?
-        .ok_or_else(|| {
-            ApiError::not_found(
-                "superseding_evaluation_not_found",
-                "superseding evaluation does not exist",
-            )
-        })?;
-        Some(decode_record::<PaperEvaluation>(
-            row.get("record_json"),
-            "superseding evaluation",
-        )?)
-    } else {
-        None
-    };
-    let (resolution, frame) = prepare_resolution(
-        &context,
-        &appeal,
+    let evaluations: Vec<PaperEvaluation> = load_review_records(
+        &mut tx,
+        "hepta_paper_evaluations",
+        paper_id,
+        "paper evaluation",
+    )
+    .await?;
+    let appeals: Vec<PaperAppeal> =
+        load_review_records(&mut tx, "hepta_paper_appeals", paper_id, "paper Appeal").await?;
+    let resolutions: Vec<PaperAppealResolution> = load_review_records(
+        &mut tx,
+        "hepta_paper_appeal_resolutions",
+        paper_id,
+        "Appeal resolution",
+    )
+    .await?;
+    let superseding_rows = sqlx::query(
+        "select record_json from hepta_paper_evaluations
+         where paper_project_id=$1 and supersedes_evaluation_id=$2
+         order by evaluation_id for share",
+    )
+    .bind(paper_id)
+    .bind(evaluation.evaluation_id)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(ApiError::database)?;
+    let superseding_records = superseding_rows
+        .iter()
+        .map(|row| {
+            decode_record::<PaperEvaluation>(row.get("record_json"), "superseding evaluation")
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let superseding = prepared_replacement_for_resolution(&evaluation, superseding_records.iter())?;
+    ensure_appealed_evaluation_activated_for_resolution(
         &evaluation,
-        superseding.as_ref(),
-        &request,
-        now,
+        superseding,
+        &evaluations,
+        &appeals,
+        &resolutions,
     )?;
+    let (resolution, frame) =
+        prepare_resolution(&context, &appeal, &evaluation, superseding, &request, now)?;
     let (player, key) = active_player_key_postgres(
         &mut tx,
         request.resolver_player_id,
@@ -7091,6 +8432,18 @@ fn review_actor_allowed(
             .any(|resolution| resolution.resolver_player_id == player_id)
 }
 
+fn review_state_evaluation_drafts<'a>(
+    records: impl Iterator<Item = &'a PaperEvaluationDraft>,
+    paper_id: Uuid,
+) -> Vec<PaperEvaluationDraft> {
+    records
+        .filter(|record| {
+            record.paper_project_id == paper_id && record.status != EvaluationDraftStatus::Finalized
+        })
+        .cloned()
+        .collect()
+}
+
 async fn get_paper_review_state(
     State(state): State<AppState>,
     Path(paper_id): Path<Uuid>,
@@ -7106,20 +8459,31 @@ async fn get_paper_review_state(
             .read()
             .await
             .projection_for_paper(paper_id)
-            .map(ConsumerPaperFinalityV1::from_projection)
-            .unwrap_or_else(ConsumerPaperFinalityV1::pending);
+            .map(ConsumerPaperFinalityV2::from_projection)
+            .unwrap_or_else(ConsumerPaperFinalityV2::pending);
         let memory = state.paper_raid.read().await;
         active_registered_player_memory(&memory, &assertion)?;
         let context = review_access_context_memory(&memory, paper_id)?;
+        let mut assignments = memory
+            .review
+            .assignments
+            .values()
+            .filter(|record| record.paper_project_id == paper_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut projected_drafts = memory
+            .review
+            .evaluation_drafts
+            .values()
+            .filter(|record| record.paper_project_id == paper_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        project_evaluation_draft_expirations(&mut projected_drafts, &mut assignments, now)?;
+        let evaluation_drafts = review_state_evaluation_drafts(projected_drafts.iter(), paper_id);
         let mut model = PaperReviewReadModel {
             finality,
-            assignments: memory
-                .review
-                .assignments
-                .values()
-                .filter(|record| record.paper_project_id == paper_id)
-                .cloned()
-                .collect(),
+            assignments,
+            evaluation_drafts,
             contribution_ledgers: memory
                 .review
                 .contribution_ledgers
@@ -7186,17 +8550,28 @@ async fn get_paper_review_state(
     .await
     .map_err(ApiError::database)?
     .map(|row| {
-        decode_record::<PaperChainFinalityProjectionV1>(
+        decode_record::<PaperChainFinalityProjectionV2>(
             row.get("record_json"),
             "Paper Chain finality projection",
         )
-        .map(ConsumerPaperFinalityV1::from_projection)
+        .map(ConsumerPaperFinalityV2::from_projection)
     })
     .transpose()?
-    .unwrap_or_else(ConsumerPaperFinalityV1::pending);
+    .unwrap_or_else(ConsumerPaperFinalityV2::pending);
+    let mut projected_drafts = load_review_records::<PaperEvaluationDraft>(
+        &mut tx,
+        "hepta_paper_evaluation_drafts",
+        paper_id,
+        "paper evaluation draft",
+    )
+    .await?;
+    let mut assignments = load_review_assignments_postgres(&mut tx, paper_id).await?;
+    project_evaluation_draft_expirations(&mut projected_drafts, &mut assignments, now)?;
+    let evaluation_drafts = review_state_evaluation_drafts(projected_drafts.iter(), paper_id);
     let mut model = PaperReviewReadModel {
         finality,
-        assignments: load_review_assignments_postgres(&mut tx, paper_id).await?,
+        assignments,
+        evaluation_drafts,
         contribution_ledgers: load_review_records(
             &mut tx,
             "hepta_paper_contribution_ledgers",
@@ -7274,6 +8649,9 @@ fn sort_review_model(model: &mut PaperReviewReadModel) {
         )
     });
     model
+        .evaluation_drafts
+        .sort_by_key(|record| record.evaluation_id);
+    model
         .contribution_ledgers
         .sort_by_key(|record| record.contribution_ledger_id);
     model.evaluations.sort_by_key(|record| record.evaluation_id);
@@ -7334,10 +8712,353 @@ mod tests {
     fn contribution_xp_is_capped_by_milestone_not_record_count() {
         assert_eq!(milestone_contribution_points(0, 0), 0);
         assert_eq!(milestone_contribution_points(1, 0), 100);
-        assert_eq!(milestone_contribution_points(200, 0), 100);
+        assert_eq!(milestone_contribution_points(257, 0), 100);
         assert_eq!(milestone_contribution_points(0, 1), 150);
-        assert_eq!(milestone_contribution_points(0, 200), 150);
-        assert_eq!(milestone_contribution_points(200, 200), 250);
+        assert_eq!(milestone_contribution_points(0, 257), 150);
+        assert_eq!(milestone_contribution_points(257, 257), 250);
+    }
+
+    fn contribution_author(player_id: Uuid, order: u32) -> PaperReleaseAuthorV2 {
+        PaperReleaseAuthorV2 {
+            author_order: order,
+            participant_slot: order,
+            player_id,
+            display_name: format!("Author {order}"),
+            credit_roles: vec!["methodology".to_string()],
+        }
+    }
+
+    fn contribution_manifest(paper_id: Uuid, manifest_id: Uuid) -> ArtifactManifest {
+        ArtifactManifest {
+            manifest_id,
+            paper_project_id: paper_id,
+            binding_schema: "fixture".to_string(),
+            source_bundle_schema: "fixture".to_string(),
+            source_bundle_id: "fixture".to_string(),
+            source_challenge_id: Uuid::new_v4().to_string(),
+            source_created_at: "2026-08-11T00:00:00Z".to_string(),
+            source_manifest_sha256: "0".repeat(64),
+            manifest_hash: format!("sha256:{}", "0".repeat(64)),
+            object_count: 0,
+            objects: Vec::new(),
+            required_run_ids: Vec::new(),
+            storage_locations: Vec::new(),
+            total_size_bytes: 0,
+            version: 1,
+            created_at: Utc::now(),
+        }
+    }
+
+    fn accepted_contribution_proposal(
+        paper_id: Uuid,
+        proposal_id: Uuid,
+        manifest_id: Uuid,
+    ) -> AgentProposal {
+        let digest = format!("sha256:{}", "1".repeat(64));
+        AgentProposal {
+            proposal_id,
+            paper_project_id: paper_id,
+            work_item_id: Uuid::new_v4(),
+            section_key: "methods".to_string(),
+            parent_revision_id: Uuid::new_v4(),
+            lease_id: Uuid::new_v4(),
+            lease_fencing_token: 1,
+            expected_work_version: 1,
+            proposal_kind: AgentProposalKind::Delivery,
+            payload_hash: digest.clone(),
+            artifact_manifest_id: manifest_id,
+            artifact_manifest_hash: digest.clone(),
+            agent_id: format!("agent-{proposal_id}"),
+            binding_id: Uuid::new_v4(),
+            agent_key_id: digest,
+            agent_public_key: "fixture".to_string(),
+            signed_at_unix: 1,
+            signature: "fixture".to_string(),
+            status: AgentProposalStatus::Accepted,
+            version: 2,
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn contribution_acceptance(
+        paper_id: Uuid,
+        proposal_id: Uuid,
+        player_id: Uuid,
+    ) -> HumanDecision {
+        let digest = format!("sha256:{}", "2".repeat(64));
+        HumanDecision {
+            decision_id: Uuid::new_v4(),
+            paper_project_id: paper_id,
+            proposal_id,
+            player_id,
+            decision: HumanDecisionKind::Accept,
+            reason_hash: digest.clone(),
+            signing_key_id: "fixture".to_string(),
+            signing_public_key: "fixture".to_string(),
+            signing_public_key_hash: digest,
+            signed_at_unix: 1,
+            signature: "fixture".to_string(),
+            version: 1,
+        }
+    }
+
+    fn approved_contribution_review(
+        paper_id: Uuid,
+        review_id: Uuid,
+        player_id: Uuid,
+    ) -> SectionReview {
+        let digest = format!("sha256:{}", "3".repeat(64));
+        SectionReview {
+            review_id,
+            paper_project_id: paper_id,
+            section_revision_id: Uuid::new_v4(),
+            reviewer_player_id: player_id,
+            verdict: SectionReviewVerdict::Approve,
+            review_hash: digest.clone(),
+            signing_key_id: "fixture".to_string(),
+            signing_public_key: "fixture".to_string(),
+            signing_public_key_hash: digest,
+            signed_at_unix: 1,
+            signature: "fixture".to_string(),
+            version: 1,
+        }
+    }
+
+    #[test]
+    fn authoritative_257_refs_are_preserved_with_milestone_points() {
+        let paper_id = Uuid::new_v4();
+        let players = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+        let authors = players
+            .iter()
+            .enumerate()
+            .map(|(index, player_id)| contribution_author(*player_id, index as u32 + 1))
+            .collect::<Vec<_>>();
+        let reviews = (1..=257_u128)
+            .map(|value| approved_contribution_review(paper_id, Uuid::from_u128(value), players[0]))
+            .collect::<Vec<_>>();
+        let entries = authoritative_contribution_entries_from_records(
+            paper_id,
+            &authors,
+            &[],
+            &[],
+            &[],
+            &reviews,
+        )
+        .expect("257 scientific references must remain freezeable");
+        let credited = entries
+            .iter()
+            .find(|entry| entry.player_id == players[0])
+            .expect("credited author");
+        assert_eq!(credited.accepted_section_review_ids.len(), 257);
+        assert_eq!(credited.contribution_points, 150);
+    }
+
+    #[test]
+    fn duplicate_and_cross_author_manifest_credit_is_rejected() {
+        let duplicate = Uuid::new_v4();
+        let error = normalize_uuid_set("accepted_artifact_manifest_ids", &[duplicate, duplicate])
+            .expect_err("one entry cannot repeat a reference");
+        assert_eq!(error.code, "duplicate_contribution_reference");
+
+        let paper_id = Uuid::new_v4();
+        let players = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+        let authors = players
+            .iter()
+            .enumerate()
+            .map(|(index, player_id)| contribution_author(*player_id, index as u32 + 1))
+            .collect::<Vec<_>>();
+        let manifest_id = Uuid::new_v4();
+        let proposals = [
+            accepted_contribution_proposal(paper_id, Uuid::new_v4(), manifest_id),
+            accepted_contribution_proposal(paper_id, Uuid::new_v4(), manifest_id),
+        ];
+        let decisions = [
+            contribution_acceptance(paper_id, proposals[0].proposal_id, players[0]),
+            contribution_acceptance(paper_id, proposals[1].proposal_id, players[1]),
+        ];
+        let error = authoritative_contribution_entries_from_records(
+            paper_id,
+            &authors,
+            &[contribution_manifest(paper_id, manifest_id)],
+            &proposals,
+            &decisions,
+            &[],
+        )
+        .expect_err("one manifest cannot be credited to two authors");
+        assert_eq!(error.code, "artifact_contribution_duplicated");
+    }
+
+    #[test]
+    fn added_or_cross_author_client_refs_are_rejected() {
+        let players = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+        let shared_manifest = Uuid::new_v4();
+        let submitted = vec![
+            CreditContribution {
+                player_id: players[0],
+                credit_roles: vec!["methodology".to_string()],
+                accepted_artifact_manifest_ids: vec![shared_manifest],
+                accepted_section_review_ids: Vec::new(),
+                contribution_points: 100,
+            },
+            CreditContribution {
+                player_id: players[1],
+                credit_roles: vec!["methodology".to_string()],
+                accepted_artifact_manifest_ids: vec![shared_manifest],
+                accepted_section_review_ids: Vec::new(),
+                contribution_points: 100,
+            },
+            CreditContribution {
+                player_id: players[2],
+                credit_roles: vec!["methodology".to_string()],
+                accepted_artifact_manifest_ids: Vec::new(),
+                accepted_section_review_ids: Vec::new(),
+                contribution_points: 0,
+            },
+        ];
+        assert_eq!(
+            duplicate_contribution_reference_kind(&submitted),
+            Some("artifact manifest")
+        );
+
+        let authoritative = submitted
+            .iter()
+            .cloned()
+            .map(|mut entry| {
+                entry.accepted_artifact_manifest_ids.clear();
+                entry.contribution_points = 0;
+                entry
+            })
+            .collect::<Vec<_>>();
+        let error =
+            require_complete_authoritative_contribution_entries(&submitted[1..], &authoritative)
+                .expect_err("added or incomplete client facts must not freeze");
+        assert_eq!(error.code, "contribution_ledger_entries_mismatch");
+    }
+
+    #[test]
+    fn ledger_id_reservation_rejects_nil_and_global_preemption() {
+        assert_eq!(
+            validate_contribution_ledger_id(Uuid::nil())
+                .expect_err("nil ledger IDs are forbidden")
+                .code,
+            "nil_contribution_ledger_id"
+        );
+        let mut memory = PaperRaidMemory::default();
+        let ledger_id = Uuid::new_v4();
+        let first_paper = Uuid::new_v4();
+        let second_paper = Uuid::new_v4();
+        let release_hash = format!("sha256:{}", "4".repeat(64));
+        reserve_contribution_ledger_id_memory(&mut memory, ledger_id, first_paper, &release_hash)
+            .expect("first promotion owns ID");
+        let error = reserve_contribution_ledger_id_memory(
+            &mut memory,
+            ledger_id,
+            second_paper,
+            &release_hash,
+        )
+        .expect_err("another Paper cannot preempt the ID");
+        assert_eq!(error.code, "contribution_ledger_id_reserved");
+    }
+
+    #[test]
+    fn ledger_loader_requires_the_exact_memory_reservation_triple() {
+        let paper_id = Uuid::new_v4();
+        let ledger_id = Uuid::new_v4();
+        let release_hash = format!("sha256:{}", "6".repeat(64));
+        let created_at = Utc::now();
+        let mut entries = (1..=3_u128)
+            .map(|value| CreditContribution {
+                player_id: Uuid::from_u128(value),
+                credit_roles: vec!["methodology".to_string()],
+                accepted_artifact_manifest_ids: Vec::new(),
+                accepted_section_review_ids: Vec::new(),
+                contribution_points: 0,
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.player_id);
+        let ledger = ContributionLedger {
+            schema: CONTRIBUTION_LEDGER_SCHEMA_V1.to_string(),
+            contribution_ledger_id: ledger_id,
+            paper_project_id: paper_id,
+            release_candidate_hash: release_hash.clone(),
+            ledger_hash: contribution_ledger_hash(ledger_id, paper_id, &entries).unwrap(),
+            entries,
+            version: 1,
+            created_at,
+        };
+        let mut memory = PaperRaidMemory::default();
+        memory
+            .review
+            .contribution_ledgers
+            .insert(ledger_id, ledger.clone());
+
+        let missing = load_contribution_ledger_memory(&memory, paper_id, &release_hash)
+            .expect_err("an unreserved ledger must never reach RaidScore");
+        assert_eq!(missing.code, "contribution_ledger_id_not_reserved");
+
+        reserve_contribution_ledger_id_memory(&mut memory, ledger_id, paper_id, &release_hash)
+            .expect("exact reservation");
+        reserve_contribution_ledger_id_memory(&mut memory, ledger_id, paper_id, &release_hash)
+            .expect("exact reservation replay is idempotent");
+        assert_eq!(
+            load_contribution_ledger_memory(&memory, paper_id, &release_hash).unwrap(),
+            ledger
+        );
+
+        memory
+            .contribution_ledger_reservations
+            .get_mut(&ledger_id)
+            .expect("reservation")
+            .release_candidate_hash = format!("sha256:{}", "7".repeat(64));
+        let mismatch = load_contribution_ledger_memory(&memory, paper_id, &release_hash)
+            .expect_err("a mismatched reservation must never reach RaidScore");
+        assert_eq!(mismatch.code, "contribution_ledger_id_ownership_mismatch");
+    }
+
+    #[test]
+    fn canonical_loader_rejects_record_json_entry_drift_before_raid_score() {
+        let paper_id = Uuid::new_v4();
+        let ledger_id = Uuid::new_v4();
+        let release_hash = format!("sha256:{}", "5".repeat(64));
+        let mut entries = (1..=3_u128)
+            .map(|value| CreditContribution {
+                player_id: Uuid::from_u128(value),
+                credit_roles: vec!["methodology".to_string()],
+                accepted_artifact_manifest_ids: Vec::new(),
+                accepted_section_review_ids: Vec::new(),
+                contribution_points: 0,
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.player_id);
+        let ledger_hash = contribution_ledger_hash(ledger_id, paper_id, &entries).unwrap();
+        let created_at = Utc::now();
+        let relational_entries = serde_json::to_value(&entries).unwrap();
+        let mut drifted = ContributionLedger {
+            schema: CONTRIBUTION_LEDGER_SCHEMA_V1.to_string(),
+            contribution_ledger_id: ledger_id,
+            paper_project_id: paper_id,
+            release_candidate_hash: release_hash.clone(),
+            entries,
+            ledger_hash: ledger_hash.clone(),
+            version: 1,
+            created_at,
+        };
+        drifted.entries[0]
+            .accepted_artifact_manifest_ids
+            .push(Uuid::new_v4());
+        drifted.entries[0].contribution_points = 100;
+        let error = validate_loaded_contribution_ledger(
+            drifted,
+            ledger_id,
+            paper_id,
+            &release_hash,
+            &ledger_hash,
+            &relational_entries,
+            1,
+            created_at,
+        )
+        .expect_err("record_json-only entry drift must fail closed");
+        assert_eq!(error.code, "internal_error");
     }
 
     fn assignment_fixture(
@@ -7435,6 +9156,116 @@ mod tests {
         draft
     }
 
+    fn evaluation_fixture_from_draft(draft: &PaperEvaluationDraft) -> PaperEvaluation {
+        PaperEvaluation {
+            schema: PAPER_EVALUATION_V1.to_string(),
+            evaluation_id: draft.evaluation_id,
+            paper_project_id: draft.paper_project_id,
+            submission_id: draft.submission_id,
+            release_candidate_hash: draft.release_candidate_hash.clone(),
+            paper_bundle_hash: draft.paper_bundle_hash.clone(),
+            supersedes_evaluation_id: draft.supersedes_evaluation_id,
+            tolerance_policy: draft.tolerance_policy.clone(),
+            tolerance_policy_hash: draft.tolerance_policy_hash.clone(),
+            reference_metrics_micros: draft.reference_metrics_micros.clone(),
+            evaluator_player_id: draft.evaluator_player_id,
+            evaluator_signing_key_id: draft.evaluator_signing_key_id.clone(),
+            evaluator_signing_public_key: draft.evaluator_signing_public_key.clone(),
+            evaluator_signing_public_key_hash: draft.evaluator_signing_public_key_hash.clone(),
+            evaluator_coi_attestation_hash: draft.evaluator_coi_attestation_hash.clone(),
+            evaluator_signed_at_unix: draft.evaluator_signed_at_unix,
+            evaluator_signature: draft.evaluator_signature.clone(),
+            reviewer_attestations: Vec::new(),
+            paper_score: draft.paper_score.clone(),
+            status: PaperEvaluationStatus::NotEligible,
+            settlement_state: ReviewSettlementState::PendingFinality,
+            evaluation_signing_hash: draft.evaluation_signing_hash.clone(),
+            version: draft.review_round,
+            created_at: draft.created_at,
+        }
+    }
+
+    fn review_attestation_fixture(
+        evaluation: &PaperEvaluation,
+        reviewer_player_id: Uuid,
+        marker: char,
+    ) -> ReviewAttestation {
+        let digest = format!("sha256:{}", marker.to_string().repeat(64));
+        ReviewAttestation {
+            attestation_id: Uuid::new_v4(),
+            evaluation_id: evaluation.evaluation_id,
+            evaluation_signing_hash: evaluation.evaluation_signing_hash.clone(),
+            reviewer_player_id,
+            verdict: PanelVerdict::Approve,
+            signing_key_id: format!("fixture-reviewer-{marker}-key"),
+            signing_public_key: format!("fixture-reviewer-{marker}-public-key"),
+            signing_public_key_hash: digest.clone(),
+            coi_attestation_hash: digest,
+            signed_at_unix: evaluation.created_at.timestamp(),
+            signature: format!("fixture-reviewer-{marker}-signature"),
+        }
+    }
+
+    #[test]
+    fn review_state_exposes_only_same_paper_unresolved_draft_authority() {
+        let paper_id = Uuid::new_v4();
+        let now = Utc::now();
+        let open = evaluation_draft_fixture(paper_id, Uuid::new_v4(), Uuid::new_v4(), now);
+        let open_id = open.evaluation_id;
+        let mut expired = evaluation_draft_fixture(paper_id, Uuid::new_v4(), Uuid::new_v4(), now);
+        expired.status = EvaluationDraftStatus::Expired;
+        let expired_id = expired.evaluation_id;
+        let mut finalized = evaluation_draft_fixture(paper_id, Uuid::new_v4(), Uuid::new_v4(), now);
+        finalized.status = EvaluationDraftStatus::Finalized;
+        let other_paper =
+            evaluation_draft_fixture(Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), now);
+        // Selection is independent of lifecycle mutation details; strict
+        // consumers validate each selected record's complete lifecycle.
+        let mut selected = review_state_evaluation_drafts(
+            [&open, &expired, &finalized, &other_paper].into_iter(),
+            paper_id,
+        );
+        selected.sort_by_key(|draft| draft.evaluation_id);
+        let mut expected = vec![open_id, expired_id];
+        expected.sort_unstable();
+        assert_eq!(
+            selected
+                .into_iter()
+                .map(|draft| draft.evaluation_id)
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+
+    #[test]
+    fn review_state_projects_draft_expiry_before_treating_pinned_actor_as_active() {
+        let paper_id = Uuid::new_v4();
+        let evaluator_id = Uuid::new_v4();
+        let now = Utc::now();
+        let created_at = now - chrono::Duration::hours(2);
+        let draft = evaluation_draft_fixture(paper_id, Uuid::new_v4(), evaluator_id, created_at);
+        let mut assignment =
+            assignment_fixture(paper_id, evaluator_id, ReviewAssignmentSlot::Evaluator);
+        assignment.submission_id = draft.submission_id;
+        assignment.review_round = draft.review_round;
+        assignment.pinned_evaluation_id = Some(draft.evaluation_id);
+        assignment.status = ReviewAssignmentStatus::Pinned;
+        assignment.version = 2;
+        assignment.claimed_at = created_at - chrono::Duration::minutes(1);
+        assignment.expires_at = created_at + chrono::Duration::minutes(5);
+        assignment.updated_at = created_at;
+
+        let mut drafts = vec![draft];
+        let mut assignments = vec![assignment];
+        project_evaluation_draft_expirations(&mut drafts, &mut assignments, now)
+            .expect("read projection expires stale draft authority");
+
+        assert_eq!(drafts[0].status, EvaluationDraftStatus::Expired);
+        assert_eq!(assignments[0].status, ReviewAssignmentStatus::Expired);
+        assert!(!review_assignment_active(&assignments[0], now));
+        assert_eq!(assignments[0].updated_at, drafts[0].expires_at);
+    }
+
     #[test]
     fn review_assignment_slots_have_stable_contract_names_and_vacancy_order() {
         assert_eq!(
@@ -7483,6 +9314,413 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn reproducer_vacancy_waits_for_exact_upheld_replacement_activation() {
+        let paper_id = Uuid::new_v4();
+        let submission_id = Uuid::new_v4();
+        let now = Utc::now();
+        let mut root = evaluation_fixture_from_draft(&evaluation_draft_fixture(
+            paper_id,
+            submission_id,
+            Uuid::new_v4(),
+            now - chrono::Duration::minutes(3),
+        ));
+        root.reviewer_attestations = vec![
+            review_attestation_fixture(&root, Uuid::new_v4(), 'a'),
+            review_attestation_fixture(&root, Uuid::new_v4(), 'b'),
+        ];
+        let appeal = PaperAppeal {
+            schema: PAPER_APPEAL_V1.to_string(),
+            appeal_id: Uuid::new_v4(),
+            evaluation_id: root.evaluation_id,
+            paper_project_id: paper_id,
+            release_candidate_hash: root.release_candidate_hash.clone(),
+            appellant_player_id: Uuid::new_v4(),
+            grounds_hash: format!("sha256:{}", "1".repeat(64)),
+            evidence_manifest_hash: format!("sha256:{}", "2".repeat(64)),
+            signing_key_id: "fixture-appeal-key".to_string(),
+            signing_public_key: "fixture-appeal-public-key".to_string(),
+            signing_public_key_hash: format!("sha256:{}", "3".repeat(64)),
+            signed_at_unix: now.timestamp(),
+            signature: "fixture-appeal-signature".to_string(),
+            version: 1,
+            created_at: now - chrono::Duration::minutes(2),
+        };
+        let mut replacement = root.clone();
+        replacement.evaluation_id = Uuid::new_v4();
+        replacement.supersedes_evaluation_id = Some(root.evaluation_id);
+        replacement.version = 2;
+        replacement.created_at = now - chrono::Duration::minutes(1);
+        replacement.evaluator_player_id = Uuid::new_v4();
+        replacement.evaluation_signing_hash = format!("sha256:{}", "c".repeat(64));
+        replacement.reviewer_attestations = vec![
+            review_attestation_fixture(&replacement, Uuid::new_v4(), 'd'),
+            review_attestation_fixture(&replacement, Uuid::new_v4(), 'e'),
+        ];
+        replacement.paper_score.evaluation_id = replacement.evaluation_id;
+        replacement.paper_score.created_at = replacement.created_at;
+        let evaluations = vec![root.clone(), replacement.clone()];
+        let player_id = Uuid::new_v4();
+
+        assert!(ensure_evaluation_activated(
+            &replacement,
+            &evaluations,
+            std::slice::from_ref(&appeal),
+            &[]
+        )
+        .is_err());
+        let before = claimable_review_vacancies(
+            paper_id,
+            player_id,
+            &evaluations,
+            &[],
+            std::slice::from_ref(&appeal),
+            &[],
+            &[],
+            now,
+        )
+        .expect("inactive replacement yields a closed reproducer vacancy");
+        assert!(!before.iter().any(|vacancy| {
+            vacancy.review_round == 2 && vacancy.slot == ReviewAssignmentSlot::Reproducer
+        }));
+
+        let resolution = PaperAppealResolution {
+            schema: PAPER_APPEAL_RESOLUTION_V1.to_string(),
+            resolution_id: Uuid::new_v4(),
+            appeal_id: appeal.appeal_id,
+            evaluation_id: root.evaluation_id,
+            paper_project_id: paper_id,
+            release_candidate_hash: root.release_candidate_hash.clone(),
+            outcome: AppealOutcome::Upheld,
+            superseding_evaluation_id: Some(replacement.evaluation_id),
+            decision_hash: format!("sha256:{}", "4".repeat(64)),
+            resolver_player_id: Uuid::new_v4(),
+            signing_key_id: "fixture-resolution-key".to_string(),
+            signing_public_key: "fixture-resolution-public-key".to_string(),
+            signing_public_key_hash: format!("sha256:{}", "5".repeat(64)),
+            signed_at_unix: now.timestamp(),
+            signature: "fixture-resolution-signature".to_string(),
+            version: 1,
+            created_at: now,
+        };
+        ensure_evaluation_activated(
+            &replacement,
+            &evaluations,
+            std::slice::from_ref(&appeal),
+            std::slice::from_ref(&resolution),
+        )
+        .expect("exact upheld resolution activates replacement");
+        let mut reproduction = PaperReproduction {
+            schema: PAPER_REPRODUCTION_V1.to_string(),
+            reproduction_id: Uuid::new_v4(),
+            evaluation_id: replacement.evaluation_id,
+            paper_project_id: paper_id,
+            release_candidate_hash: replacement.release_candidate_hash.clone(),
+            paper_bundle_hash: replacement.paper_bundle_hash.clone(),
+            tolerance_policy_hash: replacement.tolerance_policy_hash.clone(),
+            observed_metrics_micros: BTreeMap::new(),
+            statistical_evidence: BTreeMap::new(),
+            seed_set_hash: format!("sha256:{}", "6".repeat(64)),
+            environment_hash: format!("sha256:{}", "7".repeat(64)),
+            run_manifest_hash: format!("sha256:{}", "8".repeat(64)),
+            supersedes_reproduction_id: None,
+            reproducer_player_id: Uuid::new_v4(),
+            signing_key_id: "fixture-reproducer-key".to_string(),
+            signing_public_key: "fixture-reproducer-public-key".to_string(),
+            signing_public_key_hash: format!("sha256:{}", "9".repeat(64)),
+            coi_attestation_hash: format!("sha256:{}", "a".repeat(64)),
+            signed_at_unix: now.timestamp(),
+            signature: "fixture-reproduction-signature".to_string(),
+            rule_results: Vec::new(),
+            status: ReproductionStatus::Reproduced,
+            report_hash: format!("sha256:{}", "b".repeat(64)),
+            version: 1,
+            created_at: now - chrono::Duration::seconds(30),
+        };
+        let mut historical_root_reproduction = reproduction.clone();
+        historical_root_reproduction.evaluation_id = root.evaluation_id;
+        historical_root_reproduction.created_at = root.created_at + chrono::Duration::seconds(1);
+        validate_reproduction_activation(
+            &replacement,
+            &historical_root_reproduction,
+            &evaluations,
+            std::slice::from_ref(&appeal),
+            std::slice::from_ref(&resolution),
+        )
+        .expect("a root reproduction remains valid after an exact later supersession");
+
+        let mut equal_mutation_close_reproduction = historical_root_reproduction.clone();
+        equal_mutation_close_reproduction.created_at = replacement.created_at;
+        assert_eq!(
+            validate_reproduction_activation(
+                &replacement,
+                &equal_mutation_close_reproduction,
+                &evaluations,
+                std::slice::from_ref(&appeal),
+                std::slice::from_ref(&resolution),
+            )
+            .expect_err("a historical reproduction at the direct child boundary is closed")
+            .code,
+            "paper_finality_historical_reproduction_after_mutation_closed",
+        );
+
+        let mut late_historical_reproduction = historical_root_reproduction.clone();
+        late_historical_reproduction.created_at =
+            replacement.created_at + chrono::Duration::seconds(1);
+        assert_eq!(
+            validate_reproduction_activation(
+                &replacement,
+                &late_historical_reproduction,
+                &evaluations,
+                std::slice::from_ref(&appeal),
+                std::slice::from_ref(&resolution),
+            )
+            .expect_err("a historical reproduction after direct child preparation is closed")
+            .code,
+            "paper_finality_historical_reproduction_after_mutation_closed",
+        );
+
+        let mut release_candidate_drift = historical_root_reproduction.clone();
+        release_candidate_drift.release_candidate_hash = format!("sha256:{}", "1".repeat(64));
+        assert_eq!(
+            validate_reproduction_activation(
+                &replacement,
+                &release_candidate_drift,
+                &evaluations,
+                std::slice::from_ref(&appeal),
+                std::slice::from_ref(&resolution),
+            )
+            .expect_err("a reproduction cannot drift from its evaluation release candidate")
+            .code,
+            "paper_finality_reproduction_authority_mismatch",
+        );
+
+        let mut paper_bundle_drift = historical_root_reproduction.clone();
+        paper_bundle_drift.paper_bundle_hash = format!("sha256:{}", "2".repeat(64));
+        assert_eq!(
+            validate_reproduction_activation(
+                &replacement,
+                &paper_bundle_drift,
+                &evaluations,
+                std::slice::from_ref(&appeal),
+                std::slice::from_ref(&resolution),
+            )
+            .expect_err("a reproduction cannot drift from its evaluation paper bundle")
+            .code,
+            "paper_finality_reproduction_authority_mismatch",
+        );
+
+        let mut tolerance_policy_drift = historical_root_reproduction.clone();
+        tolerance_policy_drift.tolerance_policy_hash = format!("sha256:{}", "3".repeat(64));
+        assert_eq!(
+            validate_reproduction_activation(
+                &replacement,
+                &tolerance_policy_drift,
+                &evaluations,
+                std::slice::from_ref(&appeal),
+                std::slice::from_ref(&resolution),
+            )
+            .expect_err("a reproduction cannot drift from its evaluation tolerance policy")
+            .code,
+            "paper_finality_reproduction_authority_mismatch",
+        );
+
+        assert_eq!(
+            validate_reproduction_activation(
+                &replacement,
+                &reproduction,
+                &evaluations,
+                std::slice::from_ref(&appeal),
+                std::slice::from_ref(&resolution),
+            )
+            .expect_err("a child reproduction cannot predate its upheld activation")
+            .code,
+            "paper_finality_reproduction_before_activation",
+        );
+
+        let mut unrelated = evaluation_fixture_from_draft(&evaluation_draft_fixture(
+            paper_id,
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            root.created_at,
+        ));
+        unrelated.reviewer_attestations = vec![
+            review_attestation_fixture(&unrelated, Uuid::new_v4(), '6'),
+            review_attestation_fixture(&unrelated, Uuid::new_v4(), '7'),
+        ];
+        let mut unrelated_evaluations = evaluations.clone();
+        unrelated_evaluations.push(unrelated.clone());
+        let mut unrelated_reproduction = reproduction.clone();
+        unrelated_reproduction.evaluation_id = unrelated.evaluation_id;
+        unrelated_reproduction.created_at = now + chrono::Duration::seconds(1);
+        assert!(validate_reproduction_activation(
+            &replacement,
+            &unrelated_reproduction,
+            &unrelated_evaluations,
+            std::slice::from_ref(&appeal),
+            std::slice::from_ref(&resolution),
+        )
+        .is_err());
+
+        let mut fork = replacement.clone();
+        fork.evaluation_id = Uuid::new_v4();
+        fork.evaluation_signing_hash = format!("sha256:{}", "f".repeat(64));
+        fork.evaluator_player_id = Uuid::new_v4();
+        fork.reviewer_attestations = vec![
+            review_attestation_fixture(&fork, Uuid::new_v4(), '8'),
+            review_attestation_fixture(&fork, Uuid::new_v4(), '9'),
+        ];
+        fork.paper_score.evaluation_id = fork.evaluation_id;
+        let mut forked_evaluations = evaluations.clone();
+        forked_evaluations.push(fork.clone());
+        let mut fork_reproduction = reproduction.clone();
+        fork_reproduction.evaluation_id = fork.evaluation_id;
+        fork_reproduction.created_at = now + chrono::Duration::seconds(1);
+        assert!(validate_reproduction_activation(
+            &replacement,
+            &fork_reproduction,
+            &forked_evaluations,
+            std::slice::from_ref(&appeal),
+            std::slice::from_ref(&resolution),
+        )
+        .is_err());
+
+        assert!(effective_finality_resolution_id(
+            &replacement,
+            &evaluations,
+            std::slice::from_ref(&reproduction),
+            std::slice::from_ref(&appeal),
+            std::slice::from_ref(&resolution),
+        )
+        .is_err());
+        reproduction.created_at = now + chrono::Duration::seconds(1);
+        assert_eq!(
+            effective_finality_resolution_id(
+                &replacement,
+                &evaluations,
+                std::slice::from_ref(&reproduction),
+                std::slice::from_ref(&appeal),
+                std::slice::from_ref(&resolution),
+            )
+            .expect("post-activation reproduction supports exact Consumer finality"),
+            Some(resolution.resolution_id),
+        );
+        let after = claimable_review_vacancies(
+            paper_id,
+            player_id,
+            &evaluations,
+            &[],
+            std::slice::from_ref(&appeal),
+            std::slice::from_ref(&resolution),
+            &[],
+            now,
+        )
+        .expect("activated replacement exposes reproducer vacancy");
+        assert!(after.iter().any(|vacancy| {
+            vacancy.review_round == 2 && vacancy.slot == ReviewAssignmentSlot::Reproducer
+        }));
+    }
+
+    #[test]
+    fn resolution_activation_ignores_only_one_exact_direct_prepared_child() {
+        let paper_id = Uuid::new_v4();
+        let submission_id = Uuid::new_v4();
+        let now = Utc::now();
+        let mut root = evaluation_fixture_from_draft(&evaluation_draft_fixture(
+            paper_id,
+            submission_id,
+            Uuid::new_v4(),
+            now - chrono::Duration::minutes(2),
+        ));
+        root.reviewer_attestations = vec![
+            review_attestation_fixture(&root, Uuid::new_v4(), 'a'),
+            review_attestation_fixture(&root, Uuid::new_v4(), 'b'),
+        ];
+        let mut replacement = root.clone();
+        replacement.evaluation_id = Uuid::new_v4();
+        replacement.supersedes_evaluation_id = Some(root.evaluation_id);
+        replacement.version = 2;
+        replacement.created_at = now - chrono::Duration::minutes(1);
+        replacement.evaluator_player_id = Uuid::new_v4();
+        replacement.reviewer_attestations = vec![
+            review_attestation_fixture(&replacement, Uuid::new_v4(), 'c'),
+            review_attestation_fixture(&replacement, Uuid::new_v4(), 'd'),
+        ];
+        replacement.paper_score.evaluation_id = replacement.evaluation_id;
+        replacement.paper_score.created_at = replacement.created_at;
+
+        let evaluations = vec![root.clone(), replacement.clone()];
+        let prepared = prepared_replacement_for_resolution(&root, evaluations.iter())
+            .expect("one direct prepared replacement is unambiguous");
+        ensure_appealed_evaluation_activated_for_resolution(
+            &root,
+            prepared,
+            &evaluations,
+            &[],
+            &[],
+        )
+        .expect("the unique direct prepared child does not deactivate its parent before uphold");
+
+        let mut dangling = replacement.clone();
+        dangling.evaluation_id = Uuid::new_v4();
+        dangling.supersedes_evaluation_id = Some(Uuid::new_v4());
+        dangling.paper_score.evaluation_id = dangling.evaluation_id;
+        let evaluations_with_dangling = vec![root.clone(), replacement.clone(), dangling];
+        assert!(ensure_appealed_evaluation_activated_for_resolution(
+            &root,
+            Some(&replacement),
+            &evaluations_with_dangling,
+            &[],
+            &[],
+        )
+        .is_err());
+
+        let mut parallel = replacement.clone();
+        parallel.evaluation_id = Uuid::new_v4();
+        parallel.paper_score.evaluation_id = parallel.evaluation_id;
+        let evaluations_with_parallel = [root.clone(), replacement, parallel];
+        assert!(
+            prepared_replacement_for_resolution(&root, evaluations_with_parallel.iter()).is_err()
+        );
+    }
+
+    #[test]
+    fn denied_resolution_cannot_omit_an_exact_prepared_replacement() {
+        let paper_id = Uuid::new_v4();
+        let submission_id = Uuid::new_v4();
+        let root = evaluation_fixture_from_draft(&evaluation_draft_fixture(
+            paper_id,
+            submission_id,
+            Uuid::new_v4(),
+            Utc::now(),
+        ));
+        let mut replacement = root.clone();
+        replacement.evaluation_id = Uuid::new_v4();
+        replacement.supersedes_evaluation_id = Some(root.evaluation_id);
+        replacement.version = 2;
+        replacement.paper_score.evaluation_id = replacement.evaluation_id;
+
+        let records = [root.clone(), replacement.clone()];
+        let prepared = prepared_replacement_for_resolution(&root, records.iter())
+            .expect("prepared replacement lineage is unambiguous");
+        assert_eq!(
+            prepared.map(|record| record.evaluation_id),
+            Some(replacement.evaluation_id)
+        );
+        assert!(
+            validate_resolution_replacement(&root, prepared, AppealOutcome::Denied, None,).is_err()
+        );
+        validate_resolution_replacement(
+            &root,
+            prepared,
+            AppealOutcome::Upheld,
+            Some(replacement.evaluation_id),
+        )
+        .expect("uphold binds the discovered prepared replacement");
+        validate_resolution_replacement(&root, None, AppealOutcome::Denied, None)
+            .expect("denial remains valid when no replacement was prepared");
     }
 
     #[test]

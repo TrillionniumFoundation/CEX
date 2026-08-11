@@ -13,7 +13,7 @@ const VALID = {
   capabilities: ["artifact_analysis", "section_drafting"],
   resource_classes: ["cpu", "sandbox"],
   max_parallel_tasks: 2,
-  paper_ids: ["77777777-7777-4777-8777-777777777777"],
+  paper_ids: [],
   poll_interval_ms: 2500,
   request_timeout_ms: 8000,
 };
@@ -67,6 +67,7 @@ test("valid v2 config creates one bounded self-declared disclosure", async t => 
   await writeConfig(path, VALID);
   const config = await loadConfig(path);
   assert.equal(config.bff_url, VALID.bff_url);
+  assert.deepEqual(config.paper_ids, []);
   assert.deepEqual(config.capability_disclosure, {
     schema: "hepta.paper_raid.agent_capability_disclosure.v1",
     assurance: "self_declared_unverified",

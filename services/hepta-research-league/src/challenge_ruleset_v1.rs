@@ -11,6 +11,11 @@ const MIN_DURATION_SECONDS: u32 = 15 * 60;
 const MAX_DURATION_SECONDS: u32 = 7 * 24 * 60 * 60;
 const MAX_GRACE_SECONDS: u32 = 24 * 60 * 60;
 const MAX_REQUIREMENT_MINIMUM: u16 = 32;
+const MAX_GAMEPLAY_TEXT_CHARS: usize = 512;
+const MAX_GAMEPLAY_MODIFIERS: usize = 8;
+const MAX_GAMEPLAY_MODIFIER_CHARS: usize = 48;
+const MAX_ROLE_RESOURCE_UNITS: u16 = 32;
+const MAX_FAILURE_FOCUS_REFUND: u16 = 4;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case")]
@@ -103,6 +108,105 @@ pub struct ChallengePhaseGateV1 {
     pub requirements: Vec<ChallengeMinimumV1>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ChallengeDifficultyV1 {
+    Introductory,
+    Intermediate,
+    Advanced,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ChallengeRoleResourcesV1 {
+    pub captain_focus: u16,
+    pub evidence_focus: u16,
+    pub experiment_focus: u16,
+    pub run_budget: u16,
+    pub retained_failure_focus_refund: u16,
+}
+
+impl ChallengeRoleResourcesV1 {
+    pub fn validate(&self) -> Result<(), String> {
+        for (field, value) in [
+            ("captain_focus", self.captain_focus),
+            ("evidence_focus", self.evidence_focus),
+            ("experiment_focus", self.experiment_focus),
+            ("run_budget", self.run_budget),
+        ] {
+            if !(1..=MAX_ROLE_RESOURCE_UNITS).contains(&value) {
+                return Err(format!(
+                    "gameplay.role_resources.{field} must be between 1 and {MAX_ROLE_RESOURCE_UNITS}"
+                ));
+            }
+        }
+        if self.retained_failure_focus_refund == 0
+            || self.retained_failure_focus_refund > MAX_FAILURE_FOCUS_REFUND
+            || self.retained_failure_focus_refund > self.experiment_focus
+        {
+            return Err(format!(
+                "gameplay.role_resources.retained_failure_focus_refund must be between 1 and {MAX_FAILURE_FOCUS_REFUND} and not exceed experiment_focus"
+            ));
+        }
+        if self.captain_focus > self.evidence_focus
+            || self.captain_focus > self.experiment_focus
+            || self.captain_focus > self.run_budget
+        {
+            return Err(
+                "gameplay.role_resources captain_focus must be supportable by evidence, experiment, and run allocations"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ChallengeGameplayV1 {
+    pub difficulty: ChallengeDifficultyV1,
+    pub objective: String,
+    pub risk: String,
+    pub modifiers: Vec<String>,
+    pub victory_summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_resources: Option<ChallengeRoleResourcesV1>,
+}
+
+impl ChallengeGameplayV1 {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_gameplay_text("gameplay.objective", &self.objective)?;
+        validate_gameplay_text("gameplay.risk", &self.risk)?;
+        validate_gameplay_text("gameplay.victory_summary", &self.victory_summary)?;
+        if let Some(role_resources) = &self.role_resources {
+            role_resources.validate()?;
+        }
+        if self.modifiers.len() > MAX_GAMEPLAY_MODIFIERS {
+            return Err(format!(
+                "gameplay.modifiers must contain at most {MAX_GAMEPLAY_MODIFIERS} entries"
+            ));
+        }
+        let mut previous: Option<&str> = None;
+        for modifier in &self.modifiers {
+            validate_gameplay_modifier(modifier)?;
+            if let Some(previous) = previous {
+                if previous == modifier {
+                    return Err(format!(
+                        "gameplay.modifiers contains duplicate modifier {modifier}"
+                    ));
+                }
+                if previous > modifier.as_str() {
+                    return Err(
+                        "gameplay.modifiers must use canonical ascending lexical order".into(),
+                    );
+                }
+            }
+            previous = Some(modifier);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ChallengeRulesetV1 {
@@ -112,6 +216,8 @@ pub struct ChallengeRulesetV1 {
     pub grace_seconds: u32,
     pub phase_gates: Vec<ChallengePhaseGateV1>,
     pub victory_requirements: Vec<ChallengeMinimumV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gameplay: Option<ChallengeGameplayV1>,
 }
 
 impl ChallengeRulesetV1 {
@@ -161,7 +267,11 @@ impl ChallengeRulesetV1 {
             return Err("phase_gates must contain every forward transition exactly once".into());
         }
         validate_minimums("victory", &self.victory_requirements)?;
-        self.validate_template_floors()
+        if let Some(gameplay) = &self.gameplay {
+            gameplay.validate()?;
+        }
+        self.validate_template_floors()?;
+        self.validate_role_resource_reachability()
     }
 
     pub fn canonical_hash(&self) -> Result<String, String> {
@@ -203,6 +313,52 @@ impl ChallengeRulesetV1 {
             .find(|requirement| requirement.kind == kind)
             .map(|requirement| requirement.minimum)
             .unwrap_or_default()
+    }
+
+    fn maximum_run_minimum(&self, kind: ChallengeRequirementKindV1) -> u16 {
+        self.phase_gates
+            .iter()
+            .flat_map(|gate| gate.requirements.iter())
+            .chain(self.victory_requirements.iter())
+            .filter(|requirement| requirement.kind == kind)
+            .map(|requirement| requirement.minimum)
+            .max()
+            .unwrap_or_default()
+    }
+
+    fn validate_role_resource_reachability(&self) -> Result<(), String> {
+        use ChallengeRequirementKindV1 as Requirement;
+
+        let Some(role_resources) = self
+            .gameplay
+            .as_ref()
+            .and_then(|gameplay| gameplay.role_resources.as_ref())
+        else {
+            return Ok(());
+        };
+        let retained_runs = u32::from(self.maximum_run_minimum(Requirement::RetainedRuns));
+        let successful_runs = u32::from(self.maximum_run_minimum(Requirement::SuccessfulRuns));
+        let retained_failed_runs =
+            u32::from(self.maximum_run_minimum(Requirement::RetainedFailedRuns));
+        // Successful and retained-failed runs are disjoint records. A generic
+        // retained-run minimum may overlap both, so the hard lower bound is the
+        // larger of that minimum and their sum.
+        let required_run_budget =
+            retained_runs.max(successful_runs.saturating_add(retained_failed_runs));
+        if u32::from(role_resources.run_budget) < required_run_budget {
+            return Err(format!(
+                "gameplay.role_resources.run_budget must be at least {required_run_budget} to satisfy the hard retained/successful/retained-failed run minima"
+            ));
+        }
+        // A retained failed run refunds the focus it spent, but successful
+        // runs never do. Scheduling retained failures first is therefore
+        // reachable only when focus covers every required successful run.
+        if u32::from(role_resources.experiment_focus) < successful_runs {
+            return Err(format!(
+                "gameplay.role_resources.experiment_focus must be at least {successful_runs} to satisfy the hard successful run minimum"
+            ));
+        }
+        Ok(())
     }
 
     fn validate_template_floors(&self) -> Result<(), String> {
@@ -322,6 +478,46 @@ impl ChallengeRulesetV1 {
         }
         Ok(())
     }
+}
+
+fn validate_gameplay_text(field: &str, value: &str) -> Result<(), String> {
+    let character_count = value.chars().count();
+    if character_count == 0 || character_count > MAX_GAMEPLAY_TEXT_CHARS {
+        return Err(format!(
+            "{field} must contain between 1 and {MAX_GAMEPLAY_TEXT_CHARS} characters"
+        ));
+    }
+    if value.trim() != value {
+        return Err(format!("{field} must not contain surrounding whitespace"));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(format!("{field} must not contain control characters"));
+    }
+    Ok(())
+}
+
+fn validate_gameplay_modifier(value: &str) -> Result<(), String> {
+    let character_count = value.chars().count();
+    if character_count == 0 || character_count > MAX_GAMEPLAY_MODIFIER_CHARS {
+        return Err(format!(
+            "gameplay modifier must contain between 1 and {MAX_GAMEPLAY_MODIFIER_CHARS} characters"
+        ));
+    }
+    let bytes = value.as_bytes();
+    if !bytes.first().is_some_and(u8::is_ascii_lowercase)
+        || !bytes
+            .last()
+            .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        || bytes
+            .iter()
+            .any(|byte| !(byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-'))
+        || bytes.windows(2).any(|pair| pair == b"--")
+    {
+        return Err(format!(
+            "gameplay modifier {value} must be canonical lowercase kebab-case"
+        ));
+    }
+    Ok(())
 }
 
 fn requirement_allowed_at(
@@ -565,6 +761,18 @@ mod tests {
                 requirement(Requirement::AllAuthorConsents),
                 requirement(Requirement::PaperRevisionCoversSectionMerges),
             ],
+            gameplay: None,
+        }
+    }
+
+    fn typed_gameplay() -> ChallengeGameplayV1 {
+        ChallengeGameplayV1 {
+            difficulty: ChallengeDifficultyV1::Intermediate,
+            objective: "Separate the ablation effect from measurement noise.".into(),
+            risk: "A hidden confound can make the apparent effect non-causal.".into(),
+            modifiers: vec!["failure-retention".into(), "frozen-evaluator".into()],
+            victory_summary: "Pass every hard gate and retain all failed runs.".into(),
+            role_resources: None,
         }
     }
 
@@ -582,6 +790,203 @@ mod tests {
             assert_eq!(first, second);
             assert!(first.starts_with("sha256:"));
         }
+    }
+
+    #[test]
+    fn absent_gameplay_preserves_legacy_canonical_bytes_and_hash() {
+        #[derive(Serialize)]
+        struct LegacyChallengeRulesetV1<'a> {
+            schema: &'a str,
+            template: ChallengeTemplateV1,
+            duration_seconds: u32,
+            grace_seconds: u32,
+            phase_gates: &'a [ChallengePhaseGateV1],
+            victory_requirements: &'a [ChallengeMinimumV1],
+        }
+
+        let ruleset = valid_ruleset(ChallengeTemplateV1::Replication);
+        let legacy_shape = LegacyChallengeRulesetV1 {
+            schema: &ruleset.schema,
+            template: ruleset.template,
+            duration_seconds: ruleset.duration_seconds,
+            grace_seconds: ruleset.grace_seconds,
+            phase_gates: &ruleset.phase_gates,
+            victory_requirements: &ruleset.victory_requirements,
+        };
+        assert_eq!(
+            serde_json::to_vec(&ruleset).expect("serialize extended ruleset"),
+            serde_json::to_vec(&legacy_shape).expect("serialize legacy ruleset")
+        );
+        assert_eq!(
+            ruleset.canonical_hash().expect("ruleset hash"),
+            canonical_json_sha256(&legacy_shape).expect("legacy shape hash")
+        );
+
+        let serialized = serde_json::to_value(&legacy_shape).expect("legacy JSON");
+        assert!(serialized.get("gameplay").is_none());
+        let decoded: ChallengeRulesetV1 =
+            serde_json::from_value(serialized).expect("deserialize legacy ruleset");
+        assert!(decoded.gameplay.is_none());
+        assert_eq!(decoded, ruleset);
+    }
+
+    #[test]
+    fn typed_gameplay_is_validated_and_participates_in_the_canonical_hash() {
+        let mut ruleset = valid_ruleset(ChallengeTemplateV1::BenchmarkAblation);
+        let legacy_hash = ruleset.canonical_hash().expect("legacy hash");
+        ruleset.gameplay = Some(typed_gameplay());
+        ruleset.validate().expect("typed gameplay");
+        let typed_hash = ruleset.canonical_hash().expect("typed hash");
+        assert_ne!(legacy_hash, typed_hash);
+        assert_eq!(
+            serde_json::to_value(&ruleset).expect("serialize ruleset")["gameplay"]["difficulty"],
+            "intermediate"
+        );
+    }
+
+    #[test]
+    fn optional_role_resources_preserve_old_typed_bytes_and_join_the_hash_when_present() {
+        let gameplay = typed_gameplay();
+        let legacy_bytes = serde_json::to_vec(&gameplay).expect("legacy typed gameplay bytes");
+        assert!(!String::from_utf8(legacy_bytes.clone())
+            .expect("JSON")
+            .contains("role_resources"));
+
+        let mut enabled = gameplay;
+        enabled.role_resources = Some(ChallengeRoleResourcesV1 {
+            captain_focus: 2,
+            evidence_focus: 3,
+            experiment_focus: 3,
+            run_budget: 4,
+            retained_failure_focus_refund: 1,
+        });
+        enabled.validate().expect("role resources");
+        assert_ne!(
+            canonical_json_sha256(&enabled).expect("resource gameplay hash"),
+            canonical_json_sha256(
+                &serde_json::from_slice::<ChallengeGameplayV1>(&legacy_bytes)
+                    .expect("legacy typed gameplay")
+            )
+            .expect("legacy gameplay hash")
+        );
+    }
+
+    #[test]
+    fn role_resources_reject_impossible_or_economic_pressure_allocations() {
+        let mut allocation = ChallengeRoleResourcesV1 {
+            captain_focus: 3,
+            evidence_focus: 2,
+            experiment_focus: 3,
+            run_budget: 3,
+            retained_failure_focus_refund: 1,
+        };
+        assert!(allocation
+            .validate()
+            .unwrap_err()
+            .contains("must be supportable"));
+        allocation.captain_focus = 2;
+        allocation.retained_failure_focus_refund = 5;
+        assert!(allocation
+            .validate()
+            .unwrap_err()
+            .contains("must be between"));
+        allocation.retained_failure_focus_refund = 0;
+        assert!(allocation
+            .validate()
+            .unwrap_err()
+            .contains("must be between"));
+    }
+
+    #[test]
+    fn role_run_budget_must_cover_disjoint_hard_run_minima() {
+        let mut ruleset = valid_ruleset(ChallengeTemplateV1::BenchmarkAblation);
+        let mut gameplay = typed_gameplay();
+        gameplay.role_resources = Some(ChallengeRoleResourcesV1 {
+            captain_focus: 1,
+            evidence_focus: 1,
+            experiment_focus: 1,
+            run_budget: 1,
+            retained_failure_focus_refund: 1,
+        });
+        ruleset.gameplay = Some(gameplay);
+
+        let error = ruleset
+            .validate()
+            .expect_err("one run cannot be both successful and retained-failed");
+        assert!(error.contains("run_budget must be at least 2"));
+
+        ruleset
+            .gameplay
+            .as_mut()
+            .and_then(|gameplay| gameplay.role_resources.as_mut())
+            .expect("role resources")
+            .run_budget = 2;
+        ruleset.validate().expect("two-run budget is reachable");
+    }
+
+    #[test]
+    fn experiment_focus_must_cover_successful_run_minimum() {
+        let mut ruleset = valid_ruleset(ChallengeTemplateV1::Replication);
+        let successful = ruleset.phase_gates[2]
+            .requirements
+            .iter_mut()
+            .find(|requirement| requirement.kind == ChallengeRequirementKindV1::SuccessfulRuns)
+            .expect("successful run requirement");
+        successful.minimum = 2;
+        let mut gameplay = typed_gameplay();
+        gameplay.role_resources = Some(ChallengeRoleResourcesV1 {
+            captain_focus: 1,
+            evidence_focus: 1,
+            experiment_focus: 1,
+            run_budget: 2,
+            retained_failure_focus_refund: 1,
+        });
+        ruleset.gameplay = Some(gameplay);
+
+        let error = ruleset
+            .validate()
+            .expect_err("successful runs permanently spend experiment focus");
+        assert!(error.contains("experiment_focus must be at least 2"));
+
+        ruleset
+            .gameplay
+            .as_mut()
+            .and_then(|gameplay| gameplay.role_resources.as_mut())
+            .expect("role resources")
+            .experiment_focus = 2;
+        ruleset
+            .validate()
+            .expect("successful-run focus is reachable");
+    }
+
+    #[test]
+    fn typed_gameplay_rejects_noncanonical_or_unsafe_content() {
+        let mut gameplay = typed_gameplay();
+        gameplay.objective = " surrounding whitespace ".into();
+        assert!(gameplay.validate().unwrap_err().contains("whitespace"));
+
+        gameplay = typed_gameplay();
+        gameplay.risk = "line one\nline two".into();
+        assert!(gameplay.validate().unwrap_err().contains("control"));
+
+        gameplay = typed_gameplay();
+        gameplay.modifiers = vec!["Frozen-Evaluator".into()];
+        assert!(gameplay.validate().unwrap_err().contains("kebab-case"));
+
+        gameplay = typed_gameplay();
+        gameplay.modifiers = vec!["frozen-evaluator".into(), "frozen-evaluator".into()];
+        assert!(gameplay.validate().unwrap_err().contains("duplicate"));
+
+        gameplay = typed_gameplay();
+        gameplay.modifiers = vec!["frozen-evaluator".into(), "failure-retention".into()];
+        assert!(gameplay
+            .validate()
+            .unwrap_err()
+            .contains("ascending lexical order"));
+
+        gameplay = typed_gameplay();
+        gameplay.victory_summary = "x".repeat(MAX_GAMEPLAY_TEXT_CHARS + 1);
+        assert!(gameplay.validate().unwrap_err().contains("characters"));
     }
 
     #[test]

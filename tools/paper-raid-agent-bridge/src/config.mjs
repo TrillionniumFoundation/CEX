@@ -131,10 +131,9 @@ export async function loadConfig(path) {
   };
   if (
     !Array.isArray(document.paper_ids) ||
-    document.paper_ids.length < 1 ||
     document.paper_ids.length > 64
   ) {
-    throw new Error("paper_ids must be an array with 1 to 64 entries");
+    throw new Error("paper_ids must be an array with 0 to 64 entries");
   }
   const paperIds = document.paper_ids.map((value, index) =>
     assertCanonicalUuid(value, `paper_ids[${index}]`),

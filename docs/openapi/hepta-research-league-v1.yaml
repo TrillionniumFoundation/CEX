@@ -378,7 +378,7 @@ paths:
           schema: { type: string, format: uuid }
       responses:
         "200": { description: Durable verified native Chain projection }
-        "404": { description: Command remains pending finality }
+        "404": { description: No verified command-finality projection is available; pending versus unavailable is not inferred }
   /v1/hepta/trnm/finality/verify:
     post:
       tags: [TRNM]
@@ -403,7 +403,7 @@ paths:
           schema: { type: string, format: uuid }
       responses:
         "200": { description: Projected finality receipt }
-        "404": { description: Command remains pending_finality }
+        "404": { description: No command-finality projection is available; pending versus unavailable is not inferred }
   /v1/hepta/research-terminal/challenges/{challenge_id}/task-package:
     get:
       tags: [Research Terminal]
@@ -477,6 +477,47 @@ components:
           type: array
           maxItems: 18
           items: { $ref: "#/components/schemas/ChallengeMinimumV1" }
+    ChallengeGameplayV1:
+      type: object
+      additionalProperties: false
+      required: [difficulty, objective, risk, modifiers, victory_summary]
+      properties:
+        difficulty: { type: string, enum: [introductory, intermediate, advanced] }
+        objective: { type: string, minLength: 1, maxLength: 512 }
+        risk: { type: string, minLength: 1, maxLength: 512 }
+        modifiers:
+          type: array
+          maxItems: 8
+          uniqueItems: true
+          description: Canonical lowercase kebab-case tokens in ascending lexical order.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 48
+            pattern: "^[a-z](?:[a-z0-9]|-[a-z0-9])*$"
+        victory_summary: { type: string, minLength: 1, maxLength: 512 }
+        role_resources:
+          description: >-
+            Optional non-economic role pacing budget. Omission preserves the
+            previous typed gameplay bytes and canonical hash.
+          allOf:
+            - { $ref: "#/components/schemas/ChallengeRoleResourcesV1" }
+    ChallengeRoleResourcesV1:
+      type: object
+      additionalProperties: false
+      required: [captain_focus, evidence_focus, experiment_focus, run_budget, retained_failure_focus_refund]
+      properties:
+        captain_focus: { type: integer, minimum: 1, maximum: 32 }
+        evidence_focus: { type: integer, minimum: 1, maximum: 32 }
+        experiment_focus: { type: integer, minimum: 1, maximum: 32 }
+        run_budget: { type: integer, minimum: 1, maximum: 32 }
+        retained_failure_focus_refund:
+          type: integer
+          minimum: 1
+          maximum: 4
+          description: >-
+            Non-economic focus returned only when a failed RunRecord retains
+            its failure disclosure. Cancelled runs never receive this refund.
     ChallengeRulesetV1:
       type: object
       additionalProperties: false
@@ -496,6 +537,10 @@ components:
           minItems: 3
           maxItems: 18
           items: { $ref: "#/components/schemas/ChallengeMinimumV1" }
+        gameplay:
+          description: Optional authoritative player-facing metadata. Omission preserves legacy V1 canonical bytes and hash.
+          allOf:
+            - { $ref: "#/components/schemas/ChallengeGameplayV1" }
     CreateChallengeRequest:
       type: object
       additionalProperties: false

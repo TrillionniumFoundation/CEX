@@ -4,7 +4,7 @@
 //! Nakama research-session runtime. They deliberately do not widen or alter
 //! any legacy `trnm.match.*.v1` contract.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
@@ -35,6 +35,7 @@ pub const HUMAN_KEY_ROTATION_V2: &str = "hepta.paper_raid.human_key_rotation.v2"
 pub const HUMAN_KEY_REVOCATION_V2: &str = "hepta.paper_raid.human_key_revocation.v2";
 pub const CONSUMER_USER_ASSERTION_V2: &str = "hepta.consumer-edge.user-assertion.v2";
 pub const AGENT_PROPOSAL_V1: &str = "hepta.paper_raid.agent_proposal.v1";
+pub const AGENT_PROPOSAL_V2: &str = "hepta.paper_raid.agent_proposal.v2";
 pub const HUMAN_DECISION_V1: &str = "hepta.paper_raid.human_decision.v1";
 pub const HUMAN_EVIDENCE_VERIFICATION_V1: &str = "hepta.paper_raid.human_evidence_verification.v1";
 pub const SECTION_REVIEW_V1: &str = "hepta.paper_raid.section_review.v1";
@@ -44,6 +45,14 @@ pub const PAPER_REVIEW_ATTESTATION_V1: &str = "hepta.paper_raid.review_attestati
 pub const PAPER_REPRODUCTION_V1: &str = "hepta.paper_raid.reproduction.v1";
 pub const PAPER_APPEAL_V1: &str = "hepta.paper_raid.appeal.v1";
 pub const PAPER_APPEAL_RESOLUTION_V1: &str = "hepta.paper_raid.appeal_resolution.v1";
+pub const FROZEN_REVIEW_AUTHORITY_V1: &str = "hepta.paper_raid.frozen_review_authority.v1";
+pub const RESOLVED_FROZEN_REVIEW_BUNDLE_V1: &str =
+    "hepta.paper_raid.resolved_frozen_review_bundle.v1";
+pub const FROZEN_REVIEW_BUNDLE_V1: &str = RESOLVED_FROZEN_REVIEW_BUNDLE_V1;
+pub const REVIEW_EXECUTION_RECEIPT_V1: &str = "hepta.paper_raid.review_execution_receipt.v1";
+pub const REVIEW_EXECUTION_RECEIPT_ID_DOMAIN_V1: &str =
+    "hepta.paper_raid.review_execution_receipt_id.v1";
+pub const REVIEW_OBJECT_DOWNLOAD_PATH_V1: &str = "/api/agent-bridge/review-objects";
 
 pub const RESEARCH_SESSION_AUTHORIZATION_V1: &str = "trnm.research-session.authorization.v1";
 pub const RESEARCH_SESSION_ACTION_V1: &str = "trnm.research-session.action.v1";
@@ -211,7 +220,7 @@ pub fn sha256_digest(bytes: &[u8]) -> String {
 /// arrays, and objects (no floating-point values). Object keys are sorted by
 /// UTF-8/Unicode scalar order through `serde_json::Map` before compact JSON
 /// encoding; arrays retain their contract order.
-pub fn canonical_json_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
+pub fn canonical_json_bytes<T: Serialize + ?Sized>(value: &T) -> Result<Vec<u8>, String> {
     fn sort_value(value: serde_json::Value) -> serde_json::Value {
         match value {
             serde_json::Value::Array(values) => {
@@ -234,7 +243,7 @@ pub fn canonical_json_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, String> 
     serde_json::to_vec(&sort_value(value)).map_err(|error| error.to_string())
 }
 
-pub fn canonical_json_sha256<T: Serialize>(value: &T) -> Result<String, String> {
+pub fn canonical_json_sha256<T: Serialize + ?Sized>(value: &T) -> Result<String, String> {
     canonical_json_bytes(value).map(|bytes| sha256_digest(&bytes))
 }
 
@@ -735,7 +744,10 @@ fn agent_bridge_path_method_allowed(method: &str, path: &str) -> bool {
         ("GET", "/api/agent-bridge/binding")
             | ("POST", "/api/agent-bridge/health")
             | ("POST", "/api/agent-bridge/inbox")
+            | ("POST", "/api/agent-bridge/delivery-drafts")
             | ("POST", "/api/agent-bridge/proposals")
+            | ("GET", REVIEW_OBJECT_DOWNLOAD_PATH_V1)
+            | ("POST", "/api/agent-bridge/review-receipts")
     )
 }
 
@@ -855,7 +867,9 @@ pub fn agent_bridge_request_proof_signing_bytes(
             .string(&claim.schema)?
             .string(&claim.binding_id.to_string())?
             .string(&claim.agent_id)?
-            .digest(&claim.agent_key_id)?
+            // `agent_key_id` is validated as a SHA-256 identifier above, but the frozen
+            // cross-language request-proof frame binds its canonical `sha256:<hex>` text.
+            .string(&claim.agent_key_id)?
             .string(&claim.http_method)?
             .string(&claim.canonical_path)?
             .bytes(claim.canonical_query.as_bytes())?
@@ -2836,6 +2850,918 @@ pub struct PaperBundleV2 {
     pub paper_bundle_hash: String,
 }
 
+/// One immutable CAS member disclosed to an independently assigned Review Raid actor.
+///
+/// `download_path` is deliberately a fixed local route rather than an arbitrary URI.  The
+/// assignment, bundle, object and task bindings are carried in the signed Agent request query;
+/// consumers must never treat this value as a general-purpose URL.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenReviewObjectV1 {
+    pub object_key: String,
+    pub logical_path: String,
+    pub role: String,
+    pub digest: String,
+    pub size_bytes: u64,
+    pub media_type: String,
+    pub download_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenReviewExecutionPlanV1 {
+    pub schema: String,
+    pub kind: String,
+    pub adapter: String,
+    pub evaluator_version: String,
+    pub entrypoint: String,
+    pub timeout_ms: u64,
+    pub seed: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenReviewExecutionPolicyV1 {
+    pub schema: String,
+    pub kind: String,
+    pub adapter: String,
+    pub timeout_ms: u64,
+    pub seed: u64,
+}
+
+/// The scientific authority returned by Hepta before the Consumer BFF reads any CAS bytes.
+///
+/// This record deliberately is not an executable bundle.  It binds one live independent
+/// assignment to the release ArtifactManifest and to the two challenge-manifest digests.  A BFF
+/// may resolve those digests, but may not add, remove, or rewrite any ArtifactManifest member.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenReviewAuthorityV1 {
+    pub schema: String,
+    pub authority_hash: String,
+    pub assignment_id: Uuid,
+    pub paper_project_id: Uuid,
+    pub submission_id: Uuid,
+    pub review_round: u64,
+    pub slot: String,
+    pub assignment_version: u64,
+    pub expires_at: String,
+    pub release_candidate_hash: String,
+    pub paper_bundle_hash: String,
+    pub artifact_manifest_hash: String,
+    pub evaluator_manifest_hash: String,
+    pub dataset_manifest_hash: String,
+    pub artifact_objects: Vec<FrozenReviewObjectV1>,
+    pub execution_policy: FrozenReviewExecutionPolicyV1,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ChallengeManifestObjectV1 {
+    pub cas_uri: String,
+    pub media_type: String,
+    pub path: String,
+    pub sha256: String,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ChallengeEvaluatorManifestV1 {
+    pub entrypoint: String,
+    pub frozen: bool,
+    pub objects: Vec<ChallengeManifestObjectV1>,
+    pub pack_id: String,
+    pub runtime: String,
+    pub schema: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ChallengeDatasetManifestV1 {
+    pub objects: Vec<ChallengeManifestObjectV1>,
+    pub pack_id: String,
+    pub schema: String,
+}
+
+pub fn parse_challenge_evaluator_manifest(
+    bytes: &[u8],
+    expected_digest: &str,
+) -> Result<ChallengeEvaluatorManifestV1, String> {
+    if sha256_digest(bytes) != expected_digest {
+        return Err("evaluator manifest bytes do not match the Hepta digest pin".to_string());
+    }
+    let manifest: ChallengeEvaluatorManifestV1 = serde_json::from_slice(bytes)
+        .map_err(|_| "evaluator manifest is not strict JSON v1".to_string())?;
+    if manifest.schema != "hepta.challenge_pack.evaluator_manifest.v1"
+        || !manifest.frozen
+        || manifest.runtime != "python3-stdlib"
+        || !safe_review_path(&manifest.entrypoint)
+    {
+        return Err("evaluator manifest authority fields are invalid".to_string());
+    }
+    validate_challenge_manifest_objects(&manifest.objects)?;
+    if manifest
+        .objects
+        .iter()
+        .filter(|object| object.path == manifest.entrypoint)
+        .count()
+        != 1
+    {
+        return Err("evaluator manifest entrypoint must name exactly one member".to_string());
+    }
+    validate_logical_id("pack_id", &manifest.pack_id)?;
+    Ok(manifest)
+}
+
+pub fn parse_challenge_dataset_manifest(
+    bytes: &[u8],
+    expected_digest: &str,
+) -> Result<ChallengeDatasetManifestV1, String> {
+    if sha256_digest(bytes) != expected_digest {
+        return Err("dataset manifest bytes do not match the Hepta digest pin".to_string());
+    }
+    let manifest: ChallengeDatasetManifestV1 = serde_json::from_slice(bytes)
+        .map_err(|_| "dataset manifest is not strict JSON v1".to_string())?;
+    if manifest.schema != "hepta.challenge_pack.dataset_manifest.v1" {
+        return Err("dataset manifest schema is invalid".to_string());
+    }
+    validate_logical_id("pack_id", &manifest.pack_id)?;
+    validate_challenge_manifest_objects(&manifest.objects)?;
+    Ok(manifest)
+}
+
+fn validate_challenge_manifest_objects(
+    objects: &[ChallengeManifestObjectV1],
+) -> Result<(), String> {
+    if objects.is_empty() || objects.len() > 32 {
+        return Err("challenge manifest member count is invalid".to_string());
+    }
+    let mut paths = HashSet::new();
+    let mut digests = HashSet::new();
+    for object in objects {
+        if !safe_review_path(&object.path)
+            || object.size == 0
+            || object.size > 16 * 1024 * 1024
+            || object.media_type.is_empty()
+            || object.media_type.len() > 128
+            || object
+                .media_type
+                .bytes()
+                .any(|byte| byte.is_ascii_control())
+            || !paths.insert(&object.path)
+            || !digests.insert(&object.sha256)
+        {
+            return Err("challenge manifest contains an unsafe or duplicate member".to_string());
+        }
+        decode_digest(&object.sha256)?;
+        let raw = object
+            .sha256
+            .strip_prefix("sha256:")
+            .ok_or_else(|| "challenge manifest member digest is invalid".to_string())?;
+        if object.cas_uri != format!("cas://sha256/{raw}") {
+            return Err("challenge manifest CAS URI does not match its member digest".to_string());
+        }
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct FrozenReviewAuthorityHashFrameV1<'a> {
+    schema: &'a str,
+    assignment_id: Uuid,
+    paper_project_id: Uuid,
+    submission_id: Uuid,
+    review_round: u64,
+    slot: &'a str,
+    assignment_version: u64,
+    expires_at: &'a str,
+    release_candidate_hash: &'a str,
+    paper_bundle_hash: &'a str,
+    artifact_manifest_hash: &'a str,
+    evaluator_manifest_hash: &'a str,
+    dataset_manifest_hash: &'a str,
+    artifact_objects: &'a [FrozenReviewObjectV1],
+    execution_policy: &'a FrozenReviewExecutionPolicyV1,
+}
+
+pub fn frozen_review_authority_hash(authority: &FrozenReviewAuthorityV1) -> Result<String, String> {
+    validate_frozen_review_authority(authority, false)?;
+    canonical_json_sha256(&FrozenReviewAuthorityHashFrameV1 {
+        schema: &authority.schema,
+        assignment_id: authority.assignment_id,
+        paper_project_id: authority.paper_project_id,
+        submission_id: authority.submission_id,
+        review_round: authority.review_round,
+        slot: &authority.slot,
+        assignment_version: authority.assignment_version,
+        expires_at: &authority.expires_at,
+        release_candidate_hash: &authority.release_candidate_hash,
+        paper_bundle_hash: &authority.paper_bundle_hash,
+        artifact_manifest_hash: &authority.artifact_manifest_hash,
+        evaluator_manifest_hash: &authority.evaluator_manifest_hash,
+        dataset_manifest_hash: &authority.dataset_manifest_hash,
+        artifact_objects: &authority.artifact_objects,
+        execution_policy: &authority.execution_policy,
+    })
+}
+
+pub fn verify_frozen_review_authority(authority: &FrozenReviewAuthorityV1) -> Result<(), String> {
+    validate_frozen_review_authority(authority, true)
+}
+
+/// Assignment-scoped, immutable projection of the exact review bytes.
+///
+/// This is intentionally not a Paper Room membership token.  Its sole authority is the exact
+/// active assignment and the exact object descriptors committed by `bundle_hash`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenReviewBundleV1 {
+    pub schema: String,
+    pub bundle_hash: String,
+    pub authority: FrozenReviewAuthorityV1,
+    pub authority_hash: String,
+    pub assignment_id: Uuid,
+    pub paper_project_id: Uuid,
+    pub submission_id: Uuid,
+    pub review_round: u64,
+    pub slot: String,
+    pub assignment_version: u64,
+    pub expires_at: String,
+    pub release_candidate_hash: String,
+    pub paper_bundle_hash: String,
+    pub artifact_manifest_hash: String,
+    pub evaluator_manifest_hash: String,
+    pub dataset_manifest_hash: String,
+    pub objects: Vec<FrozenReviewObjectV1>,
+    pub execution: FrozenReviewExecutionPlanV1,
+}
+
+#[derive(Serialize)]
+struct FrozenReviewBundleHashFrameV1<'a> {
+    schema: &'a str,
+    authority: &'a FrozenReviewAuthorityV1,
+    authority_hash: &'a str,
+    assignment_id: Uuid,
+    paper_project_id: Uuid,
+    submission_id: Uuid,
+    review_round: u64,
+    slot: &'a str,
+    assignment_version: u64,
+    expires_at: &'a str,
+    release_candidate_hash: &'a str,
+    paper_bundle_hash: &'a str,
+    artifact_manifest_hash: &'a str,
+    evaluator_manifest_hash: &'a str,
+    dataset_manifest_hash: &'a str,
+    objects: &'a [FrozenReviewObjectV1],
+    execution: &'a FrozenReviewExecutionPlanV1,
+}
+
+pub fn frozen_review_bundle_hash(bundle: &FrozenReviewBundleV1) -> Result<String, String> {
+    validate_frozen_review_bundle(bundle, false)?;
+    canonical_json_sha256(&FrozenReviewBundleHashFrameV1 {
+        schema: &bundle.schema,
+        authority: &bundle.authority,
+        authority_hash: &bundle.authority_hash,
+        assignment_id: bundle.assignment_id,
+        paper_project_id: bundle.paper_project_id,
+        submission_id: bundle.submission_id,
+        review_round: bundle.review_round,
+        slot: &bundle.slot,
+        assignment_version: bundle.assignment_version,
+        expires_at: &bundle.expires_at,
+        release_candidate_hash: &bundle.release_candidate_hash,
+        paper_bundle_hash: &bundle.paper_bundle_hash,
+        artifact_manifest_hash: &bundle.artifact_manifest_hash,
+        evaluator_manifest_hash: &bundle.evaluator_manifest_hash,
+        dataset_manifest_hash: &bundle.dataset_manifest_hash,
+        objects: &bundle.objects,
+        execution: &bundle.execution,
+    })
+}
+
+pub fn verify_frozen_review_bundle(bundle: &FrozenReviewBundleV1) -> Result<(), String> {
+    validate_frozen_review_bundle(bundle, true)
+}
+
+fn validate_frozen_review_bundle(
+    bundle: &FrozenReviewBundleV1,
+    verify_hash: bool,
+) -> Result<(), String> {
+    if bundle.schema != RESOLVED_FROZEN_REVIEW_BUNDLE_V1 {
+        return Err("frozen review bundle schema is invalid".to_string());
+    }
+    verify_frozen_review_authority(&bundle.authority)?;
+    if bundle.authority_hash != bundle.authority.authority_hash
+        || bundle.assignment_id != bundle.authority.assignment_id
+        || bundle.paper_project_id != bundle.authority.paper_project_id
+        || bundle.submission_id != bundle.authority.submission_id
+        || bundle.review_round != bundle.authority.review_round
+        || bundle.slot != bundle.authority.slot
+        || bundle.assignment_version != bundle.authority.assignment_version
+        || bundle.expires_at != bundle.authority.expires_at
+        || bundle.release_candidate_hash != bundle.authority.release_candidate_hash
+        || bundle.paper_bundle_hash != bundle.authority.paper_bundle_hash
+        || bundle.artifact_manifest_hash != bundle.authority.artifact_manifest_hash
+        || bundle.evaluator_manifest_hash != bundle.authority.evaluator_manifest_hash
+        || bundle.dataset_manifest_hash != bundle.authority.dataset_manifest_hash
+    {
+        return Err("resolved review bundle disagrees with Hepta authority".to_string());
+    }
+    validate_resolved_review_object_mapping(&bundle.authority.artifact_objects, &bundle.objects)?;
+    if bundle.assignment_id.is_nil()
+        || bundle.paper_project_id.is_nil()
+        || bundle.submission_id.is_nil()
+        || bundle.review_round == 0
+        || bundle.assignment_version == 0
+    {
+        return Err("frozen review bundle assignment binding is invalid".to_string());
+    }
+    if !matches!(
+        bundle.slot.as_str(),
+        "evaluator" | "reviewer_1" | "reviewer_2" | "reproducer"
+    ) {
+        return Err("frozen review bundle slot is invalid".to_string());
+    }
+    for digest in [
+        &bundle.authority_hash,
+        &bundle.release_candidate_hash,
+        &bundle.paper_bundle_hash,
+        &bundle.artifact_manifest_hash,
+        &bundle.evaluator_manifest_hash,
+        &bundle.dataset_manifest_hash,
+    ] {
+        decode_digest(digest)?;
+    }
+    let expected_kind = match bundle.slot.as_str() {
+        "evaluator" => "evaluate",
+        "reviewer_1" | "reviewer_2" => "review",
+        "reproducer" => "reproduce",
+        _ => unreachable!(),
+    };
+    if bundle.execution.schema != "hepta.paper_raid.review_execution_plan.v1"
+        || bundle.execution.kind != expected_kind
+        || bundle.execution.adapter != "python3-stdlib-v1"
+        || !safe_review_path(&bundle.execution.entrypoint)
+        || !(500..=30_000).contains(&bundle.execution.timeout_ms)
+        || bundle.execution.seed > JSON_SAFE_U64_MAX
+    {
+        return Err(
+            "frozen review execution plan is not an allowed fixed adapter plan".to_string(),
+        );
+    }
+    if bundle.execution.kind != bundle.authority.execution_policy.kind
+        || bundle.execution.adapter != bundle.authority.execution_policy.adapter
+        || bundle.execution.timeout_ms != bundle.authority.execution_policy.timeout_ms
+        || bundle.execution.seed != bundle.authority.execution_policy.seed
+    {
+        return Err("resolved execution plan disagrees with Hepta authority".to_string());
+    }
+    validate_text("evaluator_version", &bundle.execution.evaluator_version)?;
+    if !bundle.expires_at.ends_with('Z')
+        || bundle.expires_at.len() < 20
+        || bundle.expires_at.len() > 40
+    {
+        return Err("frozen review bundle expiry must be canonical UTC RFC3339".to_string());
+    }
+    if !(3..=64).contains(&bundle.objects.len()) {
+        return Err("frozen review bundle must contain 3-64 objects".to_string());
+    }
+    let mut previous: Option<(&str, &str)> = None;
+    let mut keys = HashSet::new();
+    let mut paths = HashSet::new();
+    let mut total_size = 0_u64;
+    for object in &bundle.objects {
+        validate_logical_id("object_key", &object.object_key)?;
+        validate_text("logical_path", &object.logical_path)?;
+        validate_text("role", &object.role)?;
+        validate_text("media_type", &object.media_type)?;
+        if object.logical_path.starts_with('/')
+            || object
+                .logical_path
+                .split('/')
+                .any(|part| part.is_empty() || part == "." || part == "..")
+            || object.logical_path.len() > 192
+            || object
+                .media_type
+                .bytes()
+                .any(|byte| byte.is_ascii_control())
+            || object.download_path != REVIEW_OBJECT_DOWNLOAD_PATH_V1
+            || !matches!(
+                object.role.as_str(),
+                "candidate" | "dataset" | "evaluator_support" | "frozen_evaluator" | "input"
+            )
+            || object.size_bytes == 0
+            || object.size_bytes > 16 * 1024 * 1024
+        {
+            return Err("frozen review object descriptor is unsafe".to_string());
+        }
+        decode_digest(&object.digest)?;
+        let ordering = (object.object_key.as_str(), object.logical_path.as_str());
+        if previous.is_some_and(|prior| prior >= ordering)
+            || !keys.insert(&object.object_key)
+            || !paths.insert(&object.logical_path)
+        {
+            return Err(
+                "frozen review objects must be strictly sorted by unique object_key/path"
+                    .to_string(),
+            );
+        }
+        total_size = total_size
+            .checked_add(object.size_bytes)
+            .ok_or_else(|| "frozen review object size overflow".to_string())?;
+        previous = Some(ordering);
+    }
+    if total_size > 64 * 1024 * 1024 {
+        return Err("frozen review bundle exceeds 64 MiB".to_string());
+    }
+    if bundle
+        .objects
+        .iter()
+        .filter(|object| {
+            object.role == "frozen_evaluator"
+                && object.logical_path == bundle.execution.entrypoint
+                && object.digest == bundle.execution.evaluator_version
+        })
+        .count()
+        != 1
+        || bundle
+            .objects
+            .iter()
+            .filter(|object| object.role == "candidate")
+            .count()
+            != 1
+        || bundle
+            .objects
+            .iter()
+            .filter(|object| object.role == "dataset")
+            .count()
+            != 1
+        || bundle
+            .objects
+            .iter()
+            .filter(|object| object.role == "evaluator_support")
+            .count()
+            > 1
+    {
+        return Err(
+            "resolved review bundle must bind one entrypoint, one candidate, and dataset members"
+                .to_string(),
+        );
+    }
+    if verify_hash {
+        decode_digest(&bundle.bundle_hash)?;
+        if frozen_review_bundle_hash(bundle)? != bundle.bundle_hash {
+            return Err("frozen review bundle hash mismatch".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn validate_resolved_review_object_mapping(
+    authority_objects: &[FrozenReviewObjectV1],
+    resolved_objects: &[FrozenReviewObjectV1],
+) -> Result<(), String> {
+    if authority_objects.len() != resolved_objects.len() {
+        return Err(
+            "resolved review object count differs from Hepta ArtifactManifest authority"
+                .to_string(),
+        );
+    }
+    for (authority, resolved) in authority_objects.iter().zip(resolved_objects) {
+        if resolved.object_key != authority.object_key
+            || resolved.role != authority.role
+            || resolved.digest != authority.digest
+            || resolved.size_bytes != authority.size_bytes
+            || resolved.media_type != authority.media_type
+            || resolved.download_path != authority.download_path
+        {
+            return Err(
+                "resolved review object differs from Hepta ArtifactManifest authority".to_string(),
+            );
+        }
+        let expected_transport_path = match (resolved.role.as_str(), resolved.media_type.as_str()) {
+            ("frozen_evaluator", "text/x-python; charset=utf-8") => "evaluator/main.py",
+            ("evaluator_support", "text/x-python; charset=utf-8") => "evaluator/baseline.py",
+            ("candidate", "application/json") => "inputs/candidate.json",
+            ("dataset", "application/json") => "inputs/dataset.json",
+            ("dataset", "text/csv; charset=utf-8") => "inputs/dataset.csv",
+            _ => {
+                return Err(
+                    "frozen Python adapter object role or media type is unsupported".to_string(),
+                );
+            }
+        };
+        if resolved.logical_path != expected_transport_path {
+            return Err("resolved review object transport path is not deterministic".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn safe_review_path(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 192
+        && !value.starts_with('/')
+        && !value.contains('\\')
+        && !value.contains('\0')
+        && value
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+}
+
+fn validate_frozen_review_authority(
+    authority: &FrozenReviewAuthorityV1,
+    verify_hash: bool,
+) -> Result<(), String> {
+    if authority.schema != FROZEN_REVIEW_AUTHORITY_V1
+        || authority.assignment_id.is_nil()
+        || authority.paper_project_id.is_nil()
+        || authority.submission_id.is_nil()
+        || authority.review_round == 0
+        || authority.assignment_version == 0
+        || !matches!(
+            authority.slot.as_str(),
+            "evaluator" | "reviewer_1" | "reviewer_2" | "reproducer"
+        )
+    {
+        return Err("frozen review authority assignment binding is invalid".to_string());
+    }
+    for digest in [
+        &authority.release_candidate_hash,
+        &authority.paper_bundle_hash,
+        &authority.artifact_manifest_hash,
+        &authority.evaluator_manifest_hash,
+        &authority.dataset_manifest_hash,
+    ] {
+        decode_digest(digest)?;
+    }
+    if !authority.expires_at.ends_with('Z')
+        || authority.expires_at.len() < 20
+        || authority.expires_at.len() > 40
+        || !(3..=64).contains(&authority.artifact_objects.len())
+    {
+        return Err("frozen review authority expiry or object set is invalid".to_string());
+    }
+    validate_frozen_review_objects(&authority.artifact_objects)?;
+    let expected_kind = match authority.slot.as_str() {
+        "evaluator" => "evaluate",
+        "reviewer_1" | "reviewer_2" => "review",
+        "reproducer" => "reproduce",
+        _ => unreachable!(),
+    };
+    if authority.execution_policy.schema != "hepta.paper_raid.review_execution_policy.v1"
+        || authority.execution_policy.kind != expected_kind
+        || authority.execution_policy.adapter != "python3-stdlib-v1"
+        || !(500..=30_000).contains(&authority.execution_policy.timeout_ms)
+        || authority.execution_policy.seed > JSON_SAFE_U64_MAX
+    {
+        return Err("frozen review execution policy is invalid".to_string());
+    }
+    if verify_hash {
+        decode_digest(&authority.authority_hash)?;
+        if frozen_review_authority_hash(authority)? != authority.authority_hash {
+            return Err("frozen review authority hash mismatch".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn validate_frozen_review_objects(objects: &[FrozenReviewObjectV1]) -> Result<(), String> {
+    let mut previous: Option<(&str, &str)> = None;
+    let mut keys = HashSet::new();
+    let mut paths = HashSet::new();
+    let mut total_size = 0_u64;
+    for object in objects {
+        validate_logical_id("object_key", &object.object_key)?;
+        validate_text("logical_path", &object.logical_path)?;
+        validate_text("role", &object.role)?;
+        validate_text("media_type", &object.media_type)?;
+        if !safe_review_path(&object.logical_path)
+            || object
+                .media_type
+                .bytes()
+                .any(|byte| byte.is_ascii_control())
+            || object.download_path != REVIEW_OBJECT_DOWNLOAD_PATH_V1
+            || !matches!(
+                object.role.as_str(),
+                "candidate" | "dataset" | "evaluator_support" | "frozen_evaluator" | "input"
+            )
+            || object.size_bytes == 0
+            || object.size_bytes > 16 * 1024 * 1024
+        {
+            return Err("frozen review object descriptor is unsafe".to_string());
+        }
+        decode_digest(&object.digest)?;
+        let ordering = (object.object_key.as_str(), object.logical_path.as_str());
+        if previous.is_some_and(|prior| prior >= ordering)
+            || !keys.insert(&object.object_key)
+            || !paths.insert(&object.logical_path)
+        {
+            return Err(
+                "frozen review objects must be strictly sorted by unique object_key/path"
+                    .to_string(),
+            );
+        }
+        total_size = total_size
+            .checked_add(object.size_bytes)
+            .ok_or_else(|| "frozen review object size overflow".to_string())?;
+        previous = Some(ordering);
+    }
+    if total_size > 64 * 1024 * 1024 {
+        return Err("frozen review bundle exceeds 64 MiB".to_string());
+    }
+    Ok(())
+}
+
+/// Human-authored evaluation scores. These are deliberately not part of the frozen evaluator
+/// output and are collected only when the assigned evaluator confirms the execution receipt.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewExecutionScoreV1 {
+    pub method_rigor_bps: u16,
+    pub experiment_statistics_bps: u16,
+    pub reproducibility_bps: u16,
+    pub evidence_citations_bps: u16,
+    pub value_originality_bps: u16,
+    pub argument_expression_bps: u16,
+    pub ethics_transparency_bps: u16,
+}
+
+/// Human-confirmed evaluation gates. These are not trusted from the frozen evaluator process.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewExecutionHardGatesV1 {
+    pub citations_and_data_authentic: bool,
+    pub failed_runs_disclosed: bool,
+    pub all_authors_consented: bool,
+    pub core_claims_have_evidence: bool,
+    pub artifact_lineage_complete: bool,
+    pub license_ethics_coi_complete: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ReviewExecutionToleranceRuleV1 {
+    Absolute {
+        metric: String,
+        max_delta_micros: i64,
+    },
+    Relative {
+        metric: String,
+        max_delta_bps: u16,
+    },
+    Statistical {
+        metric: String,
+        minimum_interval_overlap_bps: u16,
+        maximum_effect_delta_micros: i64,
+        minimum_p_value_micros: u32,
+    },
+    Seed {
+        expected_seed_set_hash: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewEvaluationExecutionResultV1 {
+    pub reference_metrics_micros: BTreeMap<String, i64>,
+    pub tolerance_policy_version: String,
+    pub tolerance_rules: Vec<ReviewExecutionToleranceRuleV1>,
+    pub candidate_passed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewExecutionStatisticalEvidenceV1 {
+    pub interval_overlap_bps: u16,
+    pub effect_delta_micros: i64,
+    pub p_value_micros: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewReproductionExecutionResultV1 {
+    pub observed_metrics_micros: BTreeMap<String, i64>,
+    pub statistical_evidence: BTreeMap<String, ReviewExecutionStatisticalEvidenceV1>,
+}
+
+/// Agent-signed execution result.  Human review signatures consume this receipt; they do not
+/// retype metrics, seeds or environment statements.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewExecutionReceiptV1 {
+    pub schema: String,
+    pub receipt_id: Uuid,
+    pub task_id: Uuid,
+    pub binding_id: Uuid,
+    pub assignment_id: Uuid,
+    pub paper_project_id: Uuid,
+    pub submission_id: Uuid,
+    pub evaluation_id: Uuid,
+    pub kind: String,
+    pub attempt: u64,
+    pub fencing_token: u64,
+    pub bundle_hash: String,
+    pub evaluator_version: String,
+    pub input_root: String,
+    pub output_root: String,
+    pub metrics_hash: String,
+    pub observed_metrics_micros: BTreeMap<String, i64>,
+    pub statistical_evidence: serde_json::Value,
+    pub candidate_passed: Option<bool>,
+    pub seed_set_hash: String,
+    pub environment_hash: String,
+    pub run_manifest_hash: String,
+    pub logs_hash: String,
+    pub started_at_unix: i64,
+    pub completed_at_unix: i64,
+    pub agent_id: String,
+    pub agent_key_id: String,
+    pub signing_public_key_hash: String,
+    pub signature: String,
+}
+
+pub fn review_execution_receipt_id(
+    binding_id: Uuid,
+    task_id: Uuid,
+    assignment_id: Uuid,
+    bundle_hash: &str,
+    attempt: u64,
+    fencing_token: u64,
+) -> Result<Uuid, String> {
+    if binding_id.is_nil()
+        || task_id.is_nil()
+        || assignment_id.is_nil()
+        || attempt == 0
+        || attempt > JSON_SAFE_U64_MAX
+        || fencing_token == 0
+        || fencing_token > JSON_SAFE_U64_MAX
+    {
+        return Err("review execution receipt ID authority is invalid".to_string());
+    }
+    decode_digest(bundle_hash)?;
+    let fields = [
+        binding_id.to_string(),
+        task_id.to_string(),
+        assignment_id.to_string(),
+        bundle_hash.to_string(),
+        attempt.to_string(),
+        fencing_token.to_string(),
+    ];
+    let mut digest = Sha256::new();
+    digest.update(REVIEW_EXECUTION_RECEIPT_ID_DOMAIN_V1.as_bytes());
+    digest.update([0]);
+    for (index, field) in fields.iter().enumerate() {
+        if index != 0 {
+            digest.update([0]);
+        }
+        digest.update(field.as_bytes());
+    }
+    let mut bytes: [u8; 16] = digest.finalize()[..16]
+        .try_into()
+        .expect("sha256 prefix has fixed length");
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Ok(Uuid::from_bytes(bytes))
+}
+
+pub fn review_execution_receipt_signing_bytes(
+    receipt: &ReviewExecutionReceiptV1,
+) -> Result<Vec<u8>, String> {
+    validate_review_execution_receipt(receipt)?;
+    Ok(
+        CanonicalFrame::new("hepta_paper_raid_review_execution_receipt_v1")
+            .string(&receipt.schema)?
+            .string(&receipt.receipt_id.to_string())?
+            .string(&receipt.task_id.to_string())?
+            .string(&receipt.assignment_id.to_string())?
+            .string(&receipt.binding_id.to_string())?
+            .string(&receipt.paper_project_id.to_string())?
+            .string(&receipt.submission_id.to_string())?
+            .string(&receipt.evaluation_id.to_string())?
+            .string(&receipt.kind)?
+            .u64(receipt.attempt)
+            .u64(receipt.fencing_token)
+            .digest(&receipt.bundle_hash)?
+            .string(&receipt.evaluator_version)?
+            .digest(&receipt.input_root)?
+            .digest(&receipt.output_root)?
+            .digest(&receipt.metrics_hash)?
+            .u32(match receipt.candidate_passed {
+                None => 0,
+                Some(false) => 1,
+                Some(true) => 2,
+            })
+            .digest(&receipt.seed_set_hash)?
+            .digest(&receipt.environment_hash)?
+            .digest(&receipt.run_manifest_hash)?
+            .digest(&receipt.logs_hash)?
+            .i64(receipt.started_at_unix)
+            .i64(receipt.completed_at_unix)
+            .string(&receipt.agent_id)?
+            .digest(&receipt.agent_key_id)?
+            .digest(&receipt.signing_public_key_hash)?
+            .finish(),
+    )
+}
+
+pub fn review_execution_receipt_hash(receipt: &ReviewExecutionReceiptV1) -> Result<String, String> {
+    review_execution_receipt_signing_bytes(receipt).map(|bytes| sha256_digest(&bytes))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenReviewInputObjectV1 {
+    pub object_key: String,
+    pub logical_path: String,
+    pub role: String,
+    pub digest: String,
+    pub size_bytes: u64,
+}
+
+pub fn frozen_review_input_root(objects: &[FrozenReviewInputObjectV1]) -> Result<String, String> {
+    if !(3..=64).contains(&objects.len()) {
+        return Err("frozen review input root requires 3-64 objects".to_string());
+    }
+    canonical_json_sha256(objects)
+}
+
+pub fn review_execution_metrics_hash(receipt: &ReviewExecutionReceiptV1) -> Result<String, String> {
+    canonical_json_sha256(&serde_json::json!({
+        "observed_metrics_micros": receipt.observed_metrics_micros,
+        "statistical_evidence": receipt.statistical_evidence,
+        "candidate_passed": receipt.candidate_passed,
+    }))
+}
+
+pub fn verify_review_execution_receipt_signature(
+    receipt: &ReviewExecutionReceiptV1,
+    verifying_key: &VerifyingKey,
+) -> Result<(), String> {
+    let signature = decode_base64_exact::<64>("signature", &receipt.signature)?;
+    verifying_key
+        .verify(
+            &review_execution_receipt_signing_bytes(receipt)?,
+            &Signature::from_bytes(&signature),
+        )
+        .map_err(|_| "review execution receipt signature verification failed".to_string())
+}
+
+fn validate_review_execution_receipt(receipt: &ReviewExecutionReceiptV1) -> Result<(), String> {
+    if receipt.schema != REVIEW_EXECUTION_RECEIPT_V1
+        || receipt.receipt_id.is_nil()
+        || receipt.task_id.is_nil()
+        || receipt.binding_id.is_nil()
+        || receipt.assignment_id.is_nil()
+        || receipt.paper_project_id.is_nil()
+        || receipt.submission_id.is_nil()
+        || receipt.evaluation_id.is_nil()
+        || receipt.attempt == 0
+        || receipt.fencing_token == 0
+        || receipt.started_at_unix < 0
+        || receipt.completed_at_unix < receipt.started_at_unix
+    {
+        return Err("review execution receipt identity, attempt, or time is invalid".to_string());
+    }
+    if !matches!(receipt.kind.as_str(), "evaluate" | "reproduce") {
+        return Err("review execution receipt kind is invalid".to_string());
+    }
+    match (receipt.kind.as_str(), receipt.candidate_passed) {
+        ("evaluate", Some(_)) | ("reproduce", None) => {}
+        ("evaluate", None) => {
+            return Err("evaluation receipt must bind candidate_passed".to_string());
+        }
+        ("reproduce", Some(_)) => {
+            return Err("reproduction receipt must not bind candidate_passed".to_string());
+        }
+        _ => unreachable!("receipt kind was validated above"),
+    }
+    for digest in [
+        &receipt.bundle_hash,
+        &receipt.input_root,
+        &receipt.output_root,
+        &receipt.metrics_hash,
+        &receipt.seed_set_hash,
+        &receipt.environment_hash,
+        &receipt.run_manifest_hash,
+        &receipt.logs_hash,
+        &receipt.signing_public_key_hash,
+    ] {
+        decode_digest(digest)?;
+    }
+    validate_text("evaluator_version", &receipt.evaluator_version)?;
+    validate_logical_id("agent_id", &receipt.agent_id)?;
+    if receipt.agent_key_id != receipt.signing_public_key_hash {
+        return Err("review receipt signing key hashes differ".to_string());
+    }
+    if receipt.observed_metrics_micros.len() > 256 {
+        return Err("review receipt metrics are oversized".to_string());
+    }
+    Ok(())
+}
+
 pub fn paper_bundle_frame(bundle: &PaperBundleV2) -> Result<Vec<u8>, String> {
     if bundle.schema != PAPER_BUNDLE_V2 {
         return Err(format!("unsupported PaperBundle schema {}", bundle.schema));
@@ -3304,6 +4230,93 @@ pub fn verify_agent_proposal_signature(
             &Signature::from_bytes(&signature),
         )
         .map_err(|_| "Agent proposal signature verification failed".to_string())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AgentProposalSigningV2 {
+    pub schema: String,
+    pub proposal_id: Uuid,
+    pub paper_project_id: Uuid,
+    pub work_item_id: Uuid,
+    pub section_key: String,
+    pub parent_revision_id: Uuid,
+    pub lease_id: Uuid,
+    pub lease_fencing_token: u64,
+    pub expected_work_version: u64,
+    pub proposal_kind: String,
+    pub payload_hash: String,
+    pub artifact_manifest_id: Uuid,
+    pub artifact_manifest_hash: String,
+    pub agent_id: String,
+    pub binding_id: Uuid,
+    pub agent_key_id: String,
+    pub signed_at_unix: i64,
+}
+
+pub fn agent_proposal_v2_signing_bytes(
+    proposal: &AgentProposalSigningV2,
+) -> Result<Vec<u8>, String> {
+    if proposal.schema != AGENT_PROPOSAL_V2
+        || proposal.signed_at_unix < 0
+        || proposal.lease_fencing_token == 0
+        || proposal.lease_fencing_token > JSON_SAFE_U64_MAX
+        || proposal.expected_work_version == 0
+        || proposal.expected_work_version > JSON_SAFE_U64_MAX
+        || !matches!(proposal.proposal_kind.as_str(), "proposal" | "delivery")
+    {
+        return Err(
+            "Agent proposal V2 schema, kind, lease fence, work version, or signing time is invalid"
+                .to_string(),
+        );
+    }
+    validate_logical_id("section_key", &proposal.section_key)?;
+    validate_text("agent_id", &proposal.agent_id)?;
+    validate_text("agent_key_id", &proposal.agent_key_id)?;
+    Ok(CanonicalFrame::new("hepta_paper_raid_agent_proposal_v2")
+        .string(&proposal.schema)?
+        .string(&proposal.proposal_id.to_string())?
+        .string(&proposal.paper_project_id.to_string())?
+        .string(&proposal.work_item_id.to_string())?
+        .string(&proposal.section_key)?
+        .string(&proposal.parent_revision_id.to_string())?
+        .string(&proposal.lease_id.to_string())?
+        .u64(proposal.lease_fencing_token)
+        .u64(proposal.expected_work_version)
+        .string(&proposal.proposal_kind)?
+        .digest(&proposal.payload_hash)?
+        .string(&proposal.artifact_manifest_id.to_string())?
+        .digest(&proposal.artifact_manifest_hash)?
+        .string(&proposal.agent_id)?
+        .string(&proposal.binding_id.to_string())?
+        .string(&proposal.agent_key_id)?
+        .i64(proposal.signed_at_unix)
+        .finish())
+}
+
+pub fn sign_agent_proposal_v2(
+    proposal: &AgentProposalSigningV2,
+    signing_key: &SigningKey,
+) -> Result<String, String> {
+    Ok(BASE64.encode(
+        signing_key
+            .sign(&agent_proposal_v2_signing_bytes(proposal)?)
+            .to_bytes(),
+    ))
+}
+
+pub fn verify_agent_proposal_v2_signature(
+    proposal: &AgentProposalSigningV2,
+    signature: &str,
+    verifying_key: &VerifyingKey,
+) -> Result<(), String> {
+    let signature = decode_base64_exact::<64>("signature", signature)?;
+    verifying_key
+        .verify(
+            &agent_proposal_v2_signing_bytes(proposal)?,
+            &Signature::from_bytes(&signature),
+        )
+        .map_err(|_| "Agent proposal V2 signature verification failed".to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -3890,4 +4903,335 @@ pub fn verify_paper_appeal_resolution_signature(
             &Signature::from_bytes(&signature),
         )
         .map_err(|_| "paper appeal resolution signature verification failed".to_string())
+}
+
+#[cfg(test)]
+mod frozen_review_manifest_tests {
+    use super::*;
+
+    fn evaluator_bytes() -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "entrypoint":"evaluator.py",
+            "frozen":true,
+            "objects":[{
+                "cas_uri":format!("cas://sha256/{}", "a".repeat(64)),
+                "media_type":"text/x-python; charset=utf-8",
+                "path":"evaluator.py",
+                "sha256":format!("sha256:{}", "a".repeat(64)),
+                "size":7
+            }],
+            "pack_id":"pack-fixture-v1",
+            "runtime":"python3-stdlib",
+            "schema":"hepta.challenge_pack.evaluator_manifest.v1"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn strict_manifest_parser_binds_bytes_and_rejects_hostile_shapes() {
+        let bytes = evaluator_bytes();
+        let digest = sha256_digest(&bytes);
+        let parsed = parse_challenge_evaluator_manifest(&bytes, &digest).unwrap();
+        assert_eq!(parsed.entrypoint, "evaluator.py");
+        assert!(
+            parse_challenge_evaluator_manifest(&bytes, &format!("sha256:{}", "b".repeat(64)))
+                .is_err()
+        );
+
+        let traversal = serde_json::to_vec(&serde_json::json!({
+            "entrypoint":"../evaluator.py",
+            "frozen":true,
+            "objects":[{
+                "cas_uri":format!("cas://sha256/{}", "a".repeat(64)),
+                "media_type":"text/x-python; charset=utf-8",
+                "path":"../evaluator.py",
+                "sha256":format!("sha256:{}", "a".repeat(64)),
+                "size":7
+            }],
+            "pack_id":"pack-fixture-v1",
+            "runtime":"python3-stdlib",
+            "schema":"hepta.challenge_pack.evaluator_manifest.v1"
+        }))
+        .unwrap();
+        let traversal_digest = sha256_digest(&traversal);
+        assert!(parse_challenge_evaluator_manifest(&traversal, &traversal_digest).is_err());
+
+        let extra = serde_json::to_vec(&serde_json::json!({
+            "entrypoint":"evaluator.py",
+            "extra_authority":"forbidden",
+            "frozen":true,
+            "objects":[{
+                "cas_uri":format!("cas://sha256/{}", "a".repeat(64)),
+                "media_type":"text/x-python; charset=utf-8",
+                "path":"evaluator.py",
+                "sha256":format!("sha256:{}", "a".repeat(64)),
+                "size":7
+            }],
+            "pack_id":"pack-fixture-v1",
+            "runtime":"python3-stdlib",
+            "schema":"hepta.challenge_pack.evaluator_manifest.v1"
+        }))
+        .unwrap();
+        let extra_digest = sha256_digest(&extra);
+        assert!(parse_challenge_evaluator_manifest(&extra, &extra_digest).is_err());
+    }
+
+    #[test]
+    fn authority_and_resolved_bundle_hashes_bind_every_manifest_pin_and_member() {
+        let object = FrozenReviewObjectV1 {
+            object_key: "object-0000".to_string(),
+            logical_path: "evaluator.py".to_string(),
+            role: "frozen_evaluator".to_string(),
+            digest: format!("sha256:{}", "a".repeat(64)),
+            size_bytes: 7,
+            media_type: "text/x-python; charset=utf-8".to_string(),
+            download_path: REVIEW_OBJECT_DOWNLOAD_PATH_V1.to_string(),
+        };
+        let mut authority = FrozenReviewAuthorityV1 {
+            schema: FROZEN_REVIEW_AUTHORITY_V1.to_string(),
+            authority_hash: String::new(),
+            assignment_id: Uuid::from_u128(1),
+            paper_project_id: Uuid::from_u128(2),
+            submission_id: Uuid::from_u128(3),
+            review_round: 1,
+            slot: "evaluator".to_string(),
+            assignment_version: 1,
+            expires_at: "2026-08-12T00:00:00Z".to_string(),
+            release_candidate_hash: format!("sha256:{}", "1".repeat(64)),
+            paper_bundle_hash: format!("sha256:{}", "2".repeat(64)),
+            artifact_manifest_hash: format!("sha256:{}", "3".repeat(64)),
+            evaluator_manifest_hash: format!("sha256:{}", "4".repeat(64)),
+            dataset_manifest_hash: format!("sha256:{}", "5".repeat(64)),
+            artifact_objects: vec![
+                object.clone(),
+                FrozenReviewObjectV1 {
+                    object_key: "object-0001".to_string(),
+                    logical_path: "dataset.json".to_string(),
+                    role: "dataset".to_string(),
+                    digest: format!("sha256:{}", "b".repeat(64)),
+                    media_type: "application/json".to_string(),
+                    ..object.clone()
+                },
+                FrozenReviewObjectV1 {
+                    object_key: "object-0002".to_string(),
+                    logical_path: "candidate.json".to_string(),
+                    role: "candidate".to_string(),
+                    digest: format!("sha256:{}", "c".repeat(64)),
+                    media_type: "application/json".to_string(),
+                    ..object.clone()
+                },
+            ],
+            execution_policy: FrozenReviewExecutionPolicyV1 {
+                schema: "hepta.paper_raid.review_execution_policy.v1".to_string(),
+                kind: "evaluate".to_string(),
+                adapter: "python3-stdlib-v1".to_string(),
+                timeout_ms: 30_000,
+                seed: 7,
+            },
+        };
+        authority.authority_hash = frozen_review_authority_hash(&authority).unwrap();
+        verify_frozen_review_authority(&authority).unwrap();
+        let mut transport_objects = authority.artifact_objects.clone();
+        transport_objects[0].logical_path = "evaluator/main.py".to_string();
+        transport_objects[1].logical_path = "inputs/dataset.json".to_string();
+        transport_objects[2].logical_path = "inputs/candidate.json".to_string();
+        let mut bundle = FrozenReviewBundleV1 {
+            schema: RESOLVED_FROZEN_REVIEW_BUNDLE_V1.to_string(),
+            bundle_hash: String::new(),
+            authority: authority.clone(),
+            authority_hash: authority.authority_hash.clone(),
+            assignment_id: authority.assignment_id,
+            paper_project_id: authority.paper_project_id,
+            submission_id: authority.submission_id,
+            review_round: authority.review_round,
+            slot: authority.slot.clone(),
+            assignment_version: authority.assignment_version,
+            expires_at: authority.expires_at.clone(),
+            release_candidate_hash: authority.release_candidate_hash.clone(),
+            paper_bundle_hash: authority.paper_bundle_hash.clone(),
+            artifact_manifest_hash: authority.artifact_manifest_hash.clone(),
+            evaluator_manifest_hash: authority.evaluator_manifest_hash.clone(),
+            dataset_manifest_hash: authority.dataset_manifest_hash.clone(),
+            objects: transport_objects,
+            execution: FrozenReviewExecutionPlanV1 {
+                schema: "hepta.paper_raid.review_execution_plan.v1".to_string(),
+                kind: "evaluate".to_string(),
+                adapter: "python3-stdlib-v1".to_string(),
+                evaluator_version: object.digest.clone(),
+                entrypoint: "evaluator/main.py".to_string(),
+                timeout_ms: 30_000,
+                seed: 7,
+            },
+        };
+        bundle.bundle_hash = frozen_review_bundle_hash(&bundle).unwrap();
+        verify_frozen_review_bundle(&bundle).unwrap();
+        let mut path_tamper = bundle.clone();
+        path_tamper.objects[0].logical_path = "evaluator/other.py".to_string();
+        assert!(frozen_review_bundle_hash(&path_tamper).is_err());
+        let mut authority_member_tamper = bundle;
+        authority_member_tamper.objects[0].digest = format!("sha256:{}", "9".repeat(64));
+        assert!(frozen_review_bundle_hash(&authority_member_tamper).is_err());
+
+        let original = authority.authority_hash.clone();
+        authority.dataset_manifest_hash = format!("sha256:{}", "6".repeat(64));
+        assert_ne!(frozen_review_authority_hash(&authority).unwrap(), original);
+        assert!(verify_frozen_review_authority(&authority).is_err());
+    }
+
+    fn review_receipt(kind: &str, candidate_passed: Option<bool>) -> ReviewExecutionReceiptV1 {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        ReviewExecutionReceiptV1 {
+            schema: REVIEW_EXECUTION_RECEIPT_V1.to_string(),
+            receipt_id: Uuid::from_u128(1),
+            task_id: Uuid::from_u128(2),
+            binding_id: Uuid::from_u128(3),
+            assignment_id: Uuid::from_u128(4),
+            paper_project_id: Uuid::from_u128(5),
+            submission_id: Uuid::from_u128(6),
+            evaluation_id: Uuid::from_u128(7),
+            kind: kind.to_string(),
+            attempt: 1,
+            fencing_token: 1,
+            bundle_hash: digest.clone(),
+            evaluator_version: "fixture-v1".to_string(),
+            input_root: digest.clone(),
+            output_root: digest.clone(),
+            metrics_hash: digest.clone(),
+            observed_metrics_micros: BTreeMap::from([("score".to_string(), 1)]),
+            statistical_evidence: serde_json::json!({
+                "schema": "hepta.paper_raid.statistical_evidence.none.v1",
+                "reason": "evaluation_has_no_observed_statistical_evidence"
+            }),
+            candidate_passed,
+            seed_set_hash: digest.clone(),
+            environment_hash: digest.clone(),
+            run_manifest_hash: digest.clone(),
+            logs_hash: digest.clone(),
+            started_at_unix: 1,
+            completed_at_unix: 2,
+            agent_id: "did:trnm:fixture-agent".to_string(),
+            agent_key_id: digest.clone(),
+            signing_public_key_hash: digest,
+            signature: String::new(),
+        }
+    }
+
+    #[test]
+    fn execution_receipt_kind_strictly_binds_candidate_passed() {
+        let failed = review_receipt("evaluate", Some(false));
+        let passed = review_receipt("evaluate", Some(true));
+        assert_ne!(
+            review_execution_receipt_signing_bytes(&failed).unwrap(),
+            review_execution_receipt_signing_bytes(&passed).unwrap()
+        );
+        assert_ne!(
+            review_execution_metrics_hash(&failed).unwrap(),
+            review_execution_metrics_hash(&passed).unwrap()
+        );
+        assert!(review_execution_receipt_signing_bytes(&review_receipt("evaluate", None)).is_err());
+        assert!(
+            review_execution_receipt_signing_bytes(&review_receipt("reproduce", Some(true)))
+                .is_err()
+        );
+        assert!(review_execution_receipt_signing_bytes(&review_receipt("reproduce", None)).is_ok());
+    }
+
+    #[test]
+    fn review_execution_receipt_id_matches_the_bridge_golden_vector() {
+        let id = review_execution_receipt_id(
+            Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap(),
+            Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap(),
+            Uuid::parse_str("33333333-3333-4333-8333-333333333333").unwrap(),
+            &format!("sha256:{}", "a".repeat(64)),
+            2,
+            7,
+        )
+        .unwrap();
+        assert_eq!(id.to_string(), "445f1306-eda6-5a10-bcd9-bbc15e349bce");
+    }
+}
+
+#[cfg(test)]
+mod agent_proposal_v2_frozen_tests {
+    use super::*;
+
+    fn vector() -> AgentProposalSigningV2 {
+        AgentProposalSigningV2 {
+            schema: AGENT_PROPOSAL_V2.to_string(),
+            proposal_id: Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap(),
+            paper_project_id: Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap(),
+            work_item_id: Uuid::parse_str("33333333-3333-4333-8333-333333333333").unwrap(),
+            section_key: "results.main".to_string(),
+            parent_revision_id: Uuid::parse_str("44444444-4444-4444-8444-444444444444").unwrap(),
+            lease_id: Uuid::parse_str("55555555-5555-4555-8555-555555555555").unwrap(),
+            lease_fencing_token: 7,
+            expected_work_version: 11,
+            proposal_kind: "delivery".to_string(),
+            payload_hash: "sha256:7917212537bd6e80eb59be660839509f2c0319c23e7236ab589e1bf6868e598b"
+                .to_string(),
+            artifact_manifest_id: Uuid::parse_str("66666666-6666-4666-8666-666666666666").unwrap(),
+            artifact_manifest_hash:
+                "sha256:fad5d89eff2f29912c8c10f4cb411fbc87b0dbb8d916258c741edb39575c388c"
+                    .to_string(),
+            agent_id: "did:trnm:agent-proposal-v2".to_string(),
+            binding_id: Uuid::parse_str("77777777-7777-4777-8777-777777777777").unwrap(),
+            agent_key_id: "sha256:3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f"
+                .to_string(),
+            signed_at_unix: 1_770_000_000,
+        }
+    }
+
+    #[test]
+    fn agent_proposal_v2_frozen_frame_and_signature() {
+        let proposal = vector();
+        let signing_key = SigningKey::from_bytes(&[0x42; 32]);
+        assert_eq!(
+            BASE64.encode(signing_key.verifying_key().to_bytes()),
+            "IVL40Zt5HSRFMkLhXy6rbLfP+ntqXtMAl5YOBpiB2xI="
+        );
+        let frame = agent_proposal_v2_signing_bytes(&proposal).unwrap();
+        assert_eq!(
+            sha256_digest(&frame),
+            "sha256:b285cf8c2b1609a73afea9dfb7c4af2ef5720c82eded01e793e6516df4d694be"
+        );
+        let signature = sign_agent_proposal_v2(&proposal, &signing_key).unwrap();
+        assert_eq!(
+            signature,
+            "tPgBHp6Aypntpam1qkp8h14l1x4wRWn+mEfsQsqb3N79YIiKExuQEG2mEgUgxkR1HiWsV7I/daUXzXxfuZ6uCw=="
+        );
+        verify_agent_proposal_v2_signature(&proposal, &signature, &signing_key.verifying_key())
+            .unwrap();
+    }
+
+    #[test]
+    fn agent_proposal_v2_binds_epoch_work_version_and_manifest_identity() {
+        let proposal = vector();
+        let signing_key = SigningKey::from_bytes(&[0x42; 32]);
+        let signature = sign_agent_proposal_v2(&proposal, &signing_key).unwrap();
+        for tampered in [
+            AgentProposalSigningV2 {
+                lease_id: Uuid::new_v4(),
+                ..proposal.clone()
+            },
+            AgentProposalSigningV2 {
+                lease_fencing_token: proposal.lease_fencing_token + 1,
+                ..proposal.clone()
+            },
+            AgentProposalSigningV2 {
+                expected_work_version: proposal.expected_work_version + 1,
+                ..proposal.clone()
+            },
+            AgentProposalSigningV2 {
+                artifact_manifest_id: Uuid::new_v4(),
+                ..proposal.clone()
+            },
+        ] {
+            assert!(verify_agent_proposal_v2_signature(
+                &tampered,
+                &signature,
+                &signing_key.verifying_key()
+            )
+            .is_err());
+        }
+    }
 }

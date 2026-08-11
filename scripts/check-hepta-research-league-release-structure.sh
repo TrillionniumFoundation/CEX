@@ -27,6 +27,7 @@ shell_scripts=(
   scripts/check-hepta-research-league-compose-smoke.sh
   scripts/check-hepta-research-league-release.sh
   scripts/check-hepta-research-league-release-structure.sh
+  scripts/check-paper-raid-alpha-candidate-postgres.sh
   scripts/download-pinned-buildx.sh
   scripts/generate-hepta-research-league-docker-lock.sh
   scripts/generate-hepta-research-league-runtime-sbom.sh
@@ -80,6 +81,47 @@ def fail(message):
     raise AssertionError(message)
 
 
+def validate_alpha_postgres_test_isolation(text):
+    expected_invocation = (
+        'HEPTA_TEST_DATABASE_URL="$database_url" \\\n'
+        '  flock -n "$cargo_gate" cargo test --locked -p hepta-research-league '
+        '-- --test-threads=1\n'
+    )
+    if text.count(expected_invocation) != 1:
+        fail(
+            "fixed-digest candidate PostgreSQL gate must serialize the shared "
+            "database at the libtest harness boundary"
+        )
+    if text.count("cargo test") != 1:
+        fail("fixed-digest candidate PostgreSQL gate test invocation is ambiguous")
+
+
+alpha_postgres_gate = (
+    repo / "scripts/check-paper-raid-alpha-candidate-postgres.sh"
+).read_text(encoding="utf-8")
+validate_alpha_postgres_test_isolation(alpha_postgres_gate)
+alpha_postgres_gate_mutations = {
+    "parallel shared database": alpha_postgres_gate.replace(
+        " -- --test-threads=1", "", 1
+    ),
+    "more than one harness thread": alpha_postgres_gate.replace(
+        "--test-threads=1", "--test-threads=2", 1
+    ),
+    "thread bound detached from libtest": alpha_postgres_gate.replace(
+        "-- --test-threads=1", "--test-threads=1 --", 1
+    ),
+}
+for mutation_name, mutation in alpha_postgres_gate_mutations.items():
+    if mutation == alpha_postgres_gate:
+        fail(f"PostgreSQL harness-isolation mutation was not applied: {mutation_name}")
+    try:
+        validate_alpha_postgres_test_isolation(mutation)
+    except AssertionError:
+        pass
+    else:
+        fail(f"PostgreSQL harness-isolation mutation was accepted: {mutation_name}")
+
+
 collaboration_source = (
     repo / "services/hepta-research-league/src/paper_collaboration_v3.rs"
 ).read_text(encoding="utf-8")
@@ -126,6 +168,132 @@ for required in (
     if required not in proposal_authority_tests:
         fail(f"Agent proposal active-binding regression proof is missing: {required}")
 
+paper_raid_source = (
+    repo / "services/hepta-research-league/src/paper_raid_v2.rs"
+).read_text(encoding="utf-8")
+review_source = (
+    repo / "services/hepta-research-league/src/paper_review_v4.rs"
+).read_text(encoding="utf-8")
+contribution_tests = proposal_authority_tests
+postgres_reset_start = contribution_tests.find("pub(crate) async fn reset_postgres(")
+postgres_reset_end = contribution_tests.find(
+    "\nasync fn register_prerequisites(", postgres_reset_start
+)
+if postgres_reset_start < 0 or postgres_reset_end < 0:
+    fail("PostgreSQL test reset boundary is missing")
+postgres_reset_source = contribution_tests[postgres_reset_start:postgres_reset_end]
+for required in (
+    "drop trigger if exists hepta_contribution_ledger_reservation_truncate_guard",
+    "drop trigger if exists hepta_paper_contribution_ledger_truncate_guard",
+    'include_str!(\n        "../../../migrations/0047_add_hepta_contribution_ledger_authority.sql"',
+    "verify_contribution_ledger_authority_catalog(&pool)",
+    "verify exact contribution authority catalog after test reset",
+):
+    if required not in postgres_reset_source:
+        fail(f"PostgreSQL test reset does not restore 0047 authority: {required}")
+for forbidden in (
+    "drop trigger if exists hepta_contribution_ledger_reservation_immutable_guard",
+    "drop trigger if exists hepta_paper_contribution_ledger_immutable_guard",
+):
+    if forbidden in postgres_reset_source:
+        fail(f"PostgreSQL test reset weakens row-level contribution authority: {forbidden}")
+paper_raid_openapi = (
+    repo / "docs/openapi/hepta-paper-raid-v2.yaml"
+).read_text(encoding="utf-8")
+for required in (
+    "pub contribution_ledger_id: Uuid",
+    "validate_contribution_ledger_id(request.contribution_ledger_id)",
+    "reserve_contribution_ledger_id_memory",
+    "reserve_contribution_ledger_id_postgres",
+    "hepta_paper_contribution_ledger_reservations",
+    "review_v4::authoritative_contribution_entries_memory",
+    "review_v4::authoritative_contribution_entries_postgres",
+    "review_v4::contribution_ledger_hash",
+    '"contribution_ledger_hash_mismatch"',
+    "release candidate must bind the complete authoritative contribution ledger",
+):
+    if required not in paper_raid_source:
+        fail(f"release promotion contribution authority is incomplete: {required}")
+for required in (
+    "authoritative_contribution_entries_from_records",
+    "accepted Agent proposal must have exactly one matching human acceptance",
+    "from hepta_artifact_manifests where paper_project_id=$1 for share",
+    "from hepta_agent_proposals where paper_project_id=$1 for share",
+    "from hepta_human_decisions where paper_project_id=$1 for share",
+    "from hepta_section_reviews where paper_project_id=$1 for share",
+    "relational columns disagree with record_json",
+    "require_complete_authoritative_contribution_entries",
+    '"contribution_ledger_entries_mismatch"',
+    "duplicate_contribution_reference_kind",
+    "validate_loaded_contribution_ledger",
+    "contribution ledger canonical hash disagrees with frozen relational authority",
+    "entries_json,version,created_at,record_json",
+):
+    if required not in review_source:
+        fail(f"authoritative contribution ledger closure is incomplete: {required}")
+for required in (
+    '"contribution_ledger_id":contribution_ledger_id',
+    '"nil_contribution_ledger_id"',
+    '"contribution_ledger_hash_mismatch"',
+    '"contribution_ledger_entries_mismatch"',
+    "promotion must reject a ledger hash that omits authoritative contribution refs",
+    "ledger creation must reject an omitted authoritative contribution ref",
+    "ledger creation must reject an added non-authoritative contribution ref",
+    "ledger creation must reject duplicate contribution refs",
+    "runtime readiness must reject a missing contribution ledger parity constraint",
+):
+    if required not in contribution_tests:
+        fail(f"authoritative contribution regression proof is missing: {required}")
+for required in (
+    "authoritative_257_refs_are_preserved_with_milestone_points",
+    "duplicate_and_cross_author_manifest_credit_is_rejected",
+    "added_or_cross_author_client_refs_are_rejected",
+    "ledger_id_reservation_rejects_nil_and_global_preemption",
+    "canonical_loader_rejects_record_json_entry_drift_before_raid_score",
+):
+    if required not in review_source:
+        fail(f"contribution authority unit regression proof is missing: {required}")
+for required in (
+    "PromoteReleaseCandidateRequest:",
+    "- contribution_ledger_id",
+    "NonNilUuid:",
+    'contribution_ledger_id: {$ref: "#/components/schemas/NonNilUuid"}',
+    'not: {const: "00000000-0000-0000-0000-000000000000"}',
+    'schema: {$ref: "#/components/schemas/PromoteReleaseCandidateRequest"}',
+):
+    if required not in paper_raid_openapi:
+        fail(f"promotion contribution OpenAPI contract is incomplete: {required}")
+contribution_openapi = yaml.safe_load(paper_raid_openapi)["components"]["schemas"]
+credit_input = contribution_openapi["CreditContributionInput"]["properties"]
+for field in ("accepted_artifact_manifest_ids", "accepted_section_review_ids"):
+    if "maxItems" in credit_input[field]:
+        fail(f"authoritative contribution facts must not retain a liveness cap: {field}")
+    if credit_input[field].get("uniqueItems") is not True:
+        fail(f"authoritative contribution references must remain unique: {field}")
+if contribution_openapi["PromoteReleaseCandidateRequest"]["properties"][
+    "contribution_ledger_id"
+] != {"$ref": "#/components/schemas/NonNilUuid"}:
+    fail("promotion must use the non-nil contribution-ledger UUID schema")
+if contribution_openapi["CreateContributionLedgerRequest"]["properties"][
+    "contribution_ledger_id"
+] != {"$ref": "#/components/schemas/NonNilUuid"}:
+    fail("ledger creation must use the non-nil contribution-ledger UUID schema")
+
+contribution_derivation = review_source[
+    review_source.find("fn normalize_uuid_set("):
+    review_source.find("pub(super) fn authoritative_contribution_entries_memory(")
+]
+for forbidden in ("contribution_reference_limit", "len() > 256", "frozen 256-item"):
+    if forbidden in contribution_derivation:
+        fail(f"contribution derivation retained the irreversible liveness trap: {forbidden}")
+for required in (
+    "one artifact manifest may have only one accepted proposal globally",
+    "artifact_manifest_id=$1 and status='accepted'",
+    '"artifact_contribution_duplicated"',
+):
+    if required not in collaboration_source:
+        fail(f"global artifact-credit admission authority is incomplete: {required}")
+
 
 def stage_blocks(text):
     matches = list(
@@ -171,6 +339,11 @@ expected_copy_sources = {
     "migrations/0041_add_hepta_agent_capability_disclosure.sql",
     "migrations/0042_add_hepta_team_proposal_deadlines.sql",
     "migrations/0043_add_hepta_challenge_ruleset_v1.sql",
+    "migrations/0044_add_hepta_agent_proposal_v2_epoch.sql",
+    "migrations/0045_add_hepta_work_item_record_parity.sql",
+    "migrations/0046_add_hepta_matchmaking_record_parity_v2.sql",
+    "migrations/0047_add_hepta_contribution_ledger_authority.sql",
+    "migrations/0048_add_hepta_consumer_finality_v2.sql",
     "docs/openapi/hepta-research-league-v1.yaml",
     "docs/openapi/hepta-paper-raid-v2.yaml",
 }
@@ -1394,6 +1567,11 @@ require_fragments(
         "enum: [claimed, pinned, consumed, expired]",
         "Pinned seats remain authoritative past the original",
         "all three panel assignments are consumed",
+        'schema: {$ref: "#/components/schemas/PaperRoomReadModelV1"}',
+        "RoleResourceActionAvailabilityV1:",
+        "RoleResourceProjectionV1:",
+        "AuthorRaidProgressV1:",
+        "PaperRoomReadModelV1:",
     ),
 )
 require_fragments(
@@ -1405,6 +1583,35 @@ require_fragments(
         "removes every Compose container/network/volume",
         "O_NOFOLLOW|O_NONBLOCK",
         "dirfd-relative atomic",
+    ),
+)
+
+require_fragments(
+    "services/hepta-research-league/README.md",
+    (
+        "257 or more accepted artifact/review IDs remain in the canonical ledger",
+        "partial unique index for the concurrent race",
+        "Every evaluation loader re-requires the exact reservation triple",
+        "Paper cannot preempt the ID before later ledger creation",
+    ),
+)
+require_fragments(
+    "docs/adr/ADR-006-hepta-paper-collaboration-v3.md",
+    (
+        "### 8. Contribution authority and liveness",
+        "there is no\n256-reference ceiling",
+        "The\n257th fact",
+        "partial unique index on accepted proposals",
+        "loader checks relational parity",
+    ),
+)
+require_fragments(
+    "docs/hepta-paper-raid-operations-v1.md",
+    (
+        "0047 contribution-authority catalog",
+        "Never repair contribution ownership by deleting references",
+        "non-nil ledger ID retains its exact Paper/release reservation",
+        "fail-closed before RaidScore is derived",
     ),
 )
 
@@ -1556,6 +1763,84 @@ require_fragments(
 )
 
 require_fragments(
+    "migrations/0044_add_hepta_agent_proposal_v2_epoch.sql",
+    (
+        "hepta_agent_proposal_v2_requires_empty_legacy_proposal_table",
+        "add column if not exists lease_id uuid",
+        "add column if not exists lease_fencing_token bigint",
+        "add column if not exists expected_work_version bigint",
+        "add column if not exists artifact_manifest_hash text",
+        "hepta_agent_proposals_record_json_parity_check",
+        "hepta_agent_proposals_payload_hash_check",
+        "check (payload_hash ~ '^sha256:[0-9a-f]{64}$')",
+        "hepta_agent_proposals_artifact_manifest_hash_check",
+        "check (artifact_manifest_hash ~ '^sha256:[0-9a-f]{64}$')",
+        "(record_json->>'proposal_id') is not distinct from proposal_id::text",
+        "(record_json->>'lease_id') is not distinct from lease_id::text",
+        "(record_json->>'lease_fencing_token') is not distinct from lease_fencing_token::text",
+        "(record_json->>'expected_work_version') is not distinct from expected_work_version::text",
+        "(record_json->>'artifact_manifest_hash') is not distinct from artifact_manifest_hash",
+        "signed_at is not distinct from to_timestamp((record_json->>'signed_at_unix')::double precision)",
+        "hepta_agent_proposals_lease_scope_fkey",
+        "foreign key (lease_id,paper_project_id)",
+        "references hepta_section_leases(lease_id,paper_project_id)",
+        "hepta_agent_proposals_lease_epoch_v2_idx",
+    ),
+)
+
+require_fragments(
+    "migrations/0045_add_hepta_work_item_record_parity.sql",
+    (
+        "hepta_paper_work_items_record_json_parity_check",
+        "(record_json->>'work_item_id') is not distinct from work_item_id::text",
+        "(record_json->>'paper_project_id') is not distinct from paper_project_id::text",
+        "(record_json->>'assigned_player_id') is not distinct from assigned_player_id::text",
+        "(record_json->>'assigned_binding_id') is not distinct from assigned_binding_id::text",
+        "(record_json->>'status') is not distinct from status",
+        "(record_json->>'version') is not distinct from version::text",
+        ") not valid",
+        "validate constraint hepta_paper_work_items_record_json_parity_check",
+    ),
+)
+
+require_fragments(
+    "migrations/0047_add_hepta_contribution_ledger_authority.sql",
+    (
+        "duplicate_accepted_artifact_contribution_requires_operator_review",
+        "in access exclusive mode",
+        "contribution_ledger_table_shape_requires_operator_review",
+        "contribution_authority_table_metadata_requires_operator_review",
+        "hepta_agent_proposals_one_accepted_artifact_manifest_idx",
+        "drop index if exists public.hepta_agent_proposals_one_accepted_artifact_manifest_idx",
+        "where status = 'accepted'",
+        "hepta_paper_contribution_ledger_reservations",
+        "contribution_ledger_id uuid primary key",
+        "hepta_contribution_ledger_reservations_non_nil_id_check",
+        "hepta_contribution_ledger_reservations_ownership_key",
+        "unique (contribution_ledger_id, paper_project_id, release_candidate_hash)",
+        "legacy_release_candidate_missing_contribution_ledger",
+        "left join hepta_paper_contribution_ledger_reservations reservation",
+        "on reservation.paper_project_id = revision.paper_project_id",
+        "and reservation.release_candidate_hash = revision.release_candidate_hash",
+        "and reservation.contribution_ledger_id is null",
+        "contribution_ledger_reservation_backfill_mismatch",
+        "add column if not exists entries_json jsonb",
+        "alter column entries_json set not null",
+        "hepta_paper_contribution_ledgers_record_json_parity_check",
+        "hepta_paper_contribution_ledgers_paper_release_key",
+        "hepta_paper_contribution_ledgers_paper_hash_key",
+        "(record_json->'entries') is not distinct from entries_json",
+        "hepta_paper_contribution_ledgers_reservation_fkey",
+        "foreign key (contribution_ledger_id, paper_project_id, release_candidate_hash)",
+        "hepta_reject_frozen_contribution_authority_mutation",
+        "enable always trigger hepta_paper_contribution_ledger_immutable_guard",
+        "hepta_contribution_ledger_reservation_truncate_guard",
+        "hepta_paper_contribution_ledger_truncate_guard",
+        "for each statement execute function hepta_reject_frozen_contribution_authority_mutation()",
+    ),
+)
+
+require_fragments(
     "services/hepta-research-league/src/challenge_ruleset_v1.rs",
     (
         'CHALLENGE_RULESET_V1: &str = "hepta.challenge.ruleset.v1"',
@@ -1564,21 +1849,488 @@ require_fragments(
         "RetainedFailedRuns",
         "canonical_json_sha256(self)",
         "LegacyUnranked",
+        "ChallengeRoleResourcesV1",
+        "retained_failure_focus_refund",
+        "captain_focus must be supportable by evidence, experiment, and run allocations",
+        "validate_role_resource_reachability",
+        "run_budget must be at least {required_run_budget}",
+        "experiment_focus must be at least {successful_runs}",
+        "optional_role_resources_preserve_old_typed_bytes_and_join_the_hash_when_present",
+        "role_run_budget_must_cover_disjoint_hard_run_minima",
+        "experiment_focus_must_cover_successful_run_minimum",
     ),
 )
 
-require_fragments(
-    "services/hepta-research-league/src/lib.rs",
+role_resources_source = require_fragments(
+    "services/hepta-research-league/src/paper_collaboration_v3/role_resources_v1.rs",
     (
-        'include_str!("../../../migrations/0043_add_hepta_challenge_ruleset_v1.sql")',
-        'mod challenge_ruleset_v1;',
-        'pub use challenge_ruleset_v1::*;',
+        'ROLE_RESOURCE_STATE_V1: &str = "hepta.paper_raid.role_resources.v1"',
+        "role resources are non-economic and cannot unlock ranking, reward, or economic eligibility",
+        "pub(super) fn apply_run_role_resources(",
+        "pub(crate) fn validate_paper_role_resources(",
+        "Paper role-resource authority disagrees with its frozen ChallengeRuleset snapshot",
+        "run.status == RunStatus::Failed && run.failure_hash.is_some()",
+        "let action_at = now.max(state.updated_at).max(paper.updated_at)",
+        "super::super::authoritative_paper_ruleset(paper)?",
+        "super::super::require_canonical_author_role_contract(team)?",
+        '"run_budget_exhausted"',
+        '"run_resources_already_consumed"',
+        '"evidence_role_required"',
+        '"checkpoint_dependencies_incomplete"',
+        "where paper_project_id=$4 and version=$5",
+        "where paper_project_id=$1 for update",
+        '"/v2/hepta/papers/:paper_id/role-resources/actions"',
+        "cancelled_run_never_receives_retained_failure_refund",
+        "same_run_cannot_consume_resources_twice",
+        "role_mismatch_is_rejected_without_spending_focus",
+        "evidence_card_can_consume_evidence_focus_exactly_once",
+        "captain_checkpoint_requires_fresh_actions_from_both_other_roles",
+        "resource_allocation_must_match_the_frozen_challenge_snapshot",
+        "matching_state_and_mutated_ruleset_still_reject_stale_snapshot_hash",
+        "explicit_actions_require_the_canonical_roster_contract",
+        "terminal_and_elapsed_challenges_project_no_available_role_actions",
+        "run_availability_fails_closed_outside_a_run_phase",
+        "run_handler_guard_uses_the_supplied_authoritative_deadline_clock",
+        "explicit_action_time_cannot_regress_paper_authority",
+        "observed_clock_regression_cannot_regress_the_replay_ledger",
+    ),
+)
+
+role_resource_validator_definition = re.compile(
+    r"(?m)^[ \t]*(pub(?:\([^()\r\n]+\))?)[ \t]+fn[ \t]+"
+    r"validate_paper_role_resources[ \t]*\("
+)
+
+
+def role_resource_validator_visibility_is_canonical(source):
+    return role_resource_validator_definition.findall(source) == ["pub(crate)"]
+
+
+if not role_resource_validator_visibility_is_canonical(role_resources_source):
+    fail(
+        "Paper role-resource validator must have exactly one pub(crate) definition; "
+        "it is shared inside the crate but must not be public outside it"
+    )
+for hostile_visibility in ("pub", "pub(super)", "pub(in crate)", ""):
+    mutant = role_resources_source.replace(
+        "pub(crate) fn validate_paper_role_resources(",
+        f"{hostile_visibility + ' ' if hostile_visibility else ''}fn "
+        "validate_paper_role_resources(",
+        1,
+    )
+    if role_resource_validator_visibility_is_canonical(mutant):
+        fail(
+            "Paper role-resource validator visibility gate accepted hostile "
+            f"visibility {hostile_visibility or 'private'}"
+        )
+duplicate_validator = role_resources_source + (
+    "\npub(crate) fn validate_paper_role_resources("
+    "paper: &PaperProject) -> Result<(), ApiError> { let _ = paper; Ok(()) }\n"
+)
+if role_resource_validator_visibility_is_canonical(duplicate_validator):
+    fail("Paper role-resource validator visibility gate accepted a duplicate definition")
+
+required_parent_reexport = '''pub(super) use role_resources_v1::{
+    role_resource_state_from_snapshot, validate_paper_role_resources,
+};'''
+if required_parent_reexport not in collaboration_source:
+    fail("Paper role-resource validator no longer has its crate-internal parent re-export")
+if paper_raid_source.count(
+    "collaboration_v3::validate_paper_role_resources(&paper)?;"
+) < 2:
+    fail("Paper Raid sibling paths no longer justify crate-internal validator visibility")
+
+require_fragments(
+    "services/hepta-research-league/src/paper_collaboration_v3.rs",
+    (
+        '#[path = "paper_collaboration_v3/role_resources_v1.rs"]',
+        "project_role_resources(",
+        "apply_run_role_resources(",
+        "require_collaboration_phase_at(",
+        "run_record_from_request(",
+        'sqlx::query_scalar("select clock_timestamp()")',
+        '"failure_retained":record.status == RunStatus::Failed && record.failure_hash.is_some()',
+        '"ranking_eligible":false',
+        '"reward_eligible":false',
+        '"economic_eligibility":false',
     ),
 )
 
 require_fragments(
     "services/hepta-research-league/src/paper_collaboration_v3.rs",
     (
+        '#[path = "paper_collaboration_v3/matchmaking_party_v1.rs"]',
+        "pub party_code_hash: Option<String>",
+        "pub private_party: bool",
+        "matchmaking_partition_compatible",
+        "validate_premade_party_admission",
+        '"party_availability_conflict"',
+        '"party_role_conflict"',
+        "postgres_party_admission_lock_key",
+        "horizon.truncate(MAX_ALPHA_MATCH_CANDIDATES)",
+        "globally_selected = first_compatible_triplet(&horizon)",
+        "eligible_player_ids.contains(&ticket.player_id)",
+        "validate_materialization_matchmaking_source",
+        "deterministic_match_key_for_ticket_epochs",
+        "MATCHMAKING_SOLVER_VERSION_V2",
+        "source_preferences",
+        "role_assignments",
+        '"waiting_for_party_members"',
+        '"party_queue_full"',
+        "MatchmakingTicketView::from",
+        "matchmaking_ticket_created_event_payload",
+        "matchmaking_ticket_cancelled_event_payload",
+    ),
+)
+require_fragments(
+    "services/hepta-research-league/src/paper_collaboration_v3/matchmaking_party_v1.rs",
+    (
+        "challenge_id: uuid::Uuid",
+        "party_code_hash: Option<&'a str>",
+        "matchmaking_partition_key(left) == matchmaking_partition_key(right)",
+        "live_party_ticket_count",
+        "postgres_party_admission_lock_key",
+        "hides_the_party_hash",
+    ),
+)
+require_fragments(
+    "services/hepta-research-league/src/paper_raid_v2_tests.rs",
+    (
+        "exercise_private_party_matchmaking",
+        '"party_role_conflict"',
+        '"party_availability_conflict"',
+        '"party_queue_full"',
+        "cancel_matchmaking_ticket_for",
+        "materialize_team_proposal_for",
+        '"changed-role-party"',
+    ),
+)
+require_fragments(
+    "docs/openapi/hepta-paper-raid-v2.yaml",
+    (
+        "party_code_hash:",
+        "private_party:",
+        "the digest is never returned by ticket APIs",
+        "waiting_for_party_members",
+    ),
+)
+
+matcher_source = (
+    repo / "services/hepta-research-league/src/paper_collaboration_v3.rs"
+).read_text(encoding="utf-8")
+for helper in (
+    "matchmaking_ticket_created_event_payload",
+    "matchmaking_ticket_cancelled_event_payload",
+):
+    start = matcher_source.index(f"fn {helper}")
+    end = matcher_source.index("\n}\n", start)
+    event_helper = matcher_source[start:end]
+    if "party_code" in event_helper or "private_party" in event_helper:
+        fail(f"{helper} must not disclose premade-party affinity")
+
+collaboration_source = (
+    repo / "services/hepta-research-league/src/paper_collaboration_v3.rs"
+).read_text(encoding="utf-8")
+run_handler_start = collaboration_source.find("async fn create_run_record(")
+run_handler_end = collaboration_source.find(
+    "\nasync fn create_figure_lineage(", run_handler_start
+)
+if run_handler_start < 0 or run_handler_end < 0:
+    fail("RunRecord handler boundary is missing")
+run_handler = collaboration_source[run_handler_start:run_handler_end]
+memory_replay = run_handler.find("memory_replay(")
+memory_authority = run_handler.find("paper_and_team_memory(")
+postgres_start = run_handler.find("let (mut tx, replay)")
+postgres_replay = run_handler.find("if let Some(replay)", postgres_start)
+postgres_authority = run_handler.find(
+    "paper_and_team_for_role_resource_mutation_postgres(", postgres_replay
+)
+database_clock = run_handler.find(
+    'sqlx::query_scalar("select clock_timestamp()")', postgres_authority
+)
+database_phase = run_handler.find(
+    "require_collaboration_phase_at(&paper, CollaborationMutation::Run, authority_now)",
+    database_clock,
+)
+if not (0 <= memory_replay < memory_authority < postgres_start):
+    fail("memory RunRecord replay must precede aggregate authority lookup")
+if not (
+    postgres_start
+    < postgres_replay
+    < postgres_authority
+    < database_clock
+    < database_phase
+):
+    fail("PostgreSQL RunRecord replay/authority/database-clock/phase order drifted")
+if run_handler.count("run_record_from_request(paper_id, &request, authority_now)") != 2:
+    fail("memory and PostgreSQL RunRecord paths must share one authoritative-time builder")
+
+role_resource_source = (
+    repo
+    / "services/hepta-research-league/src/paper_collaboration_v3/role_resources_v1.rs"
+).read_text(encoding="utf-8")
+if role_resource_source.count(
+    "now.max(state.updated_at).max(paper.updated_at)"
+) != 2:
+    fail("all role-resource actions must clamp time to both ledger and Paper authority")
+
+require_fragments(
+    "services/hepta-research-league/src/paper_raid_v2.rs",
+    (
+        "pub role_resources: Option<RoleResourceStateV1>",
+        "role_resource_state_from_snapshot(&ruleset_snapshot, now)?",
+    ),
+)
+
+require_fragments(
+    "docs/adr/ADR-008-hepta-challenge-ruleset-v1.md",
+    (
+        "gameplay.role_resources",
+        "same aggregate",
+        "write or PostgreSQL transaction",
+        "a cancelled run does",
+        "coordination feedback rather than",
+        "scientific, phase, victory, finality, ranking, reward, or economic gate",
+    ),
+)
+
+if "CaptainCheckpoint" in (
+    repo / "services/hepta-research-league/src/challenge_ruleset_v1.rs"
+).read_text(encoding="utf-8"):
+    fail("Captain checkpoint must never become a Challenge phase or victory gate")
+
+require_fragments(
+    "services/hepta-research-league/src/lib.rs",
+    (
+        'include_str!("../../../migrations/0043_add_hepta_challenge_ruleset_v1.sql")',
+        'include_str!("../../../migrations/0044_add_hepta_agent_proposal_v2_epoch.sql")',
+        'include_str!("../../../migrations/0045_add_hepta_work_item_record_parity.sql")',
+        'include_str!("../../../migrations/0046_add_hepta_matchmaking_record_parity_v2.sql")',
+        'include_str!("../../../migrations/0047_add_hepta_contribution_ledger_authority.sql")',
+        'include_str!("../../../migrations/0048_add_hepta_consumer_finality_v2.sql")',
+        "verify_agent_proposal_v2_migration_catalog",
+        "Agent proposal V2 record parity constraint is incomplete",
+        "Agent proposal V2 managed constraint catalog must contain exactly 6 entries",
+        "hepta_agent_proposals_lease_epoch_v2_idx",
+        "verify_work_item_record_parity_catalog",
+        "WorkItem record parity constraint is incomplete",
+        "verify_contribution_ledger_authority_catalog",
+        "verify_consumer_finality_v2_catalog",
+        "contribution_authority_constraint_definition_is_exact",
+        "globally unique managed names",
+        "without unmanaged extras",
+        "Accepted artifact authority index is invalid",
+        'operator_class") != "uuid_ops"',
+        'operator_class_schema") != "pg_catalog"',
+        'operator_class_default")',
+        'operator_class_input_type") != "uuid"',
+        'operator_class_default_key_type")',
+        'operator_class_method_matches")',
+        'operator_family_schema") != "pg_catalog"',
+        'operator_family") != "uuid_ops"',
+        'operator_family_method_matches")',
+        "Frozen contribution authority requires exactly four globally table-scoped mutation/TRUNCATE guards",
+        "IMMUTABLE_TRIGGER_BODY",
+        "normalized_catalog_definition(&function_body) != IMMUTABLE_TRIGGER_BODY",
+        'mod challenge_ruleset_v1;',
+        'pub use challenge_ruleset_v1::*;',
+    ),
+)
+
+require_fragments(
+    "migrations/0048_add_hepta_consumer_finality_v2.sql",
+    (
+        "refuses to infer bindings for existing V1 projections",
+        "hepta.paper_raid.chain_finality_projection.v2",
+        "hepta_consumer_finality_v2_projection_guard",
+        "consumer-finality V2 reproduction binding is not exact",
+        "consumer-finality V2 uphold does not activate the effective evaluation",
+    ),
+)
+require_fragments(
+    "services/hepta-research-league/src/paper_review_v4.rs",
+    (
+        "prepared_replacement_for_resolution",
+        "denied Appeal must not omit or reference an already prepared replacement evaluation",
+        "where paper_project_id=$1 and supersedes_evaluation_id=$2",
+        "effective_finality_resolution_id",
+        "the evaluation requires an exact root-to-leaf upheld Appeal lineage before downstream mutation",
+        "paper_finality_reproduction_before_activation",
+        "hepta.paper_raid.consumer_finality.v2",
+        "effective_reproduction_id",
+        "effective_appeal_resolution_id",
+    ),
+)
+require_fragments(
+    "services/hepta-research-league/src/paper_chain_finality_v2.rs",
+    (
+        "every intermediate generation must be activated by its exact chronological upheld Appeal resolution",
+        "the final generation may terminate only in one exact chronological denied resolution",
+        "a resolution outside the exact parent chain claims an evaluation in the final lineage",
+        "the final submission contains an evaluation outside the single exact root-to-leaf lineage",
+        "paper_trnm_consumer_resolution_binding_mismatch",
+    ),
+)
+require_fragments(
+    "services/hepta-research-league/src/paper_raid_v2_tests.rs",
+    (
+        "premature-child-appeal",
+        "a prepared child must not acquire its own Appeal before the exact parent uphold activates it",
+    ),
+)
+require_fragments(
+    "services/paper-raid-bff/src/html.rs",
+    (
+        '"hepta.paper_raid.consumer_finality.v2"',
+        'finality.get("effective_evaluation_id")',
+        'finality.get("effective_reproduction_id")',
+        'finality.get("effective_appeal_resolution_id")',
+        "effective_reproduction_id == reproduction.reproduction_id",
+    ),
+)
+require_fragments(
+    "docs/openapi/hepta-paper-raid-v2.yaml",
+    (
+        "PaperChainFinalityProjectionV2:",
+        "ConsumerPaperFinalityV2:",
+        "hepta.paper_raid.chain_finality_projection.v2",
+        "hepta.paper_raid.consumer_finality.v2",
+        "effective_appeal_resolution_id",
+    ),
+)
+
+contribution_catalog_source = (
+    repo / "services/hepta-research-league/src/lib.rs"
+).read_text(encoding="utf-8")
+contribution_catalog_start = contribution_catalog_source.find(
+    "fn contribution_authority_constraint_definition_is_exact("
+)
+contribution_catalog_end = contribution_catalog_source.find(
+    "\nfn matchmaking_v2_column_is_exact(", contribution_catalog_start
+)
+if contribution_catalog_start < 0 or contribution_catalog_end < 0:
+    fail("Contribution authority exact catalog verifier boundary is missing")
+contribution_catalog = contribution_catalog_source[
+    contribution_catalog_start:contribution_catalog_end
+]
+for forbidden in (
+    "let mut definitions = HashMap",
+    ".all(|fragment| definition.contains(fragment))",
+):
+    if forbidden in contribution_catalog:
+        fail(f"Contribution authority catalog reverted to fragment/name-only trust: {forbidden}")
+
+contribution_migration = (
+    repo / "migrations/0047_add_hepta_contribution_ledger_authority.sql"
+).read_text(encoding="utf-8")
+
+
+def validate_contribution_legacy_upgrade_guard(source):
+    guard_start = source.find("-- A pre-0047 release candidate")
+    guard_end = source.find("-- All constraints on these two tables", guard_start)
+    if guard_start < 0 or guard_end < 0:
+        fail("0047 legacy-upgrade guard boundary is missing")
+    guard = source[guard_start:guard_end]
+    for required in (
+        "left join hepta_paper_contribution_ledgers ledger",
+        "on ledger.paper_project_id = revision.paper_project_id",
+        "and ledger.release_candidate_hash = revision.release_candidate_hash",
+        "left join hepta_paper_contribution_ledger_reservations reservation",
+        "on reservation.paper_project_id = revision.paper_project_id",
+        "and reservation.release_candidate_hash = revision.release_candidate_hash",
+        "and ledger.contribution_ledger_id is null",
+        "and reservation.contribution_ledger_id is null",
+        "legacy_release_candidate_missing_contribution_ledger",
+    ):
+        if guard.count(required) != 1:
+            fail(f"0047 legacy-upgrade three-table predicate is incomplete: {required}")
+
+
+validate_contribution_legacy_upgrade_guard(contribution_migration)
+legacy_upgrade_guard_mutations = {
+    "reservation authority removed": contribution_migration.replace(
+        "          left join hepta_paper_contribution_ledger_reservations reservation\n"
+        "            on reservation.paper_project_id = revision.paper_project_id\n"
+        "           and reservation.release_candidate_hash = revision.release_candidate_hash\n",
+        "",
+        1,
+    ),
+    "reservation release detached": contribution_migration.replace(
+        "and reservation.release_candidate_hash = revision.release_candidate_hash",
+        "and reservation.release_candidate_hash = reservation.release_candidate_hash",
+        1,
+    ),
+    "reservation presence required": contribution_migration.replace(
+        "and reservation.contribution_ledger_id is null",
+        "and reservation.contribution_ledger_id is not null",
+        1,
+    ),
+    "either authority missing is fatal": contribution_migration.replace(
+        "and reservation.contribution_ledger_id is null",
+        "or reservation.contribution_ledger_id is null",
+        1,
+    ),
+}
+for mutation_name, mutation in legacy_upgrade_guard_mutations.items():
+    if mutation == contribution_migration:
+        fail(f"0047 legacy-upgrade negative mutation was not applied: {mutation_name}")
+    try:
+        validate_contribution_legacy_upgrade_guard(mutation)
+    except AssertionError:
+        pass
+    else:
+        fail(f"0047 legacy-upgrade negative mutation was accepted: {mutation_name}")
+
+for required in (
+    "replay_0047_after_reservation",
+    "post-0047 promotion must own exactly one reservation triple",
+    "0047 replay must accept a live post-0047 candidate with its exact reservation and no frozen ledger yet",
+    "0047 first upgrade must reject a live candidate missing both authorities",
+    'legacy_upgrade_database_error.message(),\n        "legacy_release_candidate_missing_contribution_ledger"',
+):
+    if required not in contribution_tests:
+        fail(f"0047 reservation-only replay/legacy-failure proof is missing: {required}")
+
+if contribution_migration.count("before truncate on hepta_paper_contribution_") != 2:
+    fail("Both contribution authority tables require statement BEFORE TRUNCATE guards")
+
+require_fragments(
+    "services/hepta-research-league/src/paper_review_v4.rs",
+    (
+        "ledger_loader_requires_the_exact_memory_reservation_triple",
+        "require_contribution_ledger_reservation_memory(",
+        "require_contribution_ledger_reservation_postgres(",
+        "an unreserved ledger must never reach RaidScore",
+    ),
+)
+
+require_fragments(
+    "crates/hepta-paper-raid-contracts/src/lib.rs",
+    (
+        'AGENT_PROPOSAL_V1: &str = "hepta.paper_raid.agent_proposal.v1"',
+        'AGENT_PROPOSAL_V2: &str = "hepta.paper_raid.agent_proposal.v2"',
+        "pub fn agent_proposal_signing_bytes(",
+        "pub fn agent_proposal_v2_signing_bytes(",
+        'CanonicalFrame::new("hepta_paper_raid_agent_proposal_v2")',
+        ".string(&proposal.lease_id.to_string())?",
+        ".u64(proposal.lease_fencing_token)",
+        ".u64(proposal.expected_work_version)",
+        ".string(&proposal.artifact_manifest_id.to_string())?",
+        "agent_proposal_v2_binds_epoch_work_version_and_manifest_identity",
+    ),
+)
+
+require_fragments(
+    "services/hepta-research-league/src/paper_collaboration_v3.rs",
+    (
+        "AgentProposalSigningV2",
+        "stale_agent_proposal_lease_epoch",
+        "expected_work_version",
+        "artifact_manifest_id,artifact_manifest_hash,agent_id,binding_id",
+        ".bind(&proposal.artifact_manifest_hash)",
+        "select clock_timestamp()",
+        "Agent proposal relational scope disagrees with record_json",
+        "section lease relational columns disagree with record_json",
         "TEAM_PROPOSAL_RESPONSE_TTL_SECONDS: i64 = 5 * 60",
         "team_proposal_deadline",
         "expire_team_proposal_memory",
@@ -1594,6 +2346,25 @@ require_fragments(
         "hepta-paper-raid-team-id:",
         "matchmaking_team_id_conflict",
         "for share of p,b",
+    ),
+)
+
+require_fragments(
+    "services/hepta-research-league/src/paper_raid_v2_tests.rs",
+    (
+        "binding-authority-old-lease-exact-replay",
+        "the exact old V2 body must fail after the same binding reacquires a new lease epoch",
+        "binding-authority-old-work-version-exact-replay",
+        "the exact old V2 body must fail after work is rejected and reopened at a new version",
+        "assert_postgres_agent_proposal_v2_identity_parity",
+        "runtime readiness must reject a missing Agent proposal V2 index",
+        "full signed Agent proposal identity parity must reject relational-only mutation",
+        "must remain a canonical SHA-256 digest even when record_json matches",
+        "assert_postgres_work_item_record_parity",
+        "runtime readiness must reject a missing WorkItem parity constraint",
+        "runtime readiness must reject an unvalidated WorkItem parity constraint",
+        "WorkItem parity must reject a relational-only status mutation",
+        "WorkItem parity must reject a record_json-only",
     ),
 )
 

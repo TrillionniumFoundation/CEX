@@ -17,13 +17,27 @@ use uuid::Uuid;
 
 use super::*;
 use crate::paper_raid_contracts::{
-    agent_proposal_signing_bytes, human_decision_signing_bytes,
+    agent_proposal_v2_signing_bytes, human_decision_signing_bytes,
     human_evidence_verification_signing_bytes, section_materialization_root,
-    section_merge_signing_bytes, section_review_signing_bytes, AgentProposalSigningV1,
+    section_merge_signing_bytes, section_review_signing_bytes, AgentProposalSigningV2,
     HumanDecisionSigningV1, HumanEvidenceVerificationSigningV1, SectionMaterializationDescriptorV1,
     SectionMaterializationEntryV1, SectionMergeSigningV1, SectionReviewSigningV1,
-    AGENT_PROPOSAL_V1, HUMAN_DECISION_V1, HUMAN_EVIDENCE_VERIFICATION_V1,
+    AGENT_PROPOSAL_V2, HUMAN_DECISION_V1, HUMAN_EVIDENCE_VERIFICATION_V1,
     SECTION_MATERIALIZATION_V1, SECTION_MERGE_V1, SECTION_REVIEW_V1,
+};
+
+#[path = "paper_collaboration_v3/role_resources_v1.rs"]
+mod role_resources_v1;
+pub use role_resources_v1::*;
+pub(super) use role_resources_v1::{
+    role_resource_state_from_snapshot, validate_paper_role_resources,
+};
+
+#[path = "paper_collaboration_v3/matchmaking_party_v1.rs"]
+mod matchmaking_party_v1;
+use matchmaking_party_v1::{
+    live_party_ticket_count, matchmaking_partition_compatible, matchmaking_partition_key,
+    postgres_party_admission_lock_key,
 };
 
 pub const PAPER_COLLABORATION_PROTOCOL_V3: &str = "hepta.paper_raid.collaboration.v3";
@@ -38,6 +52,21 @@ const MAX_ALPHA_MATCH_CANDIDATES: usize = 2_048;
 const MATCHMAKING_TICKET_TTL_SECONDS: i64 = 30 * 60;
 const TEAM_PROPOSAL_RESPONSE_TTL_SECONDS: i64 = 5 * 60;
 pub const MATCHMAKING_QUEUE_HINT_SCHEMA_V1: &str = "hepta.paper_raid.matchmaking_queue_hint.v1";
+pub const MATCHMAKING_SOLVER_VERSION_V2: &str = "hepta.paper_raid.alpha_matcher.v2";
+const AUTOMATIC_CHALLENGE_EXPIRY_OPERATION: &str = "materialize_paper_challenge_expiry_v1";
+const AUTOMATIC_CHALLENGE_EXPIRY_EVENT: &str = "hepta.paper_raid.challenge_outcome.terminal.v1";
+const AUTOMATIC_CHALLENGE_EXPIRY_REASON: &str = "challenge_grace_deadline_elapsed";
+
+/// Read one database-authoritative, microsecond-precision timestamp and reuse
+/// it for both relational columns and their immutable JSON projection.
+pub(super) async fn postgres_transaction_now(
+    tx: &mut Transaction<'_, Postgres>,
+) -> Result<DateTime<Utc>, ApiError> {
+    sqlx::query_scalar("select clock_timestamp()")
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(ApiError::database)
+}
 
 #[derive(Clone, Default)]
 pub(super) struct CollaborationMemory {
@@ -60,6 +89,23 @@ pub(super) struct CollaborationMemory {
     pub(super) section_reviews: HashMap<Uuid, SectionReview>,
     section_merges: HashMap<Uuid, SectionMerge>,
     events: Vec<PaperRoomEvent>,
+}
+
+#[cfg(test)]
+impl CollaborationMemory {
+    pub(super) fn expire_section_lease_for_agent_authority_test(
+        &mut self,
+        lease_id: Uuid,
+        expires_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    ) {
+        let lease = self
+            .leases
+            .get_mut(&lease_id)
+            .expect("memory section lease for Agent authority test");
+        lease.expires_at = expires_at;
+        lease.updated_at = updated_at;
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -235,6 +281,8 @@ pub struct MatchmakingTicket {
     pub requested_team_size: u32,
     pub roles: Vec<String>,
     pub availability_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub party_code_hash: Option<String>,
     pub status: MatchmakingTicketStatus,
     pub matched_proposal_id: Option<Uuid>,
     #[serde(default)]
@@ -244,6 +292,66 @@ pub struct MatchmakingTicket {
     pub version: u64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MatchmakingTicketView {
+    pub ticket_id: Uuid,
+    pub player_id: Uuid,
+    pub challenge_id: Uuid,
+    pub requested_team_size: u32,
+    pub roles: Vec<String>,
+    pub availability_hash: String,
+    #[serde(default)]
+    pub private_party: bool,
+    pub status: MatchmakingTicketStatus,
+    pub matched_proposal_id: Option<Uuid>,
+    #[serde(default)]
+    pub expires_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_hint: Option<MatchmakingQueueHintV1>,
+    pub version: u64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<MatchmakingTicket> for MatchmakingTicketView {
+    fn from(ticket: MatchmakingTicket) -> Self {
+        Self {
+            ticket_id: ticket.ticket_id,
+            player_id: ticket.player_id,
+            challenge_id: ticket.challenge_id,
+            requested_team_size: ticket.requested_team_size,
+            roles: ticket.roles,
+            availability_hash: ticket.availability_hash,
+            private_party: ticket.party_code_hash.is_some(),
+            status: ticket.status,
+            matched_proposal_id: ticket.matched_proposal_id,
+            expires_at: ticket.expires_at,
+            queue_hint: ticket.queue_hint,
+            version: ticket.version,
+            created_at: ticket.created_at,
+            updated_at: ticket.updated_at,
+        }
+    }
+}
+
+fn matchmaking_ticket_created_event_payload(ticket: &MatchmakingTicket) -> Value {
+    json!({
+        "ticket_id": ticket.ticket_id,
+        "challenge_id": ticket.challenge_id,
+        "status": ticket.status,
+        "matched_proposal_id": ticket.matched_proposal_id,
+    })
+}
+
+fn matchmaking_ticket_cancelled_event_payload(ticket: &MatchmakingTicket) -> Value {
+    json!({
+        "ticket_id": ticket.ticket_id,
+        "challenge_id": ticket.challenge_id,
+        "player_id": ticket.player_id,
+        "status": ticket.status,
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -268,6 +376,8 @@ pub struct CreateMatchmakingTicketRequest {
     pub requested_team_size: u32,
     pub roles: Vec<String>,
     pub availability_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub party_code_hash: Option<String>,
     pub idempotency_key: String,
 }
 
@@ -308,6 +418,12 @@ pub struct TeamProposal {
     pub deterministic_match_key: String,
     pub member_player_ids: Vec<Uuid>,
     pub source_ticket_ids: Vec<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solver_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_preferences: Vec<TeamProposalSourcePreferenceV2>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub role_assignments: Vec<TeamProposalRoleAssignmentV2>,
     pub status: TeamProposalStatus,
     #[serde(default)]
     pub expires_at: Option<DateTime<Utc>>,
@@ -317,8 +433,24 @@ pub struct TeamProposal {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TeamProposalSourcePreferenceV2 {
+    pub ticket_id: Uuid,
+    pub player_id: Uuid,
+    pub roles: Vec<String>,
+    pub availability_hash: String,
+    pub private_party: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TeamProposalRoleAssignmentV2 {
+    pub ticket_id: Uuid,
+    pub player_id: Uuid,
+    pub assigned_role: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MatchmakingTicketResponse {
-    pub ticket: MatchmakingTicket,
+    pub ticket: MatchmakingTicketView,
     pub team_proposal: Option<TeamProposal>,
 }
 
@@ -376,6 +508,12 @@ pub struct PaperRaidProgress {
     pub paper_project_id: Uuid,
     pub title: String,
     pub phase: PaperPhase,
+    pub player_phase: String,
+    pub outcome: PaperChallengeOutcomeV1,
+    pub outcome_reason: Option<String>,
+    pub terminal_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_resources: Option<RoleResourceStateV1>,
     pub version: u64,
     pub current_revision_id: Option<Uuid>,
     pub release_candidate_revision_id: Option<Uuid>,
@@ -783,6 +921,17 @@ pub enum SectionLeaseStatus {
     Consumed,
 }
 
+impl SectionLeaseStatus {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Released => "released",
+            Self::Expired => "expired",
+            Self::Consumed => "consumed",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SectionLease {
     pub lease_id: Uuid,
@@ -865,6 +1014,9 @@ pub struct AgentProposal {
     pub work_item_id: Uuid,
     pub section_key: String,
     pub parent_revision_id: Uuid,
+    pub lease_id: Uuid,
+    pub lease_fencing_token: u64,
+    pub expected_work_version: u64,
     pub proposal_kind: AgentProposalKind,
     pub payload_hash: String,
     pub artifact_manifest_id: Uuid,
@@ -887,6 +1039,9 @@ pub struct CreateAgentProposalRequest {
     pub work_item_id: Uuid,
     pub section_key: String,
     pub parent_revision_id: Uuid,
+    pub lease_id: Uuid,
+    pub lease_fencing_token: u64,
+    pub expected_work_version: u64,
     pub proposal_kind: AgentProposalKind,
     pub payload_hash: String,
     pub artifact_manifest_id: Uuid,
@@ -1153,6 +1308,11 @@ pub struct AuthorRaidProgressV1 {
     pub schema: String,
     pub phase: PaperPhase,
     pub next_phase: Option<PaperPhase>,
+    /// Player-facing semantic phase. The legacy `reproducing` wire value is
+    /// retained in `phase` for stored V1 snapshots, but Author Raid never
+    /// performs independent reproduction; that work belongs to Review Raid.
+    pub player_phase: String,
+    pub next_player_phase: Option<String>,
     pub objective: String,
     pub actor_role: String,
     pub role_enforcement: String,
@@ -1161,6 +1321,8 @@ pub struct AuthorRaidProgressV1 {
     pub shared_actions: Vec<String>,
     pub collaboration_overrides: Vec<String>,
     pub role_blockers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role_resources: Option<RoleResourceProjectionV1>,
     pub actor_can_transition: bool,
     pub blockers: Vec<String>,
     pub next_actions: Vec<String>,
@@ -1188,6 +1350,7 @@ fn project_author_raid_progress(
     section_reviews: &[SectionReview],
     section_merges: &[SectionMerge],
 ) -> AuthorRaidProgressV1 {
+    let projection_now = Utc::now();
     let mut blockers = Vec::new();
     let mut next_actions = Vec::new();
     let (mut next_phase, mut objective) = match paper.phase {
@@ -1196,7 +1359,10 @@ fn project_author_raid_progress(
             (Some(PaperPhase::Preregistering), "open_preregistration")
         }
         PaperPhase::Preregistering => {
-            if work_items.is_empty() {
+            if !work_items
+                .iter()
+                .any(|item| item.status != WorkItemStatus::Cancelled)
+            {
                 blockers.push("work_item_required".to_string());
                 next_actions.push("create_paper_work_item".to_string());
             }
@@ -1342,8 +1508,13 @@ fn project_author_raid_progress(
         })
     {
         let facts = super::AuthorPhaseGateFacts {
-            work_item: !work_items.is_empty(),
-            work_item_count: work_items.len() as u32,
+            work_item: work_items
+                .iter()
+                .any(|item| item.status != WorkItemStatus::Cancelled),
+            work_item_count: work_items
+                .iter()
+                .filter(|item| item.status != WorkItemStatus::Cancelled)
+                .count() as u32,
             accepted_work_item_count: work_items
                 .iter()
                 .filter(|item| item.status == WorkItemStatus::Accepted)
@@ -1433,9 +1604,9 @@ fn project_author_raid_progress(
                 for blocker in &blockers {
                     let action = if blocker.contains("all_work_items_terminal") {
                         "transition_paper_work_item"
-                    } else if blocker.contains("accepted_work_items") {
-                        "create_paper_work_item"
-                    } else if blocker.contains("work_item") {
+                    } else if blocker.contains("accepted_work_items")
+                        || blocker.contains("work_item")
+                    {
                         "create_paper_work_item"
                     } else if blocker.contains("release_candidate") {
                         "promote_paper_release_candidate"
@@ -1483,15 +1654,14 @@ fn project_author_raid_progress(
             paper.outcome.as_str()
         )];
         next_actions.clear();
-    } else if paper.outcome == super::PaperChallengeOutcomeV1::InProgress
-        && paper
-            .grace_expires_at
-            .is_some_and(|grace_expires_at| Utc::now() >= grace_expires_at)
-    {
+    } else if automatic_challenge_expiry_due(paper, projection_now) {
+        // The authenticated room/event read path materializes this state
+        // before projecting the room. Keep this fail-closed fallback free of
+        // a Captain-only action in case a caller projects an old snapshot.
         next_phase = None;
-        objective = "record_expired_challenge";
+        objective = "challenge_expiry_materialization_pending";
         blockers = vec!["challenge_grace_deadline_elapsed".to_string()];
-        next_actions = vec!["record_expired_outcome".to_string()];
+        next_actions.clear();
     }
     let actor_role = team
         .members
@@ -1559,10 +1729,19 @@ fn project_author_raid_progress(
             }
         }
     }
+    let role_resources = project_role_resources(
+        paper,
+        actor_role,
+        evidence_cards.len(),
+        experiment_plans.len(),
+        projection_now,
+    );
     AuthorRaidProgressV1 {
         schema: AUTHOR_RAID_PROGRESS_SCHEMA_V1.to_string(),
         phase: paper.phase,
         next_phase,
+        player_phase: player_phase_semantic(paper.phase).to_string(),
+        next_player_phase: next_phase.map(player_phase_semantic).map(str::to_string),
         objective: objective.to_string(),
         actor_role: actor_role.to_string(),
         role_enforcement: if role_enforced {
@@ -1585,10 +1764,18 @@ fn project_author_raid_progress(
             .map(|action| (*action).to_string())
             .collect(),
         role_blockers,
+        role_resources,
         actor_can_transition: !role_enforced || actor_role == "captain",
         transition_ready: blockers.is_empty(),
         blockers,
         next_actions,
+    }
+}
+
+fn player_phase_semantic(phase: PaperPhase) -> &'static str {
+    match phase {
+        PaperPhase::Reproducing => "reproduction_readiness",
+        _ => phase.as_str(),
     }
 }
 
@@ -1701,6 +1888,7 @@ pub(super) fn router() -> Router<AppState> {
             "/v2/hepta/papers/:paper_id/events",
             get(list_paper_room_events),
         )
+        .merge(role_resources_v1::router())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1777,7 +1965,15 @@ fn require_collaboration_phase(
     paper: &PaperProject,
     mutation: CollaborationMutation,
 ) -> Result<(), ApiError> {
-    super::ensure_paper_gameplay_active(paper, Utc::now())?;
+    require_collaboration_phase_at(paper, mutation, Utc::now())
+}
+
+fn require_collaboration_phase_at(
+    paper: &PaperProject,
+    mutation: CollaborationMutation,
+    now: DateTime<Utc>,
+) -> Result<(), ApiError> {
+    super::ensure_paper_gameplay_active(paper, now)?;
     if mutation.allowed(paper.phase) {
         return Ok(());
     }
@@ -2035,6 +2231,245 @@ fn paper_and_team_memory(
     Ok((paper, team))
 }
 
+fn automatic_challenge_expiry_due(paper: &PaperProject, now: DateTime<Utc>) -> bool {
+    paper.outcome == PaperChallengeOutcomeV1::InProgress
+        && paper
+            .grace_expires_at
+            .is_some_and(|grace_expires_at| now >= grace_expires_at)
+}
+
+fn apply_automatic_challenge_expiry(paper: &mut PaperProject, now: DateTime<Utc>) -> bool {
+    if !automatic_challenge_expiry_due(paper, now) {
+        return false;
+    }
+    let grace_expires_at = paper
+        .grace_expires_at
+        .expect("automatic expiry due implies an immutable grace deadline");
+    paper.outcome = PaperChallengeOutcomeV1::Expired;
+    paper.outcome_reason = Some(AUTOMATIC_CHALLENGE_EXPIRY_REASON.to_string());
+    // The gameplay terminal fact is the immutable grace boundary. `updated_at`
+    // and the emitted event timestamp below record when lazy materialization
+    // actually happened, so polling frequency cannot change the terminal fact.
+    paper.terminal_at = Some(grace_expires_at);
+    paper.version += 1;
+    paper.updated_at = now;
+    true
+}
+
+fn automatic_challenge_expiry_idempotency_key(paper_id: Uuid) -> String {
+    format!("automatic-challenge-expiry:{paper_id}")
+}
+
+fn automatic_challenge_expiry_payload(paper: &PaperProject) -> Value {
+    json!({
+        "paper_project_id": paper.paper_project_id,
+        "outcome": paper.outcome,
+        "reason_code": paper.outcome_reason,
+        "terminal_at": paper.terminal_at,
+        "automatic": true,
+    })
+}
+
+fn materialize_automatic_challenge_expiry_memory(
+    memory: &mut PaperRaidMemory,
+    paper_id: Uuid,
+    now: DateTime<Utc>,
+) -> Option<PaperProject> {
+    let paper = memory.papers.get_mut(&paper_id)?;
+    if !apply_automatic_challenge_expiry(paper, now) {
+        return None;
+    }
+    let response = paper.clone();
+    push_room_event_memory(
+        memory,
+        AUTOMATIC_CHALLENGE_EXPIRY_OPERATION,
+        &automatic_challenge_expiry_idempotency_key(paper_id),
+        AUTOMATIC_CHALLENGE_EXPIRY_EVENT,
+        paper_id,
+        paper_id,
+        response.version,
+        automatic_challenge_expiry_payload(&response),
+    );
+    Some(response)
+}
+
+async fn materialize_automatic_challenge_expiry_postgres(
+    tx: &mut Transaction<'_, Postgres>,
+    mut paper: PaperProject,
+    now: DateTime<Utc>,
+) -> Result<Option<PaperProject>, ApiError> {
+    if !apply_automatic_challenge_expiry(&mut paper, now) {
+        return Ok(None);
+    }
+    let previous_version = paper
+        .version
+        .checked_sub(1)
+        .ok_or_else(|| ApiError::internal("automatic Paper expiry version underflow"))?;
+    let record_json = serde_json::to_value(&paper)
+        .map_err(|error| ApiError::internal(format!("encode expired paper project: {error}")))?;
+    let updated = sqlx::query(
+        "update hepta_paper_projects
+         set outcome='expired',outcome_reason=$1,terminal_at=$2,version=$3,
+             record_json=$4::jsonb,updated_at=$5
+         where paper_project_id=$6 and outcome='in_progress' and version=$7",
+    )
+    .bind(&paper.outcome_reason)
+    .bind(paper.terminal_at)
+    .bind(
+        i64::try_from(paper.version)
+            .map_err(|_| ApiError::internal("automatic Paper expiry version overflow"))?,
+    )
+    .bind(record_json)
+    .bind(paper.updated_at)
+    .bind(paper.paper_project_id)
+    .bind(
+        i64::try_from(previous_version)
+            .map_err(|_| ApiError::internal("automatic Paper expiry version overflow"))?,
+    )
+    .execute(&mut **tx)
+    .await
+    .map_err(ApiError::database)?;
+    if updated.rows_affected() != 1 {
+        return Err(ApiError::conflict(
+            "automatic_paper_expiry_race",
+            "paper project changed while its challenge expiry was materialized",
+        ));
+    }
+    insert_room_event_postgres(
+        tx,
+        AUTOMATIC_CHALLENGE_EXPIRY_OPERATION,
+        &automatic_challenge_expiry_idempotency_key(paper.paper_project_id),
+        AUTOMATIC_CHALLENGE_EXPIRY_EVENT,
+        paper.paper_project_id,
+        paper.paper_project_id,
+        paper.version,
+        automatic_challenge_expiry_payload(&paper),
+    )
+    .await?;
+    Ok(Some(paper))
+}
+
+/// Lazily materialize the immutable deadline outcome on the first authorized
+/// Paper read at or after the half-open grace boundary. Memory serializes on
+/// the Paper-Raid write lock; PostgreSQL serializes on the Paper row. Both
+/// paths re-check the outcome after acquiring their lock, so concurrent reads
+/// and retries produce one aggregate transition and one event.
+pub(super) async fn ensure_automatic_challenge_expiry_materialized(
+    state: &AppState,
+    paper_id: Uuid,
+    assertion: &ConsumerUserAssertionClaimV2,
+    now: DateTime<Utc>,
+) -> Result<(), ApiError> {
+    if state.pool.is_none() {
+        {
+            let memory = state.paper_raid.read().await;
+            let Some(paper) = memory.papers.get(&paper_id) else {
+                return Ok(());
+            };
+            if !automatic_challenge_expiry_due(paper, now) {
+                return Ok(());
+            }
+        }
+        let mut memory = state.paper_raid.write().await;
+        let (paper, _) = paper_and_team_memory(&memory, paper_id, assertion)?;
+        if !automatic_challenge_expiry_due(&paper, now) {
+            return Ok(());
+        }
+        ensure_paper_finality_v2_source_unsealed_memory(state, paper_id).await?;
+        let _ = materialize_automatic_challenge_expiry_memory(&mut memory, paper_id, now);
+        return Ok(());
+    }
+
+    let pool = state
+        .pool
+        .as_ref()
+        .ok_or_else(|| ApiError::internal("PostgreSQL state unavailable"))?;
+    let candidate = sqlx::query(
+        "select record_json,clock_timestamp() as storage_now
+         from hepta_paper_projects where paper_project_id=$1",
+    )
+    .bind(paper_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::database)?;
+    let Some(candidate) = candidate else {
+        return Ok(());
+    };
+    let storage_now: DateTime<Utc> = candidate.get("storage_now");
+    let candidate: PaperProject = decode_record(candidate.get("record_json"), "paper project")?;
+    if !automatic_challenge_expiry_due(&candidate, storage_now) {
+        return Ok(());
+    }
+
+    let mut tx = pool.begin().await.map_err(ApiError::database)?;
+    assert_team_actor_postgres(&mut tx, candidate.team_id, assertion).await?;
+    crate::paper_chain_finality_v2::lock_paper_finality_v2_source_unsealed_postgres(
+        &mut tx, paper_id,
+    )
+    .await?;
+    let row = sqlx::query("select record_json from hepta_paper_projects where paper_project_id=$1")
+        .bind(paper_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(ApiError::database)?;
+    let paper: PaperProject = decode_record(row.get("record_json"), "paper project")?;
+    let storage_now = postgres_transaction_now(&mut tx).await?;
+    let _ = materialize_automatic_challenge_expiry_postgres(&mut tx, paper, storage_now).await?;
+    tx.commit().await.map_err(ApiError::database)?;
+    Ok(())
+}
+
+async fn ensure_player_automatic_challenge_expiries_materialized(
+    state: &AppState,
+    assertion: &ConsumerUserAssertionClaimV2,
+    now: DateTime<Utc>,
+) -> Result<(), ApiError> {
+    let due_paper_ids = if let Some(pool) = &state.pool {
+        sqlx::query(
+            "select p.paper_project_id
+             from hepta_paper_projects p
+             join hepta_research_team_members m on m.team_id=p.team_id
+             where m.player_id=$1 and p.outcome='in_progress'
+               and p.grace_expires_at is not null and p.grace_expires_at <= $2
+             order by p.grace_expires_at,p.paper_project_id",
+        )
+        .bind(assertion.player_id)
+        .bind(now)
+        .fetch_all(pool)
+        .await
+        .map_err(ApiError::database)?
+        .into_iter()
+        .map(|row| row.get("paper_project_id"))
+        .collect::<Vec<Uuid>>()
+    } else {
+        let memory = state.paper_raid.read().await;
+        let team_ids = memory
+            .teams
+            .values()
+            .filter(|team| {
+                team.members
+                    .iter()
+                    .any(|member| member.player_id == assertion.player_id)
+            })
+            .map(|team| team.team_id)
+            .collect::<HashSet<_>>();
+        let mut paper_ids = memory
+            .papers
+            .values()
+            .filter(|paper| {
+                team_ids.contains(&paper.team_id) && automatic_challenge_expiry_due(paper, now)
+            })
+            .map(|paper| paper.paper_project_id)
+            .collect::<Vec<_>>();
+        paper_ids.sort_unstable();
+        paper_ids
+    };
+    for paper_id in due_paper_ids {
+        ensure_automatic_challenge_expiry_materialized(state, paper_id, assertion, now).await?;
+    }
+    Ok(())
+}
+
 async fn paper_and_team_postgres(
     tx: &mut Transaction<'_, Postgres>,
     paper_id: Uuid,
@@ -2270,6 +2705,9 @@ fn validate_matchmaking_ticket_request(
 ) -> Result<(), ApiError> {
     validate_idempotency_key(&request.idempotency_key)?;
     validate_digest_v2("availability_hash", &request.availability_hash)?;
+    if let Some(party_code_hash) = request.party_code_hash.as_deref() {
+        validate_digest_v2("party_code_hash", party_code_hash)?;
+    }
     if request.requested_team_size != 3 {
         return Err(ApiError::bad_request(
             "alpha_team_size_requires_three",
@@ -2312,6 +2750,9 @@ fn distinct_role_assignment(tickets: &[MatchmakingTicket]) -> Option<Vec<String>
             return true;
         }
         for role in &tickets[index].roles {
+            if canonical_matchmaking_role_bit(role).is_none() {
+                continue;
+            }
             if used.insert(role.clone()) {
                 roles.push(role.clone());
                 if assign(tickets, index + 1, used, roles) {
@@ -2327,6 +2768,50 @@ fn distinct_role_assignment(tickets: &[MatchmakingTicket]) -> Option<Vec<String>
     let mut used = HashSet::new();
     let mut roles = Vec::with_capacity(tickets.len());
     assign(tickets, 0, &mut used, &mut roles).then_some(roles)
+}
+
+fn validate_premade_party_admission(
+    existing: &[MatchmakingTicket],
+    candidate: &MatchmakingTicket,
+) -> Result<(), ApiError> {
+    let Some(party_code_hash) = candidate.party_code_hash.as_deref() else {
+        return Ok(());
+    };
+    if live_party_ticket_count(existing.iter(), candidate.challenge_id, party_code_hash) >= 3 {
+        return Err(ApiError::conflict(
+            "party_queue_full",
+            "the premade party already has three live matchmaking tickets",
+        ));
+    }
+    let mut party = existing
+        .iter()
+        .filter(|ticket| {
+            ticket.challenge_id == candidate.challenge_id
+                && ticket.party_code_hash.as_deref() == Some(party_code_hash)
+                && matches!(
+                    ticket.status,
+                    MatchmakingTicketStatus::Queued | MatchmakingTicketStatus::Matched
+                )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    party.push(candidate.clone());
+    if party
+        .iter()
+        .any(|ticket| !matchmaking_partition_compatible(candidate, ticket))
+    {
+        return Err(ApiError::conflict(
+            "party_availability_conflict",
+            "premade party members must choose one exact availability window; a queued member can cancel and rejoin with the shared window",
+        ));
+    }
+    if distinct_role_assignment(&party).is_none() {
+        return Err(ApiError::conflict(
+            "party_role_conflict",
+            "premade party role preferences cannot cover distinct Captain, Evidence, and Experiment slots; a queued member can cancel and rejoin with compatible roles",
+        ));
+    }
+    Ok(())
 }
 
 fn canonical_matchmaking_role_bit(role: &str) -> Option<u8> {
@@ -2350,7 +2835,7 @@ fn maximum_assignable_role_slots_for(
     }
     let mut seen_players = HashSet::from([ticket.player_id]);
     for candidate in compatible {
-        if candidate.availability_hash != ticket.availability_hash
+        if !matchmaking_partition_compatible(ticket, candidate)
             || !seen_players.insert(candidate.player_id)
         {
             continue;
@@ -2389,14 +2874,21 @@ fn matchmaking_ticket_is_live_at(ticket: &MatchmakingTicket, now: DateTime<Utc>)
     ticket.status == MatchmakingTicketStatus::Queued && matchmaking_ticket_deadline(ticket) > now
 }
 
-fn expire_matchmaking_ticket(ticket: &mut MatchmakingTicket, now: DateTime<Utc>) -> bool {
-    if !matchmaking_ticket_is_live_at(ticket, now)
-        && ticket.status == MatchmakingTicketStatus::Queued
-        && matchmaking_ticket_deadline(ticket) <= now
+fn expire_matchmaking_ticket(
+    ticket: &mut MatchmakingTicket,
+    now: DateTime<Utc>,
+    player_eligible: bool,
+) -> bool {
+    if ticket.status == MatchmakingTicketStatus::Queued
+        && (!player_eligible || matchmaking_ticket_deadline(ticket) <= now)
     {
         ticket.status = MatchmakingTicketStatus::Expired;
         ticket.matched_proposal_id = None;
-        ticket.expires_at = Some(matchmaking_ticket_deadline(ticket));
+        ticket.expires_at = Some(if player_eligible {
+            matchmaking_ticket_deadline(ticket)
+        } else {
+            now
+        });
         ticket.queue_hint = None;
         ticket.version += 1;
         ticket.updated_at = now;
@@ -2447,25 +2939,33 @@ fn project_matchmaking_ticket(
         .num_seconds()
         .max(0) as u64;
     let expires_in_seconds = deadline.signed_duration_since(now).num_seconds().max(0) as u64;
-    let mut compatible = queue
+    // The authoritative matcher applies one bounded FIFO horizon across the
+    // whole challenge before it partitions by availability and premade party.
+    // Project the exact same horizon so `eta_seconds = 0` can never claim that
+    // a tail ticket is immediately matchable when the matcher cannot inspect
+    // it yet.
+    let mut horizon = queue
         .iter()
         .filter(|candidate| {
             candidate.challenge_id == ticket.challenge_id
-                && candidate.availability_hash == ticket.availability_hash
+                && candidate.requested_team_size == 3
                 && matchmaking_ticket_is_live_at(candidate, now)
         })
         .cloned()
         .collect::<Vec<_>>();
-    if matchmaking_ticket_is_live_at(&ticket, now)
-        && !compatible
-            .iter()
-            .any(|candidate| candidate.ticket_id == ticket.ticket_id)
-    {
-        compatible.push(ticket.clone());
-    }
-    compatible.sort_by_key(|candidate| (candidate.created_at, candidate.ticket_id));
+    horizon.sort_by_key(|candidate| (candidate.created_at, candidate.ticket_id));
+    horizon.truncate(MAX_ALPHA_MATCH_CANDIDATES);
     let mut seen_players = HashSet::new();
-    compatible.retain(|candidate| seen_players.insert(candidate.player_id));
+    horizon.retain(|candidate| seen_players.insert(candidate.player_id));
+    // `eta_seconds = 0` means this exact ticket belongs to the one triplet the
+    // authoritative matcher would select next across every partition. A
+    // merely-complete later partition must not look immediately ready while
+    // an older compatible triplet wins the global FIFO comparison.
+    let globally_selected = first_compatible_triplet(&horizon);
+    let compatible = horizon
+        .into_iter()
+        .filter(|candidate| matchmaking_partition_compatible(&ticket, candidate))
+        .collect::<Vec<_>>();
     let compatible_pool_size = u32::try_from(compatible.len()).unwrap_or(u32::MAX);
     let queue_position = compatible
         .iter()
@@ -2485,13 +2985,19 @@ fn project_matchmaking_ticket(
         .requested_team_size
         .saturating_sub(assignable_role_slots);
     let ready_now = ticket.status == MatchmakingTicketStatus::Queued
-        && first_compatible_triplet(&compatible).is_some_and(|selected| {
+        && globally_selected.is_some_and(|selected| {
             selected
                 .iter()
                 .any(|item| item.ticket_id == ticket.ticket_id)
         });
     let (state, eta_seconds, message) = match ticket.status {
         MatchmakingTicketStatus::Queued if ready_now => ("ready", Some(0), "compatible_team_ready"),
+        MatchmakingTicketStatus::Queued
+            if ticket.party_code_hash.is_some()
+                && compatible_pool_size < ticket.requested_team_size =>
+        {
+            ("waiting", None, "waiting_for_party_members")
+        }
         MatchmakingTicketStatus::Queued if !missing_roles.is_empty() => {
             ("waiting", None, "waiting_for_required_roles")
         }
@@ -2534,13 +3040,13 @@ fn first_compatible_triplet(tickets: &[MatchmakingTicket]) -> Option<Vec<Matchma
     // per availability bucket. This avoids the former unbounded O(n^3) queue
     // scan and never matches players across incompatible play windows.
     let mut seen_players = HashSet::new();
-    let mut buckets: HashMap<&str, Vec<(usize, &MatchmakingTicket)>> = HashMap::new();
+    let mut buckets: HashMap<_, Vec<(usize, &MatchmakingTicket)>> = HashMap::new();
     for (index, ticket) in tickets.iter().enumerate() {
         if !seen_players.insert(ticket.player_id) {
             continue;
         }
         buckets
-            .entry(ticket.availability_hash.as_str())
+            .entry(matchmaking_partition_key(ticket))
             .or_default()
             .push((index, ticket));
     }
@@ -2597,6 +3103,7 @@ fn select_alpha_match(tickets: impl Iterator<Item = MatchmakingTicket>) -> Vec<M
 
 fn expire_due_matchmaking_tickets_memory(
     memory: &mut CollaborationMemory,
+    eligible_player_ids: &HashSet<Uuid>,
     challenge_id: Uuid,
     now: DateTime<Utc>,
 ) -> Vec<MatchmakingTicket> {
@@ -2606,7 +3113,8 @@ fn expire_due_matchmaking_tickets_memory(
         .values_mut()
         .filter(|ticket| ticket.challenge_id == challenge_id)
     {
-        if expire_matchmaking_ticket(ticket, now) {
+        let player_eligible = eligible_player_ids.contains(&ticket.player_id);
+        if expire_matchmaking_ticket(ticket, now, player_eligible) {
             expired.push(ticket.clone());
         }
     }
@@ -2619,9 +3127,17 @@ async fn expire_due_matchmaking_tickets_postgres(
     now: DateTime<Utc>,
 ) -> Result<Vec<MatchmakingTicket>, ApiError> {
     let rows = sqlx::query(
-        "select version,record_json from hepta_matchmaking_tickets
-         where challenge_id=$1 and status='queued'
-         order by created_at,ticket_id for update",
+        "select ticket.version,ticket.record_json,
+                exists (
+                    select 1 from hepta_human_players player
+                    where player.player_id=ticket.player_id and player.status='active'
+                      and (select count(*) from hepta_agent_bindings binding
+                           where binding.player_id=ticket.player_id
+                             and binding.status='active') = 1
+                ) as player_eligible
+         from hepta_matchmaking_tickets ticket
+         where ticket.challenge_id=$1 and ticket.status='queued'
+         order by ticket.created_at,ticket.ticket_id for update of ticket",
     )
     .bind(challenge_id)
     .fetch_all(&mut **tx)
@@ -2638,14 +3154,14 @@ async fn expire_due_matchmaking_tickets_postgres(
                 "matchmaking ticket record/version projection diverged",
             ));
         }
-        if !expire_matchmaking_ticket(&mut ticket, now) {
+        if !expire_matchmaking_ticket(&mut ticket, now, row.get("player_eligible")) {
             continue;
         }
         let updated = sqlx::query(
             "update hepta_matchmaking_tickets
              set status='expired',matched_proposal_id=null,version=$1,
-                 record_json=$2::jsonb,updated_at=$3
-             where ticket_id=$4 and status='queued' and version=$5",
+                 record_json=$2::jsonb,updated_at=$3,expires_at=$4
+             where ticket_id=$5 and status='queued' and version=$6",
         )
         .bind(
             i64::try_from(ticket.version)
@@ -2655,6 +3171,7 @@ async fn expire_due_matchmaking_tickets_postgres(
             ApiError::internal(format!("encode expired matchmaking ticket: {error}"))
         })?)
         .bind(now)
+        .bind(matchmaking_ticket_deadline(&ticket))
         .bind(ticket.ticket_id)
         .bind(
             i64::try_from(actual_version)
@@ -2727,10 +3244,14 @@ fn expire_team_proposal_memory(
     let Some(snapshot) = memory.team_proposals.get(&proposal_id).cloned() else {
         return Ok(false);
     };
+    let invalid_member = snapshot
+        .member_player_ids
+        .iter()
+        .any(|player_id| !eligible_player_ids.contains(player_id));
     if !matches!(
         snapshot.status,
         TeamProposalStatus::Proposed | TeamProposalStatus::Accepted
-    ) || team_proposal_deadline(&snapshot) > now
+    ) || (team_proposal_deadline(&snapshot) > now && !invalid_member)
     {
         return Ok(false);
     }
@@ -2768,10 +3289,75 @@ fn expire_team_proposal_memory(
         .get_mut(&proposal_id)
         .expect("proposal snapshot came from memory");
     proposal.status = TeamProposalStatus::Expired;
-    proposal.expires_at = Some(team_proposal_deadline(proposal));
+    proposal.expires_at = Some(if invalid_member {
+        now.min(team_proposal_deadline(proposal))
+    } else {
+        team_proposal_deadline(proposal)
+    });
     proposal.version += 1;
     proposal.updated_at = now;
     Ok(true)
+}
+
+fn invalidate_team_proposal_provenance_memory(
+    memory: &mut CollaborationMemory,
+    reserved_team_ids: &HashSet<Uuid>,
+    eligible_player_ids: &HashSet<Uuid>,
+    proposal_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<TeamProposalExpirySweep, ApiError> {
+    let snapshot = memory
+        .team_proposals
+        .get(&proposal_id)
+        .cloned()
+        .ok_or_else(|| ApiError::internal("invalid team proposal disappeared"))?;
+    if !matches!(
+        snapshot.status,
+        TeamProposalStatus::Proposed | TeamProposalStatus::Accepted
+    ) {
+        return Ok(TeamProposalExpirySweep::default());
+    }
+    for ticket_id in &snapshot.source_ticket_ids {
+        let Some(ticket) = memory.tickets.get_mut(ticket_id) else {
+            continue;
+        };
+        if ticket.status != MatchmakingTicketStatus::Matched
+            || ticket.matched_proposal_id != Some(proposal_id)
+        {
+            continue;
+        }
+        ticket.status = if eligible_player_ids.contains(&ticket.player_id)
+            && matchmaking_ticket_deadline(ticket) > now
+        {
+            MatchmakingTicketStatus::Queued
+        } else {
+            MatchmakingTicketStatus::Expired
+        };
+        ticket.matched_proposal_id = None;
+        ticket.version += 1;
+        ticket.updated_at = now;
+        ticket.queue_hint = None;
+    }
+    let proposal = memory
+        .team_proposals
+        .get_mut(&proposal_id)
+        .expect("invalid proposal snapshot came from memory");
+    proposal.status = TeamProposalStatus::Expired;
+    proposal.expires_at = Some(now.min(team_proposal_deadline(proposal)));
+    proposal.version += 1;
+    proposal.updated_at = now;
+    let expired = proposal.clone();
+    let replacements = auto_match_all_queued_tickets_memory(
+        memory,
+        reserved_team_ids,
+        eligible_player_ids,
+        snapshot.challenge_id,
+        now,
+    )?;
+    Ok(TeamProposalExpirySweep {
+        expired: vec![expired],
+        replacements,
+    })
 }
 
 #[derive(Debug, Default)]
@@ -2796,7 +3382,11 @@ fn expire_due_team_proposals_memory(
                     proposal.status,
                     TeamProposalStatus::Proposed | TeamProposalStatus::Accepted
                 )
-                && team_proposal_deadline(proposal) <= now
+                && (team_proposal_deadline(proposal) <= now
+                    || proposal
+                        .member_player_ids
+                        .iter()
+                        .any(|player_id| !eligible_player_ids.contains(player_id)))
         })
         .map(|proposal| proposal.proposal_id)
         .collect::<Vec<_>>();
@@ -2881,11 +3471,10 @@ async fn expire_due_team_proposals_postgres(
 ) -> Result<Vec<TeamProposal>, ApiError> {
     let rows = sqlx::query(
         "select proposal_id,version,record_json from hepta_team_proposals
-         where challenge_id=$1 and status in ('proposed','accepted') and expires_at <= $2
+         where challenge_id=$1 and status in ('proposed','accepted')
          order by expires_at,proposal_id for update",
     )
     .bind(challenge_id)
-    .bind(now)
     .fetch_all(&mut **tx)
     .await
     .map_err(ApiError::database)?;
@@ -2900,10 +3489,9 @@ async fn expire_due_team_proposals_postgres(
                 proposal.status,
                 TeamProposalStatus::Proposed | TeamProposalStatus::Accepted
             )
-            || team_proposal_deadline(&proposal) > now
         {
             return Err(ApiError::internal(
-                "team proposal deadline projection diverged",
+                "team proposal active-state projection diverged",
             ));
         }
         let accepted = sqlx::query(
@@ -2937,6 +3525,13 @@ async fn expire_due_team_proposals_postgres(
             return Err(ApiError::internal(
                 "expired team proposal source ticket set is incomplete",
             ));
+        }
+        let invalid_member = ticket_rows.iter().any(|ticket_row| {
+            ticket_row.get::<String, _>("player_status") != "active"
+                || ticket_row.get::<i64, _>("active_binding_count") != 1
+        });
+        if team_proposal_deadline(&proposal) > now && !invalid_member {
+            continue;
         }
         for ticket_row in ticket_rows {
             let actual_ticket_version = u64::try_from(ticket_row.get::<i64, _>("version"))
@@ -2997,13 +3592,17 @@ async fn expire_due_team_proposals_postgres(
             }
         }
         proposal.status = TeamProposalStatus::Expired;
-        proposal.expires_at = Some(team_proposal_deadline(&proposal));
+        proposal.expires_at = Some(if invalid_member {
+            now.min(team_proposal_deadline(&proposal))
+        } else {
+            team_proposal_deadline(&proposal)
+        });
         proposal.version += 1;
         proposal.updated_at = now;
         let updated = sqlx::query(
             "update hepta_team_proposals
-             set status='expired',version=$1,record_json=$2::jsonb,updated_at=$3
-             where proposal_id=$4 and status in ('proposed','accepted') and version=$5",
+             set status='expired',version=$1,record_json=$2::jsonb,updated_at=$3,expires_at=$4
+             where proposal_id=$5 and status in ('proposed','accepted') and version=$6",
         )
         .bind(
             i64::try_from(proposal.version)
@@ -3013,6 +3612,7 @@ async fn expire_due_team_proposals_postgres(
             ApiError::internal(format!("encode expired team proposal: {error}"))
         })?)
         .bind(now)
+        .bind(team_proposal_deadline(&proposal))
         .bind(proposal_id)
         .bind(
             i64::try_from(actual_version)
@@ -3050,14 +3650,216 @@ async fn expire_due_team_proposals_postgres(
     Ok(expired)
 }
 
+async fn invalidate_team_proposal_provenance_postgres(
+    tx: &mut Transaction<'_, Postgres>,
+    proposal: &TeamProposal,
+    now: DateTime<Utc>,
+) -> Result<(), ApiError> {
+    if !matches!(
+        proposal.status,
+        TeamProposalStatus::Proposed | TeamProposalStatus::Accepted
+    ) {
+        return Ok(());
+    }
+    let rows = sqlx::query(
+        "select ticket.version,ticket.record_json,player.status as player_status,
+                (select count(*) from hepta_agent_bindings binding
+                 where binding.player_id=ticket.player_id and binding.status='active')
+                    as active_binding_count
+         from hepta_matchmaking_tickets ticket
+         left join hepta_human_players player on player.player_id=ticket.player_id
+         where ticket.ticket_id=any($1) order by ticket.ticket_id
+         for update of ticket",
+    )
+    .bind(&proposal.source_ticket_ids)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(ApiError::database)?;
+    for row in rows {
+        let actual_version = u64::try_from(row.get::<i64, _>("version"))
+            .map_err(|_| ApiError::internal("matchmaking ticket version is invalid"))?;
+        let mut ticket: MatchmakingTicket =
+            decode_record(row.get("record_json"), "matchmaking ticket")?;
+        if ticket.version != actual_version {
+            return Err(ApiError::internal(
+                "matchmaking ticket record/version projection diverged",
+            ));
+        }
+        if ticket.status != MatchmakingTicketStatus::Matched
+            || ticket.matched_proposal_id != Some(proposal.proposal_id)
+        {
+            continue;
+        }
+        let player_status: Option<String> = row.try_get("player_status").unwrap_or(None);
+        ticket.status = if player_status.as_deref() == Some("active")
+            && row.get::<i64, _>("active_binding_count") == 1
+            && matchmaking_ticket_deadline(&ticket) > now
+        {
+            MatchmakingTicketStatus::Queued
+        } else {
+            MatchmakingTicketStatus::Expired
+        };
+        ticket.matched_proposal_id = None;
+        ticket.version += 1;
+        ticket.updated_at = now;
+        ticket.queue_hint = None;
+        let updated = sqlx::query(
+            "update hepta_matchmaking_tickets
+             set status=$1,matched_proposal_id=null,version=$2,
+                 record_json=$3::jsonb,updated_at=$4
+             where ticket_id=$5 and status='matched' and matched_proposal_id=$6
+               and version=$7",
+        )
+        .bind(ticket.status.as_str())
+        .bind(
+            i64::try_from(ticket.version)
+                .map_err(|_| ApiError::internal("ticket version overflow"))?,
+        )
+        .bind(serde_json::to_value(&ticket).map_err(|error| {
+            ApiError::internal(format!("encode provenance-invalid ticket: {error}"))
+        })?)
+        .bind(now)
+        .bind(ticket.ticket_id)
+        .bind(proposal.proposal_id)
+        .bind(
+            i64::try_from(actual_version)
+                .map_err(|_| ApiError::internal("ticket version overflow"))?,
+        )
+        .execute(&mut **tx)
+        .await
+        .map_err(ApiError::database)?;
+        if updated.rows_affected() != 1 {
+            return Err(ApiError::conflict(
+                "team_proposal_expiry_race",
+                "matched ticket changed while invalid proposal provenance was withdrawn",
+            ));
+        }
+    }
+    let mut expired = proposal.clone();
+    let previous_version = expired.version;
+    expired.status = TeamProposalStatus::Expired;
+    expired.expires_at = Some(now.min(team_proposal_deadline(&expired)));
+    expired.version += 1;
+    expired.updated_at = now;
+    let updated = sqlx::query(
+        "update hepta_team_proposals
+         set status='expired',version=$1,record_json=$2::jsonb,updated_at=$3,expires_at=$4
+         where proposal_id=$5 and status in ('proposed','accepted') and version=$6",
+    )
+    .bind(
+        i64::try_from(expired.version)
+            .map_err(|_| ApiError::internal("proposal version overflow"))?,
+    )
+    .bind(serde_json::to_value(&expired).map_err(|error| {
+        ApiError::internal(format!("encode provenance-invalid proposal: {error}"))
+    })?)
+    .bind(now)
+    .bind(team_proposal_deadline(&expired))
+    .bind(expired.proposal_id)
+    .bind(
+        i64::try_from(previous_version)
+            .map_err(|_| ApiError::internal("proposal version overflow"))?,
+    )
+    .execute(&mut **tx)
+    .await
+    .map_err(ApiError::database)?;
+    if updated.rows_affected() != 1 {
+        return Err(ApiError::conflict(
+            "team_proposal_expiry_race",
+            "team proposal changed while invalid provenance was withdrawn",
+        ));
+    }
+    insert_postgres_event(
+        tx,
+        "invalidate_team_proposal_provenance_v2",
+        &expired.proposal_id.to_string(),
+        "hepta.paper_raid.team_proposal.expired.v1",
+        expired.proposal_id,
+        expired.version,
+        json!({
+            "proposal_id": expired.proposal_id,
+            "challenge_id": expired.challenge_id,
+            "expires_at": expired.expires_at,
+            "reason": "matcher_v2_provenance_invalid",
+        }),
+    )
+    .await?;
+    auto_match_all_queued_tickets_postgres(tx, expired.challenge_id, now).await?;
+    Ok(())
+}
+
+fn deterministic_match_key_for_ticket_epochs(
+    challenge_id: Uuid,
+    ticket_epochs: &[(&MatchmakingTicket, u64)],
+    partition: &MatchmakingTicket,
+    assigned_roles: &[String],
+) -> String {
+    crate::paper_raid_contracts::sha256_digest(
+        format!(
+            "v2:{}:{}:{}:{}:{}",
+            MATCHMAKING_SOLVER_VERSION_V2,
+            challenge_id,
+            partition.availability_hash,
+            partition.party_code_hash.as_deref().unwrap_or("public"),
+            ticket_epochs
+                .iter()
+                .zip(assigned_roles)
+                .map(|((ticket, version), assigned_role)| {
+                    format!(
+                        "{}@{}@{}@{}@{}",
+                        ticket.ticket_id,
+                        version,
+                        ticket.player_id,
+                        ticket.roles.join(","),
+                        assigned_role,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(":")
+        )
+        .as_bytes(),
+    )
+}
+
+fn frozen_team_proposal_preferences(
+    tickets: &[MatchmakingTicket],
+) -> Vec<TeamProposalSourcePreferenceV2> {
+    tickets
+        .iter()
+        .map(|ticket| TeamProposalSourcePreferenceV2 {
+            ticket_id: ticket.ticket_id,
+            player_id: ticket.player_id,
+            roles: ticket.roles.clone(),
+            availability_hash: ticket.availability_hash.clone(),
+            private_party: ticket.party_code_hash.is_some(),
+        })
+        .collect()
+}
+
+fn frozen_team_proposal_role_assignments(
+    tickets: &[MatchmakingTicket],
+    assigned_roles: &[String],
+) -> Vec<TeamProposalRoleAssignmentV2> {
+    tickets
+        .iter()
+        .zip(assigned_roles)
+        .map(|(ticket, assigned_role)| TeamProposalRoleAssignmentV2 {
+            ticket_id: ticket.ticket_id,
+            player_id: ticket.player_id,
+            assigned_role: assigned_role.clone(),
+        })
+        .collect()
+}
+
 fn build_team_proposal(tickets: &[MatchmakingTicket]) -> Result<TeamProposal, ApiError> {
     if tickets.len() != 3
-        || tickets
-            .iter()
-            .any(|ticket| ticket.challenge_id != tickets[0].challenge_id)
+        || tickets.iter().any(|ticket| {
+            ticket.challenge_id != tickets[0].challenge_id
+                || !matchmaking_partition_compatible(&tickets[0], ticket)
+        })
     {
         return Err(ApiError::internal(
-            "deterministic alpha matcher received an invalid queue slice",
+            "deterministic alpha matcher received a cross-partition or role-incompatible queue slice",
         ));
     }
     let source_ticket_ids: Vec<_> = tickets.iter().map(|ticket| ticket.ticket_id).collect();
@@ -3074,18 +3876,17 @@ fn build_team_proposal(tickets: &[MatchmakingTicket]) -> Result<TeamProposal, Ap
             "one human player cannot occupy multiple Paper Raid team slots",
         ));
     }
-    let match_key = crate::paper_raid_contracts::sha256_digest(
-        format!(
-            "{}:{}",
-            tickets[0].challenge_id,
-            source_ticket_ids
-                .iter()
-                .zip(tickets)
-                .map(|(ticket_id, ticket)| format!("{ticket_id}@{}", ticket.version))
-                .collect::<Vec<_>>()
-                .join(":")
-        )
-        .as_bytes(),
+    let assigned_roles = distinct_role_assignment(tickets).ok_or_else(|| {
+        ApiError::internal("deterministic alpha matcher received a role-incompatible queue slice")
+    })?;
+    let match_key = deterministic_match_key_for_ticket_epochs(
+        tickets[0].challenge_id,
+        &tickets
+            .iter()
+            .map(|ticket| (ticket, ticket.version))
+            .collect::<Vec<_>>(),
+        &tickets[0],
+        &assigned_roles,
     );
     let now = Utc::now();
     Ok(TeamProposal {
@@ -3095,6 +3896,9 @@ fn build_team_proposal(tickets: &[MatchmakingTicket]) -> Result<TeamProposal, Ap
         deterministic_match_key: match_key,
         member_player_ids,
         source_ticket_ids,
+        solver_version: Some(MATCHMAKING_SOLVER_VERSION_V2.to_string()),
+        source_preferences: frozen_team_proposal_preferences(tickets),
+        role_assignments: frozen_team_proposal_role_assignments(tickets, &assigned_roles),
         status: TeamProposalStatus::Proposed,
         expires_at: Some(now + chrono::Duration::seconds(TEAM_PROPOSAL_RESPONSE_TTL_SECONDS)),
         version: 1,
@@ -3248,15 +4052,30 @@ async fn auto_match_queued_tickets_postgres(
     sqlx::query(
         "insert into hepta_team_proposals (
             proposal_id,challenge_id,requested_team_size,deterministic_match_key,status,
-            member_player_ids,source_ticket_ids,version,record_json,created_at,updated_at,
-            expires_at
-         ) values ($1,$2,3,$3,'proposed',$4,$5,1,$6::jsonb,$7,$7,$8)",
+            member_player_ids,source_ticket_ids,solver_version,source_preferences,
+            role_assignments,version,record_json,created_at,updated_at,expires_at
+         ) values ($1,$2,3,$3,'proposed',$4,$5,$6,$7::jsonb,$8::jsonb,1,$9::jsonb,$10,$10,$11)",
     )
     .bind(proposal.proposal_id)
     .bind(proposal.challenge_id)
     .bind(&proposal.deterministic_match_key)
     .bind(&proposal.member_player_ids)
     .bind(&proposal.source_ticket_ids)
+    .bind(proposal.solver_version.as_deref())
+    .bind(
+        serde_json::to_value(&proposal.source_preferences).map_err(|error| {
+            ApiError::internal(format!(
+                "encode automatic rematch source preferences: {error}"
+            ))
+        })?,
+    )
+    .bind(
+        serde_json::to_value(&proposal.role_assignments).map_err(|error| {
+            ApiError::internal(format!(
+                "encode automatic rematch role assignments: {error}"
+            ))
+        })?,
+    )
     .bind(serde_json::to_value(&proposal).map_err(|error| {
         ApiError::internal(format!("encode automatic rematch proposal: {error}"))
     })?)
@@ -3397,8 +4216,12 @@ async fn create_matchmaking_ticket(
             now,
         )?;
         push_team_proposal_expiry_sweep_memory(&mut memory, &expiry_sweep)?;
-        expire_due_matchmaking_tickets_memory(&mut memory.collaboration, request.challenge_id, now);
-        *memory_guard = memory.clone();
+        expire_due_matchmaking_tickets_memory(
+            &mut memory.collaboration,
+            &eligible_player_ids,
+            request.challenge_id,
+            now,
+        );
         if memory.collaboration.tickets.values().any(|ticket| {
             ticket.player_id == assertion.player_id
                 && ticket.challenge_id == request.challenge_id
@@ -3419,6 +4242,7 @@ async fn create_matchmaking_ticket(
             requested_team_size: request.requested_team_size,
             roles: request.roles.clone(),
             availability_hash: request.availability_hash.clone(),
+            party_code_hash: request.party_code_hash.clone(),
             status: MatchmakingTicketStatus::Queued,
             matched_proposal_id: None,
             expires_at: Some(now + chrono::Duration::seconds(MATCHMAKING_TICKET_TTL_SECONDS)),
@@ -3427,6 +4251,15 @@ async fn create_matchmaking_ticket(
             created_at: now,
             updated_at: now,
         };
+        validate_premade_party_admission(
+            &memory
+                .collaboration
+                .tickets
+                .values()
+                .cloned()
+                .collect::<Vec<_>>(),
+            &ticket,
+        )?;
         if memory
             .collaboration
             .tickets
@@ -3499,7 +4332,7 @@ async fn create_matchmaking_ticket(
             .collect::<Vec<_>>();
         let response_ticket = project_matchmaking_ticket(response_ticket, &queue_snapshot, now);
         let response = MatchmakingTicketResponse {
-            ticket: response_ticket.clone(),
+            ticket: response_ticket.clone().into(),
             team_proposal: proposal.clone(),
         };
         if let Some(proposal) = &proposal {
@@ -3525,12 +4358,7 @@ async fn create_matchmaking_ticket(
             "hepta.paper_raid.matchmaking_ticket.created.v1",
             response_ticket.ticket_id,
             response_ticket.version,
-            json!({
-                "ticket_id": response_ticket.ticket_id,
-                "challenge_id": response_ticket.challenge_id,
-                "status": response_ticket.status,
-                "matched_proposal_id": response_ticket.matched_proposal_id,
-            }),
+            matchmaking_ticket_created_event_payload(&response_ticket),
         )
         .expect("matchmaking event payload is valid JSON");
         memory_remember(
@@ -3586,7 +4414,7 @@ async fn create_matchmaking_ticket(
             "matchmaking requires an active player with exactly one active Agent binding",
         ));
     }
-    let now = Utc::now();
+    let now = postgres_transaction_now(&mut tx).await?;
     expire_due_team_proposals_postgres(&mut tx, request.challenge_id, now).await?;
     expire_due_matchmaking_tickets_postgres(&mut tx, request.challenge_id, now).await?;
     if sqlx::query(
@@ -3603,7 +4431,6 @@ async fn create_matchmaking_ticket(
     .map_err(ApiError::database)?
     .is_some()
     {
-        tx.commit().await.map_err(ApiError::database)?;
         return Err(ApiError::conflict(
             "live_matchmaking_ticket_exists",
             "player already has a queued or matched ticket for this challenge, or ticket_id exists",
@@ -3616,6 +4443,7 @@ async fn create_matchmaking_ticket(
         requested_team_size: request.requested_team_size,
         roles: request.roles.clone(),
         availability_hash: request.availability_hash.clone(),
+        party_code_hash: request.party_code_hash.clone(),
         status: MatchmakingTicketStatus::Queued,
         matched_proposal_id: None,
         expires_at: Some(now + chrono::Duration::seconds(MATCHMAKING_TICKET_TTL_SECONDS)),
@@ -3624,12 +4452,37 @@ async fn create_matchmaking_ticket(
         created_at: now,
         updated_at: now,
     };
+    if let Some(party_code_hash) = request.party_code_hash.as_deref() {
+        sqlx::query("select pg_advisory_xact_lock(hashtext($1))")
+            .bind(postgres_party_admission_lock_key(
+                request.challenge_id,
+                party_code_hash,
+            ))
+            .execute(&mut *tx)
+            .await
+            .map_err(ApiError::database)?;
+        let live_party_tickets = sqlx::query(
+            "select record_json from hepta_matchmaking_tickets
+             where challenge_id=$1 and status in ('queued','matched')
+               and party_code_hash=$2
+             order by created_at,ticket_id",
+        )
+        .bind(request.challenge_id)
+        .bind(party_code_hash)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(ApiError::database)?
+        .into_iter()
+        .map(|row| decode_record(row.get("record_json"), "matchmaking ticket"))
+        .collect::<Result<Vec<_>, _>>()?;
+        validate_premade_party_admission(&live_party_tickets, &ticket)?;
+    }
     sqlx::query(
         "insert into hepta_matchmaking_tickets (
             ticket_id, player_id, challenge_id, requested_team_size, roles,
-            availability_hash, status, matched_proposal_id, version, record_json,
-            created_at, updated_at
-         ) values ($1,$2,$3,$4,$5,$6,'queued',null,1,$7::jsonb,$8,$8)",
+            availability_hash, party_code_hash, status, matched_proposal_id, version,
+            record_json, created_at, updated_at, expires_at
+         ) values ($1,$2,$3,$4,$5,$6,$7,'queued',null,1,$8::jsonb,$9,$9,$10)",
     )
     .bind(ticket.ticket_id)
     .bind(ticket.player_id)
@@ -3639,11 +4492,13 @@ async fn create_matchmaking_ticket(
     })?)
     .bind(&ticket.roles)
     .bind(&ticket.availability_hash)
+    .bind(ticket.party_code_hash.as_deref())
     .bind(
         serde_json::to_value(&ticket)
             .map_err(|error| ApiError::internal(format!("encode matchmaking ticket: {error}")))?,
     )
     .bind(now)
+    .bind(matchmaking_ticket_deadline(&ticket))
     .execute(&mut *tx)
     .await
     .map_err(|error| match &error {
@@ -3711,15 +4566,27 @@ async fn create_matchmaking_ticket(
         sqlx::query(
             "insert into hepta_team_proposals (
                 proposal_id, challenge_id, requested_team_size, deterministic_match_key,
-                status, member_player_ids, source_ticket_ids, version, record_json,
+                status, member_player_ids, source_ticket_ids, solver_version,
+                source_preferences, role_assignments, version, record_json,
                 created_at, updated_at, expires_at
-             ) values ($1,$2,3,$3,'proposed',$4,$5,1,$6::jsonb,$7,$7,$8)",
+             ) values ($1,$2,3,$3,'proposed',$4,$5,$6,$7::jsonb,$8::jsonb,1,$9::jsonb,$10,$10,$11)",
         )
         .bind(proposal.proposal_id)
         .bind(proposal.challenge_id)
         .bind(&proposal.deterministic_match_key)
         .bind(&proposal.member_player_ids)
         .bind(&proposal.source_ticket_ids)
+        .bind(proposal.solver_version.as_deref())
+        .bind(
+            serde_json::to_value(&proposal.source_preferences).map_err(|error| {
+                ApiError::internal(format!("encode team proposal source preferences: {error}"))
+            })?,
+        )
+        .bind(
+            serde_json::to_value(&proposal.role_assignments).map_err(|error| {
+                ApiError::internal(format!("encode team proposal role assignments: {error}"))
+            })?,
+        )
         .bind(
             serde_json::to_value(&proposal)
                 .map_err(|error| ApiError::internal(format!("encode team proposal: {error}")))?,
@@ -3784,8 +4651,13 @@ async fn create_matchmaking_ticket(
         None
     };
     let response_queue_snapshot = sqlx::query(
-        "select record_json from hepta_matchmaking_tickets
-         where challenge_id=$1 and status='queued' order by created_at,ticket_id",
+        "select ticket.record_json from hepta_matchmaking_tickets ticket
+         join hepta_human_players player on player.player_id=ticket.player_id
+         where ticket.challenge_id=$1 and ticket.status='queued'
+           and player.status='active'
+           and (select count(*) from hepta_agent_bindings binding
+                where binding.player_id=ticket.player_id and binding.status='active') = 1
+         order by ticket.created_at,ticket.ticket_id",
     )
     .bind(request.challenge_id)
     .fetch_all(&mut *tx)
@@ -3795,7 +4667,7 @@ async fn create_matchmaking_ticket(
     .map(|row| decode_record(row.get("record_json"), "matchmaking ticket"))
     .collect::<Result<Vec<_>, _>>()?;
     let response = MatchmakingTicketResponse {
-        ticket: project_matchmaking_ticket(ticket.clone(), &response_queue_snapshot, now),
+        ticket: project_matchmaking_ticket(ticket.clone(), &response_queue_snapshot, now).into(),
         team_proposal: proposal,
     };
     insert_postgres_event(
@@ -3805,12 +4677,7 @@ async fn create_matchmaking_ticket(
         "hepta.paper_raid.matchmaking_ticket.created.v1",
         ticket.ticket_id,
         ticket.version,
-        json!({
-            "ticket_id":ticket.ticket_id,
-            "challenge_id":ticket.challenge_id,
-            "status":ticket.status,
-            "matched_proposal_id":ticket.matched_proposal_id,
-        }),
+        matchmaking_ticket_created_event_payload(&ticket),
     )
     .await?;
     finish_postgres_idempotent(
@@ -3832,7 +4699,7 @@ async fn cancel_matchmaking_ticket(
     headers: HeaderMap,
     Path(ticket_id): Path<Uuid>,
     Json(request): Json<CancelMatchmakingTicketRequest>,
-) -> Result<(StatusCode, Json<MatchmakingTicket>), ApiError> {
+) -> Result<(StatusCode, Json<MatchmakingTicketView>), ApiError> {
     const OPERATION: &str = "cancel_matchmaking_ticket_v3";
     validate_idempotency_key(&request.idempotency_key)?;
     let request_hash = request_hash(&request)?;
@@ -3890,6 +4757,7 @@ async fn cancel_matchmaking_ticket(
         push_team_proposal_expiry_sweep_memory(&mut memory, &expiry_sweep)?;
         let expired_tickets = expire_due_matchmaking_tickets_memory(
             &mut memory.collaboration,
+            &eligible_player_ids,
             snapshot.challenge_id,
             now,
         );
@@ -4030,23 +4898,19 @@ async fn cancel_matchmaking_ticket(
             "hepta.paper_raid.matchmaking_ticket.cancelled.v1",
             ticket_id,
             response.version,
-            json!({
-                "ticket_id": response.ticket_id,
-                "challenge_id": response.challenge_id,
-                "player_id": response.player_id,
-                "status": response.status,
-            }),
+            matchmaking_ticket_cancelled_event_payload(&response),
         )?;
+        let response_view = MatchmakingTicketView::from(response);
         memory_remember(
             &mut memory,
             OPERATION,
             &request.idempotency_key,
             request_hash,
             StatusCode::OK,
-            &response,
+            &response_view,
         )?;
         *memory_guard = memory;
-        return Ok((StatusCode::OK, Json(response)));
+        return Ok((StatusCode::OK, Json(response_view)));
     }
 
     let (mut tx, replay) =
@@ -4101,7 +4965,7 @@ async fn cancel_matchmaking_ticket(
         .execute(&mut *tx)
         .await
         .map_err(ApiError::database)?;
-    let now = Utc::now();
+    let now = postgres_transaction_now(&mut tx).await?;
     expire_due_team_proposals_postgres(&mut tx, snapshot.challenge_id, now).await?;
     expire_due_matchmaking_tickets_postgres(&mut tx, snapshot.challenge_id, now).await?;
     let row = sqlx::query(
@@ -4359,14 +5223,10 @@ async fn cancel_matchmaking_ticket(
         "hepta.paper_raid.matchmaking_ticket.cancelled.v1",
         ticket.ticket_id,
         ticket.version,
-        json!({
-            "ticket_id": ticket.ticket_id,
-            "challenge_id": ticket.challenge_id,
-            "player_id": ticket.player_id,
-            "status": ticket.status,
-        }),
+        matchmaking_ticket_cancelled_event_payload(&ticket),
     )
     .await?;
+    let response = MatchmakingTicketView::from(ticket.clone());
     finish_postgres_idempotent(
         &mut tx,
         OPERATION,
@@ -4374,17 +5234,17 @@ async fn cancel_matchmaking_ticket(
         &request_hash,
         Some(ticket.ticket_id),
         StatusCode::OK,
-        &ticket,
+        &response,
     )
     .await?;
     tx.commit().await.map_err(ApiError::database)?;
-    Ok((StatusCode::OK, Json(ticket)))
+    Ok((StatusCode::OK, Json(response)))
 }
 
 async fn list_matchmaking_tickets(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<Vec<MatchmakingTicket>>, ApiError> {
+) -> Result<Json<Vec<MatchmakingTicketView>>, ApiError> {
     let assertion = require_registered_player_read(
         &state,
         &headers,
@@ -4405,15 +5265,20 @@ async fn list_matchmaking_tickets(
         .map(|row| row.get::<Uuid, _>("challenge_id"))
         .collect::<Vec<_>>();
         challenge_ids.sort_unstable();
+        let storage_now = postgres_transaction_now(&mut tx).await?;
         for challenge_id in &challenge_ids {
             sqlx::query("select pg_advisory_xact_lock(hashtext($1))")
                 .bind(format!("hepta-paper-raid-matchmaking:{challenge_id}"))
                 .execute(&mut *tx)
                 .await
                 .map_err(ApiError::database)?;
-            let sweep_now = Utc::now();
-            expire_due_team_proposals_postgres(&mut tx, *challenge_id, sweep_now).await?;
-            expire_due_matchmaking_tickets_postgres(&mut tx, *challenge_id, sweep_now).await?;
+            expire_due_team_proposals_postgres(&mut tx, *challenge_id, storage_now).await?;
+            expire_due_matchmaking_tickets_postgres(&mut tx, *challenge_id, storage_now).await?;
+            // Migration 0046 may have released legacy proposal tickets before
+            // this process started.  Every player-scoped read drains all
+            // currently matchable queued triplets even when no fresh expiry
+            // or mutation occurred in this request.
+            auto_match_all_queued_tickets_postgres(&mut tx, *challenge_id, storage_now).await?;
         }
         let tickets = sqlx::query(
             "select record_json from hepta_matchmaking_tickets
@@ -4447,7 +5312,7 @@ async fn list_matchmaking_tickets(
             .map(|row| decode_record(row.get("record_json"), "matchmaking ticket"))
             .collect::<Result<Vec<_>, _>>()?
         };
-        let projection_now = Utc::now();
+        let projection_now = storage_now;
         tx.commit().await.map_err(ApiError::database)?;
         (tickets, queue, projection_now)
     } else {
@@ -4471,7 +5336,20 @@ async fn list_matchmaking_tickets(
                 now,
             )?;
             push_team_proposal_expiry_sweep_memory(&mut memory, &expiry_sweep)?;
-            expire_due_matchmaking_tickets_memory(&mut memory.collaboration, *challenge_id, now);
+            expire_due_matchmaking_tickets_memory(
+                &mut memory.collaboration,
+                &eligible_player_ids,
+                *challenge_id,
+                now,
+            );
+            let replacements = auto_match_all_queued_tickets_memory(
+                &mut memory.collaboration,
+                &reserved_team_ids,
+                &eligible_player_ids,
+                *challenge_id,
+                now,
+            )?;
+            push_automatic_team_proposal_events_memory(&mut memory, &replacements)?;
         }
         let tickets = memory
             .collaboration
@@ -4497,14 +5375,14 @@ async fn list_matchmaking_tickets(
         .into_iter()
         .map(|ticket| project_matchmaking_ticket(ticket, &queue_snapshot, projection_now))
         .collect();
-    Ok(Json(tickets))
+    Ok(Json(tickets.into_iter().map(Into::into).collect()))
 }
 
 async fn get_matchmaking_ticket(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(ticket_id): Path<Uuid>,
-) -> Result<Json<MatchmakingTicket>, ApiError> {
+) -> Result<Json<MatchmakingTicketView>, ApiError> {
     let path = format!("/v2/hepta/matchmaking/tickets/{ticket_id}");
     let assertion =
         require_registered_player_read(&state, &headers, "get_matchmaking_ticket_v3", &path)
@@ -4536,9 +5414,10 @@ async fn get_matchmaking_ticket(
             .execute(&mut *tx)
             .await
             .map_err(ApiError::database)?;
-        let now = Utc::now();
+        let now = postgres_transaction_now(&mut tx).await?;
         expire_due_team_proposals_postgres(&mut tx, snapshot.challenge_id, now).await?;
         expire_due_matchmaking_tickets_postgres(&mut tx, snapshot.challenge_id, now).await?;
+        auto_match_all_queued_tickets_postgres(&mut tx, snapshot.challenge_id, now).await?;
         let row = sqlx::query(
             "select record_json from hepta_matchmaking_tickets
              where ticket_id=$1 and player_id=$2",
@@ -4566,7 +5445,7 @@ async fn get_matchmaking_ticket(
         .into_iter()
         .map(|row| decode_record(row.get("record_json"), "matchmaking ticket"))
         .collect::<Result<Vec<_>, _>>()?;
-        let projection_now = Utc::now();
+        let projection_now = now;
         tx.commit().await.map_err(ApiError::database)?;
         (ticket, queue, projection_now)
     } else {
@@ -4596,9 +5475,18 @@ async fn get_matchmaking_ticket(
         push_team_proposal_expiry_sweep_memory(&mut memory, &expiry_sweep)?;
         expire_due_matchmaking_tickets_memory(
             &mut memory.collaboration,
+            &eligible_player_ids,
             snapshot.challenge_id,
             now,
         );
+        let replacements = auto_match_all_queued_tickets_memory(
+            &mut memory.collaboration,
+            &reserved_team_ids,
+            &eligible_player_ids,
+            snapshot.challenge_id,
+            now,
+        )?;
+        push_automatic_team_proposal_events_memory(&mut memory, &replacements)?;
         let ticket = memory
             .collaboration
             .tickets
@@ -4617,11 +5505,9 @@ async fn get_matchmaking_ticket(
             .collect::<Vec<_>>();
         (ticket, queue, now)
     };
-    Ok(Json(project_matchmaking_ticket(
-        ticket,
-        &queue_snapshot,
-        projection_now,
-    )))
+    Ok(Json(
+        project_matchmaking_ticket(ticket, &queue_snapshot, projection_now).into(),
+    ))
 }
 
 async fn list_team_proposals(
@@ -4649,13 +5535,14 @@ async fn list_team_proposals(
         .map(|row| row.get::<Uuid, _>("challenge_id"))
         .collect::<Vec<_>>();
         challenge_ids.sort_unstable();
+        let storage_now = postgres_transaction_now(&mut tx).await?;
         for challenge_id in challenge_ids {
             sqlx::query("select pg_advisory_xact_lock(hashtext($1))")
                 .bind(format!("hepta-paper-raid-matchmaking:{challenge_id}"))
                 .execute(&mut *tx)
                 .await
                 .map_err(ApiError::database)?;
-            expire_due_team_proposals_postgres(&mut tx, challenge_id, Utc::now()).await?;
+            expire_due_team_proposals_postgres(&mut tx, challenge_id, storage_now).await?;
         }
         let proposals = sqlx::query(
             "select record_json from hepta_team_proposals
@@ -4755,7 +5642,8 @@ async fn get_team_proposal(
             .execute(&mut *tx)
             .await
             .map_err(ApiError::database)?;
-        expire_due_team_proposals_postgres(&mut tx, snapshot.challenge_id, Utc::now()).await?;
+        let storage_now = postgres_transaction_now(&mut tx).await?;
+        expire_due_team_proposals_postgres(&mut tx, snapshot.challenge_id, storage_now).await?;
         let row = sqlx::query(
             "select record_json from hepta_team_proposals
              where proposal_id = $1 and $2 = any(member_player_ids)",
@@ -4839,12 +5727,7 @@ fn first_playable_team(
                 .ok_or_else(|| ApiError::internal("team proposal source ticket is missing"))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let assigned_roles = distinct_role_assignment(&ordered_tickets).ok_or_else(|| {
-        ApiError::conflict(
-            "team_roles_not_complementary",
-            "first-playable materialization requires three distinct compatible roles",
-        )
-    })?;
+    let assigned_roles = validate_materialization_matchmaking_source(proposal, &ordered_tickets)?;
     let mut members = Vec::with_capacity(3);
     for (index, player_id) in proposal.member_player_ids.iter().enumerate() {
         let ticket_id = proposal.source_ticket_ids[index];
@@ -4983,7 +5866,7 @@ async fn materialize_team_proposal(
             *memory_guard = memory;
             return Err(ApiError::conflict(
                 "team_proposal_expired",
-                "team proposal materialization deadline elapsed; queued members were released",
+                "team proposal expired before materialization because its response window elapsed or a member lost matchmaking eligibility",
             ));
         }
         let proposal = memory
@@ -5012,6 +5895,18 @@ async fn materialize_team_proposal(
                     .ok_or_else(|| ApiError::internal("team proposal source ticket is missing"))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        if let Err(error) = validate_materialization_matchmaking_source(&proposal, &tickets) {
+            let invalidation = invalidate_team_proposal_provenance_memory(
+                &mut memory.collaboration,
+                &reserved_team_ids,
+                &eligible_player_ids,
+                proposal.proposal_id,
+                now,
+            )?;
+            push_team_proposal_expiry_sweep_memory(&mut memory, &invalidation)?;
+            *memory_guard = memory;
+            return Err(error);
+        }
         if proposal
             .member_player_ids
             .iter()
@@ -5182,7 +6077,7 @@ async fn materialize_team_proposal(
         .execute(&mut *tx)
         .await
         .map_err(ApiError::database)?;
-    let now = Utc::now();
+    let now = postgres_transaction_now(&mut tx).await?;
     let expired =
         expire_due_team_proposals_postgres(&mut tx, proposal_snapshot.challenge_id, now).await?;
     if expired
@@ -5192,7 +6087,7 @@ async fn materialize_team_proposal(
         tx.commit().await.map_err(ApiError::database)?;
         return Err(ApiError::conflict(
             "team_proposal_expired",
-            "team proposal materialization deadline elapsed; queued members were released",
+            "team proposal expired before materialization because its response window elapsed or a member lost matchmaking eligibility",
         ));
     }
     let proposal_row =
@@ -5251,6 +6146,11 @@ async fn materialize_team_proposal(
                 .ok_or_else(|| ApiError::internal("team proposal source ticket is missing"))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    if let Err(error) = validate_materialization_matchmaking_source(&proposal, &tickets) {
+        invalidate_team_proposal_provenance_postgres(&mut tx, &proposal, now).await?;
+        tx.commit().await.map_err(ApiError::database)?;
+        return Err(error);
+    }
     let mut bindings = Vec::with_capacity(3);
     for player_id in &proposal.member_player_ids {
         let rows = sqlx::query(
@@ -5463,6 +6363,9 @@ fn raid_summary(
     player_ready: bool,
     player_id: Uuid,
 ) -> Result<PlayerRaidSummary, ApiError> {
+    if let Some(paper) = paper {
+        validate_paper_role_resources(paper)?;
+    }
     let member = team
         .members
         .iter()
@@ -5483,6 +6386,11 @@ fn raid_summary(
             paper_project_id: paper.paper_project_id,
             title: paper.title.clone(),
             phase: paper.phase,
+            player_phase: player_phase_semantic(paper.phase).to_string(),
+            outcome: paper.outcome,
+            outcome_reason: paper.outcome_reason.clone(),
+            terminal_at: paper.terminal_at,
+            role_resources: paper.role_resources.clone(),
             version: paper.version,
             current_revision_id: paper.current_revision_id,
             release_candidate_revision_id: paper.release_candidate_revision_id,
@@ -5502,39 +6410,41 @@ async fn get_player_raid_state(
     const PATH: &str = "/v2/hepta/raid-state";
     let assertion =
         require_registered_player_read(&state, &headers, "get_player_raid_state_v1", PATH).await?;
-    let mut raids = if state.pool.is_none() {
-        let memory = state.paper_raid.read().await;
-        let mut raids = Vec::new();
-        for team in memory.teams.values().filter(|team| {
-            team.members
-                .iter()
-                .any(|member| member.player_id == assertion.player_id)
-        }) {
-            let paper = memory
-                .papers
-                .values()
-                .find(|paper| paper.team_id == team.team_id);
-            let acceptances = memory
-                .team_acceptances
-                .values()
-                .filter(|acceptance| {
-                    acceptance.team_id == team.team_id && acceptance.superseded_at.is_none()
-                })
-                .collect::<Vec<_>>();
-            raids.push(raid_summary(
-                team,
-                paper,
-                acceptances.len(),
-                acceptances
+    ensure_player_automatic_challenge_expiries_materialized(&state, &assertion, Utc::now()).await?;
+    let mut raids = match &state.pool {
+        None => {
+            let memory = state.paper_raid.read().await;
+            let mut raids = Vec::new();
+            for team in memory.teams.values().filter(|team| {
+                team.members
                     .iter()
-                    .any(|acceptance| acceptance.player_id == assertion.player_id),
-                assertion.player_id,
-            )?);
+                    .any(|member| member.player_id == assertion.player_id)
+            }) {
+                let paper = memory
+                    .papers
+                    .values()
+                    .find(|paper| paper.team_id == team.team_id);
+                let acceptances = memory
+                    .team_acceptances
+                    .values()
+                    .filter(|acceptance| {
+                        acceptance.team_id == team.team_id && acceptance.superseded_at.is_none()
+                    })
+                    .collect::<Vec<_>>();
+                raids.push(raid_summary(
+                    team,
+                    paper,
+                    acceptances.len(),
+                    acceptances
+                        .iter()
+                        .any(|acceptance| acceptance.player_id == assertion.player_id),
+                    assertion.player_id,
+                )?);
+            }
+            raids
         }
-        raids
-    } else {
-        let pool = state.pool.as_ref().expect("checked PostgreSQL pool");
-        let rows = sqlx::query(
+        Some(pool) => {
+            let rows = sqlx::query(
             "select t.record_json as team_json, p.record_json as paper_json,
                     (select count(*) from hepta_research_team_member_acceptances a
                      where a.team_id=t.team_id and a.superseded_at is null) as acceptance_count,
@@ -5544,30 +6454,31 @@ async fn get_player_raid_state(
              join hepta_research_teams t on t.team_id=m.team_id
              left join hepta_paper_projects p on p.team_id=t.team_id
              where m.player_id=$1",
-        )
-        .bind(assertion.player_id)
-        .fetch_all(pool)
-        .await
-        .map_err(ApiError::database)?;
-        let mut raids = Vec::with_capacity(rows.len());
-        for row in rows {
-            let team: ResearchTeam = decode_record(row.get("team_json"), "research team")?;
-            let paper_json: Option<Value> =
-                row.try_get("paper_json").map_err(ApiError::database)?;
-            let paper = paper_json
-                .map(|value| decode_record(value, "paper project"))
-                .transpose()?;
-            let acceptance_count: i64 = row.get("acceptance_count");
-            raids.push(raid_summary(
-                &team,
-                paper.as_ref(),
-                usize::try_from(acceptance_count)
-                    .map_err(|_| ApiError::internal("acceptance count exceeds usize"))?,
-                row.get("player_ready"),
-                assertion.player_id,
-            )?);
+            )
+            .bind(assertion.player_id)
+            .fetch_all(pool)
+            .await
+            .map_err(ApiError::database)?;
+            let mut raids = Vec::with_capacity(rows.len());
+            for row in rows {
+                let team: ResearchTeam = decode_record(row.get("team_json"), "research team")?;
+                let paper_json: Option<Value> =
+                    row.try_get("paper_json").map_err(ApiError::database)?;
+                let paper = paper_json
+                    .map(|value| decode_record(value, "paper project"))
+                    .transpose()?;
+                let acceptance_count: i64 = row.get("acceptance_count");
+                raids.push(raid_summary(
+                    &team,
+                    paper.as_ref(),
+                    usize::try_from(acceptance_count)
+                        .map_err(|_| ApiError::internal("acceptance count exceeds usize"))?,
+                    row.get("player_ready"),
+                    assertion.player_id,
+                )?);
+            }
+            raids
         }
-        raids
     };
     raids.sort_by(|left, right| {
         right
@@ -5575,16 +6486,121 @@ async fn get_player_raid_state(
             .cmp(&left.updated_at)
             .then_with(|| left.team_id.cmp(&right.team_id))
     });
-    let current_raid = raids
-        .iter()
-        .find(|raid| raid.team_status != TeamStatus::Archived)
-        .cloned();
+    let current_raid = current_raid_from_sorted_history(&raids);
     Ok(Json(PlayerRaidState {
         schema: "hepta.paper_raid.player_raid_state.v1".into(),
         player_id: assertion.player_id,
         current_raid,
         raids,
     }))
+}
+
+fn current_raid_from_sorted_history(raids: &[PlayerRaidSummary]) -> Option<PlayerRaidSummary> {
+    raids
+        .iter()
+        .find(|raid| {
+            raid.team_status != TeamStatus::Archived
+                && raid.paper.as_ref().is_none_or(|paper| {
+                    matches!(
+                        paper.outcome,
+                        PaperChallengeOutcomeV1::InProgress
+                            | PaperChallengeOutcomeV1::SubmissionReady
+                    )
+                })
+        })
+        .cloned()
+}
+
+fn validate_materialization_matchmaking_source(
+    proposal: &TeamProposal,
+    ordered_tickets: &[MatchmakingTicket],
+) -> Result<Vec<String>, ApiError> {
+    if proposal.member_player_ids.len() != 3
+        || proposal.source_ticket_ids.len() != 3
+        || ordered_tickets.len() != 3
+        || ordered_tickets
+            .iter()
+            .map(|ticket| ticket.ticket_id)
+            .collect::<HashSet<_>>()
+            .len()
+            != 3
+        || ordered_tickets
+            .iter()
+            .map(|ticket| ticket.player_id)
+            .collect::<HashSet<_>>()
+            .len()
+            != 3
+        || ordered_tickets.iter().enumerate().any(|(index, ticket)| {
+            ticket.challenge_id != proposal.challenge_id
+                || ticket.requested_team_size != 3
+                || ticket.player_id != proposal.member_player_ids[index]
+                || ticket.ticket_id != proposal.source_ticket_ids[index]
+                || ticket.matched_proposal_id != Some(proposal.proposal_id)
+                || !matchmaking_partition_compatible(&ordered_tickets[0], ticket)
+        })
+    {
+        return Err(ApiError::conflict(
+            "team_proposal_provenance_mismatch",
+            "team proposal source tickets no longer form its exact player, challenge, and private-party partition",
+        ));
+    }
+    let assigned_roles = distinct_role_assignment(ordered_tickets).ok_or_else(|| {
+        ApiError::conflict(
+            "team_roles_not_complementary",
+            "first-playable materialization requires three distinct compatible roles",
+        )
+    })?;
+    let exact_preferences = frozen_team_proposal_preferences(ordered_tickets);
+    let exact_assignments = frozen_team_proposal_role_assignments(ordered_tickets, &assigned_roles);
+    if proposal.solver_version.as_deref() != Some(MATCHMAKING_SOLVER_VERSION_V2)
+        || proposal.source_preferences != exact_preferences
+        || proposal.role_assignments != exact_assignments
+    {
+        return Err(ApiError::conflict(
+            "team_proposal_provenance_mismatch",
+            "team proposal is missing or disagrees with its frozen solver, ordered preferences, or player-role assignment",
+        ));
+    }
+    let ticket_source_versions = ordered_tickets
+        .iter()
+        .map(|ticket| {
+            let transition_count = match ticket.status {
+                MatchmakingTicketStatus::Matched => 1,
+                MatchmakingTicketStatus::Consumed => 2,
+                _ => {
+                    return Err(ApiError::conflict(
+                        "team_proposal_not_materializable",
+                        "team proposal source ticket is not in its exact matched epoch",
+                    ));
+                }
+            };
+            ticket
+                .version
+                .checked_sub(transition_count)
+                .map(|source_version| (ticket, source_version))
+                .ok_or_else(|| {
+                    ApiError::conflict(
+                        "team_proposal_provenance_mismatch",
+                        "team proposal source ticket version predates its required match transition",
+                    )
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let expected_match_key = deterministic_match_key_for_ticket_epochs(
+        proposal.challenge_id,
+        &ticket_source_versions,
+        &ordered_tickets[0],
+        &assigned_roles,
+    );
+    let exact_v2 = proposal.deterministic_match_key == expected_match_key
+        && proposal.proposal_id == deterministic_uuid(&expected_match_key);
+    if !exact_v2 {
+        return Err(ApiError::conflict(
+            "team_proposal_provenance_mismatch",
+            "team proposal deterministic identity does not match its exact source ticket epochs",
+        ));
+    }
+    Ok(assigned_roles)
 }
 
 async fn create_team_proposal_decision(
@@ -5666,7 +6682,7 @@ async fn create_team_proposal_decision(
             *memory_guard = memory;
             return Err(ApiError::conflict(
                 "team_proposal_expired",
-                "team proposal response deadline elapsed; accepted members were requeued and absent members expired",
+                "team proposal expired because its response window elapsed or a member lost matchmaking eligibility; eligible accepted members were released",
             ));
         }
         let snapshot = memory
@@ -5678,7 +6694,7 @@ async fn create_team_proposal_decision(
         if snapshot.status == TeamProposalStatus::Expired {
             return Err(ApiError::conflict(
                 "team_proposal_expired",
-                "team proposal response deadline elapsed; accepted members were requeued and absent members expired",
+                "team proposal expired because its response window elapsed or a member lost matchmaking eligibility; eligible accepted members were released",
             ));
         }
         if snapshot.status != TeamProposalStatus::Proposed {
@@ -5686,6 +6702,31 @@ async fn create_team_proposal_decision(
                 "team_proposal_not_open",
                 "team proposal is no longer awaiting member decisions",
             ));
+        }
+        let source_tickets = snapshot
+            .source_ticket_ids
+            .iter()
+            .map(|ticket_id| {
+                memory
+                    .collaboration
+                    .tickets
+                    .get(ticket_id)
+                    .cloned()
+                    .ok_or_else(|| ApiError::internal("team proposal source ticket is missing"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if let Err(error) = validate_materialization_matchmaking_source(&snapshot, &source_tickets)
+        {
+            let invalidation = invalidate_team_proposal_provenance_memory(
+                &mut memory.collaboration,
+                &reserved_team_ids,
+                &eligible_player_ids,
+                proposal_id,
+                now,
+            )?;
+            push_team_proposal_expiry_sweep_memory(&mut memory, &invalidation)?;
+            *memory_guard = memory;
+            return Err(error);
         }
         if snapshot.version != request.expected_proposal_version {
             return Err(version_conflict(
@@ -5867,7 +6908,7 @@ async fn create_team_proposal_decision(
         .execute(&mut *tx)
         .await
         .map_err(ApiError::database)?;
-    let now = Utc::now();
+    let now = postgres_transaction_now(&mut tx).await?;
     let expired =
         expire_due_team_proposals_postgres(&mut tx, proposal_snapshot.challenge_id, now).await?;
     if expired
@@ -5877,7 +6918,7 @@ async fn create_team_proposal_decision(
         tx.commit().await.map_err(ApiError::database)?;
         return Err(ApiError::conflict(
             "team_proposal_expired",
-            "team proposal response deadline elapsed; accepted members were requeued and absent members expired",
+            "team proposal expired because its response window elapsed or a member lost matchmaking eligibility; eligible accepted members were released",
         ));
     }
     let proposal_row =
@@ -5891,7 +6932,7 @@ async fn create_team_proposal_decision(
     if proposal.status == TeamProposalStatus::Expired {
         return Err(ApiError::conflict(
             "team_proposal_expired",
-            "team proposal response deadline elapsed; accepted members were requeued and absent members expired",
+            "team proposal expired because its response window elapsed or a member lost matchmaking eligibility; eligible accepted members were released",
         ));
     }
     if proposal.status != TeamProposalStatus::Proposed {
@@ -5899,6 +6940,45 @@ async fn create_team_proposal_decision(
             "team_proposal_not_open",
             "team proposal is no longer awaiting member decisions",
         ));
+    }
+    let source_rows = sqlx::query(
+        "select version,record_json from hepta_matchmaking_tickets
+         where ticket_id=any($1) order by ticket_id for update",
+    )
+    .bind(&proposal.source_ticket_ids)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(ApiError::database)?;
+    let decoded_source_tickets = source_rows
+        .into_iter()
+        .map(|row| {
+            let version = u64::try_from(row.get::<i64, _>("version"))
+                .map_err(|_| ApiError::internal("matchmaking ticket version is invalid"))?;
+            let ticket: MatchmakingTicket =
+                decode_record(row.get("record_json"), "matchmaking ticket")?;
+            if ticket.version != version {
+                return Err(ApiError::internal(
+                    "matchmaking ticket record/version projection diverged",
+                ));
+            }
+            Ok(ticket)
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    let source_tickets = proposal
+        .source_ticket_ids
+        .iter()
+        .map(|ticket_id| {
+            decoded_source_tickets
+                .iter()
+                .find(|ticket| ticket.ticket_id == *ticket_id)
+                .cloned()
+                .ok_or_else(|| ApiError::internal("team proposal source ticket is missing"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if let Err(error) = validate_materialization_matchmaking_source(&proposal, &source_tickets) {
+        invalidate_team_proposal_provenance_postgres(&mut tx, &proposal, now).await?;
+        tx.commit().await.map_err(ApiError::database)?;
+        return Err(error);
     }
     if proposal.version != request.expected_proposal_version {
         return Err(version_conflict(
@@ -6415,6 +7495,7 @@ fn revision_parent_chain_covers_section_bases(
         .all(|binding| ancestors.contains(&binding.base_paper_revision_id))
 }
 
+#[cfg(test)]
 fn bind_current_section_heads(
     mut binding: PaperRevisionArtifactBinding,
     parent_revision_id: Option<Uuid>,
@@ -8304,6 +9385,27 @@ fn validate_run_request(request: &CreateRunRecordRequest) -> Result<(), ApiError
     }
 }
 
+fn run_record_from_request(
+    paper_id: Uuid,
+    request: &CreateRunRecordRequest,
+    created_at: DateTime<Utc>,
+) -> RunRecord {
+    RunRecord {
+        run_record_id: request.run_record_id,
+        paper_project_id: paper_id,
+        experiment_plan_id: request.experiment_plan_id,
+        status: request.status.clone(),
+        seed: request.seed,
+        parameters_hash: request.parameters_hash.clone(),
+        logs_manifest_id: request.logs_manifest_id,
+        outputs_manifest_id: request.outputs_manifest_id,
+        metrics_hash: request.metrics_hash.clone(),
+        failure_hash: request.failure_hash.clone(),
+        version: 1,
+        created_at,
+    }
+}
+
 async fn create_run_record(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -8328,36 +9430,23 @@ async fn create_run_record(
         manifest_ids.push(id);
     }
     validate_distinct_ids("run_manifest_ids", &manifest_ids, false)?;
-    let record = RunRecord {
-        run_record_id: request.run_record_id,
-        paper_project_id: paper_id,
-        experiment_plan_id: request.experiment_plan_id,
-        status: request.status.clone(),
-        seed: request.seed,
-        parameters_hash: request.parameters_hash.clone(),
-        logs_manifest_id: request.logs_manifest_id,
-        outputs_manifest_id: request.outputs_manifest_id,
-        metrics_hash: request.metrics_hash.clone(),
-        failure_hash: request.failure_hash.clone(),
-        version: 1,
-        created_at: Utc::now(),
-    };
     if state.pool.is_none() {
         let mut memory_guard = state.paper_raid.write().await;
         let mut memory = memory_guard.clone();
-        let (paper, team) = paper_and_team_memory(&memory, paper_id, &assertion)?;
-        require_collaboration_phase(&paper, CollaborationMutation::Run)?;
+        if let Some(replay) =
+            memory_replay(&memory, OPERATION, &request.idempotency_key, &request_hash)?
+        {
+            return Ok(replay);
+        }
+        let (mut paper, team) = paper_and_team_memory(&memory, paper_id, &assertion)?;
+        let authority_now = Utc::now();
+        require_collaboration_phase_at(&paper, CollaborationMutation::Run, authority_now)?;
         require_author_role(
             &team,
             assertion.player_id,
             "experiment",
             "experiment run recording",
         )?;
-        if let Some(replay) =
-            memory_replay(&memory, OPERATION, &request.idempotency_key, &request_hash)?
-        {
-            return Ok(replay);
-        }
         if memory
             .collaboration
             .experiment_plans
@@ -8376,6 +9465,9 @@ async fn create_run_record(
                 "run plan and manifests must all belong to this paper",
             ));
         }
+        let record = run_record_from_request(paper_id, &request, authority_now);
+        let role_resource_action =
+            apply_run_role_resources(&mut paper, assertion.player_id, &record, authority_now)?;
         if memory
             .collaboration
             .runs
@@ -8387,6 +9479,9 @@ async fn create_run_record(
                 "run_record_id already exists",
             ));
         }
+        if role_resource_action.is_some() {
+            memory.papers.insert(paper_id, paper.clone());
+        }
         push_room_event_memory(
             &mut memory,
             OPERATION,
@@ -8395,7 +9490,15 @@ async fn create_run_record(
             paper_id,
             record.run_record_id,
             1,
-            json!({"run_record_id":record.run_record_id,"status":record.status,"failure_retained":record.failure_hash.is_some()}),
+            json!({
+                "run_record_id":record.run_record_id,
+                "status":record.status,
+                "failure_retained":record.status == RunStatus::Failed && record.failure_hash.is_some(),
+                "role_resource_action":role_resource_action,
+                "ranking_eligible":false,
+                "reward_eligible":false,
+                "economic_eligibility":false,
+            }),
         );
         memory_remember(
             &mut memory,
@@ -8415,8 +9518,13 @@ async fn create_run_record(
         tx.commit().await.map_err(ApiError::database)?;
         return decode_stored(replay);
     }
-    let (paper, team) = paper_and_team_postgres(&mut tx, paper_id, &assertion).await?;
-    require_collaboration_phase(&paper, CollaborationMutation::Run)?;
+    let (mut paper, team) =
+        paper_and_team_for_role_resource_mutation_postgres(&mut tx, paper_id, &assertion).await?;
+    let authority_now: DateTime<Utc> = sqlx::query_scalar("select clock_timestamp()")
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(ApiError::database)?;
+    require_collaboration_phase_at(&paper, CollaborationMutation::Run, authority_now)?;
     require_author_role(
         &team,
         assertion.player_id,
@@ -8441,6 +9549,10 @@ async fn create_run_record(
         "run_manifest_ids",
     )
     .await?;
+    let previous_paper_version = paper.version;
+    let record = run_record_from_request(paper_id, &request, authority_now);
+    let role_resource_action =
+        apply_run_role_resources(&mut paper, assertion.player_id, &record, authority_now)?;
     sqlx::query(
         "insert into hepta_run_records (
             run_record_id,paper_project_id,experiment_plan_id,status,seed,parameters_hash,
@@ -8455,9 +9567,28 @@ async fn create_run_record(
                 ApiError::conflict("run_record_exists", "run record already exists"),
             _ => ApiError::database(error),
         })?;
-    insert_room_event_postgres(&mut tx, OPERATION, &request.idempotency_key,
-        "hepta.paper_raid.run_record.created.v1", paper_id, record.run_record_id, 1,
-        json!({"run_record_id":record.run_record_id,"status":record.status,"failure_retained":record.failure_hash.is_some()})).await?;
+    if role_resource_action.is_some() {
+        persist_role_resource_paper_postgres(&mut tx, &paper, previous_paper_version).await?;
+    }
+    insert_room_event_postgres(
+        &mut tx,
+        OPERATION,
+        &request.idempotency_key,
+        "hepta.paper_raid.run_record.created.v1",
+        paper_id,
+        record.run_record_id,
+        1,
+        json!({
+            "run_record_id":record.run_record_id,
+            "status":record.status,
+            "failure_retained":record.status == RunStatus::Failed && record.failure_hash.is_some(),
+            "role_resource_action":role_resource_action,
+            "ranking_eligible":false,
+            "reward_eligible":false,
+            "economic_eligibility":false,
+        }),
+    )
+    .await?;
     finish_postgres_idempotent(
         &mut tx,
         OPERATION,
@@ -8944,12 +10075,12 @@ async fn acquire_section_lease(
         &request.idempotency_key,
         &request_hash,
     )?;
-    let now = Utc::now();
-    let expires_at =
-        now + chrono::Duration::seconds(i64::try_from(request.ttl_seconds).expect("ttl fits i64"));
     if state.pool.is_none() {
         let mut memory_guard = state.paper_raid.write().await;
         let mut memory = memory_guard.clone();
+        let now = Utc::now();
+        let expires_at = now
+            + chrono::Duration::seconds(i64::try_from(request.ttl_seconds).expect("ttl fits i64"));
         let (paper, team) = paper_and_team_memory(&memory, paper_id, &assertion)?;
         require_collaboration_phase(&paper, CollaborationMutation::SectionDraft)?;
         if let Some(replay) =
@@ -9092,6 +10223,9 @@ async fn acquire_section_lease(
         tx.commit().await.map_err(ApiError::database)?;
         return decode_stored(replay);
     }
+    let now = postgres_transaction_now(&mut tx).await?;
+    let expires_at =
+        now + chrono::Duration::seconds(i64::try_from(request.ttl_seconds).expect("ttl fits i64"));
     sqlx::query("select pg_advisory_xact_lock(hashtext($1))")
         .bind(format!("paper-section:{paper_id}:{}", request.section_key))
         .execute(&mut *tx)
@@ -9285,6 +10419,16 @@ fn validate_agent_proposal_request(request: &CreateAgentProposalRequest) -> Resu
     validate_contract_text_api("agent_id", &request.agent_id)?;
     validate_contract_text_api("agent_key_id", &request.agent_key_id)?;
     validate_digest_v2("payload_hash", &request.payload_hash)?;
+    if request.lease_fencing_token == 0
+        || request.lease_fencing_token > JSON_SAFE_U64_MAX
+        || request.expected_work_version == 0
+        || request.expected_work_version > JSON_SAFE_U64_MAX
+    {
+        return Err(ApiError::bad_request(
+            "invalid_agent_proposal_epoch",
+            "lease_fencing_token and expected_work_version must be positive JSON-safe integers",
+        ));
+    }
     signed_time(request.signed_at_unix)?;
     Ok(())
 }
@@ -9323,22 +10467,26 @@ fn verify_agent_proposal(
             "agent_key_id does not match the active Agent binding key",
         ));
     }
-    let signing = AgentProposalSigningV1 {
-        schema: AGENT_PROPOSAL_V1.to_string(),
+    let signing = AgentProposalSigningV2 {
+        schema: AGENT_PROPOSAL_V2.to_string(),
         proposal_id: request.proposal_id,
         paper_project_id: paper_id,
         work_item_id: request.work_item_id,
         section_key: request.section_key.clone(),
         parent_revision_id: request.parent_revision_id,
+        lease_id: request.lease_id,
+        lease_fencing_token: request.lease_fencing_token,
+        expected_work_version: request.expected_work_version,
         proposal_kind: request.proposal_kind.as_str().to_string(),
         payload_hash: request.payload_hash.clone(),
+        artifact_manifest_id: request.artifact_manifest_id,
         artifact_manifest_hash: artifact_manifest_hash.to_string(),
         agent_id: request.agent_id.clone(),
         binding_id: request.binding_id,
         agent_key_id: request.agent_key_id.clone(),
         signed_at_unix: request.signed_at_unix,
     };
-    let signing_bytes = agent_proposal_signing_bytes(&signing)
+    let signing_bytes = agent_proposal_v2_signing_bytes(&signing)
         .map_err(|message| ApiError::bad_request("invalid_agent_proposal", message))?;
     let verifying_key = crate::decode_verifying_key(&public_key)?;
     verifying_key
@@ -9357,7 +10505,7 @@ fn validate_agent_scope_memory(
     paper: &PaperProject,
     team: &ResearchTeam,
     request: &CreateAgentProposalRequest,
-) -> Result<(WorkItem, ArtifactManifest, AgentBinding), ApiError> {
+) -> Result<(WorkItem, ArtifactManifest, AgentBinding, SectionLease), ApiError> {
     let binding = memory
         .bindings
         .get(&request.binding_id)
@@ -9400,6 +10548,22 @@ fn validate_agent_scope_memory(
             "proposal work item is not assigned to this player/Agent binding",
         ));
     }
+    if !matches!(
+        work.status,
+        WorkItemStatus::Planned | WorkItemStatus::InProgress | WorkItemStatus::Review
+    ) {
+        return Err(ApiError::conflict(
+            "agent_proposal_work_not_active",
+            "Agent proposals require work in planned, in_progress, or review status",
+        ));
+    }
+    if work.version != request.expected_work_version {
+        return Err(version_conflict(
+            "Agent proposal work item",
+            request.expected_work_version,
+            work.version,
+        ));
+    }
     let manifest = memory
         .collaboration
         .artifact_manifests
@@ -9430,7 +10594,42 @@ fn validate_agent_scope_memory(
             "proposal parent must be the current same-section head and may not self-reference",
         ));
     }
-    Ok((work, manifest, binding))
+    let active_leases = memory
+        .collaboration
+        .leases
+        .values()
+        .filter(|lease| {
+            lease.paper_project_id == paper.paper_project_id
+                && lease.section_key == request.section_key
+                && lease.status == SectionLeaseStatus::Active
+        })
+        .collect::<Vec<_>>();
+    let lease = match active_leases.as_slice() {
+        [lease] => *lease,
+        _ => {
+            return Err(ApiError::conflict(
+                "agent_proposal_requires_current_lease",
+                "Agent proposals require exactly one current active section lease",
+            ));
+        }
+    };
+    if lease.lease_id != request.lease_id
+        || lease.fencing_token != request.lease_fencing_token
+        || lease.fencing_token != head.fencing_token
+    {
+        return Err(ApiError::conflict(
+            "stale_agent_proposal_lease_epoch",
+            "Agent proposal lease identity or fencing token is not the current section epoch",
+        ));
+    }
+    if lease.holder_player_id != binding.player_id || lease.holder_binding_id != request.binding_id
+    {
+        return Err(ApiError::conflict(
+            "agent_proposal_requires_current_lease",
+            "Agent proposal binding must hold the current unexpired section lease and fencing token",
+        ));
+    }
+    Ok((work, manifest, binding, (*lease).clone()))
 }
 
 async fn create_agent_proposal(
@@ -9459,15 +10658,26 @@ async fn create_agent_proposal(
             .get(&paper.team_id)
             .cloned()
             .ok_or_else(|| ApiError::internal("paper research team record is missing"))?;
-        let (_, manifest, binding) = validate_agent_scope_memory(&memory, &paper, &team, &request)?;
+        let (_, manifest, binding, lease) =
+            validate_agent_scope_memory(&memory, &paper, &team, &request)?;
         let public_key =
             verify_agent_proposal(paper_id, &request, &manifest.manifest_hash, &binding)?;
+        let authority_now = Utc::now();
+        if lease.expires_at <= authority_now {
+            return Err(ApiError::conflict(
+                "agent_proposal_requires_current_lease",
+                "Agent proposal binding must hold the current unexpired section lease and fencing token",
+            ));
+        }
         let proposal = AgentProposal {
             proposal_id: request.proposal_id,
             paper_project_id: paper_id,
             work_item_id: request.work_item_id,
             section_key: request.section_key.clone(),
             parent_revision_id: request.parent_revision_id,
+            lease_id: request.lease_id,
+            lease_fencing_token: request.lease_fencing_token,
+            expected_work_version: request.expected_work_version,
             proposal_kind: request.proposal_kind.clone(),
             payload_hash: request.payload_hash.clone(),
             artifact_manifest_id: request.artifact_manifest_id,
@@ -9480,7 +10690,7 @@ async fn create_agent_proposal(
             signature: request.signature.clone(),
             status: AgentProposalStatus::Submitted,
             version: 1,
-            updated_at: Utc::now(),
+            updated_at: authority_now,
         };
         if memory
             .collaboration
@@ -9521,6 +10731,11 @@ async fn create_agent_proposal(
         tx.commit().await.map_err(ApiError::database)?;
         return decode_stored(replay);
     }
+    sqlx::query("select pg_advisory_xact_lock(hashtext($1))")
+        .bind(format!("paper-section:{paper_id}:{}", request.section_key))
+        .execute(&mut *tx)
+        .await
+        .map_err(ApiError::database)?;
     let paper_row = sqlx::query(
         "select record_json from hepta_paper_projects where paper_project_id=$1 for share",
     )
@@ -9533,8 +10748,36 @@ async fn create_agent_proposal(
     })?;
     let paper: PaperProject = decode_record(paper_row.get("record_json"), "paper project")?;
     require_collaboration_phase(&paper, CollaborationMutation::SectionDraft)?;
+    let team_row = sqlx::query(
+        "select team_id,record_json from hepta_research_teams where team_id=$1 for share",
+    )
+    .bind(paper.team_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(ApiError::database)?;
+    let team: ResearchTeam = decode_record(team_row.get("record_json"), "research team")?;
+    if team.team_id != team_row.get::<Uuid, _>("team_id") || team.team_id != paper.team_id {
+        return Err(ApiError::internal(
+            "research team relational identity disagrees with record_json",
+        ));
+    }
     let scope_row = sqlx::query(
-        "select w.record_json as work_json,m.record_json as manifest_json,b.record_json as binding_json
+        "select w.record_json as work_json,
+                w.paper_project_id as work_paper_id,
+                w.assigned_player_id as work_player_id,
+                w.assigned_binding_id as work_binding_id,
+                w.status as work_status,w.version as work_version,
+                m.record_json as manifest_json,
+                m.manifest_id as relational_manifest_id,
+                m.paper_project_id as manifest_paper_id,
+                m.manifest_hash as relational_manifest_hash,
+                m.version as manifest_version,
+                b.record_json as binding_json,
+                b.binding_id as relational_binding_id,
+                b.player_id as binding_player_id,
+                b.agent_id as relational_agent_id,
+                b.status as binding_status,b.version as binding_version,
+                tm.player_id as roster_player_id,tm.binding_id as roster_binding_id
          from hepta_paper_work_items w
          join hepta_artifact_manifests m
            on m.manifest_id=$2 and m.paper_project_id=w.paper_project_id
@@ -9563,9 +10806,69 @@ async fn create_agent_proposal(
     let manifest: ArtifactManifest =
         decode_record(scope_row.get("manifest_json"), "artifact manifest")?;
     let binding: AgentBinding = decode_record(scope_row.get("binding_json"), "Agent binding")?;
+    let work: WorkItem = decode_record(scope_row.get("work_json"), "work item")?;
+    let work_version = u64::try_from(scope_row.get::<i64, _>("work_version"))
+        .map_err(|_| ApiError::internal("negative work item version"))?;
+    let manifest_version = u64::try_from(scope_row.get::<i64, _>("manifest_version"))
+        .map_err(|_| ApiError::internal("negative artifact manifest version"))?;
+    let binding_version = u64::try_from(scope_row.get::<i64, _>("binding_version"))
+        .map_err(|_| ApiError::internal("negative Agent binding version"))?;
+    if work.work_item_id != request.work_item_id
+        || work.paper_project_id != scope_row.get::<Uuid, _>("work_paper_id")
+        || work.assigned_player_id != scope_row.get::<Option<Uuid>, _>("work_player_id")
+        || work.assigned_binding_id != scope_row.get::<Option<Uuid>, _>("work_binding_id")
+        || work.status.as_str() != scope_row.get::<String, _>("work_status")
+        || work.version != work_version
+        || manifest.manifest_id != request.artifact_manifest_id
+        || manifest.manifest_id != scope_row.get::<Uuid, _>("relational_manifest_id")
+        || manifest.paper_project_id != scope_row.get::<Uuid, _>("manifest_paper_id")
+        || manifest.manifest_hash != scope_row.get::<String, _>("relational_manifest_hash")
+        || manifest.version != manifest_version
+        || binding.binding_id != request.binding_id
+        || binding.binding_id != scope_row.get::<Uuid, _>("relational_binding_id")
+        || binding.agent_id != request.agent_id
+        || binding.player_id != scope_row.get::<Uuid, _>("binding_player_id")
+        || binding.agent_id != scope_row.get::<String, _>("relational_agent_id")
+        || binding.status.as_str() != scope_row.get::<String, _>("binding_status")
+        || binding.version != binding_version
+        || binding.player_id != scope_row.get::<Uuid, _>("roster_player_id")
+        || binding.binding_id != scope_row.get::<Uuid, _>("roster_binding_id")
+    {
+        return Err(ApiError::internal(
+            "Agent proposal relational scope disagrees with record_json",
+        ));
+    }
+    if !team.members.iter().any(|member| {
+        member.player_id == binding.player_id
+            && member.binding_id == binding.binding_id
+            && member.agent_id == binding.agent_id
+    }) {
+        return Err(ApiError::forbidden(
+            "agent_binding_not_on_team",
+            "proposal Agent binding is not on the paper roster",
+        ));
+    }
+    if !matches!(
+        work.status,
+        WorkItemStatus::Planned | WorkItemStatus::InProgress | WorkItemStatus::Review
+    ) {
+        return Err(ApiError::conflict(
+            "agent_proposal_work_not_active",
+            "Agent proposals require work in planned, in_progress, or review status",
+        ));
+    }
+    if work.version != request.expected_work_version {
+        return Err(version_conflict(
+            "Agent proposal work item",
+            request.expected_work_version,
+            work.version,
+        ));
+    }
     let head_row = sqlx::query(
-        "select current_head_revision_id from hepta_section_heads
-         where paper_project_id=$1 and section_key=$2 for share",
+        "select paper_project_id,section_key,current_head_revision_id,fencing_token,version
+         from hepta_section_heads
+         where paper_project_id=$1 and section_key=$2
+         for share",
     )
     .bind(paper_id)
     .bind(&request.section_key)
@@ -9586,13 +10889,99 @@ async fn create_agent_proposal(
             "proposal parent must be the current same-section head and may not self-reference",
         ));
     }
+    let head_fencing_token = u64::try_from(head_row.get::<i64, _>("fencing_token"))
+        .map_err(|_| ApiError::internal("negative section fencing token"))?;
+    let head_version = u64::try_from(head_row.get::<i64, _>("version"))
+        .map_err(|_| ApiError::internal("negative section head version"))?;
+    if head_row.get::<Uuid, _>("paper_project_id") != paper_id
+        || head_row.get::<String, _>("section_key") != request.section_key
+        || head_fencing_token != request.lease_fencing_token
+        || head_version == 0
+    {
+        return Err(ApiError::conflict(
+            "stale_agent_proposal_lease_epoch",
+            "Agent proposal lease fencing token is not the current section epoch",
+        ));
+    }
+    let lease_rows = sqlx::query(
+        "select lease_id,paper_project_id,section_key,holder_player_id,holder_binding_id,
+                fencing_token,status,version,acquired_at,expires_at,updated_at,record_json
+         from hepta_section_leases
+         where paper_project_id=$1 and section_key=$2 and status='active'
+         for share",
+    )
+    .bind(paper_id)
+    .bind(&request.section_key)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(ApiError::database)?;
+    let lease_row = match lease_rows.as_slice() {
+        [lease_row] => lease_row,
+        _ => {
+            return Err(ApiError::conflict(
+                "agent_proposal_requires_current_lease",
+                "Agent proposals require exactly one current active section lease",
+            ));
+        }
+    };
+    let lease: SectionLease = decode_record(lease_row.get("record_json"), "section lease")?;
+    let relational_fencing_token = u64::try_from(lease_row.get::<i64, _>("fencing_token"))
+        .map_err(|_| ApiError::internal("negative section lease fencing token"))?;
+    let relational_lease_version = u64::try_from(lease_row.get::<i64, _>("version"))
+        .map_err(|_| ApiError::internal("negative section lease version"))?;
+    let relational_acquired_at: DateTime<Utc> = lease_row.get("acquired_at");
+    let relational_expires_at: DateTime<Utc> = lease_row.get("expires_at");
+    let relational_updated_at: DateTime<Utc> = lease_row.get("updated_at");
+    if lease.lease_id != lease_row.get::<Uuid, _>("lease_id")
+        || lease.paper_project_id != lease_row.get::<Uuid, _>("paper_project_id")
+        || lease.section_key != lease_row.get::<String, _>("section_key")
+        || lease.holder_player_id != lease_row.get::<Uuid, _>("holder_player_id")
+        || lease.holder_binding_id != lease_row.get::<Uuid, _>("holder_binding_id")
+        || lease.fencing_token != relational_fencing_token
+        || lease.status.as_str() != lease_row.get::<String, _>("status")
+        || lease.version != relational_lease_version
+        || lease.acquired_at.timestamp_micros() != relational_acquired_at.timestamp_micros()
+        || lease.expires_at.timestamp_micros() != relational_expires_at.timestamp_micros()
+        || lease.updated_at.timestamp_micros() != relational_updated_at.timestamp_micros()
+    {
+        return Err(ApiError::internal(
+            "section lease relational columns disagree with record_json",
+        ));
+    }
+    if lease.status != SectionLeaseStatus::Active
+        || lease.paper_project_id != paper_id
+        || lease.section_key != request.section_key
+        || lease.lease_id != request.lease_id
+        || lease.holder_player_id != binding.player_id
+        || lease.holder_binding_id != request.binding_id
+        || lease.fencing_token != request.lease_fencing_token
+        || lease.fencing_token != head_fencing_token
+    {
+        return Err(ApiError::conflict(
+            "agent_proposal_requires_current_lease",
+            "Agent proposal binding must hold the current unexpired section lease and fencing token",
+        ));
+    }
     let public_key = verify_agent_proposal(paper_id, &request, &manifest.manifest_hash, &binding)?;
+    let authority_now: DateTime<Utc> = sqlx::query_scalar("select clock_timestamp()")
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(ApiError::database)?;
+    if lease.expires_at <= authority_now {
+        return Err(ApiError::conflict(
+            "agent_proposal_requires_current_lease",
+            "Agent proposal binding must hold the current unexpired section lease and fencing token",
+        ));
+    }
     let proposal = AgentProposal {
         proposal_id: request.proposal_id,
         paper_project_id: paper_id,
         work_item_id: request.work_item_id,
         section_key: request.section_key.clone(),
         parent_revision_id: request.parent_revision_id,
+        lease_id: request.lease_id,
+        lease_fencing_token: request.lease_fencing_token,
+        expected_work_version: request.expected_work_version,
         proposal_kind: request.proposal_kind.clone(),
         payload_hash: request.payload_hash.clone(),
         artifact_manifest_id: request.artifact_manifest_id,
@@ -9605,23 +10994,34 @@ async fn create_agent_proposal(
         signature: request.signature.clone(),
         status: AgentProposalStatus::Submitted,
         version: 1,
-        updated_at: Utc::now(),
+        updated_at: authority_now,
     };
     sqlx::query(
         "insert into hepta_agent_proposals (
             proposal_id,paper_project_id,work_item_id,section_key,parent_revision_id,
-            proposal_kind,payload_hash,artifact_manifest_id,agent_id,binding_id,
+            lease_id,lease_fencing_token,expected_work_version,
+            proposal_kind,payload_hash,artifact_manifest_id,artifact_manifest_hash,agent_id,binding_id,
             agent_key_id,agent_public_key,signature,status,version,record_json,signed_at,updated_at
-         ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'submitted',1,$14::jsonb,$15,$16)",
+         ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'submitted',1,$18::jsonb,$19,$20)",
     )
     .bind(proposal.proposal_id)
     .bind(paper_id)
     .bind(proposal.work_item_id)
     .bind(&proposal.section_key)
     .bind(proposal.parent_revision_id)
+    .bind(proposal.lease_id)
+    .bind(
+        i64::try_from(proposal.lease_fencing_token)
+            .map_err(|_| ApiError::internal("lease fencing token exceeds PostgreSQL bigint"))?,
+    )
+    .bind(
+        i64::try_from(proposal.expected_work_version)
+            .map_err(|_| ApiError::internal("work version exceeds PostgreSQL bigint"))?,
+    )
     .bind(proposal.proposal_kind.as_str())
     .bind(&proposal.payload_hash)
     .bind(proposal.artifact_manifest_id)
+    .bind(&proposal.artifact_manifest_hash)
     .bind(&proposal.agent_id)
     .bind(proposal.binding_id)
     .bind(&proposal.agent_key_id)
@@ -9746,6 +11146,30 @@ async fn create_human_decision(
                 "player already decided this proposal",
             ));
         }
+        if request.decision == HumanDecisionKind::Accept {
+            let artifact_manifest_id = memory
+                .collaboration
+                .proposals
+                .get(&request.proposal_id)
+                .filter(|proposal| proposal.paper_project_id == paper_id)
+                .map(|proposal| proposal.artifact_manifest_id)
+                .ok_or_else(|| {
+                    ApiError::bad_request(
+                        "cross_paper_or_missing_proposal",
+                        "proposal is missing or belongs to another paper",
+                    )
+                })?;
+            if memory.collaboration.proposals.values().any(|proposal| {
+                proposal.proposal_id != request.proposal_id
+                    && proposal.artifact_manifest_id == artifact_manifest_id
+                    && proposal.status == AgentProposalStatus::Accepted
+            }) {
+                return Err(ApiError::conflict(
+                    "artifact_contribution_duplicated",
+                    "one artifact manifest may have only one accepted proposal globally",
+                ));
+            }
+        }
         let proposal = memory
             .collaboration
             .proposals
@@ -9869,6 +11293,25 @@ async fn create_human_decision(
             "Agent proposal is no longer submitted",
         ));
     }
+    if request.decision == HumanDecisionKind::Accept {
+        let already_accepted: bool = sqlx::query_scalar(
+            "select exists(
+                select 1 from hepta_agent_proposals
+                where artifact_manifest_id=$1 and status='accepted' and proposal_id<>$2
+             )",
+        )
+        .bind(proposal.artifact_manifest_id)
+        .bind(proposal.proposal_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(ApiError::database)?;
+        if already_accepted {
+            return Err(ApiError::conflict(
+                "artifact_contribution_duplicated",
+                "one artifact manifest may have only one accepted proposal globally",
+            ));
+        }
+    }
     proposal.status = request.decision.proposal_status();
     proposal.version += 1;
     proposal.updated_at = Utc::now();
@@ -9939,7 +11382,17 @@ async fn create_human_decision(
     )
     .execute(&mut *tx)
     .await
-    .map_err(ApiError::database)?;
+    .map_err(|error| match &error {
+        sqlx::Error::Database(database)
+            if database.is_unique_violation() && request.decision == HumanDecisionKind::Accept =>
+        {
+            ApiError::conflict(
+                "artifact_contribution_duplicated",
+                "one artifact manifest may have only one accepted proposal globally",
+            )
+        }
+        _ => ApiError::database(error),
+    })?;
     if updated.rows_affected() != 1 {
         return Err(ApiError::conflict(
             "proposal_concurrent_decision",
@@ -11107,6 +12560,8 @@ async fn get_paper_room(
     let path = format!("/v2/hepta/papers/{paper_id}/room");
     let assertion =
         require_registered_player_read(&state, &headers, "get_paper_room_v3", &path).await?;
+    ensure_automatic_challenge_expiry_materialized(&state, paper_id, &assertion, Utc::now())
+        .await?;
     if state.pool.is_none() {
         let memory = state.paper_raid.read().await;
         let (paper, team) = paper_and_team_memory(&memory, paper_id, &assertion)?;
@@ -11289,6 +12744,7 @@ async fn get_paper_room(
             .map(|event| event.cursor)
             .max()
             .unwrap_or(0);
+        validate_paper_role_resources(&paper)?;
         let author_raid_progress = project_author_raid_progress(
             &paper,
             &team,
@@ -11544,8 +13000,9 @@ async fn get_paper_room(
     .bind(paper_id)
     .fetch_one(&mut *tx)
     .await
-    .map_err(ApiError::database)?
-    .get::<i64, _>("cursor");
+        .map_err(ApiError::database)?
+        .get::<i64, _>("cursor");
+    validate_paper_role_resources(&paper)?;
     let author_raid_progress = project_author_raid_progress(
         &paper,
         &team,
@@ -11610,6 +13067,8 @@ async fn list_paper_room_events(
     let assertion =
         require_registered_player_read(&state, &headers, "list_paper_room_events_v3", &path)
             .await?;
+    ensure_automatic_challenge_expiry_materialized(&state, paper_id, &assertion, Utc::now())
+        .await?;
     if state.pool.is_none() {
         let memory = state.paper_raid.read().await;
         paper_and_team_memory(&memory, paper_id, &assertion)?;

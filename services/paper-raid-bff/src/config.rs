@@ -44,6 +44,39 @@ pub struct AgentBridgeQuotaConfig {
 pub struct InviteAlphaConfig {
     pub quota: DurableQuotaConfig,
     pub retention_policy_id: String,
+    pub activation: InviteActivationPins,
+}
+
+#[derive(Clone, Debug)]
+pub struct InviteActivationPins {
+    pub activation_id: Uuid,
+    pub release_id: String,
+    pub local_approval_sha256: String,
+    pub approval_sequence: u64,
+    pub nonce_sha256: String,
+    pub profile_sha256: String,
+    pub base_compose_sha256: String,
+    pub runtime_acl_sha256: String,
+    pub runtime_acl_state_sha256: String,
+    pub retention_policy_sha256: String,
+    pub image_lock_sha256: String,
+    pub release_provenance_sha256: String,
+    pub runtime_acl_evidence_sha256: String,
+    pub hepta_revision: String,
+    pub hepta_source_tree: String,
+    pub hepta_fileset_sha256: String,
+    pub database_name: String,
+    pub database_oid: u32,
+    pub cluster_system_identifier: String,
+    pub deployment_identity: String,
+    pub postgres_image: String,
+    pub object_store_image: String,
+    pub object_store_client_image: String,
+    pub ops_image: String,
+    pub nakama_image: String,
+    pub hepta_image: String,
+    pub bff_image: String,
+    pub accessctl_image: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -199,13 +232,13 @@ impl Config {
                 EdgeScope::ContainerLoopbackPublish
             }
             "loopback_process" => {
-                return Err("loopback_process requires a loopback bind address".to_string())
+                return Err("loopback_process requires a loopback bind address".to_string());
             }
             "container_loopback_publish" => {
                 return Err(
                     "container_loopback_publish requires an unspecified container bind address"
                         .to_string(),
-                )
+                );
             }
             _ => return Err("PAPER_RAID_BFF_EDGE_SCOPE is invalid".to_string()),
         };
@@ -253,6 +286,7 @@ impl Config {
                 }
                 let retention_policy_id = required("PAPER_RAID_BFF_ACCESS_RETENTION_POLICY_ID")?;
                 validate_opaque("access retention policy id", &retention_policy_id, 128)?;
+                let activation = InviteActivationPins::from_env()?;
                 (
                     Vec::new(),
                     Some(InviteAlphaConfig {
@@ -274,6 +308,7 @@ impl Config {
                             )?,
                         },
                         retention_policy_id,
+                        activation,
                     }),
                 )
             }
@@ -369,6 +404,145 @@ impl Config {
     }
 }
 
+impl InviteActivationPins {
+    fn from_env() -> Result<Self, String> {
+        let activation_id = required("PAPER_RAID_BFF_INVITE_ACTIVATION_ID")?
+            .parse::<Uuid>()
+            .map_err(|_| "PAPER_RAID_BFF_INVITE_ACTIVATION_ID must be a UUID".to_string())?;
+        let digest = |name: &str| -> Result<String, String> {
+            let value = required(name)?;
+            validate_sha256(name, &value)?;
+            Ok(value)
+        };
+        let image = |name: &str| -> Result<String, String> {
+            let value = required(name)?;
+            validate_digest_image(name, &value)?;
+            Ok(value)
+        };
+        let git_oid = |name: &str| {
+            let value = required(name)?;
+            if value.len() != 40
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err(format!(
+                    "{name} must be a canonical lowercase 40-hex Git OID"
+                ));
+            }
+            Ok(value)
+        };
+        let approval_sequence = required("PAPER_RAID_BFF_INVITE_APPROVAL_SEQUENCE")?
+            .parse::<u64>()
+            .map_err(|_| {
+                "PAPER_RAID_BFF_INVITE_APPROVAL_SEQUENCE must be an integer".to_string()
+            })?;
+        if !(1..=9_007_199_254_740_991).contains(&approval_sequence) {
+            return Err(
+                "PAPER_RAID_BFF_INVITE_APPROVAL_SEQUENCE must be a positive JSON-safe integer"
+                    .to_string(),
+            );
+        }
+        let database_name = required("PAPER_RAID_BFF_INVITE_DATABASE_NAME")?;
+        validate_opaque("invite database name", &database_name, 63)?;
+        if !database_name
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+            || !database_name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        {
+            return Err(
+                "PAPER_RAID_BFF_INVITE_DATABASE_NAME must be a canonical database identifier"
+                    .to_string(),
+            );
+        }
+        let database_oid = required("PAPER_RAID_BFF_INVITE_DATABASE_OID")?
+            .parse::<u32>()
+            .map_err(|_| "PAPER_RAID_BFF_INVITE_DATABASE_OID must be a positive OID".to_string())?;
+        if database_oid == 0 {
+            return Err("PAPER_RAID_BFF_INVITE_DATABASE_OID must be a positive OID".to_string());
+        }
+        let cluster_system_identifier =
+            required("PAPER_RAID_BFF_INVITE_CLUSTER_SYSTEM_IDENTIFIER")?;
+        if cluster_system_identifier
+            .parse::<u64>()
+            .ok()
+            .filter(|value| *value > 0)
+            .is_none()
+            || cluster_system_identifier.starts_with('0')
+        {
+            return Err(
+                "PAPER_RAID_BFF_INVITE_CLUSTER_SYSTEM_IDENTIFIER must be a canonical positive decimal u64"
+                    .to_string(),
+            );
+        }
+        let deployment_identity = required("PAPER_RAID_BFF_INVITE_DEPLOYMENT_IDENTITY")?;
+        validate_opaque("invite deployment identity", &deployment_identity, 128)?;
+        if !deployment_identity
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        {
+            return Err(
+                "PAPER_RAID_BFF_INVITE_DEPLOYMENT_IDENTITY must begin with an ASCII alphanumeric character"
+                    .to_string(),
+            );
+        }
+        let release_id = required("PAPER_RAID_BFF_INVITE_RELEASE_ID")?;
+        if release_id.is_empty()
+            || release_id.len() > 128
+            || !release_id
+                .as_bytes()
+                .first()
+                .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+            || !release_id.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'.' | b'_' | b'-')
+            })
+        {
+            return Err(
+                "PAPER_RAID_BFF_INVITE_RELEASE_ID must be a canonical lowercase release id"
+                    .to_string(),
+            );
+        }
+        Ok(Self {
+            activation_id,
+            release_id,
+            local_approval_sha256: digest("PAPER_RAID_BFF_INVITE_ACTIVATION_RECEIPT_SHA256")?,
+            approval_sequence,
+            nonce_sha256: digest("PAPER_RAID_BFF_INVITE_APPROVAL_NONCE_SHA256")?,
+            profile_sha256: digest("PAPER_RAID_BFF_INVITE_PROFILE_SHA256")?,
+            base_compose_sha256: digest("PAPER_RAID_BFF_INVITE_BASE_COMPOSE_SHA256")?,
+            runtime_acl_sha256: digest("PAPER_RAID_BFF_INVITE_RUNTIME_ACL_SHA256")?,
+            runtime_acl_state_sha256: digest("PAPER_RAID_BFF_INVITE_RUNTIME_ACL_STATE_SHA256")?,
+            retention_policy_sha256: digest("PAPER_RAID_BFF_INVITE_RETENTION_POLICY_SHA256")?,
+            image_lock_sha256: digest("PAPER_RAID_BFF_INVITE_IMAGE_LOCK_SHA256")?,
+            release_provenance_sha256: digest("PAPER_RAID_BFF_INVITE_RELEASE_PROVENANCE_SHA256")?,
+            runtime_acl_evidence_sha256: digest(
+                "PAPER_RAID_BFF_INVITE_RUNTIME_ACL_EVIDENCE_SHA256",
+            )?,
+            hepta_revision: git_oid("PAPER_RAID_BFF_INVITE_HEPTA_REVISION")?,
+            hepta_source_tree: git_oid("PAPER_RAID_BFF_INVITE_HEPTA_SOURCE_TREE")?,
+            hepta_fileset_sha256: digest("PAPER_RAID_BFF_INVITE_HEPTA_FILESET_SHA256")?,
+            database_name,
+            database_oid,
+            cluster_system_identifier,
+            deployment_identity,
+            postgres_image: image("PAPER_RAID_BFF_INVITE_POSTGRES_IMAGE")?,
+            object_store_image: image("PAPER_RAID_BFF_INVITE_OBJECT_STORE_IMAGE")?,
+            object_store_client_image: image("PAPER_RAID_BFF_INVITE_OBJECT_STORE_CLIENT_IMAGE")?,
+            ops_image: image("PAPER_RAID_BFF_INVITE_OPS_IMAGE")?,
+            nakama_image: image("PAPER_RAID_BFF_INVITE_NAKAMA_IMAGE")?,
+            hepta_image: image("PAPER_RAID_BFF_INVITE_HEPTA_IMAGE")?,
+            bff_image: image("PAPER_RAID_BFF_INVITE_BFF_IMAGE")?,
+            accessctl_image: image("PAPER_RAID_BFF_INVITE_ACCESSCTL_IMAGE")?,
+        })
+    }
+}
+
 fn parse_identity_mode(value: Option<&str>) -> Result<IdentityMode, String> {
     match value {
         None | Some("fixed_alpha") => Ok(IdentityMode::FixedAlpha),
@@ -435,29 +609,30 @@ fn alpha_identity_topology_is_valid(identities: &[AlphaIdentity]) -> bool {
         .iter()
         .filter(|identity| identity.has_scope(AlphaIdentityScope::Author))
         .collect::<Vec<_>>();
-    let independent = identities
-        .iter()
-        .filter(|identity| !identity.has_scope(AlphaIdentityScope::Author))
-        .collect::<Vec<_>>();
+    // Review independence is scoped to the target Paper, not to a global
+    // account class. A player may author Paper A and review Paper B; the Hepta
+    // assignment authority still rejects every author of the target Paper.
+    let review_capable = identities.iter().collect::<Vec<_>>();
     authors.len() >= MIN_ALPHA_AUTHOR_IDENTITIES
-        && independent.len() >= MIN_ALPHA_INDEPENDENT_REVIEW_IDENTITIES
+        && review_capable.len() >= MIN_ALPHA_INDEPENDENT_REVIEW_IDENTITIES
         && distinct_author_role_assignment(&authors)
-        && independent
+        && review_capable
             .iter()
             .filter(|identity| identity.has_scope(AlphaIdentityScope::Evaluator))
             .count()
             >= MIN_ALPHA_EVALUATOR_IDENTITIES
-        && independent
+        && review_capable
             .iter()
             .filter(|identity| identity.has_scope(AlphaIdentityScope::Reviewer))
             .count()
             >= MIN_ALPHA_REVIEWER_IDENTITIES
-        && independent
+        && review_capable
             .iter()
             .filter(|identity| identity.has_scope(AlphaIdentityScope::Reproducer))
             .count()
             >= MIN_ALPHA_REPRODUCER_IDENTITIES
-        && distinct_independent_review_assignment(&independent)
+        && distinct_independent_review_assignment(&review_capable)
+        && every_author_lineup_has_an_independent_review_panel(identities)
         && [
             AlphaAuthorRole::Captain,
             AlphaAuthorRole::Evidence,
@@ -469,6 +644,49 @@ fn alpha_identity_topology_is_valid(identities: &[AlphaIdentity]) -> bool {
                 .iter()
                 .any(|identity| identity.supports_author_role(role))
         })
+}
+
+fn every_author_lineup_has_an_independent_review_panel(identities: &[AlphaIdentity]) -> bool {
+    let author_indexes = identities
+        .iter()
+        .enumerate()
+        .filter_map(|(index, identity)| {
+            identity
+                .has_scope(AlphaIdentityScope::Author)
+                .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let mut found_author_lineup = false;
+    for left in 0..author_indexes.len() {
+        for middle in left + 1..author_indexes.len() {
+            for right in middle + 1..author_indexes.len() {
+                let lineup_indexes = [
+                    author_indexes[left],
+                    author_indexes[middle],
+                    author_indexes[right],
+                ];
+                let lineup = lineup_indexes
+                    .iter()
+                    .map(|index| &identities[*index])
+                    .collect::<Vec<_>>();
+                if !distinct_author_role_assignment(&lineup) {
+                    continue;
+                }
+                found_author_lineup = true;
+                let independent = identities
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, identity)| {
+                        (!lineup_indexes.contains(&index)).then_some(identity)
+                    })
+                    .collect::<Vec<_>>();
+                if !distinct_independent_review_assignment(&independent) {
+                    return false;
+                }
+            }
+        }
+    }
+    found_author_lineup
 }
 
 fn distinct_author_role_assignment(identities: &[&AlphaIdentity]) -> bool {
@@ -602,7 +820,7 @@ fn parse_alpha_identities(raw: &str) -> Result<Vec<AlphaIdentity>, String> {
     }
     if !alpha_identity_topology_is_valid(&identities) {
         return Err(format!(
-            "alpha profile requires at least {MIN_ALPHA_AUTHOR_IDENTITIES} authors covering captain/evidence/experiment plus {MIN_ALPHA_INDEPENDENT_REVIEW_IDENTITIES} non-author review identities covering one evaluator, two reviewers, and one reproducer"
+            "alpha profile requires every valid three-Author captain/evidence/experiment lineup to leave {MIN_ALPHA_INDEPENDENT_REVIEW_IDENTITIES} pairwise-distinct evaluator/reviewer/reviewer/reproducer identities outside that target Paper"
         ));
     }
     Ok(identities)
@@ -718,6 +936,39 @@ fn validate_opaque(field: &str, value: &str, max: usize) -> Result<(), String> {
         return Err(format!("{field} must be an opaque ASCII identifier"));
     }
     Ok(())
+}
+
+fn validate_sha256(field: &str, value: &str) -> Result<(), String> {
+    if value.len() != 71
+        || !value.starts_with("sha256:")
+        || !value[7..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(format!("{field} must be a canonical sha256 digest"));
+    }
+    Ok(())
+}
+
+fn validate_digest_image(field: &str, value: &str) -> Result<(), String> {
+    let Some((name, digest)) = value.rsplit_once('@') else {
+        return Err(format!("{field} must be a digest-pinned image"));
+    };
+    if name.is_empty()
+        || name.len() > 255
+        || !name
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        || name.bytes().any(|byte| {
+            !(byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'_' | b':' | b'/' | b'-'))
+        })
+    {
+        return Err(format!("{field} image name is invalid"));
+    }
+    validate_sha256(field, digest)
 }
 
 fn validate_display_name(value: &str) -> Result<(), String> {
@@ -925,7 +1176,7 @@ mod tests {
         )
         .is_err());
 
-        let author_scopes_cannot_satisfy_independent_review = serde_json::json!([
+        let four_people_cannot_review_their_own_three_author_paper = serde_json::json!([
             identity_json("author-1", "a", ["author", "evaluator"], Some(["captain"])),
             identity_json("author-2", "b", ["author", "reviewer"], Some(["evidence"])),
             identity_json(
@@ -937,9 +1188,81 @@ mod tests {
             identity_json("reproducer-1", "d", ["reproducer"], None::<[&str; 0]>)
         ]);
         assert!(parse_alpha_identities(
-            &author_scopes_cannot_satisfy_independent_review.to_string()
+            &four_people_cannot_review_their_own_three_author_paper.to_string()
         )
         .is_err());
+
+        let six_person_dual_team_without_floating_reproducer = serde_json::json!([
+            identity_json("captain-1", "a", ["author", "evaluator"], Some(["captain"])),
+            identity_json("captain-2", "b", ["author", "evaluator"], Some(["captain"])),
+            identity_json(
+                "evidence-1",
+                "c",
+                ["author", "reviewer"],
+                Some(["evidence"])
+            ),
+            identity_json(
+                "evidence-2",
+                "d",
+                ["author", "reviewer"],
+                Some(["evidence"])
+            ),
+            identity_json(
+                "experiment-1",
+                "e",
+                ["author", "reviewer"],
+                Some(["experiment"])
+            ),
+            identity_json(
+                "experiment-2",
+                "f",
+                ["author", "reviewer"],
+                Some(["experiment"])
+            )
+        ]);
+        assert!(parse_alpha_identities(
+            &six_person_dual_team_without_floating_reproducer.to_string()
+        )
+        .is_err());
+
+        let seven_person_dual_team_with_floating_reproducer = serde_json::json!([
+            identity_json("captain-1", "a", ["author", "evaluator"], Some(["captain"])),
+            identity_json("captain-2", "b", ["author", "evaluator"], Some(["captain"])),
+            identity_json(
+                "evidence-1",
+                "c",
+                ["author", "reviewer"],
+                Some(["evidence"])
+            ),
+            identity_json(
+                "evidence-2",
+                "d",
+                ["author", "reviewer"],
+                Some(["evidence"])
+            ),
+            identity_json(
+                "experiment-1",
+                "e",
+                ["author", "reviewer"],
+                Some(["experiment"])
+            ),
+            identity_json(
+                "experiment-2",
+                "f",
+                ["author", "reviewer"],
+                Some(["experiment"])
+            ),
+            identity_json(
+                "floating-reproducer",
+                "g",
+                ["reproducer"],
+                None::<[&str; 0]>
+            )
+        ]);
+        assert!(parse_alpha_identities(
+            &seven_person_dual_team_with_floating_reproducer.to_string()
+        )
+        .is_ok());
 
         let overlapping_author_capabilities_cannot_fake_three_distinct_roles = serde_json::json!([
             identity_json(
@@ -996,10 +1319,10 @@ mod tests {
             "display_name": subject,
             "nakama_user_id": Uuid::new_v4(),
             "player_id": Uuid::new_v4(),
-            "scopes": scopes
+            "scopes": scopes.as_slice()
         });
         if let Some(author_roles) = author_roles {
-            value["author_roles"] = serde_json::json!(author_roles);
+            value["author_roles"] = serde_json::json!(author_roles.as_slice());
         }
         value
     }

@@ -6,7 +6,10 @@ export const AGENT_CAPABILITY_DISCLOSURE_SCHEMA =
   "hepta.paper_raid.agent_capability_disclosure.v1";
 export const AGENT_BRIDGE_REQUEST_PROOF_SCHEMA =
   "hepta.paper_raid.agent_bridge_request_proof.v1";
-export const AGENT_PROPOSAL_SCHEMA = "hepta.paper_raid.agent_proposal.v1";
+export const AGENT_PROPOSAL_V1_SCHEMA = "hepta.paper_raid.agent_proposal.v1";
+export const AGENT_PROPOSAL_SCHEMA = "hepta.paper_raid.agent_proposal.v2";
+export const REVIEW_EXECUTION_RECEIPT_SCHEMA =
+  "hepta.paper_raid.review_execution_receipt.v1";
 export const RESEARCH_SESSION_ACTION_SCHEMA =
   "trnm.research-session.action.v1";
 
@@ -402,7 +405,10 @@ export function agentBridgeRequestProofFrame(claim) {
     "GET /api/agent-bridge/binding",
     "POST /api/agent-bridge/health",
     "POST /api/agent-bridge/inbox",
+    "POST /api/agent-bridge/delivery-drafts",
     "POST /api/agent-bridge/proposals",
+    "GET /api/agent-bridge/review-objects",
+    "POST /api/agent-bridge/review-receipts",
   ]);
   if (
     typeof claim.canonical_path !== "string" ||
@@ -441,9 +447,9 @@ export function agentBridgeRequestProofFrame(claim) {
   ]);
 }
 
-export function agentProposalFrame(proposal) {
+export function agentProposalV1Frame(proposal) {
   if (
-    proposal.schema !== AGENT_PROPOSAL_SCHEMA ||
+    proposal.schema !== AGENT_PROPOSAL_V1_SCHEMA ||
     !["proposal", "delivery"].includes(proposal.proposal_kind)
   ) {
     fail("Agent proposal schema or kind is invalid");
@@ -479,6 +485,144 @@ export function agentProposalFrame(proposal) {
     ["string", proposal.binding_id],
     ["string", proposal.agent_key_id],
     ["i64", proposal.signed_at_unix],
+  ]);
+}
+
+export function agentProposalFrame(proposal) {
+  if (
+    proposal.schema !== AGENT_PROPOSAL_SCHEMA ||
+    !["proposal", "delivery"].includes(proposal.proposal_kind)
+  ) {
+    fail("Agent proposal V2 schema or kind is invalid");
+  }
+  for (const field of [
+    "proposal_id",
+    "paper_project_id",
+    "work_item_id",
+    "parent_revision_id",
+    "lease_id",
+    "artifact_manifest_id",
+    "binding_id",
+  ]) {
+    assertCanonicalUuid(proposal[field], field);
+  }
+  assertLogicalId(proposal.section_key, "section_key");
+  assertDigest(proposal.payload_hash, "payload_hash");
+  assertDigest(proposal.artifact_manifest_hash, "artifact_manifest_hash");
+  assertText(proposal.agent_id, "agent_id");
+  assertText(proposal.agent_key_id, "agent_key_id");
+  for (const field of ["lease_fencing_token", "expected_work_version"]) {
+    if (!Number.isSafeInteger(proposal[field]) || proposal[field] <= 0) {
+      fail(`${field} must be a valid safe unsigned integer`);
+    }
+  }
+  if (!Number.isSafeInteger(proposal.signed_at_unix) || proposal.signed_at_unix < 0) {
+    fail("signed_at_unix must be a non-negative safe integer");
+  }
+  return canonicalFrame("hepta_paper_raid_agent_proposal_v2", [
+    ["string", proposal.schema],
+    ["string", proposal.proposal_id],
+    ["string", proposal.paper_project_id],
+    ["string", proposal.work_item_id],
+    ["string", proposal.section_key],
+    ["string", proposal.parent_revision_id],
+    ["string", proposal.lease_id],
+    ["u64", proposal.lease_fencing_token],
+    ["u64", proposal.expected_work_version],
+    ["string", proposal.proposal_kind],
+    ["digest", proposal.payload_hash],
+    ["string", proposal.artifact_manifest_id],
+    ["digest", proposal.artifact_manifest_hash],
+    ["string", proposal.agent_id],
+    ["string", proposal.binding_id],
+    ["string", proposal.agent_key_id],
+    ["i64", proposal.signed_at_unix],
+  ]);
+}
+
+export function reviewExecutionReceiptFrame(receipt) {
+  if (receipt.schema !== REVIEW_EXECUTION_RECEIPT_SCHEMA) {
+    fail("unsupported review execution receipt schema");
+  }
+  for (const field of [
+    "receipt_id",
+    "task_id",
+    "assignment_id",
+    "binding_id",
+    "paper_project_id",
+    "submission_id",
+  ]) {
+    assertCanonicalUuid(receipt[field], field);
+  }
+  assertCanonicalUuid(receipt.evaluation_id, "evaluation_id");
+  if (!["evaluate", "reproduce"].includes(receipt.kind)) {
+    fail("review execution receipt kind is invalid");
+  }
+  for (const field of ["attempt", "fencing_token"]) {
+    if (!Number.isSafeInteger(receipt[field]) || receipt[field] <= 0) {
+      fail(`${field} must be a positive safe integer`);
+    }
+  }
+  for (const field of [
+    "bundle_hash",
+    "input_root",
+    "output_root",
+    "metrics_hash",
+    "seed_set_hash",
+    "environment_hash",
+    "run_manifest_hash",
+    "logs_hash",
+    "agent_key_id",
+    "signing_public_key_hash",
+  ]) {
+    assertDigest(receipt[field], field);
+  }
+  assertText(receipt.evaluator_version, "evaluator_version");
+  assertLogicalId(receipt.agent_id, "agent_id");
+  if (
+    (receipt.kind === "evaluate" && typeof receipt.candidate_passed !== "boolean") ||
+    (receipt.kind === "reproduce" && receipt.candidate_passed !== null)
+  ) {
+    fail("review execution receipt kind does not bind candidate_passed correctly");
+  }
+  if (receipt.signing_public_key_hash !== receipt.agent_key_id) {
+    fail("signing_public_key_hash must equal agent_key_id");
+  }
+  if (
+    !Number.isSafeInteger(receipt.started_at_unix) ||
+    receipt.started_at_unix < 0 ||
+    !Number.isSafeInteger(receipt.completed_at_unix) ||
+    receipt.completed_at_unix < receipt.started_at_unix
+  ) {
+    fail("review execution receipt time interval is invalid");
+  }
+  return canonicalFrame("hepta_paper_raid_review_execution_receipt_v1", [
+    ["string", receipt.schema],
+    ["string", receipt.receipt_id],
+    ["string", receipt.task_id],
+    ["string", receipt.assignment_id],
+    ["string", receipt.binding_id],
+    ["string", receipt.paper_project_id],
+    ["string", receipt.submission_id],
+    ["string", receipt.evaluation_id],
+    ["string", receipt.kind],
+    ["u64", receipt.attempt],
+    ["u64", receipt.fencing_token],
+    ["digest", receipt.bundle_hash],
+    ["string", receipt.evaluator_version],
+    ["digest", receipt.input_root],
+    ["digest", receipt.output_root],
+    ["digest", receipt.metrics_hash],
+    ["u32", receipt.candidate_passed === null ? 0 : receipt.candidate_passed ? 2 : 1],
+    ["digest", receipt.seed_set_hash],
+    ["digest", receipt.environment_hash],
+    ["digest", receipt.run_manifest_hash],
+    ["digest", receipt.logs_hash],
+    ["i64", receipt.started_at_unix],
+    ["i64", receipt.completed_at_unix],
+    ["string", receipt.agent_id],
+    ["digest", receipt.agent_key_id],
+    ["digest", receipt.signing_public_key_hash],
   ]);
 }
 

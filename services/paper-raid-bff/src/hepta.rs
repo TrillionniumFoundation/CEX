@@ -1,10 +1,10 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     time::Duration,
 };
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use chrono::Utc;
+use chrono::{DateTime, SecondsFormat, Utc};
 use ed25519_dalek::VerifyingKey;
 use hepta_paper_raid_contracts::{
     authorship_consent_signing_bytes, canonical_json_bytes, human_decision_signing_bytes,
@@ -35,6 +35,7 @@ use uuid::Uuid;
 use crate::{
     config::{AlphaAuthorRole, AlphaIdentity, AlphaIdentityScope, ConsumerAssertionConfig},
     error::AppError,
+    metrics::{HeptaErrorKind, Metrics},
 };
 
 const MAX_JSON_BYTES: usize = 2 * 1024 * 1024;
@@ -75,6 +76,7 @@ pub enum CommandName {
     CreateCitationRecord,
     CreateExperimentPlan,
     CreateRunRecord,
+    CreateRoleResourceAction,
     CreateFigureLineage,
     CreateClaimRecord,
     AcquireSectionLease,
@@ -392,6 +394,1316 @@ impl Route {
     }
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum HeptaPaperTerminalOutcome {
+    Failed,
+    Expired,
+    Abandoned,
+}
+
+impl HeptaPaperTerminalOutcome {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Failed => "failed",
+            Self::Expired => "expired",
+            Self::Abandoned => "abandoned",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HeptaPaperTerminalReason {
+    QualityGateFailed,
+    PreregisteredResultFailed,
+    IntegrityFailure,
+    TeamWithdrawal,
+    ResourceUnavailable,
+    ChallengeInfeasible,
+    ChallengeGraceDeadlineElapsed,
+}
+
+impl HeptaPaperTerminalReason {
+    pub(crate) fn parse_for_outcome(
+        outcome: HeptaPaperTerminalOutcome,
+        value: &str,
+    ) -> Option<Self> {
+        match (outcome, value) {
+            (HeptaPaperTerminalOutcome::Failed, "quality_gate_failed") => {
+                Some(Self::QualityGateFailed)
+            }
+            (HeptaPaperTerminalOutcome::Failed, "preregistered_result_failed") => {
+                Some(Self::PreregisteredResultFailed)
+            }
+            (HeptaPaperTerminalOutcome::Failed, "integrity_failure") => {
+                Some(Self::IntegrityFailure)
+            }
+            (HeptaPaperTerminalOutcome::Abandoned, "team_withdrawal") => Some(Self::TeamWithdrawal),
+            (HeptaPaperTerminalOutcome::Abandoned, "resource_unavailable") => {
+                Some(Self::ResourceUnavailable)
+            }
+            (HeptaPaperTerminalOutcome::Abandoned, "challenge_infeasible") => {
+                Some(Self::ChallengeInfeasible)
+            }
+            (HeptaPaperTerminalOutcome::Expired, "challenge_grace_deadline_elapsed") => {
+                Some(Self::ChallengeGraceDeadlineElapsed)
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::QualityGateFailed => "quality_gate_failed",
+            Self::PreregisteredResultFailed => "preregistered_result_failed",
+            Self::IntegrityFailure => "integrity_failure",
+            Self::TeamWithdrawal => "team_withdrawal",
+            Self::ResourceUnavailable => "resource_unavailable",
+            Self::ChallengeInfeasible => "challenge_infeasible",
+            Self::ChallengeGraceDeadlineElapsed => "challenge_grace_deadline_elapsed",
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PaperRoomEnvelopeV3 {
+    paper: Value,
+    team: Value,
+    author_raid_progress: Value,
+    team_member_acceptances: Vec<Value>,
+    work_items: Vec<Value>,
+    paper_revisions: Vec<Value>,
+    authorship_consents: Vec<Value>,
+    joint_submission: Option<Value>,
+    member_research_sessions: Vec<Value>,
+    artifact_manifests: Vec<Value>,
+    revision_artifact_bindings: Vec<Value>,
+    evidence_cards: Vec<Value>,
+    citations: Vec<Value>,
+    experiment_plans: Vec<Value>,
+    runs: Vec<Value>,
+    figures: Vec<Value>,
+    claims: Vec<Value>,
+    section_heads: Vec<Value>,
+    leases: Vec<Value>,
+    proposals: Vec<Value>,
+    decisions: Vec<Value>,
+    section_revisions: Vec<Value>,
+    section_reviews: Vec<Value>,
+    section_merges: Vec<Value>,
+    last_event_cursor: u64,
+}
+
+impl PaperRoomEnvelopeV3 {
+    fn consume_for_strict_shape(self) {
+        let Self {
+            paper,
+            team,
+            author_raid_progress,
+            team_member_acceptances,
+            work_items,
+            paper_revisions,
+            authorship_consents,
+            joint_submission,
+            member_research_sessions,
+            artifact_manifests,
+            revision_artifact_bindings,
+            evidence_cards,
+            citations,
+            experiment_plans,
+            runs,
+            figures,
+            claims,
+            section_heads,
+            leases,
+            proposals,
+            decisions,
+            section_revisions,
+            section_reviews,
+            section_merges,
+            last_event_cursor,
+        } = self;
+        drop((
+            paper,
+            team,
+            author_raid_progress,
+            team_member_acceptances,
+            work_items,
+            paper_revisions,
+            authorship_consents,
+            joint_submission,
+            member_research_sessions,
+            artifact_manifests,
+            revision_artifact_bindings,
+            evidence_cards,
+            citations,
+            experiment_plans,
+            runs,
+            figures,
+            claims,
+            section_heads,
+            leases,
+            proposals,
+            decisions,
+            section_revisions,
+            section_reviews,
+            section_merges,
+            last_event_cursor,
+        ));
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum SealedConsumerFinalityStatusV2 {
+    PendingFinality,
+    VerifiedFinality,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SealedConsumerFinalityV2 {
+    schema: String,
+    status: SealedConsumerFinalityStatusV2,
+    effective_evaluation_id: Option<Uuid>,
+    effective_reproduction_id: Option<Uuid>,
+    effective_appeal_resolution_id: Option<Uuid>,
+    ranking_eligible: bool,
+    reward_eligible: bool,
+    score_eligible: bool,
+    economic_eligible: bool,
+    verified_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+enum SealedReviewAssignmentSlotV1 {
+    Evaluator,
+    #[serde(rename = "reviewer_1")]
+    Reviewer1,
+    #[serde(rename = "reviewer_2")]
+    Reviewer2,
+    Reproducer,
+}
+
+impl SealedReviewAssignmentSlotV1 {
+    fn rank(self) -> u8 {
+        match self {
+            Self::Evaluator => 0,
+            Self::Reviewer1 => 1,
+            Self::Reviewer2 => 2,
+            Self::Reproducer => 3,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum SealedReviewAssignmentStatusV1 {
+    Claimed,
+    Pinned,
+    Consumed,
+    Expired,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SealedReviewAssignmentV1 {
+    schema: String,
+    assignment_id: Uuid,
+    paper_project_id: Uuid,
+    submission_id: Uuid,
+    player_id: Uuid,
+    review_round: u64,
+    slot: SealedReviewAssignmentSlotV1,
+    pinned_evaluation_id: Option<Uuid>,
+    status: SealedReviewAssignmentStatusV1,
+    version: u64,
+    claimed_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum SealedEvaluationDraftStatusV1 {
+    Open,
+    Finalized,
+    Expired,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SealedEvaluationDraftV1 {
+    schema: String,
+    evaluation_id: Uuid,
+    paper_project_id: Uuid,
+    submission_id: Uuid,
+    review_round: u64,
+    supersedes_evaluation_id: Option<Uuid>,
+    release_candidate_hash: String,
+    paper_bundle_hash: String,
+    tolerance_policy: Value,
+    tolerance_policy_hash: String,
+    reference_metrics_micros: BTreeMap<String, i64>,
+    paper_score: Value,
+    evaluator_player_id: Uuid,
+    evaluator_signing_key_id: String,
+    evaluator_signing_public_key: String,
+    evaluator_signing_public_key_hash: String,
+    evaluator_coi_attestation_hash: String,
+    evaluator_signed_at_unix: i64,
+    evaluator_signature: String,
+    evaluation_signing_hash: String,
+    draft_hash: String,
+    status: SealedEvaluationDraftStatusV1,
+    version: u64,
+    finalized_evaluation_id: Option<Uuid>,
+    created_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    finalized_at: Option<DateTime<Utc>>,
+    expired_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SealedStatisticalEvidenceV1 {
+    interval_overlap_bps: u16,
+    effect_delta_micros: i64,
+    p_value_micros: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SealedReproductionRuleResultV1 {
+    rule_key: String,
+    passed: bool,
+    detail_hash: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum SealedReproductionStatusV1 {
+    Reproduced,
+    FailedTolerance,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SealedPaperReproductionV1 {
+    schema: String,
+    reproduction_id: Uuid,
+    evaluation_id: Uuid,
+    paper_project_id: Uuid,
+    release_candidate_hash: String,
+    paper_bundle_hash: String,
+    tolerance_policy_hash: String,
+    observed_metrics_micros: BTreeMap<String, i64>,
+    statistical_evidence: BTreeMap<String, SealedStatisticalEvidenceV1>,
+    seed_set_hash: String,
+    environment_hash: String,
+    run_manifest_hash: String,
+    supersedes_reproduction_id: Option<Uuid>,
+    reproducer_player_id: Uuid,
+    signing_key_id: String,
+    signing_public_key: String,
+    signing_public_key_hash: String,
+    coi_attestation_hash: String,
+    signed_at_unix: i64,
+    signature: String,
+    rule_results: Vec<SealedReproductionRuleResultV1>,
+    status: SealedReproductionStatusV1,
+    report_hash: String,
+    version: u64,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PaperReviewStateEnvelopeV1 {
+    finality: SealedConsumerFinalityV2,
+    assignments: Vec<SealedReviewAssignmentV1>,
+    evaluation_drafts: Vec<SealedEvaluationDraftV1>,
+    contribution_ledgers: Vec<Value>,
+    evaluations: Vec<Value>,
+    reproductions: Vec<SealedPaperReproductionV1>,
+    appeals: Vec<Value>,
+    resolutions: Vec<Value>,
+    raid_scores: Vec<Value>,
+}
+
+#[derive(Clone)]
+struct SealedEvaluationCrosslinkV1 {
+    submission_id: Uuid,
+    version: u64,
+    release_candidate_hash: String,
+    paper_bundle_hash: String,
+    tolerance_policy_hash: String,
+    evaluator_player_id: Uuid,
+    reviewer_player_ids: HashSet<Uuid>,
+    tolerance_rule_keys: Vec<String>,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Clone)]
+struct SealedEvaluationDraftCrosslinkV1 {
+    submission_id: Uuid,
+    review_round: u64,
+    evaluator_player_id: Uuid,
+    status: SealedEvaluationDraftStatusV1,
+    created_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+fn sealed_digest(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
+fn sealed_text(value: &str) -> bool {
+    !value.is_empty() && value.chars().count() <= 512 && !value.as_bytes().contains(&0)
+}
+
+fn sealed_canonical_base64(value: &str, expected_len: usize) -> bool {
+    BASE64
+        .decode(value)
+        .ok()
+        .is_some_and(|decoded| decoded.len() == expected_len && BASE64.encode(decoded) == value)
+}
+
+fn sealed_public_key(public_key: &str, public_key_hash: &str) -> bool {
+    BASE64.decode(public_key).ok().is_some_and(|decoded| {
+        decoded.len() == 32
+            && BASE64.encode(&decoded) == public_key
+            && sha256_digest(&decoded) == public_key_hash
+    })
+}
+
+fn sealed_uuid(record: &Value, field: &str, expected: Uuid) -> bool {
+    !expected.is_nil()
+        && record.get(field).and_then(Value::as_str) == Some(expected.to_string().as_str())
+}
+
+fn sealed_optional_uuid(record: &Value, field: &str, expected: Option<Uuid>) -> bool {
+    match (record.get(field), expected) {
+        (Some(Value::Null), None) => true,
+        (Some(Value::String(value)), Some(expected)) => {
+            !expected.is_nil() && value == &expected.to_string()
+        }
+        _ => false,
+    }
+}
+
+fn sealed_timestamp(record: &Value, field: &str, expected: DateTime<Utc>) -> bool {
+    record.get(field).and_then(Value::as_str)
+        == Some(
+            expected
+                .to_rfc3339_opts(SecondsFormat::AutoSi, true)
+                .as_str(),
+        )
+}
+
+fn sealed_optional_timestamp(record: &Value, field: &str, expected: Option<DateTime<Utc>>) -> bool {
+    match (record.get(field), expected) {
+        (Some(Value::Null), None) => true,
+        (Some(Value::String(value)), Some(expected)) => {
+            value == &expected.to_rfc3339_opts(SecondsFormat::AutoSi, true)
+        }
+        _ => false,
+    }
+}
+
+fn sealed_tolerance_rule_keys(evaluation: &Value) -> Option<Vec<String>> {
+    let reference = evaluation.get("reference_metrics_micros")?.as_object()?;
+    if reference.is_empty() || reference.len() > 256 {
+        return None;
+    }
+    let rules = evaluation
+        .get("tolerance_policy")?
+        .get("rules")?
+        .as_array()?;
+    if rules.is_empty() || rules.len() > 128 {
+        return None;
+    }
+    let mut seen = HashSet::with_capacity(rules.len());
+    let mut keys = Vec::with_capacity(rules.len());
+    for rule in rules {
+        let rule = rule.as_object()?;
+        let key = match rule.get("kind")?.as_str()? {
+            "absolute" => format!("absolute:{}", rule.get("metric")?.as_str()?),
+            "relative" => format!("relative:{}", rule.get("metric")?.as_str()?),
+            "statistical" => format!("statistical:{}", rule.get("metric")?.as_str()?),
+            "seed" => format!("seed:{}", rule.get("expected_seed_set_hash")?.as_str()?),
+            _ => return None,
+        };
+        if !sealed_text(&key) || !seen.insert(key.clone()) {
+            return None;
+        }
+        keys.push(key);
+    }
+    Some(keys)
+}
+
+fn sealed_evaluation_crosslinks(
+    records: &[Value],
+    paper_id: Uuid,
+) -> Option<HashMap<Uuid, SealedEvaluationCrosslinkV1>> {
+    let paper_id_text = paper_id.to_string();
+    let mut result = HashMap::with_capacity(records.len());
+    for record in records {
+        if record.get("schema")?.as_str()? != "hepta.paper_raid.evaluation.v1"
+            || record.get("paper_project_id")?.as_str()? != paper_id_text
+        {
+            return None;
+        }
+        let evaluation_id = Uuid::parse_str(record.get("evaluation_id")?.as_str()?).ok()?;
+        let submission_id = Uuid::parse_str(record.get("submission_id")?.as_str()?).ok()?;
+        let evaluator_player_id =
+            Uuid::parse_str(record.get("evaluator_player_id")?.as_str()?).ok()?;
+        if !sealed_uuid(record, "evaluation_id", evaluation_id)
+            || !sealed_uuid(record, "submission_id", submission_id)
+            || !sealed_uuid(record, "evaluator_player_id", evaluator_player_id)
+        {
+            return None;
+        }
+        let version = record.get("version")?.as_u64()?;
+        let release_candidate_hash = record.get("release_candidate_hash")?.as_str()?;
+        let paper_bundle_hash = record.get("paper_bundle_hash")?.as_str()?;
+        let tolerance_policy_hash = record.get("tolerance_policy_hash")?.as_str()?;
+        let created_at = DateTime::parse_from_rfc3339(record.get("created_at")?.as_str()?)
+            .ok()?
+            .with_timezone(&Utc);
+        if version == 0
+            || !sealed_digest(release_candidate_hash)
+            || !sealed_digest(paper_bundle_hash)
+            || !sealed_digest(tolerance_policy_hash)
+            || !sealed_timestamp(record, "created_at", created_at)
+        {
+            return None;
+        }
+        let reviewers = record.get("reviewer_attestations")?.as_array()?;
+        if reviewers.len() != 2 {
+            return None;
+        }
+        let reviewer_player_ids = reviewers
+            .iter()
+            .map(|review| {
+                let reviewer = Uuid::parse_str(review.get("reviewer_player_id")?.as_str()?).ok()?;
+                sealed_uuid(review, "reviewer_player_id", reviewer).then_some(reviewer)
+            })
+            .collect::<Option<HashSet<_>>>()?;
+        if reviewer_player_ids.len() != 2 || reviewer_player_ids.contains(&evaluator_player_id) {
+            return None;
+        }
+        let crosslink = SealedEvaluationCrosslinkV1 {
+            submission_id,
+            version,
+            release_candidate_hash: release_candidate_hash.into(),
+            paper_bundle_hash: paper_bundle_hash.into(),
+            tolerance_policy_hash: tolerance_policy_hash.into(),
+            evaluator_player_id,
+            reviewer_player_ids,
+            tolerance_rule_keys: sealed_tolerance_rule_keys(record)?,
+            created_at,
+        };
+        if result.insert(evaluation_id, crosslink).is_some() {
+            return None;
+        }
+    }
+    Some(result)
+}
+
+fn sealed_evaluation_draft_hash(record: &Value, schema: &str) -> Option<String> {
+    let fields = match schema {
+        "hepta.paper_raid.evaluation_draft.v1" => &[
+            "schema",
+            "evaluation_id",
+            "paper_project_id",
+            "submission_id",
+            "review_round",
+            "supersedes_evaluation_id",
+            "release_candidate_hash",
+            "paper_bundle_hash",
+            "tolerance_policy",
+            "tolerance_policy_hash",
+            "reference_metrics_micros",
+            "paper_score",
+            "evaluator_player_id",
+            "evaluator_signing_key_id",
+            "evaluator_signing_public_key",
+            "evaluator_signing_public_key_hash",
+            "evaluator_coi_attestation_hash",
+            "evaluator_signed_at_unix",
+            "evaluator_signature",
+            "evaluation_signing_hash",
+        ][..],
+        "hepta.paper_raid.evaluation_draft.v2" => &[
+            "schema",
+            "evaluation_id",
+            "paper_project_id",
+            "submission_id",
+            "review_round",
+            "supersedes_evaluation_id",
+            "release_candidate_hash",
+            "paper_bundle_hash",
+            "tolerance_policy",
+            "tolerance_policy_hash",
+            "reference_metrics_micros",
+            "paper_score",
+            "evaluator_player_id",
+            "evaluator_signing_key_id",
+            "evaluator_signing_public_key",
+            "evaluator_signing_public_key_hash",
+            "evaluator_coi_attestation_hash",
+            "evaluator_signed_at_unix",
+            "evaluator_signature",
+            "evaluation_signing_hash",
+            "expires_at",
+        ][..],
+        _ => return None,
+    };
+    let source = record.as_object()?;
+    let mut immutable = serde_json::Map::with_capacity(fields.len());
+    for field in fields {
+        immutable.insert((*field).into(), source.get(*field)?.clone());
+    }
+    Some(sha256_digest(
+        &canonical_json_bytes(&Value::Object(immutable)).ok()?,
+    ))
+}
+
+fn sealed_evaluation_draft_crosslinks(
+    raw: &[Value],
+    drafts: &[SealedEvaluationDraftV1],
+    paper_id: Uuid,
+    evaluations: &HashMap<Uuid, SealedEvaluationCrosslinkV1>,
+) -> Option<HashMap<Uuid, SealedEvaluationDraftCrosslinkV1>> {
+    if raw.len() != drafts.len() || drafts.len() > 4_096 {
+        return None;
+    }
+    let mut result = HashMap::with_capacity(drafts.len());
+    let mut open_rounds = HashSet::with_capacity(drafts.len());
+    let mut previous_id = None;
+    for (raw, draft) in raw.iter().zip(drafts) {
+        if raw.as_object()?.len() != 29
+            || !matches!(
+                draft.schema.as_str(),
+                "hepta.paper_raid.evaluation_draft.v1" | "hepta.paper_raid.evaluation_draft.v2"
+            )
+            || draft.paper_project_id != paper_id
+            || draft.review_round == 0
+            || draft.created_at >= draft.expires_at
+            || draft.evaluator_signed_at_unix < 0
+            || draft.reference_metrics_micros.is_empty()
+            || draft.reference_metrics_micros.len() > 256
+            || draft
+                .reference_metrics_micros
+                .keys()
+                .any(|key| !sealed_text(key))
+            || !sealed_uuid(raw, "evaluation_id", draft.evaluation_id)
+            || !sealed_uuid(raw, "paper_project_id", draft.paper_project_id)
+            || !sealed_uuid(raw, "submission_id", draft.submission_id)
+            || !sealed_optional_uuid(
+                raw,
+                "supersedes_evaluation_id",
+                draft.supersedes_evaluation_id,
+            )
+            || !sealed_uuid(raw, "evaluator_player_id", draft.evaluator_player_id)
+            || !sealed_optional_uuid(
+                raw,
+                "finalized_evaluation_id",
+                draft.finalized_evaluation_id,
+            )
+            || !sealed_timestamp(raw, "created_at", draft.created_at)
+            || !sealed_timestamp(raw, "expires_at", draft.expires_at)
+            || !sealed_timestamp(raw, "updated_at", draft.updated_at)
+            || !sealed_optional_timestamp(raw, "finalized_at", draft.finalized_at)
+            || !sealed_optional_timestamp(raw, "expired_at", draft.expired_at)
+            || previous_id.is_some_and(|previous| previous >= draft.evaluation_id)
+            || sealed_tolerance_rule_keys(raw).is_none()
+        {
+            return None;
+        }
+        previous_id = Some(draft.evaluation_id);
+        for digest in [
+            &draft.release_candidate_hash,
+            &draft.paper_bundle_hash,
+            &draft.tolerance_policy_hash,
+            &draft.evaluator_signing_public_key_hash,
+            &draft.evaluator_coi_attestation_hash,
+            &draft.evaluation_signing_hash,
+            &draft.draft_hash,
+        ] {
+            if !sealed_digest(digest) {
+                return None;
+            }
+        }
+        if !sealed_text(&draft.evaluator_signing_key_id)
+            || !sealed_public_key(
+                &draft.evaluator_signing_public_key,
+                &draft.evaluator_signing_public_key_hash,
+            )
+            || !sealed_canonical_base64(&draft.evaluator_signature, 64)
+            || sha256_digest(&canonical_json_bytes(&draft.tolerance_policy).ok()?)
+                != draft.tolerance_policy_hash
+            || sealed_evaluation_draft_hash(raw, &draft.schema)? != draft.draft_hash
+        {
+            return None;
+        }
+        let paper_score = draft.paper_score.as_object()?;
+        if paper_score.len() != 9
+            || paper_score.get("schema")?.as_str()? != "hepta.paper_raid.paper_score.v1"
+            || !sealed_uuid(&draft.paper_score, "evaluation_id", draft.evaluation_id)
+            || !sealed_uuid(
+                &draft.paper_score,
+                "paper_project_id",
+                draft.paper_project_id,
+            )
+            || !sealed_timestamp(&draft.paper_score, "created_at", draft.created_at)
+            || !sealed_digest(paper_score.get("score_hash")?.as_str()?)
+        {
+            return None;
+        }
+        let lifecycle_valid = match draft.status {
+            SealedEvaluationDraftStatusV1::Open => {
+                draft.version == 1
+                    && draft.finalized_evaluation_id.is_none()
+                    && draft.updated_at == draft.created_at
+                    && draft.finalized_at.is_none()
+                    && draft.expired_at.is_none()
+                    && !evaluations.contains_key(&draft.evaluation_id)
+                    && open_rounds.insert((draft.submission_id, draft.review_round))
+            }
+            SealedEvaluationDraftStatusV1::Expired => {
+                draft.version == 2
+                    && draft.finalized_evaluation_id.is_none()
+                    && draft.updated_at == draft.expires_at
+                    && draft.finalized_at.is_none()
+                    && draft.expired_at == Some(draft.expires_at)
+                    && !evaluations.contains_key(&draft.evaluation_id)
+            }
+            // Finalized drafts are deliberately omitted from review-state;
+            // consumed assignments remain linked to finalized evaluations.
+            SealedEvaluationDraftStatusV1::Finalized => false,
+        };
+        if !lifecycle_valid
+            || result
+                .insert(
+                    draft.evaluation_id,
+                    SealedEvaluationDraftCrosslinkV1 {
+                        submission_id: draft.submission_id,
+                        review_round: draft.review_round,
+                        evaluator_player_id: draft.evaluator_player_id,
+                        status: draft.status,
+                        created_at: draft.created_at,
+                        expires_at: draft.expires_at,
+                        updated_at: draft.updated_at,
+                    },
+                )
+                .is_some()
+        {
+            return None;
+        }
+    }
+    Some(result)
+}
+
+fn sealed_review_assignments(
+    raw: &[Value],
+    assignments: &[SealedReviewAssignmentV1],
+    paper_id: Uuid,
+    evaluations: &HashMap<Uuid, SealedEvaluationCrosslinkV1>,
+    evaluation_drafts: &HashMap<Uuid, SealedEvaluationDraftCrosslinkV1>,
+) -> Option<()> {
+    if raw.len() != assignments.len() || assignments.len() > 16_384 {
+        return None;
+    }
+    let mut ids = HashSet::with_capacity(assignments.len());
+    let mut live_slots = HashSet::with_capacity(assignments.len());
+    let mut live_players = HashSet::with_capacity(assignments.len());
+    let mut draft_evaluators = HashMap::<Uuid, usize>::new();
+    let mut previous = None;
+    let mut consumed = HashMap::<Uuid, Vec<&SealedReviewAssignmentV1>>::new();
+    for (raw, assignment) in raw.iter().zip(assignments) {
+        if raw.as_object()?.len() != 13
+            || assignment.schema != "hepta.paper_raid.review_assignment.v1"
+            || assignment.paper_project_id != paper_id
+            || assignment.review_round == 0
+            || assignment.claimed_at >= assignment.expires_at
+            || assignment.updated_at < assignment.claimed_at
+            || !sealed_uuid(raw, "assignment_id", assignment.assignment_id)
+            || !sealed_uuid(raw, "paper_project_id", assignment.paper_project_id)
+            || !sealed_uuid(raw, "submission_id", assignment.submission_id)
+            || !sealed_uuid(raw, "player_id", assignment.player_id)
+            || !sealed_optional_uuid(raw, "pinned_evaluation_id", assignment.pinned_evaluation_id)
+            || !sealed_timestamp(raw, "claimed_at", assignment.claimed_at)
+            || !sealed_timestamp(raw, "expires_at", assignment.expires_at)
+            || !sealed_timestamp(raw, "updated_at", assignment.updated_at)
+            || !ids.insert(assignment.assignment_id)
+        {
+            return None;
+        }
+        let ordering = (
+            assignment.review_round,
+            assignment.slot.rank(),
+            assignment.assignment_id,
+        );
+        if previous.is_some_and(|previous| previous >= ordering) {
+            return None;
+        }
+        previous = Some(ordering);
+        let lifecycle_valid = match assignment.status {
+            SealedReviewAssignmentStatusV1::Claimed => {
+                assignment.version == 1
+                    && assignment.pinned_evaluation_id.is_none()
+                    && assignment.updated_at == assignment.claimed_at
+            }
+            SealedReviewAssignmentStatusV1::Pinned => {
+                assignment.version == 2
+                    && assignment.pinned_evaluation_id.is_some()
+                    && assignment.updated_at < assignment.expires_at
+            }
+            SealedReviewAssignmentStatusV1::Consumed => {
+                assignment.version == 3 && assignment.pinned_evaluation_id.is_some()
+            }
+            SealedReviewAssignmentStatusV1::Expired => match assignment.pinned_evaluation_id {
+                None => assignment.version == 2 && assignment.updated_at >= assignment.expires_at,
+                Some(_) => assignment.version == 3,
+            },
+        };
+        if !lifecycle_valid
+            || (assignment.pinned_evaluation_id.is_some()
+                && assignment.slot == SealedReviewAssignmentSlotV1::Reproducer)
+        {
+            return None;
+        }
+        if matches!(
+            assignment.status,
+            SealedReviewAssignmentStatusV1::Claimed | SealedReviewAssignmentStatusV1::Pinned
+        ) && (!live_slots.insert((assignment.review_round, assignment.slot))
+            || !live_players.insert((assignment.review_round, assignment.player_id)))
+        {
+            return None;
+        }
+        if let Some(evaluation_id) = assignment.pinned_evaluation_id {
+            if assignment.status == SealedReviewAssignmentStatusV1::Consumed {
+                let evaluation = evaluations.get(&evaluation_id)?;
+                if assignment.submission_id != evaluation.submission_id
+                    || assignment.review_round != evaluation.version
+                {
+                    return None;
+                }
+                if assignment.updated_at != evaluation.created_at {
+                    return None;
+                }
+                consumed.entry(evaluation_id).or_default().push(assignment);
+            } else {
+                let draft = evaluation_drafts.get(&evaluation_id)?;
+                let expected_status = match assignment.status {
+                    SealedReviewAssignmentStatusV1::Pinned => SealedEvaluationDraftStatusV1::Open,
+                    SealedReviewAssignmentStatusV1::Expired => {
+                        SealedEvaluationDraftStatusV1::Expired
+                    }
+                    _ => return None,
+                };
+                if draft.status != expected_status
+                    || assignment.submission_id != draft.submission_id
+                    || assignment.review_round != draft.review_round
+                    || assignment.claimed_at >= draft.expires_at
+                    || (assignment.slot == SealedReviewAssignmentSlotV1::Evaluator
+                        && assignment.claimed_at > draft.created_at)
+                    || (assignment.status == SealedReviewAssignmentStatusV1::Pinned
+                        && (assignment.updated_at < draft.created_at
+                            || assignment.updated_at >= draft.expires_at))
+                    || (assignment.status == SealedReviewAssignmentStatusV1::Expired
+                        && assignment.updated_at != draft.updated_at)
+                {
+                    return None;
+                }
+                if assignment.slot == SealedReviewAssignmentSlotV1::Evaluator {
+                    if assignment.player_id != draft.evaluator_player_id {
+                        return None;
+                    }
+                    *draft_evaluators.entry(evaluation_id).or_default() += 1;
+                }
+            }
+        }
+    }
+    if evaluation_drafts
+        .keys()
+        .any(|evaluation_id| draft_evaluators.get(evaluation_id) != Some(&1))
+    {
+        return None;
+    }
+    for (evaluation_id, evaluation) in evaluations {
+        let panel = consumed.get(evaluation_id)?;
+        if panel.len() != 3 {
+            return None;
+        }
+        let evaluator = panel
+            .iter()
+            .filter(|assignment| assignment.slot == SealedReviewAssignmentSlotV1::Evaluator)
+            .map(|assignment| assignment.player_id)
+            .collect::<Vec<_>>();
+        let reviewers = panel
+            .iter()
+            .filter(|assignment| {
+                matches!(
+                    assignment.slot,
+                    SealedReviewAssignmentSlotV1::Reviewer1
+                        | SealedReviewAssignmentSlotV1::Reviewer2
+                )
+            })
+            .map(|assignment| assignment.player_id)
+            .collect::<HashSet<_>>();
+        let slots = panel
+            .iter()
+            .map(|assignment| assignment.slot)
+            .collect::<HashSet<_>>();
+        if evaluator.as_slice() != [evaluation.evaluator_player_id]
+            || reviewers != evaluation.reviewer_player_ids
+            || slots
+                != HashSet::from([
+                    SealedReviewAssignmentSlotV1::Evaluator,
+                    SealedReviewAssignmentSlotV1::Reviewer1,
+                    SealedReviewAssignmentSlotV1::Reviewer2,
+                ])
+        {
+            return None;
+        }
+    }
+    Some(())
+}
+
+fn sealed_reproductions(
+    raw: &[Value],
+    reproductions: &[SealedPaperReproductionV1],
+    paper_id: Uuid,
+    evaluations: &HashMap<Uuid, SealedEvaluationCrosslinkV1>,
+    assignments: &[SealedReviewAssignmentV1],
+) -> Option<()> {
+    if raw.len() != reproductions.len() || reproductions.len() > 16_384 {
+        return None;
+    }
+    let mut ids = HashSet::with_capacity(reproductions.len());
+    let mut previous_id = None;
+    let mut children = HashMap::with_capacity(reproductions.len());
+    for (raw, reproduction) in raw.iter().zip(reproductions) {
+        if raw.as_object()?.len() != 25
+            || reproduction.schema != PAPER_REPRODUCTION_V1
+            || reproduction.paper_project_id != paper_id
+            || reproduction.version == 0
+            || reproduction.signed_at_unix < 0
+            || reproduction.observed_metrics_micros.len() > 256
+            || reproduction.statistical_evidence.len() > 256
+            || !sealed_uuid(raw, "reproduction_id", reproduction.reproduction_id)
+            || !sealed_uuid(raw, "evaluation_id", reproduction.evaluation_id)
+            || !sealed_uuid(raw, "paper_project_id", reproduction.paper_project_id)
+            || !sealed_optional_uuid(
+                raw,
+                "supersedes_reproduction_id",
+                reproduction.supersedes_reproduction_id,
+            )
+            || !sealed_uuid(
+                raw,
+                "reproducer_player_id",
+                reproduction.reproducer_player_id,
+            )
+            || !sealed_timestamp(raw, "created_at", reproduction.created_at)
+            || !ids.insert(reproduction.reproduction_id)
+            || previous_id.is_some_and(|previous| previous >= reproduction.reproduction_id)
+        {
+            return None;
+        }
+        previous_id = Some(reproduction.reproduction_id);
+        for digest in [
+            &reproduction.release_candidate_hash,
+            &reproduction.paper_bundle_hash,
+            &reproduction.tolerance_policy_hash,
+            &reproduction.seed_set_hash,
+            &reproduction.environment_hash,
+            &reproduction.run_manifest_hash,
+            &reproduction.signing_public_key_hash,
+            &reproduction.coi_attestation_hash,
+            &reproduction.report_hash,
+        ] {
+            if !sealed_digest(digest) {
+                return None;
+            }
+        }
+        if !sealed_text(&reproduction.signing_key_id)
+            || !sealed_public_key(
+                &reproduction.signing_public_key,
+                &reproduction.signing_public_key_hash,
+            )
+            || !sealed_canonical_base64(&reproduction.signature, 64)
+            || reproduction
+                .observed_metrics_micros
+                .keys()
+                .any(|key| !sealed_text(key))
+            || reproduction
+                .statistical_evidence
+                .iter()
+                .any(|(key, evidence)| {
+                    !sealed_text(key)
+                        || evidence.interval_overlap_bps > 10_000
+                        || evidence.p_value_micros > 1_000_000
+                })
+        {
+            return None;
+        }
+        let evaluation = evaluations.get(&reproduction.evaluation_id)?;
+        if reproduction.release_candidate_hash != evaluation.release_candidate_hash
+            || reproduction.paper_bundle_hash != evaluation.paper_bundle_hash
+            || reproduction.tolerance_policy_hash != evaluation.tolerance_policy_hash
+            || reproduction.created_at < evaluation.created_at
+            || reproduction.reproducer_player_id == evaluation.evaluator_player_id
+            || evaluation
+                .reviewer_player_ids
+                .contains(&reproduction.reproducer_player_id)
+        {
+            return None;
+        }
+        let result_keys = reproduction
+            .rule_results
+            .iter()
+            .map(|result| {
+                (sealed_text(&result.rule_key) && sealed_digest(&result.detail_hash))
+                    .then_some(result.rule_key.clone())
+            })
+            .collect::<Option<Vec<_>>>()?;
+        if result_keys != evaluation.tolerance_rule_keys
+            || (reproduction.status == SealedReproductionStatusV1::Reproduced)
+                != reproduction.rule_results.iter().all(|result| result.passed)
+            || !assignments.iter().any(|assignment| {
+                assignment.paper_project_id == paper_id
+                    && assignment.submission_id == evaluation.submission_id
+                    && assignment.review_round == evaluation.version
+                    && assignment.slot == SealedReviewAssignmentSlotV1::Reproducer
+                    && assignment.player_id == reproduction.reproducer_player_id
+                    && assignment.claimed_at <= reproduction.created_at
+                    && reproduction.created_at < assignment.expires_at
+                    && assignment.pinned_evaluation_id.is_none()
+                    && matches!(
+                        assignment.status,
+                        SealedReviewAssignmentStatusV1::Claimed
+                            | SealedReviewAssignmentStatusV1::Expired
+                    )
+            })
+        {
+            return None;
+        }
+        let observed_hash =
+            sha256_digest(&canonical_json_bytes(&reproduction.observed_metrics_micros).ok()?);
+        let statistical_hash =
+            sha256_digest(&canonical_json_bytes(&reproduction.statistical_evidence).ok()?);
+        let signing = PaperReproductionSigningV1 {
+            schema: PAPER_REPRODUCTION_V1.into(),
+            reproduction_id: reproduction.reproduction_id,
+            evaluation_id: reproduction.evaluation_id,
+            paper_project_id: reproduction.paper_project_id,
+            release_candidate_hash: reproduction.release_candidate_hash.clone(),
+            paper_bundle_hash: reproduction.paper_bundle_hash.clone(),
+            tolerance_policy_hash: reproduction.tolerance_policy_hash.clone(),
+            observed_metrics_hash: observed_hash,
+            statistical_evidence_hash: statistical_hash,
+            seed_set_hash: reproduction.seed_set_hash.clone(),
+            environment_hash: reproduction.environment_hash.clone(),
+            run_manifest_hash: reproduction.run_manifest_hash.clone(),
+            supersedes_reproduction_id: reproduction.supersedes_reproduction_id,
+            reproducer_player_id: reproduction.reproducer_player_id,
+            signing_key_id: reproduction.signing_key_id.clone(),
+            signing_public_key_hash: reproduction.signing_public_key_hash.clone(),
+            coi_attestation_hash: reproduction.coi_attestation_hash.clone(),
+            signed_at_unix: reproduction.signed_at_unix,
+        };
+        let signing_hash = sha256_digest(&paper_reproduction_signing_bytes(&signing).ok()?);
+        let expected_report_hash = sha256_digest(
+            &canonical_json_bytes(&serde_json::json!({
+                "signing_hash":signing_hash,
+                "rule_results":&reproduction.rule_results,
+                "status":reproduction.status,
+            }))
+            .ok()?,
+        );
+        if reproduction.report_hash != expected_report_hash {
+            return None;
+        }
+        if let Some(parent) = reproduction.supersedes_reproduction_id {
+            if children
+                .insert(parent, reproduction.reproduction_id)
+                .is_some()
+            {
+                return None;
+            }
+        }
+    }
+    let by_id = reproductions
+        .iter()
+        .map(|record| (record.reproduction_id, record))
+        .collect::<HashMap<_, _>>();
+    let mut roots = HashMap::<(Uuid, Uuid), usize>::new();
+    for reproduction in reproductions {
+        match reproduction.supersedes_reproduction_id {
+            None if reproduction.version != 1 => return None,
+            Some(parent_id) => {
+                let parent = by_id.get(&parent_id)?;
+                if parent.evaluation_id != reproduction.evaluation_id
+                    || parent.reproducer_player_id != reproduction.reproducer_player_id
+                    || parent.version.checked_add(1)? != reproduction.version
+                    || parent.created_at > reproduction.created_at
+                {
+                    return None;
+                }
+            }
+            None => {
+                *roots
+                    .entry((
+                        reproduction.evaluation_id,
+                        reproduction.reproducer_player_id,
+                    ))
+                    .or_default() += 1;
+            }
+        }
+    }
+    if roots.values().any(|count| *count != 1) {
+        return None;
+    }
+    Some(())
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AuthenticatedPaperRoom {
+    paper_id: Uuid,
+    body: Value,
+}
+
+impl AuthenticatedPaperRoom {
+    fn seal(route: &Route, paper_id: Uuid, body: Value) -> Result<Self, AppError> {
+        let expected_path = format!("/v2/hepta/papers/{paper_id}/room");
+        if route.method != Method::GET
+            || route.path != expected_path
+            || route.query.is_some()
+            || route.operation != "get_paper_room_v3"
+        {
+            return Err(AppError::Internal);
+        }
+        let envelope: PaperRoomEnvelopeV3 =
+            serde_json::from_value(body.clone()).map_err(|_| AppError::Upstream)?;
+        let encoded_paper_id = envelope
+            .paper
+            .get("paper_project_id")
+            .and_then(Value::as_str)
+            .ok_or(AppError::Upstream)?;
+        if encoded_paper_id != paper_id.to_string() {
+            return Err(AppError::Upstream);
+        }
+        envelope.consume_for_strict_shape();
+        Ok(Self { paper_id, body })
+    }
+
+    pub(crate) fn paper_id(&self) -> Uuid {
+        self.paper_id
+    }
+
+    pub(crate) fn value(&self) -> &Value {
+        &self.body
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_only_seal(paper_id: Uuid, body: Value) -> Result<Self, AppError> {
+        Self::seal(
+            &Route {
+                method: Method::GET,
+                path: format!("/v2/hepta/papers/{paper_id}/room"),
+                query: None,
+                operation: "get_paper_room_v3",
+            },
+            paper_id,
+            body,
+        )
+    }
+}
+
+impl std::ops::Deref for AuthenticatedPaperRoom {
+    type Target = Value;
+
+    fn deref(&self) -> &Self::Target {
+        self.value()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AuthenticatedPaperReviewState {
+    paper_id: Uuid,
+    body: Value,
+}
+
+impl AuthenticatedPaperReviewState {
+    fn seal(route: &Route, paper_id: Uuid, body: Value) -> Result<Self, AppError> {
+        let expected_path = format!("/v2/hepta/papers/{paper_id}/review-state");
+        if route.method != Method::GET
+            || route.path != expected_path
+            || route.query.is_some()
+            || route.operation != "get_paper_review_state_v1"
+        {
+            return Err(AppError::Internal);
+        }
+        let envelope: PaperReviewStateEnvelopeV1 =
+            serde_json::from_value(body.clone()).map_err(|_| AppError::Upstream)?;
+        let finality = &envelope.finality;
+        let raw_finality = body.get("finality").ok_or(AppError::Upstream)?;
+        let encoded_verified_at = body
+            .get("finality")
+            .and_then(|value| value.get("verified_at"));
+        let canonical_finality_timestamp = match (&finality.status, &finality.verified_at) {
+            (SealedConsumerFinalityStatusV2::PendingFinality, None) => {
+                encoded_verified_at.is_some_and(Value::is_null)
+            }
+            (SealedConsumerFinalityStatusV2::VerifiedFinality, Some(verified_at)) => {
+                encoded_verified_at
+                    .and_then(Value::as_str)
+                    .is_some_and(|encoded| {
+                        encoded == verified_at.to_rfc3339_opts(SecondsFormat::AutoSi, true)
+                    })
+            }
+            _ => false,
+        };
+        let canonical_finality_bindings = sealed_optional_uuid(
+            raw_finality,
+            "effective_evaluation_id",
+            finality.effective_evaluation_id,
+        ) && sealed_optional_uuid(
+            raw_finality,
+            "effective_reproduction_id",
+            finality.effective_reproduction_id,
+        ) && sealed_optional_uuid(
+            raw_finality,
+            "effective_appeal_resolution_id",
+            finality.effective_appeal_resolution_id,
+        );
+        let finality_bindings_valid = match finality.status {
+            SealedConsumerFinalityStatusV2::PendingFinality => {
+                finality.effective_evaluation_id.is_none()
+                    && finality.effective_reproduction_id.is_none()
+                    && finality.effective_appeal_resolution_id.is_none()
+            }
+            SealedConsumerFinalityStatusV2::VerifiedFinality => {
+                finality.effective_evaluation_id.is_some()
+                    && finality.effective_reproduction_id.is_some()
+            }
+        };
+        if finality.schema != "hepta.paper_raid.consumer_finality.v2"
+            || finality.ranking_eligible
+            || finality.reward_eligible
+            || finality.score_eligible
+            || finality.economic_eligible
+            || !canonical_finality_bindings
+            || !finality_bindings_valid
+            || !canonical_finality_timestamp
+        {
+            return Err(AppError::Upstream);
+        }
+        let expected_paper_id = paper_id.to_string();
+        for records in [
+            &envelope.contribution_ledgers,
+            &envelope.evaluations,
+            &envelope.appeals,
+            &envelope.resolutions,
+            &envelope.raid_scores,
+        ] {
+            for record in records {
+                if record.get("paper_project_id").and_then(Value::as_str)
+                    != Some(expected_paper_id.as_str())
+                {
+                    return Err(AppError::Upstream);
+                }
+            }
+        }
+        let raw_assignments = body
+            .get("assignments")
+            .and_then(Value::as_array)
+            .ok_or(AppError::Upstream)?;
+        let raw_evaluation_drafts = body
+            .get("evaluation_drafts")
+            .and_then(Value::as_array)
+            .ok_or(AppError::Upstream)?;
+        let raw_reproductions = body
+            .get("reproductions")
+            .and_then(Value::as_array)
+            .ok_or(AppError::Upstream)?;
+        let evaluations = sealed_evaluation_crosslinks(&envelope.evaluations, paper_id)
+            .ok_or(AppError::Upstream)?;
+        let evaluation_drafts = sealed_evaluation_draft_crosslinks(
+            raw_evaluation_drafts,
+            &envelope.evaluation_drafts,
+            paper_id,
+            &evaluations,
+        )
+        .ok_or(AppError::Upstream)?;
+        sealed_review_assignments(
+            raw_assignments,
+            &envelope.assignments,
+            paper_id,
+            &evaluations,
+            &evaluation_drafts,
+        )
+        .ok_or(AppError::Upstream)?;
+        sealed_reproductions(
+            raw_reproductions,
+            &envelope.reproductions,
+            paper_id,
+            &evaluations,
+            &envelope.assignments,
+        )
+        .ok_or(AppError::Upstream)?;
+        Ok(Self { paper_id, body })
+    }
+
+    pub(crate) fn paper_id(&self) -> Uuid {
+        self.paper_id
+    }
+
+    pub(crate) fn value(&self) -> &Value {
+        &self.body
+    }
+
+    pub(crate) fn finality(&self) -> &Value {
+        self.body
+            .get("finality")
+            .expect("sealed review state contains finality")
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_only_seal(paper_id: Uuid, body: Value) -> Result<Self, AppError> {
+        Self::seal(
+            &Route {
+                method: Method::GET,
+                path: format!("/v2/hepta/papers/{paper_id}/review-state"),
+                query: None,
+                operation: "get_paper_review_state_v1",
+            },
+            paper_id,
+            body,
+        )
+    }
+}
+
+impl std::ops::Deref for AuthenticatedPaperReviewState {
+    type Target = Value;
+
+    fn deref(&self) -> &Self::Target {
+        self.value()
+    }
+}
+
 impl BrowserCommand {
     fn route(&self) -> Result<Route, AppError> {
         let resource = || {
@@ -552,6 +1864,10 @@ impl BrowserCommand {
             CommandName::CreateRunRecord => post(
                 format!("/v2/hepta/papers/{}/run-records", resource()?),
                 "create_run_record_v3",
+            ),
+            CommandName::CreateRoleResourceAction => post(
+                format!("/v2/hepta/papers/{}/role-resources/actions", resource()?),
+                "create_role_resource_action_v1",
             ),
             CommandName::CreateFigureLineage => post(
                 format!("/v2/hepta/papers/{}/figure-lineage", resource()?),
@@ -727,6 +2043,7 @@ pub struct HeptaClient {
     base: Url,
     assertions: ConsumerAssertionConfig,
     pool: PgPool,
+    metrics: Metrics,
 }
 
 impl HeptaClient {
@@ -734,6 +2051,7 @@ impl HeptaClient {
         base: Url,
         assertions: ConsumerAssertionConfig,
         pool: PgPool,
+        metrics: Metrics,
     ) -> Result<Self, String> {
         if base.path() != "/" && !base.path().is_empty() {
             return Err("Hepta base URL must not contain a path".to_string());
@@ -750,6 +2068,7 @@ impl HeptaClient {
             base,
             assertions,
             pool,
+            metrics,
         })
     }
 
@@ -960,7 +2279,8 @@ impl HeptaClient {
                     })?;
                 validate_frame_https_uri(&input.source_uri)?;
                 let room = self.get_paper_room(identity, paper_id).await?;
-                require_room_paper_id(&room, paper_id)?;
+                let room = room.value();
+                require_room_paper_id(room, paper_id)?;
                 let signing = HumanEvidenceVerificationSigningV1 {
                     schema: HUMAN_EVIDENCE_VERIFICATION_V1.into(),
                     verification_id: input.evidence_card_id,
@@ -1019,7 +2339,8 @@ impl HeptaClient {
                     validate_frame_https_uri(url)?;
                 }
                 let room = self.get_paper_room(identity, paper_id).await?;
-                require_room_paper_id(&room, paper_id)?;
+                let room = room.value();
+                require_room_paper_id(room, paper_id)?;
                 let evidence_id = input.evidence_card_id.to_string();
                 let evidence = room
                     .get("evidence_cards")
@@ -1083,9 +2404,10 @@ impl HeptaClient {
                         AppError::Invalid("invalid human decision frame payload".into())
                     })?;
                 let room = self.get_paper_room(identity, paper_id).await?;
-                require_room_paper_id(&room, paper_id)?;
+                let room = room.value();
+                require_room_paper_id(room, paper_id)?;
                 let proposal =
-                    find_room_record(&room, "proposals", "proposal_id", input.proposal_id)?;
+                    find_room_record(room, "proposals", "proposal_id", input.proposal_id)?;
                 if required_u64(proposal, "version")? != input.expected_proposal_version
                     || proposal.get("status").and_then(Value::as_str) != Some("submitted")
                 {
@@ -1130,9 +2452,10 @@ impl HeptaClient {
                 let input: ReviewFramePayload = serde_json::from_value(request.payload.clone())
                     .map_err(|_| AppError::Invalid("invalid review frame payload".into()))?;
                 let room = self.get_paper_room(identity, paper_id).await?;
-                require_room_paper_id(&room, paper_id)?;
+                let room = room.value();
+                require_room_paper_id(room, paper_id)?;
                 let revision = find_room_record(
-                    &room,
+                    room,
                     "section_revisions",
                     "section_revision_id",
                     section_revision_id,
@@ -1145,7 +2468,7 @@ impl HeptaClient {
                     ));
                 }
                 let lease_id = required_uuid(revision, "lease_id")?;
-                let lease = find_room_record(&room, "leases", "lease_id", lease_id)?;
+                let lease = find_room_record(room, "leases", "lease_id", lease_id)?;
                 if required_uuid(lease, "holder_player_id")? == identity.player_id {
                     return Err(AppError::Forbidden);
                 }
@@ -1192,9 +2515,10 @@ impl HeptaClient {
                     ));
                 }
                 let room = self.get_paper_room(identity, paper_id).await?;
-                require_room_paper_id(&room, paper_id)?;
+                let room = room.value();
+                require_room_paper_id(room, paper_id)?;
                 let revision = find_room_record(
-                    &room,
+                    room,
                     "section_revisions",
                     "section_revision_id",
                     input.section_revision_id,
@@ -1210,7 +2534,7 @@ impl HeptaClient {
                         "section merge must bind the current approved revision".into(),
                     ));
                 }
-                let lease = find_room_record(&room, "leases", "lease_id", input.lease_id)?;
+                let lease = find_room_record(room, "leases", "lease_id", input.lease_id)?;
                 let lease_expires_at = lease
                     .get("expires_at")
                     .and_then(Value::as_str)
@@ -1366,11 +2690,11 @@ impl HeptaClient {
                         .get("version")
                         .and_then(Value::as_str)
                         != Some("1")
-                    || !input
+                    || input
                         .tolerance_policy
                         .get("rules")
                         .and_then(Value::as_array)
-                        .is_some_and(|rules| !rules.is_empty())
+                        .is_none_or(Vec::is_empty)
                 {
                     return Err(AppError::Invalid(
                         "evaluation requires a frozen v1 tolerance policy and reference metrics"
@@ -1623,8 +2947,10 @@ impl HeptaClient {
                     ));
                 }
                 let room = self.get_paper_room(identity, paper_id).await?;
-                require_room_paper_id(&room, paper_id)?;
+                let room = room.value();
+                require_room_paper_id(room, paper_id)?;
                 let review = self.get_paper_review_state(identity, paper_id).await?;
+                let review = review.value();
                 if review
                     .get("finality")
                     .and_then(|value| value.get("status"))
@@ -1636,10 +2962,8 @@ impl HeptaClient {
                     ));
                 }
                 let evaluation = match request.child_id {
-                    Some(evaluation_id) => {
-                        paper_evaluation_by_id(&review, paper_id, evaluation_id)?
-                    }
-                    None => latest_paper_evaluation(&review, paper_id)?,
+                    Some(evaluation_id) => paper_evaluation_by_id(review, paper_id, evaluation_id)?,
+                    None => latest_paper_evaluation(review, paper_id)?,
                 };
                 let evaluation_id = required_uuid(evaluation, "evaluation_id")?;
                 let current_release = required_string(evaluation, "release_candidate_hash")?;
@@ -1669,7 +2993,7 @@ impl HeptaClient {
                     ));
                 }
                 let evidence_manifest_hash = exact_manifest_hash(
-                    &room,
+                    room,
                     paper_id,
                     input.evidence_manifest_id,
                     input.evidence_manifest_hash.as_deref(),
@@ -1750,6 +3074,7 @@ impl HeptaClient {
                     &["reproducer"],
                 )?;
                 let review = self.get_paper_review_state(identity, paper_id).await?;
+                let review = review.value();
                 if review
                     .get("finality")
                     .and_then(|value| value.get("status"))
@@ -1760,7 +3085,7 @@ impl HeptaClient {
                         "Appeal resolution requires pending scientific finality".into(),
                     ));
                 }
-                let evaluation = paper_evaluation_by_id(&review, paper_id, evaluation_id)?;
+                let evaluation = paper_evaluation_by_id(review, paper_id, evaluation_id)?;
                 if required_uuid(evaluation, "submission_id")? != submission_id
                     || required_string(evaluation, "release_candidate_hash")?
                         != release_candidate_hash
@@ -1770,14 +3095,14 @@ impl HeptaClient {
                 {
                     return Err(AppError::Forbidden);
                 }
-                let appeal = exact_open_appeal(&review, paper_id, evaluation_id)?;
+                let appeal = exact_open_appeal(review, paper_id, evaluation_id)?;
                 if required_uuid(appeal, "evaluation_id")? != evaluation_id
                     || required_string(appeal, "release_candidate_hash")? != release_candidate_hash
                     || required_uuid(appeal, "appellant_player_id")? == identity.player_id
                 {
                     return Err(AppError::Forbidden);
                 }
-                let superseding = exact_superseding_evaluation(&review, evaluation)?;
+                let superseding = exact_superseding_evaluation(review, evaluation)?;
                 let superseding_evaluation_id = match input.outcome.as_str() {
                     "denied" => None,
                     "upheld" => {
@@ -1984,18 +3309,22 @@ impl HeptaClient {
         .await
     }
 
-    pub async fn get_paper_room(
+    pub(crate) async fn get_paper_room(
         &self,
         identity: &AlphaIdentity,
         paper_id: Uuid,
-    ) -> Result<Value, AppError> {
-        self.get_json(
-            identity,
-            format!("/v2/hepta/papers/{paper_id}/room"),
-            None,
-            "get_paper_room_v3",
-        )
-        .await
+    ) -> Result<AuthenticatedPaperRoom, AppError> {
+        let route = Route {
+            method: Method::GET,
+            path: format!("/v2/hepta/papers/{paper_id}/room"),
+            query: None,
+            operation: "get_paper_room_v3",
+        };
+        let body = self
+            .send(identity, route.clone(), Uuid::new_v4(), &Value::Null)
+            .await
+            .and_then(read_json)?;
+        AuthenticatedPaperRoom::seal(&route, paper_id, body)
     }
 
     pub async fn list_paper_room_events(
@@ -2013,18 +3342,22 @@ impl HeptaClient {
         .await
     }
 
-    pub async fn get_paper_review_state(
+    pub(crate) async fn get_paper_review_state(
         &self,
         identity: &AlphaIdentity,
         paper_id: Uuid,
-    ) -> Result<Value, AppError> {
-        self.get_json(
-            identity,
-            format!("/v2/hepta/papers/{paper_id}/review-state"),
-            None,
-            "get_paper_review_state_v1",
-        )
-        .await
+    ) -> Result<AuthenticatedPaperReviewState, AppError> {
+        let route = Route {
+            method: Method::GET,
+            path: format!("/v2/hepta/papers/{paper_id}/review-state"),
+            query: None,
+            operation: "get_paper_review_state_v1",
+        };
+        let body = self
+            .send(identity, route.clone(), Uuid::new_v4(), &Value::Null)
+            .await
+            .and_then(read_json)?;
+        AuthenticatedPaperReviewState::seal(&route, paper_id, body)
     }
 
     pub async fn list_review_queue(&self, identity: &AlphaIdentity) -> Result<Value, AppError> {
@@ -2172,17 +3505,24 @@ impl HeptaClient {
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(body_bytes);
         }
-        let response = request
-            .send()
-            .await
-            .map_err(|_| AppError::Unavailable("hepta"))?;
+        let response = request.send().await.map_err(|_| {
+            self.metrics.observe_hepta_error(HeptaErrorKind::Transport);
+            AppError::Unavailable("hepta")
+        })?;
         if response.status().is_redirection() || !strict_json(response.headers()) {
+            self.metrics.observe_hepta_error(HeptaErrorKind::Protocol);
             return Err(AppError::Upstream);
         }
         let status = response.status();
-        let bytes = limited_body(response, MAX_JSON_BYTES).await?;
-        let _: Value = serde_json::from_slice(&bytes).map_err(|_| AppError::Upstream)?;
+        let bytes = limited_body(response, MAX_JSON_BYTES)
+            .await
+            .inspect_err(|_| self.metrics.observe_hepta_error(HeptaErrorKind::Protocol))?;
+        let _: Value = serde_json::from_slice(&bytes).map_err(|_| {
+            self.metrics.observe_hepta_error(HeptaErrorKind::Protocol);
+            AppError::Upstream
+        })?;
         if status.is_server_error() {
+            self.metrics.observe_hepta_error(HeptaErrorKind::Server);
             return Err(AppError::Unavailable("hepta"));
         }
         if route.method != Method::GET && status.is_success() {
@@ -2287,6 +3627,37 @@ impl HeptaClient {
     }
 }
 
+pub(crate) fn matchmaking_party_payload_is_safe(payload: &Value) -> bool {
+    let Some(object) = payload.as_object() else {
+        return false;
+    };
+    const ALLOWED_KEYS: [&str; 7] = [
+        "ticket_id",
+        "challenge_id",
+        "requested_team_size",
+        "roles",
+        "availability_hash",
+        "party_code_hash",
+        "idempotency_key",
+    ];
+    if object
+        .keys()
+        .any(|key| !ALLOWED_KEYS.contains(&key.as_str()))
+    {
+        return false;
+    }
+    match object.get("party_code_hash") {
+        None => true,
+        Some(Value::String(value)) => value.strip_prefix("sha256:").is_some_and(|hex| {
+            hex.len() == 64
+                && hex
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        }),
+        Some(_) => false,
+    }
+}
+
 fn validate_identity_command_payload(
     identity: &AlphaIdentity,
     command: CommandName,
@@ -2307,6 +3678,12 @@ fn validate_identity_command_payload(
     }
     match command {
         CommandName::QueueMatchmaking => {
+            if !matchmaking_party_payload_is_safe(payload) {
+                return Err(AppError::Invalid(
+                    "matchmaking accepts only an optional canonical party_code_hash; raw party codes and unknown fields are forbidden"
+                        .into(),
+                ));
+            }
             let roles = payload
                 .get("roles")
                 .and_then(Value::as_array)
@@ -2459,7 +3836,7 @@ fn find_room_record<'a>(
         .ok_or(AppError::NotFound)
 }
 
-fn latest_paper_evaluation<'a>(review: &'a Value, paper_id: Uuid) -> Result<&'a Value, AppError> {
+fn latest_paper_evaluation(review: &Value, paper_id: Uuid) -> Result<&Value, AppError> {
     let evaluations = review
         .get("evaluations")
         .and_then(Value::as_array)
@@ -2495,11 +3872,11 @@ fn latest_paper_evaluation<'a>(review: &'a Value, paper_id: Uuid) -> Result<&'a 
     Ok(latest[0])
 }
 
-fn paper_evaluation_by_id<'a>(
-    review: &'a Value,
+fn paper_evaluation_by_id(
+    review: &Value,
     paper_id: Uuid,
     evaluation_id: Uuid,
-) -> Result<&'a Value, AppError> {
+) -> Result<&Value, AppError> {
     let wanted = evaluation_id.to_string();
     let matches = review
         .get("evaluations")
@@ -2525,11 +3902,11 @@ fn paper_evaluation_by_id<'a>(
     Ok(matches[0])
 }
 
-fn exact_open_appeal<'a>(
-    review: &'a Value,
+fn exact_open_appeal(
+    review: &Value,
     paper_id: Uuid,
     evaluation_id: Uuid,
-) -> Result<&'a Value, AppError> {
+) -> Result<&Value, AppError> {
     let resolutions = review
         .get("resolutions")
         .and_then(Value::as_array)
@@ -2990,6 +4367,297 @@ mod tests {
         collections::HashMap,
         sync::{Arc, Mutex},
     };
+
+    fn sealed_review_test_envelope(
+        assignments: Vec<Value>,
+        evaluation_drafts: Vec<Value>,
+    ) -> Value {
+        serde_json::json!({
+            "finality": {
+                "schema": "hepta.paper_raid.consumer_finality.v2",
+                "status": "pending_finality",
+                "effective_evaluation_id": null,
+                "effective_reproduction_id": null,
+                "effective_appeal_resolution_id": null,
+                "ranking_eligible": false,
+                "reward_eligible": false,
+                "score_eligible": false,
+                "economic_eligible": false,
+                "verified_at": null
+            },
+            "assignments": assignments,
+            "evaluation_drafts": evaluation_drafts,
+            "contribution_ledgers": [],
+            "evaluations": [],
+            "reproductions": [],
+            "appeals": [],
+            "resolutions": [],
+            "raid_scores": []
+        })
+    }
+
+    fn sealed_open_evaluation_draft_fixture(
+        paper_id: Uuid,
+        submission_id: Uuid,
+        evaluation_id: Uuid,
+        evaluator_player_id: Uuid,
+    ) -> Value {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let public_key_bytes = [41_u8; 32];
+        let public_key = BASE64.encode(public_key_bytes);
+        let public_key_hash = sha256_digest(&public_key_bytes);
+        let tolerance_policy = serde_json::json!({
+            "schema":"hepta.paper_raid.tolerance_policy.v1",
+            "version":"1",
+            "rules":[{"kind":"absolute","metric":"accuracy","max_delta_micros":1000}]
+        });
+        let tolerance_policy_hash =
+            sha256_digest(&canonical_json_bytes(&tolerance_policy).expect("canonical policy"));
+        let mut draft = serde_json::json!({
+            "schema":"hepta.paper_raid.evaluation_draft.v2",
+            "evaluation_id":evaluation_id,
+            "paper_project_id":paper_id,
+            "submission_id":submission_id,
+            "review_round":1,
+            "supersedes_evaluation_id":null,
+            "release_candidate_hash":digest,
+            "paper_bundle_hash":digest,
+            "tolerance_policy":tolerance_policy,
+            "tolerance_policy_hash":tolerance_policy_hash,
+            "reference_metrics_micros":{"accuracy":900000},
+            "paper_score":{
+                "schema":"hepta.paper_raid.paper_score.v1",
+                "evaluation_id":evaluation_id,
+                "paper_project_id":paper_id,
+                "components":{},
+                "hard_gates":{},
+                "score_bps":0,
+                "eligible":false,
+                "score_hash":digest,
+                "created_at":"2026-08-11T00:01:00Z"
+            },
+            "evaluator_player_id":evaluator_player_id,
+            "evaluator_signing_key_id":"draft-evaluator-key",
+            "evaluator_signing_public_key":public_key,
+            "evaluator_signing_public_key_hash":public_key_hash,
+            "evaluator_coi_attestation_hash":digest,
+            "evaluator_signed_at_unix":1_786_406_460_i64,
+            "evaluator_signature":BASE64.encode([42_u8;64]),
+            "evaluation_signing_hash":digest,
+            "draft_hash":digest,
+            "status":"open",
+            "version":1,
+            "finalized_evaluation_id":null,
+            "created_at":"2026-08-11T00:01:00Z",
+            "expires_at":"2026-08-12T00:01:00Z",
+            "updated_at":"2026-08-11T00:01:00Z",
+            "finalized_at":null,
+            "expired_at":null
+        });
+        draft["draft_hash"] = Value::String(
+            sealed_evaluation_draft_hash(&draft, "hepta.paper_raid.evaluation_draft.v2")
+                .expect("canonical draft hash"),
+        );
+        draft
+    }
+
+    struct SealedAssignmentFixture<'a> {
+        assignment_id: Uuid,
+        paper_id: Uuid,
+        submission_id: Uuid,
+        player_id: Uuid,
+        slot: &'a str,
+        pinned_evaluation_id: Option<Uuid>,
+        status: &'a str,
+        version: u64,
+        updated_at: &'a str,
+    }
+
+    fn sealed_assignment_fixture(input: SealedAssignmentFixture<'_>) -> Value {
+        let SealedAssignmentFixture {
+            assignment_id,
+            paper_id,
+            submission_id,
+            player_id,
+            slot,
+            pinned_evaluation_id,
+            status,
+            version,
+            updated_at,
+        } = input;
+        serde_json::json!({
+            "schema":"hepta.paper_raid.review_assignment.v1",
+            "assignment_id":assignment_id,
+            "paper_project_id":paper_id,
+            "submission_id":submission_id,
+            "player_id":player_id,
+            "review_round":1,
+            "slot":slot,
+            "pinned_evaluation_id":pinned_evaluation_id,
+            "status":status,
+            "version":version,
+            "claimed_at":"2026-08-11T00:00:00Z",
+            "expires_at":"2026-08-11T02:00:00Z",
+            "updated_at":updated_at
+        })
+    }
+
+    #[test]
+    fn sealed_review_state_accepts_open_and_expired_draft_pinned_panels() {
+        let paper_id = Uuid::from_u128(1);
+        let submission_id = Uuid::from_u128(2);
+        let evaluation_id = Uuid::from_u128(3);
+        let evaluator_id = Uuid::from_u128(4);
+        let reviewer_id = Uuid::from_u128(5);
+        let draft = sealed_open_evaluation_draft_fixture(
+            paper_id,
+            submission_id,
+            evaluation_id,
+            evaluator_id,
+        );
+        let assignments = vec![
+            sealed_assignment_fixture(SealedAssignmentFixture {
+                assignment_id: Uuid::from_u128(10),
+                paper_id,
+                submission_id,
+                player_id: evaluator_id,
+                slot: "evaluator",
+                pinned_evaluation_id: Some(evaluation_id),
+                status: "pinned",
+                version: 2,
+                updated_at: "2026-08-11T00:01:00Z",
+            }),
+            {
+                let mut reviewer = sealed_assignment_fixture(SealedAssignmentFixture {
+                    assignment_id: Uuid::from_u128(11),
+                    paper_id,
+                    submission_id,
+                    player_id: reviewer_id,
+                    slot: "reviewer_1",
+                    pinned_evaluation_id: Some(evaluation_id),
+                    status: "pinned",
+                    version: 2,
+                    updated_at: "2026-08-11T00:01:30Z",
+                });
+                // Reviewers may claim an open slot after the evaluator has
+                // frozen the draft; their later attestation pins that lease.
+                reviewer["claimed_at"] = serde_json::json!("2026-08-11T00:01:10Z");
+                reviewer
+            },
+        ];
+        AuthenticatedPaperReviewState::test_only_seal(
+            paper_id,
+            sealed_review_test_envelope(assignments.clone(), vec![draft.clone()]),
+        )
+        .expect("open draft pins its evaluator and attesting reviewer");
+
+        let missing_draft = sealed_review_test_envelope(assignments.clone(), Vec::new());
+        assert!(matches!(
+            AuthenticatedPaperReviewState::test_only_seal(paper_id, missing_draft),
+            Err(AppError::Upstream)
+        ));
+
+        let mut expired_draft = draft;
+        expired_draft["status"] = serde_json::json!("expired");
+        expired_draft["version"] = serde_json::json!(2);
+        expired_draft["updated_at"] = expired_draft["expires_at"].clone();
+        expired_draft["expired_at"] = expired_draft["expires_at"].clone();
+        let expired_assignments = assignments
+            .into_iter()
+            .map(|mut assignment| {
+                assignment["status"] = serde_json::json!("expired");
+                assignment["version"] = serde_json::json!(3);
+                assignment["updated_at"] = expired_draft["expires_at"].clone();
+                assignment
+            })
+            .collect();
+        AuthenticatedPaperReviewState::test_only_seal(
+            paper_id,
+            sealed_review_test_envelope(expired_assignments, vec![expired_draft]),
+        )
+        .expect("expired draft preserves its exact released pinned-panel lineage");
+    }
+
+    #[test]
+    fn sealed_review_state_rejects_semantic_duplicate_live_assignments() {
+        let paper_id = Uuid::from_u128(21);
+        let submission_id = Uuid::from_u128(22);
+        let evaluation_id = Uuid::from_u128(23);
+        let evaluator_id = Uuid::from_u128(24);
+        let reviewer_id = Uuid::from_u128(25);
+        let draft = sealed_open_evaluation_draft_fixture(
+            paper_id,
+            submission_id,
+            evaluation_id,
+            evaluator_id,
+        );
+        let evaluator = sealed_assignment_fixture(SealedAssignmentFixture {
+            assignment_id: Uuid::from_u128(30),
+            paper_id,
+            submission_id,
+            player_id: evaluator_id,
+            slot: "evaluator",
+            pinned_evaluation_id: Some(evaluation_id),
+            status: "pinned",
+            version: 2,
+            updated_at: "2026-08-11T00:01:00Z",
+        });
+        let reviewer = sealed_assignment_fixture(SealedAssignmentFixture {
+            assignment_id: Uuid::from_u128(32),
+            paper_id,
+            submission_id,
+            player_id: reviewer_id,
+            slot: "reviewer_1",
+            pinned_evaluation_id: Some(evaluation_id),
+            status: "pinned",
+            version: 2,
+            updated_at: "2026-08-11T00:01:30Z",
+        });
+
+        let duplicate_slot = sealed_assignment_fixture(SealedAssignmentFixture {
+            assignment_id: Uuid::from_u128(31),
+            paper_id,
+            submission_id,
+            player_id: Uuid::from_u128(26),
+            slot: "evaluator",
+            pinned_evaluation_id: None,
+            status: "claimed",
+            version: 1,
+            updated_at: "2026-08-11T00:00:00Z",
+        });
+        assert!(matches!(
+            AuthenticatedPaperReviewState::test_only_seal(
+                paper_id,
+                sealed_review_test_envelope(
+                    vec![evaluator.clone(), duplicate_slot, reviewer.clone()],
+                    vec![draft.clone()],
+                ),
+            ),
+            Err(AppError::Upstream)
+        ));
+
+        let duplicate_player = sealed_assignment_fixture(SealedAssignmentFixture {
+            assignment_id: Uuid::from_u128(33),
+            paper_id,
+            submission_id,
+            player_id: evaluator_id,
+            slot: "reviewer_2",
+            pinned_evaluation_id: None,
+            status: "claimed",
+            version: 1,
+            updated_at: "2026-08-11T00:00:00Z",
+        });
+        assert!(matches!(
+            AuthenticatedPaperReviewState::test_only_seal(
+                paper_id,
+                sealed_review_test_envelope(
+                    vec![evaluator, reviewer, duplicate_player],
+                    vec![draft],
+                ),
+            ),
+            Err(AppError::Upstream)
+        ));
+    }
 
     #[test]
     fn appeal_player_frames_derive_one_exact_authoritative_lineage() {
@@ -3698,6 +5366,27 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn matchmaking_party_payload_accepts_only_the_canonical_digest_field() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        assert!(matchmaking_party_payload_is_safe(&serde_json::json!({
+            "roles":["captain"],
+            "party_code_hash":digest,
+        })));
+        assert!(matchmaking_party_payload_is_safe(&serde_json::json!({
+            "roles":["captain"],
+        })));
+        for unsafe_payload in [
+            serde_json::json!({"roles":["captain"],"party_code":"PR1-raw"}),
+            serde_json::json!({"roles":["captain"],"raw_party_code":"PR1-raw"}),
+            serde_json::json!({"roles":["captain"],"party_code_hash":format!("sha256:{}", "A".repeat(64))}),
+            serde_json::json!({"roles":["captain"],"party_code_hash":"not-a-digest"}),
+            serde_json::json!({"roles":["captain"],"party_code_hash":null}),
+        ] {
+            assert!(!matchmaking_party_payload_is_safe(&unsafe_payload));
+        }
+    }
+
     #[derive(Default)]
     struct MockHeptaState {
         calls: usize,
@@ -3920,8 +5609,13 @@ mod tests {
         let body = canonical_json_bytes(&payload).expect("canonical body");
         let request_hash = business_request_hash(&route, &body);
 
-        let first_process =
-            HeptaClient::new(base.clone(), assertions.clone(), pool.clone()).expect("first client");
+        let first_process = HeptaClient::new(
+            base.clone(),
+            assertions.clone(),
+            pool.clone(),
+            Metrics::default(),
+        )
+        .expect("first client");
         assert!(first_process
             .begin_idempotent(&identity, request.idempotency_key, &request_hash)
             .await
@@ -3929,7 +5623,8 @@ mod tests {
             .is_none());
         drop(first_process);
 
-        let restarted = HeptaClient::new(base, assertions, pool).expect("restarted client");
+        let restarted =
+            HeptaClient::new(base, assertions, pool, Metrics::default()).expect("restarted client");
         let response = restarted
             .forward_command(&identity, &request)
             .await

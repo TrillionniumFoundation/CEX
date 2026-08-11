@@ -13,11 +13,15 @@ bash scripts/project-preflight.sh --dev
 bash scripts/check-hepta-research-league-release-structure.sh
 python3 scripts/check-hepta-route-openapi-parity.py
 bash services/paper-raid-bff/scripts/check-boundaries.sh
+bash services/paper-raid-bff/scripts/check-agent-bridge-boundary.sh
+bash services/paper-raid-bff/scripts/check-invite-alpha-boundary.sh
+bash services/paper-raid-bff/scripts/check-observability-boundary.sh
+npm --prefix tools/paper-raid-agent-bridge test
 cargo_locked fmt --all -- --check
-cargo_locked test --locked -p hepta-research-league
-cargo_locked test --locked -p paper-raid-bff
 cargo_locked check --locked -p hepta-research-league -p paper-raid-bff
 cargo_locked clippy --locked -p hepta-research-league -p paper-raid-bff --all-targets -- -D warnings
+cargo_locked test --locked -p hepta-research-league
+cargo_locked test --locked -p paper-raid-bff
 
 if [[ ${PAPER_RAID_ALPHA_REQUIRE_POSTGRES:-1} == 1 ]]; then
   bash scripts/check-paper-raid-alpha-candidate-postgres.sh

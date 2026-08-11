@@ -37,14 +37,14 @@ pub const PAPER_TRNM_EVALUATION_EXTERNAL_KEY_NAMESPACE_V1: &str = "hepta.paper_r
 pub const PAPER_TRNM_SUBMISSION_BINDING_DOMAIN_V1: &[u8] =
     b"HEPTA_PAPER_TRNM_SUBMISSION_BINDING_V1\0";
 pub const PAPER_TRNM_MATCH_EVIDENCE_OBJECT_VERSION_V1: u64 = 1;
-pub const PAPER_CHAIN_FINALITY_PROJECTION_SCHEMA_V1: &str =
-    "hepta.paper_raid.chain_finality_projection.v1";
-pub const PAPER_CHAIN_FINALITY_HISTORY_SCHEMA_V1: &str =
-    "hepta.paper_raid.chain_finality_history.v1";
+pub const PAPER_CHAIN_FINALITY_PROJECTION_SCHEMA_V2: &str =
+    "hepta.paper_raid.chain_finality_projection.v2";
+pub const PAPER_CHAIN_FINALITY_HISTORY_SCHEMA_V2: &str =
+    "hepta.paper_raid.chain_finality_history.v2";
 pub const PAPER_CHAIN_TRUST_ANCHOR_SCHEMA_V1: &str = "hepta.paper_raid.cometbft_trust_anchor.v1";
 pub const TRNM_TRUST_ANCHOR_HASH_HEADER: &str = "x-hepta-trnm-trust-anchor-hash";
 
-const PAPER_CHAIN_VERIFIED_EVENT_V1: &str = "hepta.paper_raid.chain_finality.verified.v1";
+const PAPER_CHAIN_VERIFIED_EVENT_V2: &str = "hepta.paper_raid.chain_finality.verified.v2";
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PaperTrnmCommandBindingV1 {
@@ -69,10 +69,10 @@ pub struct PaperTrnmCommandBindingV1 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PaperChainFinalityHistoryV1 {
+pub struct PaperChainFinalityHistoryV2 {
     pub schema: String,
     pub paper_project_id: Uuid,
-    pub projections: Vec<PaperChainFinalityProjectionV1>,
+    pub projections: Vec<PaperChainFinalityProjectionV2>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -83,11 +83,13 @@ pub enum PaperChainFinalityStatusV1 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PaperChainFinalityProjectionV1 {
+pub struct PaperChainFinalityProjectionV2 {
     pub schema: String,
     pub paper_project_id: Uuid,
     pub submission_id: Uuid,
     pub evaluation_id: Uuid,
+    pub reproduction_id: Uuid,
+    pub appeal_resolution_id: Option<Uuid>,
     pub local_command_id: Uuid,
     pub command_idempotency_key: String,
     pub command_fingerprint: String,
@@ -131,14 +133,14 @@ struct MemoryReceipt {
     canonical_sha256: String,
     trust_anchor_hash: String,
     canonical: Bytes,
-    projection: PaperChainFinalityProjectionV1,
+    projection: PaperChainFinalityProjectionV2,
 }
 
 #[derive(Clone, Default)]
 pub(crate) struct PaperChainFinalityMemory {
     trust_anchors: HashMap<String, MemoryTrustAnchor>,
     receipts: HashMap<String, MemoryReceipt>,
-    projections: HashMap<Uuid, PaperChainFinalityProjectionV1>,
+    projections: HashMap<Uuid, PaperChainFinalityProjectionV2>,
     inbox: HashMap<String, String>,
     pub(crate) preparations_v2:
         crate::paper_chain_finality_v2::PaperChainFinalityPreparationMemoryV2,
@@ -148,7 +150,7 @@ impl PaperChainFinalityMemory {
     pub(crate) fn projection_for_paper(
         &self,
         paper_id: Uuid,
-    ) -> Option<PaperChainFinalityProjectionV1> {
+    ) -> Option<PaperChainFinalityProjectionV2> {
         self.projections.get(&paper_id).cloned()
     }
 }
@@ -497,7 +499,7 @@ async fn ingest_paper_chain_finality(
     State(state): State<AppState>,
     Path(paper_id): Path<Uuid>,
     request: Request,
-) -> Result<(StatusCode, Json<PaperChainFinalityProjectionV1>), ApiError> {
+) -> Result<(StatusCode, Json<PaperChainFinalityProjectionV2>), ApiError> {
     // Keep this order invariant: authenticate, validate trusted-anchor selector,
     // acquire bounded verification capacity, enforce the deployment byte limit
     // while streaming, and only then parse canonical JSON.
@@ -567,7 +569,7 @@ async fn get_paper_chain_finality(
     State(state): State<AppState>,
     Path(paper_id): Path<Uuid>,
     headers: HeaderMap,
-) -> Result<Json<PaperChainFinalityProjectionV1>, ApiError> {
+) -> Result<Json<PaperChainFinalityProjectionV2>, ApiError> {
     require_service_token(
         &headers,
         TRNM_TOKEN_HEADER,
@@ -586,7 +588,7 @@ async fn get_paper_chain_finality(
         .ok_or_else(|| {
             ApiError::not_found(
                 "paper_chain_finality_not_found",
-                "Paper remains pending finality",
+                "No verified Paper finality projection is available",
             )
         })?;
         Ok(Json(decode_record(
@@ -605,7 +607,7 @@ async fn get_paper_chain_finality(
             .ok_or_else(|| {
                 ApiError::not_found(
                     "paper_chain_finality_not_found",
-                    "Paper remains pending finality",
+                    "No verified Paper finality projection is available",
                 )
             })
     }
@@ -620,7 +622,7 @@ async fn ingest_paper_chain_finality_memory(
     canonical_sha256: String,
     receipt: CometBftAppHashFinalityReceiptV2,
     verification_time: SystemTime,
-) -> Result<(StatusCode, Json<PaperChainFinalityProjectionV1>), ApiError> {
+) -> Result<(StatusCode, Json<PaperChainFinalityProjectionV2>), ApiError> {
     let anchor_canonical = {
         let memory = state.paper_chain_finality.read().await;
         memory
@@ -662,7 +664,7 @@ async fn ingest_verified_paper_chain_finality_memory(
     canonical_sha256: String,
     verified: VerifiedCometBftReceiptV2,
     verified_at: DateTime<Utc>,
-) -> Result<(StatusCode, Json<PaperChainFinalityProjectionV1>), ApiError> {
+) -> Result<(StatusCode, Json<PaperChainFinalityProjectionV2>), ApiError> {
     let verified_domain_command = require_legacy_research_domain(&verified)?;
     // Paper writes take this same lock. Holding it across the command and new
     // projection updates prevents an Appeal/integrity transition from racing
@@ -704,17 +706,23 @@ async fn ingest_verified_paper_chain_finality_memory(
         &paper_memory,
         &state.security,
     )?;
+    let binding = command
+        .paper_binding
+        .as_ref()
+        .ok_or_else(|| ApiError::internal("verified command lost its Paper binding"))?;
+    let appeal_resolution_id = effective_resolution_id_memory(&paper_memory, binding)?;
     let projection = build_projection(
         paper_id,
         command,
         &verified,
         &trust_anchor_hash,
+        appeal_resolution_id,
         verified_at,
     )?;
     command.status = TrnmProjectionStatus::VerifiedFinality;
     push_event(
         &mut league,
-        PAPER_CHAIN_VERIFIED_EVENT_V1,
+        PAPER_CHAIN_VERIFIED_EVENT_V2,
         paper_id.to_string(),
         projection_event_payload(&projection),
     );
@@ -741,7 +749,7 @@ fn receipt_replay_memory(
     trust_anchor_hash: &str,
     canonical: &[u8],
     canonical_sha256: &str,
-) -> Result<Option<PaperChainFinalityProjectionV1>, ApiError> {
+) -> Result<Option<PaperChainFinalityProjectionV2>, ApiError> {
     if let Some(existing) = memory.receipts.get(receipt_hash) {
         if existing.projection.paper_project_id == paper_id
             && existing.trust_anchor_hash == trust_anchor_hash
@@ -768,7 +776,7 @@ async fn ingest_paper_chain_finality_postgres(
     canonical_sha256: String,
     receipt: CometBftAppHashFinalityReceiptV2,
     verification_time: SystemTime,
-) -> Result<(StatusCode, Json<PaperChainFinalityProjectionV1>), ApiError> {
+) -> Result<(StatusCode, Json<PaperChainFinalityProjectionV2>), ApiError> {
     let pool = state.pool.as_ref().expect("PostgreSQL checked");
     let mut tx = pool.begin().await.map_err(ApiError::database)?;
     sqlx::query(
@@ -825,7 +833,7 @@ async fn ingest_verified_paper_chain_finality_postgres(
     canonical_sha256: &str,
     verified: &VerifiedCometBftReceiptV2,
     verified_at: DateTime<Utc>,
-) -> Result<(StatusCode, Json<PaperChainFinalityProjectionV1>), ApiError> {
+) -> Result<(StatusCode, Json<PaperChainFinalityProjectionV2>), ApiError> {
     let verified_domain_command = require_legacy_research_domain(verified)?;
 
     let state_row = sqlx::query(
@@ -876,11 +884,19 @@ async fn ingest_verified_paper_chain_finality_postgres(
     }
     let binding = validate_command_identity(command, paper_id, verified)?.clone();
     validate_paper_binding_postgres(tx, &binding, true, &state.security).await?;
-    let projection = build_projection(paper_id, command, verified, trust_anchor_hash, verified_at)?;
+    let appeal_resolution_id = effective_resolution_id_postgres(tx, &binding).await?;
+    let projection = build_projection(
+        paper_id,
+        command,
+        verified,
+        trust_anchor_hash,
+        appeal_resolution_id,
+        verified_at,
+    )?;
     command.status = TrnmProjectionStatus::VerifiedFinality;
     push_event(
         &mut league,
-        PAPER_CHAIN_VERIFIED_EVENT_V1,
+        PAPER_CHAIN_VERIFIED_EVENT_V2,
         paper_id.to_string(),
         projection_event_payload(&projection),
     );
@@ -958,17 +974,20 @@ async fn ingest_verified_paper_chain_finality_postgres(
 
 async fn insert_finality_projection_postgres(
     tx: &mut Transaction<'_, Postgres>,
-    projection: &PaperChainFinalityProjectionV1,
+    projection: &PaperChainFinalityProjectionV2,
     projection_json: &Value,
 ) -> Result<(), ApiError> {
     sqlx::query(
         "insert into hepta_paper_chain_finality_projections (
-            paper_project_id,evaluation_id,local_command_id,receipt_hash,
+            paper_project_id,evaluation_id,reproduction_id,appeal_resolution_id,
+            local_command_id,receipt_hash,
             status,version,record_json,updated_at
-         ) values ($1,$2,$3,$4,'verified_finality',1,$5::jsonb,$6)",
+         ) values ($1,$2,$3,$4,$5,$6,'verified_finality',2,$7::jsonb,$8)",
     )
     .bind(projection.paper_project_id)
     .bind(projection.evaluation_id)
+    .bind(projection.reproduction_id)
+    .bind(projection.appeal_resolution_id)
     .bind(projection.local_command_id)
     .bind(&projection.receipt_hash)
     .bind(projection_json)
@@ -986,7 +1005,7 @@ async fn receipt_replay_postgres(
     trust_anchor_hash: &str,
     canonical: &[u8],
     canonical_sha256: &str,
-) -> Result<Option<PaperChainFinalityProjectionV1>, ApiError> {
+) -> Result<Option<PaperChainFinalityProjectionV2>, ApiError> {
     let row = sqlx::query(
         "select r.paper_project_id,r.anchor_hash,r.canonical_receipt,r.canonical_sha256,
                 p.record_json,i.canonical_sha256 as inbox_sha256
@@ -1594,6 +1613,129 @@ pub(crate) fn validate_current_binding_records(
     Ok(())
 }
 
+fn effective_resolution_id_memory(
+    memory: &crate::paper_raid_v2::PaperRaidMemory,
+    binding: &PaperTrnmCommandBindingV1,
+) -> Result<Option<Uuid>, ApiError> {
+    let evaluation = memory
+        .review
+        .evaluations
+        .get(&binding.evaluation_id)
+        .filter(|evaluation| evaluation.paper_project_id == binding.paper_project_id)
+        .ok_or_else(|| {
+            ApiError::conflict(
+                "paper_finality_evaluation_binding_missing",
+                "verified command evaluation is absent from the exact review authority",
+            )
+        })?;
+    let evaluations = memory
+        .review
+        .evaluations
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    let reproductions = memory
+        .review
+        .reproductions
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    let appeals = memory.review.appeals.values().cloned().collect::<Vec<_>>();
+    let resolutions = memory
+        .review
+        .resolutions
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    crate::paper_raid_v2::effective_finality_resolution_id(
+        evaluation,
+        &evaluations,
+        &reproductions,
+        &appeals,
+        &resolutions,
+    )
+}
+
+async fn effective_resolution_id_postgres(
+    tx: &mut Transaction<'_, Postgres>,
+    binding: &PaperTrnmCommandBindingV1,
+) -> Result<Option<Uuid>, ApiError> {
+    let evaluation_rows = sqlx::query(
+        "select record_json from hepta_paper_evaluations
+         where paper_project_id=$1 order by evaluation_id for share",
+    )
+    .bind(binding.paper_project_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(ApiError::database)?;
+    let evaluations = evaluation_rows
+        .into_iter()
+        .map(|row| decode_record::<PaperEvaluation>(row.get("record_json"), "paper evaluation"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let reproduction_rows = sqlx::query(
+        "select record_json from hepta_paper_reproductions
+         where paper_project_id=$1 order by reproduction_id for share",
+    )
+    .bind(binding.paper_project_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(ApiError::database)?;
+    let reproductions = reproduction_rows
+        .into_iter()
+        .map(|row| decode_record::<PaperReproduction>(row.get("record_json"), "paper reproduction"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let appeal_rows = sqlx::query(
+        "select record_json from hepta_paper_appeals
+         where paper_project_id=$1 order by appeal_id for share",
+    )
+    .bind(binding.paper_project_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(ApiError::database)?;
+    let appeals = appeal_rows
+        .into_iter()
+        .map(|row| {
+            decode_record::<crate::paper_raid_v2::PaperAppeal>(
+                row.get("record_json"),
+                "paper Appeal",
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let resolution_rows = sqlx::query(
+        "select record_json from hepta_paper_appeal_resolutions
+         where paper_project_id=$1 order by resolution_id for share",
+    )
+    .bind(binding.paper_project_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(ApiError::database)?;
+    let resolutions = resolution_rows
+        .into_iter()
+        .map(|row| {
+            decode_record::<crate::paper_raid_v2::PaperAppealResolution>(
+                row.get("record_json"),
+                "Appeal resolution",
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let evaluation = evaluations
+        .iter()
+        .find(|evaluation| evaluation.evaluation_id == binding.evaluation_id)
+        .ok_or_else(|| {
+            ApiError::conflict(
+                "paper_finality_evaluation_binding_missing",
+                "verified command evaluation is absent from the exact review authority",
+            )
+        })?;
+    crate::paper_raid_v2::effective_finality_resolution_id(
+        evaluation,
+        &evaluations,
+        &reproductions,
+        &appeals,
+        &resolutions,
+    )
+}
+
 fn require_receipt_v2_enabled(state: &AppState) -> Result<(), ApiError> {
     if state.security.finality_mode != crate::FinalityMode::Verified {
         return Err(ApiError::conflict(
@@ -1618,8 +1760,9 @@ fn build_projection(
     command: &crate::workflows::TrnmCommand,
     verified: &VerifiedCometBftReceiptV2,
     trust_anchor_hash: &str,
+    appeal_resolution_id: Option<Uuid>,
     verified_at: DateTime<Utc>,
-) -> Result<PaperChainFinalityProjectionV1, ApiError> {
+) -> Result<PaperChainFinalityProjectionV2, ApiError> {
     let binding = command
         .paper_binding
         .as_ref()
@@ -1628,11 +1771,13 @@ fn build_projection(
         .paper_binding_fingerprint
         .clone()
         .ok_or_else(|| ApiError::internal("verified command lost its Paper binding fingerprint"))?;
-    Ok(PaperChainFinalityProjectionV1 {
-        schema: PAPER_CHAIN_FINALITY_PROJECTION_SCHEMA_V1.to_string(),
+    Ok(PaperChainFinalityProjectionV2 {
+        schema: PAPER_CHAIN_FINALITY_PROJECTION_SCHEMA_V2.to_string(),
         paper_project_id: paper_id,
         submission_id: binding.submission_id,
         evaluation_id: binding.evaluation_id,
+        reproduction_id: binding.reproduction_id,
+        appeal_resolution_id,
         local_command_id: command.command_id,
         command_idempotency_key: command.idempotency_key.clone(),
         command_fingerprint: command.command_fingerprint.clone(),
@@ -1651,16 +1796,18 @@ fn build_projection(
         reward_eligible: false,
         score_eligible: false,
         economic_eligible: false,
-        version: 1,
+        version: 2,
         verified_at,
     })
 }
 
-fn projection_event_payload(projection: &PaperChainFinalityProjectionV1) -> Value {
+fn projection_event_payload(projection: &PaperChainFinalityProjectionV2) -> Value {
     json!({
         "paper_project_id": projection.paper_project_id,
         "submission_id": projection.submission_id,
         "evaluation_id": projection.evaluation_id,
+        "reproduction_id": projection.reproduction_id,
+        "appeal_resolution_id": projection.appeal_resolution_id,
         "local_command_id": projection.local_command_id,
         "command_idempotency_key": projection.command_idempotency_key,
         "receipt_hash": projection.receipt_hash,
@@ -3117,7 +3264,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn postgres_projection_persists_evaluation_binding() {
+    async fn postgres_projection_persists_exact_consumer_finality_v2_bindings() {
         let Ok(database_url) = std::env::var("HEPTA_TEST_DATABASE_URL") else {
             eprintln!("HEPTA_TEST_DATABASE_URL unset; finality projection PostgreSQL test skipped");
             return;
@@ -3137,11 +3284,13 @@ mod tests {
             crate::paper_raid_v2::endpoint_tests::seed_paper_chain_finality_test(state.clone())
                 .await;
         let pool = state.pool.as_ref().expect("PostgreSQL pool");
-        let projection = PaperChainFinalityProjectionV1 {
-            schema: PAPER_CHAIN_FINALITY_PROJECTION_SCHEMA_V1.to_string(),
+        let projection = PaperChainFinalityProjectionV2 {
+            schema: PAPER_CHAIN_FINALITY_PROJECTION_SCHEMA_V2.to_string(),
             paper_project_id: binding.paper_project_id,
             submission_id: binding.submission_id,
             evaluation_id: binding.evaluation_id,
+            reproduction_id: binding.reproduction_id,
+            appeal_resolution_id: None,
             local_command_id: Uuid::new_v4(),
             command_idempotency_key: "finality-projection-postgres-command".to_string(),
             command_fingerprint: digest(0x81),
@@ -3160,7 +3309,7 @@ mod tests {
             reward_eligible: false,
             score_eligible: false,
             economic_eligible: false,
-            version: 1,
+            version: 2,
             verified_at: Utc::now(),
         };
         let projection_json = serde_json::to_value(&projection).expect("projection JSON");
@@ -3207,15 +3356,25 @@ mod tests {
             .await
             .expect("persist verified projection");
         tx.commit().await.expect("commit verified projection");
-        let stored_evaluation_id: Uuid = sqlx::query_scalar(
-            "select evaluation_id from hepta_paper_chain_finality_projections
+        let stored = sqlx::query(
+            "select evaluation_id,reproduction_id,appeal_resolution_id,version
+             from hepta_paper_chain_finality_projections
              where local_command_id=$1",
         )
         .bind(projection.local_command_id)
         .fetch_one(pool)
         .await
         .expect("stored projection evaluation binding");
-        assert_eq!(stored_evaluation_id, binding.evaluation_id);
+        assert_eq!(
+            stored.get::<Uuid, _>("evaluation_id"),
+            binding.evaluation_id
+        );
+        assert_eq!(
+            stored.get::<Uuid, _>("reproduction_id"),
+            binding.reproduction_id
+        );
+        assert_eq!(stored.get::<Option<Uuid>, _>("appeal_resolution_id"), None);
+        assert_eq!(stored.get::<i64, _>("version"), 2);
         crate::paper_raid_v2::endpoint_tests::reset_postgres(&database_url).await;
         sqlx::query("select pg_advisory_unlock(hashtext('hepta-research-league-pg-tests'))")
             .execute(&mut lock)

@@ -42,6 +42,7 @@ pub struct AccessDirectoryStatus {
 pub struct InviteAuthentication {
     pub identity: AlphaIdentity,
     pub expected_session_generation: i64,
+    pub redeemed_invite: bool,
 }
 
 impl AccessDirectory {
@@ -145,6 +146,7 @@ impl AccessDirectory {
             return Ok(InviteAuthentication {
                 identity,
                 expected_session_generation,
+                redeemed_invite: false,
             });
         }
 
@@ -217,6 +219,7 @@ impl AccessDirectory {
         Ok(InviteAuthentication {
             identity,
             expected_session_generation,
+            redeemed_invite: true,
         })
     }
 

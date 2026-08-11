@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use super::*;
 use crate::{
-    app,
+    agent_proposal_v2_record_parity_definition_is_exact, app,
     paper_chain_finality_v1::{
         paper_finality_side_effect_snapshot, paper_trnm_submission_commitment_hash,
         PaperTrnmCommandBindingV1, PAPER_TRNM_COMMAND_BINDING_SCHEMA_V1,
@@ -31,7 +31,7 @@ use crate::{
     paper_raid_contracts::{
         agent_binding_key_rotation_signing_bytes, agent_binding_proof_signing_bytes,
         agent_binding_proof_v3_signing_bytes, agent_capability_disclosure_hash,
-        agent_proposal_signing_bytes, canonical_json_bytes, canonical_json_sha256,
+        agent_proposal_v2_signing_bytes, canonical_json_bytes, canonical_json_sha256,
         human_decision_signing_bytes, human_evidence_verification_signing_bytes,
         human_key_registration_signing_bytes, human_key_revocation_signing_bytes,
         human_key_rotation_signing_bytes, paper_appeal_resolution_signing_bytes,
@@ -45,7 +45,7 @@ use crate::{
         sign_consumer_user_assertion, team_member_acceptance_signing_bytes,
         AgentBindingKeyRotationClaimV2, AgentBindingProofClaimV2, AgentBindingProofClaimV3,
         AgentCapabilityDisclosureAssuranceV1, AgentCapabilityDisclosureV1, AgentCapabilityV1,
-        AgentProposalSigningV1, AgentResourceClassV1, AuthorshipConsentSigningV2,
+        AgentProposalSigningV2, AgentResourceClassV1, AuthorshipConsentSigningV2,
         ConsumerUserAssertionClaimV2, HumanDecisionSigningV1, HumanEvidenceVerificationSigningV1,
         HumanKeyRegistrationClaimV2, HumanKeyRevocationClaimV2, HumanKeyRotationClaimV2,
         PaperAppealResolutionSigningV1, PaperAppealSigningV1, PaperEvaluationSigningV1,
@@ -53,14 +53,16 @@ use crate::{
         ResearchSessionEventV1, ResearchSessionTerminalFactsV1, SectionMergeSigningV1,
         SectionReviewSigningV1, TeamMemberAcceptanceSigningV2, AGENT_BINDING_KEY_ROTATION_V2,
         AGENT_BINDING_PROOF_V2, AGENT_BINDING_PROOF_V3, AGENT_CAPABILITY_DISCLOSURE_V1,
-        AGENT_PROPOSAL_V1, AUTHORSHIP_CONSENT_V2, CONSUMER_USER_ASSERTION_V2, HUMAN_DECISION_V1,
+        AGENT_PROPOSAL_V2, AUTHORSHIP_CONSENT_V2, CONSUMER_USER_ASSERTION_V2, HUMAN_DECISION_V1,
         HUMAN_EVIDENCE_VERIFICATION_V1, HUMAN_KEY_REGISTRATION_V2, HUMAN_KEY_REVOCATION_V2,
         HUMAN_KEY_ROTATION_V2, JSON_SAFE_U64_MAX, PAPER_APPEAL_RESOLUTION_V1, PAPER_APPEAL_V1,
         PAPER_EVALUATION_V1, PAPER_REPRODUCTION_V1, PAPER_REVIEW_ATTESTATION_V1,
         RESEARCH_SESSION_COMPLETION_V1, RESEARCH_SESSION_EVENT_V1, SECTION_MATERIALIZATION_V1,
         SECTION_MERGE_V1, SECTION_REVIEW_V1, TEAM_MEMBER_ACCEPTANCE_V2,
     },
-    AppState, ChallengeRulesetV1, SecurityConfig, NAKAMA_TOKEN_HEADER, OPERATOR_TOKEN_HEADER,
+    verify_agent_proposal_v2_migration_catalog, verify_contribution_ledger_authority_catalog,
+    verify_work_item_record_parity_catalog, AppState, ChallengeRulesetV1, SecurityConfig,
+    AGENT_PROPOSAL_V2_RECORD_PARITY_CLAUSES, NAKAMA_TOKEN_HEADER, OPERATOR_TOKEN_HEADER,
     TRNM_TOKEN_HEADER, USER_ASSERTION_HEADER,
 };
 
@@ -97,6 +99,65 @@ struct FlowOutcome {
 }
 
 #[test]
+fn agent_proposal_v2_record_parity_catalog_accepts_postgres_deparse_only_exactly() {
+    let direct = format!(
+        "CHECK ({})",
+        AGENT_PROPOSAL_V2_RECORD_PARITY_CLAUSES
+            .iter()
+            .map(|(left, right)| format!("(({left}) IS NOT DISTINCT FROM ({right}))"))
+            .collect::<Vec<_>>()
+            .join(" AND ")
+    );
+    let postgres_deparsed = format!(
+        "CHECK ((({})))",
+        AGENT_PROPOSAL_V2_RECORD_PARITY_CLAUSES
+            .iter()
+            .map(|(left, right)| format!("(NOT (({left}) IS DISTINCT FROM ({right})))"))
+            .collect::<Vec<_>>()
+            .join(" AND ")
+    );
+    assert!(agent_proposal_v2_record_parity_definition_is_exact(&direct));
+    assert!(agent_proposal_v2_record_parity_definition_is_exact(
+        &postgres_deparsed
+    ));
+
+    let missing_signed_at = format!(
+        "CHECK ({})",
+        AGENT_PROPOSAL_V2_RECORD_PARITY_CLAUSES[..19]
+            .iter()
+            .map(|(left, right)| format!("NOT (({left}) IS DISTINCT FROM ({right}))"))
+            .collect::<Vec<_>>()
+            .join(" AND ")
+    );
+    let duplicate_field = postgres_deparsed.replacen(
+        " AND ",
+        &format!(
+            " AND NOT (({}) IS DISTINCT FROM ({})) AND ",
+            AGENT_PROPOSAL_V2_RECORD_PARITY_CLAUSES[0].0,
+            AGENT_PROPOSAL_V2_RECORD_PARITY_CLAUSES[0].1,
+        ),
+        1,
+    );
+    let wrong_relational_operand = postgres_deparsed.replacen(
+        "IS DISTINCT FROM (proposal_id)",
+        "IS DISTINCT FROM (paper_project_id)",
+        1,
+    );
+    let or_true = format!("{postgres_deparsed} OR TRUE");
+    for hostile in [
+        missing_signed_at,
+        duplicate_field,
+        wrong_relational_operand,
+        or_true,
+    ] {
+        assert!(
+            !agent_proposal_v2_record_parity_definition_is_exact(&hostile),
+            "Agent proposal parity catalog must reject hostile definition: {hostile}"
+        );
+    }
+}
+
+#[test]
 fn author_phase_transitions_are_server_gated_by_scientific_milestones() {
     let now = Utc::now();
     let mut paper = PaperProject {
@@ -113,6 +174,7 @@ fn author_phase_transitions_are_server_gated_by_scientific_milestones() {
         outcome: PaperChallengeOutcomeV1::InProgress,
         outcome_reason: None,
         terminal_at: None,
+        role_resources: None,
         current_revision_id: None,
         release_candidate_revision_id: None,
         version: 1,
@@ -285,7 +347,7 @@ async fn create_team_http_boundary_rejects_noncanonical_roles() {
                 "participant_slot":index + 1,
                 "player_id":actor.player_id,
                 "binding_id":actor.binding_id,
-                "role":["foo", "bar", "baz"][index],
+                "role":(["foo", "bar", "baz"][index]),
             })).collect::<Vec<_>>(),
             "idempotency_key":key,
         }),
@@ -447,6 +509,7 @@ fn typed_challenge_snapshot_overrides_legacy_phase_gate_and_deadline_is_fail_clo
         outcome: PaperChallengeOutcomeV1::InProgress,
         outcome_reason: None,
         terminal_at: None,
+        role_resources: None,
         current_revision_id: None,
         release_candidate_revision_id: None,
         version: 1,
@@ -502,6 +565,7 @@ struct FlowOptions {
     replace_session_epoch: bool,
     revoke_author_before_finalize: bool,
     concurrent_finalize: bool,
+    replay_0047_after_reservation: bool,
 }
 
 fn digest(label: &str) -> String {
@@ -527,6 +591,36 @@ fn integration_artifact_bundle(
     .expect("vendored Integration artifact bundle fixture");
     bundle["challenge_id"] = json!(challenge_id.to_string());
     bundle["bundle_id"] = json!(format!("paper-raid-synthetic-ablation-001-{bundle_suffix}"));
+    for object in bundle["objects"].as_array_mut().expect("artifact objects") {
+        let review_role = match object["logical_path"].as_str().expect("logical path") {
+            "code/baseline.py" => Some("frozen_evaluator"),
+            "data/synthetic-observations.csv" => Some("dataset"),
+            "code/ablation.py" => Some("candidate"),
+            _ => None,
+        };
+        if let Some(review_role) = review_role {
+            object["role"] = json!(review_role);
+        }
+    }
+    let frozen_roles = bundle["objects"]
+        .as_array()
+        .expect("artifact objects")
+        .iter()
+        .filter_map(|object| object["role"].as_str())
+        .fold([0_usize; 3], |mut counts, role| {
+            match role {
+                "frozen_evaluator" => counts[0] += 1,
+                "dataset" => counts[1] += 1,
+                "candidate" => counts[2] += 1,
+                _ => {}
+            }
+            counts
+        });
+    assert_eq!(
+        frozen_roles,
+        [1, 1, 1],
+        "fixture must expose one frozen evaluator, one dataset, and one candidate"
+    );
     let mut canonical = canonical_json_bytes(&bundle).expect("canonical neutral artifact bundle");
     canonical.push(b'\n');
     let source_manifest_sha256 = sha256_digest(&canonical)
@@ -543,7 +637,7 @@ fn integration_artifact_bundle(
                 "logical_path": object["logical_path"],
                 "sha256": sha256,
                 "uri": format!("cas://sha256/{sha256}"),
-                "acl": "team",
+                "acl": "reviewers",
             })
         })
         .collect();
@@ -623,26 +717,82 @@ struct AuthorDraftingGateSeed {
     work_item_id: Uuid,
 }
 
+struct ContributionGateFixture {
+    accepted_artifact_manifest_id: Uuid,
+    accepted_by_player_id: Uuid,
+    accepted_section_review_id: Uuid,
+    reviewed_by_player_id: Uuid,
+}
+
 async fn create_matchmaking_ticket_for(
     router: &Router,
     actor: &Actor,
     challenge_id: Uuid,
     requested_team_size: u32,
 ) -> (StatusCode, Value) {
+    let availability_hash = digest("shared-alpha-availability-window");
+    create_matchmaking_ticket_for_preferences(
+        router,
+        actor,
+        challenge_id,
+        requested_team_size,
+        &[actor.role.as_str()],
+        &availability_hash,
+        None,
+    )
+    .await
+}
+
+async fn create_matchmaking_ticket_for_preferences(
+    router: &Router,
+    actor: &Actor,
+    challenge_id: Uuid,
+    requested_team_size: u32,
+    roles: &[&str],
+    availability_hash: &str,
+    party_code_hash: Option<&str>,
+) -> (StatusCode, Value) {
     let ticket_id = Uuid::new_v4();
     let key = format!("p3-ticket-{ticket_id}");
+    let mut body = json!({
+        "ticket_id":ticket_id,
+        "challenge_id":challenge_id,
+        "requested_team_size":requested_team_size,
+        "roles":roles,
+        "availability_hash":availability_hash,
+        "idempotency_key":key,
+    });
+    if let Some(party_code_hash) = party_code_hash {
+        body["party_code_hash"] = json!(party_code_hash);
+    }
     user_post(
         router,
         actor,
         "create_matchmaking_ticket_v3",
         "/v2/hepta/matchmaking/tickets",
         &key,
+        body,
+    )
+    .await
+}
+
+async fn cancel_matchmaking_ticket_for(
+    router: &Router,
+    actor: &Actor,
+    ticket_id: Uuid,
+    expected_version: u64,
+    suffix: &str,
+) -> (StatusCode, Value) {
+    let path = format!("/v2/hepta/matchmaking/tickets/{ticket_id}/cancel");
+    let key = format!("p3-ticket-cancel-{ticket_id}-{suffix}");
+    user_post(
+        router,
+        actor,
+        "cancel_matchmaking_ticket_v3",
+        &path,
+        &key,
         json!({
-            "ticket_id":ticket_id,
-            "challenge_id":challenge_id,
-            "requested_team_size":requested_team_size,
-            "roles":[actor.role],
-            "availability_hash":digest("shared-alpha-availability-window"),
+            "expected_version":expected_version,
             "idempotency_key":key,
         }),
     )
@@ -674,6 +824,302 @@ async fn decide_team_proposal(
         }),
     )
     .await
+}
+
+async fn materialize_team_proposal_for(
+    router: &Router,
+    actor: &Actor,
+    proposal_id: Uuid,
+    expected_proposal_version: u64,
+    suffix: &str,
+) -> (StatusCode, Value) {
+    let path = format!("/v2/hepta/team-proposals/{proposal_id}/materialize");
+    let key = format!("p3-team-materialize-{proposal_id}-{suffix}");
+    user_post(
+        router,
+        actor,
+        "materialize_team_proposal_v1",
+        &path,
+        &key,
+        json!({
+            "expected_proposal_version":expected_proposal_version,
+            "idempotency_key":key,
+        }),
+    )
+    .await
+}
+
+async fn exercise_private_party_matchmaking(router: &Router, actors: &[Actor], challenge_id: Uuid) {
+    let party_hash = digest("strict-private-party-affinity");
+    let availability = digest("strict-private-party-window");
+    let other_availability = digest("strict-private-party-other-window");
+
+    let captain = assert_status(
+        create_matchmaking_ticket_for_preferences(
+            router,
+            &actors[0],
+            challenge_id,
+            3,
+            &["captain"],
+            &availability,
+            Some(&party_hash),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(captain["ticket"]["private_party"], true);
+    assert!(captain["ticket"].get("party_code_hash").is_none());
+    let captain_ticket = Uuid::parse_str(captain["ticket"]["ticket_id"].as_str().unwrap()).unwrap();
+
+    assert_eq!(
+        error_code(
+            create_matchmaking_ticket_for_preferences(
+                router,
+                &actors[1],
+                challenge_id,
+                3,
+                &["captain"],
+                &availability,
+                Some(&party_hash),
+            )
+            .await,
+            StatusCode::CONFLICT,
+        ),
+        "party_role_conflict"
+    );
+    let evidence = assert_status(
+        create_matchmaking_ticket_for_preferences(
+            router,
+            &actors[1],
+            challenge_id,
+            3,
+            &["evidence"],
+            &availability,
+            Some(&party_hash),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    let evidence_ticket =
+        Uuid::parse_str(evidence["ticket"]["ticket_id"].as_str().unwrap()).unwrap();
+
+    assert_eq!(
+        error_code(
+            create_matchmaking_ticket_for_preferences(
+                router,
+                &actors[2],
+                challenge_id,
+                3,
+                &["experiment"],
+                &other_availability,
+                Some(&party_hash),
+            )
+            .await,
+            StatusCode::CONFLICT,
+        ),
+        "party_availability_conflict"
+    );
+    let experiment = assert_status(
+        create_matchmaking_ticket_for_preferences(
+            router,
+            &actors[2],
+            challenge_id,
+            3,
+            &["experiment"],
+            &availability,
+            Some(&party_hash),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    let experiment_ticket =
+        Uuid::parse_str(experiment["ticket"]["ticket_id"].as_str().unwrap()).unwrap();
+    let proposal_id = Uuid::parse_str(
+        experiment["team_proposal"]["proposal_id"]
+            .as_str()
+            .expect("private proposal id"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        error_code(
+            create_matchmaking_ticket_for_preferences(
+                router,
+                &actors[3],
+                challenge_id,
+                3,
+                &["captain"],
+                &availability,
+                Some(&party_hash),
+            )
+            .await,
+            StatusCode::CONFLICT,
+        ),
+        "party_queue_full"
+    );
+
+    let declined = assert_status(
+        decide_team_proposal(router, &actors[0], proposal_id, 1, "decline", "party").await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(declined["proposal"]["status"], "declined");
+    assert!(declined["replacement_proposal"].is_null());
+
+    let replacement = assert_status(
+        create_matchmaking_ticket_for_preferences(
+            router,
+            &actors[3],
+            challenge_id,
+            3,
+            &["captain"],
+            &availability,
+            Some(&party_hash),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    let replacement_ticket =
+        Uuid::parse_str(replacement["ticket"]["ticket_id"].as_str().unwrap()).unwrap();
+    assert!(replacement["team_proposal"].is_object());
+
+    let withdrawn = assert_status(
+        cancel_matchmaking_ticket_for(router, &actors[3], replacement_ticket, 2, "withdraw").await,
+        StatusCode::OK,
+    );
+    assert_eq!(withdrawn["status"], "cancelled");
+    assert_status(
+        cancel_matchmaking_ticket_for(router, &actors[1], evidence_ticket, 5, "evidence").await,
+        StatusCode::OK,
+    );
+    assert_status(
+        cancel_matchmaking_ticket_for(router, &actors[2], experiment_ticket, 5, "experiment").await,
+        StatusCode::OK,
+    );
+
+    let captain_path = format!("/v2/hepta/matchmaking/tickets/{captain_ticket}");
+    let captain_read = assert_status(
+        user_get(
+            router,
+            &actors[0],
+            "get_matchmaking_ticket_v3",
+            &captain_path,
+            "private-party-captain-read",
+        )
+        .await,
+        StatusCode::OK,
+    );
+    assert_eq!(captain_read["status"], "cancelled");
+    assert!(captain_read.get("party_code_hash").is_none());
+
+    // The cancelled players can deliberately correct/change their role
+    // preferences, rejoin the same private party, accept it, and materialize
+    // the exact party-bound proposal without falling back to a public ticket.
+    let changed_evidence = assert_status(
+        create_matchmaking_ticket_for_preferences(
+            router,
+            &actors[0],
+            challenge_id,
+            3,
+            &["evidence"],
+            &availability,
+            Some(&party_hash),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    assert!(changed_evidence["team_proposal"].is_null());
+    let changed_experiment = assert_status(
+        create_matchmaking_ticket_for_preferences(
+            router,
+            &actors[1],
+            challenge_id,
+            3,
+            &["experiment"],
+            &availability,
+            Some(&party_hash),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    assert!(changed_experiment["team_proposal"].is_null());
+    let changed_captain = assert_status(
+        create_matchmaking_ticket_for_preferences(
+            router,
+            &actors[2],
+            challenge_id,
+            3,
+            &["captain"],
+            &availability,
+            Some(&party_hash),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    let accepted_proposal_id = Uuid::parse_str(
+        changed_captain["team_proposal"]["proposal_id"]
+            .as_str()
+            .expect("changed-role private proposal id"),
+    )
+    .unwrap();
+    assert_status(
+        decide_team_proposal(
+            router,
+            &actors[0],
+            accepted_proposal_id,
+            1,
+            "accept",
+            "changed-role-a",
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    assert_status(
+        decide_team_proposal(
+            router,
+            &actors[1],
+            accepted_proposal_id,
+            2,
+            "accept",
+            "changed-role-b",
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    let accepted = assert_status(
+        decide_team_proposal(
+            router,
+            &actors[2],
+            accepted_proposal_id,
+            3,
+            "accept",
+            "changed-role-c",
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(accepted["proposal"]["status"], "accepted");
+    assert_eq!(accepted["proposal"]["version"], 4);
+
+    let team = assert_status(
+        materialize_team_proposal_for(
+            router,
+            &actors[0],
+            accepted_proposal_id,
+            4,
+            "changed-role-party",
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(team["team_id"], accepted_proposal_id.to_string());
+    let members = team["members"].as_array().expect("materialized members");
+    assert_eq!(members.len(), 3);
+    assert_eq!(members[0]["player_id"], actors[0].player_id.to_string());
+    assert_eq!(members[0]["role"], "evidence");
+    assert_eq!(members[1]["player_id"], actors[1].player_id.to_string());
+    assert_eq!(members[1]["role"], "experiment");
+    assert_eq!(members[2]["player_id"], actors[2].player_id.to_string());
+    assert_eq!(members[2]["role"], "captain");
 }
 
 async fn exercise_matchmaking(
@@ -778,20 +1224,40 @@ fn human_verification_signature(
     )
 }
 
+struct SignedAgentProposalBodyInput<'a> {
+    proposal_id: Uuid,
+    section_key: &'a str,
+    parent_revision_id: Uuid,
+    lease_id: Uuid,
+    lease_fencing_token: u64,
+    expected_work_version: u64,
+    payload_hash: &'a str,
+    idempotency_key: &'a str,
+}
+
 fn signed_agent_proposal_body(
     context: &DraftingPaperContext,
-    proposal_id: Uuid,
-    section_key: &str,
-    parent_revision_id: Uuid,
-    payload_hash: &str,
-    idempotency_key: &str,
+    input: SignedAgentProposalBodyInput<'_>,
 ) -> Value {
+    let SignedAgentProposalBodyInput {
+        proposal_id,
+        section_key,
+        parent_revision_id,
+        lease_id,
+        lease_fencing_token,
+        expected_work_version,
+        payload_hash,
+        idempotency_key,
+    } = input;
     signed_agent_proposal_body_for_actor(
         context,
         &context.actors[0],
         proposal_id,
         section_key,
         parent_revision_id,
+        lease_id,
+        lease_fencing_token,
+        expected_work_version,
         payload_hash,
         idempotency_key,
         None,
@@ -805,6 +1271,40 @@ fn signed_agent_proposal_body_for_actor(
     proposal_id: Uuid,
     section_key: &str,
     parent_revision_id: Uuid,
+    lease_id: Uuid,
+    lease_fencing_token: u64,
+    expected_work_version: u64,
+    payload_hash: &str,
+    idempotency_key: &str,
+    declared_agent_key_id: Option<String>,
+) -> Value {
+    signed_agent_proposal_body_for_actor_and_artifact(
+        context,
+        actor,
+        &context.artifact,
+        proposal_id,
+        section_key,
+        parent_revision_id,
+        lease_id,
+        lease_fencing_token,
+        expected_work_version,
+        payload_hash,
+        idempotency_key,
+        declared_agent_key_id,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn signed_agent_proposal_body_for_actor_and_artifact(
+    context: &DraftingPaperContext,
+    actor: &Actor,
+    artifact: &VerifiedArtifactHashes,
+    proposal_id: Uuid,
+    section_key: &str,
+    parent_revision_id: Uuid,
+    lease_id: Uuid,
+    lease_fencing_token: u64,
+    expected_work_version: u64,
     payload_hash: &str,
     idempotency_key: &str,
     declared_agent_key_id: Option<String>,
@@ -812,16 +1312,20 @@ fn signed_agent_proposal_body_for_actor(
     let signed_at_unix = Utc::now().timestamp();
     let agent_key_id = declared_agent_key_id
         .unwrap_or_else(|| sha256_digest(&actor.agent_key.verifying_key().to_bytes()));
-    let signing = AgentProposalSigningV1 {
-        schema: AGENT_PROPOSAL_V1.to_string(),
+    let signing = AgentProposalSigningV2 {
+        schema: AGENT_PROPOSAL_V2.to_string(),
         proposal_id,
         paper_project_id: context.paper_id,
         work_item_id: context.work_item_id,
         section_key: section_key.to_string(),
         parent_revision_id,
+        lease_id,
+        lease_fencing_token,
+        expected_work_version,
         proposal_kind: "delivery".to_string(),
         payload_hash: payload_hash.to_string(),
-        artifact_manifest_hash: context.artifact.artifact_manifest_hash.clone(),
+        artifact_manifest_id: artifact.manifest_id,
+        artifact_manifest_hash: artifact.artifact_manifest_hash.clone(),
         agent_id: actor.agent_id.clone(),
         binding_id: actor.binding_id,
         agent_key_id: agent_key_id.clone(),
@@ -832,15 +1336,18 @@ fn signed_agent_proposal_body_for_actor(
         "work_item_id":context.work_item_id,
         "section_key":section_key,
         "parent_revision_id":parent_revision_id,
+        "lease_id":lease_id,
+        "lease_fencing_token":lease_fencing_token,
+        "expected_work_version":expected_work_version,
         "proposal_kind":"delivery",
         "payload_hash":payload_hash,
-        "artifact_manifest_id":context.artifact.manifest_id,
+        "artifact_manifest_id":artifact.manifest_id,
         "agent_id":actor.agent_id,
         "binding_id":actor.binding_id,
         "agent_key_id":agent_key_id,
         "signed_at_unix":signed_at_unix,
         "signature":BASE64.encode(actor.agent_key.sign(
-            &agent_proposal_signing_bytes(&signing).expect("Agent proposal frame")
+            &agent_proposal_v2_signing_bytes(&signing).expect("Agent proposal V2 frame")
         ).to_bytes()),
         "idempotency_key":idempotency_key,
     })
@@ -1266,16 +1773,30 @@ async fn transition_fixture_work_to_accepted(
     }
 }
 
-async fn create_post_merge_whole_paper_revision(
-    router: &Router,
-    actor: &Actor,
+struct PostMergeWholePaperRevisionInput<'a> {
     paper_id: Uuid,
     expected_paper_version: u64,
     parent_revision_id: Uuid,
     revision_id: Uuid,
-    artifact: &VerifiedArtifactHashes,
-    suffix: &str,
+    artifact: &'a VerifiedArtifactHashes,
+    suffix: &'a str,
+    expected_section_count: usize,
+}
+
+async fn create_post_merge_whole_paper_revision(
+    router: &Router,
+    actor: &Actor,
+    input: PostMergeWholePaperRevisionInput<'_>,
 ) -> Uuid {
+    let PostMergeWholePaperRevisionInput {
+        paper_id,
+        expected_paper_version,
+        parent_revision_id,
+        revision_id,
+        artifact,
+        suffix,
+        expected_section_count,
+    } = input;
     let key = format!("post-merge-revision-{paper_id}-{suffix}");
     let revision = assert_status(
         user_post(
@@ -1315,21 +1836,30 @@ async fn create_post_merge_whole_paper_revision(
     let sections = descriptor["sections"]
         .as_array()
         .expect("materialized sections");
-    assert_eq!(sections.len(), 1, "fixture has one merged section head");
-    for field in [
-        "section_key",
-        "base_paper_revision_id",
-        "head_section_revision_id",
-        "merge_id",
-        "patch_manifest_id",
-        "patch_hash",
-    ] {
-        assert!(sections[0].get(field).is_some(), "descriptor binds {field}");
+    assert_eq!(
+        sections.len(),
+        expected_section_count,
+        "fixture materializes every terminal merged section head"
+    );
+    for section in sections {
+        for field in [
+            "section_key",
+            "base_paper_revision_id",
+            "head_section_revision_id",
+            "merge_id",
+            "patch_manifest_id",
+            "patch_hash",
+        ] {
+            assert!(section.get(field).is_some(), "descriptor binds {field}");
+        }
     }
     revision_id
 }
 
-async fn create_approved_section_gate_fixture(context: &DraftingPaperContext, suffix: &str) {
+async fn create_approved_section_gate_fixture(
+    context: &DraftingPaperContext,
+    suffix: &str,
+) -> ContributionGateFixture {
     let actor = &context.actors[0];
     let decision_actor = &context.actors[1];
     let reviewer = &context.actors[2];
@@ -1365,24 +1895,32 @@ async fn create_approved_section_gate_fixture(context: &DraftingPaperContext, su
         context.paper_id
     ));
     let proposal_key = format!("gate-proposal-{}-{suffix}", context.paper_id);
-    assert_status(
+    let created_proposal = assert_status(
         request(
             &context.router,
             "POST",
             &format!("/v2/hepta/papers/{}/agent-proposals", context.paper_id),
             signed_agent_proposal_body(
                 context,
-                proposal_id,
-                &section_key,
-                context.revision_id,
-                &payload_hash,
-                &proposal_key,
+                SignedAgentProposalBodyInput {
+                    proposal_id,
+                    section_key: &section_key,
+                    parent_revision_id: context.revision_id,
+                    lease_id,
+                    lease_fencing_token: 1,
+                    expected_work_version: 1,
+                    payload_hash: &payload_hash,
+                    idempotency_key: &proposal_key,
+                },
             ),
             None,
         )
         .await,
         StatusCode::CREATED,
     );
+    assert_eq!(created_proposal["lease_id"], lease_id.to_string());
+    assert_eq!(created_proposal["lease_fencing_token"], 1);
+    assert_eq!(created_proposal["expected_work_version"], 1);
 
     let decision_id = Uuid::new_v4();
     let decision_key = format!("gate-decision-{}-{suffix}", context.paper_id);
@@ -1533,6 +2071,220 @@ async fn create_approved_section_gate_fixture(context: &DraftingPaperContext, su
         .await,
         StatusCode::CREATED,
     );
+
+    ContributionGateFixture {
+        accepted_artifact_manifest_id: context.artifact.manifest_id,
+        accepted_by_player_id: decision_actor.player_id,
+        accepted_section_review_id: review_id,
+        reviewed_by_player_id: reviewer.player_id,
+    }
+}
+
+struct CompleteExistingSectionLeaseInput<'a> {
+    section_key: &'a str,
+    parent_revision_id: Uuid,
+    lease_id: Uuid,
+    fencing_token: u64,
+    artifact: &'a VerifiedArtifactHashes,
+    suffix: &'a str,
+}
+
+async fn complete_existing_section_lease_fixture(
+    context: &DraftingPaperContext,
+    input: CompleteExistingSectionLeaseInput<'_>,
+) -> Uuid {
+    let CompleteExistingSectionLeaseInput {
+        section_key,
+        parent_revision_id,
+        lease_id,
+        fencing_token,
+        artifact,
+        suffix,
+    } = input;
+    let actor = &context.actors[0];
+    let decision_actor = &context.actors[1];
+    let reviewer = &context.actors[2];
+    let proposal_id = Uuid::new_v4();
+    let payload_hash = digest(&format!(
+        "terminal-section-payload-{}-{suffix}",
+        context.paper_id
+    ));
+    let proposal_key = format!("terminal-section-proposal-{}-{suffix}", context.paper_id);
+    assert_status(
+        request(
+            &context.router,
+            "POST",
+            &format!("/v2/hepta/papers/{}/agent-proposals", context.paper_id),
+            signed_agent_proposal_body_for_actor_and_artifact(
+                context,
+                actor,
+                artifact,
+                proposal_id,
+                section_key,
+                parent_revision_id,
+                lease_id,
+                fencing_token,
+                1,
+                &payload_hash,
+                &proposal_key,
+                None,
+            ),
+            None,
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+
+    let decision_id = Uuid::new_v4();
+    let decision_key = format!("terminal-section-decision-{}-{suffix}", context.paper_id);
+    assert_status(
+        user_post(
+            &context.router,
+            decision_actor,
+            "create_human_decision_v3",
+            &format!("/v2/hepta/papers/{}/human-decisions", context.paper_id),
+            &decision_key,
+            signed_human_decision_body(
+                context,
+                decision_actor,
+                decision_id,
+                proposal_id,
+                1,
+                "accept",
+                &digest(&format!(
+                    "terminal-section-decision-{}-{suffix}",
+                    context.paper_id
+                )),
+                &decision_key,
+            ),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+
+    let section_revision_id = Uuid::new_v4();
+    let revision_key = format!("terminal-section-revision-{}-{suffix}", context.paper_id);
+    assert_status(
+        user_post(
+            &context.router,
+            actor,
+            "create_section_revision_v3",
+            &format!("/v2/hepta/papers/{}/section-revisions", context.paper_id),
+            &revision_key,
+            json!({
+                "section_revision_id":section_revision_id,
+                "section_key":section_key,
+                "parent_revision_id":parent_revision_id,
+                "proposal_id":proposal_id,
+                "lease_id":lease_id,
+                "fencing_token":fencing_token,
+                "patch_manifest_id":artifact.manifest_id,
+                "patch_hash":payload_hash,
+                "idempotency_key":revision_key,
+            }),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+
+    let review_id = Uuid::new_v4();
+    let review_hash = digest(&format!(
+        "terminal-section-review-{}-{suffix}",
+        context.paper_id
+    ));
+    let review_time = Utc::now().timestamp();
+    let review_signing = SectionReviewSigningV1 {
+        schema: SECTION_REVIEW_V1.to_string(),
+        review_id,
+        paper_project_id: context.paper_id,
+        section_revision_id,
+        reviewer_player_id: reviewer.player_id,
+        verdict: "approve".to_string(),
+        review_hash: review_hash.clone(),
+        expected_revision_version: 1,
+        signing_key_id: reviewer.human_key_id.clone(),
+        signing_public_key_hash: reviewer.human_public_key_hash.clone(),
+        signed_at_unix: review_time,
+    };
+    let review_key = format!("terminal-section-review-{}-{suffix}", context.paper_id);
+    assert_status(
+        user_post(
+            &context.router,
+            reviewer,
+            "create_section_review_v3",
+            &format!(
+                "/v2/hepta/papers/{}/section-revisions/{section_revision_id}/reviews",
+                context.paper_id
+            ),
+            &review_key,
+            json!({
+                "review_id":review_id,
+                "expected_revision_version":1,
+                "verdict":"approve",
+                "review_hash":review_hash,
+                "signing_key_id":reviewer.human_key_id,
+                "signing_public_key":reviewer.human_public_key,
+                "signing_public_key_hash":reviewer.human_public_key_hash,
+                "signed_at_unix":review_time,
+                "signature":BASE64.encode(reviewer.human_key.sign(
+                    &section_review_signing_bytes(&review_signing)
+                        .expect("terminal section review frame")
+                ).to_bytes()),
+                "idempotency_key":review_key,
+            }),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+
+    let merge_id = Uuid::new_v4();
+    let merge_time = Utc::now().timestamp();
+    let merge_signing = SectionMergeSigningV1 {
+        schema: SECTION_MERGE_V1.to_string(),
+        merge_id,
+        paper_project_id: context.paper_id,
+        section_key: section_key.to_string(),
+        section_revision_id,
+        parent_revision_id,
+        merged_section_revision_id: section_revision_id,
+        lease_id,
+        fencing_token,
+        merged_by_player_id: actor.player_id,
+        signing_key_id: actor.human_key_id.clone(),
+        signing_public_key_hash: actor.human_public_key_hash.clone(),
+        merged_at_unix: merge_time,
+    };
+    let merge_key = format!("terminal-section-merge-{}-{suffix}", context.paper_id);
+    assert_status(
+        user_post(
+            &context.router,
+            actor,
+            "create_section_merge_v3",
+            &format!("/v2/hepta/papers/{}/section-merges", context.paper_id),
+            &merge_key,
+            json!({
+                "merge_id":merge_id,
+                "section_revision_id":section_revision_id,
+                "expected_revision_version":2,
+                "parent_revision_id":parent_revision_id,
+                "merged_section_revision_id":section_revision_id,
+                "lease_id":lease_id,
+                "fencing_token":fencing_token,
+                "signing_key_id":actor.human_key_id,
+                "signing_public_key":actor.human_public_key,
+                "signing_public_key_hash":actor.human_public_key_hash,
+                "merged_at_unix":merge_time,
+                "signature":BASE64.encode(actor.human_key.sign(
+                    &section_merge_signing_bytes(&merge_signing)
+                        .expect("terminal section merge frame")
+                ).to_bytes()),
+                "idempotency_key":merge_key,
+            }),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    section_revision_id
 }
 
 async fn create_locked_drafting_paper(
@@ -1917,11 +2669,13 @@ pub(crate) async fn reset_postgres(database_url: &str) {
     let pool = sqlx::PgPool::connect(database_url)
         .await
         .expect("maintenance pool");
-    // 0038 and 0040 intentionally make TRUNCATE impossible for immutable
-    // evidence, evaluation drafts, attestations, and their source tables.
+    // 0038, 0040, and 0047 intentionally make TRUNCATE impossible for
+    // immutable evidence, evaluation drafts, attestations, contribution
+    // ledgers, reservations, and their source tables.
     // These PostgreSQL tests run in a dedicated disposable database, so reset
     // removes only statement-level TRUNCATE guards, clears fixture data, and
-    // then reapplies both migrations to reconstruct the production guard set.
+    // then reapplies all three migrations to reconstruct the production guard
+    // set and verifies the exact contribution-authority catalog.
     sqlx::raw_sql(
         "drop trigger if exists hepta_trnm_time_checkpoint_v1_truncate_guard
              on hepta_trnm_cometbft_time_checkpoints_v1;
@@ -1948,11 +2702,15 @@ pub(crate) async fn reset_postgres(database_url: &str) {
          drop trigger if exists hepta_evaluation_draft_truncate_guard
              on hepta_paper_evaluation_drafts;
          drop trigger if exists hepta_evaluation_draft_attestation_truncate_guard
-             on hepta_paper_evaluation_draft_attestations;",
+             on hepta_paper_evaluation_draft_attestations;
+         drop trigger if exists hepta_contribution_ledger_reservation_truncate_guard
+             on hepta_paper_contribution_ledger_reservations;
+         drop trigger if exists hepta_paper_contribution_ledger_truncate_guard
+             on hepta_paper_contribution_ledgers;",
     )
     .execute(&pool)
     .await
-    .expect("drop test-only V2 TRUNCATE guards before reset");
+    .expect("drop test-only immutable TRUNCATE guards before reset");
     sqlx::raw_sql(
         "truncate table
            hepta_paper_chain_finality_preparations_v2,
@@ -1973,6 +2731,7 @@ pub(crate) async fn reset_postgres(database_url: &str) {
            hepta_paper_evaluation_panel_attestations,
            hepta_paper_evaluations,
            hepta_paper_contribution_ledgers,
+           hepta_paper_contribution_ledger_reservations,
            hepta_paper_room_events,
            hepta_section_merges,
            hepta_section_reviews,
@@ -2042,6 +2801,15 @@ pub(crate) async fn reset_postgres(database_url: &str) {
     .execute(&pool)
     .await
     .expect("restore evaluation draft quorum constraints and guards after test reset");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0047_add_hepta_contribution_ledger_authority.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("restore contribution authority constraints and guards after test reset");
+    verify_contribution_ledger_authority_catalog(&pool)
+        .await
+        .expect("verify exact contribution authority catalog after test reset");
 }
 
 async fn register_prerequisites(router: &Router, _actors: &[Actor]) -> Uuid {
@@ -3707,6 +4475,88 @@ async fn set_agent_binding_status_for_test(
     }
 }
 
+async fn set_work_item_status_for_agent_authority_test(
+    state: &AppState,
+    work_item_id: Uuid,
+    status: WorkItemStatus,
+    version: u64,
+    artifact_manifest_hash: Option<String>,
+) {
+    let now = Utc::now();
+    if let Some(pool) = &state.pool {
+        let record_json: Value = sqlx::query_scalar(
+            "select record_json from hepta_paper_work_items where work_item_id=$1",
+        )
+        .bind(work_item_id)
+        .fetch_one(pool)
+        .await
+        .expect("work item record for Agent authority test");
+        let mut work: WorkItem =
+            serde_json::from_value(record_json).expect("decode Agent authority-test work item");
+        work.status = status;
+        work.version = version;
+        work.artifact_manifest_hash = artifact_manifest_hash;
+        work.updated_at = now;
+        sqlx::query(
+            "update hepta_paper_work_items
+             set status=$1,version=$2,record_json=$3::jsonb,updated_at=$4
+             where work_item_id=$5",
+        )
+        .bind(status.as_str())
+        .bind(i64::try_from(version).expect("Agent authority-test work version fits bigint"))
+        .bind(serde_json::to_value(work).expect("encode Agent authority-test work item"))
+        .bind(now)
+        .bind(work_item_id)
+        .execute(pool)
+        .await
+        .expect("update Agent authority-test work status");
+    } else {
+        let mut memory = state.paper_raid.write().await;
+        let work = memory
+            .work_items
+            .get_mut(&work_item_id)
+            .expect("memory work item for Agent authority test");
+        work.status = status;
+        work.version = version;
+        work.artifact_manifest_hash = artifact_manifest_hash;
+        work.updated_at = now;
+    }
+}
+
+async fn expire_section_lease_for_agent_authority_test(state: &AppState, lease_id: Uuid) {
+    let now = Utc::now();
+    let expires_at = now - chrono::Duration::seconds(1);
+    if let Some(pool) = &state.pool {
+        let record_json: Value =
+            sqlx::query_scalar("select record_json from hepta_section_leases where lease_id=$1")
+                .bind(lease_id)
+                .fetch_one(pool)
+                .await
+                .expect("section lease record for Agent authority test");
+        let mut lease: SectionLease =
+            serde_json::from_value(record_json).expect("decode Agent authority-test section lease");
+        lease.expires_at = expires_at;
+        lease.updated_at = now;
+        sqlx::query(
+            "update hepta_section_leases
+             set expires_at=$1,record_json=$2::jsonb,updated_at=$3
+             where lease_id=$4",
+        )
+        .bind(expires_at)
+        .bind(serde_json::to_value(lease).expect("encode Agent authority-test section lease"))
+        .bind(now)
+        .bind(lease_id)
+        .execute(pool)
+        .await
+        .expect("expire Agent authority-test section lease");
+    } else {
+        let mut memory = state.paper_raid.write().await;
+        memory
+            .collaboration
+            .expire_section_lease_for_agent_authority_test(lease_id, expires_at, now);
+    }
+}
+
 async fn exercise_agent_proposal_binding_authority(state: AppState) {
     let router = app(state.clone());
     let group = actors(3);
@@ -3721,6 +4571,7 @@ async fn exercise_agent_proposal_binding_authority(state: AppState) {
     let actor = context.actors[0].clone();
     let section_key = "binding-authority";
     let lease_key = format!("binding-authority-lease-{}", context.paper_id);
+    let lease_id = Uuid::new_v4();
     assert_status(
         user_post(
             &context.router,
@@ -3729,7 +4580,7 @@ async fn exercise_agent_proposal_binding_authority(state: AppState) {
             &format!("/v2/hepta/papers/{}/section-leases", context.paper_id),
             &lease_key,
             json!({
-                "lease_id":Uuid::new_v4(),
+                "lease_id":lease_id,
                 "section_key":section_key,
                 "holder_binding_id":actor.binding_id,
                 "expected_previous_fencing_token":0,
@@ -3755,6 +4606,9 @@ async fn exercise_agent_proposal_binding_authority(state: AppState) {
                 Uuid::new_v4(),
                 section_key,
                 context.revision_id,
+                lease_id,
+                1,
+                1,
                 &digest("binding-authority-no-registry"),
                 &no_registry_key,
                 None,
@@ -3768,6 +4622,275 @@ async fn exercise_agent_proposal_binding_authority(state: AppState) {
         legacy_league_state_snapshot_bytes(&state).await,
         empty_registry_before,
         "Agent proposal must not read-modify-write the empty legacy registry",
+    );
+
+    for (status, work_version) in [
+        (WorkItemStatus::Cancelled, 2_u64),
+        (WorkItemStatus::Accepted, 3_u64),
+    ] {
+        set_work_item_status_for_agent_authority_test(
+            &state,
+            context.work_item_id,
+            status,
+            work_version,
+            (status == WorkItemStatus::Accepted)
+                .then(|| context.artifact.artifact_manifest_hash.clone()),
+        )
+        .await;
+        let status_key = format!(
+            "binding-authority-work-{}-{}",
+            status.as_str(),
+            context.paper_id
+        );
+        assert_eq!(
+            error_code(
+                request(
+                    &context.router,
+                    "POST",
+                    &proposal_path,
+                    signed_agent_proposal_body_for_actor(
+                        &context,
+                        &actor,
+                        Uuid::new_v4(),
+                        section_key,
+                        context.revision_id,
+                        lease_id,
+                        1,
+                        work_version,
+                        &digest(&format!("binding-authority-work-{}", status.as_str())),
+                        &status_key,
+                        None,
+                    ),
+                    None,
+                )
+                .await,
+                StatusCode::CONFLICT,
+            ),
+            "agent_proposal_work_not_active",
+            "terminal or cancelled work must not authorize a new Agent proposal",
+        );
+    }
+    set_work_item_status_for_agent_authority_test(
+        &state,
+        context.work_item_id,
+        WorkItemStatus::Planned,
+        4,
+        None,
+    )
+    .await;
+
+    let old_lease_replay_key = format!(
+        "binding-authority-old-lease-exact-replay-{}",
+        context.paper_id
+    );
+    let old_lease_replay_body = signed_agent_proposal_body_for_actor(
+        &context,
+        &actor,
+        Uuid::new_v4(),
+        section_key,
+        context.revision_id,
+        lease_id,
+        1,
+        4,
+        &digest("binding-authority-old-lease-exact-replay"),
+        &old_lease_replay_key,
+        None,
+    );
+
+    expire_section_lease_for_agent_authority_test(&state, lease_id).await;
+    let expired_lease_key = format!("binding-authority-expired-lease-{}", context.paper_id);
+    assert_eq!(
+        error_code(
+            request(
+                &context.router,
+                "POST",
+                &proposal_path,
+                signed_agent_proposal_body_for_actor(
+                    &context,
+                    &actor,
+                    Uuid::new_v4(),
+                    section_key,
+                    context.revision_id,
+                    lease_id,
+                    1,
+                    4,
+                    &digest("binding-authority-expired-lease"),
+                    &expired_lease_key,
+                    None,
+                ),
+                None,
+            )
+            .await,
+            StatusCode::CONFLICT,
+        ),
+        "agent_proposal_requires_current_lease",
+    );
+
+    let replacement_actor = context.actors[1].clone();
+    let replacement_lease_id = Uuid::new_v4();
+    let replacement_lease_key = format!("binding-authority-replacement-{}", context.paper_id);
+    assert_status(
+        user_post(
+            &context.router,
+            &replacement_actor,
+            "acquire_section_lease_v3",
+            &format!("/v2/hepta/papers/{}/section-leases", context.paper_id),
+            &replacement_lease_key,
+            json!({
+                "lease_id":replacement_lease_id,
+                "section_key":section_key,
+                "holder_binding_id":replacement_actor.binding_id,
+                "expected_previous_fencing_token":1,
+                "ttl_seconds":3600,
+                "idempotency_key":replacement_lease_key,
+            }),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    let replaced_lease_key = format!("binding-authority-replaced-lease-{}", context.paper_id);
+    assert_eq!(
+        error_code(
+            request(
+                &context.router,
+                "POST",
+                &proposal_path,
+                signed_agent_proposal_body_for_actor(
+                    &context,
+                    &actor,
+                    Uuid::new_v4(),
+                    section_key,
+                    context.revision_id,
+                    replacement_lease_id,
+                    2,
+                    4,
+                    &digest("binding-authority-replaced-lease"),
+                    &replaced_lease_key,
+                    None,
+                ),
+                None,
+            )
+            .await,
+            StatusCode::CONFLICT,
+        ),
+        "agent_proposal_requires_current_lease",
+        "a replaced lease must not authorize its previous holder",
+    );
+
+    expire_section_lease_for_agent_authority_test(&state, replacement_lease_id).await;
+    let current_lease_key = format!("binding-authority-current-lease-{}", context.paper_id);
+    let current_lease_id = Uuid::new_v4();
+    assert_status(
+        user_post(
+            &context.router,
+            &actor,
+            "acquire_section_lease_v3",
+            &format!("/v2/hepta/papers/{}/section-leases", context.paper_id),
+            &current_lease_key,
+            json!({
+                "lease_id":current_lease_id,
+                "section_key":section_key,
+                "holder_binding_id":actor.binding_id,
+                "expected_previous_fencing_token":2,
+                "ttl_seconds":3600,
+                "idempotency_key":current_lease_key,
+            }),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+
+    assert_eq!(
+        error_code(
+            request(
+                &context.router,
+                "POST",
+                &proposal_path,
+                old_lease_replay_body,
+                None,
+            )
+            .await,
+            StatusCode::CONFLICT,
+        ),
+        "stale_agent_proposal_lease_epoch",
+        "the exact old V2 body must fail after the same binding reacquires a new lease epoch",
+    );
+
+    let old_work_version_replay_key = format!(
+        "binding-authority-old-work-version-exact-replay-{}",
+        context.paper_id
+    );
+    let old_work_version_replay_body = signed_agent_proposal_body_for_actor(
+        &context,
+        &actor,
+        Uuid::new_v4(),
+        section_key,
+        context.revision_id,
+        current_lease_id,
+        3,
+        4,
+        &digest("binding-authority-old-work-version-exact-replay"),
+        &old_work_version_replay_key,
+        None,
+    );
+    set_work_item_status_for_agent_authority_test(
+        &state,
+        context.work_item_id,
+        WorkItemStatus::Rejected,
+        5,
+        None,
+    )
+    .await;
+    set_work_item_status_for_agent_authority_test(
+        &state,
+        context.work_item_id,
+        WorkItemStatus::InProgress,
+        6,
+        None,
+    )
+    .await;
+    assert_eq!(
+        error_code(
+            request(
+                &context.router,
+                "POST",
+                &proposal_path,
+                old_work_version_replay_body,
+                None,
+            )
+            .await,
+            StatusCode::CONFLICT,
+        ),
+        "aggregate_version_conflict",
+        "the exact old V2 body must fail after work is rejected and reopened at a new version",
+    );
+
+    let current_lease_proposal_key = format!(
+        "binding-authority-current-lease-proposal-{}",
+        context.paper_id
+    );
+    assert_status(
+        request(
+            &context.router,
+            "POST",
+            &proposal_path,
+            signed_agent_proposal_body_for_actor(
+                &context,
+                &actor,
+                Uuid::new_v4(),
+                section_key,
+                context.revision_id,
+                current_lease_id,
+                3,
+                6,
+                &digest("binding-authority-current-lease-proposal"),
+                &current_lease_proposal_key,
+                None,
+            ),
+            None,
+        )
+        .await,
+        StatusCode::CREATED,
     );
 
     let wrong_legacy_key = &context.actors[1].agent_key;
@@ -3805,6 +4928,9 @@ async fn exercise_agent_proposal_binding_authority(state: AppState) {
                     Uuid::new_v4(),
                     section_key,
                     context.revision_id,
+                    current_lease_id,
+                    3,
+                    6,
                     &digest("binding-authority-key-mismatch"),
                     &key_mismatch_key,
                     Some(wrong_key_id),
@@ -3830,6 +4956,9 @@ async fn exercise_agent_proposal_binding_authority(state: AppState) {
                 Uuid::new_v4(),
                 section_key,
                 context.revision_id,
+                current_lease_id,
+                3,
+                6,
                 &digest("binding-authority-inactive"),
                 &inactive_key,
                 None,
@@ -3856,6 +4985,9 @@ async fn exercise_agent_proposal_binding_authority(state: AppState) {
                 Uuid::new_v4(),
                 section_key,
                 context.revision_id,
+                current_lease_id,
+                3,
+                6,
                 &digest("binding-authority-foreign"),
                 &foreign_key,
                 None,
@@ -3903,6 +5035,9 @@ async fn exercise_agent_proposal_binding_authority(state: AppState) {
                     Uuid::new_v4(),
                     section_key,
                     context.revision_id,
+                    current_lease_id,
+                    3,
+                    6,
                     &digest("binding-authority-stale-key"),
                     &stale_key,
                     None,
@@ -3929,6 +5064,9 @@ async fn exercise_agent_proposal_binding_authority(state: AppState) {
                 Uuid::new_v4(),
                 section_key,
                 context.revision_id,
+                current_lease_id,
+                3,
+                6,
                 &digest("binding-authority-current-key"),
                 &rotated_key_request,
                 None,
@@ -3971,6 +5109,7 @@ async fn run_collaboration_kernel_flow(state: AppState) -> CollaborationOutcome 
     let all_actors = actors(7);
     let challenge_id = register_prerequisites(&router, &all_actors).await;
     create_players_and_bindings(&router, &all_actors).await;
+    exercise_private_party_matchmaking(&router, &all_actors, challenge_id).await;
     exercise_matchmaking(&router, &all_actors, challenge_id).await;
 
     let mut context =
@@ -4067,6 +5206,7 @@ async fn run_collaboration_kernel_flow(state: AppState) -> CollaborationOutcome 
     );
 
     let actor = &context.actors[0];
+    let evidence_actor = &context.actors[1];
     let evidence_id = Uuid::new_v4();
     let source_uri = "https://example.org/public/paper-source";
     let source_hash = digest("public-paper-source");
@@ -4074,7 +5214,7 @@ async fn run_collaboration_kernel_flow(state: AppState) -> CollaborationOutcome 
     let license = "CC-BY-4.0";
     let evidence_time = Utc::now().timestamp();
     let evidence_signature = human_verification_signature(
-        actor,
+        evidence_actor,
         context.paper_id,
         "evidence_card",
         evidence_id,
@@ -4092,9 +5232,9 @@ async fn run_collaboration_kernel_flow(state: AppState) -> CollaborationOutcome 
         "source_hash":source_hash,
         "locator":locator,
         "license":license,
-        "verification_key_id":actor.human_key_id,
-        "verification_public_key":actor.human_public_key,
-        "verification_public_key_hash":actor.human_public_key_hash,
+        "verification_key_id":evidence_actor.human_key_id,
+        "verification_public_key":evidence_actor.human_public_key,
+        "verification_public_key_hash":evidence_actor.human_public_key_hash,
         "signed_at_unix":evidence_time,
         "verification_signature":evidence_signature,
         "idempotency_key":evidence_key,
@@ -4102,7 +5242,7 @@ async fn run_collaboration_kernel_flow(state: AppState) -> CollaborationOutcome 
     assert_status(
         user_post(
             &context.router,
-            actor,
+            evidence_actor,
             "create_evidence_card_v3",
             &evidence_path,
             &evidence_key,
@@ -4118,7 +5258,7 @@ async fn run_collaboration_kernel_flow(state: AppState) -> CollaborationOutcome 
     let uri_tamper_code = error_code(
         user_post(
             &context.router,
-            actor,
+            evidence_actor,
             "create_evidence_card_v3",
             &evidence_path,
             &uri_tamper_key,
@@ -4134,7 +5274,7 @@ async fn run_collaboration_kernel_flow(state: AppState) -> CollaborationOutcome 
     let citation_time = Utc::now().timestamp();
     let citation_source = format!("citation-doi\n{doi}\ncitation-url\n{canonical_url}");
     let citation_signature = human_verification_signature(
-        actor,
+        evidence_actor,
         context.paper_id,
         "citation",
         citation_id,
@@ -4154,9 +5294,9 @@ async fn run_collaboration_kernel_flow(state: AppState) -> CollaborationOutcome 
         "source_hash":source_hash,
         "locator":locator,
         "license":license,
-        "verification_key_id":actor.human_key_id,
-        "verification_public_key":actor.human_public_key,
-        "verification_public_key_hash":actor.human_public_key_hash,
+        "verification_key_id":evidence_actor.human_key_id,
+        "verification_public_key":evidence_actor.human_public_key,
+        "verification_public_key_hash":evidence_actor.human_public_key_hash,
         "signed_at_unix":citation_time,
         "verification_signature":citation_signature,
         "idempotency_key":citation_key,
@@ -4164,7 +5304,7 @@ async fn run_collaboration_kernel_flow(state: AppState) -> CollaborationOutcome 
     assert_status(
         user_post(
             &context.router,
-            actor,
+            evidence_actor,
             "create_citation_record_v3",
             &citation_path,
             &citation_key,
@@ -4180,7 +5320,7 @@ async fn run_collaboration_kernel_flow(state: AppState) -> CollaborationOutcome 
     let doi_tamper_code = error_code(
         user_post(
             &context.router,
-            actor,
+            evidence_actor,
             "create_citation_record_v3",
             &citation_path,
             &doi_tamper_key,
@@ -4248,11 +5388,16 @@ async fn run_collaboration_kernel_flow(state: AppState) -> CollaborationOutcome 
     let proposal_path = format!("/v2/hepta/papers/{}/agent-proposals", context.paper_id);
     let proposal_body = signed_agent_proposal_body(
         &context,
-        proposal_id,
-        section_key,
-        context.revision_id,
-        &payload_hash,
-        &proposal_key,
+        SignedAgentProposalBodyInput {
+            proposal_id,
+            section_key,
+            parent_revision_id: context.revision_id,
+            lease_id,
+            lease_fencing_token: 1,
+            expected_work_version: 1,
+            payload_hash: &payload_hash,
+            idempotency_key: &proposal_key,
+        },
     );
     assert_status(
         request(&context.router, "POST", &proposal_path, proposal_body, None).await,
@@ -4263,11 +5408,16 @@ async fn run_collaboration_kernel_flow(state: AppState) -> CollaborationOutcome 
     let duplicate_key = format!("p3-proposal-duplicate-{proposal_id}");
     let duplicate_body = signed_agent_proposal_body(
         &context,
-        proposal_id,
-        section_key,
-        context.revision_id,
-        &digest("different-valid-payload"),
-        &duplicate_key,
+        SignedAgentProposalBodyInput {
+            proposal_id,
+            section_key,
+            parent_revision_id: context.revision_id,
+            lease_id,
+            lease_fencing_token: 1,
+            expected_work_version: 1,
+            payload_hash: &digest("different-valid-payload"),
+            idempotency_key: &duplicate_key,
+        },
     );
     let duplicate_proposal_code = error_code(
         request(
@@ -4485,11 +5635,16 @@ async fn run_collaboration_kernel_flow(state: AppState) -> CollaborationOutcome 
             &proposal_path,
             signed_agent_proposal_body(
                 &context,
-                Uuid::new_v4(),
-                section_key,
-                context.revision_id,
-                &digest("stale-parent"),
-                &stale_key,
+                SignedAgentProposalBodyInput {
+                    proposal_id: Uuid::new_v4(),
+                    section_key,
+                    parent_revision_id: context.revision_id,
+                    lease_id: next_lease_id,
+                    lease_fencing_token: 2,
+                    expected_work_version: 1,
+                    payload_hash: &digest("stale-parent"),
+                    idempotency_key: &stale_key,
+                },
             ),
             None,
         )
@@ -4526,11 +5681,16 @@ async fn run_collaboration_kernel_flow(state: AppState) -> CollaborationOutcome 
             &proposal_path,
             signed_agent_proposal_body(
                 &context,
-                context.revision_id,
-                "results",
-                context.revision_id,
-                &digest("cyclic-section-parent"),
-                &cyclic_parent_key,
+                SignedAgentProposalBodyInput {
+                    proposal_id: context.revision_id,
+                    section_key: "results",
+                    parent_revision_id: context.revision_id,
+                    lease_id: results_lease_id,
+                    lease_fencing_token: 1,
+                    expected_work_version: 1,
+                    payload_hash: &digest("cyclic-section-parent"),
+                    idempotency_key: &cyclic_parent_key,
+                },
             ),
             None,
         )
@@ -4545,11 +5705,16 @@ async fn run_collaboration_kernel_flow(state: AppState) -> CollaborationOutcome 
             &proposal_path,
             signed_agent_proposal_body(
                 &context,
-                Uuid::new_v4(),
-                "results",
-                section_revision_id,
-                &digest("cross-section-parent"),
-                &cross_section_key,
+                SignedAgentProposalBodyInput {
+                    proposal_id: Uuid::new_v4(),
+                    section_key: "results",
+                    parent_revision_id: section_revision_id,
+                    lease_id: results_lease_id,
+                    lease_fencing_token: 1,
+                    expected_work_version: 1,
+                    payload_hash: &digest("cross-section-parent"),
+                    idempotency_key: &cross_section_key,
+                },
             ),
             None,
         )
@@ -4564,17 +5729,66 @@ async fn run_collaboration_kernel_flow(state: AppState) -> CollaborationOutcome 
             &proposal_path,
             signed_agent_proposal_body(
                 &context,
-                Uuid::new_v4(),
-                "results",
-                cross_context.revision_id,
-                &digest("cross-paper-parent"),
-                &cross_paper_key,
+                SignedAgentProposalBodyInput {
+                    proposal_id: Uuid::new_v4(),
+                    section_key: "results",
+                    parent_revision_id: cross_context.revision_id,
+                    lease_id: results_lease_id,
+                    lease_fencing_token: 1,
+                    expected_work_version: 1,
+                    payload_hash: &digest("cross-paper-parent"),
+                    idempotency_key: &cross_paper_key,
+                },
             ),
             None,
         )
         .await,
         StatusCode::CONFLICT,
     );
+
+    let methods_terminal_artifact = create_verified_artifact_manifest(
+        &context.router,
+        actor,
+        context.paper_id,
+        challenge_id,
+        context.paper_version,
+        "collaboration-methods-second-generation",
+    )
+    .await;
+    let results_terminal_artifact = create_verified_artifact_manifest(
+        &context.router,
+        actor,
+        context.paper_id,
+        challenge_id,
+        context.paper_version,
+        "collaboration-results-first-generation",
+    )
+    .await;
+
+    complete_existing_section_lease_fixture(
+        &context,
+        CompleteExistingSectionLeaseInput {
+            section_key,
+            parent_revision_id: section_revision_id,
+            lease_id: next_lease_id,
+            fencing_token: 2,
+            artifact: &methods_terminal_artifact,
+            suffix: "methods-second-generation",
+        },
+    )
+    .await;
+    complete_existing_section_lease_fixture(
+        &context,
+        CompleteExistingSectionLeaseInput {
+            section_key: "results",
+            parent_revision_id: context.revision_id,
+            lease_id: results_lease_id,
+            fencing_token: 1,
+            artifact: &results_terminal_artifact,
+            suffix: "results-first-generation",
+        },
+    )
+    .await;
 
     transition_fixture_work_to_accepted(
         &context.router,
@@ -4629,12 +5843,15 @@ async fn run_collaboration_kernel_flow(state: AppState) -> CollaborationOutcome 
     let post_merge_revision_id = create_post_merge_whole_paper_revision(
         &context.router,
         actor,
-        context.paper_id,
-        context.paper_version,
-        context.revision_id,
-        Uuid::new_v4(),
-        &context.artifact,
-        "collaboration-kernel",
+        PostMergeWholePaperRevisionInput {
+            paper_id: context.paper_id,
+            expected_paper_version: context.paper_version,
+            parent_revision_id: context.revision_id,
+            revision_id: Uuid::new_v4(),
+            artifact: &context.artifact,
+            suffix: "collaboration-kernel",
+            expected_section_count: 2,
+        },
     )
     .await;
     context.revision_id = post_merge_revision_id;
@@ -4716,6 +5933,34 @@ async fn run_collaboration_kernel_flow(state: AppState) -> CollaborationOutcome 
         StatusCode::OK,
     );
     context.paper_version += 1;
+
+    let continuation_work_item_id = Uuid::new_v4();
+    let continuation_work_key =
+        format!("p3-materialized-continuation-work-{continuation_work_item_id}");
+    let continuation_work = assert_status(
+        user_post(
+            &context.router,
+            actor,
+            "create_paper_work_item_v2",
+            &format!("/v2/hepta/papers/{}/work-items", context.paper_id),
+            &continuation_work_key,
+            json!({
+                "work_item_id":continuation_work_item_id,
+                "expected_paper_version":context.paper_version,
+                "kind":"paper_section",
+                "title":"Continue the methods section after materialization",
+                "assigned_player_id":actor.player_id,
+                "assigned_binding_id":actor.binding_id,
+                "idempotency_key":continuation_work_key,
+            }),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(continuation_work["version"], 1);
+    context.work_item_id = continuation_work_item_id;
+    context.paper_version += 1;
+
     let continuation_lease_id = Uuid::new_v4();
     let continuation_lease_key = format!("p3-materialized-continuation-{continuation_lease_id}");
     let continuation_lease = assert_status(
@@ -4729,7 +5974,7 @@ async fn run_collaboration_kernel_flow(state: AppState) -> CollaborationOutcome 
                 "lease_id":continuation_lease_id,
                 "section_key":section_key,
                 "holder_binding_id":actor.binding_id,
-                "expected_previous_fencing_token":1,
+                "expected_previous_fencing_token":2,
                 "ttl_seconds":3600,
                 "idempotency_key":continuation_lease_key,
             }),
@@ -4737,7 +5982,7 @@ async fn run_collaboration_kernel_flow(state: AppState) -> CollaborationOutcome 
         .await,
         StatusCode::CREATED,
     );
-    assert_eq!(continuation_lease["fencing_token"], 2);
+    assert_eq!(continuation_lease["fencing_token"], 3);
     let continuation_proposal_id = Uuid::new_v4();
     let continuation_proposal_key =
         format!("p3-materialized-continuation-proposal-{continuation_proposal_id}");
@@ -4748,11 +5993,16 @@ async fn run_collaboration_kernel_flow(state: AppState) -> CollaborationOutcome 
             &proposal_path,
             signed_agent_proposal_body(
                 &context,
-                continuation_proposal_id,
-                section_key,
-                post_merge_revision_id,
-                &digest("methods-section-post-materialization-patch"),
-                &continuation_proposal_key,
+                SignedAgentProposalBodyInput {
+                    proposal_id: continuation_proposal_id,
+                    section_key,
+                    parent_revision_id: post_merge_revision_id,
+                    lease_id: continuation_lease_id,
+                    lease_fencing_token: 3,
+                    expected_work_version: 1,
+                    payload_hash: &digest("methods-section-post-materialization-patch"),
+                    idempotency_key: &continuation_proposal_key,
+                },
             ),
             None,
         )
@@ -5260,8 +6510,11 @@ async fn run_full_flow(state: AppState, member_count: usize, options: FlowOption
         paper_version,
         artifact: verified_artifact.clone(),
     };
-    create_approved_section_gate_fixture(&section_gate_context, &format!("authors-{member_count}"))
-        .await;
+    let contribution_fixture = create_approved_section_gate_fixture(
+        &section_gate_context,
+        &format!("authors-{member_count}"),
+    )
+    .await;
     if section_work_item_id != work_item_id {
         transition_fixture_work_to_accepted(
             &router,
@@ -5298,15 +6551,19 @@ async fn run_full_flow(state: AppState, member_count: usize, options: FlowOption
         paper_version += 1;
     }
 
+    let post_merge_revision_suffix = format!("authors-{member_count}");
     revision_id = create_post_merge_whole_paper_revision(
         &router,
         &actors[0],
-        paper_id,
-        paper_version,
-        revision_id,
-        Uuid::from_u128(0x6100_0000_0000_4000_8000_0000_0000_0000 + base),
-        &verified_artifact,
-        &format!("authors-{member_count}"),
+        PostMergeWholePaperRevisionInput {
+            paper_id,
+            expected_paper_version: paper_version,
+            parent_revision_id: revision_id,
+            revision_id: Uuid::from_u128(0x6100_0000_0000_4000_8000_0000_0000_0000 + base),
+            artifact: &verified_artifact,
+            suffix: &post_merge_revision_suffix,
+            expected_section_count: 1,
+        },
     )
     .await;
     paper_version += 1;
@@ -5350,12 +6607,33 @@ async fn run_full_flow(state: AppState, member_count: usize, options: FlowOption
     let mut contribution_entries = actors
         .iter()
         .map(|actor| {
+            let accepted_artifact_manifest_ids = (actor.player_id
+                == contribution_fixture.accepted_by_player_id)
+                .then_some(contribution_fixture.accepted_artifact_manifest_id)
+                .into_iter()
+                .collect::<Vec<_>>();
+            let accepted_section_review_ids = (actor.player_id
+                == contribution_fixture.reviewed_by_player_id)
+                .then_some(contribution_fixture.accepted_section_review_id)
+                .into_iter()
+                .collect::<Vec<_>>();
+            let artifact_points = if actor.player_id == contribution_fixture.accepted_by_player_id {
+                100_u64
+            } else {
+                0
+            };
+            let review_points = if actor.player_id == contribution_fixture.reviewed_by_player_id {
+                150_u64
+            } else {
+                0
+            };
+            let contribution_points = artifact_points + review_points;
             json!({
                 "player_id": actor.player_id,
                 "credit_roles": ["methodology", "writing_review_editing"],
-                "accepted_artifact_manifest_ids": [],
-                "accepted_section_review_ids": [],
-                "contribution_points": 0,
+                "accepted_artifact_manifest_ids": accepted_artifact_manifest_ids,
+                "accepted_section_review_ids": accepted_section_review_ids,
+                "contribution_points": contribution_points,
             })
         })
         .collect::<Vec<_>>();
@@ -5367,6 +6645,91 @@ async fn run_full_flow(state: AppState, member_count: usize, options: FlowOption
         "entries": contribution_entries,
     }))
     .expect("contribution ledger preimage");
+    let mut omitted_contribution_entries = actors
+        .iter()
+        .map(|actor| {
+            json!({
+                "player_id": actor.player_id,
+                "credit_roles": ["methodology", "writing_review_editing"],
+                "accepted_artifact_manifest_ids": [],
+                "accepted_section_review_ids": [],
+                "contribution_points": 0,
+            })
+        })
+        .collect::<Vec<_>>();
+    omitted_contribution_entries
+        .sort_by_key(|entry| entry["player_id"].as_str().unwrap().to_string());
+    let omitted_contribution_ledger_hash = canonical_json_sha256(&json!({
+        "schema": CONTRIBUTION_LEDGER_SCHEMA_V1,
+        "contribution_ledger_id": contribution_ledger_id,
+        "paper_project_id": paper_id,
+        "entries": omitted_contribution_entries,
+    }))
+    .expect("omitted contribution ledger preimage");
+    let nil_promote_key = format!("promote-{member_count}-nil-ledger-id");
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                &actors[0],
+                "promote_paper_release_candidate_v2",
+                &promote_path,
+                &nil_promote_key,
+                json!({
+                    "expected_paper_version":paper_version,
+                    "expected_revision_version":1,
+                    "title":format!("Paper Raid {member_count}-author reproducible study"),
+                    "abstract_text":"A complete reproducible research collaboration test.",
+                    "collaboration_compact_hash":compact_hash,
+                    "research_protocol_snapshot_hash":digest("research-protocol"),
+                    "ethics_disclosure_hash":digest("ethics-disclosure"),
+                    "coi_disclosure_hash":digest("coi-disclosure"),
+                    "contribution_ledger_id":Uuid::nil(),
+                    "contribution_ledger_hash":contribution_ledger_hash,
+                    "ai_disclosure_hash":digest("ai-disclosure"),
+                    "license":"CC-BY-4.0",
+                    "authors":authors,
+                    "idempotency_key":nil_promote_key,
+                }),
+            )
+            .await,
+            StatusCode::BAD_REQUEST,
+        ),
+        "nil_contribution_ledger_id",
+        "promotion must reject the globally preemptable nil ledger ID",
+    );
+    let omitted_promote_key = format!("promote-{member_count}-omitted-contributions");
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                &actors[0],
+                "promote_paper_release_candidate_v2",
+                &promote_path,
+                &omitted_promote_key,
+                json!({
+                    "expected_paper_version":paper_version,
+                    "expected_revision_version":1,
+                    "title":format!("Paper Raid {member_count}-author reproducible study"),
+                    "abstract_text":"A complete reproducible research collaboration test.",
+                    "collaboration_compact_hash":compact_hash,
+                    "research_protocol_snapshot_hash":digest("research-protocol"),
+                    "ethics_disclosure_hash":digest("ethics-disclosure"),
+                    "coi_disclosure_hash":digest("coi-disclosure"),
+                    "contribution_ledger_id":contribution_ledger_id,
+                    "contribution_ledger_hash":omitted_contribution_ledger_hash,
+                    "ai_disclosure_hash":digest("ai-disclosure"),
+                    "license":"CC-BY-4.0",
+                    "authors":authors,
+                    "idempotency_key":omitted_promote_key,
+                }),
+            )
+            .await,
+            StatusCode::CONFLICT,
+        ),
+        "contribution_ledger_hash_mismatch",
+        "promotion must reject a ledger hash that omits authoritative contribution refs",
+    );
     let promoted = assert_status(
         user_post(
             &router,
@@ -5383,6 +6746,7 @@ async fn run_full_flow(state: AppState, member_count: usize, options: FlowOption
                 "research_protocol_snapshot_hash":digest("research-protocol"),
                 "ethics_disclosure_hash":digest("ethics-disclosure"),
                 "coi_disclosure_hash":digest("coi-disclosure"),
+                "contribution_ledger_id":contribution_ledger_id,
                 "contribution_ledger_hash":contribution_ledger_hash,
                 "ai_disclosure_hash":digest("ai-disclosure"),
                 "license":"CC-BY-4.0",
@@ -5404,7 +6768,159 @@ async fn run_full_flow(state: AppState, member_count: usize, options: FlowOption
         .expect("release candidate hash")
         .to_string();
 
+    if options.replay_0047_after_reservation {
+        let pool = state
+            .pool
+            .as_ref()
+            .expect("0047 reservation-only replay requires PostgreSQL state");
+        let frozen_ledger_count: i64 = sqlx::query_scalar(
+            "select count(*)
+               from hepta_paper_contribution_ledgers
+              where contribution_ledger_id=$1
+                and paper_project_id=$2
+                and release_candidate_hash=$3",
+        )
+        .bind(contribution_ledger_id)
+        .bind(paper_id)
+        .bind(&release_candidate_hash)
+        .fetch_one(pool)
+        .await
+        .expect("inspect reservation-only release candidate ledger state");
+        assert_eq!(
+            frozen_ledger_count, 0,
+            "the 0047 replay probe must run before the contribution ledger is frozen"
+        );
+        let exact_reservation_count: i64 = sqlx::query_scalar(
+            "select count(*)
+               from hepta_paper_contribution_ledger_reservations
+              where contribution_ledger_id=$1
+                and paper_project_id=$2
+                and release_candidate_hash=$3",
+        )
+        .bind(contribution_ledger_id)
+        .bind(paper_id)
+        .bind(&release_candidate_hash)
+        .fetch_one(pool)
+        .await
+        .expect("inspect exact promotion-time contribution reservation");
+        assert_eq!(
+            exact_reservation_count, 1,
+            "post-0047 promotion must own exactly one reservation triple"
+        );
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/0047_add_hepta_contribution_ledger_authority.sql"
+        ))
+        .execute(pool)
+        .await
+        .expect(
+            "0047 replay must accept a live post-0047 candidate with its exact reservation and no frozen ledger yet",
+        );
+        verify_contribution_ledger_authority_catalog(pool)
+            .await
+            .expect("0047 reservation-only replay must preserve the exact authority catalog");
+    }
+
     let ledger_path = format!("/v2/hepta/papers/{paper_id}/contribution-ledgers");
+    let added_ledger_key = format!("contribution-ledger-{member_count}-added-ref");
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                &actors[0],
+                "create_contribution_ledger_v1",
+                &ledger_path,
+                &added_ledger_key,
+                json!({
+                    "contribution_ledger_id":contribution_ledger_id,
+                    "expected_paper_version":paper_version,
+                    "release_candidate_hash":release_candidate_hash,
+                    "entries":actors.iter().map(|actor| json!({
+                        "player_id":actor.player_id,
+                        "credit_roles":["methodology","writing_review_editing"],
+                        "accepted_artifact_manifest_ids":
+                            (actor.player_id == contribution_fixture.accepted_by_player_id)
+                                .then_some(vec![
+                                    contribution_fixture.accepted_artifact_manifest_id,
+                                    Uuid::new_v4(),
+                                ])
+                                .unwrap_or_default(),
+                        "accepted_section_review_ids":
+                            (actor.player_id == contribution_fixture.reviewed_by_player_id)
+                                .then_some(contribution_fixture.accepted_section_review_id)
+                                .into_iter()
+                                .collect::<Vec<_>>(),
+                    })).collect::<Vec<_>>(),
+                    "idempotency_key":added_ledger_key,
+                }),
+            )
+            .await,
+            StatusCode::CONFLICT,
+        ),
+        "contribution_ledger_entries_mismatch",
+        "ledger creation must reject an added non-authoritative contribution ref",
+    );
+    let duplicate_ledger_key = format!("contribution-ledger-{member_count}-duplicate-ref");
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                &actors[0],
+                "create_contribution_ledger_v1",
+                &ledger_path,
+                &duplicate_ledger_key,
+                json!({
+                    "contribution_ledger_id":contribution_ledger_id,
+                    "expected_paper_version":paper_version,
+                    "release_candidate_hash":release_candidate_hash,
+                    "entries":actors.iter().map(|actor| json!({
+                        "player_id":actor.player_id,
+                        "credit_roles":["methodology","writing_review_editing"],
+                        "accepted_artifact_manifest_ids":
+                            (actor.player_id == contribution_fixture.accepted_by_player_id)
+                                .then_some(vec![
+                                    contribution_fixture.accepted_artifact_manifest_id,
+                                    contribution_fixture.accepted_artifact_manifest_id,
+                                ])
+                                .unwrap_or_default(),
+                        "accepted_section_review_ids":[],
+                    })).collect::<Vec<_>>(),
+                    "idempotency_key":duplicate_ledger_key,
+                }),
+            )
+            .await,
+            StatusCode::BAD_REQUEST,
+        ),
+        "duplicate_contribution_reference",
+        "ledger creation must reject duplicate contribution refs",
+    );
+    let omitted_ledger_key = format!("contribution-ledger-{member_count}-omitted");
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                &actors[0],
+                "create_contribution_ledger_v1",
+                &ledger_path,
+                &omitted_ledger_key,
+                json!({
+                    "contribution_ledger_id":contribution_ledger_id,
+                    "expected_paper_version":paper_version,
+                    "release_candidate_hash":release_candidate_hash,
+                    "entries":actors.iter().map(|actor| json!({
+                        "player_id":actor.player_id,
+                        "credit_roles":["methodology","writing_review_editing"],
+                        "accepted_artifact_manifest_ids":[],
+                        "accepted_section_review_ids":[],
+                    })).collect::<Vec<_>>(),
+                    "idempotency_key":omitted_ledger_key,
+                }),
+            )
+            .await,
+            StatusCode::CONFLICT,
+        ),
+        "contribution_ledger_entries_mismatch",
+        "ledger creation must reject an omitted authoritative contribution ref",
+    );
     let ledger_key = format!("contribution-ledger-{member_count}");
     let ledger = assert_status(
         user_post(
@@ -5420,8 +6936,16 @@ async fn run_full_flow(state: AppState, member_count: usize, options: FlowOption
                 "entries":actors.iter().map(|actor| json!({
                     "player_id":actor.player_id,
                     "credit_roles":["methodology","writing_review_editing"],
-                    "accepted_artifact_manifest_ids":[],
-                    "accepted_section_review_ids":[],
+                    "accepted_artifact_manifest_ids":
+                        (actor.player_id == contribution_fixture.accepted_by_player_id)
+                            .then_some(contribution_fixture.accepted_artifact_manifest_id)
+                            .into_iter()
+                            .collect::<Vec<_>>(),
+                    "accepted_section_review_ids":
+                        (actor.player_id == contribution_fixture.reviewed_by_player_id)
+                            .then_some(contribution_fixture.accepted_section_review_id)
+                            .into_iter()
+                            .collect::<Vec<_>>(),
                 })).collect::<Vec<_>>(),
                 "idempotency_key":ledger_key,
             }),
@@ -6204,14 +7728,15 @@ fn update_legacy_binding_for_latest_review(
     legacy.reproduction_report_hash = reproduction.report_hash.clone();
 }
 
-async fn create_replacement_review_for_finality_v2(
+async fn create_replacement_evaluation_for_finality_v2(
     router: &Router,
-    legacy: &mut PaperTrnmCommandBindingV1,
+    legacy: &PaperTrnmCommandBindingV1,
     submission: &Value,
     previous_evaluation: &Value,
-    external: &[Actor],
+    evaluator: &Actor,
+    reviewers: [&Actor; 2],
     label: &str,
-) -> (Value, Value) {
+) -> Value {
     let review_round = previous_evaluation["version"]
         .as_u64()
         .expect("previous evaluation version")
@@ -6221,8 +7746,8 @@ async fn create_replacement_review_for_finality_v2(
         router,
         legacy.paper_project_id,
         review_round,
-        &external[6],
-        [&external[7], &external[8]],
+        evaluator,
+        reviewers,
         &format!("{label}-replacement"),
     )
     .await;
@@ -6231,15 +7756,15 @@ async fn create_replacement_review_for_finality_v2(
     let evaluation = assert_status(
         user_post(
             router,
-            &external[6],
+            evaluator,
             "create_paper_evaluation_v1",
             &format!("/v2/hepta/papers/{}/evaluations", legacy.paper_project_id),
             &evaluation_key,
             evaluation_body(
                 legacy.paper_project_id,
                 submission,
-                &external[6],
-                [&external[7], &external[8]],
+                evaluator,
+                reviewers,
                 evaluation_id,
                 Some(legacy.evaluation_id),
                 &evaluation_key,
@@ -6252,9 +7777,28 @@ async fn create_replacement_review_for_finality_v2(
         evaluation["supersedes_evaluation_id"],
         previous_evaluation["evaluation_id"]
     );
+    evaluation
+}
+
+async fn create_activated_reproduction_for_finality_v2(
+    router: &Router,
+    legacy: &mut PaperTrnmCommandBindingV1,
+    evaluation: &Value,
+    reproducer: &Actor,
+    label: &str,
+) -> Value {
+    let review_round = evaluation["version"]
+        .as_u64()
+        .expect("replacement evaluation version");
+    let evaluation_id = Uuid::parse_str(
+        evaluation["evaluation_id"]
+            .as_str()
+            .expect("replacement evaluation ID"),
+    )
+    .expect("canonical replacement evaluation ID");
     claim_review_assignment_fixture(
         router,
-        &external[3],
+        reproducer,
         legacy.paper_project_id,
         review_round,
         "reproducer",
@@ -6266,7 +7810,7 @@ async fn create_replacement_review_for_finality_v2(
     let reproduction = assert_status(
         user_post(
             router,
-            &external[3],
+            reproducer,
             "create_paper_reproduction_v1",
             &format!(
                 "/v2/hepta/papers/{}/evaluations/{evaluation_id}/reproductions",
@@ -6275,8 +7819,8 @@ async fn create_replacement_review_for_finality_v2(
             &reproduction_key,
             reproduction_body(
                 legacy.paper_project_id,
-                &evaluation,
-                &external[3],
+                evaluation,
+                reproducer,
                 reproduction_id,
                 None,
                 true,
@@ -6291,7 +7835,7 @@ async fn create_replacement_review_for_finality_v2(
     let reproduction_record: PaperReproduction =
         serde_json::from_value(reproduction.clone()).expect("decode replacement reproduction");
     update_legacy_binding_for_latest_review(legacy, &evaluation_record, &reproduction_record);
-    (evaluation, reproduction)
+    reproduction
 }
 
 async fn exercise_resolved_appeal_paper_chain_finality_v2(
@@ -6362,17 +7906,30 @@ async fn exercise_resolved_appeal_paper_chain_finality_v2(
         StatusCode::CREATED,
     );
 
-    if matches!(scenario, ResolvedAppealScenarioV2::Upheld) {
-        create_replacement_review_for_finality_v2(
-            &router,
-            &mut legacy,
-            &submission,
-            &appealed_evaluation,
-            &external,
-            scenario.label(),
+    let replacement_evaluation = if matches!(scenario, ResolvedAppealScenarioV2::Upheld) {
+        Some(
+            create_replacement_evaluation_for_finality_v2(
+                &router,
+                &legacy,
+                &submission,
+                &appealed_evaluation,
+                &external[6],
+                [&external[7], &external[8]],
+                scenario.label(),
+            )
+            .await,
         )
-        .await;
-    }
+    } else {
+        None
+    };
+    let replacement_evaluation_id = replacement_evaluation.as_ref().map(|evaluation| {
+        Uuid::parse_str(
+            evaluation["evaluation_id"]
+                .as_str()
+                .expect("replacement evaluation ID"),
+        )
+        .expect("canonical replacement evaluation ID")
+    });
     let resolution_id = Uuid::new_v4();
     let resolution_key = format!("paper-finality-v2-{}-resolution", scenario.label());
     assert_status(
@@ -6393,8 +7950,7 @@ async fn exercise_resolved_appeal_paper_chain_finality_v2(
                 ResolutionBody {
                     resolution_id,
                     outcome: scenario.outcome(),
-                    superseding_evaluation_id: matches!(scenario, ResolvedAppealScenarioV2::Upheld)
-                        .then_some(legacy.evaluation_id),
+                    superseding_evaluation_id: replacement_evaluation_id,
                     idempotency_key: &resolution_key,
                 },
             ),
@@ -6402,6 +7958,16 @@ async fn exercise_resolved_appeal_paper_chain_finality_v2(
         .await,
         StatusCode::CREATED,
     );
+    if let Some(replacement_evaluation) = replacement_evaluation.as_ref() {
+        create_activated_reproduction_for_finality_v2(
+            &router,
+            &mut legacy,
+            replacement_evaluation,
+            &external[3],
+            scenario.label(),
+        )
+        .await;
+    }
 
     // The repository's real CometBFT proof predates these dynamically-created
     // review records.  Keep that proof as the admission boundary, then advance
@@ -6868,30 +8434,25 @@ async fn memory_paper_chain_finality_v2_resolved_appeal_branches_reach_preparati
 }
 
 #[derive(Debug, Clone, Copy)]
-enum AppealLineageRejectionScenarioV2 {
+enum AppealLineageScenarioV2 {
     AncestorOpen,
-    MultipleResolved,
+    TerminalDeniedAfterUpheld,
+    MultiGenerationUpheld,
 }
 
-impl AppealLineageRejectionScenarioV2 {
+impl AppealLineageScenarioV2 {
     fn label(self) -> &'static str {
         match self {
             Self::AncestorOpen => "ancestor-open",
-            Self::MultipleResolved => "multiple-resolved",
-        }
-    }
-
-    fn expected_code(self) -> &'static str {
-        match self {
-            Self::AncestorOpen => "paper_chain_finality_open_appeal",
-            Self::MultipleResolved => "paper_trnm_appeal_lineage_ambiguous",
+            Self::TerminalDeniedAfterUpheld => "terminal-denied-after-upheld",
+            Self::MultiGenerationUpheld => "multi-generation-upheld",
         }
     }
 }
 
-async fn exercise_paper_chain_finality_v2_appeal_lineage_rejection(
+async fn exercise_paper_chain_finality_v2_appeal_lineage(
     mut state: AppState,
-    scenario: AppealLineageRejectionScenarioV2,
+    scenario: AppealLineageScenarioV2,
 ) {
     set_paper_chain_finality_v2_clock(
         &mut state,
@@ -6902,7 +8463,8 @@ async fn exercise_paper_chain_finality_v2_appeal_lineage_rejection(
     let start_checkpoint = admit_paper_chain_finality_v2_start_checkpoint(&router).await;
     let mut legacy = seed_paper_chain_finality_test(state.clone()).await;
     let authors = actors(3);
-    let external = actors(11);
+    let external = actors(15);
+    create_players_and_bindings(&router, &external).await;
     let submission = assert_status(
         user_get(
             &router,
@@ -6956,17 +8518,63 @@ async fn exercise_paper_chain_finality_v2_appeal_lineage_rejection(
         .await,
         StatusCode::CREATED,
     );
-    let (replacement_evaluation, _) = create_replacement_review_for_finality_v2(
-        &router,
-        &mut legacy,
-        &submission,
-        &original_evaluation,
-        &external,
-        scenario.label(),
-    )
-    .await;
+    let mut expected_positive_lineage = None;
+    let replacement_evaluation = if !matches!(scenario, AppealLineageScenarioV2::AncestorOpen) {
+        Some(
+            create_replacement_evaluation_for_finality_v2(
+                &router,
+                &legacy,
+                &submission,
+                &original_evaluation,
+                &external[6],
+                [&external[7], &external[8]],
+                scenario.label(),
+            )
+            .await,
+        )
+    } else {
+        None
+    };
 
-    if matches!(scenario, AppealLineageRejectionScenarioV2::MultipleResolved) {
+    if !matches!(scenario, AppealLineageScenarioV2::AncestorOpen) {
+        let replacement_evaluation = replacement_evaluation
+            .as_ref()
+            .expect("resolved-lineage fixture prepares a replacement evaluation");
+        let replacement_evaluation_id = Uuid::parse_str(
+            replacement_evaluation["evaluation_id"]
+                .as_str()
+                .expect("replacement evaluation ID"),
+        )
+        .expect("canonical replacement evaluation ID");
+        let premature_appeal_key = format!(
+            "paper-finality-v2-{}-premature-child-appeal",
+            scenario.label()
+        );
+        let premature_appeal_error = error_code(
+            user_post(
+                &router,
+                &authors[1],
+                "create_paper_appeal_v1",
+                &format!(
+                    "/v2/hepta/papers/{}/evaluations/{replacement_evaluation_id}/appeals",
+                    legacy.paper_project_id
+                ),
+                &premature_appeal_key,
+                appeal_body(
+                    legacy.paper_project_id,
+                    replacement_evaluation,
+                    &authors[1],
+                    Uuid::new_v4(),
+                    &premature_appeal_key,
+                ),
+            )
+            .await,
+            StatusCode::CONFLICT,
+        );
+        assert_eq!(
+            premature_appeal_error, "paper_evaluation_not_activated",
+            "a prepared child must not acquire its own Appeal before the exact parent uphold activates it"
+        );
         let first_resolution_key = format!("paper-finality-v2-{}-resolution-1", scenario.label());
         assert_status(
             user_post(
@@ -6986,7 +8594,7 @@ async fn exercise_paper_chain_finality_v2_appeal_lineage_rejection(
                     ResolutionBody {
                         resolution_id: Uuid::new_v4(),
                         outcome: "upheld",
-                        superseding_evaluation_id: Some(legacy.evaluation_id),
+                        superseding_evaluation_id: Some(replacement_evaluation_id),
                         idempotency_key: &first_resolution_key,
                     },
                 ),
@@ -6994,6 +8602,14 @@ async fn exercise_paper_chain_finality_v2_appeal_lineage_rejection(
             .await,
             StatusCode::CREATED,
         );
+        create_activated_reproduction_for_finality_v2(
+            &router,
+            &mut legacy,
+            replacement_evaluation,
+            &external[3],
+            scenario.label(),
+        )
+        .await;
         let second_appeal_id = Uuid::new_v4();
         let second_appeal_key = format!("paper-finality-v2-{}-appeal-2", scenario.label());
         assert_status(
@@ -7008,7 +8624,7 @@ async fn exercise_paper_chain_finality_v2_appeal_lineage_rejection(
                 &second_appeal_key,
                 appeal_body(
                     legacy.paper_project_id,
-                    &replacement_evaluation,
+                    replacement_evaluation,
                     &authors[1],
                     second_appeal_id,
                     &second_appeal_key,
@@ -7017,6 +8633,32 @@ async fn exercise_paper_chain_finality_v2_appeal_lineage_rejection(
             .await,
             StatusCode::CREATED,
         );
+        let second_replacement =
+            if matches!(scenario, AppealLineageScenarioV2::MultiGenerationUpheld) {
+                Some(
+                    create_replacement_evaluation_for_finality_v2(
+                        &router,
+                        &legacy,
+                        &submission,
+                        replacement_evaluation,
+                        &external[10],
+                        [&external[11], &external[12]],
+                        &format!("{}-generation-3", scenario.label()),
+                    )
+                    .await,
+                )
+            } else {
+                None
+            };
+        let second_replacement_id = second_replacement.as_ref().map(|record| {
+            Uuid::parse_str(
+                record["evaluation_id"]
+                    .as_str()
+                    .expect("generation-3 evaluation ID"),
+            )
+            .expect("canonical generation-3 evaluation ID")
+        });
+        let second_resolution_id = Uuid::new_v4();
         let second_resolution_key = format!("paper-finality-v2-{}-resolution-2", scenario.label());
         assert_status(
             user_post(
@@ -7030,13 +8672,17 @@ async fn exercise_paper_chain_finality_v2_appeal_lineage_rejection(
                 &second_resolution_key,
                 resolution_body(
                     legacy.paper_project_id,
-                    &replacement_evaluation,
+                    replacement_evaluation,
                     second_appeal_id,
                     &external[9],
                     ResolutionBody {
-                        resolution_id: Uuid::new_v4(),
-                        outcome: "denied",
-                        superseding_evaluation_id: None,
+                        resolution_id: second_resolution_id,
+                        outcome: if second_replacement_id.is_some() {
+                            "upheld"
+                        } else {
+                            "denied"
+                        },
+                        superseding_evaluation_id: second_replacement_id,
                         idempotency_key: &second_resolution_key,
                     },
                 ),
@@ -7044,6 +8690,87 @@ async fn exercise_paper_chain_finality_v2_appeal_lineage_rejection(
             .await,
             StatusCode::CREATED,
         );
+        if let Some(second_replacement) = second_replacement.as_ref() {
+            create_activated_reproduction_for_finality_v2(
+                &router,
+                &mut legacy,
+                second_replacement,
+                &external[13],
+                &format!("{}-generation-3", scenario.label()),
+            )
+            .await;
+        }
+        expected_positive_lineage = Some((
+            if second_replacement.is_some() {
+                PaperTrnmAppealStatusV2::ResolvedUpheld
+            } else {
+                PaperTrnmAppealStatusV2::ResolvedDenied
+            },
+            second_appeal_id,
+            second_resolution_id,
+        ));
+    }
+
+    if let Some((expected_status, expected_appeal_id, expected_resolution_id)) =
+        expected_positive_lineage
+    {
+        let source_safe_start_time = u64::try_from(Utc::now().timestamp_millis())
+            .expect("positive multi-generation source time")
+            .checked_add(1_000)
+            .expect("multi-generation source time overflow");
+        let (source_safe_start_checkpoint, source_safe_start_proof) =
+            synthetic_authenticated_checkpoint(
+                &start_checkpoint,
+                start_checkpoint.height + 1,
+                source_safe_start_time,
+                &format!("{}-source-safe-start", scenario.label()),
+            );
+        seed_authenticated_chain_time_checkpoint(
+            &state,
+            &source_safe_start_checkpoint,
+            &source_safe_start_proof,
+        )
+        .await;
+        set_paper_chain_finality_v2_clock(&mut state, source_safe_start_time);
+        let router = app(state.clone());
+        let arm = assert_status(
+            request(
+                &router,
+                "POST",
+                &format!(
+                    "/v2/hepta/papers/{}/chain-finality-v2/arm",
+                    legacy.paper_project_id
+                ),
+                json!({
+                    "submission_id":legacy.submission_id,
+                    "evaluation_id":legacy.evaluation_id,
+                    "latest_reproduction_id":legacy.reproduction_id,
+                    "research_session_id":legacy.research_session_id,
+                    "research_session_roster_version":legacy.research_session_roster_version,
+                    "start_checkpoint_hash":source_safe_start_checkpoint.checkpoint_hash,
+                    "idempotency_key":format!(
+                        "paper-finality-v2-{}-window-arm",
+                        scenario.label()
+                    ),
+                }),
+                None,
+            )
+            .await,
+            StatusCode::CREATED,
+        );
+        assert_eq!(
+            serde_json::from_value::<PaperTrnmAppealStatusV2>(arm["appeal_status"].clone())
+                .expect("decode multi-generation Appeal status"),
+            expected_status
+        );
+        let expected_appeal_id = expected_appeal_id.to_string();
+        let expected_resolution_id = expected_resolution_id.to_string();
+        assert_eq!(arm["appeal_id"].as_str(), Some(expected_appeal_id.as_str()));
+        assert_eq!(
+            arm["appeal_resolution_id"].as_str(),
+            Some(expected_resolution_id.as_str())
+        );
+        return;
     }
 
     let before = paper_finality_side_effect_snapshot(&state).await;
@@ -7072,7 +8799,7 @@ async fn exercise_paper_chain_finality_v2_appeal_lineage_rejection(
         .await,
         StatusCode::CONFLICT,
     );
-    assert_eq!(error, scenario.expected_code());
+    assert_eq!(error, "paper_chain_finality_open_appeal");
     let after = paper_finality_side_effect_snapshot(&state).await;
     assert_eq!(
         after, before,
@@ -7081,12 +8808,13 @@ async fn exercise_paper_chain_finality_v2_appeal_lineage_rejection(
 }
 
 #[tokio::test]
-async fn memory_paper_chain_finality_v2_appeal_lineage_rejections_are_atomic() {
+async fn memory_paper_chain_finality_v2_appeal_lineage_outcomes_are_strict() {
     for scenario in [
-        AppealLineageRejectionScenarioV2::AncestorOpen,
-        AppealLineageRejectionScenarioV2::MultipleResolved,
+        AppealLineageScenarioV2::AncestorOpen,
+        AppealLineageScenarioV2::TerminalDeniedAfterUpheld,
+        AppealLineageScenarioV2::MultiGenerationUpheld,
     ] {
-        exercise_paper_chain_finality_v2_appeal_lineage_rejection(
+        exercise_paper_chain_finality_v2_appeal_lineage(
             AppState::new(paper_chain_finality_v2_security()),
             scenario,
         )
@@ -7933,13 +9661,59 @@ async fn run_draft_lease_recovery_flow(state: AppState) -> DraftLeaseRecoveryOut
 }
 
 async fn run_review_flow(state: AppState) -> ReviewFlowOutcome {
-    let _ = run_full_flow(state.clone(), 3, FlowOptions::default()).await;
+    let replay_0047_after_reservation = state.pool.is_some();
+    let _ = run_full_flow(
+        state.clone(),
+        3,
+        FlowOptions {
+            replay_0047_after_reservation,
+            ..FlowOptions::default()
+        },
+    )
+    .await;
+    let paper_id = Uuid::from_u128(0x5000_0000_0000_4000_8000_0000_0000_0000 + 3 * 0x100);
+    if let Some(pool) = &state.pool {
+        let challenge_id: Uuid = sqlx::query_scalar(
+            "select challenge_id from hepta_paper_projects where paper_project_id=$1",
+        )
+        .bind(paper_id)
+        .fetch_one(pool)
+        .await
+        .expect("read PostgreSQL review fixture challenge ID");
+        assert!(
+            !state
+                .inner
+                .read()
+                .await
+                .challenges
+                .contains_key(&challenge_id),
+            "PostgreSQL review regression must not accidentally hydrate the in-memory challenge cache"
+        );
+        let durable_hashes = state
+            .inspect(|league| {
+                league
+                    .challenges
+                    .get(&challenge_id)
+                    .map(|challenge| {
+                        (
+                            challenge.evaluator_manifest_hash.clone(),
+                            challenge.dataset_manifest_hash.clone(),
+                        )
+                    })
+                    .ok_or_else(|| {
+                        ApiError::internal("durable PostgreSQL review fixture challenge is missing")
+                    })
+            })
+            .await
+            .expect("read durable PostgreSQL review fixture challenge");
+        assert_eq!(durable_hashes.0, digest("paper-raid-evaluator"));
+        assert_eq!(durable_hashes.1, digest("paper-raid-dataset"));
+    }
     let router = app(state.clone());
     let authors = actors(3);
     let external = actors(11);
     register_prerequisites(&router, &external).await;
     create_players_and_bindings(&router, &external).await;
-    let paper_id = Uuid::from_u128(0x5000_0000_0000_4000_8000_0000_0000_0000 + 3 * 0x100);
     let submission_path = format!("/v2/hepta/papers/{paper_id}/submission");
     let submission = assert_status(
         user_get(
@@ -8611,7 +10385,7 @@ async fn memory_collaboration_kernel_is_atomic_signed_and_phase_frozen() {
         "paper_phase_disallows_collaboration_mutation"
     );
     assert_eq!(outcome.revision_binding_count, 2);
-    assert_eq!(outcome.section_merge_count, 1);
+    assert_eq!(outcome.section_merge_count, 3);
     assert!(outcome.room_event_count >= 11);
     assert!(outcome.room_last_cursor >= outcome.room_event_count as u64);
 }
@@ -8619,6 +10393,151 @@ async fn memory_collaboration_kernel_is_atomic_signed_and_phase_frozen() {
 #[tokio::test]
 async fn memory_agent_proposals_trust_only_the_active_secure_binding() {
     exercise_agent_proposal_binding_authority(AppState::new(security())).await;
+}
+
+async fn assert_postgres_agent_proposal_v2_identity_parity(pool: &sqlx::PgPool) {
+    let proposal_count: i64 = sqlx::query_scalar("select count(*) from hepta_agent_proposals")
+        .fetch_one(pool)
+        .await
+        .expect("count persisted Agent proposal V2 rows");
+    assert!(
+        proposal_count > 0,
+        "Agent proposal V2 parity proof needs rows"
+    );
+    let parity_violations: i64 = sqlx::query_scalar(
+        "select count(*)
+         from hepta_agent_proposals
+         where not (
+             (record_json->>'proposal_id') is not distinct from proposal_id::text
+             and (record_json->>'paper_project_id') is not distinct from paper_project_id::text
+             and (record_json->>'work_item_id') is not distinct from work_item_id::text
+             and (record_json->>'section_key') is not distinct from section_key
+             and (record_json->>'parent_revision_id') is not distinct from parent_revision_id::text
+             and (record_json->>'lease_id') is not distinct from lease_id::text
+             and (record_json->>'lease_fencing_token') is not distinct from lease_fencing_token::text
+             and (record_json->>'expected_work_version') is not distinct from expected_work_version::text
+             and (record_json->>'proposal_kind') is not distinct from proposal_kind
+             and (record_json->>'payload_hash') is not distinct from payload_hash
+             and (record_json->>'artifact_manifest_id') is not distinct from artifact_manifest_id::text
+             and (record_json->>'artifact_manifest_hash') is not distinct from artifact_manifest_hash
+             and (record_json->>'agent_id') is not distinct from agent_id
+             and (record_json->>'binding_id') is not distinct from binding_id::text
+             and (record_json->>'agent_key_id') is not distinct from agent_key_id
+             and (record_json->>'agent_public_key') is not distinct from agent_public_key
+             and (record_json->>'signature') is not distinct from signature
+             and (record_json->>'status') is not distinct from status
+             and (record_json->>'version') is not distinct from version::text
+             and signed_at is not distinct from to_timestamp((record_json->>'signed_at_unix')::double precision)
+         )",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("verify persisted Agent proposal V2 relational/JSON identity parity");
+    assert_eq!(parity_violations, 0);
+
+    let mutation = sqlx::query(
+        "update hepta_agent_proposals
+         set artifact_manifest_hash=$1
+         where proposal_id=(select proposal_id from hepta_agent_proposals order by proposal_id limit 1)",
+    )
+    .bind(digest("tampered-relational-artifact-manifest-hash"))
+    .execute(pool)
+    .await;
+    assert!(
+        mutation.is_err(),
+        "full signed Agent proposal identity parity must reject relational-only mutation"
+    );
+
+    for (column_name, record_path) in [
+        ("payload_hash", "payload_hash"),
+        ("artifact_manifest_hash", "artifact_manifest_hash"),
+    ] {
+        let statement = format!(
+            "update hepta_agent_proposals
+             set {column_name}='not-a-sha256-digest',
+                 record_json=jsonb_set(
+                     record_json,
+                     '{{{record_path}}}',
+                     to_jsonb('not-a-sha256-digest'::text)
+                 )
+             where proposal_id=(select proposal_id from hepta_agent_proposals order by proposal_id limit 1)"
+        );
+        let digest_mutation = sqlx::query(&statement).execute(pool).await;
+        assert!(
+            digest_mutation.is_err(),
+            "Agent proposal V2 {column_name} must remain a canonical SHA-256 digest even when record_json matches"
+        );
+    }
+}
+
+async fn assert_postgres_work_item_record_parity(pool: &sqlx::PgPool) {
+    let work_item_count: i64 = sqlx::query_scalar("select count(*) from hepta_paper_work_items")
+        .fetch_one(pool)
+        .await
+        .expect("count persisted WorkItem rows");
+    assert!(
+        work_item_count > 0,
+        "WorkItem relational/JSON parity proof needs rows"
+    );
+    let parity_violations: i64 = sqlx::query_scalar(
+        "select count(*)
+         from hepta_paper_work_items
+         where not (
+             (record_json->>'work_item_id') is not distinct from work_item_id::text
+             and (record_json->>'paper_project_id') is not distinct from paper_project_id::text
+             and (record_json->>'assigned_player_id') is not distinct from assigned_player_id::text
+             and (record_json->>'assigned_binding_id') is not distinct from assigned_binding_id::text
+             and (record_json->>'status') is not distinct from status
+             and (record_json->>'version') is not distinct from version::text
+         )",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("verify persisted WorkItem relational/JSON identity parity");
+    assert_eq!(parity_violations, 0);
+
+    let relational_only_mutation = sqlx::query(
+        "update hepta_paper_work_items
+         set status=case when status='cancelled' then 'planned' else 'cancelled' end
+         where work_item_id=(
+             select work_item_id from hepta_paper_work_items order by work_item_id limit 1
+         )",
+    )
+    .execute(pool)
+    .await;
+    assert!(
+        relational_only_mutation.is_err(),
+        "WorkItem parity must reject a relational-only status mutation"
+    );
+
+    for json_field in [
+        "work_item_id",
+        "paper_project_id",
+        "assigned_player_id",
+        "assigned_binding_id",
+        "status",
+        "version",
+    ] {
+        let json_only_mutation = sqlx::query(
+            "update hepta_paper_work_items
+             set record_json=jsonb_set(
+                 record_json,
+                 array[$1]::text[],
+                 to_jsonb('__work_item_record_drift__'::text),
+                 true
+             )
+             where work_item_id=(
+                 select work_item_id from hepta_paper_work_items order by work_item_id limit 1
+             )",
+        )
+        .bind(json_field)
+        .execute(pool)
+        .await;
+        assert!(
+            json_only_mutation.is_err(),
+            "WorkItem parity must reject a record_json-only {json_field} mutation"
+        );
+    }
 }
 
 #[tokio::test]
@@ -8676,8 +10595,90 @@ async fn postgres_agent_proposals_trust_only_the_active_secure_binding() {
     let state = AppState::connect(&database_url, security())
         .await
         .expect("Agent binding authority PostgreSQL state");
+    let pool = state
+        .pool
+        .as_ref()
+        .expect("Agent authority PostgreSQL pool");
+    for application in ["second", "third"] {
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/0044_add_hepta_agent_proposal_v2_epoch.sql"
+        ))
+        .execute(pool)
+        .await
+        .unwrap_or_else(|error| panic!("0044 {application} application: {error}"));
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/0045_add_hepta_work_item_record_parity.sql"
+        ))
+        .execute(pool)
+        .await
+        .unwrap_or_else(|error| panic!("0045 {application} application: {error}"));
+    }
+    verify_agent_proposal_v2_migration_catalog(pool)
+        .await
+        .expect("0044 exact runtime catalog readiness");
+    verify_work_item_record_parity_catalog(pool)
+        .await
+        .expect("0045 exact runtime catalog readiness");
+    sqlx::query("drop index hepta_agent_proposals_lease_epoch_v2_idx")
+        .execute(pool)
+        .await
+        .expect("remove Agent proposal V2 lease-epoch index for readiness probe");
+    let missing_index = verify_agent_proposal_v2_migration_catalog(pool)
+        .await
+        .expect_err("runtime readiness must reject a missing Agent proposal V2 index");
+    assert!(missing_index.contains("hepta_agent_proposals_lease_epoch_v2_idx"));
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0044_add_hepta_agent_proposal_v2_epoch.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("0044 repairs the deliberately removed lease-epoch index");
+    verify_agent_proposal_v2_migration_catalog(pool)
+        .await
+        .expect("0044 repaired exact runtime catalog readiness");
+    sqlx::query(
+        "alter table hepta_paper_work_items
+         drop constraint hepta_paper_work_items_record_json_parity_check",
+    )
+    .execute(pool)
+    .await
+    .expect("remove WorkItem parity constraint for readiness probe");
+    let missing_parity = verify_work_item_record_parity_catalog(pool)
+        .await
+        .expect_err("runtime readiness must reject a missing WorkItem parity constraint");
+    assert!(missing_parity.contains("hepta_paper_work_items_record_json_parity_check"));
+    sqlx::raw_sql(
+        "alter table hepta_paper_work_items
+         add constraint hepta_paper_work_items_record_json_parity_check
+         check (
+             (record_json->>'work_item_id') is not distinct from work_item_id::text
+             and (record_json->>'paper_project_id') is not distinct from paper_project_id::text
+             and (record_json->>'assigned_player_id') is not distinct from assigned_player_id::text
+             and (record_json->>'assigned_binding_id') is not distinct from assigned_binding_id::text
+             and (record_json->>'status') is not distinct from status
+             and (record_json->>'version') is not distinct from version::text
+         ) not valid",
+    )
+    .execute(pool)
+    .await
+    .expect("install unvalidated WorkItem parity constraint for readiness probe");
+    let unvalidated_parity = verify_work_item_record_parity_catalog(pool)
+        .await
+        .expect_err("runtime readiness must reject an unvalidated WorkItem parity constraint");
+    assert!(unvalidated_parity.contains("unvalidated"));
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0045_add_hepta_work_item_record_parity.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("0045 repairs the deliberately removed WorkItem parity constraint");
+    verify_work_item_record_parity_catalog(pool)
+        .await
+        .expect("0045 repaired exact runtime catalog readiness");
     reset_postgres(&database_url).await;
-    exercise_agent_proposal_binding_authority(state).await;
+    exercise_agent_proposal_binding_authority(state.clone()).await;
+    assert_postgres_agent_proposal_v2_identity_parity(pool).await;
+    assert_postgres_work_item_record_parity(pool).await;
     sqlx::query("select pg_advisory_unlock(hashtext('hepta-research-league-pg-tests'))")
         .execute(&mut lock)
         .await
@@ -8858,6 +10859,21 @@ async fn postgres_review_flow_matches_memory_and_migration_is_repeatable() {
     .execute(pool)
     .await
     .expect("0040 third application");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0047_add_hepta_contribution_ledger_authority.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("0047 second application");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0047_add_hepta_contribution_ledger_authority.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("0047 third application");
+    verify_contribution_ledger_authority_catalog(pool)
+        .await
+        .expect("0047 exact runtime catalog readiness");
     reset_postgres(&database_url).await;
     let postgres = run_review_flow(state.clone()).await;
     assert_eq!(postgres.contribution_room_event_count, 1);
@@ -8869,6 +10885,162 @@ async fn postgres_review_flow_matches_memory_and_migration_is_repeatable() {
     assert_eq!(postgres.resolution_outbox_event_count, 1);
     assert_eq!(postgres.appeal_room_settlement_state, "challenged");
     assert_eq!(postgres.resolution_room_settlement_state, "resolved");
+    let reservation_count: i64 =
+        sqlx::query_scalar("select count(*) from hepta_paper_contribution_ledger_reservations")
+            .fetch_one(pool)
+            .await
+            .expect("promotion-time contribution ledger reservation count");
+    assert_eq!(
+        reservation_count, 1,
+        "release promotion must reserve exactly one global ledger ID before ledger creation"
+    );
+    let reservation = sqlx::query(
+        "select contribution_ledger_id,paper_project_id,release_candidate_hash
+         from hepta_paper_contribution_ledger_reservations",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("promotion-time contribution reservation");
+    let mut reservation_replay = pool.begin().await.expect("reservation replay transaction");
+    super::reserve_contribution_ledger_id_postgres(
+        &mut reservation_replay,
+        reservation.get("contribution_ledger_id"),
+        reservation.get("paper_project_id"),
+        &reservation.get::<String, _>("release_candidate_hash"),
+        Utc::now(),
+    )
+    .await
+    .expect("the exact PostgreSQL reservation replay must match memory idempotency");
+    reservation_replay
+        .rollback()
+        .await
+        .expect("rollback reservation replay probe");
+
+    let drift_rejected = sqlx::query(
+        "update hepta_paper_contribution_ledgers
+         set record_json=jsonb_set(record_json,'{entries,0,contribution_points}','999'::jsonb)",
+    )
+    .execute(pool)
+    .await
+    .expect_err("frozen contribution ledger record_json drift must be rejected");
+    assert!(
+        drift_rejected
+            .as_database_error()
+            .and_then(|database| database
+                .message()
+                .contains("frozen_contribution_authority_is_immutable")
+                .then_some(()))
+            .is_some(),
+        "record_json drift must fail at frozen contribution authority"
+    );
+    for statement in [
+        "update hepta_paper_contribution_ledger_reservations set created_at=created_at",
+        "truncate table hepta_paper_contribution_ledgers",
+        "truncate table hepta_paper_contribution_ledger_reservations cascade",
+    ] {
+        let immutable = sqlx::query(statement)
+            .execute(pool)
+            .await
+            .expect_err("row and statement authority mutation must be rejected");
+        assert!(
+            immutable
+                .as_database_error()
+                .is_some_and(|database| database
+                    .message()
+                    .contains("frozen_contribution_authority_is_immutable")),
+            "immutable contribution authority rejected {statement:?} with the wrong error"
+        );
+    }
+
+    sqlx::raw_sql(
+        "alter table hepta_paper_contribution_ledgers
+           drop constraint hepta_paper_contribution_ledgers_entries_json_check;
+         alter table hepta_paper_contribution_ledgers
+           add constraint hepta_paper_contribution_ledgers_entries_json_check
+           check (jsonb_typeof(entries_json) is not distinct from 'array' or true);",
+    )
+    .execute(pool)
+    .await
+    .expect("install permissive OR TRUE constraint probe");
+    let permissive_check = verify_contribution_ledger_authority_catalog(pool)
+        .await
+        .expect_err("runtime readiness must reject OR TRUE authority checks");
+    assert!(permissive_check.contains("non-canonical exact definition"));
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0047_add_hepta_contribution_ledger_authority.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("0047 repairs permissive contribution checks");
+
+    sqlx::raw_sql(
+        "create table hepta_contribution_authority_decoy (contribution_ledger_id uuid);
+         alter table hepta_contribution_authority_decoy
+           add constraint hepta_contribution_ledger_reservations_non_nil_id_check
+           check (contribution_ledger_id <> '00000000-0000-0000-0000-000000000000'::uuid);",
+    )
+    .execute(pool)
+    .await
+    .expect("install wrong-table duplicate constraint probe");
+    let wrong_table = verify_contribution_ledger_authority_catalog(pool)
+        .await
+        .expect_err("runtime readiness must reject duplicate names on wrong tables");
+    assert!(wrong_table.contains("globally unique managed names"));
+    sqlx::query("drop table hepta_contribution_authority_decoy")
+        .execute(pool)
+        .await
+        .expect("remove wrong-table constraint probe");
+
+    sqlx::raw_sql(
+        "create table hepta_contribution_index_decoy (
+             artifact_manifest_id uuid,
+             status text not null
+         );
+         drop index hepta_agent_proposals_one_accepted_artifact_manifest_idx;
+         create unique index hepta_agent_proposals_one_accepted_artifact_manifest_idx
+           on hepta_contribution_index_decoy (artifact_manifest_id)
+           where status='accepted';",
+    )
+    .execute(pool)
+    .await
+    .expect("install wrong-table IF NOT EXISTS index probe");
+    let wrong_index = verify_contribution_ledger_authority_catalog(pool)
+        .await
+        .expect_err("runtime readiness must reject a same-name index on the wrong table");
+    assert!(wrong_index.contains("missing the accepted artifact unique index"));
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0047_add_hepta_contribution_ledger_authority.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("0047 repairs a same-name wrong-table authority index");
+    sqlx::query("drop table hepta_contribution_index_decoy")
+        .execute(pool)
+        .await
+        .expect("remove wrong-table index probe");
+
+    sqlx::query(
+        "alter table hepta_paper_contribution_ledgers
+         drop constraint hepta_paper_contribution_ledgers_record_json_parity_check",
+    )
+    .execute(pool)
+    .await
+    .expect("remove contribution parity constraint for readiness negative evidence");
+    let missing_parity = verify_contribution_ledger_authority_catalog(pool)
+        .await
+        .expect_err(
+            "runtime readiness must reject a missing contribution ledger parity constraint",
+        );
+    assert!(missing_parity.contains("constraint catalog"));
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0047_add_hepta_contribution_ledger_authority.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("0047 repairs contribution ledger parity catalog");
+    verify_contribution_ledger_authority_catalog(pool)
+        .await
+        .expect("0047 repaired exact contribution authority readiness");
     let draft_count: i64 = sqlx::query_scalar("select count(*) from hepta_paper_evaluation_drafts")
         .fetch_one(pool)
         .await
@@ -8928,6 +11100,51 @@ async fn postgres_review_flow_matches_memory_and_migration_is_repeatable() {
     );
     let memory = run_review_flow(AppState::new(security())).await;
     assert_eq!(postgres, memory);
+
+    // Model the first-upgrade ambiguity in the disposable database: the
+    // release candidate remains live, but neither the pre-0047 frozen ledger
+    // nor the post-0047 reservation that retains its caller-owned ID exists.
+    // Removing the row guards is test-only setup; reset_postgres immediately
+    // rebuilds the exact production catalog after the fail-closed assertion.
+    sqlx::raw_sql(
+        "drop trigger hepta_paper_contribution_ledger_immutable_guard
+             on hepta_paper_contribution_ledgers;
+         drop trigger hepta_contribution_ledger_reservation_immutable_guard
+             on hepta_paper_contribution_ledger_reservations;
+         delete from hepta_paper_contribution_ledgers;
+         delete from hepta_paper_contribution_ledger_reservations;",
+    )
+    .execute(pool)
+    .await
+    .expect("construct a pre-0047 release candidate with no recoverable ledger ID");
+    let mut legacy_upgrade_connection = PgConnection::connect(&database_url)
+        .await
+        .expect("dedicated 0047 legacy-upgrade probe connection");
+    let legacy_upgrade_error = sqlx::raw_sql(include_str!(
+        "../../../migrations/0047_add_hepta_contribution_ledger_authority.sql"
+    ))
+    .execute(&mut legacy_upgrade_connection)
+    .await
+    .expect_err("0047 first upgrade must reject a live candidate missing both authorities");
+    let legacy_upgrade_database_error = legacy_upgrade_error
+        .as_database_error()
+        .expect("legacy release-candidate rejection must be a PostgreSQL error");
+    assert_eq!(
+        legacy_upgrade_database_error.code().as_deref(),
+        Some("23514")
+    );
+    assert_eq!(
+        legacy_upgrade_database_error.message(),
+        "legacy_release_candidate_missing_contribution_ledger"
+    );
+    sqlx::query("rollback")
+        .execute(&mut legacy_upgrade_connection)
+        .await
+        .expect("rollback expected-failing 0047 legacy-upgrade probe");
+    legacy_upgrade_connection
+        .close()
+        .await
+        .expect("close dedicated 0047 legacy-upgrade probe connection");
     reset_postgres(&database_url).await;
     let postgres_recovery = run_draft_lease_recovery_flow(state).await;
     let memory_recovery = run_draft_lease_recovery_flow(AppState::new(security())).await;
@@ -9276,19 +11493,31 @@ async fn assert_paper_finality_v2_cross_paper_updates_are_deadlock_free(
     .execute(pool)
     .await
     .expect("seed unsealed cross-Paper team");
+    let unsealed_terminal_at: chrono::DateTime<Utc> =
+        sqlx::query_scalar("select clock_timestamp()")
+            .fetch_one(pool)
+            .await
+            .expect("read cross-Paper terminal timestamp");
     sqlx::query(
         "insert into hepta_paper_projects (
-            paper_project_id,team_id,challenge_id,phase,version,
-            record_json,created_at,updated_at
-         ) values ($1,$2,$3,'submission_ready',1,$4::jsonb,now(),now())",
+            paper_project_id,team_id,challenge_id,phase,outcome,outcome_reason,
+            terminal_at,version,record_json,created_at,updated_at
+         ) values (
+            $1,$2,$3,'submission_ready','submission_ready',null,
+            $4,1,$5::jsonb,$4,$4
+         )",
     )
     .bind(unsealed_paper_id)
     .bind(unsealed_team_id)
     .bind(challenge_id)
+    .bind(unsealed_terminal_at)
     .bind(json!({
         "paper_project_id":unsealed_paper_id,
         "team_id":unsealed_team_id,
         "phase":"submission_ready",
+        "outcome":"submission_ready",
+        "outcome_reason":null,
+        "terminal_at":unsealed_terminal_at,
     }))
     .execute(pool)
     .await
@@ -9417,11 +11646,12 @@ async fn postgres_paper_chain_finality_v2_preparation_matches_memory_and_is_atom
         exercise_resolved_appeal_paper_chain_finality_v2(state.clone(), scenario).await;
     }
     for scenario in [
-        AppealLineageRejectionScenarioV2::AncestorOpen,
-        AppealLineageRejectionScenarioV2::MultipleResolved,
+        AppealLineageScenarioV2::AncestorOpen,
+        AppealLineageScenarioV2::TerminalDeniedAfterUpheld,
+        AppealLineageScenarioV2::MultiGenerationUpheld,
     ] {
         reset_postgres(&database_url).await;
-        exercise_paper_chain_finality_v2_appeal_lineage_rejection(state.clone(), scenario).await;
+        exercise_paper_chain_finality_v2_appeal_lineage(state.clone(), scenario).await;
     }
     reset_postgres(&database_url).await;
     exercise_paper_chain_finality_v2_arm_source_drift(state.clone()).await;
@@ -9617,6 +11847,18 @@ async fn postgres_matches_memory_and_covers_four_five_restart_concurrency_and_ho
         .execute(pg_pool)
         .await
         .unwrap_or_else(|error| panic!("0043 {application} application: {error}"));
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/0044_add_hepta_agent_proposal_v2_epoch.sql"
+        ))
+        .execute(pg_pool)
+        .await
+        .unwrap_or_else(|error| panic!("0044 {application} application: {error}"));
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/0045_add_hepta_work_item_record_parity.sql"
+        ))
+        .execute(pg_pool)
+        .await
+        .unwrap_or_else(|error| panic!("0045 {application} application: {error}"));
     }
     reset_postgres(&database_url).await;
     let postgres = run_full_flow(pg_state.clone(), 3, FlowOptions::default()).await;

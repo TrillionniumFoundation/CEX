@@ -19,3 +19,4 @@ services/*
 !services/paper-raid-bff/docker/workspace.Cargo.toml
 !services/paper-raid-bff/docker/Cargo.lock
 !services/paper-raid-bff/docker/sbom.cdx.json
+!services/paper-raid-bff/docker/accessctl.sbom.cdx.json

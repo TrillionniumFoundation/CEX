@@ -838,11 +838,79 @@ async fn apply_hepta_migrations(pool: &PgPool) -> Result<(), String> {
             "ChallengeRuleset V1",
             include_str!("../../../migrations/0043_add_hepta_challenge_ruleset_v1.sql"),
         ),
+        (
+            "Agent proposal V2 epoch binding",
+            include_str!("../../../migrations/0044_add_hepta_agent_proposal_v2_epoch.sql"),
+        ),
+        (
+            "WorkItem relational/JSON parity",
+            include_str!("../../../migrations/0045_add_hepta_work_item_record_parity.sql"),
+        ),
+        (
+            "Matcher V2 relational/JSON parity",
+            include_str!("../../../migrations/0046_add_hepta_matchmaking_record_parity_v2.sql"),
+        ),
+        (
+            "Contribution ledger authority",
+            include_str!("../../../migrations/0047_add_hepta_contribution_ledger_authority.sql"),
+        ),
+        (
+            "Consumer finality V2 exact bindings",
+            include_str!("../../../migrations/0048_add_hepta_consumer_finality_v2.sql"),
+        ),
     ] {
         sqlx::raw_sql(migration)
             .execute(pool)
             .await
             .map_err(|error| format!("apply {name} migration: {error}"))?;
+    }
+    Ok(())
+}
+
+async fn verify_consumer_finality_v2_catalog(pool: &PgPool) -> Result<(), String> {
+    let columns = sqlx::query(
+        "select
+            count(*) filter (where attname='reproduction_id' and attnotnull)::bigint
+                as reproduction_columns,
+            count(*) filter (where attname='appeal_resolution_id' and not attnotnull)::bigint
+                as resolution_columns
+         from pg_attribute
+         where attrelid='hepta_paper_chain_finality_projections'::regclass
+           and attnum > 0 and not attisdropped",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|error| format!("inspect Consumer finality V2 columns: {error}"))?;
+    if columns.get::<i64, _>("reproduction_columns") != 1
+        || columns.get::<i64, _>("resolution_columns") != 1
+    {
+        return Err("Consumer finality V2 exact-binding columns are incomplete".to_string());
+    }
+    let version_definition = sqlx::query_scalar::<_, String>(
+        "select pg_get_constraintdef(oid, true)
+         from pg_constraint
+         where conrelid='hepta_paper_chain_finality_projections'::regclass
+           and conname='hepta_paper_chain_finality_projections_version_check'",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| format!("inspect Consumer finality V2 version constraint: {error}"))?
+    .ok_or_else(|| "Consumer finality V2 version constraint is missing".to_string())?;
+    if !version_definition.contains("version = 2") {
+        return Err("Consumer finality projection version is not pinned to V2".to_string());
+    }
+    let trigger_count = sqlx::query_scalar::<_, i64>(
+        "select count(*)::bigint
+         from pg_trigger
+         where tgrelid='hepta_paper_chain_finality_projections'::regclass
+           and tgname='hepta_consumer_finality_v2_projection_guard'
+           and not tgisinternal and tgenabled <> 'D'",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|error| format!("inspect Consumer finality V2 projection trigger: {error}"))?;
+    if trigger_count != 1 {
+        return Err("Consumer finality V2 projection guard is missing or disabled".to_string());
     }
     Ok(())
 }
@@ -1168,6 +1236,1336 @@ async fn verify_finality_v2_migration_catalog(pool: &PgPool) -> Result<(), Strin
         return Err(format!(
             "Paper Chain finality V2 constraint catalog mismatch: expected 77/910d4454106f5722ad44c6c9095bf48d585dfaa9501fc40d9ef377fd57c3f3ba, got {constraint_count}/{catalog_sha256}"
         ));
+    }
+    Ok(())
+}
+
+fn normalized_catalog_definition(definition: &str) -> String {
+    definition
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+fn compact_catalog_definition(definition: &str) -> String {
+    normalized_catalog_definition(definition)
+        .chars()
+        .filter(|character| !matches!(character, ' ' | '(' | ')' | '"'))
+        .collect::<String>()
+        .replace("::text", "")
+}
+
+const AGENT_PROPOSAL_V2_RECORD_PARITY_CLAUSES: [(&str, &str); 20] = [
+    ("record_json->>'proposal_id'", "proposal_id"),
+    ("record_json->>'paper_project_id'", "paper_project_id"),
+    ("record_json->>'work_item_id'", "work_item_id"),
+    ("record_json->>'section_key'", "section_key"),
+    ("record_json->>'parent_revision_id'", "parent_revision_id"),
+    ("record_json->>'lease_id'", "lease_id"),
+    ("record_json->>'lease_fencing_token'", "lease_fencing_token"),
+    (
+        "record_json->>'expected_work_version'",
+        "expected_work_version",
+    ),
+    ("record_json->>'proposal_kind'", "proposal_kind"),
+    ("record_json->>'payload_hash'", "payload_hash"),
+    (
+        "record_json->>'artifact_manifest_id'",
+        "artifact_manifest_id",
+    ),
+    (
+        "record_json->>'artifact_manifest_hash'",
+        "artifact_manifest_hash",
+    ),
+    ("record_json->>'agent_id'", "agent_id"),
+    ("record_json->>'binding_id'", "binding_id"),
+    ("record_json->>'agent_key_id'", "agent_key_id"),
+    ("record_json->>'agent_public_key'", "agent_public_key"),
+    ("record_json->>'signature'", "signature"),
+    ("record_json->>'status'", "status"),
+    ("record_json->>'version'", "version"),
+    (
+        "signed_at",
+        "to_timestamprecord_json->>'signed_at_unix'::doubleprecision",
+    ),
+];
+
+fn agent_proposal_v2_record_parity_definition_is_exact(definition: &str) -> bool {
+    exact_not_distinct_check(
+        &compact_catalog_definition(definition),
+        &AGENT_PROPOSAL_V2_RECORD_PARITY_CLAUSES,
+    )
+}
+
+async fn verify_agent_proposal_v2_migration_catalog(pool: &PgPool) -> Result<(), String> {
+    for (column_name, expected_type) in [
+        ("lease_id", "uuid"),
+        ("lease_fencing_token", "bigint"),
+        ("expected_work_version", "bigint"),
+        ("artifact_manifest_hash", "text"),
+    ] {
+        let row = sqlx::query(
+            "select format_type(attribute.atttypid, attribute.atttypmod) as data_type,
+                    attribute.attnotnull as not_null
+             from pg_attribute as attribute
+             join pg_class as relation on relation.oid=attribute.attrelid
+             join pg_namespace as namespace on namespace.oid=relation.relnamespace
+             where namespace.nspname='public'
+               and relation.relname='hepta_agent_proposals'
+               and relation.relkind in ('r','p')
+               and attribute.attname=$1
+               and attribute.attnum > 0
+               and not attribute.attisdropped",
+        )
+        .bind(column_name)
+        .fetch_optional(pool)
+        .await
+        .map_err(|error| format!("verify Agent proposal V2 column {column_name}: {error}"))?;
+        let Some(row) = row else {
+            return Err(format!(
+                "Agent proposal V2 migration is missing public.hepta_agent_proposals.{column_name}"
+            ));
+        };
+        let actual_type: String = row.get("data_type");
+        let not_null: bool = row.get("not_null");
+        if actual_type != expected_type || !not_null {
+            return Err(format!(
+                "Agent proposal V2 column public.hepta_agent_proposals.{column_name} must be {expected_type} NOT NULL, got {actual_type}{}",
+                if not_null { " NOT NULL" } else { " nullable" }
+            ));
+        }
+    }
+
+    for (constraint_name, required_fragments) in [
+        (
+            "hepta_agent_proposals_lease_fencing_token_check",
+            &["lease_fencing_token", ">= 1", "9007199254740991"][..],
+        ),
+        (
+            "hepta_agent_proposals_expected_work_version_check",
+            &["expected_work_version", ">= 1", "9007199254740991"][..],
+        ),
+        (
+            "hepta_agent_proposals_payload_hash_check",
+            &["payload_hash", "^sha256:[0-9a-f]{64}$"][..],
+        ),
+        (
+            "hepta_agent_proposals_artifact_manifest_hash_check",
+            &["artifact_manifest_hash", "^sha256:[0-9a-f]{64}$"][..],
+        ),
+    ] {
+        let row = sqlx::query(
+            "select constraint_row.contype::text as constraint_type,
+                    constraint_row.convalidated as validated,
+                    constraint_row.condeferrable as deferrable,
+                    constraint_row.condeferred as initially_deferred,
+                    pg_get_constraintdef(constraint_row.oid, false) as definition
+             from pg_constraint as constraint_row
+             join pg_class as relation on relation.oid=constraint_row.conrelid
+             join pg_namespace as namespace on namespace.oid=relation.relnamespace
+             where namespace.nspname='public'
+               and relation.relname='hepta_agent_proposals'
+               and constraint_row.conname=$1",
+        )
+        .bind(constraint_name)
+        .fetch_optional(pool)
+        .await
+        .map_err(|error| {
+            format!("verify Agent proposal V2 constraint {constraint_name}: {error}")
+        })?;
+        let Some(row) = row else {
+            return Err(format!(
+                "Agent proposal V2 migration is missing constraint {constraint_name}"
+            ));
+        };
+        let definition = normalized_catalog_definition(row.get("definition"));
+        let exact = row.get::<String, _>("constraint_type") == "c"
+            && row.get::<bool, _>("validated")
+            && !row.get::<bool, _>("deferrable")
+            && !row.get::<bool, _>("initially_deferred")
+            && required_fragments
+                .iter()
+                .all(|fragment| definition.contains(fragment));
+        if !exact {
+            return Err(format!(
+                "Agent proposal V2 constraint {constraint_name} is missing, unvalidated, deferrable, or has the wrong definition: {definition}"
+            ));
+        }
+    }
+
+    let parity_row = sqlx::query(
+        "select constraint_row.contype::text as constraint_type,
+                constraint_row.convalidated as validated,
+                constraint_row.condeferrable as deferrable,
+                constraint_row.condeferred as initially_deferred,
+                pg_get_constraintdef(constraint_row.oid, false) as definition
+         from pg_constraint as constraint_row
+         join pg_class as relation on relation.oid=constraint_row.conrelid
+         join pg_namespace as namespace on namespace.oid=relation.relnamespace
+         where namespace.nspname='public'
+           and relation.relname='hepta_agent_proposals'
+           and constraint_row.conname='hepta_agent_proposals_record_json_parity_check'",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| format!("verify Agent proposal V2 record parity constraint: {error}"))?;
+    let Some(parity_row) = parity_row else {
+        return Err(
+            "Agent proposal V2 migration is missing constraint hepta_agent_proposals_record_json_parity_check"
+                .to_string(),
+        );
+    };
+    let parity_definition = normalized_catalog_definition(parity_row.get("definition"));
+    let parity_exact = parity_row.get::<String, _>("constraint_type") == "c"
+        && parity_row.get::<bool, _>("validated")
+        && !parity_row.get::<bool, _>("deferrable")
+        && !parity_row.get::<bool, _>("initially_deferred")
+        && agent_proposal_v2_record_parity_definition_is_exact(&parity_definition);
+    if !parity_exact {
+        return Err(format!(
+            "Agent proposal V2 record parity constraint is incomplete, unvalidated, or has the wrong definition: {parity_definition}"
+        ));
+    }
+
+    let lease_scope = sqlx::query(
+        "select constraint_row.contype::text as constraint_type,
+                constraint_row.convalidated as validated,
+                constraint_row.condeferrable as deferrable,
+                constraint_row.condeferred as initially_deferred,
+                constraint_row.confupdtype::text as update_action,
+                constraint_row.confdeltype::text as delete_action,
+                constraint_row.confmatchtype::text as match_type,
+                referenced_namespace.nspname as referenced_schema,
+                referenced_relation.relname as referenced_table,
+                coalesce((
+                    select array_agg(local_attribute.attname::text order by key_column.ordinality)
+                    from unnest(constraint_row.conkey) with ordinality
+                         as key_column(attribute_number, ordinality)
+                    join pg_attribute as local_attribute
+                      on local_attribute.attrelid=constraint_row.conrelid
+                     and local_attribute.attnum=key_column.attribute_number
+                ), array[]::text[]) as local_columns,
+                coalesce((
+                    select array_agg(referenced_attribute.attname::text order by key_column.ordinality)
+                    from unnest(constraint_row.confkey) with ordinality
+                         as key_column(attribute_number, ordinality)
+                    join pg_attribute as referenced_attribute
+                      on referenced_attribute.attrelid=constraint_row.confrelid
+                     and referenced_attribute.attnum=key_column.attribute_number
+                ), array[]::text[]) as referenced_columns,
+                pg_get_constraintdef(constraint_row.oid, false) as definition
+         from pg_constraint as constraint_row
+         join pg_class as relation on relation.oid=constraint_row.conrelid
+         join pg_namespace as namespace on namespace.oid=relation.relnamespace
+         join pg_class as referenced_relation on referenced_relation.oid=constraint_row.confrelid
+         join pg_namespace as referenced_namespace
+           on referenced_namespace.oid=referenced_relation.relnamespace
+         where namespace.nspname='public'
+           and relation.relname='hepta_agent_proposals'
+           and constraint_row.conname='hepta_agent_proposals_lease_scope_fkey'",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| format!("verify Agent proposal V2 lease-scope foreign key: {error}"))?;
+    let Some(lease_scope) = lease_scope else {
+        return Err(
+            "Agent proposal V2 migration is missing constraint hepta_agent_proposals_lease_scope_fkey"
+                .to_string(),
+        );
+    };
+    let lease_scope_definition = normalized_catalog_definition(lease_scope.get("definition"));
+    let lease_scope_exact = lease_scope.get::<String, _>("constraint_type") == "f"
+        && lease_scope.get::<bool, _>("validated")
+        && !lease_scope.get::<bool, _>("deferrable")
+        && !lease_scope.get::<bool, _>("initially_deferred")
+        && lease_scope.get::<String, _>("update_action") == "a"
+        && lease_scope.get::<String, _>("delete_action") == "a"
+        && lease_scope.get::<String, _>("match_type") == "s"
+        && lease_scope.get::<String, _>("referenced_schema") == "public"
+        && lease_scope.get::<String, _>("referenced_table") == "hepta_section_leases"
+        && lease_scope.get::<Vec<String>, _>("local_columns")
+            == vec!["lease_id".to_string(), "paper_project_id".to_string()]
+        && lease_scope.get::<Vec<String>, _>("referenced_columns")
+            == vec!["lease_id".to_string(), "paper_project_id".to_string()]
+        && lease_scope_definition.contains("foreign key (lease_id, paper_project_id)")
+        && lease_scope_definition
+            .contains("references hepta_section_leases(lease_id, paper_project_id)");
+    if !lease_scope_exact {
+        return Err(format!(
+            "Agent proposal V2 lease-scope foreign key is missing, unvalidated, deferrable, cascading, or miswired: {lease_scope_definition}"
+        ));
+    }
+
+    let managed_constraint_count: i64 = sqlx::query_scalar(
+        "select count(*)
+         from pg_constraint as constraint_row
+         join pg_class as relation on relation.oid=constraint_row.conrelid
+         join pg_namespace as namespace on namespace.oid=relation.relnamespace
+         where namespace.nspname='public'
+           and relation.relname='hepta_agent_proposals'
+           and constraint_row.conname in (
+               'hepta_agent_proposals_lease_fencing_token_check',
+               'hepta_agent_proposals_expected_work_version_check',
+               'hepta_agent_proposals_payload_hash_check',
+               'hepta_agent_proposals_artifact_manifest_hash_check',
+               'hepta_agent_proposals_record_json_parity_check',
+               'hepta_agent_proposals_lease_scope_fkey'
+           )",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|error| format!("count Agent proposal V2 managed constraints: {error}"))?;
+    if managed_constraint_count != 6 {
+        return Err(format!(
+            "Agent proposal V2 managed constraint catalog must contain exactly 6 entries, got {managed_constraint_count}"
+        ));
+    }
+
+    let index_row = sqlx::query(
+        "select index_row.indisvalid as valid,
+                index_row.indisready as ready,
+                index_row.indislive as live,
+                index_row.indisunique as unique_index,
+                index_row.indisprimary as primary_index,
+                index_row.indpred is null as no_predicate,
+                index_row.indexprs is null as no_expressions,
+                index_row.indnkeyatts as key_count,
+                index_row.indnatts as attribute_count,
+                access_method.amname as access_method,
+                coalesce((
+                    select array_agg(attribute.attname::text order by key_column.ordinality)
+                    from unnest(index_row.indkey::smallint[]) with ordinality
+                         as key_column(attribute_number, ordinality)
+                    join pg_attribute as attribute
+                      on attribute.attrelid=index_row.indrelid
+                     and attribute.attnum=key_column.attribute_number
+                ), array[]::text[]) as indexed_columns
+         from pg_index as index_row
+         join pg_class as index_relation on index_relation.oid=index_row.indexrelid
+         join pg_namespace as index_namespace on index_namespace.oid=index_relation.relnamespace
+         join pg_class as table_relation on table_relation.oid=index_row.indrelid
+         join pg_namespace as table_namespace on table_namespace.oid=table_relation.relnamespace
+         join pg_am as access_method on access_method.oid=index_relation.relam
+         where index_namespace.nspname='public'
+           and index_relation.relname='hepta_agent_proposals_lease_epoch_v2_idx'
+           and table_namespace.nspname='public'
+           and table_relation.relname='hepta_agent_proposals'",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| format!("verify Agent proposal V2 lease-epoch index: {error}"))?;
+    let Some(index_row) = index_row else {
+        return Err(
+            "Agent proposal V2 migration is missing index hepta_agent_proposals_lease_epoch_v2_idx"
+                .to_string(),
+        );
+    };
+    let index_exact = index_row.get::<bool, _>("valid")
+        && index_row.get::<bool, _>("ready")
+        && index_row.get::<bool, _>("live")
+        && !index_row.get::<bool, _>("unique_index")
+        && !index_row.get::<bool, _>("primary_index")
+        && index_row.get::<bool, _>("no_predicate")
+        && index_row.get::<bool, _>("no_expressions")
+        && index_row.get::<i16, _>("key_count") == 5
+        && index_row.get::<i16, _>("attribute_count") == 5
+        && index_row.get::<String, _>("access_method") == "btree"
+        && index_row.get::<Vec<String>, _>("indexed_columns")
+            == vec![
+                "paper_project_id".to_string(),
+                "section_key".to_string(),
+                "lease_id".to_string(),
+                "lease_fencing_token".to_string(),
+                "expected_work_version".to_string(),
+            ];
+    if !index_exact {
+        return Err(
+            "Agent proposal V2 lease-epoch index is invalid, partial, expression-based, or has the wrong ordered columns"
+                .to_string(),
+        );
+    }
+
+    Ok(())
+}
+
+async fn verify_work_item_record_parity_catalog(pool: &PgPool) -> Result<(), String> {
+    let row = sqlx::query(
+        "select constraint_row.contype::text as constraint_type,
+                constraint_row.convalidated as validated,
+                constraint_row.condeferrable as deferrable,
+                constraint_row.condeferred as initially_deferred,
+                pg_get_constraintdef(constraint_row.oid, false) as definition
+         from pg_constraint as constraint_row
+         join pg_class as relation on relation.oid=constraint_row.conrelid
+         join pg_namespace as namespace on namespace.oid=relation.relnamespace
+         where namespace.nspname='public'
+           and relation.relname='hepta_paper_work_items'
+           and constraint_row.conname='hepta_paper_work_items_record_json_parity_check'",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| format!("verify WorkItem record parity constraint: {error}"))?;
+    let Some(row) = row else {
+        return Err(
+            "WorkItem record parity migration is missing constraint hepta_paper_work_items_record_json_parity_check"
+                .to_string(),
+        );
+    };
+    let definition = normalized_catalog_definition(row.get("definition"));
+    let compact_definition = compact_catalog_definition(&definition);
+    let exact = row.get::<String, _>("constraint_type") == "c"
+        && row.get::<bool, _>("validated")
+        && !row.get::<bool, _>("deferrable")
+        && !row.get::<bool, _>("initially_deferred")
+        && exact_not_distinct_check(
+            &compact_definition,
+            &[
+                ("record_json->>'work_item_id'", "work_item_id"),
+                ("record_json->>'paper_project_id'", "paper_project_id"),
+                ("record_json->>'assigned_player_id'", "assigned_player_id"),
+                ("record_json->>'assigned_binding_id'", "assigned_binding_id"),
+                ("record_json->>'status'", "status"),
+                ("record_json->>'version'", "version"),
+            ],
+        );
+    if !exact {
+        return Err(format!(
+            "WorkItem record parity constraint is incomplete, unvalidated, deferrable, or has the wrong definition: {definition}"
+        ));
+    }
+    Ok(())
+}
+
+fn contribution_authority_constraint_definition_is_exact(
+    table: &str,
+    name: &str,
+    definition: &str,
+) -> bool {
+    let compact = compact_catalog_definition(definition).replace("public.", "");
+    match (table, name) {
+        (
+            "hepta_paper_contribution_ledger_reservations",
+            "hepta_paper_contribution_ledger_reservations_pkey",
+        )
+        | (
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledgers_pkey",
+        ) => compact == "primarykeycontribution_ledger_id",
+        (
+            "hepta_paper_contribution_ledger_reservations",
+            "hepta_contribution_ledger_reservations_non_nil_id_check",
+        )
+        | (
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledgers_non_nil_id_check",
+        ) => {
+            compact
+                == "checkcontribution_ledger_id<>'00000000-0000-0000-0000-000000000000'::uuid"
+        }
+        (
+            "hepta_paper_contribution_ledger_reservations",
+            "hepta_contribution_ledger_reservations_release_hash_check",
+        )
+        | (
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledgers_release_hash_check",
+        ) => compact == "checkrelease_candidate_hash~'^sha256:[0-9a-f]{64}$'",
+        (
+            "hepta_paper_contribution_ledger_reservations",
+            "hepta_contribution_ledger_reservations_ownership_key",
+        ) => {
+            compact
+                == "uniquecontribution_ledger_id,paper_project_id,release_candidate_hash"
+        }
+        (
+            "hepta_paper_contribution_ledger_reservations",
+            "hepta_contribution_ledger_reservations_paper_fkey",
+        ) => {
+            compact
+                == "foreignkeypaper_project_idreferenceshepta_paper_projectspaper_project_id"
+                || compact
+                    == "foreignkeypaper_project_idreferenceshepta_paper_projectspaper_project_idonupdatenoactionondeletenoaction"
+        }
+        (
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledgers_paper_release_key",
+        ) => compact == "uniquepaper_project_id,release_candidate_hash",
+        (
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledgers_paper_hash_key",
+        ) => compact == "uniquepaper_project_id,ledger_hash",
+        (
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledgers_paper_fkey",
+        ) => {
+            compact
+                == "foreignkeypaper_project_idreferenceshepta_paper_projectspaper_project_idondeletecascade"
+                || compact
+                    == "foreignkeypaper_project_idreferenceshepta_paper_projectspaper_project_idonupdatenoactionondeletecascade"
+        }
+        (
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledgers_version_check",
+        ) => compact == "checkversion>0",
+        (
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledgers_ledger_hash_check",
+        ) => compact == "checkledger_hash~'^sha256:[0-9a-f]{64}$'",
+        (
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledgers_entries_json_check",
+        ) => exact_not_distinct_check(
+            &compact,
+            &[("jsonb_typeofentries_json", "'array'")],
+        ),
+        (
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledgers_record_json_parity_check",
+        ) => exact_not_distinct_check(
+            &compact,
+            &[
+                (
+                    "record_json->>'schema'",
+                    "'hepta.paper_raid.contribution_ledger.v1'",
+                ),
+                (
+                    "record_json->>'contribution_ledger_id'",
+                    "contribution_ledger_id",
+                ),
+                ("record_json->>'paper_project_id'", "paper_project_id"),
+                (
+                    "record_json->>'release_candidate_hash'",
+                    "release_candidate_hash",
+                ),
+                ("record_json->'entries'", "entries_json"),
+                ("record_json->>'ledger_hash'", "ledger_hash"),
+                ("record_json->>'version'", "version"),
+                (
+                    "record_json->>'created_at'::timestampwithtimezone",
+                    "created_at",
+                ),
+            ],
+        ),
+        (
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledgers_reservation_fkey",
+        ) => {
+            let exact = "foreignkeycontribution_ledger_id,paper_project_id,release_candidate_hashreferenceshepta_paper_contribution_ledger_reservationscontribution_ledger_id,paper_project_id,release_candidate_hash";
+            compact == exact
+                || compact == format!("{exact}onupdatenoactionondeletenoaction")
+        }
+        _ => false,
+    }
+}
+
+async fn verify_contribution_ledger_authority_catalog(pool: &PgPool) -> Result<(), String> {
+    const LEDGER_COLUMNS: &[(i16, &str, &str)] = &[
+        (1, "contribution_ledger_id", "uuid"),
+        (2, "paper_project_id", "uuid"),
+        (3, "release_candidate_hash", "text"),
+        (4, "ledger_hash", "text"),
+        (5, "version", "bigint"),
+        (6, "record_json", "jsonb"),
+        (7, "created_at", "timestamp with time zone"),
+        (8, "entries_json", "jsonb"),
+    ];
+    const RESERVATION_COLUMNS: &[(i16, &str, &str)] = &[
+        (1, "contribution_ledger_id", "uuid"),
+        (2, "paper_project_id", "uuid"),
+        (3, "release_candidate_hash", "text"),
+        (4, "created_at", "timestamp with time zone"),
+    ];
+    for (table, expected_columns) in [
+        ("hepta_paper_contribution_ledgers", LEDGER_COLUMNS),
+        (
+            "hepta_paper_contribution_ledger_reservations",
+            RESERVATION_COLUMNS,
+        ),
+    ] {
+        let rows = sqlx::query(
+            "select attribute.attnum as ordinal,attribute.attname as column_name,
+                    format_type(attribute.atttypid,attribute.atttypmod) as data_type,
+                    attribute.attnotnull as not_null,
+                    pg_get_expr(default_row.adbin,default_row.adrelid,false) as default_expression,
+                    attribute.attidentity::text as identity_kind,
+                    attribute.attgenerated::text as generated_kind
+             from pg_attribute attribute
+             join pg_class relation on relation.oid=attribute.attrelid
+             join pg_namespace namespace on namespace.oid=relation.relnamespace
+             left join pg_attrdef default_row
+               on default_row.adrelid=attribute.attrelid
+              and default_row.adnum=attribute.attnum
+             where namespace.nspname='public' and relation.relname=$1
+               and attribute.attnum>0 and not attribute.attisdropped
+             order by attribute.attnum",
+        )
+        .bind(table)
+        .fetch_all(pool)
+        .await
+        .map_err(|error| format!("verify contribution authority columns for {table}: {error}"))?;
+        if rows.len() != expected_columns.len() {
+            return Err(format!(
+                "Contribution authority table public.{table} must contain exactly {} ordered columns, got {}",
+                expected_columns.len(),
+                rows.len()
+            ));
+        }
+        for (row, (ordinal, column, data_type)) in rows.iter().zip(expected_columns.iter()) {
+            if row.get::<i16, _>("ordinal") != *ordinal
+                || row.get::<String, _>("column_name") != *column
+                || row.get::<String, _>("data_type") != *data_type
+                || !row.get::<bool, _>("not_null")
+                || row.get::<Option<String>, _>("default_expression").is_some()
+                || !row.get::<String, _>("identity_kind").is_empty()
+                || !row.get::<String, _>("generated_kind").is_empty()
+            {
+                return Err(format!(
+                    "Contribution authority column public.{table}.{column} has a non-canonical ordinal, type, nullability, default, identity, or generated expression"
+                ));
+            }
+        }
+
+        let metadata = sqlx::query(
+            "select relation.relkind::text as relation_kind,
+                    relation.relpersistence::text as persistence,
+                    relation.relispartition as partitioned,
+                    relation.relrowsecurity as row_security,
+                    relation.relforcerowsecurity as force_row_security,
+                    relation.reloftype=0 as no_typed_table,
+                    relation.relreplident::text as replica_identity,
+                    coalesce(relation.reloptions,array[]::text[]) as relation_options,
+                    access_method.amname as access_method,
+                    relation.relowner=(
+                        select project.relowner from pg_class project
+                        join pg_namespace project_namespace
+                          on project_namespace.oid=project.relnamespace
+                        where project_namespace.nspname='public'
+                          and project.relname='hepta_paper_projects'
+                    ) as canonical_owner,
+                    relation.reltablespace=(
+                        select ledger.reltablespace from pg_class ledger
+                        join pg_namespace ledger_namespace
+                          on ledger_namespace.oid=ledger.relnamespace
+                        where ledger_namespace.nspname='public'
+                          and ledger.relname='hepta_paper_contribution_ledgers'
+                    ) as canonical_tablespace,
+                    (select count(*) from pg_policy policy
+                      where policy.polrelid=relation.oid) as policy_count,
+                    (select count(*) from pg_inherits inheritance
+                      where inheritance.inhrelid=relation.oid
+                         or inheritance.inhparent=relation.oid) as inheritance_count,
+                    (select count(*) from pg_rewrite rewrite_rule
+                      where rewrite_rule.ev_class=relation.oid
+                        and rewrite_rule.rulename<>'_RETURN') as rewrite_rule_count
+             from pg_class relation
+             join pg_namespace namespace on namespace.oid=relation.relnamespace
+             join pg_am access_method on access_method.oid=relation.relam
+             where namespace.nspname='public' and relation.relname=$1",
+        )
+        .bind(table)
+        .fetch_optional(pool)
+        .await
+        .map_err(|error| format!("verify contribution authority table {table}: {error}"))?
+        .ok_or_else(|| format!("Contribution authority table public.{table} is missing"))?;
+        if metadata.get::<String, _>("relation_kind") != "r"
+            || metadata.get::<String, _>("persistence") != "p"
+            || metadata.get::<bool, _>("partitioned")
+            || metadata.get::<bool, _>("row_security")
+            || metadata.get::<bool, _>("force_row_security")
+            || !metadata.get::<bool, _>("no_typed_table")
+            || metadata.get::<String, _>("replica_identity") != "d"
+            || !metadata
+                .get::<Vec<String>, _>("relation_options")
+                .is_empty()
+            || metadata.get::<String, _>("access_method") != "heap"
+            || !metadata.get::<bool, _>("canonical_owner")
+            || !metadata.get::<bool, _>("canonical_tablespace")
+            || metadata.get::<i64, _>("policy_count") != 0
+            || metadata.get::<i64, _>("inheritance_count") != 0
+            || metadata.get::<i64, _>("rewrite_rule_count") != 0
+        {
+            return Err(format!(
+                "Contribution authority table public.{table} has non-canonical owner, RLS/policies, persistence, options, access method, tablespace, inheritance, or rewrite rules"
+            ));
+        }
+    }
+
+    let mut expected_constraints = vec![
+        (
+            "hepta_paper_contribution_ledger_reservations",
+            "hepta_contribution_ledger_reservations_non_nil_id_check",
+            "c",
+        ),
+        (
+            "hepta_paper_contribution_ledger_reservations",
+            "hepta_contribution_ledger_reservations_ownership_key",
+            "u",
+        ),
+        (
+            "hepta_paper_contribution_ledger_reservations",
+            "hepta_contribution_ledger_reservations_paper_fkey",
+            "f",
+        ),
+        (
+            "hepta_paper_contribution_ledger_reservations",
+            "hepta_contribution_ledger_reservations_release_hash_check",
+            "c",
+        ),
+        (
+            "hepta_paper_contribution_ledger_reservations",
+            "hepta_paper_contribution_ledger_reservations_pkey",
+            "p",
+        ),
+        (
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledgers_entries_json_check",
+            "c",
+        ),
+        (
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledgers_ledger_hash_check",
+            "c",
+        ),
+        (
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledgers_non_nil_id_check",
+            "c",
+        ),
+        (
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledgers_paper_fkey",
+            "f",
+        ),
+        (
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledgers_paper_hash_key",
+            "u",
+        ),
+        (
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledgers_paper_release_key",
+            "u",
+        ),
+        (
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledgers_pkey",
+            "p",
+        ),
+        (
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledgers_record_json_parity_check",
+            "c",
+        ),
+        (
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledgers_release_hash_check",
+            "c",
+        ),
+        (
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledgers_reservation_fkey",
+            "f",
+        ),
+        (
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledgers_version_check",
+            "c",
+        ),
+    ];
+    expected_constraints.sort_unstable();
+    let constraint_names = expected_constraints
+        .iter()
+        .map(|(_, name, _)| (*name).to_string())
+        .collect::<Vec<_>>();
+    let constraint_rows = sqlx::query(
+        "select relation.relname as table_name,constraint_row.conname,
+                constraint_row.contype::text as constraint_type,
+                constraint_row.convalidated as validated,
+                constraint_row.condeferrable as deferrable,
+                constraint_row.condeferred as initially_deferred,
+                pg_get_constraintdef(constraint_row.oid,false) as definition
+         from pg_constraint constraint_row
+         join pg_class relation on relation.oid=constraint_row.conrelid
+         join pg_namespace namespace on namespace.oid=relation.relnamespace
+         where namespace.nspname='public' and constraint_row.conname=any($1)
+         order by relation.relname,constraint_row.conname",
+    )
+    .bind(constraint_names)
+    .fetch_all(pool)
+    .await
+    .map_err(|error| format!("verify contribution authority constraints: {error}"))?;
+    if constraint_rows.len() != expected_constraints.len() {
+        return Err(format!(
+            "Contribution authority constraint catalog must contain exactly {} globally unique managed names, got {}",
+            expected_constraints.len(),
+            constraint_rows.len()
+        ));
+    }
+    for (row, (expected_table, expected_name, expected_type)) in
+        constraint_rows.iter().zip(expected_constraints.iter())
+    {
+        let table: String = row.get("table_name");
+        let name: String = row.get("conname");
+        let definition: String = row.get("definition");
+        if table != *expected_table
+            || name != *expected_name
+            || row.get::<String, _>("constraint_type") != *expected_type
+            || !row.get::<bool, _>("validated")
+            || row.get::<bool, _>("deferrable")
+            || row.get::<bool, _>("initially_deferred")
+            || !contribution_authority_constraint_definition_is_exact(&table, &name, &definition)
+        {
+            return Err(format!(
+                "Contribution authority constraint public.{table}.{name} is on the wrong table, duplicated, unvalidated, deferrable, or has a non-canonical exact definition: {definition}"
+            ));
+        }
+    }
+    let authority_constraint_count: i64 = sqlx::query_scalar(
+        "select count(*) from pg_constraint constraint_row
+         where constraint_row.conrelid in (
+             'public.hepta_paper_contribution_ledgers'::regclass,
+             'public.hepta_paper_contribution_ledger_reservations'::regclass
+         )",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|error| format!("count contribution authority constraints: {error}"))?;
+    if authority_constraint_count != expected_constraints.len() as i64 {
+        return Err(format!(
+            "Contribution authority tables must contain exactly {} constraints without unmanaged extras, got {authority_constraint_count}",
+            expected_constraints.len()
+        ));
+    }
+
+    let index = sqlx::query(
+        "select index_row.indisvalid as valid,index_row.indisready as ready,
+                index_row.indislive as live,index_row.indisunique as unique_index,
+                index_row.indisprimary as primary_index,
+                index_row.indisexclusion as exclusion_index,
+                index_row.indimmediate as immediate,
+                index_row.indisclustered as clustered,
+                index_row.indisreplident as replica_identity,
+                index_row.indcheckxmin as check_xmin,
+                index_row.indnullsnotdistinct as nulls_not_distinct,
+                index_row.indexprs is null as no_expressions,
+                index_row.indnkeyatts as key_count,index_row.indnatts as attribute_count,
+                access_method.amname as access_method,
+                attribute.attname as indexed_column,
+                operator_class.opcname as operator_class,
+                operator_class_namespace.nspname as operator_class_schema,
+                operator_class.opcdefault as operator_class_default,
+                format_type(operator_class.opcintype,-1) as operator_class_input_type,
+                operator_class.opckeytype=0 as operator_class_default_key_type,
+                operator_class.opcmethod=access_method.oid as operator_class_method_matches,
+                operator_family_namespace.nspname as operator_family_schema,
+                operator_family.opfname as operator_family,
+                operator_family.opfmethod=access_method.oid as operator_family_method_matches,
+                index_row.indcollation[0]=0 as no_collation,
+                index_row.indoption[0] as key_option,
+                index_relation.relpersistence::text as persistence,
+                coalesce(index_relation.reloptions,array[]::text[]) as index_options,
+                index_relation.relowner=table_relation.relowner as canonical_owner,
+                index_relation.reltablespace=table_relation.reltablespace as canonical_tablespace,
+                pg_get_expr(index_row.indpred,index_row.indrelid,false) as predicate
+         from pg_index index_row
+         join pg_class index_relation on index_relation.oid=index_row.indexrelid
+         join pg_namespace index_namespace on index_namespace.oid=index_relation.relnamespace
+         join pg_class table_relation on table_relation.oid=index_row.indrelid
+         join pg_namespace table_namespace on table_namespace.oid=table_relation.relnamespace
+         join pg_am access_method on access_method.oid=index_relation.relam
+         join pg_attribute attribute on attribute.attrelid=index_row.indrelid
+              and attribute.attnum=index_row.indkey[0]
+         join pg_opclass operator_class on operator_class.oid=index_row.indclass[0]
+         join pg_namespace operator_class_namespace
+              on operator_class_namespace.oid=operator_class.opcnamespace
+         join pg_opfamily operator_family on operator_family.oid=operator_class.opcfamily
+         join pg_namespace operator_family_namespace
+              on operator_family_namespace.oid=operator_family.opfnamespace
+         where index_namespace.nspname='public'
+           and index_relation.relname='hepta_agent_proposals_one_accepted_artifact_manifest_idx'
+           and table_namespace.nspname='public'
+           and table_relation.relname='hepta_agent_proposals'",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| format!("verify accepted artifact authority index: {error}"))?
+    .ok_or_else(|| {
+        "Contribution authority migration is missing the accepted artifact unique index on public.hepta_agent_proposals"
+            .to_string()
+    })?;
+    let predicate = compact_catalog_definition(index.get("predicate"));
+    if !index.get::<bool, _>("valid")
+        || !index.get::<bool, _>("ready")
+        || !index.get::<bool, _>("live")
+        || !index.get::<bool, _>("unique_index")
+        || index.get::<bool, _>("primary_index")
+        || index.get::<bool, _>("exclusion_index")
+        || !index.get::<bool, _>("immediate")
+        || index.get::<bool, _>("clustered")
+        || index.get::<bool, _>("replica_identity")
+        || index.get::<bool, _>("check_xmin")
+        || index.get::<bool, _>("nulls_not_distinct")
+        || !index.get::<bool, _>("no_expressions")
+        || index.get::<i16, _>("key_count") != 1
+        || index.get::<i16, _>("attribute_count") != 1
+        || index.get::<String, _>("access_method") != "btree"
+        || index.get::<String, _>("indexed_column") != "artifact_manifest_id"
+        || index.get::<String, _>("operator_class") != "uuid_ops"
+        || index.get::<String, _>("operator_class_schema") != "pg_catalog"
+        || !index.get::<bool, _>("operator_class_default")
+        || index.get::<String, _>("operator_class_input_type") != "uuid"
+        || !index.get::<bool, _>("operator_class_default_key_type")
+        || !index.get::<bool, _>("operator_class_method_matches")
+        || index.get::<String, _>("operator_family_schema") != "pg_catalog"
+        || index.get::<String, _>("operator_family") != "uuid_ops"
+        || !index.get::<bool, _>("operator_family_method_matches")
+        || !index.get::<bool, _>("no_collation")
+        || index.get::<i16, _>("key_option") != 0
+        || index.get::<String, _>("persistence") != "p"
+        || !index.get::<Vec<String>, _>("index_options").is_empty()
+        || !index.get::<bool, _>("canonical_owner")
+        || !index.get::<bool, _>("canonical_tablespace")
+        || predicate != "status='accepted'"
+    {
+        return Err(format!(
+            "Accepted artifact authority index is invalid or has non-canonical ownership, storage, key semantics, or predicate: {predicate}"
+        ));
+    }
+
+    let mut expected_triggers = [
+        (
+            "hepta_paper_contribution_ledger_reservations",
+            "hepta_contribution_ledger_reservation_immutable_guard",
+            27_i16,
+        ),
+        (
+            "hepta_paper_contribution_ledger_reservations",
+            "hepta_contribution_ledger_reservation_truncate_guard",
+            34_i16,
+        ),
+        (
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledger_immutable_guard",
+            27_i16,
+        ),
+        (
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledger_truncate_guard",
+            34_i16,
+        ),
+    ];
+    expected_triggers.sort_unstable();
+    let trigger_names = expected_triggers
+        .iter()
+        .map(|(_, name, _)| (*name).to_string())
+        .collect::<Vec<_>>();
+    let trigger_rows = sqlx::query(
+        "select relation.relname as table_name,trigger_row.tgname as trigger_name,
+                trigger_row.tgenabled::text as enabled,trigger_row.tgtype as trigger_type,
+                trigger_row.tgnargs as trigger_argument_count,
+                trigger_row.tgconstraint=0 as not_constraint_trigger,
+                trigger_row.tgdeferrable as deferrable,
+                trigger_row.tginitdeferred as initially_deferred,
+                trigger_row.tgqual is null as no_when_clause,
+                trigger_row.tgoldtable is null and trigger_row.tgnewtable is null
+                    as no_transition_tables,
+                function_namespace.nspname as function_schema,
+                function_row.proname as function_name,function_row.prokind::text as function_kind,
+                function_row.pronargs as argument_count,function_row.prosecdef as security_definer,
+                function_row.proleakproof as leakproof,function_row.proisstrict as strict,
+                function_row.proretset as returns_set,
+                function_row.provolatile::text as volatility,
+                function_row.proparallel::text as parallel_safety,
+                coalesce(function_row.proconfig,array[]::text[]) as function_config,
+                function_row.proowner=relation.relowner as canonical_owner,
+                language_row.lanname as language,
+                pg_get_function_result(function_row.oid) as result_type,
+                function_row.prosrc as function_body
+         from pg_trigger trigger_row
+         join pg_class relation on relation.oid=trigger_row.tgrelid
+         join pg_namespace namespace on namespace.oid=relation.relnamespace
+         join pg_proc function_row on function_row.oid=trigger_row.tgfoid
+         join pg_namespace function_namespace on function_namespace.oid=function_row.pronamespace
+         join pg_language language_row on language_row.oid=function_row.prolang
+         where namespace.nspname='public' and not trigger_row.tgisinternal
+           and trigger_row.tgname=any($1)
+         order by relation.relname,trigger_row.tgname",
+    )
+    .bind(trigger_names)
+    .fetch_all(pool)
+    .await
+    .map_err(|error| format!("verify frozen contribution authority triggers: {error}"))?;
+    if trigger_rows.len() != expected_triggers.len() {
+        return Err(format!(
+            "Frozen contribution authority requires exactly four globally table-scoped mutation/TRUNCATE guards, got {}",
+            trigger_rows.len()
+        ));
+    }
+    const IMMUTABLE_TRIGGER_BODY: &str = "begin raise exception using errcode = '55000', message = 'frozen_contribution_authority_is_immutable', detail = tg_table_name || ' rows are append-only scientific authority'; end";
+    for (row, (expected_table, expected_trigger, expected_type)) in
+        trigger_rows.iter().zip(expected_triggers.iter())
+    {
+        let table_name: String = row.get("table_name");
+        let trigger_name: String = row.get("trigger_name");
+        let function_body: String = row.get("function_body");
+        if table_name != *expected_table
+            || trigger_name != *expected_trigger
+            || row.get::<String, _>("enabled") != "A"
+            || row.get::<i16, _>("trigger_type") != *expected_type
+            || row.get::<i16, _>("trigger_argument_count") != 0
+            || !row.get::<bool, _>("not_constraint_trigger")
+            || row.get::<bool, _>("deferrable")
+            || row.get::<bool, _>("initially_deferred")
+            || !row.get::<bool, _>("no_when_clause")
+            || !row.get::<bool, _>("no_transition_tables")
+            || row.get::<String, _>("function_schema") != "public"
+            || row.get::<String, _>("function_name")
+                != "hepta_reject_frozen_contribution_authority_mutation"
+            || row.get::<String, _>("function_kind") != "f"
+            || row.get::<i16, _>("argument_count") != 0
+            || row.get::<bool, _>("security_definer")
+            || row.get::<bool, _>("leakproof")
+            || row.get::<bool, _>("strict")
+            || row.get::<bool, _>("returns_set")
+            || row.get::<String, _>("volatility") != "v"
+            || row.get::<String, _>("parallel_safety") != "u"
+            || !row.get::<Vec<String>, _>("function_config").is_empty()
+            || !row.get::<bool, _>("canonical_owner")
+            || row.get::<String, _>("language") != "plpgsql"
+            || row.get::<String, _>("result_type") != "trigger"
+            || normalized_catalog_definition(&function_body) != IMMUTABLE_TRIGGER_BODY
+        {
+            return Err(format!(
+                "Frozen contribution authority trigger public.{table_name}.{trigger_name} is duplicated, on the wrong table, disabled, miswired, or non-canonical"
+            ));
+        }
+    }
+    let authority_trigger_count: i64 = sqlx::query_scalar(
+        "select count(*) from pg_trigger trigger_row
+         where trigger_row.tgrelid in (
+             'public.hepta_paper_contribution_ledgers'::regclass,
+             'public.hepta_paper_contribution_ledger_reservations'::regclass
+         ) and not trigger_row.tgisinternal",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|error| format!("count contribution authority triggers: {error}"))?;
+    if authority_trigger_count != expected_triggers.len() as i64 {
+        return Err(format!(
+            "Frozen contribution authority tables must contain exactly four guards without unmanaged extras, got {authority_trigger_count}"
+        ));
+    }
+    let guard_function_count: i64 = sqlx::query_scalar(
+        "select count(*) from pg_proc function_row
+         join pg_namespace namespace on namespace.oid=function_row.pronamespace
+         where namespace.nspname='public'
+           and function_row.proname='hepta_reject_frozen_contribution_authority_mutation'",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|error| format!("count contribution authority guard functions: {error}"))?;
+    if guard_function_count != 1 {
+        return Err(format!(
+            "Frozen contribution authority requires exactly one zero-argument guard function, got {guard_function_count}"
+        ));
+    }
+    Ok(())
+}
+
+fn matchmaking_v2_column_is_exact(
+    table: &str,
+    column: &str,
+    data_type: &str,
+    not_null: bool,
+) -> bool {
+    match (table, column) {
+        ("hepta_matchmaking_tickets", "party_code_hash") => data_type == "text" && !not_null,
+        ("hepta_matchmaking_tickets", "expires_at") => {
+            data_type == "timestamp with time zone" && not_null
+        }
+        ("hepta_team_proposals", "solver_version") => data_type == "text" && !not_null,
+        ("hepta_team_proposals", "source_preferences")
+        | ("hepta_team_proposals", "role_assignments") => data_type == "jsonb" && !not_null,
+        _ => false,
+    }
+}
+
+fn matchmaking_v2_constraint_definition_is_exact(name: &str, definition: &str) -> bool {
+    let compact = compact_catalog_definition(definition);
+    match name {
+        "hepta_matchmaking_tickets_party_code_hash_check" => {
+            compact == "checkparty_code_hashisnullorparty_code_hash~'^sha256:[0-9a-f]{64}$'"
+        }
+        "hepta_matchmaking_tickets_record_json_parity_v2_check" => exact_not_distinct_check(
+            &compact,
+            &[
+                ("record_json->>'ticket_id'", "ticket_id"),
+                ("record_json->>'player_id'", "player_id"),
+                ("record_json->>'challenge_id'", "challenge_id"),
+                ("record_json->>'requested_team_size'", "requested_team_size"),
+                ("record_json->'roles'", "to_jsonbroles"),
+                ("record_json->>'availability_hash'", "availability_hash"),
+                ("record_json->>'party_code_hash'", "party_code_hash"),
+                ("record_json->>'status'", "status"),
+                ("record_json->>'matched_proposal_id'", "matched_proposal_id"),
+                ("record_json->>'version'", "version"),
+                (
+                    "record_json->>'created_at'::timestampwithtimezone",
+                    "created_at",
+                ),
+                (
+                    "record_json->>'updated_at'::timestampwithtimezone",
+                    "updated_at",
+                ),
+                (
+                    "record_json->>'expires_at'::timestampwithtimezone",
+                    "expires_at",
+                ),
+            ],
+        ),
+        "hepta_team_proposals_record_json_parity_v2_check" => exact_not_distinct_check(
+            &compact,
+            &[
+                ("record_json->>'proposal_id'", "proposal_id"),
+                ("record_json->>'challenge_id'", "challenge_id"),
+                ("record_json->>'requested_team_size'", "requested_team_size"),
+                (
+                    "record_json->>'deterministic_match_key'",
+                    "deterministic_match_key",
+                ),
+                (
+                    "record_json->'member_player_ids'",
+                    "to_jsonbmember_player_ids",
+                ),
+                (
+                    "record_json->'source_ticket_ids'",
+                    "to_jsonbsource_ticket_ids",
+                ),
+                ("record_json->>'solver_version'", "solver_version"),
+                ("record_json->'source_preferences'", "source_preferences"),
+                ("record_json->'role_assignments'", "role_assignments"),
+                ("record_json->>'status'", "status"),
+                ("record_json->>'version'", "version"),
+                (
+                    "record_json->>'created_at'::timestampwithtimezone",
+                    "created_at",
+                ),
+                (
+                    "record_json->>'updated_at'::timestampwithtimezone",
+                    "updated_at",
+                ),
+                (
+                    "record_json->>'expires_at'::timestampwithtimezone",
+                    "expires_at",
+                ),
+            ],
+        ),
+        "hepta_team_proposals_active_matcher_v2_check" => {
+            let direct = "checkstatus<>allarray['proposed','accepted']orsolver_versionisnotnullandsolver_versionisnotdistinctfrom'hepta.paper_raid.alpha_matcher.v2'andsource_preferencesisnotnullandjsonb_typeofsource_preferencesisnotdistinctfrom'array'andjsonb_array_lengthsource_preferencesisnotdistinctfromrequested_team_sizeandrole_assignmentsisnotnullandjsonb_typeofrole_assignmentsisnotdistinctfrom'array'andjsonb_array_lengthrole_assignmentsisnotdistinctfromrequested_team_sizeistrue";
+            let deparsed = "checkstatus<>allarray['proposed','accepted']orsolver_versionisnotnullandnotsolver_versionisdistinctfrom'hepta.paper_raid.alpha_matcher.v2'andsource_preferencesisnotnullandnotjsonb_typeofsource_preferencesisdistinctfrom'array'andnotjsonb_array_lengthsource_preferencesisdistinctfromrequested_team_sizeandrole_assignmentsisnotnullandnotjsonb_typeofrole_assignmentsisdistinctfrom'array'andnotjsonb_array_lengthrole_assignmentsisdistinctfromrequested_team_sizeistrue";
+            compact == direct || compact == deparsed
+        }
+        _ => false,
+    }
+}
+
+fn exact_not_distinct_check(compact: &str, clauses: &[(&str, &str)]) -> bool {
+    let direct = format!(
+        "check{}",
+        clauses
+            .iter()
+            .map(|(left, right)| format!("{left}isnotdistinctfrom{right}"))
+            .collect::<Vec<_>>()
+            .join("and")
+    );
+    let deparsed = format!(
+        "check{}",
+        clauses
+            .iter()
+            .map(|(left, right)| format!("not{left}isdistinctfrom{right}"))
+            .collect::<Vec<_>>()
+            .join("and")
+    );
+    compact == direct || compact == deparsed
+}
+
+#[allow(clippy::too_many_arguments)]
+fn matchmaking_v2_live_party_index_is_exact(
+    valid: bool,
+    ready: bool,
+    live: bool,
+    unique_index: bool,
+    primary_index: bool,
+    no_expressions: bool,
+    key_count: i16,
+    attribute_count: i16,
+    access_method: &str,
+    indexed_columns: &[String],
+    predicate: &str,
+) -> bool {
+    valid
+        && ready
+        && live
+        && !unique_index
+        && !primary_index
+        && no_expressions
+        && key_count == 4
+        && attribute_count == 4
+        && access_method == "btree"
+        && indexed_columns
+            == [
+                "challenge_id".to_string(),
+                "party_code_hash".to_string(),
+                "created_at".to_string(),
+                "ticket_id".to_string(),
+            ]
+        && compact_catalog_definition(predicate)
+            == "status=anyarray['queued','matched']andparty_code_hashisnotnull"
+}
+
+async fn verify_matchmaking_v2_catalog(pool: &PgPool) -> Result<(), String> {
+    for (table, column) in [
+        ("hepta_matchmaking_tickets", "party_code_hash"),
+        ("hepta_matchmaking_tickets", "expires_at"),
+        ("hepta_team_proposals", "solver_version"),
+        ("hepta_team_proposals", "source_preferences"),
+        ("hepta_team_proposals", "role_assignments"),
+    ] {
+        let row = sqlx::query(
+            "select format_type(attribute.atttypid, attribute.atttypmod) as data_type,
+                    attribute.attnotnull as not_null
+             from pg_attribute as attribute
+             join pg_class as relation on relation.oid=attribute.attrelid
+             join pg_namespace as namespace on namespace.oid=relation.relnamespace
+             where namespace.nspname='public' and relation.relname=$1
+               and relation.relkind in ('r','p') and attribute.attname=$2
+               and attribute.attnum > 0 and not attribute.attisdropped",
+        )
+        .bind(table)
+        .bind(column)
+        .fetch_optional(pool)
+        .await
+        .map_err(|error| format!("verify Matcher V2 column {table}.{column}: {error}"))?;
+        let Some(row) = row else {
+            return Err(format!(
+                "Matcher V2 migration is missing public.{table}.{column}"
+            ));
+        };
+        let data_type: String = row.get("data_type");
+        let not_null: bool = row.get("not_null");
+        if !matchmaking_v2_column_is_exact(table, column, &data_type, not_null) {
+            return Err(format!(
+                "Matcher V2 column public.{table}.{column} has unsafe type/nullability {data_type} not_null={not_null}"
+            ));
+        }
+    }
+
+    let managed_constraints = [
+        (
+            "hepta_matchmaking_tickets",
+            "hepta_matchmaking_tickets_party_code_hash_check",
+        ),
+        (
+            "hepta_matchmaking_tickets",
+            "hepta_matchmaking_tickets_record_json_parity_v2_check",
+        ),
+        (
+            "hepta_team_proposals",
+            "hepta_team_proposals_record_json_parity_v2_check",
+        ),
+        (
+            "hepta_team_proposals",
+            "hepta_team_proposals_active_matcher_v2_check",
+        ),
+    ];
+    for (table, constraint_name) in managed_constraints {
+        let row = sqlx::query(
+            "select constraint_row.contype::text as constraint_type,
+                    constraint_row.convalidated as validated,
+                    constraint_row.condeferrable as deferrable,
+                    constraint_row.condeferred as initially_deferred,
+                    pg_get_constraintdef(constraint_row.oid, false) as definition
+             from pg_constraint as constraint_row
+             join pg_class as relation on relation.oid=constraint_row.conrelid
+             join pg_namespace as namespace on namespace.oid=relation.relnamespace
+             where namespace.nspname='public' and constraint_row.conname=$1
+               and relation.relname=$2",
+        )
+        .bind(constraint_name)
+        .bind(table)
+        .fetch_optional(pool)
+        .await
+        .map_err(|error| format!("verify Matcher V2 constraint {constraint_name}: {error}"))?;
+        let Some(row) = row else {
+            return Err(format!(
+                "Matcher V2 migration is missing constraint {constraint_name}"
+            ));
+        };
+        let definition: String = row.get("definition");
+        if row.get::<String, _>("constraint_type") != "c"
+            || !row.get::<bool, _>("validated")
+            || row.get::<bool, _>("deferrable")
+            || row.get::<bool, _>("initially_deferred")
+            || !matchmaking_v2_constraint_definition_is_exact(constraint_name, &definition)
+        {
+            return Err(format!(
+                "Matcher V2 constraint {constraint_name} is incomplete, unvalidated, deferrable, or has the wrong definition: {definition}"
+            ));
+        }
+    }
+
+    let index = sqlx::query(
+        "select index_row.indisvalid as valid,index_row.indisready as ready,
+                index_row.indislive as live,index_row.indisunique as unique_index,
+                index_row.indisprimary as primary_index,
+                index_row.indexprs is null as no_expressions,
+                index_row.indnkeyatts as key_count,index_row.indnatts as attribute_count,
+                access_method.amname as access_method,
+                pg_get_expr(index_row.indpred,index_row.indrelid,false) as predicate,
+                coalesce((select array_agg(attribute.attname::text order by key_column.ordinality)
+                          from unnest(index_row.indkey::smallint[]) with ordinality
+                               as key_column(attribute_number,ordinality)
+                          join pg_attribute as attribute
+                            on attribute.attrelid=index_row.indrelid
+                           and attribute.attnum=key_column.attribute_number),array[]::text[])
+                    as indexed_columns
+         from pg_index as index_row
+         join pg_class as index_relation on index_relation.oid=index_row.indexrelid
+         join pg_namespace as index_namespace on index_namespace.oid=index_relation.relnamespace
+         join pg_class as table_relation on table_relation.oid=index_row.indrelid
+         join pg_namespace as table_namespace on table_namespace.oid=table_relation.relnamespace
+         join pg_am as access_method on access_method.oid=index_relation.relam
+         where index_namespace.nspname='public'
+           and index_relation.relname='hepta_matchmaking_live_party_idx'
+           and table_namespace.nspname='public'
+           and table_relation.relname='hepta_matchmaking_tickets'",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| format!("verify Matcher V2 live-party index: {error}"))?;
+    let Some(index) = index else {
+        return Err(
+            "Matcher V2 migration is missing index hepta_matchmaking_live_party_idx".into(),
+        );
+    };
+    if !matchmaking_v2_live_party_index_is_exact(
+        index.get("valid"),
+        index.get("ready"),
+        index.get("live"),
+        index.get("unique_index"),
+        index.get("primary_index"),
+        index.get("no_expressions"),
+        index.get("key_count"),
+        index.get("attribute_count"),
+        index.get::<String, _>("access_method").as_str(),
+        &index.get::<Vec<String>, _>("indexed_columns"),
+        index.get::<String, _>("predicate").as_str(),
+    ) {
+        return Err(
+            "Matcher V2 live-party index is invalid, expression-based, or has the wrong ordered columns/predicate"
+                .into(),
+        );
     }
     Ok(())
 }
@@ -1630,6 +3028,11 @@ impl AppState {
         apply_hepta_migrations(&pool).await?;
         initialize_hepta_state(&pool).await?;
         verify_finality_v2_migration_catalog(&pool).await?;
+        verify_agent_proposal_v2_migration_catalog(&pool).await?;
+        verify_work_item_record_parity_catalog(&pool).await?;
+        verify_matchmaking_v2_catalog(&pool).await?;
+        verify_contribution_ledger_authority_catalog(&pool).await?;
+        verify_consumer_finality_v2_catalog(&pool).await?;
         Ok(Self::from_pools(Some(pool.clone()), Some(pool), security))
     }
 
@@ -1645,6 +3048,11 @@ impl AppState {
             apply_hepta_migrations(&migration_pool).await?;
             initialize_hepta_state(&migration_pool).await?;
             verify_finality_v2_migration_catalog(&migration_pool).await?;
+            verify_agent_proposal_v2_migration_catalog(&migration_pool).await?;
+            verify_work_item_record_parity_catalog(&migration_pool).await?;
+            verify_matchmaking_v2_catalog(&migration_pool).await?;
+            verify_contribution_ledger_authority_catalog(&migration_pool).await?;
+            verify_consumer_finality_v2_catalog(&migration_pool).await?;
             configure_database_roles(&migration_pool, runtime_role, finality_role).await
         }
         .await;
@@ -1691,6 +3099,11 @@ impl AppState {
                 );
             }
             verify_finality_v2_migration_catalog(&runtime_pool).await?;
+            verify_agent_proposal_v2_migration_catalog(&runtime_pool).await?;
+            verify_work_item_record_parity_catalog(&runtime_pool).await?;
+            verify_matchmaking_v2_catalog(&runtime_pool).await?;
+            verify_contribution_ledger_authority_catalog(&runtime_pool).await?;
+            verify_consumer_finality_v2_catalog(&runtime_pool).await?;
             verify_unprivileged_database_role(&runtime_pool, &runtime_role, "runtime").await?;
             verify_unprivileged_database_role(&finality_pool, &finality_role, "finality").await?;
             verify_runtime_role_privileges(&runtime_pool, &runtime_role).await?;
@@ -3576,6 +4989,210 @@ mod database_role_tests {
     use sqlx::{Connection, PgConnection};
 
     const POSTGRES_TEST_LOCK: &str = "hepta-research-league-pg-tests";
+
+    #[test]
+    fn contribution_authority_constraint_definitions_fail_closed() {
+        let non_nil = "CHECK (
+            contribution_ledger_id <> '00000000-0000-0000-0000-000000000000'::uuid
+        )";
+        assert!(contribution_authority_constraint_definition_is_exact(
+            "hepta_paper_contribution_ledger_reservations",
+            "hepta_contribution_ledger_reservations_non_nil_id_check",
+            non_nil,
+        ));
+        assert!(!contribution_authority_constraint_definition_is_exact(
+            "hepta_paper_contribution_ledger_reservations",
+            "hepta_contribution_ledger_reservations_non_nil_id_check",
+            &format!("{non_nil} OR TRUE"),
+        ));
+        assert!(!contribution_authority_constraint_definition_is_exact(
+            "hepta_paper_contribution_ledgers",
+            "hepta_contribution_ledger_reservations_non_nil_id_check",
+            non_nil,
+        ));
+
+        let entries = "CHECK (
+            jsonb_typeof(entries_json) IS NOT DISTINCT FROM 'array'::text
+        )";
+        assert!(contribution_authority_constraint_definition_is_exact(
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledgers_entries_json_check",
+            entries,
+        ));
+        assert!(!contribution_authority_constraint_definition_is_exact(
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledgers_entries_json_check",
+            &format!("{entries} OR TRUE"),
+        ));
+
+        let reservation_fk = "FOREIGN KEY (
+            contribution_ledger_id,paper_project_id,release_candidate_hash
+        ) REFERENCES public.hepta_paper_contribution_ledger_reservations (
+            contribution_ledger_id,paper_project_id,release_candidate_hash
+        )";
+        assert!(contribution_authority_constraint_definition_is_exact(
+            "hepta_paper_contribution_ledgers",
+            "hepta_paper_contribution_ledgers_reservation_fkey",
+            reservation_fk,
+        ));
+        assert!(!contribution_authority_constraint_definition_is_exact(
+            "hepta_paper_contribution_ledger_reservations",
+            "hepta_paper_contribution_ledgers_reservation_fkey",
+            reservation_fk,
+        ));
+    }
+
+    #[test]
+    fn matcher_v2_catalog_tampering_fails_closed() {
+        assert!(matchmaking_v2_column_is_exact(
+            "hepta_matchmaking_tickets",
+            "expires_at",
+            "timestamp with time zone",
+            true,
+        ));
+        assert!(!matchmaking_v2_column_is_exact(
+            "hepta_matchmaking_tickets",
+            "expires_at",
+            "timestamp with time zone",
+            false,
+        ));
+        assert!(!matchmaking_v2_column_is_exact(
+            "hepta_team_proposals",
+            "source_preferences",
+            "text",
+            false,
+        ));
+
+        let party_hash = "CHECK (
+            party_code_hash IS NULL OR party_code_hash ~ '^sha256:[0-9a-f]{64}$'::text
+        )";
+        assert!(matchmaking_v2_constraint_definition_is_exact(
+            "hepta_matchmaking_tickets_party_code_hash_check",
+            party_hash,
+        ));
+        assert!(!matchmaking_v2_constraint_definition_is_exact(
+            "hepta_matchmaking_tickets_party_code_hash_check",
+            &format!("{party_hash} OR TRUE"),
+        ));
+
+        let ticket_parity = "CHECK (
+            (record_json->>'ticket_id') IS NOT DISTINCT FROM ticket_id::text AND
+            (record_json->>'player_id') IS NOT DISTINCT FROM player_id::text AND
+            (record_json->>'challenge_id') IS NOT DISTINCT FROM challenge_id::text AND
+            (record_json->>'requested_team_size') IS NOT DISTINCT FROM requested_team_size::text AND
+            (record_json->'roles') IS NOT DISTINCT FROM to_jsonb(roles) AND
+            (record_json->>'availability_hash') IS NOT DISTINCT FROM availability_hash AND
+            (record_json->>'party_code_hash') IS NOT DISTINCT FROM party_code_hash AND
+            (record_json->>'status') IS NOT DISTINCT FROM status AND
+            (record_json->>'matched_proposal_id') IS NOT DISTINCT FROM matched_proposal_id::text AND
+            (record_json->>'version') IS NOT DISTINCT FROM version::text AND
+            (record_json->>'created_at')::timestamp with time zone IS NOT DISTINCT FROM created_at AND
+            (record_json->>'updated_at')::timestamp with time zone IS NOT DISTINCT FROM updated_at AND
+            (record_json->>'expires_at')::timestamp with time zone IS NOT DISTINCT FROM expires_at
+        )";
+        assert!(matchmaking_v2_constraint_definition_is_exact(
+            "hepta_matchmaking_tickets_record_json_parity_v2_check",
+            ticket_parity,
+        ));
+        assert!(!matchmaking_v2_constraint_definition_is_exact(
+            "hepta_matchmaking_tickets_record_json_parity_v2_check",
+            &ticket_parity.replace(
+                "(record_json->>'expires_at')::timestamp with time zone IS NOT DISTINCT FROM expires_at",
+                "TRUE",
+            ),
+        ));
+        assert!(!matchmaking_v2_constraint_definition_is_exact(
+            "hepta_matchmaking_tickets_record_json_parity_v2_check",
+            &format!("{ticket_parity} OR TRUE"),
+        ));
+
+        let proposal_parity = "CHECK (
+            (record_json->>'proposal_id') IS NOT DISTINCT FROM proposal_id::text AND
+            (record_json->>'challenge_id') IS NOT DISTINCT FROM challenge_id::text AND
+            (record_json->>'requested_team_size') IS NOT DISTINCT FROM requested_team_size::text AND
+            (record_json->>'deterministic_match_key') IS NOT DISTINCT FROM deterministic_match_key AND
+            (record_json->'member_player_ids') IS NOT DISTINCT FROM to_jsonb(member_player_ids) AND
+            (record_json->'source_ticket_ids') IS NOT DISTINCT FROM to_jsonb(source_ticket_ids) AND
+            (record_json->>'solver_version') IS NOT DISTINCT FROM solver_version AND
+            (record_json->'source_preferences') IS NOT DISTINCT FROM source_preferences AND
+            (record_json->'role_assignments') IS NOT DISTINCT FROM role_assignments AND
+            (record_json->>'status') IS NOT DISTINCT FROM status AND
+            (record_json->>'version') IS NOT DISTINCT FROM version::text AND
+            (record_json->>'created_at')::timestamp with time zone IS NOT DISTINCT FROM created_at AND
+            (record_json->>'updated_at')::timestamp with time zone IS NOT DISTINCT FROM updated_at AND
+            (record_json->>'expires_at')::timestamp with time zone IS NOT DISTINCT FROM expires_at
+        )";
+        assert!(matchmaking_v2_constraint_definition_is_exact(
+            "hepta_team_proposals_record_json_parity_v2_check",
+            proposal_parity,
+        ));
+        assert!(!matchmaking_v2_constraint_definition_is_exact(
+            "hepta_team_proposals_record_json_parity_v2_check",
+            &proposal_parity.replace(
+                "(record_json->'role_assignments') IS NOT DISTINCT FROM role_assignments AND",
+                "",
+            ),
+        ));
+        assert!(!matchmaking_v2_constraint_definition_is_exact(
+            "hepta_team_proposals_record_json_parity_v2_check",
+            &format!("{proposal_parity} OR TRUE"),
+        ));
+
+        let active_contract = "CHECK (
+            status <> ALL (ARRAY['proposed'::text,'accepted'::text]) OR (
+                solver_version IS NOT NULL AND
+                solver_version IS NOT DISTINCT FROM 'hepta.paper_raid.alpha_matcher.v2' AND
+                source_preferences IS NOT NULL AND
+                jsonb_typeof(source_preferences) IS NOT DISTINCT FROM 'array' AND
+                jsonb_array_length(source_preferences) IS NOT DISTINCT FROM requested_team_size AND
+                role_assignments IS NOT NULL AND
+                jsonb_typeof(role_assignments) IS NOT DISTINCT FROM 'array' AND
+                jsonb_array_length(role_assignments) IS NOT DISTINCT FROM requested_team_size
+            ) IS TRUE
+        )";
+        assert!(matchmaking_v2_constraint_definition_is_exact(
+            "hepta_team_proposals_active_matcher_v2_check",
+            active_contract,
+        ));
+        assert!(!matchmaking_v2_constraint_definition_is_exact(
+            "hepta_team_proposals_active_matcher_v2_check",
+            &active_contract.replace("alpha_matcher.v2", "alpha_matcher.v1"),
+        ));
+        assert!(!matchmaking_v2_constraint_definition_is_exact(
+            "hepta_team_proposals_active_matcher_v2_check",
+            &format!("{active_contract} OR TRUE"),
+        ));
+
+        let columns = vec![
+            "challenge_id".to_string(),
+            "party_code_hash".to_string(),
+            "created_at".to_string(),
+            "ticket_id".to_string(),
+        ];
+        let predicate =
+            "((status = ANY (ARRAY['queued'::text,'matched'::text])) AND party_code_hash IS NOT NULL)";
+        assert!(matchmaking_v2_live_party_index_is_exact(
+            true, true, true, false, false, true, 4, 4, "btree", &columns, predicate,
+        ));
+        let mut reordered = columns.clone();
+        reordered.swap(1, 2);
+        assert!(!matchmaking_v2_live_party_index_is_exact(
+            true, true, true, false, false, true, 4, 4, "btree", &reordered, predicate,
+        ));
+        assert!(!matchmaking_v2_live_party_index_is_exact(
+            true,
+            true,
+            true,
+            false,
+            false,
+            true,
+            4,
+            4,
+            "btree",
+            &columns,
+            "status = 'queued' AND party_code_hash IS NOT NULL",
+        ));
+    }
 
     fn is_insufficient_privilege(error: &sqlx::Error) -> bool {
         error

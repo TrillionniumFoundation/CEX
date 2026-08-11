@@ -17,6 +17,17 @@ import {
   prepareBridgeStateForPairing,
   saveBridgeState,
 } from "./state.mjs";
+import {
+  executeReviewTask,
+  reviewObjectQuery,
+  validateReviewReceiptRequest,
+  validateReviewReceiptResult,
+} from "./review.mjs";
+import {
+  clearReviewOutbox,
+  loadReviewOutbox,
+  saveReviewOutbox,
+} from "./review_outbox.mjs";
 
 export const PAIRING_CONTEXT_SCHEMA =
   "hepta.paper_raid.agent_bridge.pairing_context.v1";
@@ -24,6 +35,8 @@ export const HEALTH_REPORT_SCHEMA =
   "hepta.paper_raid.agent_bridge.health_report.v1";
 export const INBOX_REQUEST_SCHEMA =
   "hepta.paper_raid.agent_bridge.inbox_request.v1";
+export const DELIVERY_DRAFT_REQUEST_SCHEMA =
+  "hepta.paper_raid.agent_bridge.delivery_draft_request.v1";
 export const PROPOSAL_REQUEST_SCHEMA =
   "hepta.paper_raid.agent_bridge.proposal_request.v1";
 
@@ -90,7 +103,7 @@ function validatePairingContext(value, nowUnix) {
   return value;
 }
 
-function deterministicUuid(domain, fields) {
+export function deterministicUuid(domain, fields) {
   const digest = createHash("sha256")
     .update(domain, "utf8")
     .update("\0", "utf8")
@@ -101,6 +114,17 @@ function deterministicUuid(domain, fields) {
   digest[8] = (digest[8] & 0x3f) | 0x80;
   const hex = digest.toString("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+export function stableDeliveryDraftId(state, input) {
+  return deterministicUuid("hepta.paper_raid.agent_bridge.delivery_draft_id.v1", [
+    state.binding_id,
+    input.paper_id,
+    input.work_item_id,
+    input.section_key,
+    input.artifact_manifest_id,
+    input.payload_hash,
+  ]);
 }
 
 export function stableBindingId(identity, playerId) {
@@ -414,20 +438,71 @@ export async function getInbox(
   });
 }
 
+export function createDeliveryDraftRequest(state, input, { draftId } = {}) {
+  for (const [field, value] of [
+    ["paper_id", input.paper_id],
+    ["work_item_id", input.work_item_id],
+    ["artifact_manifest_id", input.artifact_manifest_id],
+  ]) {
+    assertCanonicalUuid(value, field);
+  }
+  assertLogicalId(input.section_key, "section_key");
+  assertDigest(input.payload_hash, "payload_hash");
+  return Object.freeze({
+    schema: DELIVERY_DRAFT_REQUEST_SCHEMA,
+    delivery_draft_id: assertCanonicalUuid(
+      draftId ?? stableDeliveryDraftId(state, input),
+      "delivery_draft_id",
+    ),
+    paper_id: input.paper_id,
+    work_item_id: input.work_item_id,
+    section_key: input.section_key,
+    artifact_manifest_id: input.artifact_manifest_id,
+    payload_hash: input.payload_hash,
+  });
+}
+
+export async function prepareDeliveryDraft(
+  config,
+  identity,
+  input,
+  {
+    nowUnix = Math.floor(Date.now() / 1000),
+    fetchImplementation,
+    draftId,
+  } = {},
+) {
+  const { state, client } = await signedClientState(
+    config,
+    identity,
+    fetchImplementation,
+  );
+  return client.signed(identity, state, {
+    method: "POST",
+    path: AGENT_BRIDGE_ENDPOINTS.delivery_drafts,
+    nowUnix,
+    body: createDeliveryDraftRequest(state, input, { draftId }),
+  });
+}
+
 export function createProposalRequest(
   state,
   identity,
   input,
   {
     nowUnix = Math.floor(Date.now() / 1000),
-    proposalId = randomUUID(),
-    idempotencyKey = randomUUID(),
+    proposalId,
+    idempotencyKey,
   } = {},
 ) {
+  if (input.proposal_kind !== "delivery" || input.delivery_draft_id === undefined) {
+    throw new Error("Agent Proposal V2 requires a delivery_draft_id-bound delivery");
+  }
   for (const [field, value] of [
     ["paper_id", input.paper_id],
     ["work_item_id", input.work_item_id],
     ["parent_revision_id", input.parent_revision_id],
+    ["lease_id", input.lease_id],
     ["artifact_manifest_id", input.artifact_manifest_id],
   ]) {
     assertCanonicalUuid(value, field);
@@ -435,42 +510,76 @@ export function createProposalRequest(
   assertLogicalId(input.section_key, "section_key");
   assertDigest(input.payload_hash, "payload_hash");
   assertDigest(input.artifact_manifest_hash, "artifact_manifest_hash");
-  if (!["proposal", "delivery"].includes(input.proposal_kind)) {
-    throw new Error("proposal_kind must be proposal or delivery");
+  assertCanonicalUuid(input.delivery_draft_id, "delivery_draft_id");
+  for (const [field, value] of [
+    ["lease_fencing_token", input.lease_fencing_token],
+    ["expected_work_version", input.expected_work_version],
+  ]) {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new Error(`${field} is invalid`);
+    }
   }
+  const signedAtUnix = input.declared_at_unix;
+  if (!Number.isSafeInteger(signedAtUnix) || signedAtUnix < 0) {
+    throw new Error("delivery declared_at_unix is invalid");
+  }
+  const stableProposalId = deterministicUuid(
+    "hepta.paper_raid.agent_bridge.delivery_proposal_id.v1",
+    [state.binding_id, input.delivery_draft_id],
+  );
+  const stableIdempotencyKey = deterministicUuid(
+    "hepta.paper_raid.agent_bridge.delivery_idempotency_key.v1",
+    [state.binding_id, input.delivery_draft_id],
+  );
+  if (proposalId !== undefined && proposalId !== stableProposalId) {
+    throw new Error("delivery proposal_id is fixed by delivery_draft_id");
+  }
+  if (idempotencyKey !== undefined && idempotencyKey !== stableIdempotencyKey) {
+    throw new Error("delivery idempotency_key is fixed by delivery_draft_id");
+  }
+  const exactProposalId = proposalId ?? stableProposalId;
+  const exactIdempotencyKey = idempotencyKey ?? stableIdempotencyKey;
   const claim = {
     schema: AGENT_PROPOSAL_SCHEMA,
-    proposal_id: assertCanonicalUuid(proposalId, "proposal_id"),
+    proposal_id: assertCanonicalUuid(exactProposalId, "proposal_id"),
     paper_project_id: input.paper_id,
     work_item_id: input.work_item_id,
     section_key: input.section_key,
     parent_revision_id: input.parent_revision_id,
+    lease_id: input.lease_id,
+    lease_fencing_token: input.lease_fencing_token,
+    expected_work_version: input.expected_work_version,
     proposal_kind: input.proposal_kind,
     payload_hash: input.payload_hash,
+    artifact_manifest_id: input.artifact_manifest_id,
     artifact_manifest_hash: input.artifact_manifest_hash,
     agent_id: identity.agent_id,
     binding_id: state.binding_id,
     agent_key_id: identity.agent_key_id,
-    signed_at_unix: nowUnix,
+    signed_at_unix: signedAtUnix,
   };
   const payload = Object.freeze({
     proposal_id: claim.proposal_id,
     work_item_id: claim.work_item_id,
     section_key: claim.section_key,
     parent_revision_id: claim.parent_revision_id,
+    lease_id: claim.lease_id,
+    lease_fencing_token: claim.lease_fencing_token,
+    expected_work_version: claim.expected_work_version,
     proposal_kind: claim.proposal_kind,
     payload_hash: claim.payload_hash,
-    artifact_manifest_id: input.artifact_manifest_id,
+    artifact_manifest_id: claim.artifact_manifest_id,
     agent_id: claim.agent_id,
     binding_id: claim.binding_id,
     agent_key_id: claim.agent_key_id,
     signed_at_unix: claim.signed_at_unix,
     signature: identity.sign(agentProposalFrame(claim)),
-    idempotency_key: assertCanonicalUuid(idempotencyKey, "idempotency_key"),
+    idempotency_key: assertCanonicalUuid(exactIdempotencyKey, "idempotency_key"),
   });
   return Object.freeze({
     schema: PROPOSAL_REQUEST_SCHEMA,
     paper_id: input.paper_id,
+    delivery_draft_id: input.delivery_draft_id,
     payload,
   });
 }
@@ -501,6 +610,143 @@ export async function submitAgentProposal(
     path: AGENT_BRIDGE_ENDPOINTS.proposals,
     nowUnix,
     body: request,
+  });
+}
+
+async function submitReviewReceiptWithClient(
+  client,
+  state,
+  identity,
+  request,
+  nowUnix,
+) {
+  validateReviewReceiptRequest(state, identity, request);
+  const result = await client.signed(identity, state, {
+    method: "POST",
+    path: AGENT_BRIDGE_ENDPOINTS.review_receipts,
+    nowUnix,
+    body: request,
+  });
+  return validateReviewReceiptResult(request, result);
+}
+
+export async function recoverPendingReviewReceipt(
+  config,
+  identity,
+  {
+    nowUnix = Math.floor(Date.now() / 1000),
+    fetchImplementation,
+  } = {},
+) {
+  const { state, client } = await signedClientState(
+    config,
+    identity,
+    fetchImplementation,
+  );
+  const pending = await loadReviewOutbox(config, state, identity, {
+    optional: true,
+  });
+  if (pending === null) return null;
+  const result = await submitReviewReceiptWithClient(
+    client,
+    state,
+    identity,
+    pending.request,
+    nowUnix,
+  );
+  await clearReviewOutbox(config);
+  return Object.freeze({
+    receipt_id: pending.request.receipt.receipt_id,
+    task_id: pending.request.receipt.task_id,
+    recovered: true,
+    result,
+  });
+}
+
+export async function executeAndSubmitReviewTask(
+  config,
+  identity,
+  task,
+  {
+    nowUnix = Math.floor(Date.now() / 1000),
+    fetchImplementation,
+    adapter,
+    adapterOptions,
+  } = {},
+) {
+  const requiredCapability = task.kind === "reproduce"
+    ? "reproduction"
+    : "artifact_analysis";
+  if (!config.capability_disclosure.capabilities.includes(requiredCapability)) {
+    throw new Error(`review task requires declared ${requiredCapability} capability`);
+  }
+  const { state, client } = await signedClientState(
+    config,
+    identity,
+    fetchImplementation,
+  );
+  const pending = await loadReviewOutbox(config, state, identity, {
+    optional: true,
+  });
+  if (pending !== null) {
+    if (pending.request.receipt.task_id !== task.task_id) {
+      throw new Error("a different review receipt must be recovered before new work");
+    }
+    const result = await submitReviewReceiptWithClient(
+      client,
+      state,
+      identity,
+      pending.request,
+      nowUnix,
+    );
+    await clearReviewOutbox(config);
+    return Object.freeze({
+      receipt_id: pending.request.receipt.receipt_id,
+      task_id: task.task_id,
+      recovered: true,
+      result,
+    });
+  }
+  if (task.state !== "pending") {
+    throw new Error("review execution can start only from a pending task");
+  }
+  const request = await executeReviewTask(state, identity, task, {
+    downloadObject: (exactTask, object) => client.signedBytes(
+      identity,
+      state,
+      {
+        method: "GET",
+        path: object.download_path,
+        query: reviewObjectQuery(exactTask, object),
+        nowUnix,
+      },
+      {
+        expectedBytes: object.size_bytes,
+        maxBytes: object.size_bytes,
+      },
+    ),
+    adapter,
+    adapterOptions,
+  });
+  const outbox = await saveReviewOutbox(
+    config,
+    state,
+    identity,
+    request,
+  );
+  const result = await submitReviewReceiptWithClient(
+    client,
+    state,
+    identity,
+    outbox.request,
+    nowUnix,
+  );
+  await clearReviewOutbox(config);
+  return Object.freeze({
+    receipt_id: request.receipt.receipt_id,
+    task_id: task.task_id,
+    recovered: false,
+    result,
   });
 }
 

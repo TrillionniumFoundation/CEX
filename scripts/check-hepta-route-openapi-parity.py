@@ -36,8 +36,10 @@ contracts = (
 )
 
 failures = []
+documents = {}
 for contract, prefix, shared in contracts:
     document = yaml.safe_load(contract.read_text(encoding="utf-8"))
+    documents[contract] = document
     documented = set(document.get("paths", {}))
     expected = {path for path in implemented if path.startswith(prefix)} | shared
     missing = sorted(expected - documented)
@@ -56,6 +58,54 @@ for contract, prefix, shared in contracts:
         failures.append(
             f"{contract.relative_to(ROOT)}: missing={missing} stale={stale} "
             f"duplicate_or_missing_operation_ids={duplicate_ids}"
+        )
+
+research_contract = contracts[0][0]
+research_document = documents[research_contract]
+missing_finality_description = (
+    research_document["paths"]["/v1/hepta/trnm/finality/{command_id}"]["get"]
+    ["responses"]["404"]["description"]
+)
+expected_missing_finality_description = (
+    "No command-finality projection is available; "
+    "pending versus unavailable is not inferred"
+)
+if missing_finality_description != expected_missing_finality_description:
+    failures.append(
+        f"{research_contract.relative_to(ROOT)}: missing finality projection "
+        "must remain unknown rather than being rewritten as pending"
+    )
+
+workflows = (SOURCE / "workflows.rs").read_text(encoding="utf-8")
+required_missing_finality_message = (
+    "No TRNM finality projection is available for command {command_id}; "
+    "pending versus unavailable is not inferred"
+)
+if required_missing_finality_message not in workflows:
+    failures.append(
+        "services/hepta-research-league/src/workflows.rs: missing finality "
+        "projection does not use the canonical unknown-state message"
+    )
+if "TRNM command {command_id} is still pending finality" in workflows:
+    failures.append(
+        "services/hepta-research-league/src/workflows.rs: missing projection "
+        "still manufactures pending finality"
+    )
+
+service_readme = (
+    ROOT / "services/hepta-research-league/README.md"
+).read_text(encoding="utf-8")
+for required in (
+    "A queued authoritative command is\n`pending_finality`",
+    "an absent projection is `unknown_finality`",
+    "conflicting\nauthority is `unavailable_finality`",
+    "an upstream or malformed projection is\n`error_finality`",
+    "must never collapse to `pending_finality`",
+):
+    if required not in service_readme:
+        failures.append(
+            "services/hepta-research-league/README.md: finality availability "
+            f"taxonomy is missing {required!r}"
         )
 
 if failures:

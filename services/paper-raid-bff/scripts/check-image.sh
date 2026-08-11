@@ -9,6 +9,9 @@ repro_container_name=paper-raid-bff-reproducibility-image-gate-$$
 sentinel_container=paper-raid-bff-sentinel-seed-$$
 sentinel_scan_container=paper-raid-bff-sentinel-scan-$$
 sentinel_image=paper-raid-bff:sentinel-negative-gate-$$
+export_image_ref=${PAPER_RAID_BFF_EXPORT_IMAGE_REF:-}
+export_image_owned=false
+gate_succeeded=false
 scratch_dir=$(mktemp -d)
 source_context="$scratch_dir/source"
 rg_bin=$(command -v rg)
@@ -30,12 +33,28 @@ cleanup() {
   sudo -n docker image rm -f "$image_name" >/dev/null 2>&1 || true
   sudo -n docker image rm -f "$sentinel_image" >/dev/null 2>&1 || true
   sudo -n docker image rm -f "$repro_image" >/dev/null 2>&1 || true
+  if [[ "$export_image_owned" == true && "$gate_succeeded" != true ]]; then
+    sudo -n docker image rm -f "$export_image_ref" >/dev/null 2>&1 || true
+  fi
   case "$scratch_dir" in
     /tmp/tmp.*) sudo -n rm -rf -- "$scratch_dir" ;;
     *) echo "refusing to remove unexpected scratch path: $scratch_dir" >&2 ;;
   esac
 }
 trap cleanup EXIT INT TERM
+
+validate_export_image_ref() {
+  local candidate=$1
+  local repository tag
+
+  [[ -n "$candidate" && ${#candidate} -le 255 ]] || return 1
+  [[ "$candidate" != *@* && "$candidate" != *[[:space:]]* ]] || return 1
+  repository=${candidate%:*}
+  tag=${candidate##*:}
+  [[ "$repository" != "$candidate" && -n "$repository" ]] || return 1
+  [[ "$repository" =~ ^[a-z0-9]+([._-][a-z0-9]+)*([/:][a-z0-9]+([._-][a-z0-9]+)*)*$ ]] || return 1
+  [[ "$tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || return 1
+}
 
 verify_source_unchanged() {
   local current_revision current_tree current_status
@@ -153,6 +172,28 @@ scan_runtime_image() {
   esac
   sudo -n docker rm -f "$candidate_container" >/dev/null
 }
+
+if [[ -n "$export_image_ref" ]]; then
+  if ! validate_export_image_ref "$export_image_ref"; then
+    echo "PAPER_RAID_BFF_EXPORT_IMAGE_REF must be a canonical tagged local image reference" >&2
+    exit 64
+  fi
+  if [[ "$export_image_ref" == "$image_name" || \
+        "$export_image_ref" == "$repro_image" || \
+        "$export_image_ref" == "$sentinel_image" ]]; then
+    echo "export image reference collides with an internal disposable tag" >&2
+    exit 64
+  fi
+  existing_export_ids=$(sudo -n docker image ls \
+    --quiet --no-trunc "$export_image_ref") || {
+    echo "failed to inspect the requested local export image reference" >&2
+    exit 1
+  }
+  if [[ -n "$existing_export_ids" ]]; then
+    echo "refusing to replace an existing local export image reference: $export_image_ref" >&2
+    exit 1
+  fi
+fi
 
 if [[ -n "$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all)" ]]; then
   echo "immutable image gate requires a clean committed worktree" >&2
@@ -323,6 +364,7 @@ then
 fi
 
 architecture=$(sudo -n docker image inspect "$image_id" --format '{{.Architecture}}')
+operating_system=$(sudo -n docker image inspect "$image_id" --format '{{.Os}}')
 configured_user=$(sudo -n docker image inspect "$image_id" --format '{{.Config.User}}')
 entrypoint=$(sudo -n docker image inspect "$image_id" --format '{{json .Config.Entrypoint}}')
 healthcheck=$(sudo -n docker image inspect "$image_id" --format '{{json .Config.Healthcheck.Test}}')
@@ -335,6 +377,7 @@ label_sbom_sha256=$(sudo -n docker image inspect "$image_id" --format '{{index .
 label_lock_sha256=$(sudo -n docker image inspect "$image_id" --format '{{index .Config.Labels "org.trillionnium.cargo-lock.sha256"}}')
 label_runtime_binary_sha256=$(sudo -n docker image inspect "$image_id" --format '{{index .Config.Labels "org.trillionnium.runtime-binary.sha256"}}')
 [[ "$architecture" == "amd64" ]]
+[[ "$operating_system" == "linux" ]]
 [[ "$configured_user" == "65532:65532" ]]
 [[ "$entrypoint" == '["/paper-raid-bff"]' ]]
 [[ "$healthcheck" == '["CMD","/paper-raid-bff","--probe-ready"]' ]]
@@ -412,4 +455,18 @@ verify_tag_binding "$image_name" "$image_id"
 verify_tag_binding "$repro_image" "$repro_image_id"
 verify_source_unchanged
 
-echo "paper-raid-bff immutable image gate: ok image_id=$image_id oci_index_digest=$index_digest iid=$iid config_digest=$config_digest revision=$revision tree=$source_tree binary_sha256=$binary_sha256 sbom_sha256=$sbom_sha256"
+if [[ -n "$export_image_ref" ]]; then
+  export_image_owned=true
+  sudo -n docker image tag "$image_id" "$export_image_ref"
+  verify_tag_binding "$export_image_ref" "$image_id"
+  [[ "$(sudo -n docker image inspect "$export_image_ref" --format '{{.Os}}/{{.Architecture}}')" == \
+    "linux/amd64" ]]
+  verify_source_unchanged
+fi
+gate_succeeded=true
+
+if [[ -n "$export_image_ref" ]]; then
+  echo "paper-raid-bff immutable image gate: ok image_ref=$export_image_ref image_id=$image_id oci_index_digest=$index_digest iid=$iid config_digest=$config_digest revision=$revision tree=$source_tree platform=linux/amd64 binary_sha256=$binary_sha256 sbom_sha256=$sbom_sha256"
+else
+  echo "paper-raid-bff immutable image gate: ok image_id=$image_id oci_index_digest=$index_digest iid=$iid config_digest=$config_digest revision=$revision tree=$source_tree binary_sha256=$binary_sha256 sbom_sha256=$sbom_sha256"
+fi

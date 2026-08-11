@@ -1,12 +1,14 @@
 use std::{
     collections::{BTreeMap, HashSet},
+    net::SocketAddr,
     sync::Arc,
 };
 
 use axum::{
     body::Body,
-    extract::{DefaultBodyLimit, Path, Query, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Path, Query, Request, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Redirect, Response},
     routing::{get, post, put},
     Json, Router,
@@ -27,9 +29,12 @@ use crate::{
     db,
     error::AppError,
     hepta::{
-        BrowserCommand, CommandName, HeptaClient, HumanRegistrationProof, HumanSigningFrameRequest,
+        matchmaking_party_payload_is_safe, AuthenticatedPaperReviewState, AuthenticatedPaperRoom,
+        BrowserCommand, CommandName, HeptaClient, HeptaPaperTerminalOutcome,
+        HeptaPaperTerminalReason, HumanRegistrationProof, HumanSigningFrameRequest,
     },
     html,
+    metrics::{self, InviteOutcome, Metrics},
     nakama::{member_session_accesses, MemberSessionAccess, NakamaArchiveClient},
 };
 
@@ -40,8 +45,9 @@ pub struct AppState {
     pub(crate) sessions: SessionStore,
     pub(crate) access: Option<AccessDirectory>,
     pub(crate) hepta: HeptaClient,
+    pub(crate) metrics: Metrics,
     nakama: NakamaArchiveClient,
-    cas: CasClient,
+    pub(crate) cas: CasClient,
 }
 
 impl AppState {
@@ -53,7 +59,18 @@ impl AppState {
             IdentityMode::FixedAlpha => db::migrate(&pool)
                 .await
                 .map_err(|error| format!("cannot migrate BFF PostgreSQL: {error}"))?,
-            IdentityMode::InviteAlpha if db::invite_schema_ready(&pool).await => {}
+            IdentityMode::InviteAlpha if db::invite_schema_ready(&pool).await => {
+                let invite = config
+                    .invite_alpha
+                    .as_ref()
+                    .ok_or_else(|| "invite-alpha activation pins are absent".to_string())?;
+                if !db::invite_activation_ready(&pool, invite).await {
+                    return Err(
+                        "invite-alpha activation authority is absent, expired, revoked, pin-mismatched, or runtime ACL drifted"
+                            .to_string(),
+                    );
+                }
+            }
             IdentityMode::InviteAlpha => {
                 return Err(
                     "invite-alpha schema is not provisioned; run paper-raid-accessctl with the separate operator DSN before starting the BFF"
@@ -61,6 +78,7 @@ impl AppState {
                 )
             }
         }
+        let metrics = Metrics::default();
         let access = config
             .invite_alpha
             .as_ref()
@@ -76,6 +94,7 @@ impl AppState {
             config.hepta_base.clone(),
             config.assertions.clone(),
             pool.clone(),
+            metrics.clone(),
         )?;
         let nakama =
             NakamaArchiveClient::new(config.nakama_base.clone(), config.nakama_http_key.clone())?;
@@ -86,6 +105,7 @@ impl AppState {
             sessions,
             access,
             hepta,
+            metrics,
             nakama,
             cas,
         })
@@ -142,9 +162,12 @@ impl AppState {
 }
 
 pub fn router(state: AppState) -> Router {
+    let request_metrics = state.metrics.clone();
+    let activation_state = state.clone();
     Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
+        .route("/metrics", get(operator_metrics))
         .route("/login", get(login_page))
         .route("/assets/paper-raid.js", get(browser_script))
         .route("/assets/paper-raid.css", get(browser_stylesheet))
@@ -180,6 +203,18 @@ pub fn router(state: AppState) -> Router {
         .route("/api/agent-bridge/health", post(agent_bridge::agent_health))
         .route("/api/agent-bridge/inbox", post(agent_bridge::agent_inbox))
         .route(
+            "/api/agent-bridge/review-objects",
+            get(agent_bridge::agent_review_object),
+        )
+        .route(
+            "/api/agent-bridge/review-receipts",
+            post(agent_bridge::agent_review_receipt),
+        )
+        .route(
+            "/api/agent-bridge/delivery-drafts",
+            post(agent_bridge::agent_delivery_draft),
+        )
+        .route(
             "/api/agent-bridge/proposals",
             post(agent_bridge::agent_proposal),
         )
@@ -193,6 +228,18 @@ pub fn router(state: AppState) -> Router {
             "/api/papers/:paper_id/artifacts/:digest",
             put(upload_artifact).get(download_artifact),
         )
+        .route(
+            "/api/review/papers/:paper_id/artifacts/:digest",
+            get(download_review_artifact),
+        )
+        .route(
+            "/api/review/papers/:paper_id/receipts/:receipt_id/signing-frame",
+            post(crate::review_receipts::signing_frame),
+        )
+        .route(
+            "/api/review/papers/:paper_id/receipts/:receipt_id/confirm",
+            post(crate::review_receipts::confirm),
+        )
         .route("/league/start", get(league_start))
         .route("/league/onboarding", get(onboarding))
         .route("/league", get(lobby))
@@ -202,6 +249,56 @@ pub fn router(state: AppState) -> Router {
         .route("/league/papers/:paper_id", get(paper_room))
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .with_state(state)
+        .layer(middleware::from_fn_with_state(
+            activation_state,
+            enforce_invite_activation,
+        ))
+        .layer(middleware::from_fn_with_state(
+            request_metrics,
+            metrics::observe_http,
+        ))
+}
+
+async fn enforce_invite_activation(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let path = request.uri().path();
+    if matches!(
+        path,
+        "/health"
+            | "/ready"
+            | "/metrics"
+            | "/login"
+            | "/assets/paper-raid.js"
+            | "/assets/paper-raid.css"
+    ) {
+        return next.run(request).await;
+    }
+    let active = match &state.config.invite_alpha {
+        Some(invite) => db::invite_activation_ready(&state.pool, invite).await,
+        None => true,
+    };
+    if active {
+        next.run(request).await
+    } else {
+        let mut response = (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "error": "invite_activation_unavailable",
+                "retryable": false
+            })),
+        )
+            .into_response();
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        response
+            .headers_mut()
+            .insert(header::RETRY_AFTER, HeaderValue::from_static("5"));
+        response
+    }
 }
 
 #[derive(Serialize)]
@@ -217,8 +314,15 @@ async fn health() -> Json<Health<'static>> {
     })
 }
 
+async fn operator_metrics(
+    State(state): State<AppState>,
+    peer: ConnectInfo<SocketAddr>,
+) -> Response {
+    metrics::loopback_metrics_response(&state.metrics, peer)
+}
+
 async fn ready(State(state): State<AppState>) -> Response {
-    let (postgres, hepta, nakama, cas, access_status, agent_bridge_status) = tokio::join!(
+    let (postgres, hepta, nakama, cas, access_status, agent_bridge_status, activation_ready) = tokio::join!(
         db::ready(&state.pool),
         state.hepta.ready(),
         state.nakama.ready(),
@@ -230,6 +334,12 @@ async fn ready(State(state): State<AppState>) -> Response {
             }
         },
         db::agent_bridge_schema_status(&state.pool),
+        async {
+            match &state.config.invite_alpha {
+                Some(invite) => db::invite_activation_ready(&state.pool, invite).await,
+                None => true,
+            }
+        },
     );
     let trust = state.config.alpha_identity_topology_is_valid()
         && is_root_url(&state.config.hepta_base)
@@ -261,6 +371,7 @@ async fn ready(State(state): State<AppState>) -> Response {
         && access_topology_ready
         && agent_bridge_status.schema_ready
         && agent_bridge_status.integrity_ok
+        && activation_ready
         && trust;
     (
         if ready {
@@ -289,6 +400,7 @@ async fn ready(State(state): State<AppState>) -> Response {
             "access_reproducers": access_status.as_ref().map(|status| status.reproducers),
             "agent_bridge_schema_ready": agent_bridge_status.schema_ready,
             "agent_bridge_integrity_ok": agent_bridge_status.integrity_ok,
+            "invite_activation_ready": activation_ready,
             "identity_mode": match state.config.identity_mode {
                 IdentityMode::FixedAlpha => "fixed_alpha",
                 IdentityMode::InviteAlpha => "invite_alpha",
@@ -333,12 +445,30 @@ async fn alpha_login(
             None,
         ),
         IdentityMode::InviteAlpha => {
-            let authentication = state
+            let authentication = match state
                 .access
                 .as_ref()
                 .ok_or(AppError::Internal)?
                 .authenticate_or_redeem(&request.login_key)
-                .await?;
+                .await
+            {
+                Ok(authentication) => authentication,
+                Err(error) => {
+                    state.metrics.observe_invite(match &error {
+                        AppError::Unauthorized | AppError::Forbidden => InviteOutcome::Denied,
+                        AppError::RateLimited { .. } => InviteOutcome::RateLimited,
+                        _ => InviteOutcome::Error,
+                    });
+                    return Err(error);
+                }
+            };
+            state
+                .metrics
+                .observe_invite(if authentication.redeemed_invite {
+                    InviteOutcome::Redeemed
+                } else {
+                    InviteOutcome::Authenticated
+                });
             (
                 authentication.identity,
                 Some(authentication.expected_session_generation),
@@ -372,6 +502,7 @@ async fn alpha_login(
     {
         tracing::warn!(%error, "could not record login telemetry");
     }
+    state.metrics.observe_product_event("login_succeeded");
     let response = (
         StatusCode::OK,
         Json(json!({
@@ -668,42 +799,15 @@ async fn forward_hepta_command(
     with_rotated_csrf(private_no_store(response), next_csrf)
 }
 
-#[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum GuidedPaperOutcome {
-    Failed,
-    Expired,
-    Abandoned,
-}
-
-impl GuidedPaperOutcome {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Failed => "failed",
-            Self::Expired => "expired",
-            Self::Abandoned => "abandoned",
-        }
-    }
-}
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct GuidedPaperOutcomeRequest {
-    outcome: GuidedPaperOutcome,
+    outcome: HeptaPaperTerminalOutcome,
     reason_code: String,
 }
 
-fn guided_outcome_reason_allowed(outcome: GuidedPaperOutcome, reason_code: &str) -> bool {
-    matches!(
-        (outcome, reason_code),
-        (
-            GuidedPaperOutcome::Failed,
-            "quality_gate_failed" | "preregistered_result_failed" | "integrity_failure"
-        ) | (
-            GuidedPaperOutcome::Abandoned,
-            "team_withdrawal" | "resource_unavailable" | "challenge_infeasible"
-        ) | (GuidedPaperOutcome::Expired, "grace_window_elapsed")
-    )
+fn guided_outcome_reason_allowed(outcome: HeptaPaperTerminalOutcome, reason_code: &str) -> bool {
+    HeptaPaperTerminalReason::parse_for_outcome(outcome, reason_code).is_some()
 }
 
 fn room_actor_is_captain(room: &Value, player_id: Uuid) -> Result<bool, AppError> {
@@ -761,7 +865,8 @@ async fn transition_paper_challenge_outcome_inner(
         .hepta
         .get_paper_room(&session.identity, paper_id)
         .await?;
-    if !room_actor_is_captain(&room, session.identity.player_id)? {
+    let room = room.value();
+    if !room_actor_is_captain(room, session.identity.player_id)? {
         return Err(AppError::Forbidden);
     }
     let paper = room
@@ -796,7 +901,7 @@ async fn transition_paper_challenge_outcome_inner(
             "paper already has a different immutable challenge outcome".into(),
         ));
     }
-    if request.outcome == GuidedPaperOutcome::Expired {
+    if request.outcome == HeptaPaperTerminalOutcome::Expired {
         let deadline_at = paper
             .get("deadline_at")
             .and_then(Value::as_str)
@@ -866,18 +971,9 @@ async fn transition_paper_challenge_outcome_inner(
 
 fn identity_scope_allows_command(identity: &AlphaIdentity, command: CommandName) -> bool {
     let author = || identity.has_scope(AlphaIdentityScope::Author);
-    let evaluator = || {
-        !identity.has_scope(AlphaIdentityScope::Author)
-            && identity.has_scope(AlphaIdentityScope::Evaluator)
-    };
-    let reviewer = || {
-        !identity.has_scope(AlphaIdentityScope::Author)
-            && identity.has_scope(AlphaIdentityScope::Reviewer)
-    };
-    let reproducer = || {
-        !identity.has_scope(AlphaIdentityScope::Author)
-            && identity.has_scope(AlphaIdentityScope::Reproducer)
-    };
+    let evaluator = || identity.has_scope(AlphaIdentityScope::Evaluator);
+    let reviewer = || identity.has_scope(AlphaIdentityScope::Reviewer);
+    let reproducer = || identity.has_scope(AlphaIdentityScope::Reproducer);
     match command {
         CommandName::RotateHumanSigningKey
         | CommandName::RevokeHumanSigningKey
@@ -890,10 +986,12 @@ fn identity_scope_allows_command(identity: &AlphaIdentity, command: CommandName)
         // The legacy atomic evaluation body bundled two reviewers' signatures.
         // Browser callers must use the immutable draft/quorum protocol instead.
         CommandName::CreatePaperEvaluation => false,
-        CommandName::CreatePaperEvaluationDraft => evaluator(),
+        // Evaluator/reproducer machine results may only enter through the receipt-confirm
+        // endpoints.  Those endpoints derive the exact command from a locked, signed receipt.
+        CommandName::CreatePaperEvaluationDraft => false,
         CommandName::SubmitEvaluationDraftAttestation => reviewer(),
         CommandName::FinalizePaperEvaluationDraft => evaluator(),
-        CommandName::SubmitReproduction => reproducer(),
+        CommandName::SubmitReproduction => false,
         // The protocol excludes authors, the appellant, evaluator and panel
         // reviewers from resolving an Appeal.  In the seven-identity Alpha
         // topology the independent reproducer is the remaining eligible
@@ -924,6 +1022,7 @@ fn identity_scope_allows_command(identity: &AlphaIdentity, command: CommandName)
         | CommandName::CreateCitationRecord
         | CommandName::CreateExperimentPlan
         | CommandName::CreateRunRecord
+        | CommandName::CreateRoleResourceAction
         | CommandName::CreateFigureLineage
         | CommandName::CreateClaimRecord
         | CommandName::AcquireSectionLease
@@ -939,14 +1038,14 @@ fn identity_scope_allows_command(identity: &AlphaIdentity, command: CommandName)
 }
 
 fn identity_has_review_scope(identity: &AlphaIdentity) -> bool {
-    !identity.has_scope(AlphaIdentityScope::Author)
-        && (identity.has_scope(AlphaIdentityScope::Evaluator)
-            || identity.has_scope(AlphaIdentityScope::Reviewer)
-            || identity.has_scope(AlphaIdentityScope::Reproducer))
+    identity.has_scope(AlphaIdentityScope::Evaluator)
+        || identity.has_scope(AlphaIdentityScope::Reviewer)
+        || identity.has_scope(AlphaIdentityScope::Reproducer)
 }
 
 fn identity_requires_agent_binding(identity: &AlphaIdentity) -> bool {
     identity.has_scope(AlphaIdentityScope::Author)
+        || identity.has_scope(AlphaIdentityScope::Evaluator)
         || identity.has_scope(AlphaIdentityScope::Reproducer)
 }
 
@@ -961,6 +1060,9 @@ fn identity_home_path(identity: &AlphaIdentity) -> &'static str {
 fn identity_payload_allows_command(identity: &AlphaIdentity, command: &BrowserCommand) -> bool {
     match command.command {
         CommandName::QueueMatchmaking => {
+            if !matchmaking_party_payload_is_safe(&command.payload) {
+                return false;
+            }
             let Some(roles) = command.payload.get("roles").and_then(Value::as_array) else {
                 return false;
             };
@@ -1068,7 +1170,7 @@ async fn record_browser_product_event(
     };
     let allowed = matches!(
         event.event_name.as_str(),
-        "abandoned" | "reconnected" | "replay_started" | "continue_opened"
+        "abandoned" | "reconnected" | "replay_started" | "continue_opened" | "stale_ui_reload"
     );
     let phase_valid = event.phase.as_ref().is_none_or(|phase| {
         matches!(
@@ -1087,6 +1189,12 @@ async fn record_browser_product_event(
     });
     let response = if !allowed || !phase_valid {
         AppError::Invalid("unsupported product event".into()).into_response()
+    } else if event.event_name == "stale_ui_reload" {
+        // This signal is process-local operational telemetry. It deliberately
+        // does not expand the durable product-event schema or persist a Paper
+        // identifier solely for monitoring.
+        state.metrics.observe_stale_ui_reload();
+        (StatusCode::NO_CONTENT, Body::empty()).into_response()
     } else {
         match db::record_product_event(
             &state.pool,
@@ -1175,6 +1283,7 @@ async fn record_server_command_event(
     {
         tracing::warn!(%error, event_name, "could not record product telemetry");
     }
+    state.metrics.observe_product_event(event_name);
 }
 
 async fn lobby(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, AppError> {
@@ -1189,6 +1298,7 @@ async fn lobby(State(state): State<AppState>, headers: HeaderMap) -> Result<Resp
         state.hepta.list_current_agent_bindings(&session.identity),
         state.hepta.get_player_raid_state(&session.identity),
     );
+    state.metrics.observe_match_queue(tickets.as_ref().ok());
     Ok(html::lobby(
         &session.identity,
         read_state(&challenges),
@@ -1244,11 +1354,23 @@ async fn review_bundle_page(
             .get_paper_review_state(&session.identity, paper_id),
     );
     let bundle = bundle?;
+    let receipt_projection =
+        crate::review_receipts::pending_projection(&state, &session.identity, paper_id)
+            .await
+            .unwrap_or_else(|_| {
+                json!({
+                    "schema": "hepta.paper_raid.review_receipt_projection.v1",
+                    "status": "unavailable",
+                    "reason_code": "receipt_authority_unavailable",
+                    "receipt": Value::Null,
+                })
+            });
     Ok(html::review_bundle(
         &session.identity,
         &assignment,
         &bundle,
-        read_state(&review_state),
+        authenticated_review_value_state(&review_state),
+        &receipt_projection,
     ))
 }
 
@@ -1301,12 +1423,14 @@ async fn paper_room(
             .hepta
             .get_paper_review_state(&session.identity, paper_id),
     );
-    Ok(html::paper_room(
+    let finality = timeline_finality_projection_ref(&review);
+    Ok(html::paper_room_with_finality(
         &session.identity,
         &paper_id.to_string(),
-        read_state(&room),
+        authenticated_room_state(&room),
         read_state(&events),
-        read_state(&review),
+        authenticated_review_state(&review),
+        &finality,
     ))
 }
 
@@ -1343,12 +1467,14 @@ async fn paper_timeline(
     );
     let room = room?;
     let events = events?;
-    // Finality is an ancillary projection for the live timeline.  A fresh
-    // Paper has no release candidate yet, so the review aggregate may
-    // legitimately be absent/conflicted while authoring is fully available.
-    // Never let that expected state break Paper Room synchronization.
+    // Finality is an ancillary projection for the live timeline. A fresh
+    // Paper has no release candidate yet, so the review aggregate may be
+    // absent/conflicted while authoring is fully available. Keep Paper Room
+    // synchronization available, but preserve that epistemic state: unknown,
+    // unavailable, and upstream error must never be rewritten as pending.
     let finality = timeline_finality_projection(review);
-    let accesses = latest_session_accesses(member_session_accesses(&room)?, None)?;
+    state.metrics.observe_finality_availability(&finality);
+    let accesses = latest_session_accesses(member_session_accesses(room.value())?, None)?;
     if accesses.len() > MAX_TIMELINE_SESSION_HEADS {
         return Err(AppError::Upstream);
     }
@@ -1390,7 +1516,7 @@ async fn paper_timeline(
             "paper_id": paper_id,
             "after_cursor": query.after_cursor,
             "after_sequence": query.after_sequence,
-            "paper_room": room,
+            "paper_room": room.value(),
             "hepta_events": events,
             "research_sessions": session_heads,
             "nakama_archives": archives,
@@ -1474,6 +1600,14 @@ struct ArtifactQuery {
     media_type: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewArtifactQuery {
+    assignment_id: Uuid,
+    bundle_hash: String,
+    object_key: String,
+}
+
 async fn download_artifact(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1486,7 +1620,7 @@ async fn download_artifact(
         .get_paper_room(&session.identity, paper_id)
         .await?;
     let expected_uri = state.cas.expected_uri(&digest)?;
-    let media_type = authorized_artifact_media(&room, &digest, &expected_uri)?;
+    let media_type = authorized_artifact_media(room.value(), &digest, &expected_uri)?;
     if query
         .media_type
         .as_deref()
@@ -1512,6 +1646,121 @@ async fn download_artifact(
     response.headers_mut().insert(
         header::CONTENT_DISPOSITION,
         HeaderValue::from_static("attachment; filename=paper-raid-artifact"),
+    );
+    response.headers_mut().insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("sandbox; default-src 'none'"),
+    );
+    Ok(response)
+}
+
+async fn download_review_artifact(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((paper_id, digest)): Path<(Uuid, String)>,
+    Query(query): Query<ReviewArtifactQuery>,
+) -> Result<Response, AppError> {
+    let session = state.session(&headers).await?;
+    if !identity_has_review_scope(&session.identity) {
+        return Err(AppError::Forbidden);
+    }
+    let hepta_bundle = state
+        .hepta
+        .get_paper_review_bundle(&session.identity, paper_id)
+        .await?;
+    let bundle = crate::agent_bridge::resolve_frozen_review_bundle(&state, &hepta_bundle).await?;
+    let media_type = authorized_review_artifact_media(
+        &bundle,
+        query.assignment_id,
+        &query.bundle_hash,
+        &query.object_key,
+        &digest,
+    )?;
+    state.cas.validate_media_type(&media_type)?;
+    let bytes = state.cas.get(&digest, &media_type).await?;
+    review_artifact_response(bytes, &media_type)
+}
+
+pub(crate) fn authorized_review_artifact_media(
+    review_bundle: &Value,
+    assignment_id: Uuid,
+    bundle_hash: &str,
+    object_key: &str,
+    digest: &str,
+) -> Result<String, AppError> {
+    crate::cas::raw_sha256(digest)?;
+    let assignment_id_text = assignment_id.to_string();
+    let descriptor = review_bundle
+        .get("resolved_frozen_review_bundle")
+        .and_then(Value::as_object)
+        .ok_or(AppError::Upstream)?;
+    if descriptor.get("assignment_id").and_then(Value::as_str) != Some(assignment_id_text.as_str())
+        || descriptor.get("bundle_hash").and_then(Value::as_str) != Some(bundle_hash)
+        || descriptor.get("paper_project_id").and_then(Value::as_str)
+            != review_bundle
+                .get("paper_project_id")
+                .and_then(Value::as_str)
+    {
+        return Err(AppError::Forbidden);
+    }
+    let assignments = review_bundle
+        .get("my_assignments")
+        .and_then(Value::as_array)
+        .ok_or(AppError::Upstream)?;
+    if assignments.len() != 1
+        || assignments[0].get("assignment_id").and_then(Value::as_str)
+            != Some(assignment_id_text.as_str())
+        || !matches!(
+            assignments[0].get("status").and_then(Value::as_str),
+            Some("claimed" | "pinned")
+        )
+    {
+        return Err(AppError::Forbidden);
+    }
+    let objects = descriptor
+        .get("objects")
+        .and_then(Value::as_array)
+        .ok_or(AppError::Upstream)?;
+    let matches = objects
+        .iter()
+        .filter(|object| {
+            object.get("object_key").and_then(Value::as_str) == Some(object_key)
+                && object.get("digest").and_then(Value::as_str) == Some(digest)
+                && object.get("download_path").and_then(Value::as_str)
+                    == Some("/api/agent-bridge/review-objects")
+        })
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        return Err(AppError::NotFound);
+    }
+    let media_type = matches[0]
+        .get("media_type")
+        .and_then(Value::as_str)
+        .ok_or(AppError::Upstream)?;
+    crate::cas::validate_media_type(media_type).map_err(|_| AppError::Upstream)?;
+    Ok(media_type.to_string())
+}
+
+pub(crate) fn review_artifact_response(
+    bytes: Vec<u8>,
+    media_type: &str,
+) -> Result<Response, AppError> {
+    let content_type = HeaderValue::from_str(media_type).map_err(|_| AppError::Upstream)?;
+    let mut response = (StatusCode::OK, Body::from(bytes)).into_response();
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, content_type);
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_static("attachment; filename=paper-raid-frozen-review-object"),
     );
     response.headers_mut().insert(
         header::CONTENT_SECURITY_POLICY,
@@ -1674,14 +1923,14 @@ fn with_cookie(mut response: Response, cookie: HeaderValue) -> Response {
     response
 }
 
-fn with_rotated_csrf(mut response: Response, csrf: String) -> Response {
+pub(crate) fn with_rotated_csrf(mut response: Response, csrf: String) -> Response {
     if let Ok(value) = HeaderValue::from_str(&csrf) {
         response.headers_mut().insert(CSRF_HEADER, value);
     }
     response
 }
 
-fn private_no_store(mut response: Response) -> Response {
+pub(crate) fn private_no_store(mut response: Response) -> Response {
     response.headers_mut().insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("private, no-store"),
@@ -1705,10 +1954,44 @@ fn read_state(result: &Result<Value, AppError>) -> html::ReadState<'_> {
     }
 }
 
-fn pending_consumer_finality() -> Value {
+fn authenticated_room_state(
+    result: &Result<AuthenticatedPaperRoom, AppError>,
+) -> html::ReadState<'_, AuthenticatedPaperRoom> {
+    match result {
+        Ok(value) => html::ReadState::Available(value),
+        Err(AppError::NotFound) => html::ReadState::NotFound,
+        Err(_) => html::ReadState::Unavailable,
+    }
+}
+
+fn authenticated_review_state(
+    result: &Result<AuthenticatedPaperReviewState, AppError>,
+) -> html::ReadState<'_, AuthenticatedPaperReviewState> {
+    match result {
+        Ok(value) => html::ReadState::Available(value),
+        Err(AppError::NotFound) => html::ReadState::NotFound,
+        Err(_) => html::ReadState::Unavailable,
+    }
+}
+
+fn authenticated_review_value_state(
+    result: &Result<AuthenticatedPaperReviewState, AppError>,
+) -> html::ReadState<'_> {
+    match result {
+        Ok(value) => html::ReadState::Available(value.value()),
+        Err(AppError::NotFound) => html::ReadState::NotFound,
+        Err(_) => html::ReadState::Unavailable,
+    }
+}
+
+const FINALITY_AVAILABILITY_SCHEMA_V1: &str = "hepta.paper_raid.bff_finality_availability.v1";
+
+fn non_authoritative_finality_availability(status: &str, reason_code: &str) -> Value {
     json!({
-        "schema": "hepta.paper_raid.consumer_finality.v1",
-        "status": "pending_finality",
+        "schema": FINALITY_AVAILABILITY_SCHEMA_V1,
+        "status": status,
+        "authoritative": false,
+        "reason_code": reason_code,
         "ranking_eligible": false,
         "reward_eligible": false,
         "score_eligible": false,
@@ -1717,16 +2000,26 @@ fn pending_consumer_finality() -> Value {
     })
 }
 
-fn timeline_finality_projection(review: Result<Value, AppError>) -> Value {
+fn timeline_finality_projection(review: Result<AuthenticatedPaperReviewState, AppError>) -> Value {
+    timeline_finality_projection_ref(&review)
+}
+
+fn timeline_finality_projection_ref(
+    review: &Result<AuthenticatedPaperReviewState, AppError>,
+) -> Value {
     match review {
-        Ok(value) => value
-            .get("finality")
-            .cloned()
-            .unwrap_or_else(pending_consumer_finality),
-        Err(AppError::NotFound | AppError::Conflict(_)) => pending_consumer_finality(),
+        Ok(value) => value.finality().clone(),
+        Err(AppError::NotFound) => non_authoritative_finality_availability(
+            "unknown_finality",
+            "review_aggregate_not_found",
+        ),
+        Err(AppError::Conflict(_)) => non_authoritative_finality_availability(
+            "unavailable_finality",
+            "review_projection_conflict",
+        ),
         Err(error) => {
             tracing::warn!(%error, "Paper finality projection unavailable during timeline read");
-            pending_consumer_finality()
+            non_authoritative_finality_availability("error_finality", "review_projection_error")
         }
     }
 }
@@ -1778,6 +2071,10 @@ mod tests {
             &author,
             CommandName::QueueMatchmaking
         ));
+        assert!(identity_scope_allows_command(
+            &author,
+            CommandName::CreateRoleResourceAction
+        ));
         assert!(!identity_scope_allows_command(
             &author,
             CommandName::TransitionPaperChallengeOutcome
@@ -1792,12 +2089,12 @@ mod tests {
         evaluator.scopes = Arc::from([AlphaIdentityScope::Evaluator]);
         evaluator.author_roles = Arc::from([]);
         assert_eq!(identity_home_path(&evaluator), "/league/review");
-        assert!(!identity_requires_agent_binding(&evaluator));
+        assert!(identity_requires_agent_binding(&evaluator));
         assert!(!identity_scope_allows_command(
             &evaluator,
             CommandName::CreatePaperEvaluation
         ));
-        assert!(identity_scope_allows_command(
+        assert!(!identity_scope_allows_command(
             &evaluator,
             CommandName::CreatePaperEvaluationDraft
         ));
@@ -1817,6 +2114,10 @@ mod tests {
             &evaluator,
             CommandName::QueueMatchmaking
         ));
+        assert!(!identity_scope_allows_command(
+            &evaluator,
+            CommandName::CreateRoleResourceAction
+        ));
 
         let mut reproducer =
             AlphaIdentity::test_identity("reproducer", Uuid::new_v4(), Uuid::new_v4());
@@ -1824,7 +2125,7 @@ mod tests {
         reproducer.author_roles = Arc::from([]);
         assert_eq!(identity_home_path(&reproducer), "/league/review");
         assert!(identity_requires_agent_binding(&reproducer));
-        assert!(identity_scope_allows_command(
+        assert!(!identity_scope_allows_command(
             &reproducer,
             CommandName::SubmitReproduction
         ));
@@ -1836,6 +2137,10 @@ mod tests {
             &reproducer,
             CommandName::CreatePaperEvaluation
         ));
+        assert!(!identity_scope_allows_command(
+            &reproducer,
+            CommandName::CreateRoleResourceAction
+        ));
 
         let mut mixed_author = evaluator.clone();
         mixed_author.scopes =
@@ -1844,29 +2149,29 @@ mod tests {
             &mixed_author,
             CommandName::CreatePaperEvaluationDraft
         ));
-        assert!(!identity_has_review_scope(&mixed_author));
+        assert!(identity_has_review_scope(&mixed_author));
     }
 
     #[test]
     fn guided_terminal_outcome_reasons_are_typed_and_outcome_specific() {
         assert!(guided_outcome_reason_allowed(
-            GuidedPaperOutcome::Failed,
+            HeptaPaperTerminalOutcome::Failed,
             "preregistered_result_failed"
         ));
         assert!(guided_outcome_reason_allowed(
-            GuidedPaperOutcome::Abandoned,
+            HeptaPaperTerminalOutcome::Abandoned,
             "team_withdrawal"
         ));
         assert!(guided_outcome_reason_allowed(
-            GuidedPaperOutcome::Expired,
-            "grace_window_elapsed"
+            HeptaPaperTerminalOutcome::Expired,
+            "challenge_grace_deadline_elapsed"
         ));
         assert!(!guided_outcome_reason_allowed(
-            GuidedPaperOutcome::Expired,
+            HeptaPaperTerminalOutcome::Expired,
             "team_withdrawal"
         ));
         assert!(!guided_outcome_reason_allowed(
-            GuidedPaperOutcome::Failed,
+            HeptaPaperTerminalOutcome::Failed,
             "invented"
         ));
     }
@@ -1899,6 +2204,37 @@ mod tests {
             &evidence,
             &command(json!(["invented"]))
         ));
+    }
+
+    #[test]
+    fn matchmaking_payload_never_forwards_a_raw_or_noncanonical_party_code() {
+        let mut captain = AlphaIdentity::test_identity("captain", Uuid::new_v4(), Uuid::new_v4());
+        captain.author_roles = Arc::from([AlphaAuthorRole::Captain]);
+        let command = |payload: Value| BrowserCommand {
+            command: CommandName::QueueMatchmaking,
+            resource_id: None,
+            child_id: None,
+            session_id: None,
+            idempotency_key: Uuid::new_v4(),
+            payload,
+        };
+        assert!(identity_payload_allows_command(
+            &captain,
+            &command(json!({
+                "roles":["captain"],
+                "party_code_hash":format!("sha256:{}", "a".repeat(64)),
+            }))
+        ));
+        for payload in [
+            json!({"roles":["captain"],"party_code":"PR1-raw"}),
+            json!({"roles":["captain"],"raw_party_code":"PR1-raw"}),
+            json!({"roles":["captain"],"party_code_hash":format!("sha256:{}", "A".repeat(64))}),
+        ] {
+            assert!(!identity_payload_allows_command(
+                &captain,
+                &command(payload)
+            ));
+        }
     }
 
     #[test]
@@ -1938,28 +2274,196 @@ mod tests {
     }
 
     #[test]
-    fn fresh_paper_timeline_projects_pending_without_a_review_aggregate() {
-        let pending = timeline_finality_projection(Err(AppError::Conflict(
+    fn timeline_never_rewrites_unknown_or_unavailable_finality_as_pending() {
+        let unavailable = timeline_finality_projection(Err(AppError::Conflict(
             "release_candidate_required".into(),
         )));
-        assert_eq!(pending["status"], "pending_finality");
-        assert_eq!(pending["ranking_eligible"], false);
+        assert_eq!(unavailable["status"], "unavailable_finality");
+        assert_eq!(
+            unavailable["schema"],
+            "hepta.paper_raid.bff_finality_availability.v1"
+        );
+        assert_eq!(unavailable["authoritative"], false);
+        assert_eq!(unavailable["reason_code"], "review_projection_conflict");
+        assert_eq!(unavailable["ranking_eligible"], false);
+        assert_eq!(unavailable["reward_eligible"], false);
+        assert_eq!(unavailable["score_eligible"], false);
+        assert_eq!(unavailable["economic_eligible"], false);
 
-        let verified = json!({
-            "finality": {
-                "schema": "hepta.paper_raid.consumer_finality.v1",
-                "status": "verified_finality",
-                "ranking_eligible": false,
-                "reward_eligible": false,
-                "score_eligible": false,
-                "economic_eligible": false,
-                "verified_at": "2026-08-10T00:00:00Z"
-            }
-        });
+        let missing = timeline_finality_projection(Err(AppError::NotFound));
+        assert_eq!(missing["status"], "unknown_finality");
+        assert_eq!(missing["reason_code"], "review_aggregate_not_found");
+
+        let malformed = timeline_finality_projection(
+            AuthenticatedPaperReviewState::test_only_seal(Uuid::new_v4(), json!({})),
+        );
+        assert_eq!(malformed["status"], "error_finality");
+        assert_eq!(malformed["reason_code"], "review_projection_error");
+
+        let failed = timeline_finality_projection(Err(AppError::Upstream));
+        assert_eq!(failed["status"], "error_finality");
+        assert_eq!(failed["reason_code"], "review_projection_error");
+
+        let paper_id = Uuid::new_v4();
+        let evaluation_id = Uuid::new_v4();
+        let reproduction_id = Uuid::new_v4();
+        let verified = AuthenticatedPaperReviewState::test_only_seal(
+            paper_id,
+            json!({
+                "finality": {
+                    "schema": "hepta.paper_raid.consumer_finality.v2",
+                    "status": "verified_finality",
+                    "effective_evaluation_id": evaluation_id,
+                    "effective_reproduction_id": reproduction_id,
+                    "effective_appeal_resolution_id": null,
+                    "ranking_eligible": false,
+                    "reward_eligible": false,
+                    "score_eligible": false,
+                    "economic_eligible": false,
+                    "verified_at": "2026-08-10T00:00:00Z"
+                },
+                "assignments": [],
+                "evaluation_drafts": [],
+                "contribution_ledgers": [],
+                "evaluations": [],
+                "reproductions": [],
+                "appeals": [],
+                "resolutions": [],
+                "raid_scores": []
+            }),
+        )
+        .expect("strict authenticated review fixture");
         assert_eq!(
             timeline_finality_projection(Ok(verified))["status"],
             "verified_finality"
         );
+    }
+
+    #[test]
+    fn timeline_rejects_malformed_or_eligible_authoritative_finality() {
+        let paper_id = Uuid::new_v4();
+        let envelope = |finality: Value| {
+            json!({
+                "finality": finality,
+                "assignments": [],
+                "evaluation_drafts": [],
+                "contribution_ledgers": [],
+                "evaluations": [],
+                "reproductions": [],
+                "appeals": [],
+                "resolutions": [],
+                "raid_scores": []
+            })
+        };
+        let malformed_schema = json!({
+            "schema": "hepta.paper_raid.bff_finality_availability.v1",
+            "status": "verified_finality",
+            "effective_evaluation_id": Uuid::new_v4(),
+            "effective_reproduction_id": Uuid::new_v4(),
+            "effective_appeal_resolution_id": null,
+            "ranking_eligible": false,
+            "reward_eligible": false,
+            "score_eligible": false,
+            "economic_eligible": false,
+            "verified_at": "2026-08-10T00:00:00Z"
+        });
+        let projection = timeline_finality_projection(
+            AuthenticatedPaperReviewState::test_only_seal(paper_id, envelope(malformed_schema)),
+        );
+        assert_eq!(projection["status"], "error_finality");
+        assert_eq!(projection["reason_code"], "review_projection_error");
+
+        let unexpectedly_eligible = json!({
+            "schema": "hepta.paper_raid.consumer_finality.v2",
+            "status": "verified_finality",
+            "effective_evaluation_id": Uuid::new_v4(),
+            "effective_reproduction_id": Uuid::new_v4(),
+            "effective_appeal_resolution_id": null,
+            "ranking_eligible": true,
+            "reward_eligible": false,
+            "score_eligible": false,
+            "economic_eligible": false,
+            "verified_at": "2026-08-10T00:00:00Z"
+        });
+        let projection =
+            timeline_finality_projection(AuthenticatedPaperReviewState::test_only_seal(
+                paper_id,
+                envelope(unexpectedly_eligible),
+            ));
+        assert_eq!(projection["status"], "error_finality");
+        assert_eq!(projection["reason_code"], "review_projection_error");
+
+        let pending_with_timestamp = json!({
+            "schema": "hepta.paper_raid.consumer_finality.v2",
+            "status": "pending_finality",
+            "effective_evaluation_id": null,
+            "effective_reproduction_id": null,
+            "effective_appeal_resolution_id": null,
+            "ranking_eligible": false,
+            "reward_eligible": false,
+            "score_eligible": false,
+            "economic_eligible": false,
+            "verified_at": "2026-08-10T00:00:00Z"
+        });
+        assert_eq!(
+            timeline_finality_projection(AuthenticatedPaperReviewState::test_only_seal(
+                paper_id,
+                envelope(pending_with_timestamp),
+            ))["reason_code"],
+            "review_projection_error"
+        );
+
+        let extra_field = json!({
+            "schema": "hepta.paper_raid.consumer_finality.v2",
+            "status": "pending_finality",
+            "effective_evaluation_id": null,
+            "effective_reproduction_id": null,
+            "effective_appeal_resolution_id": null,
+            "ranking_eligible": false,
+            "reward_eligible": false,
+            "score_eligible": false,
+            "economic_eligible": false,
+            "verified_at": null,
+            "authoritative": true
+        });
+        assert_eq!(
+            timeline_finality_projection(AuthenticatedPaperReviewState::test_only_seal(
+                paper_id,
+                envelope(extra_field),
+            ))["reason_code"],
+            "review_projection_error"
+        );
+    }
+
+    #[test]
+    fn rendered_review_state_rejects_invalid_finality_before_html() {
+        let paper_id = Uuid::new_v4();
+        let review = json!({
+            "finality": {
+                "schema": "hepta.paper_raid.consumer_finality.v2",
+                "status": "verified_finality",
+                "effective_evaluation_id": Uuid::new_v4(),
+                "effective_reproduction_id": Uuid::new_v4(),
+                "effective_appeal_resolution_id": null,
+                "ranking_eligible": false,
+                "reward_eligible": false,
+                "score_eligible": false,
+                "economic_eligible": true,
+                "verified_at": "2026-08-10T00:00:00Z"
+            },
+            "assignments": [],
+            "evaluation_drafts": [],
+            "contribution_ledgers": [],
+            "evaluations": [],
+            "reproductions": [],
+            "appeals": [],
+            "resolutions": [],
+            "raid_scores": []
+        });
+        assert!(matches!(
+            AuthenticatedPaperReviewState::test_only_seal(paper_id, review),
+            Err(AppError::Upstream)
+        ));
     }
 
     #[test]

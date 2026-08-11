@@ -34,6 +34,94 @@ fn request_for(bundle: NeutralArtifactBundleV1) -> CreateArtifactManifestRequest
 }
 
 #[test]
+fn cancelled_only_work_does_not_satisfy_preregistration_progress() {
+    let now = Utc::now();
+    let player_id = Uuid::new_v4();
+    let team_id = Uuid::new_v4();
+    let challenge_id = Uuid::new_v4();
+    let paper_id = Uuid::new_v4();
+    let paper = PaperProject {
+        paper_project_id: paper_id,
+        team_id,
+        challenge_id,
+        title: "Cancelled-only work fixture".into(),
+        target_format: "paper".into(),
+        phase: PaperPhase::Preregistering,
+        challenge_ruleset_snapshot: None,
+        challenge_ruleset_snapshot_hash: None,
+        deadline_at: None,
+        grace_expires_at: None,
+        outcome: PaperChallengeOutcomeV1::InProgress,
+        outcome_reason: None,
+        terminal_at: None,
+        role_resources: None,
+        current_revision_id: None,
+        release_candidate_revision_id: None,
+        version: 1,
+        created_at: now,
+        updated_at: now,
+    };
+    let team = ResearchTeam {
+        team_id,
+        challenge_id,
+        collaboration_compact_hash: format!("sha256:{}", "11".repeat(32)),
+        status: TeamStatus::Locked,
+        roster_version: 1,
+        members: vec![TeamMember {
+            participant_slot: 1,
+            player_id,
+            binding_id: Uuid::new_v4(),
+            agent_id: "did:trnm:cancelled-only-work".into(),
+            role: "captain".into(),
+            joined_at: now,
+        }],
+        version: 1,
+        created_at: now,
+        updated_at: now,
+    };
+    let cancelled = WorkItem {
+        work_item_id: Uuid::new_v4(),
+        paper_project_id: paper_id,
+        kind: "preregistration".into(),
+        title: "Cancelled preregistration".into(),
+        assigned_player_id: Some(player_id),
+        assigned_binding_id: Some(team.members[0].binding_id),
+        status: WorkItemStatus::Cancelled,
+        artifact_manifest_hash: None,
+        version: 2,
+        created_at: now,
+        updated_at: now,
+    };
+    let progress = project_author_raid_progress(
+        &paper,
+        &team,
+        player_id,
+        &[cancelled],
+        &[],
+        &[],
+        &[],
+        &None,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    );
+    assert!(progress
+        .blockers
+        .contains(&"work_item_required".to_string()));
+    assert!(progress
+        .next_actions
+        .contains(&"create_paper_work_item".to_string()));
+    assert!(!progress.transition_ready);
+}
+
+#[test]
 fn whole_paper_revision_must_snapshot_current_merged_section_head_and_inherit_its_base() {
     let now = Utc::now();
     let paper_id = Uuid::new_v4();
@@ -54,6 +142,7 @@ fn whole_paper_revision_must_snapshot_current_merged_section_head_and_inherit_it
         outcome: PaperChallengeOutcomeV1::InProgress,
         outcome_reason: None,
         terminal_at: None,
+        role_resources: None,
         current_revision_id: Some(base_revision_id),
         release_candidate_revision_id: None,
         version: 1,
@@ -200,6 +289,12 @@ fn whole_paper_revision_must_snapshot_current_merged_section_head_and_inherit_it
         stale_progress.blockers,
         vec!["paper_revision_section_lineage_required"]
     );
+    assert_eq!(stale_progress.phase, PaperPhase::Reproducing);
+    assert_eq!(stale_progress.player_phase, "reproduction_readiness");
+    assert_eq!(
+        stale_progress.next_player_phase,
+        Some("author_approval".into())
+    );
     assert_eq!(stale_progress.next_actions, vec!["create_paper_revision"]);
 
     paper.current_revision_id = Some(current_revision_id);
@@ -309,6 +404,7 @@ fn authoritative_author_approval_projects_victory_gates_not_a_phase_transition()
         outcome: PaperChallengeOutcomeV1::InProgress,
         outcome_reason: None,
         terminal_at: None,
+        role_resources: None,
         current_revision_id: None,
         release_candidate_revision_id: None,
         version: 7,
@@ -524,6 +620,7 @@ fn matchmaking_ticket(
         requested_team_size: 3,
         roles: roles.iter().map(|role| (*role).to_string()).collect(),
         availability_hash: availability.to_string(),
+        party_code_hash: None,
         status: MatchmakingTicketStatus::Queued,
         matched_proposal_id: None,
         expires_at: Some(now + chrono::Duration::minutes(30)),
@@ -548,6 +645,51 @@ fn role_assignment_backtracks_instead_of_greedily_rejecting_a_valid_team() {
             "captain".to_string(),
             "experiment".to_string(),
         ])
+    );
+}
+
+#[test]
+fn matcher_v2_identity_freezes_role_order_and_exact_assignments() {
+    let original = vec![
+        matchmaking_ticket(1, 11, "window", &["captain", "evidence"]),
+        matchmaking_ticket(2, 12, "window", &["evidence", "captain"]),
+        matchmaking_ticket(3, 13, "window", &["experiment"]),
+    ];
+    let first = build_team_proposal(&original).expect("original proposal");
+    assert_eq!(
+        first
+            .role_assignments
+            .iter()
+            .map(|assignment| assignment.assigned_role.as_str())
+            .collect::<Vec<_>>(),
+        vec!["captain", "evidence", "experiment"]
+    );
+
+    let mut reordered = original.clone();
+    reordered[0].roles = vec!["evidence".into(), "captain".into()];
+    let second = build_team_proposal(&reordered).expect("reordered proposal");
+    assert_ne!(
+        first.deterministic_match_key,
+        second.deterministic_match_key
+    );
+    assert_ne!(first.proposal_id, second.proposal_id);
+    assert_ne!(first.source_preferences, second.source_preferences);
+    assert_ne!(first.role_assignments, second.role_assignments);
+
+    let mut matched = original;
+    let mut accepted = first;
+    accepted.status = TeamProposalStatus::Accepted;
+    for ticket in &mut matched {
+        ticket.status = MatchmakingTicketStatus::Matched;
+        ticket.matched_proposal_id = Some(accepted.proposal_id);
+        ticket.version += 1;
+    }
+    accepted.role_assignments.swap(0, 1);
+    assert_eq!(
+        validate_materialization_matchmaking_source(&accepted, &matched)
+            .expect_err("assignment drift must fail closed")
+            .code,
+        "team_proposal_provenance_mismatch"
     );
 }
 
@@ -581,6 +723,537 @@ fn matcher_requires_one_shared_availability_window() {
     assert!(incompatible.is_empty());
 }
 
+fn party_ticket(mut ticket: MatchmakingTicket, marker: char) -> MatchmakingTicket {
+    ticket.party_code_hash = Some(format!("sha256:{}", marker.to_string().repeat(64)));
+    ticket
+}
+
+#[test]
+fn matcher_never_mixes_public_or_different_premade_parties() {
+    let captain = party_ticket(matchmaking_ticket(1, 11, "window", &["captain"]), 'a');
+    let evidence = party_ticket(matchmaking_ticket(2, 12, "window", &["evidence"]), 'a');
+    let public_experiment = matchmaking_ticket(3, 13, "window", &["experiment"]);
+    let other_party_experiment =
+        party_ticket(matchmaking_ticket(4, 14, "window", &["experiment"]), 'b');
+
+    assert!(select_alpha_match(
+        vec![
+            captain.clone(),
+            evidence.clone(),
+            public_experiment,
+            other_party_experiment,
+        ]
+        .into_iter(),
+    )
+    .is_empty());
+
+    let same_party_experiment =
+        party_ticket(matchmaking_ticket(5, 15, "window", &["experiment"]), 'a');
+    let selected = select_alpha_match(vec![captain, evidence, same_party_experiment].into_iter());
+    assert_eq!(selected.len(), 3);
+    assert!(selected.iter().all(|ticket| {
+        ticket.party_code_hash.as_deref()
+            == Some("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    }));
+}
+
+#[test]
+fn party_queue_hint_waits_for_the_exact_third_member() {
+    let now = Utc::now();
+    let captain = party_ticket(matchmaking_ticket(1, 11, "window", &["captain"]), 'a');
+    let evidence = party_ticket(matchmaking_ticket(2, 12, "window", &["evidence"]), 'a');
+    let public_experiment = matchmaking_ticket(3, 13, "window", &["experiment"]);
+    let projected = project_matchmaking_ticket(
+        captain.clone(),
+        &[captain, evidence, public_experiment],
+        now,
+    );
+    let hint = projected.queue_hint.expect("party queue hint");
+    assert_eq!(hint.state, "waiting");
+    assert_eq!(hint.compatible_pool_size, 2);
+    assert_eq!(hint.compatible_players_needed, 1);
+    assert_eq!(hint.missing_roles, vec!["experiment"]);
+    assert_eq!(hint.message, "waiting_for_party_members");
+    assert_eq!(hint.eta_seconds, None);
+}
+
+#[test]
+fn complete_party_reports_role_deficit_instead_of_missing_members() {
+    let now = Utc::now();
+    let captain_a = party_ticket(matchmaking_ticket(1, 11, "window", &["captain"]), 'a');
+    let captain_b = party_ticket(matchmaking_ticket(2, 12, "window", &["captain"]), 'a');
+    let captain_c = party_ticket(matchmaking_ticket(3, 13, "window", &["captain"]), 'a');
+    let projected =
+        project_matchmaking_ticket(captain_a.clone(), &[captain_a, captain_b, captain_c], now);
+    let hint = projected.queue_hint.expect("complete party queue hint");
+
+    assert_eq!(hint.compatible_pool_size, 3);
+    assert_eq!(hint.message, "waiting_for_required_roles");
+    assert_eq!(hint.eta_seconds, None);
+}
+
+#[test]
+fn party_admission_rejects_an_unfinishable_role_or_availability_partition() {
+    let captain = party_ticket(matchmaking_ticket(1, 11, "window", &["captain"]), 'a');
+    validate_premade_party_admission(&[], &captain).expect("first party member");
+
+    let duplicate_captain = party_ticket(matchmaking_ticket(2, 12, "window", &["captain"]), 'a');
+    assert_eq!(
+        validate_premade_party_admission(std::slice::from_ref(&captain), &duplicate_captain)
+            .expect_err("two captain-only members cannot be completed")
+            .code,
+        "party_role_conflict"
+    );
+
+    let evidence = party_ticket(matchmaking_ticket(3, 13, "window", &["evidence"]), 'a');
+    validate_premade_party_admission(std::slice::from_ref(&captain), &evidence)
+        .expect("two distinct roles remain completable");
+    let wrong_window = party_ticket(
+        matchmaking_ticket(4, 14, "other-window", &["experiment"]),
+        'a',
+    );
+    assert_eq!(
+        validate_premade_party_admission(&[captain, evidence], &wrong_window)
+            .expect_err("one party cannot span availability partitions")
+            .code,
+        "party_availability_conflict"
+    );
+}
+
+#[test]
+fn cancellation_frees_one_party_slot_and_replacement_rematches_only_inside_party() {
+    let now = Utc::now();
+    let mut cancelled = party_ticket(matchmaking_ticket(1, 11, "window", &["experiment"]), 'a');
+    cancelled.status = MatchmakingTicketStatus::Cancelled;
+    let captain = party_ticket(matchmaking_ticket(2, 12, "window", &["captain"]), 'a');
+    let evidence = party_ticket(matchmaking_ticket(3, 13, "window", &["evidence"]), 'a');
+    let replacement = party_ticket(matchmaking_ticket(4, 14, "window", &["experiment"]), 'a');
+    let public = matchmaking_ticket(5, 15, "window", &["experiment"]);
+
+    validate_premade_party_admission(
+        &[cancelled.clone(), captain.clone(), evidence.clone()],
+        &replacement,
+    )
+    .expect("cancelled member no longer occupies the private party cap");
+
+    let mut memory = CollaborationMemory::default();
+    for ticket in [cancelled, captain, evidence, replacement, public.clone()] {
+        memory.tickets.insert(ticket.ticket_id, ticket);
+    }
+    let eligible_player_ids = memory
+        .tickets
+        .values()
+        .map(|ticket| ticket.player_id)
+        .collect();
+    let proposals = auto_match_all_queued_tickets_memory(
+        &mut memory,
+        &HashSet::new(),
+        &eligible_player_ids,
+        public.challenge_id,
+        now,
+    )
+    .expect("replacement rematch");
+
+    assert_eq!(proposals.len(), 1);
+    assert!(proposals[0].source_ticket_ids.iter().all(|ticket_id| {
+        memory.tickets.get(ticket_id).is_some_and(|ticket| {
+            ticket.party_code_hash.as_deref()
+                == Some("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        })
+    }));
+    assert_eq!(
+        memory
+            .tickets
+            .get(&public.ticket_id)
+            .expect("public ticket retained")
+            .status,
+        MatchmakingTicketStatus::Queued
+    );
+}
+
+#[test]
+fn queue_projection_never_claims_ready_beyond_the_matcher_fifo_horizon() {
+    let now = Utc::now();
+    let base = now - chrono::Duration::seconds(10);
+    let mut queue = (0..MAX_ALPHA_MATCH_CANDIDATES)
+        .map(|index| {
+            let mut ticket = matchmaking_ticket(
+                10_000 + index as u128,
+                20_000 + index as u128,
+                "window",
+                &["captain"],
+            );
+            ticket.created_at = base + chrono::Duration::milliseconds(index as i64);
+            ticket.updated_at = ticket.created_at;
+            ticket
+        })
+        .collect::<Vec<_>>();
+    let mut captain = party_ticket(
+        matchmaking_ticket(40_001, 50_001, "window", &["captain"]),
+        'a',
+    );
+    let mut evidence = party_ticket(
+        matchmaking_ticket(40_002, 50_002, "window", &["evidence"]),
+        'a',
+    );
+    let mut experiment = party_ticket(
+        matchmaking_ticket(40_003, 50_003, "window", &["experiment"]),
+        'a',
+    );
+    for (offset, ticket) in [&mut captain, &mut evidence, &mut experiment]
+        .into_iter()
+        .enumerate()
+    {
+        ticket.created_at = base
+            + chrono::Duration::milliseconds(
+                i64::try_from(MAX_ALPHA_MATCH_CANDIDATES + offset).expect("bounded horizon"),
+            );
+        ticket.updated_at = ticket.created_at;
+    }
+    queue.extend([captain.clone(), evidence, experiment]);
+
+    assert!(select_alpha_match_at(queue.clone().into_iter(), now).is_empty());
+    let projected = project_matchmaking_ticket(captain, &queue, now);
+    let hint = projected.queue_hint.expect("bounded queue hint");
+    assert_eq!(hint.state, "waiting");
+    assert_eq!(hint.queue_position, None);
+    assert_eq!(hint.eta_seconds, None);
+    assert_ne!(hint.message, "compatible_team_ready");
+}
+
+#[test]
+fn expiry_sweep_immediately_rematches_a_triplet_behind_2048_due_blockers() {
+    let now = Utc::now();
+    let base = now - chrono::Duration::hours(1);
+    let challenge_id = Uuid::from_u128(0x9000);
+    let mut memory = CollaborationMemory::default();
+    let mut eligible = HashSet::new();
+    for index in 0..MAX_ALPHA_MATCH_CANDIDATES {
+        let mut blocker = matchmaking_ticket(
+            100_000 + index as u128,
+            200_000 + index as u128,
+            "window",
+            &["captain"],
+        );
+        blocker.created_at = base + chrono::Duration::milliseconds(index as i64);
+        blocker.updated_at = blocker.created_at;
+        blocker.expires_at = Some(now - chrono::Duration::seconds(1));
+        eligible.insert(blocker.player_id);
+        memory.tickets.insert(blocker.ticket_id, blocker);
+    }
+    let mut tail = [
+        matchmaking_ticket(900_001, 910_001, "window", &["captain"]),
+        matchmaking_ticket(900_002, 910_002, "window", &["evidence"]),
+        matchmaking_ticket(900_003, 910_003, "window", &["experiment"]),
+    ];
+    for (offset, ticket) in tail.iter_mut().enumerate() {
+        ticket.created_at = now + chrono::Duration::milliseconds(offset as i64);
+        ticket.updated_at = ticket.created_at;
+        eligible.insert(ticket.player_id);
+        memory.tickets.insert(ticket.ticket_id, ticket.clone());
+    }
+    let expired = expire_due_matchmaking_tickets_memory(&mut memory, &eligible, challenge_id, now);
+    assert_eq!(expired.len(), MAX_ALPHA_MATCH_CANDIDATES);
+    let replacements = auto_match_all_queued_tickets_memory(
+        &mut memory,
+        &HashSet::new(),
+        &eligible,
+        challenge_id,
+        now,
+    )
+    .expect("tail rematch after expiry sweep");
+    assert_eq!(replacements.len(), 1);
+    assert_eq!(
+        replacements[0].source_ticket_ids,
+        tail.iter()
+            .map(|ticket| ticket.ticket_id)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn read_drain_matches_a_released_legacy_triplet_without_a_new_mutation() {
+    let now = Utc::now();
+    let challenge_id = Uuid::from_u128(0x9010);
+    let mut memory = CollaborationMemory::default();
+    let tickets = vec![
+        matchmaking_ticket(901_001, 911_001, "window", &["captain"]),
+        matchmaking_ticket(901_002, 911_002, "window", &["evidence"]),
+        matchmaking_ticket(901_003, 911_003, "window", &["experiment"]),
+    ];
+    let eligible = tickets.iter().map(|ticket| ticket.player_id).collect();
+    for mut ticket in tickets {
+        ticket.challenge_id = challenge_id;
+        memory.tickets.insert(ticket.ticket_id, ticket);
+    }
+
+    let replacements = auto_match_all_queued_tickets_memory(
+        &mut memory,
+        &HashSet::new(),
+        &eligible,
+        challenge_id,
+        now,
+    )
+    .expect("player-scoped read drains already queued legacy releases");
+
+    assert_eq!(replacements.len(), 1);
+    assert!(memory.tickets.values().all(|ticket| {
+        ticket.status == MatchmakingTicketStatus::Matched
+            && ticket.matched_proposal_id == Some(replacements[0].proposal_id)
+    }));
+}
+
+#[test]
+fn queue_projection_eta_zero_follows_the_one_global_fifo_winner() {
+    let now = Utc::now();
+    let base = now - chrono::Duration::seconds(10);
+    let mut public = [
+        matchmaking_ticket(1, 11, "public-window", &["captain"]),
+        matchmaking_ticket(2, 12, "public-window", &["evidence"]),
+        matchmaking_ticket(3, 13, "public-window", &["experiment"]),
+    ];
+    let mut private = [
+        party_ticket(matchmaking_ticket(4, 14, "party-window", &["captain"]), 'a'),
+        party_ticket(
+            matchmaking_ticket(5, 15, "party-window", &["evidence"]),
+            'a',
+        ),
+        party_ticket(
+            matchmaking_ticket(6, 16, "party-window", &["experiment"]),
+            'a',
+        ),
+    ];
+    for (index, ticket) in public.iter_mut().enumerate() {
+        ticket.created_at = base + chrono::Duration::milliseconds(index as i64);
+        ticket.updated_at = ticket.created_at;
+    }
+    for (index, ticket) in private.iter_mut().enumerate() {
+        ticket.created_at = base + chrono::Duration::milliseconds(10 + index as i64);
+        ticket.updated_at = ticket.created_at;
+    }
+    let queue = public
+        .iter()
+        .chain(private.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let public_hint = project_matchmaking_ticket(public[0].clone(), &queue, now)
+        .queue_hint
+        .expect("public hint");
+    assert_eq!(public_hint.state, "ready");
+    assert_eq!(public_hint.eta_seconds, Some(0));
+
+    let private_hint = project_matchmaking_ticket(private[0].clone(), &queue, now)
+        .queue_hint
+        .expect("private hint");
+    assert_eq!(private_hint.state, "waiting");
+    assert_eq!(private_hint.eta_seconds, None);
+    assert_ne!(private_hint.message, "compatible_team_ready");
+}
+
+#[test]
+fn eligibility_filtered_current_ticket_is_never_reinserted_by_projection() {
+    let now = Utc::now();
+    let evidence = matchmaking_ticket(1, 11, "window", &["evidence"]);
+    let eligible_queue = vec![
+        matchmaking_ticket(2, 12, "window", &["captain"]),
+        matchmaking_ticket(3, 13, "window", &["experiment"]),
+    ];
+
+    let hint = project_matchmaking_ticket(evidence, &eligible_queue, now)
+        .queue_hint
+        .expect("filtered hint");
+    assert_eq!(hint.state, "waiting");
+    assert_eq!(hint.queue_position, None);
+    assert_eq!(hint.eta_seconds, None);
+}
+
+#[test]
+fn party_capacity_counts_only_same_challenge_live_tickets() {
+    let party_hash = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let tickets = [
+        party_ticket(matchmaking_ticket(1, 11, "window", &["captain"]), 'a'),
+        party_ticket(matchmaking_ticket(2, 12, "window", &["evidence"]), 'a'),
+        party_ticket(matchmaking_ticket(3, 13, "window", &["experiment"]), 'a'),
+    ];
+    assert_eq!(
+        live_party_ticket_count(tickets.iter(), tickets[0].challenge_id, party_hash),
+        3,
+    );
+}
+
+#[test]
+fn materialization_revalidates_party_partition_and_deterministic_ticket_epochs() {
+    let mut tickets = vec![
+        party_ticket(matchmaking_ticket(1, 11, "window", &["captain"]), 'a'),
+        party_ticket(matchmaking_ticket(2, 12, "window", &["evidence"]), 'a'),
+        party_ticket(matchmaking_ticket(3, 13, "window", &["experiment"]), 'a'),
+    ];
+    let mut proposal = build_team_proposal(&tickets).expect("valid private proposal");
+    proposal.status = TeamProposalStatus::Accepted;
+    for ticket in &mut tickets {
+        ticket.status = MatchmakingTicketStatus::Matched;
+        ticket.matched_proposal_id = Some(proposal.proposal_id);
+        ticket.version += 1;
+    }
+    validate_materialization_matchmaking_source(&proposal, &tickets)
+        .expect("exact matched party remains materializable");
+
+    let mut partition_drift = tickets.clone();
+    partition_drift[2].party_code_hash =
+        Some("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into());
+    assert_eq!(
+        validate_materialization_matchmaking_source(&proposal, &partition_drift)
+            .expect_err("cross-party source drift must fail closed")
+            .code,
+        "team_proposal_provenance_mismatch"
+    );
+
+    let mut synchronized_partition_drift = tickets.clone();
+    for ticket in &mut synchronized_partition_drift {
+        ticket.party_code_hash =
+            Some("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into());
+    }
+    assert_eq!(
+        validate_materialization_matchmaking_source(&proposal, &synchronized_partition_drift)
+            .expect_err("the V2 match key must bind the original private partition")
+            .code,
+        "team_proposal_provenance_mismatch"
+    );
+
+    let mut epoch_drift = tickets.clone();
+    epoch_drift[0].version += 1;
+    assert_eq!(
+        validate_materialization_matchmaking_source(&proposal, &epoch_drift)
+            .expect_err("source ticket epoch drift must fail closed")
+            .code,
+        "team_proposal_provenance_mismatch"
+    );
+
+    let mut synchronized_role_drift = tickets.clone();
+    synchronized_role_drift[1].roles = vec!["experiment".to_string()];
+    synchronized_role_drift[2].roles = vec!["evidence".to_string()];
+    assert_eq!(
+        validate_materialization_matchmaking_source(&proposal, &synchronized_role_drift)
+            .expect_err("the V2 match key must bind each player's original role offer")
+            .code,
+        "team_proposal_provenance_mismatch"
+    );
+
+    let mut synchronized_player_drift = tickets.clone();
+    // Swap the players attached to two fixed source tickets, then drift the
+    // proposal's visible player mapping in lockstep. The deterministic
+    // identity must still reject the rewrite.
+    let swapped_player = synchronized_player_drift[1].player_id;
+    synchronized_player_drift[1].player_id = synchronized_player_drift[2].player_id;
+    synchronized_player_drift[2].player_id = swapped_player;
+    let mut player_drift_proposal = proposal.clone();
+    player_drift_proposal.member_player_ids = synchronized_player_drift
+        .iter()
+        .map(|ticket| ticket.player_id)
+        .collect();
+    assert_eq!(
+        validate_materialization_matchmaking_source(
+            &player_drift_proposal,
+            &synchronized_player_drift,
+        )
+        .expect_err("the V2 match key must bind each source ticket's original player")
+        .code,
+        "team_proposal_provenance_mismatch"
+    );
+
+    proposal.deterministic_match_key =
+        "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".into();
+    assert_eq!(
+        validate_materialization_matchmaking_source(&proposal, &tickets)
+            .expect_err("proposal match-key drift must fail closed")
+            .code,
+        "team_proposal_provenance_mismatch"
+    );
+}
+
+#[test]
+fn proposal_actions_reject_and_invalidate_legacy_contract_before_decision() {
+    let mut tickets = vec![
+        matchmaking_ticket(1, 11, "window", &["captain"]),
+        matchmaking_ticket(2, 12, "window", &["evidence"]),
+        matchmaking_ticket(3, 13, "window", &["experiment"]),
+    ];
+    let legacy_match_key = crate::paper_raid_contracts::sha256_digest(b"legacy-public-proposal");
+    let mut proposal = build_team_proposal(&tickets).expect("current proposal shape");
+    proposal.proposal_id = deterministic_uuid(&legacy_match_key);
+    proposal.deterministic_match_key = legacy_match_key;
+    proposal.solver_version = None;
+    proposal.source_preferences.clear();
+    proposal.role_assignments.clear();
+    proposal.status = TeamProposalStatus::Proposed;
+    for ticket in &mut tickets {
+        ticket.status = MatchmakingTicketStatus::Matched;
+        ticket.matched_proposal_id = Some(proposal.proposal_id);
+        ticket.version += 1;
+    }
+
+    assert_eq!(
+        validate_materialization_matchmaking_source(&proposal, &tickets)
+            .expect_err("legacy proposals without complete frozen source identity fail closed")
+            .code,
+        "team_proposal_provenance_mismatch"
+    );
+
+    let now = Utc::now();
+    let mut memory = CollaborationMemory::default();
+    for ticket in &tickets {
+        memory.tickets.insert(ticket.ticket_id, ticket.clone());
+    }
+    memory
+        .team_proposals
+        .insert(proposal.proposal_id, proposal.clone());
+    let eligible_player_ids = tickets.iter().map(|ticket| ticket.player_id).collect();
+    let invalidation = invalidate_team_proposal_provenance_memory(
+        &mut memory,
+        &HashSet::new(),
+        &eligible_player_ids,
+        proposal.proposal_id,
+        now,
+    )
+    .expect("decision authority atomically invalidates legacy contract");
+    assert_eq!(invalidation.expired.len(), 1);
+    assert_eq!(invalidation.replacements.len(), 1);
+    assert_eq!(
+        memory
+            .team_proposals
+            .get(&proposal.proposal_id)
+            .expect("legacy proposal retained for history")
+            .status,
+        TeamProposalStatus::Expired
+    );
+    assert!(memory.tickets.values().all(|ticket| {
+        ticket.status == MatchmakingTicketStatus::Matched
+            && ticket.matched_proposal_id == Some(invalidation.replacements[0].proposal_id)
+    }));
+}
+
+#[test]
+fn player_ticket_view_reveals_only_private_party_boolean() {
+    let internal = party_ticket(matchmaking_ticket(1, 11, "window", &["captain"]), 'a');
+    let created_event = matchmaking_ticket_created_event_payload(&internal);
+    let cancelled_event = matchmaking_ticket_cancelled_event_payload(&internal);
+    let view = MatchmakingTicketView::from(internal);
+    let value = serde_json::to_value(view).expect("ticket view JSON");
+
+    assert_eq!(
+        value.get("private_party").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert!(value.get("party_code_hash").is_none());
+    assert!(!value.to_string().contains(&"a".repeat(64)));
+    for event in [created_event, cancelled_event] {
+        assert!(event.get("party_code_hash").is_none());
+        assert!(event.get("private_party").is_none());
+        assert!(!event.to_string().contains(&"a".repeat(64)));
+    }
+}
+
 #[test]
 fn matcher_waits_when_three_tickets_cannot_cover_three_distinct_roles() {
     let selected = select_alpha_match(
@@ -603,9 +1276,15 @@ fn matchmaking_rejects_noncanonical_role_names() {
         roles: vec!["foo".to_string()],
         availability_hash:
             "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+        party_code_hash: None,
         idempotency_key: Uuid::new_v4().to_string(),
     };
     assert!(validate_matchmaking_ticket_request(&request).is_err());
+
+    let mut invalid_party = request;
+    invalid_party.roles = vec!["captain".to_string()];
+    invalid_party.party_code_hash = Some("not-a-canonical-digest".to_string());
+    assert!(validate_matchmaking_ticket_request(&invalid_party).is_err());
 }
 
 #[test]
@@ -620,12 +1299,12 @@ fn expired_tickets_are_not_matchable_and_project_an_honest_wait_hint() {
     )
     .is_empty());
 
-    assert!(expire_matchmaking_ticket(&mut expired, now));
+    assert!(expire_matchmaking_ticket(&mut expired, now, true));
     assert_eq!(expired.status, MatchmakingTicketStatus::Expired);
     assert_eq!(expired.version, 2);
-    assert!(!expire_matchmaking_ticket(&mut expired, now));
+    assert!(!expire_matchmaking_ticket(&mut expired, now, true));
 
-    let waiting = project_matchmaking_ticket(evidence, std::slice::from_ref(&experiment), now);
+    let waiting = project_matchmaking_ticket(evidence.clone(), &[evidence, experiment], now);
     let hint = waiting.queue_hint.expect("queue hint");
     assert_eq!(hint.schema, MATCHMAKING_QUEUE_HINT_SCHEMA_V1);
     assert_eq!(hint.state, "waiting");
@@ -640,7 +1319,8 @@ fn queue_hint_reports_hall_role_deficit_instead_of_zero_needed_players() {
     let captain_a = matchmaking_ticket(1, 11, "window", &["captain"]);
     let captain_b = matchmaking_ticket(2, 12, "window", &["captain"]);
     let flexible = matchmaking_ticket(3, 13, "window", &["evidence", "experiment"]);
-    let projected = project_matchmaking_ticket(captain_a, &[captain_b, flexible], now);
+    let projected =
+        project_matchmaking_ticket(captain_a.clone(), &[captain_a, captain_b, flexible], now);
     let hint = projected.queue_hint.expect("queue hint");
     assert_eq!(hint.state, "waiting");
     assert_eq!(hint.compatible_pool_size, 3);
@@ -664,6 +1344,7 @@ fn legacy_ticket_json_derives_a_deadline_without_schema_breakage() {
         .remove("queue_hint");
     let decoded: MatchmakingTicket = serde_json::from_value(value).expect("legacy ticket decodes");
     assert_eq!(decoded.expires_at, None);
+    assert_eq!(decoded.party_code_hash, None);
     assert_eq!(
         matchmaking_ticket_deadline(&decoded),
         decoded.created_at + chrono::Duration::minutes(30)
@@ -1016,6 +1697,61 @@ fn automatic_match_excludes_an_older_ineligible_player() {
 }
 
 #[test]
+fn eligibility_sweep_expires_queued_and_matched_party_seats_without_waiting_for_ttl() {
+    let now = Utc::now();
+    let challenge_id = Uuid::from_u128(0x9000);
+    let mut memory = CollaborationMemory::default();
+    let queued = party_ticket(matchmaking_ticket(1, 11, "window", &["captain"]), 'a');
+    memory.tickets.insert(queued.ticket_id, queued.clone());
+    let eligible_without_queued = HashSet::new();
+    let expired = expire_due_matchmaking_tickets_memory(
+        &mut memory,
+        &eligible_without_queued,
+        challenge_id,
+        now,
+    );
+    assert_eq!(expired.len(), 1);
+    assert_eq!(expired[0].status, MatchmakingTicketStatus::Expired);
+    assert_eq!(expired[0].expires_at, Some(now));
+
+    let mut matched = vec![
+        party_ticket(matchmaking_ticket(2, 12, "window", &["captain"]), 'a'),
+        party_ticket(matchmaking_ticket(3, 13, "window", &["evidence"]), 'a'),
+        party_ticket(matchmaking_ticket(4, 14, "window", &["experiment"]), 'a'),
+    ];
+    let mut proposal = build_team_proposal(&matched).expect("valid private proposal");
+    proposal.expires_at = Some(now + chrono::Duration::minutes(5));
+    for ticket in &mut matched {
+        ticket.status = MatchmakingTicketStatus::Matched;
+        ticket.matched_proposal_id = Some(proposal.proposal_id);
+        ticket.version += 1;
+        memory.tickets.insert(ticket.ticket_id, ticket.clone());
+    }
+    memory
+        .team_proposals
+        .insert(proposal.proposal_id, proposal.clone());
+    let eligible_players = [Uuid::from_u128(12), Uuid::from_u128(14)]
+        .into_iter()
+        .collect();
+    let sweep = expire_due_team_proposals_memory(
+        &mut memory,
+        &HashSet::new(),
+        &eligible_players,
+        challenge_id,
+        now,
+    )
+    .expect("ineligible matched member releases the proposal");
+    assert_eq!(sweep.expired.len(), 1);
+    assert_eq!(sweep.expired[0].expires_at, Some(now));
+    assert!(matched.iter().all(|source| {
+        memory
+            .tickets
+            .get(&source.ticket_id)
+            .is_some_and(|ticket| ticket.status == MatchmakingTicketStatus::Expired)
+    }));
+}
+
+#[test]
 fn proposal_deadline_never_requeues_an_ineligible_acceptor() {
     let now = Utc::now();
     let mut memory = CollaborationMemory::default();
@@ -1091,4 +1827,431 @@ fn materialization_consumes_exact_tickets_idempotently() {
     assert!(!consume_materialized_ticket(&mut ticket, proposal_id, now)
         .expect("consumption replay is stable"));
     assert!(consume_materialized_ticket(&mut ticket, Uuid::new_v4(), now).is_err());
+}
+
+fn expiring_paper(grace_expires_at: DateTime<Utc>) -> PaperProject {
+    PaperProject {
+        paper_project_id: Uuid::from_u128(0xeeee),
+        team_id: Uuid::from_u128(0xaaaa),
+        challenge_id: Uuid::from_u128(0xbbbb),
+        title: "Automatic expiry fixture".into(),
+        target_format: "paper".into(),
+        phase: PaperPhase::Experimenting,
+        challenge_ruleset_snapshot: None,
+        challenge_ruleset_snapshot_hash: None,
+        deadline_at: Some(grace_expires_at - chrono::Duration::minutes(15)),
+        grace_expires_at: Some(grace_expires_at),
+        outcome: PaperChallengeOutcomeV1::InProgress,
+        outcome_reason: None,
+        terminal_at: None,
+        role_resources: None,
+        current_revision_id: None,
+        release_candidate_revision_id: None,
+        version: 7,
+        created_at: grace_expires_at - chrono::Duration::hours(2),
+        updated_at: grace_expires_at - chrono::Duration::minutes(1),
+    }
+}
+
+#[test]
+fn automatic_challenge_expiry_uses_a_half_open_grace_boundary_and_is_idempotent() {
+    let grace_expires_at = Utc
+        .with_ymd_and_hms(2026, 8, 11, 9, 12, 1)
+        .single()
+        .expect("fixed grace deadline");
+    let mut paper = expiring_paper(grace_expires_at);
+    let original = paper.clone();
+
+    assert!(!apply_automatic_challenge_expiry(
+        &mut paper,
+        grace_expires_at - chrono::Duration::nanoseconds(1),
+    ));
+    assert_eq!(paper, original);
+
+    assert!(apply_automatic_challenge_expiry(
+        &mut paper,
+        grace_expires_at,
+    ));
+    assert_eq!(paper.outcome, PaperChallengeOutcomeV1::Expired);
+    assert_eq!(
+        paper.outcome_reason.as_deref(),
+        Some(AUTOMATIC_CHALLENGE_EXPIRY_REASON)
+    );
+    assert_eq!(paper.terminal_at, Some(grace_expires_at));
+    assert_eq!(paper.updated_at, grace_expires_at);
+    assert_eq!(paper.version, original.version + 1);
+
+    let materialized = paper.clone();
+    assert!(!apply_automatic_challenge_expiry(
+        &mut paper,
+        grace_expires_at + chrono::Duration::hours(1),
+    ));
+    assert_eq!(paper, materialized, "retry must be a no-op");
+}
+
+#[test]
+fn automatic_challenge_expiry_memory_writes_one_room_and_outbox_event() {
+    let grace_expires_at = Utc
+        .with_ymd_and_hms(2026, 8, 11, 9, 12, 1)
+        .single()
+        .expect("fixed grace deadline");
+    let paper = expiring_paper(grace_expires_at);
+    let paper_id = paper.paper_project_id;
+    let mut memory = PaperRaidMemory::default();
+    memory.papers.insert(paper_id, paper);
+
+    assert!(materialize_automatic_challenge_expiry_memory(
+        &mut memory,
+        paper_id,
+        grace_expires_at - chrono::Duration::nanoseconds(1),
+    )
+    .is_none());
+    let response =
+        materialize_automatic_challenge_expiry_memory(&mut memory, paper_id, grace_expires_at)
+            .expect("boundary materializes expiry");
+    assert!(materialize_automatic_challenge_expiry_memory(
+        &mut memory,
+        paper_id,
+        grace_expires_at + chrono::Duration::seconds(1),
+    )
+    .is_none());
+
+    let room_events = memory
+        .collaboration
+        .events
+        .iter()
+        .filter(|event| event.event_type == AUTOMATIC_CHALLENGE_EXPIRY_EVENT)
+        .collect::<Vec<_>>();
+    assert_eq!(room_events.len(), 1);
+    assert_eq!(room_events[0].aggregate_id, paper_id);
+    assert_eq!(room_events[0].aggregate_version, response.version);
+    assert_eq!(room_events[0].payload["automatic"], true);
+    assert_eq!(
+        room_events[0].payload["reason_code"],
+        AUTOMATIC_CHALLENGE_EXPIRY_REASON
+    );
+
+    let outbox_events = memory
+        .events
+        .iter()
+        .filter(|event| event.event_type == AUTOMATIC_CHALLENGE_EXPIRY_EVENT)
+        .collect::<Vec<_>>();
+    assert_eq!(outbox_events.len(), 1);
+    assert_eq!(
+        outbox_events[0].idempotency_key,
+        format!(
+            "paper-raid:{AUTOMATIC_CHALLENGE_EXPIRY_OPERATION}:{}",
+            automatic_challenge_expiry_idempotency_key(paper_id)
+        )
+    );
+}
+
+#[tokio::test]
+async fn concurrent_automatic_challenge_expiry_reads_materialize_once() {
+    let grace_expires_at = Utc
+        .with_ymd_and_hms(2026, 8, 11, 9, 12, 1)
+        .single()
+        .expect("fixed grace deadline");
+    let paper = expiring_paper(grace_expires_at);
+    let paper_id = paper.paper_project_id;
+    let memory = std::sync::Arc::new(tokio::sync::RwLock::new(PaperRaidMemory::default()));
+    memory.write().await.papers.insert(paper_id, paper);
+
+    let materialize = |memory: std::sync::Arc<tokio::sync::RwLock<PaperRaidMemory>>| async move {
+        let mut memory = memory.write().await;
+        materialize_automatic_challenge_expiry_memory(&mut memory, paper_id, grace_expires_at)
+            .is_some()
+    };
+    let (left, right) = tokio::join!(materialize(memory.clone()), materialize(memory.clone()));
+    assert_ne!(left, right, "exactly one concurrent caller must win");
+
+    let memory = memory.read().await;
+    assert_eq!(
+        memory
+            .collaboration
+            .events
+            .iter()
+            .filter(|event| event.event_type == AUTOMATIC_CHALLENGE_EXPIRY_EVENT)
+            .count(),
+        1
+    );
+    assert_eq!(
+        memory
+            .events
+            .iter()
+            .filter(|event| event.event_type == AUTOMATIC_CHALLENGE_EXPIRY_EVENT)
+            .count(),
+        1
+    );
+}
+
+fn expiry_assertion(
+    player_id: Uuid,
+    subject_id: &str,
+    nakama_user_id: Uuid,
+) -> ConsumerUserAssertionClaimV2 {
+    ConsumerUserAssertionClaimV2 {
+        schema: "hepta.consumer_user_assertion.v2".into(),
+        assertion_id: Uuid::new_v4(),
+        issuer: "expiry-test".into(),
+        audience: "hepta-paper-raid-v2".into(),
+        subject_id: subject_id.into(),
+        nakama_user_id,
+        player_id,
+        operation: "get_paper_project_v2".into(),
+        http_method: "GET".into(),
+        canonical_path: "/v2/hepta/papers/fixture".into(),
+        idempotency_key: format!("expiry-read-{player_id}"),
+        body_hash: format!("sha256:{}", "00".repeat(32)),
+        issued_at_unix: 1,
+        expires_at_unix: i64::MAX,
+        nonce: format!("expiry-nonce-{player_id}"),
+    }
+}
+
+#[tokio::test]
+async fn authorized_late_read_materializes_grace_time_and_non_member_cannot_mutate() {
+    let grace_expires_at = Utc
+        .with_ymd_and_hms(2026, 8, 11, 9, 12, 1)
+        .single()
+        .expect("fixed grace deadline");
+    let materialized_at = grace_expires_at + chrono::Duration::seconds(9);
+    let paper = expiring_paper(grace_expires_at);
+    let paper_id = paper.paper_project_id;
+    let member_id = Uuid::from_u128(0x1111);
+    let outsider_id = Uuid::from_u128(0x2222);
+    let member_nakama_id = Uuid::from_u128(0x3333);
+    let subject_id = "oidc|expiry-member";
+    let now = grace_expires_at - chrono::Duration::hours(1);
+    let team = ResearchTeam {
+        team_id: paper.team_id,
+        challenge_id: paper.challenge_id,
+        collaboration_compact_hash: format!("sha256:{}", "11".repeat(32)),
+        status: TeamStatus::Locked,
+        roster_version: 1,
+        members: vec![TeamMember {
+            participant_slot: 1,
+            player_id: member_id,
+            binding_id: Uuid::from_u128(0x4444),
+            agent_id: "did:trnm:expiry-member".into(),
+            role: "captain".into(),
+            joined_at: now,
+        }],
+        version: 1,
+        created_at: now,
+        updated_at: now,
+    };
+    let player = HumanPlayer {
+        player_id: member_id,
+        subject_id: subject_id.into(),
+        nakama_user_id: member_nakama_id,
+        display_name: "Expiry member".into(),
+        signing_key_id: "expiry-key-v1".into(),
+        signing_public_key: "00".repeat(32),
+        signing_public_key_hash: format!("sha256:{}", "22".repeat(32)),
+        status: HumanPlayerStatus::Active,
+        version: 1,
+        created_at: now,
+        updated_at: now,
+    };
+    let state = AppState::new(crate::SecurityConfig::new("operator", "nakama"));
+    {
+        let mut memory = state.paper_raid.write().await;
+        memory.players.insert(member_id, player);
+        memory.teams.insert(team.team_id, team);
+        memory.papers.insert(paper_id, paper);
+    }
+
+    let outsider = expiry_assertion(outsider_id, "oidc|outsider", Uuid::from_u128(0x5555));
+    assert_eq!(
+        ensure_automatic_challenge_expiry_materialized(
+            &state,
+            paper_id,
+            &outsider,
+            materialized_at,
+        )
+        .await
+        .expect_err("non-member read must not materialize expiry")
+        .code,
+        "user_not_on_team",
+    );
+    assert_eq!(
+        state.paper_raid.read().await.papers[&paper_id].outcome,
+        PaperChallengeOutcomeV1::InProgress,
+    );
+
+    let member = expiry_assertion(member_id, subject_id, member_nakama_id);
+    ensure_automatic_challenge_expiry_materialized(&state, paper_id, &member, materialized_at)
+        .await
+        .expect("authorized late read materializes expiry");
+    ensure_automatic_challenge_expiry_materialized(
+        &state,
+        paper_id,
+        &member,
+        materialized_at + chrono::Duration::seconds(1),
+    )
+    .await
+    .expect("authorized retry is idempotent");
+
+    let memory = state.paper_raid.read().await;
+    let expired = &memory.papers[&paper_id];
+    assert_eq!(expired.outcome, PaperChallengeOutcomeV1::Expired);
+    assert_eq!(expired.terminal_at, Some(grace_expires_at));
+    assert_eq!(expired.updated_at, materialized_at);
+    assert_eq!(
+        super::super::validate_requested_terminal_outcome(
+            expired,
+            PaperChallengeOutcomeV1::Expired,
+            materialized_at,
+        )
+        .expect_err("manual expiry cannot overwrite canonical automatic expiry")
+        .code,
+        "paper_challenge_terminal",
+    );
+    assert_eq!(
+        expired.outcome_reason.as_deref(),
+        Some(AUTOMATIC_CHALLENGE_EXPIRY_REASON),
+    );
+    assert_eq!(
+        memory
+            .collaboration
+            .events
+            .iter()
+            .filter(|event| event.event_type == AUTOMATIC_CHALLENGE_EXPIRY_EVENT)
+            .count(),
+        1,
+    );
+    assert_eq!(
+        memory
+            .events
+            .iter()
+            .filter(|event| event.event_type == AUTOMATIC_CHALLENGE_EXPIRY_EVENT)
+            .count(),
+        1,
+    );
+}
+
+#[test]
+fn automatic_challenge_expiry_transition_is_backend_neutral() {
+    let grace_expires_at = Utc
+        .with_ymd_and_hms(2026, 8, 11, 9, 12, 1)
+        .single()
+        .expect("fixed grace deadline");
+    let now = grace_expires_at + chrono::Duration::seconds(9);
+    let mut memory_record = expiring_paper(grace_expires_at);
+    let mut postgres_record = memory_record.clone();
+
+    assert!(apply_automatic_challenge_expiry(&mut memory_record, now));
+    assert!(apply_automatic_challenge_expiry(&mut postgres_record, now));
+    assert_eq!(memory_record, postgres_record);
+    assert_eq!(
+        memory_record.terminal_at,
+        Some(grace_expires_at),
+        "late materialization must preserve the immutable grace boundary",
+    );
+    assert_eq!(
+        memory_record.updated_at, now,
+        "updated_at records when lazy materialization occurred",
+    );
+
+    memory_record.outcome = PaperChallengeOutcomeV1::SubmissionReady;
+    postgres_record = memory_record.clone();
+    assert!(!apply_automatic_challenge_expiry(
+        &mut memory_record,
+        now + chrono::Duration::days(1),
+    ));
+    assert_eq!(memory_record, postgres_record);
+}
+
+fn raid_history_fixture(
+    seed: u128,
+    outcome: PaperChallengeOutcomeV1,
+    updated_at: DateTime<Utc>,
+) -> PlayerRaidSummary {
+    let terminal = matches!(
+        outcome,
+        PaperChallengeOutcomeV1::Failed
+            | PaperChallengeOutcomeV1::Expired
+            | PaperChallengeOutcomeV1::Abandoned
+    );
+    PlayerRaidSummary {
+        team_id: Uuid::from_u128(seed),
+        challenge_id: Uuid::from_u128(seed + 100),
+        team_status: TeamStatus::Locked,
+        team_version: 1,
+        roster_version: 1,
+        member_count: 3,
+        acceptance_count: 3,
+        participant_slot: 1,
+        role: "captain".into(),
+        player_ready: true,
+        paper: Some(PaperRaidProgress {
+            paper_project_id: Uuid::from_u128(seed + 200),
+            title: format!("Raid {seed}"),
+            phase: PaperPhase::Experimenting,
+            player_phase: "experimenting".into(),
+            outcome,
+            outcome_reason: terminal.then(|| "terminal-fixture".into()),
+            terminal_at: terminal.then_some(updated_at),
+            role_resources: None,
+            version: 2,
+            current_revision_id: None,
+            release_candidate_revision_id: None,
+            updated_at,
+        }),
+        updated_at,
+    }
+}
+
+#[test]
+fn terminal_raid_remains_in_history_but_never_becomes_current() {
+    let now = Utc
+        .with_ymd_and_hms(2026, 8, 11, 10, 0, 0)
+        .single()
+        .expect("fixed raid-state time");
+    let expired_newest = raid_history_fixture(
+        1,
+        PaperChallengeOutcomeV1::Expired,
+        now + chrono::Duration::minutes(2),
+    );
+    let active_older = raid_history_fixture(2, PaperChallengeOutcomeV1::InProgress, now);
+    let raids = vec![expired_newest.clone(), active_older.clone()];
+
+    let current =
+        current_raid_from_sorted_history(&raids).expect("older active raid remains current");
+    assert_eq!(current.team_id, active_older.team_id);
+    assert_eq!(
+        raids[0].team_id, expired_newest.team_id,
+        "history is retained"
+    );
+
+    for outcome in [
+        PaperChallengeOutcomeV1::Failed,
+        PaperChallengeOutcomeV1::Expired,
+        PaperChallengeOutcomeV1::Abandoned,
+    ] {
+        assert!(
+            current_raid_from_sorted_history(&[raid_history_fixture(10, outcome, now)]).is_none()
+        );
+    }
+
+    let submission_ready = raid_history_fixture(20, PaperChallengeOutcomeV1::SubmissionReady, now);
+    assert_eq!(
+        current_raid_from_sorted_history(std::slice::from_ref(&submission_ready))
+            .expect("submission-ready raid remains resumable")
+            .team_id,
+        submission_ready.team_id,
+    );
+
+    let mut forming = raid_history_fixture(30, PaperChallengeOutcomeV1::InProgress, now);
+    forming.team_status = TeamStatus::Forming;
+    forming.paper = None;
+    assert_eq!(
+        current_raid_from_sorted_history(std::slice::from_ref(&forming))
+            .expect("forming team without a Paper remains current")
+            .team_id,
+        forming.team_id,
+    );
+    forming.team_status = TeamStatus::Archived;
+    assert!(current_raid_from_sorted_history(&[forming]).is_none());
 }

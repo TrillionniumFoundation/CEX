@@ -2,7 +2,11 @@
 set -euo pipefail
 
 service_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+repo_root=$(cd "$service_root/../.." && pwd -P)
 scratch_dir=$(mktemp -d)
+accessctl_dockerfile="$service_root/Dockerfile.accessctl"
+accessctl_sbom="$service_root/docker/accessctl.sbom.cdx.json"
+accessctl_sbom_binder="$service_root/scripts/bind-accessctl-runtime-sbom.sh"
 
 cleanup() {
   case "$scratch_dir" in
@@ -58,6 +62,7 @@ fi
 browser="$service_root/src/browser.js"
 html="$service_root/src/html.rs"
 hepta="$service_root/src/hepta.rs"
+app="$service_root/src/app.rs"
 if rg -n 'localStorage|indexedDB|\.style' "$browser" || \
   rg -n '<input[^>]+name=\\?"agent_(private_key|seed|mnemonic)' "$html"
 then
@@ -69,6 +74,37 @@ if [[ $(rg -o 'sessionStorage' "$browser" | wc -l) -ne 2 ]] || \
    ! rg -q --fixed-strings 'sessionStorage.setItem(liveCursorKey(paperId), JSON.stringify({ hepta: cursor.hepta }))' "$browser"
 then
   echo "browser session storage is not limited to non-secret live cursors" >&2
+  exit 1
+fi
+
+for required in \
+  'hepta.paper_raid.bff_finality_availability.v1' \
+  'AuthenticatedPaperReviewState' \
+  'timeline_finality_projection_ref'
+do
+  if ! rg -q --fixed-strings "$required" "$app"; then
+    echo "strict fail-closed finality boundary is missing: $required" >&2
+    exit 1
+  fi
+done
+for required in \
+  'hepta.paper_raid.consumer_finality.v2' \
+  'effective_evaluation_id' \
+  'effective_reproduction_id' \
+  'effective_appeal_resolution_id' \
+  'pub(crate) struct AuthenticatedPaperRoom' \
+  'pub(crate) struct AuthenticatedPaperReviewState' \
+  'struct PaperRoomEnvelopeV3' \
+  'struct PaperReviewStateEnvelopeV1' \
+  '#[serde(deny_unknown_fields)]'
+do
+  if ! rg -q --fixed-strings "$required" "$hepta"; then
+    echo "sealed authenticated Hepta read boundary is missing: $required" >&2
+    exit 1
+  fi
+done
+if rg -n --fixed-strings 'non_authoritative_consumer_finality' "$app"; then
+  echo "non-authoritative availability must not reuse the consumer-finality schema" >&2
   exit 1
 fi
 
@@ -225,6 +261,45 @@ do
   fi
 done
 
+staging_image_builder="$repo_root/scripts/build-paper-raid-bff-image.sh"
+[[ -x "$staging_image_builder" ]] || {
+  echo "paper-raid-bff durable staging image builder is absent" >&2
+  exit 1
+}
+for required in \
+  '--image-ref <local-tag>' \
+  'project-preflight.sh" --audit' \
+  'paper-raid-bff-release-authority.lock' \
+  'flock -n 9' \
+  'PAPER_RAID_BFF_EXPORT_IMAGE_REF=$image_ref' \
+  'services/paper-raid-bff/scripts/check-image.sh'
+do
+  if ! rg -q --fixed-strings -- "$required" "$staging_image_builder"; then
+    echo "paper-raid-bff staging image builder contract drifted: $required" >&2
+    exit 1
+  fi
+done
+for required in \
+  'export_image_owned=false' \
+  'refusing to replace an existing local export image reference' \
+  'sudo -n docker image tag "$image_id" "$export_image_ref"' \
+  'verify_tag_binding "$export_image_ref" "$image_id"' \
+  "'{{.Os}}/{{.Architecture}}'" \
+  'platform=linux/amd64'
+do
+  if ! rg -q --fixed-strings -- "$required" "$service_root/scripts/check-image.sh"; then
+    echo "paper-raid-bff verified local image export contract drifted: $required" >&2
+    exit 1
+  fi
+done
+if rg -n -- '(docker[[:space:]]+push|buildx[[:space:]]+build.*--push)' \
+  "$staging_image_builder"
+then
+  echo "paper-raid-bff staging builder must retain a local image only" >&2
+  exit 1
+fi
+bash -n "$staging_image_builder" "$service_root/scripts/check-image.sh"
+
 runtime_generator="$service_root/scripts/generate-runtime-sbom.sh"
 for required in \
   '--no-cache' \
@@ -309,6 +384,60 @@ do
   fi
 done
 
+[[ -f "$accessctl_dockerfile" && -f "$accessctl_sbom" \
+  && -x "$accessctl_sbom_binder" ]] || {
+  echo "paper-raid-accessctl image definition or SBOM is absent" >&2
+  exit 1
+}
+for fragment in \
+  'cargo build --locked --offline --release' \
+  '--bin paper-raid-accessctl' \
+  'ENTRYPOINT ["/paper-raid-accessctl"]' \
+  'PAPER_RAID_ACCESSCTL_RUNTIME_BINARY_SHA256' \
+  '"value": "bound-release-binary"' \
+  '/usr/share/doc/paper-raid-accessctl/sbom.cdx.json'; do
+  rg -q --fixed-strings -- "$fragment" "$accessctl_dockerfile" || {
+    echo "paper-raid-accessctl image contract drifted: $fragment" >&2
+    exit 1
+  }
+done
+for fragment in \
+  'accessctl SBOM output must be the exact tracked accessctl SBOM path' \
+  'accessctl SBOM binding requires a clean committed source tree' \
+  'independent pinned-builder accessctl binaries are not byte-deterministic' \
+  'accessctl runtime binary embeds revision/tree/self-hash material' \
+  '"bound-release-binary"' \
+  'cmp -s "$scratch_dir/first.cdx.json" "$scratch_dir/second.cdx.json"' \
+  'mv -f -- "$staged_output" "$resolved_output"'; do
+  rg -q --fixed-strings -- "$fragment" "$accessctl_sbom_binder" || {
+    echo "paper-raid-accessctl SBOM binding contract drifted: $fragment" >&2
+    exit 1
+  }
+done
+jq -e '
+  .bomFormat == "CycloneDX"
+  and .specVersion == "1.5"
+  and (.components | length) == 1
+  and .components[0]["bom-ref"] == "file:/paper-raid-accessctl"
+  and .components[0].name == "/paper-raid-accessctl"
+  and .components[0].type == "file"
+  and (.components[0].hashes | length) == 1
+  and .components[0].hashes[0].alg == "SHA-256"
+  and (.components[0].hashes[0].content as $digest
+    | ([.metadata.properties[]
+        | select(.name == "org.trillionnium.release-state")
+        | .value] as $states
+      | ($states | length) == 1
+      and (if $states[0] == "unbound-must-regenerate-from-release-binary"
+           then $digest == ("0" * 64)
+           elif $states[0] == "bound-release-binary"
+           then ($digest | test("^[0-9a-f]{64}$"))
+             and $digest != ("0" * 64)
+           else false
+           end)))
+' "$accessctl_sbom" >/dev/null
+
 node "$service_root/scripts/check-browser-crypto.mjs"
+bash "$service_root/scripts/check-observability-boundary.sh"
 
 echo "paper-raid-bff boundary scan: ok"

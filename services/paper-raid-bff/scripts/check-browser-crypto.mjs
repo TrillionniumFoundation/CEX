@@ -54,24 +54,54 @@ for (const command of [
 ]) assert.ok(source.includes(`"${command}"`));
 assert.ok(source.includes('input[name="roles"]:checked'));
 assert.ok(source.includes("selected_role_is_not_authorized_for_this_identity"));
+assert.ok(source.includes("const PARTY_CODE_V1_PATTERN = /^PR1-"));
+assert.ok(source.includes("input.value = `PR1-${uuid()}`"));
+assert.ok(source.includes("await sha256Label(new TextEncoder().encode(partyCode))"));
+assert.ok(source.includes("if (partyCodeInput) partyCodeInput.value = \"\""));
+assert.ok(source.includes("payload.party_code_hash = partyCodeHash"));
+assert.equal(source.includes("payload.party_code ="), false);
 assert.ok(source.includes("input-manifest-wizard-form"));
 assert.ok(source.includes("draft-manifest-wizard-form"));
+assert.ok(source.includes("run-artifact-wizard-form"));
+assert.ok(source.includes("figure-lineage-wizard-form"));
+assert.ok(source.includes("role-resource-action-form"));
+assert.ok(source.includes('"create_role_resource_action"'));
+assert.ok(source.includes("createAuthoritativeRunFromArtifacts"));
+assert.ok(source.includes("createAuthoritativeFigureLineage"));
+assert.ok(source.includes("authoritativeArtifactRegistration"));
 assert.ok(source.includes('"register_artifact"'));
+assert.ok(source.includes("async function preserveDisclosure("));
+assert.ok(source.includes("new Blob([plainText]"));
+assert.ok(source.includes("function invalidateStalePlayerForms("));
+assert.ok(source.includes('connection.dataset.state = "stale-authority"'));
+assert.ok(source.includes("newHeptaEvents > 0 || currentPhase !== synchronizedPhase"));
 const htmlSource = await readFile(new URL("../src/html.rs", import.meta.url), "utf8");
 const heptaSource = await readFile(new URL("../src/hepta.rs", import.meta.url), "utf8");
 const appSource = await readFile(new URL("../src/app.rs", import.meta.url), "utf8");
+const metricsSource = await readFile(new URL("../src/metrics.rs", import.meta.url), "utf8");
+assert.ok(htmlSource.includes('name="party_code" type="text"'));
+assert.ok(htmlSource.includes('class="generate-party-code"'));
+assert.ok(htmlSource.includes('.get("private_party")'));
+assert.equal(htmlSource.includes('.get("party_code_hash")'), false);
+assert.ok(heptaSource.includes("matchmaking_party_payload_is_safe"));
+assert.ok(appSource.includes("matchmaking_party_payload_is_safe(&command.payload)"));
+assert.equal(metricsSource.includes("party_code"), false);
 assert.ok(htmlSource.includes("at least 7 identities across the full flow"));
 assert.ok(htmlSource.includes("Provisional contribution telemetry / 暂定贡献遥测"));
+assert.ok(htmlSource.includes('data-after-action-report="v1"'));
+assert.ok(htmlSource.includes("Role mastery, challenge unlocks, immutable replay and automatic rematch are not authoritative yet"));
+assert.ok(htmlSource.includes('data-eligible="false">locked'));
+assert.equal(source.includes('replay_started'), false);
 assert.ok(htmlSource.includes("Template version / 模式版本"));
 assert.ok(htmlSource.includes("Risk / 主要风险"));
 assert.ok(htmlSource.includes("Modifiers / 规则修饰"));
 assert.ok(htmlSource.includes("RELEASE-BOUND MATERIALIZATION"));
 assert.ok(htmlSource.includes("section_materialization_root"));
 assert.ok(htmlSource.includes("PLAYER-SIGNED QUORUM"));
-assert.ok(htmlSource.includes("review-evaluation-draft-form"));
+assert.ok(htmlSource.includes("review-receipt-confirm-form"));
 assert.ok(htmlSource.includes("review-attestation-form"));
 assert.ok(htmlSource.includes("review-finalize-form"));
-assert.ok(htmlSource.includes("review-reproduction-form"));
+assert.ok(source.includes("confirmReviewReceipt"));
 assert.ok(htmlSource.includes("author-appeal-form"));
 assert.ok(htmlSource.includes("review-appeal-resolution-form"));
 assert.ok(htmlSource.includes("value=\"upheld\"{}"));
@@ -80,12 +110,15 @@ const reviewPageStart = htmlSource.indexOf("pub fn review_queue(");
 const loginPageStart = htmlSource.indexOf("pub fn login_page()", reviewPageStart);
 assert.ok(reviewPageStart >= 0 && loginPageStart > reviewPageStart);
 const reviewPageSource = htmlSource.slice(reviewPageStart, loginPageStart);
+const htmlProductionSource = htmlSource.slice(0, htmlSource.indexOf("#[cfg(test)]"));
 assert.equal(reviewPageSource.includes("/league/papers/"), false);
 assert.ok(reviewPageSource.includes("/league/review/"));
 assert.equal(htmlSource.includes("Use one of the three externally provisioned alpha login keys"), false);
-assert.ok(htmlSource.includes("paper-raid-agent-bridge/src/cli.mjs pair"));
-assert.ok(htmlSource.includes("--config paper-raid-agent-bridge.local.json"));
-assert.equal(htmlSource.slice(0, htmlSource.indexOf("#[cfg(test)]")).includes("--submit"), false);
+assert.equal(htmlProductionSource.includes("paper-raid-agent-bridge/src/cli.mjs pair"), false);
+assert.equal(htmlProductionSource.includes("prepare-delivery --input"), false);
+assert.equal(htmlProductionSource.includes("work --config"), false);
+assert.ok(htmlSource.includes("Open the installed Paper Raid Agent Bridge"));
+assert.equal(htmlProductionSource.includes("--submit"), false);
 assert.ok(htmlSource.includes("agent-pairing-grant-form"));
 assert.ok(htmlSource.includes("Shown once / 仅显示一次"));
 assert.ok(htmlSource.includes("hepta.paper_raid.agent_binding_proof.v3"));
@@ -97,18 +130,162 @@ const approvalHtmlStart = htmlSource.indexOf("fn release_approval_controls(", pr
 assert.ok(promoteHtmlStart >= 0 && approvalHtmlStart > promoteHtmlStart);
 const promoteHtmlSource = htmlSource.slice(promoteHtmlStart, approvalHtmlStart);
 assert.equal(promoteHtmlSource.includes('name="contribution_ledger_hash"'), false);
-assert.ok(promoteHtmlSource.includes("deterministically budgets the zero-milestone contribution ledger"));
+assert.ok(promoteHtmlSource.includes("derives accepted-artifact and approving-review milestones"));
+assert.ok(promoteHtmlSource.includes("Splitting records cannot mint extra milestone points"));
+assert.ok(promoteHtmlSource.includes("authoritative_contribution_refs(room, paper_id, &player_id)"));
+for (const semanticClosure of [
+  "fn canonical_uuid_array(",
+  "fn frozen_release_credit_roster(",
+  "fn validated_joint_submission(",
+  "fn validated_run_status",
+  "fn validated_paper_score(",
+  "fn validated_evaluation_quality(",
+  "fn effective_review_evaluation(",
+  "fn effective_reproduction_authority(",
+  "activation_by_evaluation",
+  "created_at < *activation_by_evaluation.get(&record_evaluation_id)?",
+  "paper_evaluation_signing_bytes",
+  'room.get("paper_revisions")',
+  "action_id != subject_id",
+  '"challenge_grace_deadline_elapsed"',
+  '.get("deadline_at")',
+  '.get("grace_expires_at")',
+  "deadline_at >= grace_expires_at",
+  "terminal_at < grace",
+  "verified_at >= terminal_at",
+  "struct ValidatedAar",
+  "fn aar_unavailable()",
+]) assert.ok(htmlSource.includes(semanticClosure));
+assert.equal(htmlSource.includes("grace_window_elapsed"), false);
+assert.equal(appSource.includes("grace_window_elapsed"), false);
+assert.equal(heptaSource.includes("grace_window_elapsed"), false);
+for (const sealedBoundary of [
+  "pub(crate) struct AuthenticatedPaperRoom",
+  "pub(crate) struct AuthenticatedPaperReviewState",
+  "Result<AuthenticatedPaperRoom, AppError>",
+  "Result<AuthenticatedPaperReviewState, AppError>",
+  "struct PaperRoomEnvelopeV3",
+  "struct PaperReviewStateEnvelopeV1",
+  "struct SealedReviewAssignmentV1",
+  "struct SealedPaperReproductionV1",
+  "fn sealed_review_assignments(",
+  "fn sealed_reproductions(",
+  "#[serde(deny_unknown_fields)]",
+]) assert.ok(heptaSource.includes(sealedBoundary));
+assert.match(heptaSource, /#\[cfg\(test\)\]\s+pub\(crate\) fn test_only_seal/g);
+assert.match(htmlSource, /#\[cfg\(test\)\]\s+fn after_action_report\(/);
+const rawAarHelperStart = htmlSource.indexOf("#[cfg(test)]\nfn after_action_report(");
+const productionAarStart = htmlSource.indexOf("fn authenticated_after_action_report(");
+assert.ok(productionAarStart >= 0 && rawAarHelperStart > productionAarStart);
+const productionAarSource = htmlSource.slice(productionAarStart, rawAarHelperStart);
+assert.ok(productionAarSource.includes("AuthenticatedPaperRoom"));
+assert.ok(productionAarSource.includes("AuthenticatedPaperReviewState"));
+assert.equal(productionAarSource.includes("test_only_seal"), false);
+assert.equal(productionAarSource.includes("VerifyingKey"), false);
+assert.ok(htmlSource.includes("fn assert_whole_aar_unavailable("));
+for (const negativeFixture of [
+  'remove("deadline_at")',
+  'remove("grace_expires_at")',
+  'serde_json::json!("invented")',
+  "appeal_before_evaluation",
+  "resolution_before_appeal",
+  "premature_verified_finality",
+  "child_before_parent_resolution",
+  "premature_reproduction_review",
+  "later_reproduction",
+  "duplicate_assignment",
+  "unlinked_reproduction",
+  "noncanonical_player",
+]) assert.ok(htmlSource.includes(negativeFixture));
+assert.equal(htmlSource.includes("artifacts.len() > 256"), false);
+assert.equal(htmlSource.includes("accepted_reviews.len() > 256"), false);
+assert.ok(promoteHtmlSource.includes('name="coi_disclosure_text"'));
+assert.equal(promoteHtmlSource.includes('name="coi_disclosure_hash"'), false);
+assert.ok(promoteHtmlSource.includes("No player enters a ledger UUID, reference, JSON, or digest"));
+assert.ok(source.includes("contribution_ledger_id: budget.contributionLedgerId"));
+const evidenceHtmlStart = htmlSource.indexOf('class="create-evidence-card-form"');
+const evidenceHtmlEnd = htmlSource.indexOf('class="create-citation-record-form"', evidenceHtmlStart);
+assert.ok(evidenceHtmlStart >= 0 && evidenceHtmlEnd > evidenceHtmlStart);
+const evidenceHtmlSource = htmlSource.slice(evidenceHtmlStart, evidenceHtmlEnd);
+assert.ok(evidenceHtmlSource.includes('name="source_file" type="file" required'));
+assert.ok(evidenceHtmlSource.includes('name="source_media_type"'));
+assert.equal(evidenceHtmlSource.includes('name="source_hash"'), false);
+const runWizardStart = htmlSource.indexOf('class="run-artifact-wizard-form primary-action"');
+const legacyRunStart = htmlSource.indexOf('class="create-run-record-form"', runWizardStart);
+const figureWizardStart = htmlSource.indexOf('class="figure-lineage-wizard-form"', legacyRunStart);
+assert.ok(runWizardStart >= 0 && legacyRunStart > runWizardStart && figureWizardStart > legacyRunStart);
+const runWizardSource = htmlSource.slice(runWizardStart, legacyRunStart);
+for (const field of ["stdout_file", "stderr_file", "output_file"]) {
+  assert.ok(runWizardSource.includes(`name="${field}" type="file" required`));
+}
+assert.ok(runWizardSource.includes('name="metrics_file" type="file" accept='));
+for (const forbiddenField of ["manifest_id", "manifest_hash", "run_record_id", "metrics_hash"]) {
+  assert.equal(runWizardSource.includes(`name="${forbiddenField}"`), false);
+}
+assert.equal(runWizardSource.includes("sha256"), false);
+const figureWizardSource = htmlSource.slice(figureWizardStart, htmlSource.indexOf("if matches!(phase", figureWizardStart));
+assert.ok(figureWizardSource.includes('name="figure_file" type="file"'));
+assert.ok(figureWizardSource.includes('name="lineage_file" type="file" accept='));
+assert.ok(figureWizardSource.includes('name="run_record_ids" multiple'));
+for (const forbiddenField of ["figure_manifest_id", "figure_lineage_id", "transform_hash"]) {
+  assert.equal(figureWizardSource.includes(`name="${forbiddenField}"`), false);
+}
+assert.equal(figureWizardSource.includes("sha256"), false);
+const roleResourceStart = htmlSource.indexOf("fn role_resource_panel(");
+const guidedRoomStart = htmlSource.indexOf("fn guided_paper_room(", roleResourceStart);
+assert.ok(roleResourceStart >= 0 && guidedRoomStart > roleResourceStart);
+const roleResourceSource = htmlSource.slice(roleResourceStart, guidedRoomStart);
+assert.ok(roleResourceSource.includes("NON-ECONOMIC GAMEPLAY / 非经济玩法"));
+assert.ok(htmlSource.includes('value.get("player_phase")'));
+assert.ok(htmlSource.includes('data-player-phase="{}"'));
+assert.ok(htmlSource.includes('"reproduction_readiness"'));
+assert.ok(htmlSource.includes("Finality unknown / 终局状态未知"));
+assert.ok(htmlSource.includes("Finality temporarily unavailable / 终局暂不可用"));
+assert.ok(htmlSource.includes("Finality verification error / 终局验证错误"));
+assert.ok(htmlSource.includes("finality-reason"));
+assert.ok(roleResourceSource.includes('class="role-resource-action-form"'));
+assert.ok(roleResourceSource.includes('data-resource-version="{}"'));
+assert.ok(roleResourceSource.includes('name="evidence_card_id" required'));
+for (const forbiddenField of ["action_id", "idempotency_key", "expected_resource_version", "payload"]) {
+  assert.equal(roleResourceSource.includes(`name="${forbiddenField}"`), false);
+}
+const sciencePanelStart = htmlSource.indexOf("fn science_action_panel_for_role(");
+const workPanelStart = htmlSource.indexOf("fn work_item_panel(", sciencePanelStart);
+assert.ok(sciencePanelStart >= 0 && workPanelStart > sciencePanelStart);
+const sciencePanelSource = htmlSource.slice(sciencePanelStart, workPanelStart);
+assert.ok(sciencePanelSource.includes('role_resource_action(resources, "create_run_record")'));
+assert.ok(sciencePanelSource.includes("if run_creation_allowed"));
+assert.ok(sciencePanelSource.includes("run-resource-blocked"));
+assert.ok(sciencePanelSource.includes("disabled before any CAS mutation"));
+assert.ok(heptaSource.includes("CommandName::CreateRoleResourceAction"));
+assert.ok(heptaSource.includes('"create_role_resource_action_v1"'));
+const revisionHtmlStart = htmlSource.indexOf('class="{}" data-paper-id="{}" data-paper-version="{}" data-parent-revision-id="{}"');
+const revisionHtmlEnd = htmlSource.indexOf('fn latest_field', revisionHtmlStart);
+assert.ok(revisionHtmlStart >= 0 && revisionHtmlEnd > revisionHtmlStart);
+const revisionHtmlSource = htmlSource.slice(revisionHtmlStart, revisionHtmlEnd);
+for (const field of [
+  "source_manifest_hash",
+  "artifact_manifest_hash",
+  "bibliography_hash",
+  "claim_evidence_graph_hash",
+]) assert.ok(revisionHtmlSource.includes(`name="${field}" type="hidden"`));
+assert.equal(revisionHtmlSource.includes('placeholder="sha256:…"'), false);
 assert.ok(htmlSource.includes("freeze-contribution-ledger-form"));
 assert.ok(htmlSource.includes('ledger.get("ledger_hash")'));
 assert.ok(source.includes("idempotency_key: budget.contributionLedgerId"));
 for (const className of [
   "acquire-section-lease-form",
-  "bridge-proposal-task-form",
+  "bridge-inbox-task",
   "human-proposal-decision-form",
   "create-section-revision-form",
   "section-review-form",
   "merge-section-form",
 ]) assert.ok(htmlSource.includes(className));
+assert.equal(htmlSource.includes("copy-bridge-proposal"), false);
+assert.ok(htmlSource.includes("never asks you to copy a terminal command, JSON, UUID, or digest"));
+assert.ok(htmlSource.includes("In confirmation mode it shows one local approval prompt; in auto mode"));
+assert.equal(source.includes("bridgeProposalCommand"), false);
+assert.equal(source.includes("clipboard_unavailable_copy_the_rendered_command_manually"), false);
 assert.ok(htmlSource.includes("data-artifact-manifest-hash"));
 assert.ok(htmlSource.includes("formation_renders_authoritative_deadline_and_matched_ticket_withdrawal"));
 assert.ok(htmlSource.includes("data-proposal-expires-at"));
@@ -120,7 +297,7 @@ assert.ok(source.includes("/api/papers/${encodeURIComponent(paperId)}/outcome"))
 assert.ok(htmlSource.includes("AUTHORITATIVE RULESET"));
 assert.ok(htmlSource.includes("Victory conditions / 胜利条件"));
 assert.ok(htmlSource.includes("challenge-outcome-form"));
-assert.ok(htmlSource.includes("expired-outcome-control"));
+assert.ok(htmlSource.includes("materializes automatically on the next authorized Room/state/event read"));
 for (const boundary of [
   "post(transition_paper_challenge_outcome)",
   "guided_outcome_reason_allowed",
@@ -133,6 +310,8 @@ const terminalControlsStart = htmlSource.indexOf("fn challenge_terminal_controls
 const requirementsStart = htmlSource.indexOf("fn challenge_requirements(", terminalControlsStart);
 assert.ok(terminalControlsStart >= 0 && requirementsStart > terminalControlsStart);
 const terminalControlsSource = htmlSource.slice(terminalControlsStart, requirementsStart);
+assert.equal(terminalControlsSource.includes("expired-outcome-control"), false);
+assert.equal(terminalControlsSource.includes('name="outcome" value="expired"'), false);
 for (const forbiddenField of ['name="paper_id"', 'name="expected_version"', 'name="payload"']) {
   assert.equal(terminalControlsSource.includes(forbiddenField), false);
 }
@@ -377,6 +556,80 @@ assert.equal(workItem.expected_paper_version, 4);
 assert.equal(workItem.assigned_player_id, "00000000-0000-4000-8000-000000000001");
 assert.match(workItem.work_item_id, /^[0-9a-f-]{36}$/i);
 const digest = `sha256:${"a".repeat(64)}`;
+const manifestReceipt = context.authoritativeArtifactRegistration({
+  manifest_id: "00000000-0000-4000-8000-000000000201",
+  paper_project_id: "00000000-0000-4000-8000-000000000202",
+  source_bundle_id: "browser-run-logs",
+  source_manifest_sha256: "b".repeat(64),
+  manifest_hash: `sha256:${"b".repeat(64)}`,
+  object_count: 1,
+  required_run_ids: ["run-1"],
+  version: 1,
+}, {
+  manifestId: "00000000-0000-4000-8000-000000000201",
+  paperId: "00000000-0000-4000-8000-000000000202",
+  sourceBundleId: "browser-run-logs",
+  expectedSourceManifestSha256: "b".repeat(64),
+  requiredRunIds: ["run-1"],
+  uploaded: [{
+    logicalPath: "runs/run-1/logs/stdout.txt",
+    role: "run_stdout",
+    stored: {
+      digest: `sha256:${"c".repeat(64)}`,
+      uri: `cas://sha256/${"c".repeat(64)}`,
+      size: 12,
+    },
+  }],
+});
+assert.equal(manifestReceipt.manifestId, "00000000-0000-4000-8000-000000000201");
+assert.equal(manifestReceipt.manifestHash, `sha256:${"b".repeat(64)}`);
+assert.equal(manifestReceipt.objects[0].role, "run_stdout");
+assert.throws(() => context.authoritativeArtifactRegistration({
+  manifest_id: "00000000-0000-4000-8000-000000000201",
+  paper_project_id: "00000000-0000-4000-8000-000000000202",
+  source_bundle_id: "browser-run-logs",
+  source_manifest_sha256: "b".repeat(64),
+  manifest_hash: `sha256:${"d".repeat(64)}`,
+  object_count: 1,
+  required_run_ids: ["run-1"],
+  version: 1,
+}, {
+  manifestId: "00000000-0000-4000-8000-000000000201",
+  paperId: "00000000-0000-4000-8000-000000000202",
+  sourceBundleId: "browser-run-logs",
+  expectedSourceManifestSha256: "b".repeat(64),
+  requiredRunIds: ["run-1"],
+  uploaded: [{
+    logicalPath: "runs/run-1/logs/stdout.txt",
+    role: "run_stdout",
+    stored: { digest: `sha256:${"c".repeat(64)}`, uri: `cas://sha256/${"c".repeat(64)}`, size: 12 },
+  }],
+}), /artifact_manifest_registration_receipt_is_not_authoritative_or_exact/);
+const figureLineage = JSON.parse(JSON.stringify(context.figureLineagePayload({
+  figureKey: "primary-effect",
+  figureManifestId: "00000000-0000-4000-8000-000000000211",
+  runRecordIds: [
+    "00000000-0000-4000-8000-000000000212",
+    "00000000-0000-4000-8000-000000000213",
+  ],
+  transformHash: digest,
+})));
+assert.equal(figureLineage.figure_key, "primary-effect");
+assert.equal(figureLineage.figure_manifest_id, "00000000-0000-4000-8000-000000000211");
+assert.deepEqual(figureLineage.run_record_ids, [
+  "00000000-0000-4000-8000-000000000212",
+  "00000000-0000-4000-8000-000000000213",
+]);
+assert.match(figureLineage.figure_lineage_id, /^[0-9a-f-]{36}$/i);
+assert.throws(() => context.figureLineagePayload({
+  figureKey: "primary-effect",
+  figureManifestId: "00000000-0000-4000-8000-000000000211",
+  runRecordIds: [
+    "00000000-0000-4000-8000-000000000212",
+    "00000000-0000-4000-8000-000000000212",
+  ],
+  transformHash: digest,
+}), /figure_lineage_requires_distinct_authoritative_runs/);
 assert.deepEqual(
   JSON.parse(JSON.stringify(context.workItemTransitionPayload(2, "accepted", digest))),
   { expected_version: 2, next_status: "accepted", artifact_manifest_hash: digest },
@@ -449,38 +702,29 @@ const mergePayload = JSON.parse(JSON.stringify(context.sectionMergePayload({
 })));
 assert.equal(mergePayload.merged_section_revision_id, sectionRevision.section_revision_id);
 assert.equal(mergePayload.expected_revision_version, 2);
-const bridgeCommand = context.bridgeProposalCommand({
-  paperId: "00000000-0000-4000-8000-000000000035",
-  sectionKey: "methods",
-  parentRevisionId: sectionRevision.parent_revision_id,
-  bindingId: "00000000-0000-4000-8000-000000000031",
-  agentId: "did:trnm:agent:fixture",
-}, {
-  workItemId: "00000000-0000-4000-8000-000000000036",
-  artifactManifestId: sectionRevision.patch_manifest_id,
-  artifactManifestHash: digest,
-  proposalKind: "delivery",
-  payloadHash: digest,
-});
-assert.ok(bridgeCommand.includes("submit-proposal"));
-assert.ok(bridgeCommand.includes("--section-key 'methods'"));
-assert.ok(bridgeCommand.includes(`--artifact-manifest-hash '${digest}'`));
-assert.equal(bridgeCommand.includes("signature"), false);
-
 const ledgerPaperId = "00000000-0000-4000-8000-000000000101";
 const ledgerRevisionId = "00000000-0000-4000-8000-000000000102";
 const ledgerAuthors = [
   {
     player_id: "00000000-0000-4000-8000-000000000105",
     credit_roles: ["validation", "methodology"],
+    accepted_artifact_manifest_ids: [
+      "00000000-0000-4000-8000-000000000202",
+      "00000000-0000-4000-8000-000000000201",
+    ],
+    accepted_section_review_ids: [],
   },
   {
     player_id: "00000000-0000-4000-8000-000000000103",
     credit_roles: ["conceptualization", "writing_review_editing"],
+    accepted_artifact_manifest_ids: [],
+    accepted_section_review_ids: ["00000000-0000-4000-8000-000000000301"],
   },
   {
     player_id: "00000000-0000-4000-8000-000000000104",
     credit_roles: ["data_curation"],
+    accepted_artifact_manifest_ids: [],
+    accepted_section_review_ids: [],
   },
 ];
 const promoteBudget = await context.contributionLedgerBudget(
@@ -489,7 +733,7 @@ const promoteBudget = await context.contributionLedgerBudget(
   ledgerAuthors,
 );
 assert.equal(promoteBudget.contributionLedgerId, "52411704-c8f0-53f3-b981-2c859f99cdcc");
-assert.equal(promoteBudget.ledgerHash, "sha256:92e282d43c2a93c89ad3e48f69177a97d3817171f4786903a4e9dcd1759f55c7");
+assert.equal(promoteBudget.ledgerHash, "sha256:153fd3c7913bafb523dce23a1ae4d749c6363effda6ccb6e5541ba67213edb42");
 assert.deepEqual(
   JSON.parse(JSON.stringify(promoteBudget.requestEntries.map(entry => entry.player_id))),
   [
@@ -498,18 +742,46 @@ assert.deepEqual(
     "00000000-0000-4000-8000-000000000105",
   ],
 );
-assert.ok(promoteBudget.frozenEntries.every(entry =>
-  entry.contribution_points === 0 &&
-  entry.accepted_artifact_manifest_ids.length === 0 &&
-  entry.accepted_section_review_ids.length === 0
-));
+await assert.rejects(
+  context.contributionLedgerBudget(
+    ledgerPaperId,
+    ledgerRevisionId,
+    ledgerAuthors.map((author, index) => index === 0 ? {
+      ...author,
+      accepted_artifact_manifest_ids: [
+        author.accepted_artifact_manifest_ids[0],
+        author.accepted_artifact_manifest_ids[0],
+      ],
+    } : author),
+  ),
+  /accepted_artifact_manifest_id_must_not_contain_duplicates/,
+);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(promoteBudget.frozenEntries.map(entry => ({
+    player_id: entry.player_id,
+    contribution_points: entry.contribution_points,
+  })) )),
+  [
+    { player_id: "00000000-0000-4000-8000-000000000103", contribution_points: 150 },
+    { player_id: "00000000-0000-4000-8000-000000000104", contribution_points: 0 },
+    { player_id: "00000000-0000-4000-8000-000000000105", contribution_points: 100 },
+  ],
+);
 // Reload repair reconstructs from frozen release_candidate authors, whose
 // order may differ, and must produce the same UUID/hash byte-for-byte.
 const frozenAuthorNodes = [ledgerAuthors[1], ledgerAuthors[2], ledgerAuthors[0]].map(author => ({
   dataset: { playerId: author.player_id },
   querySelectorAll(selector) {
-    assert.equal(selector, ".ledger-credit-role");
-    return author.credit_roles.map(role => ({ dataset: { role } }));
+    if (selector === ".ledger-credit-role") {
+      return author.credit_roles.map(role => ({ dataset: { role } }));
+    }
+    if (selector === ".contribution-artifact-ref") {
+      return author.accepted_artifact_manifest_ids.map(manifestId => ({ dataset: { manifestId } }));
+    }
+    if (selector === ".contribution-review-ref") {
+      return author.accepted_section_review_ids.map(reviewId => ({ dataset: { reviewId } }));
+    }
+    assert.fail(`unexpected selector ${selector}`);
   },
 }));
 const reconstructedAuthors = context.frozenLedgerAuthors({
@@ -528,7 +800,9 @@ assert.equal(repairBudget.ledgerHash, promoteBudget.ledgerHash);
 
 assert.equal(await context.semanticDigest("  reproducible protocol  ", "protocol"),
   await context.sha256Label(new TextEncoder().encode("reproducible protocol")));
-assert.equal(await context.semanticDigest(digest.toUpperCase(), "protocol"), digest);
+assert.equal(await context.semanticDigest(digest.toUpperCase(), "protocol"),
+  await context.sha256Label(new TextEncoder().encode(digest.toUpperCase())));
+assert.notEqual(await context.semanticDigest(digest, "protocol"), digest);
 const experimentPlan = JSON.parse(JSON.stringify(await context.experimentPlanPayload({
   protocol: "frozen protocol",
   codeManifestId: "00000000-0000-4000-8000-000000000011",
@@ -693,53 +967,118 @@ assert.equal(await webcrypto.subtle.verify(
 ), false);
 
 const input = value => ({ value });
-const unchecked = { checked: false };
-const evaluationDraft = JSON.parse(JSON.stringify(await context.evaluationDraftPayload({
-  elements: {
-    metric_key: input("primary_effect"),
-    reference_metric: input("1250000"),
-    tolerance_preset: input("relative"),
-    absolute_delta: input("50000"),
-    relative_delta: input("500"),
-    interval_overlap: input("8000"),
-    effect_delta: input("50000"),
-    p_value: input("50000"),
-    method_rigor_bps: input("2000"),
-    experiment_statistics_bps: input("1200"),
-    reproducibility_bps: input("1200"),
-    evidence_citations_bps: input("1200"),
-    value_originality_bps: input("1200"),
-    argument_expression_bps: input("800"),
-    ethics_transparency_bps: input("400"),
-    citations_and_data_authentic: unchecked,
-    failed_runs_disclosed: unchecked,
-    all_authors_consented: unchecked,
-    core_claims_have_evidence: unchecked,
-    artifact_lineage_complete: unchecked,
-    license_ethics_coi_complete: unchecked,
-    coi_statement: input("No conflict; independent evaluator fixture.")
-  }
-})));
-assert.deepEqual(evaluationDraft.reference_metrics_micros, { primary_effect: 1250000 });
-assert.deepEqual(evaluationDraft.tolerance_policy.rules, [{
-  kind: "relative",
-  metric: "primary_effect",
-  max_delta_bps: 500,
-}]);
-assert.equal(Object.values(evaluationDraft.hard_gates).every(value => value === false), true);
-assert.match(evaluationDraft.evaluator_coi_attestation_hash, /^sha256:[0-9a-f]{64}$/);
-
-const signedEvaluationFrame = await context.signServerFrame(
-  "create_paper_evaluation_draft",
-  {
-    signing_public_key: created.signer.publicKeyBase64,
-    signing_bytes: Buffer.from(exactServerBytes).toString("base64"),
-    payload: evaluationDraft,
+const reviewDigest = `sha256:${"a".repeat(64)}`;
+const reviewPublicKeyHash = `sha256:${createHash("sha256")
+  .update(Buffer.from(created.signer.publicKeyBase64, "base64"))
+  .digest("hex")}`;
+const reviewSigningKeyId = `human-ed25519:${reviewPublicKeyHash.slice("sha256:".length)}`;
+const scoreComponents = {
+  method_rigor_bps: 2000,
+  experiment_statistics_bps: 1200,
+  reproducibility_bps: 1200,
+  evidence_citations_bps: 1200,
+  value_originality_bps: 1200,
+  argument_expression_bps: 800,
+  ethics_transparency_bps: 400,
+};
+const observableHardGates = {
+  citations_and_data_authentic: false,
+  failed_runs_disclosed: false,
+  core_claims_have_evidence: false,
+  license_ethics_coi_complete: false,
+};
+const evaluationRequest = {
+  coi_attestation_hash: reviewDigest,
+  score_components: scoreComponents,
+  observable_hard_gates: observableHardGates,
+};
+const reviewContext = {
+  schema: "hepta.paper_raid.review_receipt_confirmation_context.v1",
+  receipt_id: "00000000-0000-4000-8000-000000000043",
+  receipt_hash: reviewDigest,
+  task_id: "00000000-0000-4000-8000-000000000044",
+  assignment_id: "00000000-0000-4000-8000-000000000045",
+  assignment_version: 1,
+  paper_project_id: "00000000-0000-4000-8000-000000000042",
+  submission_id: "00000000-0000-4000-8000-000000000046",
+  evaluation_id: "00000000-0000-4000-8000-000000000047",
+  kind: "evaluate",
+  bundle_hash: reviewDigest,
+  release_candidate_hash: reviewDigest,
+  paper_bundle_hash: reviewDigest,
+  artifact_manifest_hash: reviewDigest,
+  evaluator_version: reviewDigest,
+  agent_id: "agent-evaluator",
+  agent_key_id: "agent-key-evaluator",
+  input_root: reviewDigest,
+  output_root: reviewDigest,
+  metrics_hash: reviewDigest,
+  candidate_passed: true,
+  seed_set_hash: reviewDigest,
+  environment_hash: reviewDigest,
+  run_manifest_hash: reviewDigest,
+  logs_hash: reviewDigest,
+  completed_at_unix: 1786439700,
+};
+const evaluationFrame = {
+  schema: "hepta.paper_raid.review_receipt_confirmation_frame.v1",
+  receipt_context: reviewContext,
+  command: "create_paper_evaluation_draft",
+  resource_id: reviewContext.paper_project_id,
+  child_id: null,
+  payload: {
+    score_components: scoreComponents,
+    hard_gates: {
+      ...observableHardGates,
+      all_authors_consented: true,
+      artifact_lineage_complete: true,
+    },
+    evaluator_coi_attestation_hash: reviewDigest,
   },
+  signing_bytes: Buffer.from(exactServerBytes).toString("base64"),
+  signing_key_id: reviewSigningKeyId,
+  signing_public_key: created.signer.publicKeyBase64,
+  signing_public_key_hash: reviewPublicKeyHash,
+};
+evaluationFrame.receipt_context_signing_bytes = Buffer.from(context.canonicalJson({
+  schema: "hepta.paper_raid.review_receipt_confirmation_context_signing.v1",
+  receipt_context: evaluationFrame.receipt_context,
+  command: evaluationFrame.command,
+  resource_id: evaluationFrame.resource_id,
+  child_id: evaluationFrame.child_id,
+  upstream_signing_bytes: evaluationFrame.signing_bytes,
+  signing_key_id: evaluationFrame.signing_key_id,
+  signing_public_key_hash: evaluationFrame.signing_public_key_hash,
+})).toString("base64");
+context.validateReviewConfirmationFrame(
+  evaluationFrame,
+  evaluationFrame.command,
+  evaluationFrame.resource_id,
+  reviewContext.receipt_id,
+  evaluationRequest,
+);
+const signedReviewFrame = await context.signReviewConfirmationFrame(
+  evaluationFrame.command,
+  evaluationFrame,
   created.signer,
 );
-assert.equal("signature" in signedEvaluationFrame.payload, false);
-assert.equal(typeof signedEvaluationFrame.payload.evaluator_signature, "string");
+assert.equal(typeof signedReviewFrame.signedFrame.payload.evaluator_signature, "string");
+assert.equal(typeof signedReviewFrame.receiptContextSignature, "string");
+assert.equal(await webcrypto.subtle.verify(
+  "Ed25519",
+  exactFramePublicKey,
+  Uint8Array.from(atob(signedReviewFrame.receiptContextSignature), character => character.charCodeAt(0)),
+  Uint8Array.from(atob(evaluationFrame.receipt_context_signing_bytes), character => character.charCodeAt(0)),
+), true);
+const tamperedReviewFrame = JSON.parse(JSON.stringify(evaluationFrame));
+tamperedReviewFrame.receipt_context.output_root = `sha256:${"b".repeat(64)}`;
+assert.throws(() => context.validateReviewConfirmationFrame(
+  tamperedReviewFrame,
+  tamperedReviewFrame.command,
+  tamperedReviewFrame.resource_id,
+  reviewContext.receipt_id,
+  evaluationRequest,
+), /review_receipt_confirmation_context_mismatch/);
 
 const attestation = JSON.parse(JSON.stringify(await context.evaluationAttestationPayload(
   { elements: { coi_statement: input("No reviewer conflict.") } },
@@ -748,24 +1087,29 @@ const attestation = JSON.parse(JSON.stringify(await context.evaluationAttestatio
 assert.equal(attestation.verdict, "approve");
 assert.match(attestation.coi_attestation_hash, /^sha256:[0-9a-f]{64}$/);
 
-const reproduction = JSON.parse(JSON.stringify(await context.reproductionPayload({
-  elements: {
-    seed_statement: input("Seeds 7, 11, and 13 generated before execution."),
-    environment_statement: input("Container image and dependency lock are frozen."),
-    run_manifest_statement: input("Run logs and output artifacts retained."),
-    coi_statement: input("No reproducer conflict."),
-  },
-  querySelectorAll(selector) {
-    if (selector === ".observed-metric") {
-      return [{ dataset: { metric: "primary_effect" }, value: "1240000" }];
-    }
-    return [];
-  },
-})));
-assert.deepEqual(reproduction.observed_metrics_micros, { primary_effect: 1240000 });
-for (const field of ["seed_set_hash", "environment_hash", "run_manifest_hash", "coi_attestation_hash"]) {
-  assert.match(reproduction[field], /^sha256:[0-9a-f]{64}$/);
-}
+const reproductionFrame = JSON.parse(JSON.stringify(evaluationFrame));
+reproductionFrame.receipt_context.kind = "reproduce";
+reproductionFrame.receipt_context.candidate_passed = null;
+reproductionFrame.command = "submit_reproduction";
+reproductionFrame.child_id = reproductionFrame.receipt_context.evaluation_id;
+reproductionFrame.payload = { coi_attestation_hash: reviewDigest };
+reproductionFrame.receipt_context_signing_bytes = Buffer.from(context.canonicalJson({
+  schema: "hepta.paper_raid.review_receipt_confirmation_context_signing.v1",
+  receipt_context: reproductionFrame.receipt_context,
+  command: reproductionFrame.command,
+  resource_id: reproductionFrame.resource_id,
+  child_id: reproductionFrame.child_id,
+  upstream_signing_bytes: reproductionFrame.signing_bytes,
+  signing_key_id: reproductionFrame.signing_key_id,
+  signing_public_key_hash: reproductionFrame.signing_public_key_hash,
+})).toString("base64");
+context.validateReviewConfirmationFrame(
+  reproductionFrame,
+  reproductionFrame.command,
+  reproductionFrame.resource_id,
+  reviewContext.receipt_id,
+  { coi_attestation_hash: reviewDigest },
+);
 
 const restored = await context.decryptBundle(
   JSON.parse(JSON.stringify(created.bundle)),

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Hepta Paper Raid API
-  version: 4.4.0-alpha.1
+  version: 4.4.0-alpha.2
   description: >-
     Versioned Team + Paper collaboration control-plane API for 3-5 human players using
     independently operated external Agents to create one signed, reproducible
@@ -70,32 +70,58 @@ paths:
       description: >-
         Lists only the asserted player's tickets. Queued tickets have a
         server-derived 30-minute deadline and an honest queue hint: ETA is
-        zero only when a compatible team is ready and null otherwise.
+        zero only when the ticket belongs to the globally selected next team
+        and null otherwise. The read holds each challenge matcher lock and
+        drains all currently matchable queued triplets, including tickets
+        released from a legacy proposal by migration 0046.
       responses:
-        "200": {description: Player-scoped matchmaking tickets}
+        "200":
+          description: Player-scoped matchmaking tickets
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/MatchmakingTicket"}
     post:
       operationId: createMatchmakingTicket
       description: >-
         Enqueues the asserted player. The alpha matcher requires exactly three
         players while Team and protocol aggregates remain 3-5 capable. Queue
         admission, matching, rematching, and queue hints include only active
-        humans who currently own exactly one active external Agent binding.
+        humans who currently own exactly one active external Agent binding;
+        queued tickets and proposals stop occupying party capacity immediately
+        when that eligibility is lost.
       requestBody:
         required: true
         content:
           application/json:
             schema: {$ref: "#/components/schemas/CreateMatchmakingTicketRequest"}
       responses:
-        "201": {description: Ticket created and optional deterministic team proposal returned}
-        "409": {description: Player already has one live ticket, or is not active with exactly one active Agent binding}
+        "201":
+          description: Ticket created and optional deterministic team proposal returned
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MatchmakingTicketResponse"}
+        "409":
+          description: >-
+            Player already has one live ticket, is not active with exactly one
+            active Agent binding, the private party already has three live
+            tickets, or the joining member would make its exact availability
+            partition or distinct Captain/Evidence/Experiment roles infeasible.
   /v2/hepta/matchmaking/tickets/{ticket_id}:
     parameters:
       - {$ref: "#/components/parameters/TicketId"}
     get:
       operationId: getMatchmakingTicket
-      description: Returns a ticket only to its asserted player.
+      description: >-
+        Returns a ticket only to its asserted player and drains all currently
+        matchable queued triplets in that challenge under the matcher lock.
       responses:
-        "200": {description: Matchmaking ticket}
+        "200":
+          description: Matchmaking ticket
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MatchmakingTicket"}
         "404": {description: Ticket not found in player scope}
   /v2/hepta/matchmaking/tickets/{ticket_id}/cancel:
     parameters:
@@ -105,15 +131,21 @@ paths:
       description: >-
         Cancels the asserted player's queued ticket, or atomically withdraws
         that player from an unmaterialized proposed/accepted team and rematches
-        eligible peers, using optimistic versioning. Consumed, cancelled, and
-        expired tickets are immutable.
+        eligible peers inside their unchanged public/private partition, using
+        optimistic versioning. A private-party member can use this path before
+        rejoining with a shared availability window or compatible role set.
+        Consumed, cancelled, and expired tickets are immutable.
       requestBody:
         required: true
         content:
           application/json:
             schema: {$ref: "#/components/schemas/CancelMatchmakingTicketRequest"}
       responses:
-        "200": {description: Ticket cancelled; an unmaterialized proposal is atomically withdrawn when applicable}
+        "200":
+          description: Ticket cancelled; an unmaterialized proposal is atomically withdrawn when applicable
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/MatchmakingTicket"}
         "403": {description: Ticket belongs to another player}
         "404": {description: Ticket does not exist}
         "409": {$ref: "#/components/responses/VersionConflict"}
@@ -139,6 +171,10 @@ paths:
         Records one accept/decline for the asserted member. Unanimous acceptance
         is required; decline requeues all eligible tickets deterministically.
         The deciding human must remain active with exactly one active Agent binding.
+        Before writing any decision, Hepta revalidates the exact V2 solver,
+        ordered source preferences, role assignments and source epochs; an
+        invalid active proposal is atomically expired and its eligible tickets
+        are requeued/rematched instead of accepting the decision.
       requestBody:
         required: true
         content:
@@ -171,8 +207,15 @@ paths:
       description: >-
         Returns only the asserted player's authoritative Team/Paper progress,
         including the current active Raid used by browser Continue navigation.
+        An authorized read lazily materializes any elapsed immutable grace
+        deadline before projection. Failed, expired, and abandoned Papers remain
+        in raids history but can never be selected as current_raid.
       responses:
-        "200": {description: Player-scoped active and historical Raid summaries}
+        "200":
+          description: Player-scoped active and historical Raid summaries
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PlayerRaidState"}
   /v2/hepta/players:
     post:
       operationId: createHumanPlayer
@@ -371,7 +414,11 @@ paths:
       - {$ref: "#/components/parameters/PaperId"}
     get:
       operationId: getPaperProject
-      description: Requires a signed assertion from a current team member.
+      description: >-
+        Requires a signed assertion from a current team member. At or after an
+        authoritative grace boundary, this read lazily persists canonical
+        automatic expiry before returning the Paper. Zero-request periods do
+        not run a background timer.
       responses:
         "200":
           description: Paper project
@@ -385,9 +432,12 @@ paths:
       operationId: transitionPaperChallengeOutcome
       description: >-
         Captain may record failed or abandoned before the grace boundary. At
-        or after a snapshotted grace deadline, the only valid manual outcome is
-        expired. Terminal outcomes are immutable and block
-        further gameplay mutation without changing scientific-finality facts.
+        or after a snapshotted grace deadline, Hepta first persists canonical
+        automatic expiry; a manual expired reason cannot win the race.
+        terminal_at is the immutable grace boundary, while updated_at and the
+        terminal event timestamp record later lazy materialization. Terminal
+        outcomes are immutable and block further gameplay mutation without
+        changing scientific-finality facts.
       requestBody:
         required: true
         content:
@@ -522,6 +572,27 @@ paths:
             schema: {$ref: "#/components/schemas/CreateRunRecordRequest"}
       responses:
         "201": {description: Immutable run record}
+  /v2/hepta/papers/{paper_id}/role-resources/actions:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    post:
+      operationId: createRoleResourceAction
+      description: >-
+        Applies an idempotent, replayable, non-economic Evidence assessment or
+        Captain checkpoint. Checkpoints never gate scientific state and add no
+        new Captain liveness dependency. Experiment run spend and
+        retained-failure focus refund occur atomically with RunRecord creation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateRoleResourceActionRequestV1"}
+      responses:
+        "201":
+          description: Role resource action and updated deterministic ledger
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RoleResourceActionResponseV1"}
   /v2/hepta/papers/{paper_id}/figure-lineage:
     parameters:
       - {$ref: "#/components/parameters/PaperId"}
@@ -570,10 +641,18 @@ paths:
       security: []
       operationId: createAgentProposal
       description: >-
-        Accepts an external Agent's Ed25519-signed proposal. Authority comes
-        exclusively from the active Paper Raid AgentBinding and signed body,
-        not a Consumer assertion or legacy v1 Agent registry. Agent ID, key ID,
-        canonical public key, and public-key hash must all match.
+        Accepts only an external Agent's V2 Ed25519-signed proposal. The V2
+        frame binds the exact section lease UUID, fencing token, expected work
+        version, artifact-manifest UUID and authoritative manifest hash.
+        Hepta revalidates the current work, roster, section head and sole live
+        lease under one authority lock/transaction before persisting. Authority
+        comes exclusively from the active Paper Raid AgentBinding and signed
+        body, not a Consumer assertion or legacy v1 Agent registry. Agent ID,
+        key ID, canonical public key, and public-key hash must all match. The
+        normalized row stores the authoritative manifest hash separately and a
+        validated null-safe constraint keeps the complete signed identity equal
+        to record_json. Service startup fails closed if migration 0044 column,
+        constraint, foreign-key, or ordered-index catalog readiness drifts.
       requestBody:
         required: true
         content:
@@ -582,6 +661,7 @@ paths:
       responses:
         "201": {description: Signed Agent proposal recorded}
         "403": {description: Agent identity, scope, key, or signature failed}
+        "409": {description: Lease epoch, work version, section head, or active-work state is stale}
   /v2/hepta/papers/{paper_id}/human-decisions:
     parameters:
       - {$ref: "#/components/parameters/PaperId"}
@@ -645,8 +725,14 @@ paths:
       description: >-
         Returns a player-scoped repeatable-read projection of Team, Paper,
         artifacts, claims, runs, revisions, leases, proposals, reviews and merges.
+        This authorized read lazily persists elapsed challenge expiry first;
+        zero-request periods do not run a background timer.
       responses:
-        "200": {description: Consistent Paper Room read model}
+        "200":
+          description: Consistent Paper Room read model
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaperRoomReadModelV1"}
   /v2/hepta/papers/{paper_id}/events:
     parameters:
       - {$ref: "#/components/parameters/PaperId"}
@@ -656,9 +742,18 @@ paths:
         schema: {type: integer, minimum: 0, default: 0}
     get:
       operationId: listPaperRoomEvents
-      description: Cursor-based catch-up over persisted typed Paper Room events.
+      description: >-
+        Cursor-based catch-up over persisted typed Paper Room events. This
+        authorized read lazily persists elapsed challenge expiry before listing
+        events; concurrent reads produce one aggregate transition and event.
       responses:
-        "200": {description: Ordered events strictly after after_cursor}
+        "200":
+          description: Ordered events strictly after after_cursor
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/PaperRoomEventV1"}
   /v2/hepta/papers/{paper_id}/revisions/{revision_id}/promote:
     parameters:
       - {$ref: "#/components/parameters/PaperId"}
@@ -671,9 +766,21 @@ paths:
       description: >-
         Freezes author_order separately from participant_slot and binds the
         Compact, protocol/amendments, ethics, COI, AI, artifact manifests and
-        the revision's server-derived section-materialization root.
+        the revision's server-derived section-materialization root. Hepta locks
+        the same-Paper contribution facts, derives the complete accepted-artifact
+        and approving-review sets for every frozen author, and rejects a
+        contribution_ledger_hash that is not the exact canonical hash for the
+        supplied non-nil contribution_ledger_id and authoritative entries. The
+        ID is globally and atomically reserved for this Paper in the same
+        promotion mutation, so another Paper cannot preempt later ledger creation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PromoteReleaseCandidateRequest"}
       responses:
         "200": {description: Canonical release candidate promoted}
+        "409": {description: Revision, roster, or authoritative contribution ledger binding is stale or mismatched}
   /v2/hepta/papers/{paper_id}/author-consents:
     parameters:
       - {$ref: "#/components/parameters/PaperId"}
@@ -754,8 +861,10 @@ paths:
     get:
       operationId: getPaperReviewBundle
       description: >-
-        Returns the exact frozen submission-ready PaperBundle to an author or
-        claimed Review Raid actor without adding that actor to the Research Team.
+        Returns the exact frozen submission-ready PaperBundle only to a currently
+        assigned Review Raid actor without adding that actor to the Research Team.
+        Authors of the target Paper are explicitly forbidden even if their account
+        has review-capable scopes for other Papers.
         Existing JointPaperSubmission fields remain unchanged at the top level.
         Additive assignment-scoped fields expose the caller's active assignments,
         current draft quorum and finalized evaluation. Thus reviewer_1/reviewer_2
@@ -767,7 +876,7 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/PaperReviewBundleV1"}
-        "403": {description: Asserted player is neither an author nor assigned review actor}
+        "403": {description: Asserted player is an Author of the target Paper or lacks a current review assignment}
         "404": {description: Submission-ready review bundle does not exist}
   /v2/hepta/papers/{paper_id}/contribution-ledgers:
     parameters:
@@ -777,8 +886,12 @@ paths:
       description: >-
         During author_approval, freezes one canonical CRediT ledger whose
         author roles exactly equal the release candidate. Artifact and review
-        points are derived only from accepted same-paper signed records and
-        never enter PaperScore or determine author order.
+        references are the complete untruncated authoritative sets, including
+        sets larger than 256. One artifact manifest has at most one accepted
+        proposal and credited author globally. Points are milestone-capped at
+        0/100/150/250 regardless of record count, never enter PaperScore, and
+        never determine author order. The ID must be the Paper-owned reservation
+        created atomically by release-candidate promotion.
       requestBody:
         required: true
         content:
@@ -977,11 +1090,18 @@ paths:
         and signed review participants. A legal team member may read pending
         finality plus empty review collections before a release candidate exists.
         Evaluation settlement is derived as pending_finality, challenged, or resolved;
-        signed immutable records are never rewritten. Pending draft quorum is
-        intentionally exposed only through assignment-scoped review-bundle and
+        signed immutable records are never rewritten. Canonically ordered open
+        and expired evaluation-draft records are included so consumers can bind
+        pinned/released assignment lineage. Finalized drafts are omitted because
+        consumed assignments bind the immutable evaluation; detailed quorum
+        controls remain available through assignment-scoped review-bundle and
         evaluation-draft reads.
       responses:
-        "200": {description: Contribution, evaluation, reproduction, Appeal, resolution and RaidScore records}
+        "200":
+          description: Assignment, unresolved draft, contribution, evaluation, reproduction, Appeal, resolution, RaidScore, and exact Consumer-finality bindings
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaperReviewReadModelV2"}
         "403": {description: Asserted player is not a signed participant}
   /v2/hepta/research-session-authorizations:
     post:
@@ -1276,8 +1396,8 @@ paths:
           description: Orthogonal verified-finality projection; never an economic eligibility grant
           content:
             application/json:
-              schema: {$ref: "#/components/schemas/PaperChainFinalityProjectionV1"}
-        "404": {description: Paper remains pending_finality}
+              schema: {$ref: "#/components/schemas/PaperChainFinalityProjectionV2"}
+        "404": {description: No verified Paper finality projection is available; pending versus unavailable is not inferred}
     post:
       security:
         - trnmServiceToken: []
@@ -1312,7 +1432,7 @@ paths:
           description: pending_finality transitioned to verified_finality atomically
           content:
             application/json:
-              schema: {$ref: "#/components/schemas/PaperChainFinalityProjectionV1"}
+              schema: {$ref: "#/components/schemas/PaperChainFinalityProjectionV2"}
         "200": {description: Exact applied receipt replay; no duplicate event/outbox}
         "400": {description: Noncanonical, malformed, or structurally invalid receipt}
         "403": {description: TRNM authentication or trust verification failed}
@@ -1440,6 +1560,51 @@ components:
           type: array
           maxItems: 18
           items: {$ref: "#/components/schemas/ChallengeMinimumV1"}
+    ChallengeGameplayV1:
+      type: object
+      additionalProperties: false
+      required: [difficulty, objective, risk, modifiers, victory_summary]
+      properties:
+        difficulty: {type: string, enum: [introductory, intermediate, advanced]}
+        objective: {type: string, minLength: 1, maxLength: 512}
+        risk: {type: string, minLength: 1, maxLength: 512}
+        modifiers:
+          type: array
+          maxItems: 8
+          uniqueItems: true
+          description: Canonical lowercase kebab-case tokens in ascending lexical order.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 48
+            pattern: '^[a-z](?:[a-z0-9]|-[a-z0-9])*$'
+        victory_summary: {type: string, minLength: 1, maxLength: 512}
+        role_resources:
+          description: Optional non-economic role pacing budget; omission preserves prior canonical bytes.
+          allOf:
+            - {$ref: "#/components/schemas/ChallengeRoleResourcesV1"}
+    ChallengeRoleResourcesV1:
+      type: object
+      additionalProperties: false
+      required: [captain_focus, evidence_focus, experiment_focus, run_budget, retained_failure_focus_refund]
+      properties:
+        captain_focus: {type: integer, minimum: 1, maximum: 32}
+        evidence_focus: {type: integer, minimum: 1, maximum: 32}
+        experiment_focus:
+          type: integer
+          minimum: 1
+          maximum: 32
+          description: Must cover the maximum hard successful-run minimum across phase and victory gates.
+        run_budget:
+          type: integer
+          minimum: 1
+          maximum: 32
+          description: Must cover max(retained runs, successful runs plus retained-failed runs) across all hard gates.
+        retained_failure_focus_refund:
+          type: integer
+          minimum: 1
+          maximum: 4
+          description: Non-economic focus refund for retained failed runs only; cancelled runs receive none.
     ChallengeRulesetV1:
       type: object
       additionalProperties: false
@@ -1460,6 +1625,10 @@ components:
           minItems: 3
           maxItems: 18
           items: {$ref: "#/components/schemas/ChallengeMinimumV1"}
+        gameplay:
+          description: Optional authoritative player-facing metadata. Omission preserves legacy V1 canonical bytes and hash.
+          allOf:
+            - {$ref: "#/components/schemas/ChallengeGameplayV1"}
     CreateResearchChallengeRequest:
       type: object
       additionalProperties: false
@@ -1550,11 +1719,240 @@ components:
         outcome: {type: string, enum: [in_progress, submission_ready, failed, expired, abandoned]}
         outcome_reason: {type: [string, "null"], maxLength: 512}
         terminal_at: {type: [string, "null"], format: date-time}
+        role_resources:
+          anyOf:
+            - {$ref: "#/components/schemas/RoleResourceStateV1"}
+            - {type: "null"}
         current_revision_id: {type: [string, "null"], format: uuid}
         release_candidate_revision_id: {type: [string, "null"], format: uuid}
         version: {type: integer, minimum: 1}
         created_at: {type: string, format: date-time}
         updated_at: {type: string, format: date-time}
+    PaperRaidProgress:
+      type: object
+      additionalProperties: false
+      required: [paper_project_id, title, phase, player_phase, outcome, outcome_reason, terminal_at, version, current_revision_id, release_candidate_revision_id, updated_at]
+      properties:
+        paper_project_id: {type: string, format: uuid}
+        title: {type: string}
+        phase: {type: string, enum: [forming, preregistering, researching, experimenting, drafting, integrity_review, reproducing, author_approval, integrity_hold, submission_ready]}
+        player_phase: {type: string, enum: [forming, preregistering, researching, experimenting, drafting, integrity_review, reproduction_readiness, author_approval, integrity_hold, submission_ready]}
+        outcome: {type: string, enum: [in_progress, submission_ready, failed, expired, abandoned]}
+        outcome_reason: {type: [string, "null"], maxLength: 512}
+        terminal_at: {type: [string, "null"], format: date-time}
+        role_resources:
+          anyOf:
+            - {$ref: "#/components/schemas/RoleResourceStateV1"}
+            - {type: "null"}
+        version: {type: integer, minimum: 1}
+        current_revision_id: {type: [string, "null"], format: uuid}
+        release_candidate_revision_id: {type: [string, "null"], format: uuid}
+        updated_at: {type: string, format: date-time}
+    RoleResourceActionKindV1:
+      type: string
+      enum: [evidence_assessment, experiment_run, captain_checkpoint]
+    CanonicalAuthorRoleV1:
+      type: string
+      enum: [captain, evidence, experiment]
+    RoleResourceActionRecordV1:
+      type: object
+      additionalProperties: false
+      required: [action_id, kind, actor_player_id, actor_role, subject_id, focus_spent, focus_refunded, run_budget_spent, occurred_at]
+      properties:
+        action_id: {type: string, format: uuid}
+        kind: {$ref: "#/components/schemas/RoleResourceActionKindV1"}
+        actor_player_id: {type: string, format: uuid}
+        actor_role: {$ref: "#/components/schemas/CanonicalAuthorRoleV1"}
+        subject_id: {type: string, format: uuid}
+        focus_spent: {type: integer, minimum: 0, maximum: 1}
+        focus_refunded: {type: integer, minimum: 0, maximum: 4}
+        run_budget_spent: {type: integer, minimum: 0, maximum: 1}
+        occurred_at: {type: string, format: date-time}
+    RoleResourceStateV1:
+      type: object
+      additionalProperties: false
+      required: [schema, allocation, captain_focus_remaining, evidence_focus_remaining, experiment_focus_remaining, run_budget_remaining, actions, version, ranking_eligible, reward_eligible, economic_eligibility, created_at, updated_at]
+      properties:
+        schema: {type: string, const: hepta.paper_raid.role_resources.v1}
+        allocation: {$ref: "#/components/schemas/ChallengeRoleResourcesV1"}
+        captain_focus_remaining: {type: integer, minimum: 0, maximum: 32}
+        evidence_focus_remaining: {type: integer, minimum: 0, maximum: 32}
+        experiment_focus_remaining: {type: integer, minimum: 0, maximum: 32}
+        run_budget_remaining: {type: integer, minimum: 0, maximum: 32}
+        actions:
+          type: array
+          maxItems: 96
+          items: {$ref: "#/components/schemas/RoleResourceActionRecordV1"}
+        version: {type: integer, minimum: 1, maximum: 97}
+        ranking_eligible: {type: boolean, const: false}
+        reward_eligible: {type: boolean, const: false}
+        economic_eligibility: {type: boolean, const: false}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    RoleResourceActionAvailabilityV1:
+      type: object
+      additionalProperties: false
+      required: [action, available, blockers]
+      properties:
+        action: {type: string, enum: [assess_evidence, create_run_record, coordinate_checkpoint]}
+        available: {type: boolean}
+        blockers:
+          type: array
+          items: {type: string}
+    RoleResourceProjectionV1:
+      type: object
+      additionalProperties: false
+      required: [schema, actor_role, state_version, actor_focus_remaining, run_budget_remaining, evidence_assessment_count, experiment_run_count, captain_checkpoint_count, retained_failure_count, actions, ranking_eligible, reward_eligible, economic_eligibility]
+      properties:
+        schema: {type: string, const: hepta.paper_raid.role_resource_projection.v1}
+        actor_role: {type: string}
+        state_version: {type: integer, minimum: 1, maximum: 9007199254740991}
+        actor_focus_remaining: {type: integer, minimum: 0, maximum: 32}
+        run_budget_remaining: {type: integer, minimum: 0, maximum: 32}
+        evidence_assessment_count: {type: integer, minimum: 0}
+        experiment_run_count: {type: integer, minimum: 0}
+        captain_checkpoint_count: {type: integer, minimum: 0}
+        retained_failure_count: {type: integer, minimum: 0}
+        actions:
+          type: array
+          minItems: 3
+          maxItems: 3
+          items: {$ref: "#/components/schemas/RoleResourceActionAvailabilityV1"}
+        ranking_eligible: {type: boolean, const: false}
+        reward_eligible: {type: boolean, const: false}
+        economic_eligibility: {type: boolean, const: false}
+    AuthorRaidProgressV1:
+      type: object
+      additionalProperties: false
+      required: [schema, phase, next_phase, player_phase, next_player_phase, objective, actor_role, role_enforcement, personal_objective, primary_actions, shared_actions, collaboration_overrides, role_blockers, actor_can_transition, blockers, next_actions, transition_ready]
+      properties:
+        schema: {type: string, const: hepta.paper_raid.author_progress.v1}
+        phase: {type: string, enum: [forming, preregistering, researching, experimenting, drafting, integrity_review, reproducing, author_approval, integrity_hold, submission_ready]}
+        next_phase: {type: [string, "null"], enum: [forming, preregistering, researching, experimenting, drafting, integrity_review, reproducing, author_approval, integrity_hold, submission_ready, null]}
+        player_phase: {type: string, enum: [forming, preregistering, researching, experimenting, drafting, integrity_review, reproduction_readiness, author_approval, integrity_hold, submission_ready]}
+        next_player_phase: {type: [string, "null"], enum: [forming, preregistering, researching, experimenting, drafting, integrity_review, reproduction_readiness, author_approval, integrity_hold, submission_ready, null]}
+        objective: {type: string}
+        actor_role: {type: string}
+        role_enforcement: {type: string, enum: [enforced, legacy_advisory]}
+        personal_objective: {type: string}
+        primary_actions: {type: array, items: {type: string}}
+        shared_actions: {type: array, items: {type: string}}
+        collaboration_overrides: {type: array, items: {type: string}}
+        role_blockers: {type: array, items: {type: string}}
+        role_resources:
+          anyOf:
+            - {$ref: "#/components/schemas/RoleResourceProjectionV1"}
+            - {type: "null"}
+        actor_can_transition: {type: boolean}
+        blockers: {type: array, items: {type: string}}
+        next_actions: {type: array, items: {type: string}}
+        transition_ready: {type: boolean}
+    PaperRoomReadModelV1:
+      type: object
+      additionalProperties: false
+      required: [paper, team, author_raid_progress, team_member_acceptances, work_items, paper_revisions, authorship_consents, joint_submission, member_research_sessions, artifact_manifests, revision_artifact_bindings, evidence_cards, citations, experiment_plans, runs, figures, claims, section_heads, leases, proposals, decisions, section_revisions, section_reviews, section_merges, last_event_cursor]
+      properties:
+        paper: {$ref: "#/components/schemas/PaperProject"}
+        team: {type: object, description: Authoritative ResearchTeam record.}
+        author_raid_progress: {$ref: "#/components/schemas/AuthorRaidProgressV1"}
+        team_member_acceptances: {type: array, items: {type: object}}
+        work_items: {type: array, items: {type: object}}
+        paper_revisions: {type: array, items: {type: object}}
+        authorship_consents: {type: array, items: {type: object}}
+        joint_submission: {type: [object, "null"]}
+        member_research_sessions: {type: array, items: {type: object}}
+        artifact_manifests: {type: array, items: {type: object}}
+        revision_artifact_bindings: {type: array, items: {type: object}}
+        evidence_cards: {type: array, items: {type: object}}
+        citations: {type: array, items: {type: object}}
+        experiment_plans: {type: array, items: {type: object}}
+        runs: {type: array, items: {type: object}}
+        figures: {type: array, items: {type: object}}
+        claims: {type: array, items: {type: object}}
+        section_heads: {type: array, items: {type: object}}
+        leases: {type: array, items: {type: object}}
+        proposals: {type: array, items: {type: object}}
+        decisions: {type: array, items: {type: object}}
+        section_revisions: {type: array, items: {type: object}}
+        section_reviews: {type: array, items: {type: object}}
+        section_merges: {type: array, items: {type: object}}
+        last_event_cursor: {type: integer, minimum: 0, maximum: 9007199254740991}
+    PaperRoomEventV1:
+      type: object
+      additionalProperties: false
+      required: [cursor, event_id, paper_project_id, event_type, aggregate_id, aggregate_version, payload, occurred_at]
+      properties:
+        cursor: {type: integer, minimum: 1, maximum: 9007199254740991}
+        event_id: {type: string, format: uuid}
+        paper_project_id: {type: string, format: uuid}
+        event_type: {type: string}
+        aggregate_id: {type: string, format: uuid}
+        aggregate_version: {type: integer, minimum: 1, maximum: 9007199254740991}
+        payload: {}
+        occurred_at: {type: string, format: date-time}
+    RoleResourceActionInputV1:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [kind, evidence_card_id]
+          properties:
+            kind: {type: string, const: evidence_assessment}
+            evidence_card_id: {type: string, format: uuid}
+        - type: object
+          additionalProperties: false
+          required: [kind]
+          properties:
+            kind: {type: string, const: captain_checkpoint}
+    CreateRoleResourceActionRequestV1:
+      type: object
+      additionalProperties: false
+      required: [action_id, expected_resource_version, action, idempotency_key]
+      properties:
+        action_id: {type: string, format: uuid}
+        expected_resource_version: {type: integer, minimum: 1, maximum: 9007199254740991}
+        action: {$ref: "#/components/schemas/RoleResourceActionInputV1"}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    RoleResourceActionResponseV1:
+      type: object
+      additionalProperties: false
+      required: [action, state]
+      properties:
+        action: {$ref: "#/components/schemas/RoleResourceActionRecordV1"}
+        state: {$ref: "#/components/schemas/RoleResourceStateV1"}
+    PlayerRaidSummary:
+      type: object
+      additionalProperties: false
+      required: [team_id, challenge_id, team_status, team_version, roster_version, member_count, acceptance_count, participant_slot, role, player_ready, paper, updated_at]
+      properties:
+        team_id: {type: string, format: uuid}
+        challenge_id: {type: string, format: uuid}
+        team_status: {type: string, enum: [forming, locked, archived]}
+        team_version: {type: integer, minimum: 1}
+        roster_version: {type: integer, minimum: 1}
+        member_count: {type: integer, minimum: 0}
+        acceptance_count: {type: integer, minimum: 0}
+        participant_slot: {type: integer, minimum: 1}
+        role: {type: string}
+        player_ready: {type: boolean}
+        paper:
+          anyOf:
+            - {$ref: "#/components/schemas/PaperRaidProgress"}
+            - {type: "null"}
+        updated_at: {type: string, format: date-time}
+    PlayerRaidState:
+      type: object
+      additionalProperties: false
+      required: [schema, player_id, current_raid, raids]
+      properties:
+        schema: {type: string, const: hepta.paper_raid.player_raid_state.v1}
+        player_id: {type: string, format: uuid}
+        current_raid:
+          anyOf:
+            - {$ref: "#/components/schemas/PlayerRaidSummary"}
+            - {type: "null"}
+        raids:
+          type: array
+          items: {$ref: "#/components/schemas/PlayerRaidSummary"}
     TransitionPaperOutcomeRequestV1:
       type: object
       additionalProperties: false
@@ -1567,6 +1965,10 @@ components:
     Sha256Digest:
       type: string
       pattern: '^sha256:[0-9a-f]{64}$'
+    NonNilUuid:
+      type: string
+      format: uuid
+      not: {const: "00000000-0000-0000-0000-000000000000"}
     RawSha256Hex:
       type: string
       pattern: '^[0-9a-f]{64}$'
@@ -1783,15 +2185,19 @@ components:
         binding_fingerprint: {$ref: "#/components/schemas/Sha256Digest"}
         status: {type: string, const: awaiting_chain_verifier_upgrade}
         created_at: {type: string, format: date-time}
-    PaperChainFinalityProjectionV1:
+    PaperChainFinalityProjectionV2:
       type: object
       additionalProperties: false
-      required: [schema, paper_project_id, submission_id, evaluation_id, local_command_id, command_idempotency_key, command_fingerprint, paper_binding_fingerprint, receipt_hash, trust_anchor_hash, chain_id, comet_tx_hash, transaction_index, execution_height, commitment_height, commitment_header_hash, app_hash, status, ranking_eligible, reward_eligible, score_eligible, economic_eligible, version, verified_at]
+      required: [schema, paper_project_id, submission_id, evaluation_id, reproduction_id, appeal_resolution_id, local_command_id, command_idempotency_key, command_fingerprint, paper_binding_fingerprint, receipt_hash, trust_anchor_hash, chain_id, comet_tx_hash, transaction_index, execution_height, commitment_height, commitment_header_hash, app_hash, status, ranking_eligible, reward_eligible, score_eligible, economic_eligible, version, verified_at]
       properties:
-        schema: {type: string, const: hepta.paper_raid.chain_finality_projection.v1}
+        schema: {type: string, const: hepta.paper_raid.chain_finality_projection.v2}
         paper_project_id: {type: string, format: uuid}
         submission_id: {type: string, format: uuid}
         evaluation_id: {type: string, format: uuid}
+        reproduction_id: {type: string, format: uuid}
+        appeal_resolution_id:
+          anyOf: [{type: string, format: uuid}, {type: "null"}]
+          description: Exact terminal denial or latest upheld activation resolution; null only when the root evaluation had no Appeal.
         local_command_id: {type: string, format: uuid}
         command_idempotency_key: {type: string, pattern: "^[0-9a-f]{64}$"}
         command_fingerprint: {$ref: "#/components/schemas/Sha256Digest"}
@@ -1810,7 +2216,7 @@ components:
         reward_eligible: {type: boolean, const: false}
         score_eligible: {type: boolean, const: false}
         economic_eligible: {type: boolean, const: false}
-        version: {type: integer, const: 1}
+        version: {type: integer, const: 2}
         verified_at: {type: string, format: date-time}
     CreateNakamaResearchSessionControlRequestV2:
       type: object
@@ -1891,7 +2297,126 @@ components:
           uniqueItems: true
           items: {type: string, enum: [captain, evidence, experiment]}
         availability_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        party_code_hash:
+          anyOf:
+            - {$ref: "#/components/schemas/Sha256Digest"}
+            - {type: "null"}
+          description: >-
+            Optional digest of a one-time, high-entropy PR1 party code. The raw
+            code is browser-local and is never accepted or retained by Hepta.
+            Null/absent tickets match only the public pool; a digest matches
+            only tickets carrying the exact same digest. Every admitted member
+            must keep one availability window and a partial role set that can
+            still cover distinct Captain, Evidence, and Experiment slots.
         idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    MatchmakingTicket:
+      type: object
+      additionalProperties: false
+      required: [ticket_id, player_id, challenge_id, requested_team_size, roles, availability_hash, private_party, status, matched_proposal_id, expires_at, version, created_at, updated_at]
+      properties:
+        ticket_id: {type: string, format: uuid}
+        player_id: {type: string, format: uuid}
+        challenge_id: {type: string, format: uuid}
+        requested_team_size: {type: integer, const: 3}
+        roles:
+          type: array
+          minItems: 1
+          maxItems: 3
+          uniqueItems: true
+          items: {type: string, enum: [captain, evidence, experiment]}
+        availability_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        private_party:
+          type: boolean
+          description: True when exact private-party affinity is active; the digest is never returned by ticket APIs.
+        status: {type: string, enum: [queued, matched, consumed, cancelled, expired]}
+        matched_proposal_id:
+          anyOf: [{type: string, format: uuid}, {type: "null"}]
+        expires_at:
+          anyOf: [{type: string, format: date-time}, {type: "null"}]
+        queue_hint: {$ref: "#/components/schemas/MatchmakingQueueHintV1"}
+        version: {type: integer, minimum: 1, maximum: 9007199254740991}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    TeamProposal:
+      type: object
+      additionalProperties: false
+      required: [proposal_id, challenge_id, requested_team_size, deterministic_match_key, member_player_ids, source_ticket_ids, status, expires_at, version, created_at, updated_at]
+      properties:
+        proposal_id: {type: string, format: uuid}
+        challenge_id: {type: string, format: uuid}
+        requested_team_size: {type: integer, const: 3}
+        deterministic_match_key:
+          allOf:
+            - {$ref: "#/components/schemas/Sha256Digest"}
+          description: >-
+            Binds the challenge, exact availability/public-or-private party
+            partition, and each ordered source ticket's ID, pre-match version,
+            player ID, exact ordered role preferences, and assigned role.
+        member_player_ids:
+          type: array
+          minItems: 3
+          maxItems: 3
+          uniqueItems: true
+          items: {type: string, format: uuid}
+        source_ticket_ids:
+          type: array
+          minItems: 3
+          maxItems: 3
+          uniqueItems: true
+          items: {type: string, format: uuid}
+        solver_version:
+          type: string
+          enum: [hepta.paper_raid.alpha_matcher.v2]
+          description: Present on every V2 active proposal; absent only on terminal legacy history.
+        source_preferences:
+          type: array
+          minItems: 3
+          maxItems: 3
+          description: Exact ordered preferences frozen into the V2 proposal identity.
+          items:
+            type: object
+            additionalProperties: false
+            required: [ticket_id, player_id, roles, availability_hash, private_party]
+            properties:
+              ticket_id: {type: string, format: uuid}
+              player_id: {type: string, format: uuid}
+              roles:
+                type: array
+                minItems: 1
+                maxItems: 3
+                uniqueItems: true
+                items: {type: string, enum: [captain, evidence, experiment]}
+              availability_hash: {$ref: "#/components/schemas/Sha256Digest"}
+              private_party:
+                type: boolean
+                description: Reveals only private/public affinity; the party digest never leaves Hepta.
+        role_assignments:
+          type: array
+          minItems: 3
+          maxItems: 3
+          description: Exact player-to-role assignment frozen into the V2 proposal identity.
+          items:
+            type: object
+            additionalProperties: false
+            required: [ticket_id, player_id, assigned_role]
+            properties:
+              ticket_id: {type: string, format: uuid}
+              player_id: {type: string, format: uuid}
+              assigned_role: {type: string, enum: [captain, evidence, experiment]}
+        status: {type: string, enum: [proposed, accepted, materialized, declined, expired]}
+        expires_at:
+          anyOf: [{type: string, format: date-time}, {type: "null"}]
+        version: {type: integer, minimum: 1, maximum: 9007199254740991}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    MatchmakingTicketResponse:
+      type: object
+      additionalProperties: false
+      required: [ticket, team_proposal]
+      properties:
+        ticket: {$ref: "#/components/schemas/MatchmakingTicket"}
+        team_proposal:
+          anyOf: [{$ref: "#/components/schemas/TeamProposal"}, {type: "null"}]
     CancelMatchmakingTicketRequest:
       type: object
       additionalProperties: false
@@ -1919,7 +2444,7 @@ components:
         eta_seconds:
           description: Zero only when ready/matched; null rather than a fabricated time estimate.
           anyOf: [{type: integer, const: 0}, {type: "null"}]
-        message: {type: string, enum: [compatible_team_ready, waiting_for_required_roles, waiting_for_role_distribution, waiting_for_compatible_players, team_proposal_created, team_materialized, ticket_cancelled, ticket_expired]}
+        message: {type: string, enum: [compatible_team_ready, waiting_for_party_members, waiting_for_required_roles, waiting_for_role_distribution, waiting_for_compatible_players, team_proposal_created, team_materialized, ticket_cancelled, ticket_expired]}
     CreateTeamProposalDecisionRequest:
       type: object
       additionalProperties: false
@@ -2135,12 +2660,15 @@ components:
     CreateAgentProposalRequest:
       type: object
       additionalProperties: false
-      required: [proposal_id, work_item_id, section_key, parent_revision_id, proposal_kind, payload_hash, artifact_manifest_id, agent_id, binding_id, agent_key_id, signed_at_unix, signature, idempotency_key]
+      required: [proposal_id, work_item_id, section_key, parent_revision_id, lease_id, lease_fencing_token, expected_work_version, proposal_kind, payload_hash, artifact_manifest_id, agent_id, binding_id, agent_key_id, signed_at_unix, signature, idempotency_key]
       properties:
         proposal_id: {type: string, format: uuid}
         work_item_id: {type: string, format: uuid}
         section_key: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
         parent_revision_id: {type: string, format: uuid}
+        lease_id: {type: string, format: uuid}
+        lease_fencing_token: {type: integer, minimum: 1, maximum: 9007199254740991}
+        expected_work_version: {type: integer, minimum: 1, maximum: 9007199254740991}
         proposal_kind: {type: string, enum: [proposal, delivery]}
         payload_hash: {$ref: "#/components/schemas/Sha256Digest"}
         artifact_manifest_id: {type: string, format: uuid}
@@ -2753,6 +3281,48 @@ components:
     ReviewAssignmentSlot:
       type: string
       enum: [evaluator, reviewer_1, reviewer_2, reproducer]
+    ConsumerPaperFinalityV2:
+      type: object
+      additionalProperties: false
+      required: [schema, status, effective_evaluation_id, effective_reproduction_id, effective_appeal_resolution_id, ranking_eligible, reward_eligible, score_eligible, economic_eligible, verified_at]
+      properties:
+        schema: {type: string, const: hepta.paper_raid.consumer_finality.v2}
+        status: {type: string, enum: [pending_finality, verified_finality]}
+        effective_evaluation_id:
+          anyOf: [{type: string, format: uuid}, {type: "null"}]
+        effective_reproduction_id:
+          anyOf: [{type: string, format: uuid}, {type: "null"}]
+        effective_appeal_resolution_id:
+          anyOf: [{type: string, format: uuid}, {type: "null"}]
+        ranking_eligible: {type: boolean, const: false}
+        reward_eligible: {type: boolean, const: false}
+        score_eligible: {type: boolean, const: false}
+        economic_eligible: {type: boolean, const: false}
+        verified_at:
+          anyOf: [{type: string, format: date-time}, {type: "null"}]
+      description: >-
+        Pending projections carry null binding IDs and verified_at. Verified
+        projections carry exact effective evaluation and reproduction IDs plus
+        the terminal denial/latest upheld activation resolution ID when an
+        Appeal exists. V1 payloads are unsupported and fail closed.
+    PaperReviewReadModelV2:
+      type: object
+      additionalProperties: false
+      required: [finality, assignments, evaluation_drafts, contribution_ledgers, evaluations, reproductions, appeals, resolutions, raid_scores]
+      properties:
+        finality: {$ref: "#/components/schemas/ConsumerPaperFinalityV2"}
+        assignments:
+          type: array
+          items: {$ref: "#/components/schemas/ReviewAssignment"}
+        evaluation_drafts:
+          type: array
+          items: {$ref: "#/components/schemas/PaperEvaluationDraft"}
+        contribution_ledgers: {type: array, items: {type: object}}
+        evaluations: {type: array, items: {$ref: "#/components/schemas/PaperEvaluation"}}
+        reproductions: {type: array, items: {type: object}}
+        appeals: {type: array, items: {type: object}}
+        resolutions: {type: array, items: {type: object}}
+        raid_scores: {type: array, items: {type: object}}
     ReviewAssignmentStatus:
       type: string
       enum: [claimed, pinned, consumed, expired]
@@ -2839,7 +3409,65 @@ components:
           anyOf:
             - {$ref: "#/components/schemas/PaperEvaluation"}
             - {type: "null"}
+    PaperReleaseAuthorV2:
+      type: object
+      additionalProperties: false
+      required: [author_order, participant_slot, player_id, display_name, credit_roles]
+      properties:
+        author_order: {type: integer, minimum: 1, maximum: 5}
+        participant_slot: {type: integer, minimum: 1, maximum: 5}
+        player_id: {type: string, format: uuid}
+        display_name: {type: string, minLength: 1, maxLength: 512}
+        credit_roles:
+          type: array
+          minItems: 1
+          maxItems: 32
+          uniqueItems: true
+          items: {type: string, minLength: 1, maxLength: 512}
+    PromoteReleaseCandidateRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - expected_paper_version
+        - expected_revision_version
+        - title
+        - abstract_text
+        - collaboration_compact_hash
+        - research_protocol_snapshot_hash
+        - ethics_disclosure_hash
+        - coi_disclosure_hash
+        - contribution_ledger_id
+        - contribution_ledger_hash
+        - ai_disclosure_hash
+        - license
+        - authors
+        - idempotency_key
+      properties:
+        expected_paper_version: {type: integer, minimum: 1}
+        expected_revision_version: {type: integer, minimum: 1}
+        title: {type: string, minLength: 1, maxLength: 512}
+        abstract_text: {type: string, minLength: 1, maxLength: 512}
+        collaboration_compact_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        research_protocol_snapshot_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        ethics_disclosure_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        coi_disclosure_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        contribution_ledger_id: {$ref: "#/components/schemas/NonNilUuid"}
+        contribution_ledger_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        ai_disclosure_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        license: {type: string, minLength: 1, maxLength: 512}
+        authors:
+          type: array
+          minItems: 3
+          maxItems: 5
+          items: {$ref: "#/components/schemas/PaperReleaseAuthorV2"}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
     CreditContributionInput:
+      description: >-
+        Client restatement of one frozen author's authoritative contribution
+        milestones. Hepta derives the complete sets from locked Paper records;
+        omission, addition, duplicate, or cross-author reuse is rejected and
+        points are never accepted from the client. Reference arrays are full
+        scientific-fact sets and are not truncated at 256; only points are capped.
       type: object
       additionalProperties: false
       required: [player_id, credit_roles, accepted_artifact_manifest_ids, accepted_section_review_ids]
@@ -2853,12 +3481,10 @@ components:
           items: {type: string, minLength: 1, maxLength: 512}
         accepted_artifact_manifest_ids:
           type: array
-          maxItems: 256
           uniqueItems: true
           items: {type: string, format: uuid}
         accepted_section_review_ids:
           type: array
-          maxItems: 256
           uniqueItems: true
           items: {type: string, format: uuid}
     CreateContributionLedgerRequest:
@@ -2866,7 +3492,7 @@ components:
       additionalProperties: false
       required: [contribution_ledger_id, expected_paper_version, release_candidate_hash, entries, idempotency_key]
       properties:
-        contribution_ledger_id: {type: string, format: uuid}
+        contribution_ledger_id: {$ref: "#/components/schemas/NonNilUuid"}
         expected_paper_version: {type: integer, minimum: 1}
         release_candidate_hash: {$ref: "#/components/schemas/Sha256Digest"}
         entries:

@@ -1,19 +1,191 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, createPrivateKey, sign as signMessage } from "node:crypto";
 import test from "node:test";
 import {
   AGENT_BINDING_PROOF_SCHEMA,
   AGENT_BRIDGE_REQUEST_PROOF_SCHEMA,
+  AGENT_PROPOSAL_SCHEMA,
+  AGENT_PROPOSAL_V1_SCHEMA,
+  REVIEW_EXECUTION_RECEIPT_SCHEMA,
   agentBindingProofFrame,
   agentBridgeRequestProofFrame,
   agentCapabilityDisclosureFrame,
   agentCapabilityDisclosureHash,
+  agentProposalFrame,
+  agentProposalV1Frame,
   canonicalJsonBytes,
   canonicalQuery,
   researchSessionActionFrame,
+  reviewExecutionReceiptFrame,
   sha256Digest,
 } from "../src/canonical.mjs";
 import { DISCLOSURE, fixture } from "./helpers.mjs";
+
+test("Agent Proposal V1 historical frame remains byte frozen", () => {
+  const frame = agentProposalV1Frame({
+    schema: AGENT_PROPOSAL_V1_SCHEMA,
+    proposal_id: "11111111-1111-4111-8111-111111111111",
+    paper_project_id: "22222222-2222-4222-8222-222222222222",
+    work_item_id: "33333333-3333-4333-8333-333333333333",
+    section_key: "methods",
+    parent_revision_id: "44444444-4444-4444-8444-444444444444",
+    proposal_kind: "delivery",
+    payload_hash: `sha256:${"aa".repeat(32)}`,
+    artifact_manifest_hash: `sha256:${"bb".repeat(32)}`,
+    agent_id: "agent.fixture",
+    binding_id: "55555555-5555-4555-8555-555555555555",
+    agent_key_id: `sha256:${"cc".repeat(32)}`,
+    signed_at_unix: 1_700_000_000,
+  });
+  assert.equal(
+    createHash("sha256").update(frame).digest("hex"),
+    "d2b9c101267889a53ba7766a2f252a94ee5f7b08ba92237e6e801391b3b7c1ad",
+  );
+});
+
+test("Agent Proposal V2 frame matches the frozen Rust epoch vector", () => {
+  const frame = agentProposalFrame({
+    schema: AGENT_PROPOSAL_SCHEMA,
+    proposal_id: "11111111-1111-4111-8111-111111111111",
+    paper_project_id: "22222222-2222-4222-8222-222222222222",
+    work_item_id: "33333333-3333-4333-8333-333333333333",
+    section_key: "results.main",
+    parent_revision_id: "44444444-4444-4444-8444-444444444444",
+    lease_id: "55555555-5555-4555-8555-555555555555",
+    lease_fencing_token: 7,
+    expected_work_version: 11,
+    proposal_kind: "delivery",
+    payload_hash: "sha256:7917212537bd6e80eb59be660839509f2c0319c23e7236ab589e1bf6868e598b",
+    artifact_manifest_id: "66666666-6666-4666-8666-666666666666",
+    artifact_manifest_hash: "sha256:fad5d89eff2f29912c8c10f4cb411fbc87b0dbb8d916258c741edb39575c388c",
+    agent_id: "did:trnm:agent-proposal-v2",
+    binding_id: "77777777-7777-4777-8777-777777777777",
+    agent_key_id: "sha256:3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f",
+    signed_at_unix: 1_770_000_000,
+  });
+  assert.equal(
+    createHash("sha256").update(frame).digest("hex"),
+    "b285cf8c2b1609a73afea9dfb7c4af2ef5720c82eded01e793e6516df4d694be",
+  );
+  const privateKey = createPrivateKey({
+    key: Buffer.concat([
+      Buffer.from("302e020100300506032b657004220420", "hex"),
+      Buffer.alloc(32, 0x42),
+    ]),
+    format: "der",
+    type: "pkcs8",
+  });
+  assert.equal(
+    signMessage(null, frame, privateKey).toString("base64"),
+    "tPgBHp6Aypntpam1qkp8h14l1x4wRWn+mEfsQsqb3N79YIiKExuQEG2mEgUgxkR1HiWsV7I/daUXzXxfuZ6uCw==",
+  );
+  const proposalFrame = agentProposalFrame({
+    schema: AGENT_PROPOSAL_SCHEMA,
+    proposal_id: "11111111-1111-4111-8111-111111111111",
+    paper_project_id: "22222222-2222-4222-8222-222222222222",
+    work_item_id: "33333333-3333-4333-8333-333333333333",
+    section_key: "results.main",
+    parent_revision_id: "44444444-4444-4444-8444-444444444444",
+    lease_id: "55555555-5555-4555-8555-555555555555",
+    lease_fencing_token: 7,
+    expected_work_version: 11,
+    proposal_kind: "proposal",
+    payload_hash: "sha256:7917212537bd6e80eb59be660839509f2c0319c23e7236ab589e1bf6868e598b",
+    artifact_manifest_id: "66666666-6666-4666-8666-666666666666",
+    artifact_manifest_hash: "sha256:fad5d89eff2f29912c8c10f4cb411fbc87b0dbb8d916258c741edb39575c388c",
+    agent_id: "did:trnm:agent-proposal-v2",
+    binding_id: "77777777-7777-4777-8777-777777777777",
+    agent_key_id: "sha256:3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f",
+    signed_at_unix: 1_770_000_000,
+  });
+  assert.notDeepEqual(proposalFrame, frame);
+  for (const tampered of [
+    { lease_fencing_token: 0 },
+    { expected_work_version: 0 },
+    { artifact_manifest_id: "88888888-8888-4888-8888-888888888888" },
+  ]) {
+    const proposal = {
+      schema: AGENT_PROPOSAL_SCHEMA,
+      proposal_id: "11111111-1111-4111-8111-111111111111",
+      paper_project_id: "22222222-2222-4222-8222-222222222222",
+      work_item_id: "33333333-3333-4333-8333-333333333333",
+      section_key: "results.main",
+      parent_revision_id: "44444444-4444-4444-8444-444444444444",
+      lease_id: "55555555-5555-4555-8555-555555555555",
+      lease_fencing_token: 7,
+      expected_work_version: 11,
+      proposal_kind: "delivery",
+      payload_hash: "sha256:7917212537bd6e80eb59be660839509f2c0319c23e7236ab589e1bf6868e598b",
+      artifact_manifest_id: "66666666-6666-4666-8666-666666666666",
+      artifact_manifest_hash: "sha256:fad5d89eff2f29912c8c10f4cb411fbc87b0dbb8d916258c741edb39575c388c",
+      agent_id: "did:trnm:agent-proposal-v2",
+      binding_id: "77777777-7777-4777-8777-777777777777",
+      agent_key_id: "sha256:3097e2dee2cb4a34b53840cdb705aed71067c36f68db0e0f559c3f3fa043315f",
+      signed_at_unix: 1_770_000_000,
+      ...tampered,
+    };
+    if (tampered.lease_fencing_token === 0 || tampered.expected_work_version === 0) {
+      assert.throws(() => agentProposalFrame(proposal), /unsigned integer/);
+    } else {
+      assert.notEqual(
+        createHash("sha256").update(agentProposalFrame(proposal)).digest("hex"),
+        "b285cf8c2b1609a73afea9dfb7c4af2ef5720c82eded01e793e6516df4d694be",
+      );
+    }
+  }
+});
+
+test("ReviewExecutionReceiptV1 frame freezes assignment, evaluation, seals, and fencing", () => {
+  const receipt = {
+    schema: REVIEW_EXECUTION_RECEIPT_SCHEMA,
+    receipt_id: "11111111-1111-4111-8111-111111111111",
+    task_id: "22222222-2222-4222-8222-222222222222",
+    assignment_id: "33333333-3333-4333-8333-333333333333",
+    binding_id: "44444444-4444-4444-8444-444444444444",
+    paper_project_id: "55555555-5555-4555-8555-555555555555",
+    submission_id: "66666666-6666-4666-8666-666666666666",
+    evaluation_id: "77777777-7777-4777-8777-777777777777",
+    kind: "evaluate",
+    attempt: 2,
+    fencing_token: 9,
+    bundle_hash: `sha256:${"01".repeat(32)}`,
+    evaluator_version: "evidence-audit-evaluator-v1",
+    input_root: `sha256:${"02".repeat(32)}`,
+    output_root: `sha256:${"03".repeat(32)}`,
+    metrics_hash: `sha256:${"04".repeat(32)}`,
+    candidate_passed: true,
+    seed_set_hash: `sha256:${"05".repeat(32)}`,
+    environment_hash: `sha256:${"06".repeat(32)}`,
+    run_manifest_hash: `sha256:${"07".repeat(32)}`,
+    logs_hash: `sha256:${"08".repeat(32)}`,
+    started_at_unix: 1_800_000_010,
+    completed_at_unix: 1_800_000_011,
+    agent_id: "did:trnm:review-agent",
+    agent_key_id: `sha256:${"09".repeat(32)}`,
+    signing_public_key_hash: `sha256:${"09".repeat(32)}`,
+  };
+  const frame = reviewExecutionReceiptFrame(receipt);
+  assert.equal(
+    createHash("sha256").update(frame).digest("hex"),
+    "52b2f4f7bcf9991c6eddc7e296db05d98e851cc819e9d5baf6a89203bd0730f9",
+  );
+  for (const tamper of [
+    { evaluation_id: "88888888-8888-4888-8888-888888888888" },
+    { attempt: 3 },
+    { fencing_token: 10 },
+    { output_root: `sha256:${"ff".repeat(32)}` },
+    { candidate_passed: false },
+  ]) {
+    assert.notDeepEqual(
+      reviewExecutionReceiptFrame({ ...receipt, ...tamper }),
+      frame,
+    );
+  }
+  assert.throws(
+    () => reviewExecutionReceiptFrame({ ...receipt, evaluation_id: null }),
+    /evaluation_id must be a canonical lowercase UUID/,
+  );
+});
 
 test("AgentBinding V3 capability disclosure matches the frozen Rust vector", () => {
   assert.equal(
@@ -106,7 +278,34 @@ test("request proof freezes method, path, canonical query, and exact body hash",
   };
   const signature = identity.sign(agentBridgeRequestProofFrame(claim));
   assert.equal(identity.verify(agentBridgeRequestProofFrame(claim), signature), true);
+  assert.doesNotThrow(() =>
+    agentBridgeRequestProofFrame({
+      ...claim,
+      http_method: "GET",
+      canonical_path: "/api/agent-bridge/review-objects",
+      canonical_query:
+        "assignment_id=33333333-3333-4333-8333-333333333333&object_key=object-0000&task_id=44444444-4444-4444-8444-444444444444",
+      body_hash: sha256Digest(Buffer.alloc(0)),
+    }),
+  );
+  assert.doesNotThrow(() =>
+    agentBridgeRequestProofFrame({
+      ...claim,
+      canonical_path: "/api/agent-bridge/review-receipts",
+    }),
+  );
+  assert.throws(
+    () =>
+      agentBridgeRequestProofFrame({
+        ...claim,
+        http_method: "GET",
+        canonical_path: "/api/agent-bridge/review-receipts",
+        body_hash: sha256Digest(Buffer.alloc(0)),
+      }),
+    /method\/path is not allowed/,
+  );
   for (const tampered of [
+    { ...claim, agent_key_id: sha256Digest(Buffer.from("tampered-key")) },
     { ...claim, canonical_path: "/api/agent-bridge/health" },
     { ...claim, canonical_query: "after=1" },
     { ...claim, body_hash: sha256Digest(Buffer.from("tampered")) },
