@@ -539,6 +539,11 @@ async function runRecordPayload(values) {
   if (succeeded && (!values.outputsManifestId || values.outputsManifestId === values.logsManifestId)) {
     throw new Error("successful_run_requires_a_distinct_outputs_manifest");
   }
+  const metricsHash = succeeded
+    ? (values.metricsHash
+      ? canonicalDigest(values.metricsHash, "metrics_hash")
+      : await semanticDigest(values.metrics, "metrics"))
+    : null;
   return {
     run_record_id: uuid(),
     experiment_plan_id: values.experimentPlanId,
@@ -547,7 +552,7 @@ async function runRecordPayload(values) {
     parameters_hash: await semanticDigest(values.parameters, "parameters"),
     logs_manifest_id: values.logsManifestId,
     outputs_manifest_id: succeeded ? values.outputsManifestId : null,
-    metrics_hash: succeeded ? await semanticDigest(values.metrics, "metrics") : null,
+    metrics_hash: metricsHash,
     failure_hash: succeeded ? null : await semanticDigest(values.failure, "failure")
   };
 }
@@ -981,6 +986,9 @@ async function createAuthoritativeRunFromArtifacts(form) {
   }
   const metrics = outputs && outputs.objects.find(object => object.role === "run_metrics");
   if (outputs && !metrics) throw new Error("registered_outputs_manifest_is_missing_metrics");
+  const expectedMetricsHash = metrics
+    ? canonicalDigest(metrics.digest, "metrics_hash")
+    : null;
   const payload = await runRecordPayload({
     experimentPlanId: form.elements.experiment_plan_id.value,
     status,
@@ -988,7 +996,7 @@ async function createAuthoritativeRunFromArtifacts(form) {
     parameters: form.elements.parameters.value,
     logsManifestId: logs.manifestId,
     outputsManifestId: outputs ? outputs.manifestId : null,
-    metrics: metrics ? metrics.digest : "",
+    metricsHash: expectedMetricsHash,
     failure: form.elements.failure.value
   });
   const response = await sendCommand("create_run_record", form.dataset.paperId, null, payload);
@@ -997,7 +1005,7 @@ async function createAuthoritativeRunFromArtifacts(form) {
   if (!result || canonicalUuid(result.run_record_id, "registered_run_record_id") !== payload.run_record_id ||
       result.logs_manifest_id !== logs.manifestId ||
       result.outputs_manifest_id !== (outputs ? outputs.manifestId : null) ||
-      result.metrics_hash !== (metrics ? metrics.digest : null) ||
+      result.metrics_hash !== payload.metrics_hash ||
       result.failure_hash !== payload.failure_hash || result.status !== status) {
     throw new Error("run_record_receipt_is_not_authoritative_or_exact");
   }

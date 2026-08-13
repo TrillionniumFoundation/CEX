@@ -873,6 +873,132 @@ const failedRun = JSON.parse(JSON.stringify(await context.runRecordPayload({
 assert.equal(failedRun.outputs_manifest_id, null);
 assert.equal(failedRun.metrics_hash, null);
 assert.match(failedRun.failure_hash, /^sha256:[0-9a-f]{64}$/);
+const authoritativeMetricsHash = `sha256:${"b".repeat(64)}`;
+const succeededArtifactRun = JSON.parse(JSON.stringify(await context.runRecordPayload({
+  experimentPlanId: experimentPlan.experiment_plan_id,
+  status: "succeeded",
+  seed: "17",
+  parameters: "batch=32",
+  logsManifestId: "00000000-0000-4000-8000-000000000022",
+  outputsManifestId: "00000000-0000-4000-8000-000000000023",
+  metricsHash: authoritativeMetricsHash,
+  metrics: "must not replace the authoritative artifact digest",
+  failure: "",
+})));
+assert.equal(succeededArtifactRun.metrics_hash, authoritativeMetricsHash);
+assert.equal(succeededArtifactRun.failure_hash, null);
+const succeededGuidedRun = JSON.parse(JSON.stringify(await context.runRecordPayload({
+  experimentPlanId: experimentPlan.experiment_plan_id,
+  status: "succeeded",
+  seed: "18",
+  parameters: "batch=64",
+  logsManifestId: "00000000-0000-4000-8000-000000000024",
+  outputsManifestId: "00000000-0000-4000-8000-000000000025",
+  metrics: "accuracy=0.91",
+  failure: "",
+})));
+assert.equal(
+  succeededGuidedRun.metrics_hash,
+  await context.semanticDigest("accuracy=0.91", "metrics"),
+);
+await assert.rejects(context.runRecordPayload({
+  experimentPlanId: experimentPlan.experiment_plan_id,
+  status: "succeeded",
+  seed: "17",
+  parameters: "batch=32",
+  logsManifestId: "00000000-0000-4000-8000-000000000022",
+  outputsManifestId: "00000000-0000-4000-8000-000000000023",
+  metricsHash: "sha256:not-a-digest",
+  metrics: "",
+  failure: "",
+}), /metrics_hash_must_be_a_sha256_digest/);
+const logsManifestId = "00000000-0000-4000-8000-000000000026";
+const outputsManifestId = "00000000-0000-4000-8000-000000000027";
+const logsManifestHash = `sha256:${"c".repeat(64)}`;
+const outputsManifestHash = `sha256:${"d".repeat(64)}`;
+const originalUploadAndRegisterManifest = context.uploadAndRegisterManifest;
+const originalSendCommand = context.sendCommand;
+let manifestCall = 0;
+let capturedArtifactRunPayload = null;
+context.uploadAndRegisterManifest = async () => {
+  manifestCall += 1;
+  if (manifestCall % 2 === 1) {
+    return {
+      manifestId: logsManifestId,
+      manifestHash: logsManifestHash,
+      objects: [],
+    };
+  }
+  return {
+    manifestId: outputsManifestId,
+    manifestHash: outputsManifestHash,
+    objects: [{ role: "run_metrics", digest: authoritativeMetricsHash }],
+  };
+};
+const artifactRunForm = {
+  dataset: {
+    paperId: "00000000-0000-4000-8000-000000000028",
+    paperVersion: "7",
+    challengeId: "paper-raid-alpha",
+  },
+  elements: {
+    run_label: { value: "baseline-seed-17" },
+    stdout_file: { files: [{ name: "stdout.txt" }] },
+    stderr_file: { files: [{ name: "stderr.txt" }] },
+    output_file: { files: [{ name: "result.json" }] },
+    metrics_file: { files: [{ name: "metrics.json" }] },
+    status: { value: "succeeded" },
+    output_media_type: { value: "application/json" },
+    metrics_media_type: { value: "application/json" },
+    experiment_plan_id: { value: experimentPlan.experiment_plan_id },
+    seed: { value: "17" },
+    parameters: { value: "batch=32" },
+    failure: { value: "" },
+  },
+};
+context.sendCommand = async (command, resourceId, childId, payload) => {
+  assert.equal(command, "create_run_record");
+  assert.equal(resourceId, artifactRunForm.dataset.paperId);
+  assert.equal(childId, null);
+  capturedArtifactRunPayload = JSON.parse(JSON.stringify(payload));
+  return {
+    ok: true,
+    text: async () => JSON.stringify({
+      run_record_id: payload.run_record_id,
+      logs_manifest_id: payload.logs_manifest_id,
+      outputs_manifest_id: payload.outputs_manifest_id,
+      metrics_hash: payload.metrics_hash,
+      failure_hash: payload.failure_hash,
+      status: payload.status,
+    }),
+  };
+};
+try {
+  const artifactRun = JSON.parse(JSON.stringify(
+    await context.createAuthoritativeRunFromArtifacts(artifactRunForm),
+  ));
+  assert.equal(capturedArtifactRunPayload.metrics_hash, authoritativeMetricsHash);
+  assert.equal(artifactRun.logsManifestId, logsManifestId);
+  assert.equal(artifactRun.outputsManifestId, outputsManifestId);
+  context.sendCommand = async (command, resourceId, childId, payload) => ({
+    ok: true,
+    text: async () => JSON.stringify({
+      run_record_id: payload.run_record_id,
+      logs_manifest_id: payload.logs_manifest_id,
+      outputs_manifest_id: payload.outputs_manifest_id,
+      metrics_hash: `sha256:${"e".repeat(64)}`,
+      failure_hash: payload.failure_hash,
+      status: payload.status,
+    }),
+  });
+  await assert.rejects(
+    context.createAuthoritativeRunFromArtifacts(artifactRunForm),
+    /run_record_receipt_is_not_authoritative_or_exact/,
+  );
+} finally {
+  context.uploadAndRegisterManifest = originalUploadAndRegisterManifest;
+  context.sendCommand = originalSendCommand;
+}
 const claim = JSON.parse(JSON.stringify(await context.claimRecordPayload({
   claimKey: "primary-effect",
   claimKind: "main",
