@@ -90,12 +90,77 @@ assert.ok(source.includes("new Blob([plainText]"));
 assert.ok(source.includes("function invalidateStalePlayerForms("));
 assert.ok(source.includes('connection.dataset.state = "stale-authority"'));
 assert.ok(source.includes("newHeptaEvents > 0 || currentPhase !== synchronizedPhase"));
+assert.ok(source.includes("const paperWorkflowStates = new Map();"));
+assert.ok(source.includes("const PAPER_WORKFLOW_STALE_MAX_WAIT_MS = 120_000;"));
+assert.ok(source.includes("function requestPaperReload(paperId, delayMs)"));
+assert.ok(source.includes("function requestStaleAuthorityRefresh(paperId, applyInvalidation)"));
+assert.ok(source.includes("function beginPaperWorkflow(paperId)"));
 assert.ok(source.includes("const LIVE_AUTHORITY_POLL_MS = 500;"));
 assert.ok(source.includes("const STALE_AUTHORITY_RELOAD_DELAY_MS = 100;"));
 assert.ok(source.includes("schedule(catchingUp ? 25 : LIVE_AUTHORITY_POLL_MS);"));
 assert.ok(source.includes(
   "window.setTimeout(reloadCurrentAuthority, STALE_AUTHORITY_RELOAD_DELAY_MS);",
 ));
+const workflowFormSelectors = [
+  ".input-manifest-wizard-form",
+  ".draft-manifest-wizard-form",
+  ".run-artifact-wizard-form",
+  ".figure-lineage-wizard-form",
+  ".promote-release-form",
+];
+for (const [index, selector] of workflowFormSelectors.entries()) {
+  const start = source.indexOf(`document.querySelectorAll("${selector}")`);
+  const nextSelector = workflowFormSelectors[index + 1];
+  const fallback = selector === ".figure-lineage-wizard-form"
+    ? source.indexOf('document.querySelectorAll(".role-resource-action-form")', start)
+    : source.indexOf('document.querySelectorAll(".freeze-contribution-ledger-form")', start);
+  const end = nextSelector ? source.indexOf(`document.querySelectorAll("${nextSelector}")`, start) : fallback;
+  assert.ok(start >= 0 && end > start, `${selector} workflow boundary is absent`);
+  const handler = source.slice(start, end);
+  assert.equal(
+    (handler.match(/beginPaperWorkflow\(form\.dataset\.paperId\)/g) || []).length,
+    1,
+    `${selector} does not begin exactly one paper workflow`,
+  );
+  assert.equal(
+    (handler.match(/finishPaperWorkflow\(\)/g) || []).length,
+    1,
+    `${selector} does not finish exactly one paper workflow`,
+  );
+  assert.ok(
+    handler.indexOf("try {") < handler.indexOf("beginPaperWorkflow(form.dataset.paperId)"),
+    `${selector} does not catch a rejected workflow start`,
+  );
+  assert.equal(
+    handler.includes("window.location.reload()"),
+    false,
+    `${selector} bypasses the paper-scoped reload coordinator`,
+  );
+}
+const staleInvalidationStart = source.indexOf("function invalidateStalePlayerForms(");
+const liveSyncStart = source.indexOf("function createLiveRaidSync(", staleInvalidationStart);
+assert.ok(staleInvalidationStart >= 0 && liveSyncStart > staleInvalidationStart);
+const staleInvalidation = source.slice(staleInvalidationStart, liveSyncStart);
+assert.ok(staleInvalidation.includes("requestPaperReload(paperId, 0);"));
+assert.ok(staleInvalidation.includes("requestStaleAuthorityRefresh(paperId, applyInvalidation)"));
+assert.ok(staleInvalidation.includes('card.dataset.authorityState = "stale-pending-workflow"'));
+const staleApplyStart = staleInvalidation.indexOf("const applyInvalidation = () => {");
+const staleTelemetryStart = staleInvalidation.indexOf(
+  'recordProductEvent("stale_ui_reload", { paperId }).finally(reloadCurrentAuthority);',
+);
+const staleRequestStart = staleInvalidation.indexOf(
+  "requestStaleAuthorityRefresh(paperId, applyInvalidation)",
+);
+assert.ok(
+  staleApplyStart >= 0
+    && staleTelemetryStart > staleApplyStart
+    && staleRequestStart > staleTelemetryStart,
+  "stale telemetry must begin only inside the deferred invalidation",
+);
+assert.equal(
+  staleInvalidation.slice(0, staleApplyStart).includes('connection.dataset.state = "stale-authority"'),
+  false,
+);
 const htmlSource = await readFile(new URL("../src/html.rs", import.meta.url), "utf8");
 assert.ok(htmlSource.includes('class=\"human-key-import-form\"'));
 assert.ok(htmlSource.includes('<button type=\"submit\" disabled>Decrypt into this tab'));
@@ -389,6 +454,47 @@ assert.equal(pairingFlow.includes("login_key"), false);
 assert.equal(pairingFlow.includes("localStorage"), false);
 assert.equal(pairingFlow.includes("sessionStorage"), false);
 
+let fakeNowMs = 1_000;
+let nextFakeTimerId = 1;
+const fakeTimers = new Map();
+function fakeSetTimeout(callback, delayMs = 0) {
+  assert.equal(typeof callback, "function");
+  const delay = Math.max(0, Number(delayMs) || 0);
+  const timerId = nextFakeTimerId;
+  nextFakeTimerId += 1;
+  fakeTimers.set(timerId, { callback, deadlineMs: fakeNowMs + delay });
+  return timerId;
+}
+function fakeClearTimeout(timerId) {
+  fakeTimers.delete(timerId);
+}
+function runDueFakeTimers() {
+  for (let iteration = 0; iteration < 1_000; iteration += 1) {
+    const due = [...fakeTimers.entries()]
+      .filter(([, timer]) => timer.deadlineMs <= fakeNowMs)
+      .sort((left, right) => left[1].deadlineMs - right[1].deadlineMs || left[0] - right[0]);
+    if (due.length === 0) return;
+    const [timerId, timer] = due[0];
+    fakeTimers.delete(timerId);
+    timer.callback();
+  }
+  assert.fail("fake timer queue did not quiesce");
+}
+function advanceFakeClock(delayMs) {
+  assert.ok(Number.isSafeInteger(delayMs) && delayMs >= 0);
+  fakeNowMs += delayMs;
+  runDueFakeTimers();
+}
+class FakeDate extends Date {
+  constructor(...args) {
+    super(...(args.length === 0 ? [fakeNowMs] : args));
+  }
+
+  static now() {
+    return fakeNowMs;
+  }
+}
+
 const sessionValues = new Map();
 const context = vm.createContext({
   Uint8Array,
@@ -401,23 +507,310 @@ const context = vm.createContext({
   btoa,
   console,
   crypto: webcrypto,
+  CSS: { escape(value) { return String(value); } },
+  Date: FakeDate,
+  Headers,
+  Response,
   document: {
     addEventListener() {},
     querySelector() { return null; },
     querySelectorAll() { return []; },
   },
-  setTimeout,
-  clearTimeout,
+  setTimeout: fakeSetTimeout,
+  clearTimeout: fakeClearTimeout,
   sessionStorage: {
     getItem(key) { return sessionValues.get(key) ?? null; },
     setItem(key, value) { sessionValues.set(key, value); },
   },
   window: {
     location: { assign() {} },
-    setTimeout,
+    setTimeout: fakeSetTimeout,
+    clearTimeout: fakeClearTimeout,
   },
 });
 vm.runInContext(source, context, { filename: browserUrl.pathname });
+
+const paperA = "11111111-1111-4111-8111-111111111111";
+const paperB = "22222222-2222-4222-8222-222222222222";
+const paperC = "33333333-3333-4333-8333-333333333333";
+const paperD = "44444444-4444-4444-8444-444444444444";
+const paperE = "55555555-5555-4555-8555-555555555555";
+const paperF = "66666666-6666-4666-8666-666666666666";
+const paperH = "88888888-8888-4888-8888-888888888888";
+const deferredReloads = [];
+context.window.location.reload = () => deferredReloads.push(fakeNowMs);
+
+context.requestPaperReload(paperA, 450);
+context.requestPaperReload(paperA, 0);
+assert.equal(fakeTimers.size, 1);
+advanceFakeClock(0);
+assert.deepEqual(deferredReloads, [1_000]);
+advanceFakeClock(450);
+assert.deepEqual(deferredReloads, [1_000]);
+
+const finishPaperBOuter = context.beginPaperWorkflow(paperB);
+const finishPaperBInner = context.beginPaperWorkflow(paperB);
+context.requestPaperReload(paperB, 25);
+context.requestPaperReload(paperB, 0);
+finishPaperBOuter();
+advanceFakeClock(25);
+assert.deepEqual(deferredReloads, [1_000]);
+finishPaperBInner();
+assert.deepEqual(deferredReloads, [1_000]);
+advanceFakeClock(0);
+assert.deepEqual(deferredReloads, [1_000, 1_475]);
+context.requestPaperReload(paperB, 0);
+advanceFakeClock(0);
+assert.deepEqual(deferredReloads, [1_000, 1_475]);
+assert.throws(finishPaperBInner, /paper_workflow_finished_more_than_once/);
+
+context.requestPaperReload(paperC, 10);
+assert.throws(
+  () => context.beginPaperWorkflow(paperC),
+  /paper_authority_refresh_is_pending/,
+);
+advanceFakeClock(9);
+assert.deepEqual(deferredReloads, [1_000, 1_475]);
+advanceFakeClock(1);
+assert.deepEqual(deferredReloads, [1_000, 1_475, 1_485]);
+
+let staleApplyCount = 0;
+let duplicateStaleApplyCount = 0;
+const finishPaperD = context.beginPaperWorkflow(paperD);
+assert.equal(context.requestStaleAuthorityRefresh(paperD, () => {
+  staleApplyCount += 1;
+  context.requestPaperReload(paperD, 0);
+  fakeSetTimeout(() => context.requestPaperReload(paperD, 0), 100);
+}), true);
+assert.throws(
+  () => context.beginPaperWorkflow(paperD),
+  /paper_authority_refresh_is_pending/,
+);
+assert.equal(context.requestStaleAuthorityRefresh(paperD, () => {
+  duplicateStaleApplyCount += 1;
+}), true);
+advanceFakeClock(500);
+assert.equal(staleApplyCount, 0);
+assert.equal(duplicateStaleApplyCount, 0);
+assert.deepEqual(deferredReloads, [1_000, 1_475, 1_485]);
+finishPaperD();
+assert.equal(staleApplyCount, 1);
+assert.equal(duplicateStaleApplyCount, 0);
+assert.deepEqual(deferredReloads, [1_000, 1_475, 1_485]);
+advanceFakeClock(0);
+assert.deepEqual(deferredReloads, [1_000, 1_475, 1_485, 1_985]);
+advanceFakeClock(100);
+assert.deepEqual(deferredReloads, [1_000, 1_475, 1_485, 1_985]);
+assert.throws(() => context.requestPaperReload(paperD, -1), /paper_reload_delay_is_invalid/);
+
+let watchdogApplyCount = 0;
+const finishPaperE = context.beginPaperWorkflow(paperE);
+assert.equal(context.requestStaleAuthorityRefresh(paperE, () => {
+  watchdogApplyCount += 1;
+}), true);
+advanceFakeClock(119_999);
+assert.equal(watchdogApplyCount, 0);
+assert.deepEqual(deferredReloads, [1_000, 1_475, 1_485, 1_985]);
+advanceFakeClock(1);
+assert.equal(watchdogApplyCount, 1);
+assert.deepEqual(deferredReloads, [1_000, 1_475, 1_485, 1_985, 122_085]);
+assert.throws(
+  () => context.beginPaperWorkflow(paperE),
+  /paper_authority_refresh_is_pending/,
+);
+finishPaperE();
+advanceFakeClock(1_000);
+assert.deepEqual(deferredReloads, [1_000, 1_475, 1_485, 1_985, 122_085]);
+
+let immediateStaleApplyCount = 0;
+assert.equal(context.requestStaleAuthorityRefresh(paperF, () => {
+  immediateStaleApplyCount += 1;
+  context.requestPaperReload(paperF, 0);
+}), false);
+assert.equal(immediateStaleApplyCount, 1);
+advanceFakeClock(0);
+assert.deepEqual(deferredReloads, [1_000, 1_475, 1_485, 1_985, 122_085, 123_085]);
+
+const paperG = "77777777-7777-4777-8777-777777777777";
+assert.throws(
+  () => context.requestStaleAuthorityRefresh(paperG, () => {
+    throw new Error("synthetic_stale_dom_failure");
+  }),
+  /synthetic_stale_dom_failure/,
+);
+assert.deepEqual(
+  deferredReloads,
+  [1_000, 1_475, 1_485, 1_985, 122_085, 123_085, 123_085],
+);
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
+function jsonResponse(value, status = 200) {
+  const text = JSON.stringify(value);
+  return {
+    headers: { get() { return null; } },
+    ok: status >= 200 && status < 300,
+    status,
+    async text() { return text; },
+  };
+}
+
+const productEventRelease = deferred();
+let productEventRequests = 0;
+context.fetch = async url => {
+  if (url === "/session/refresh") return jsonResponse({ csrf: "strict-csrf-token" });
+  if (url === "/api/product-events") {
+    productEventRequests += 1;
+    await productEventRelease.promise;
+    return jsonResponse({ accepted: true });
+  }
+  throw new Error(`unexpected_browser_crypto_gate_fetch:${url}`);
+};
+
+const staleCard = { dataset: { authorityState: "current", paperId: paperH } };
+const staleConnection = { dataset: {}, textContent: "Current" };
+const staleOutput = {
+  classList: { toggle() {} },
+  textContent: "",
+};
+const staleControl = { disabled: false };
+const staleForm = { dataset: {}, elements: [staleControl] };
+context.document.querySelectorAll = selector => selector.includes(paperH) ? [staleForm] : [];
+context.document.querySelector = () => null;
+
+let storedArtifactIndex = 0;
+context.uploadCasArtifact = async (_paperId, file, mediaType) => {
+  storedArtifactIndex += 1;
+  const raw = storedArtifactIndex.toString(16).padStart(64, "0");
+  return {
+    acl: "team",
+    artifact_sha256: raw,
+    digest: `sha256:${raw}`,
+    media_type: mediaType,
+    size: file.size,
+    uri: `cas://sha256/${raw}`,
+  };
+};
+const secondRegisterStarted = deferred();
+const secondRegisterRelease = deferred();
+const workflowCommands = [];
+let registerCount = 0;
+context.sendCommand = async (command, resourceId, _childId, payload) => {
+  workflowCommands.push(command);
+  if (command === "register_artifact") {
+    registerCount += 1;
+    if (registerCount === 1) {
+      context.invalidateStalePlayerForms(staleCard, staleConnection, staleOutput);
+    } else if (registerCount === 2) {
+      secondRegisterStarted.resolve();
+      await secondRegisterRelease.promise;
+    }
+    return jsonResponse({
+      manifest_id: payload.manifest_id,
+      manifest_hash: `sha256:${payload.expected_source_manifest_sha256}`,
+      object_count: payload.source_bundle.object_count,
+      paper_project_id: resourceId,
+      required_run_ids: payload.source_bundle.required_run_ids,
+      source_bundle_id: payload.source_bundle.bundle_id,
+      source_manifest_sha256: payload.expected_source_manifest_sha256,
+      version: 1,
+    });
+  }
+  if (command === "create_run_record") {
+    return jsonResponse({
+      failure_hash: payload.failure_hash,
+      logs_manifest_id: payload.logs_manifest_id,
+      metrics_hash: payload.metrics_hash,
+      outputs_manifest_id: payload.outputs_manifest_id,
+      run_record_id: payload.run_record_id,
+      status: payload.status,
+    });
+  }
+  throw new Error(`unexpected_browser_crypto_gate_command:${command}`);
+};
+const artifactFile = name => ({ name, size: 4 });
+const runForm = {
+  dataset: {
+    challengeId: "99999999-9999-4999-8999-999999999999",
+    paperId: paperH,
+    paperVersion: "1",
+  },
+  elements: {
+    experiment_plan_id: { value: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" },
+    failure: { value: "" },
+    metrics_file: { files: [artifactFile("metrics.json")] },
+    metrics_media_type: { value: "application/json" },
+    output_file: { files: [artifactFile("result.bin")] },
+    output_media_type: { value: "application/octet-stream" },
+    parameters: { value: '{"learning_rate":0.1}' },
+    run_label: { value: "strict-race-regression" },
+    seed: { value: "17" },
+    status: { value: "succeeded" },
+    stderr_file: { files: [artifactFile("stderr.txt")] },
+    stdout_file: { files: [artifactFile("stdout.txt")] },
+  },
+};
+const finishPaperH = context.beginPaperWorkflow(paperH);
+const authoritativeRun = context.createAuthoritativeRunFromArtifacts(runForm);
+await secondRegisterStarted.promise;
+assert.deepEqual(workflowCommands, ["register_artifact", "register_artifact"]);
+assert.equal(staleCard.dataset.authorityState, "stale-pending-workflow");
+assert.equal(staleConnection.dataset.state, "stale-authority-pending-workflow");
+assert.equal(staleControl.disabled, false);
+assert.equal(productEventRequests, 0);
+assert.throws(
+  () => context.beginPaperWorkflow(paperH),
+  /paper_authority_refresh_is_pending/,
+);
+advanceFakeClock(1_000);
+assert.equal(staleCard.dataset.authorityState, "stale-pending-workflow");
+assert.equal(staleControl.disabled, false);
+assert.deepEqual(
+  deferredReloads,
+  [1_000, 1_475, 1_485, 1_985, 122_085, 123_085, 123_085],
+);
+secondRegisterRelease.resolve();
+const runReceipt = await authoritativeRun;
+assert.deepEqual(workflowCommands, [
+  "register_artifact",
+  "register_artifact",
+  "create_run_record",
+]);
+assert.match(runReceipt.runRecordId, /^[0-9a-f-]{36}$/);
+context.requestPaperReload(paperH, 450);
+finishPaperH();
+for (let index = 0; index < 10 && productEventRequests === 0; index += 1) {
+  await Promise.resolve();
+}
+assert.equal(staleCard.dataset.authorityState, "stale");
+assert.equal(staleConnection.dataset.state, "stale-authority");
+assert.equal(staleControl.disabled, true);
+assert.equal(productEventRequests, 1);
+advanceFakeClock(99);
+assert.deepEqual(
+  deferredReloads,
+  [1_000, 1_475, 1_485, 1_985, 122_085, 123_085, 123_085],
+);
+advanceFakeClock(1);
+assert.deepEqual(
+  deferredReloads,
+  [1_000, 1_475, 1_485, 1_985, 122_085, 123_085, 123_085, 124_185],
+);
+productEventRelease.resolve();
+await Promise.resolve();
+await Promise.resolve();
+advanceFakeClock(350);
+assert.deepEqual(
+  deferredReloads,
+  [1_000, 1_475, 1_485, 1_985, 122_085, 123_085, 123_085, 124_185],
+);
 
 const appealPayload = await context.appealPayload({
   elements: {

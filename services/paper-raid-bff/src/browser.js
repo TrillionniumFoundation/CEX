@@ -360,6 +360,144 @@ function canonicalUuid(value, field) {
   return clean;
 }
 
+const PAPER_WORKFLOW_STALE_MAX_WAIT_MS = 120_000;
+const paperWorkflowStates = new Map();
+
+function paperWorkflowState(paperId) {
+  const canonicalPaperId = canonicalUuid(paperId, "paper_id");
+  let state = paperWorkflowStates.get(canonicalPaperId);
+  if (!state) {
+    state = {
+      active: 0,
+      pendingReloadDelayMs: null,
+      pendingStaleApply: null,
+      reloadDeadlineMs: null,
+      reloadStarted: false,
+      reloadTimer: null,
+      staleWatchdogTimer: null,
+    };
+    paperWorkflowStates.set(canonicalPaperId, state);
+  }
+  return { canonicalPaperId, state };
+}
+
+function forcePaperReload(state) {
+  if (state.reloadStarted) return;
+  if (state.reloadTimer !== null) window.clearTimeout(state.reloadTimer);
+  state.pendingReloadDelayMs = null;
+  state.reloadDeadlineMs = null;
+  state.reloadTimer = null;
+  state.reloadStarted = true;
+  window.location.reload();
+}
+
+function armPaperReload(canonicalPaperId, state, delayMs) {
+  if (state.reloadStarted) return;
+  const deadlineMs = Date.now() + delayMs;
+  if (state.reloadDeadlineMs !== null && state.reloadDeadlineMs <= deadlineMs) return;
+  if (state.reloadTimer !== null) window.clearTimeout(state.reloadTimer);
+  state.reloadDeadlineMs = deadlineMs;
+  state.reloadTimer = window.setTimeout(() => {
+    if (state.reloadStarted) return;
+    state.reloadTimer = null;
+    state.reloadDeadlineMs = null;
+    if (state.active > 0) {
+      state.pendingReloadDelayMs = 0;
+      return;
+    }
+    state.reloadStarted = true;
+    window.location.reload();
+  }, Math.max(0, deadlineMs - Date.now()));
+  paperWorkflowStates.set(canonicalPaperId, state);
+}
+
+function requestPaperReload(paperId, delayMs) {
+  if (!Number.isSafeInteger(delayMs) || delayMs < 0 || delayMs > 10_000) {
+    throw new Error("paper_reload_delay_is_invalid");
+  }
+  const { canonicalPaperId, state } = paperWorkflowState(paperId);
+  if (state.reloadStarted) return;
+  if (state.active > 0) {
+    state.pendingReloadDelayMs = state.pendingReloadDelayMs === null
+      ? delayMs
+      : Math.min(state.pendingReloadDelayMs, delayMs);
+    return;
+  }
+  armPaperReload(canonicalPaperId, state, delayMs);
+}
+
+function requestStaleAuthorityRefresh(paperId, applyInvalidation) {
+  if (typeof applyInvalidation !== "function") {
+    throw new Error("stale_authority_invalidation_must_be_a_function");
+  }
+  const { canonicalPaperId, state } = paperWorkflowState(paperId);
+  if (!state.pendingStaleApply) state.pendingStaleApply = applyInvalidation;
+  if (state.active > 0) {
+    if (state.staleWatchdogTimer === null) {
+      state.staleWatchdogTimer = window.setTimeout(() => {
+        state.staleWatchdogTimer = null;
+        const apply = state.pendingStaleApply;
+        state.pendingStaleApply = null;
+        try {
+          if (apply) apply();
+        } finally {
+          forcePaperReload(state);
+        }
+      }, PAPER_WORKFLOW_STALE_MAX_WAIT_MS);
+    }
+    return true;
+  }
+  const apply = state.pendingStaleApply;
+  state.pendingStaleApply = null;
+  try {
+    apply();
+  } catch (error) {
+    forcePaperReload(state);
+    throw error;
+  }
+  return false;
+}
+
+function beginPaperWorkflow(paperId) {
+  const { canonicalPaperId, state } = paperWorkflowState(paperId);
+  if (state.pendingStaleApply || state.pendingReloadDelayMs !== null ||
+      state.reloadTimer !== null || state.reloadStarted) {
+    throw new Error("paper_authority_refresh_is_pending");
+  }
+  state.active += 1;
+  let finished = false;
+  return () => {
+    if (finished) throw new Error("paper_workflow_finished_more_than_once");
+    finished = true;
+    state.active -= 1;
+    if (state.active < 0) throw new Error("paper_workflow_active_count_is_invalid");
+    if (state.active > 0) return;
+    if (state.pendingStaleApply) {
+      if (state.staleWatchdogTimer !== null) {
+        window.clearTimeout(state.staleWatchdogTimer);
+        state.staleWatchdogTimer = null;
+      }
+      const apply = state.pendingStaleApply;
+      state.pendingStaleApply = null;
+      try {
+        apply();
+      } catch (error) {
+        forcePaperReload(state);
+        throw error;
+      }
+    }
+    if (state.pendingReloadDelayMs === null) {
+      if (state.reloadTimer === null && !state.reloadStarted) {
+        paperWorkflowStates.delete(canonicalPaperId);
+      }
+      return;
+    }
+    const delayMs = state.pendingReloadDelayMs;
+    state.pendingReloadDelayMs = null;
+    armPaperReload(canonicalPaperId, state, delayMs);
+  };
+}
+
 function nonNegativeInteger(value, field) {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 0) {
@@ -2092,8 +2230,10 @@ function bindGuidedPaperActions() {
       event.preventDefault();
       const output = form.querySelector("output");
       const button = form.querySelector("button");
+      let finishPaperWorkflow = null;
       button.disabled = true;
       try {
+        finishPaperWorkflow = beginPaperWorkflow(form.dataset.paperId);
         const plannedRunId = form.elements.planned_run_id.value.trim();
         if (!LOGICAL_SESSION_PATTERN.test(plannedRunId)) {
           throw new Error("planned_run_id_must_be_a_safe_logical_identifier");
@@ -2136,11 +2276,12 @@ function bindGuidedPaperActions() {
           });
         }
         show(output, "Three input manifests registered. The experiment plan can now bind them.", true);
-        window.setTimeout(() => window.location.reload(), 450);
+        requestPaperReload(form.dataset.paperId, 450);
       } catch (error) {
         show(output, error.message, false);
       } finally {
         button.disabled = false;
+        if (finishPaperWorkflow) finishPaperWorkflow();
       }
     });
   }
@@ -2150,8 +2291,10 @@ function bindGuidedPaperActions() {
       event.preventDefault();
       const output = form.querySelector("output");
       const button = form.querySelector("button");
+      let finishPaperWorkflow = null;
       button.disabled = true;
       try {
+        finishPaperWorkflow = beginPaperWorkflow(form.dataset.paperId);
         const requiredRunIds = String(form.dataset.requiredRunIds || "")
           .split(",")
           .map(value => value.trim())
@@ -2188,11 +2331,12 @@ function bindGuidedPaperActions() {
           ]
         });
         show(output, "Revision bundle registered. Select it in Draft + Release.", true);
-        window.setTimeout(() => window.location.reload(), 450);
+        requestPaperReload(form.dataset.paperId, 450);
       } catch (error) {
         show(output, error.message, false);
       } finally {
         button.disabled = false;
+        if (finishPaperWorkflow) finishPaperWorkflow();
       }
     });
   }
@@ -2217,8 +2361,10 @@ function bindGuidedPaperActions() {
       event.preventDefault();
       const output = form.querySelector("output");
       const button = form.querySelector("button");
+      let finishPaperWorkflow = null;
       button.disabled = true;
       try {
+        finishPaperWorkflow = beginPaperWorkflow(form.dataset.paperId);
         show(output, "Hashing and preserving the exact run logs, outputs, and metrics…", true);
         const receipt = await createAuthoritativeRunFromArtifacts(form);
         form.dataset.runRecordId = receipt.runRecordId;
@@ -2232,11 +2378,12 @@ function bindGuidedPaperActions() {
           delete form.dataset.outputsManifestHash;
         }
         show(output, "Run artifacts and the exact outcome are authoritatively registered.", true);
-        window.setTimeout(() => window.location.reload(), 450);
+        requestPaperReload(form.dataset.paperId, 450);
       } catch (error) {
         show(output, error.message, false);
       } finally {
         button.disabled = false;
+        if (finishPaperWorkflow) finishPaperWorkflow();
       }
     });
   }
@@ -2246,19 +2393,22 @@ function bindGuidedPaperActions() {
       event.preventDefault();
       const output = form.querySelector("output");
       const button = form.querySelector("button");
+      let finishPaperWorkflow = null;
       button.disabled = true;
       try {
+        finishPaperWorkflow = beginPaperWorkflow(form.dataset.paperId);
         show(output, "Hashing and preserving the figure plus its transform lineage…", true);
         const receipt = await createAuthoritativeFigureLineage(form);
         form.dataset.figureLineageId = receipt.figureLineageId;
         form.dataset.figureManifestId = receipt.figureManifestId;
         form.dataset.figureManifestHash = receipt.figureManifestHash;
         show(output, "Figure artifact and authoritative run lineage are registered.", true);
-        window.setTimeout(() => window.location.reload(), 450);
+        requestPaperReload(form.dataset.paperId, 450);
       } catch (error) {
         show(output, error.message, false);
       } finally {
         button.disabled = false;
+        if (finishPaperWorkflow) finishPaperWorkflow();
       }
     });
   }
@@ -2753,9 +2903,11 @@ function bindGuidedPaperActions() {
       event.preventDefault();
       const output = form.querySelector("output");
       const buttons = form.querySelectorAll("button");
+      let finishPaperWorkflow = null;
       for (const button of buttons) button.disabled = true;
       let promoteAttempted = false;
       try {
+        finishPaperWorkflow = beginPaperWorkflow(form.dataset.paperId);
         const authors = promoteReleaseAuthors(form);
         const budget = await contributionLedgerBudget(
           form.dataset.paperId,
@@ -2833,7 +2985,7 @@ function bindGuidedPaperActions() {
           releaseHash
         );
         show(output, "Release and deterministic ledger are authoritative. Loading author consent…", true);
-        window.setTimeout(() => window.location.reload(), 450);
+        requestPaperReload(form.dataset.paperId, 450);
       } catch (error) {
         show(
           output,
@@ -2842,9 +2994,10 @@ function bindGuidedPaperActions() {
             : error.message,
           false
         );
-        if (promoteAttempted) window.setTimeout(() => window.location.reload(), 900);
+        if (promoteAttempted) requestPaperReload(form.dataset.paperId, 900);
       } finally {
         for (const button of buttons) button.disabled = false;
+        if (finishPaperWorkflow) finishPaperWorkflow();
       }
     });
   }
@@ -3654,24 +3807,29 @@ const LIVE_AUTHORITY_POLL_MS = 500;
 const STALE_AUTHORITY_RELOAD_DELAY_MS = 100;
 
 function invalidateStalePlayerForms(card, connection, output) {
-  if (card.dataset.authorityState === "stale") return;
-  card.dataset.authorityState = "stale";
-  connection.dataset.state = "stale-authority";
-  connection.textContent = "Authoritative state changed · reloading / 权威状态已变化，正在刷新";
+  if (new Set(["stale", "stale-pending-workflow"]).has(card.dataset.authorityState)) return;
   const paperId = card.dataset.paperId;
-  for (const form of document.querySelectorAll(`form[data-paper-id="${CSS.escape(paperId)}"]`)) {
-    form.dataset.authorityState = "stale";
-    for (const control of form.elements) control.disabled = true;
-  }
-  show(output, "A teammate changed the Raid. Old controls are disabled; loading the current objective and actions…", false);
-  let reloadStarted = false;
-  const reloadCurrentAuthority = () => {
-    if (reloadStarted) return;
-    reloadStarted = true;
-    window.location.reload();
+  const applyInvalidation = () => {
+    card.dataset.authorityState = "stale";
+    connection.dataset.state = "stale-authority";
+    connection.textContent = "Authoritative state changed · reloading / 权威状态已变化，正在刷新";
+    for (const form of document.querySelectorAll(`form[data-paper-id="${CSS.escape(paperId)}"]`)) {
+      form.dataset.authorityState = "stale";
+      for (const control of form.elements) control.disabled = true;
+    }
+    show(output, "A teammate changed the Raid. Old controls are disabled; loading the current objective and actions…", false);
+    const reloadCurrentAuthority = () => {
+      requestPaperReload(paperId, 0);
+    };
+    recordProductEvent("stale_ui_reload", { paperId }).finally(reloadCurrentAuthority);
+    window.setTimeout(reloadCurrentAuthority, STALE_AUTHORITY_RELOAD_DELAY_MS);
   };
-  recordProductEvent("stale_ui_reload", { paperId }).finally(reloadCurrentAuthority);
-  window.setTimeout(reloadCurrentAuthority, STALE_AUTHORITY_RELOAD_DELAY_MS);
+  const pendingWorkflow = requestStaleAuthorityRefresh(paperId, applyInvalidation);
+  if (pendingWorkflow) {
+    card.dataset.authorityState = "stale-pending-workflow";
+    connection.dataset.state = "stale-authority-pending-workflow";
+    connection.textContent = "Authoritative state changed · finishing the current action before reload / 权威状态已变化，当前操作完成后刷新";
+  }
 }
 
 function createLiveRaidSync(card) {
