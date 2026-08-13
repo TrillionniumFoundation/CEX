@@ -1506,6 +1506,21 @@ async fn seed_paper_to_drafting_through_scientific_gates(
     )
     .await;
 
+    let room_path = format!("/v2/hepta/papers/{paper_id}/room");
+    let room_before_work = assert_status(
+        user_get(
+            router,
+            &actors[0],
+            "get_paper_room_v3",
+            &room_path,
+            &format!("gate-work-room-before-{paper_id}-{suffix}"),
+        )
+        .await,
+        StatusCode::OK,
+    );
+    let cursor_before_work = room_before_work["last_event_cursor"]
+        .as_u64()
+        .expect("Paper Room cursor before work-item creation");
     let work_path = format!("/v2/hepta/papers/{paper_id}/work-items");
     let work_key = format!("gate-work-{paper_id}-{work_item_id}-{suffix}");
     let work_body = json!({
@@ -1545,6 +1560,36 @@ async fn seed_paper_to_drafting_through_scientific_gates(
         ),
         work,
         "work-item fixture replay must be exact",
+    );
+    let work_events_path =
+        format!("/v2/hepta/papers/{paper_id}/events?after_cursor={cursor_before_work}");
+    let work_events = assert_status(
+        user_get(
+            router,
+            &actors[1],
+            "list_paper_room_events_v3",
+            &work_events_path,
+            &format!("gate-work-events-after-{paper_id}-{suffix}"),
+        )
+        .await,
+        StatusCode::OK,
+    );
+    let matching_work_events = work_events
+        .as_array()
+        .expect("Paper Room events after work-item creation")
+        .iter()
+        .filter(|event| {
+            event["event_type"] == "hepta.paper_raid.work_item.created.v2"
+                && event["aggregate_id"] == paper_id.to_string()
+                && event["aggregate_version"] == *paper_version + 1
+                && event["payload"]["paper_project_id"] == paper_id.to_string()
+                && event["payload"]["work_item_id"] == work_item_id.to_string()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        matching_work_events.len(),
+        1,
+        "work-item creation and exact replay must publish one live Paper Room event",
     );
     *paper_version += 1;
 

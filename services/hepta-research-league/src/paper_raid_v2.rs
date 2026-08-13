@@ -5845,11 +5845,12 @@ async fn create_work_item(
             paper.updated_at = now;
             paper.version
         };
-        push_memory_event(
+        push_room_event_memory(
             &mut memory,
             OPERATION,
             &request.idempotency_key,
             "hepta.paper_raid.work_item.created.v2",
+            paper_id,
             paper_id,
             new_paper_version,
             json!({
@@ -5857,7 +5858,7 @@ async fn create_work_item(
                 "work_item_id": item.work_item_id,
                 "kind": item.kind,
             }),
-        )?;
+        );
         memory_remember(
             &mut memory,
             OPERATION,
@@ -6004,11 +6005,12 @@ async fn create_work_item(
             "paper project changed concurrently",
         ));
     }
-    insert_postgres_event(
+    insert_room_event_postgres(
         &mut tx,
         OPERATION,
         &request.idempotency_key,
         "hepta.paper_raid.work_item.created.v2",
+        paper.paper_project_id,
         paper.paper_project_id,
         paper.version,
         json!({
