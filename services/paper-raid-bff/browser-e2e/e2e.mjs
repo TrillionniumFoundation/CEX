@@ -179,8 +179,61 @@ async function runContext(browser, index) {
     });
   });
 
+  let releaseDelayedCsrf = null;
+  let delayedCsrfRouteInstalled = false;
   try {
-    await signIn(page, credentials.login_keys[index]);
+    let delayedCsrfRequest = null;
+    if (index === 0) {
+      delayedCsrfRequest = page.waitForRequest(request =>
+        new URL(request.url()).pathname === "/session/refresh"
+        && request.method() === "POST",
+        { timeout: 15_000 },
+      );
+      const delayedCsrfGate = new Promise(resolve => { releaseDelayedCsrf = resolve; });
+      await page.route("**/session/refresh", async route => {
+        await delayedCsrfGate;
+        await route.continue();
+      });
+      delayedCsrfRouteInstalled = true;
+    }
+    if (index === 0) {
+      await Promise.all([
+        signIn(page, credentials.login_keys[index]),
+        delayedCsrfRequest,
+      ]);
+    } else {
+      await signIn(page, credentials.login_keys[index]);
+    }
+    if (index === 0) {
+      await page.waitForFunction(() =>
+        document.documentElement.dataset.paperRaidBindingsReady === "true"
+      );
+      const importSubmit = page.locator('.human-key-import-form button[type="submit"]');
+      assert.equal(await importSubmit.count(), 1);
+      assert.equal(await importSubmit.isEnabled(), true);
+      const delayedPageUrl = page.url();
+      await page.getByText("Local signing key / 本地签名密钥", { exact: true }).click();
+      await page.getByLabel("Encrypted key bundle / 加密密钥包").setInputFiles({
+        name: "delayed-csrf-invalid-key-bundle.json",
+        mimeType: "application/json",
+        buffer: Buffer.from("{}\n", "utf8"),
+      });
+      await page.getByLabel("Passphrase / 口令").fill("delayed-csrf-binding-probe");
+      await importSubmit.click();
+      await page.locator(".human-key-import-form output.result-error")
+        .filter({ hasText: "unsupported_or_malformed_key_bundle" })
+        .waitFor();
+      assert.equal(page.url(), delayedPageUrl, "unbound key import navigated during CSRF warm-up");
+      assert.equal(new URL(page.url()).search, "", "key import exposed its passphrase in the URL");
+      const csrfCompleted = page.waitForResponse(response =>
+        new URL(response.url()).pathname === "/session/refresh"
+        && response.request().method() === "POST"
+      );
+      releaseDelayedCsrf();
+      assert.equal((await csrfCompleted).status(), 200);
+      await page.unroute("**/session/refresh");
+      delayedCsrfRouteInstalled = false;
+    }
     const sessionResponse = await context.request.get(url("/api/session"), {
       headers: { accept: "application/json" },
     });
@@ -416,6 +469,10 @@ async function runContext(browser, index) {
       recoveredLostResponse: registration.lostResponse,
     };
   } finally {
+    releaseDelayedCsrf?.();
+    if (delayedCsrfRouteInstalled) {
+      await page.unroute("**/session/refresh").catch(() => {});
+    }
     await context.close();
   }
 }

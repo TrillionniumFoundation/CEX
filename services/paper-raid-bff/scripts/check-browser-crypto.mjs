@@ -25,6 +25,21 @@ assert.equal(source.includes(".style"), false);
 assert.ok(source.includes("hepta.paper-raid.live-cursor.v1:"));
 assert.equal((source.match(/sessionStorage/g) || []).length, 2);
 assert.ok(source.includes("bindGuidedPaperActions()"));
+const bindingEntrypoint = source.indexOf('document.addEventListener("DOMContentLoaded", async () => {');
+assert.ok(bindingEntrypoint >= 0);
+const bindingContract = source.slice(bindingEntrypoint);
+const humanKeyBinding = bindingContract.indexOf("bindHumanKeyImport();");
+const bindingsReady = bindingContract.indexOf(
+  'document.documentElement.dataset.paperRaidBindingsReady = "true";'
+);
+const eagerCsrfRefresh = bindingContract.indexOf("try { await refreshCsrf(); } catch (_) { return; }");
+assert.ok(humanKeyBinding >= 0 && bindingsReady > humanKeyBinding);
+assert.ok(
+  eagerCsrfRefresh > bindingsReady,
+  "player controls must be bound before the asynchronous CSRF warm-up"
+);
+assert.ok(source.includes("const button = form.querySelector('button[type=\"submit\"]');"));
+assert.ok(source.includes("button.disabled = false;\n  }\n  for (const button"));
 assert.ok(source.includes('"transition_paper_project"'));
 assert.ok(source.includes('"create_paper_work_item"'));
 assert.ok(source.includes('"create_paper_revision"'));
@@ -76,6 +91,8 @@ assert.ok(source.includes("function invalidateStalePlayerForms("));
 assert.ok(source.includes('connection.dataset.state = "stale-authority"'));
 assert.ok(source.includes("newHeptaEvents > 0 || currentPhase !== synchronizedPhase"));
 const htmlSource = await readFile(new URL("../src/html.rs", import.meta.url), "utf8");
+assert.ok(htmlSource.includes('class=\"human-key-import-form\"'));
+assert.ok(htmlSource.includes('<button type=\"submit\" disabled>Decrypt into this tab'));
 const heptaSource = await readFile(new URL("../src/hepta.rs", import.meta.url), "utf8");
 const appSource = await readFile(new URL("../src/app.rs", import.meta.url), "utf8");
 const metricsSource = await readFile(new URL("../src/metrics.rs", import.meta.url), "utf8");

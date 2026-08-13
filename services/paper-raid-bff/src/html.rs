@@ -7451,7 +7451,7 @@ pub fn browser_stylesheet() -> Response {
 
 fn page(title: &str, player: &str, content: &str, authenticated: bool) -> Response {
     let key_vault = if authenticated {
-        r#"<section class="panel key-vault"><details><summary>Local signing key / 本地签名密钥</summary><p class="muted">Import your encrypted recovery bundle when this tab needs to sign a human action. Decryption stays in memory and is discarded when the tab closes.</p><form class="human-key-import-form"><label>Encrypted key bundle / 加密密钥包<input name="key_bundle" type="file" accept="application/json,.json" required></label><label>Passphrase / 口令<input name="passphrase" type="password" minlength="16" autocomplete="current-password" required></label><button type="submit">Decrypt into this tab / 仅解密到当前标签页</button><output></output></form><button class="forget-human-key" type="button">Forget in-memory key / 清除内存密钥</button><output class="human-key-status">No in-memory key / 当前无内存密钥</output></details></section>"#
+        r#"<section class="panel key-vault"><details><summary>Local signing key / 本地签名密钥</summary><p class="muted">Import your encrypted recovery bundle when this tab needs to sign a human action. Decryption stays in memory and is discarded when the tab closes.</p><form class="human-key-import-form"><label>Encrypted key bundle / 加密密钥包<input name="key_bundle" type="file" accept="application/json,.json" required></label><label>Passphrase / 口令<input name="passphrase" type="password" minlength="16" autocomplete="current-password" required></label><button type="submit" disabled>Decrypt into this tab / 仅解密到当前标签页</button><output></output></form><button class="forget-human-key" type="button">Forget in-memory key / 清除内存密钥</button><output class="human-key-status">No in-memory key / 当前无内存密钥</output></details></section>"#
     } else {
         ""
     };
@@ -10907,6 +10907,21 @@ mod tests {
         assert!(script.contains("Ed25519"));
         assert!(script.contains("privatePkcs8.fill(0)"));
         assert!(script.contains("decrypted.fill(0)"));
+        let binding_entrypoint = script
+            .find("document.addEventListener(\"DOMContentLoaded\", async () => {")
+            .expect("browser binding entrypoint");
+        let binding_contract = &script[binding_entrypoint..];
+        let human_key_binding = binding_contract
+            .find("bindHumanKeyImport();")
+            .expect("human key binding");
+        let bindings_ready = binding_contract
+            .find("document.documentElement.dataset.paperRaidBindingsReady = \"true\";")
+            .expect("browser binding readiness contract");
+        let csrf_warmup = binding_contract
+            .find("try { await refreshCsrf(); } catch (_) { return; }")
+            .expect("authenticated CSRF warm-up");
+        assert!(human_key_binding < bindings_ready);
+        assert!(bindings_ready < csrf_warmup);
     }
 
     #[tokio::test]
@@ -10922,6 +10937,9 @@ mod tests {
         let body = std::str::from_utf8(&body).expect("UTF-8 onboarding");
         assert!(body.contains("human-key-create-form"));
         assert!(body.contains("human-key-register-form"));
+        assert!(body.contains(
+            "<button type=\"submit\" disabled>Decrypt into this tab / 仅解密到当前标签页</button>"
+        ));
         assert!(body.contains("AES-256-GCM + PBKDF2-SHA-256"));
         assert!(body.contains("import the original bundle and retry with the same key"));
         assert!(!body.contains("Generate, encrypt, export, and register"));

@@ -1473,10 +1473,10 @@ function bindAgentRotation() {
 
 function bindHumanKeyImport() {
   for (const form of document.querySelectorAll(".human-key-import-form")) {
+    const button = form.querySelector('button[type="submit"]');
     form.addEventListener("submit", async event => {
       event.preventDefault();
       const output = form.querySelector("output");
-      const button = form.querySelector("button");
       const fileInput = form.elements.key_bundle;
       const passphraseInput = form.elements.passphrase;
       const passphrase = passphraseInput.value;
@@ -1501,6 +1501,11 @@ function bindHumanKeyImport() {
         button.disabled = false;
       }
     });
+    // The server renders this sensitive local-only form disabled.  Enable it
+    // only after preventDefault is synchronously installed, so a missing or
+    // delayed script can never fall back to a native GET containing its
+    // passphrase.
+    button.disabled = false;
   }
   for (const button of document.querySelectorAll(".forget-human-key")) {
     button.addEventListener("click", () => {
@@ -3795,9 +3800,6 @@ function bindProductTelemetry() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   bindLogin();
-  if (document.body.dataset.authenticated === "true") {
-    try { await refreshCsrf(); } catch (_) { return; }
-  }
   bindHumanKeyCreate();
   bindHumanKeyRegistration();
   bindHumanKeyImport();
@@ -3819,4 +3821,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindArtifactForms();
   bindTimeline();
   bindProductTelemetry();
+  // Binding player controls must not depend on a network round trip.  A slow
+  // CSRF refresh previously left native forms briefly active without their
+  // fail-closed JavaScript handlers, so a real player click could submit and
+  // navigate away before the listener existed.  Mutations already refresh a
+  // missing token lazily; publish one explicit readiness contract after every
+  // control is synchronously bound, then warm the token in the background.
+  document.documentElement.dataset.paperRaidBindingsReady = "true";
+  if (document.body.dataset.authenticated === "true") {
+    try { await refreshCsrf(); } catch (_) { return; }
+  }
 });
