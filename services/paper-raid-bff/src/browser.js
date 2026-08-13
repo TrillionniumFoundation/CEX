@@ -3650,6 +3650,9 @@ function renderLiveRaid(card, value) {
   while (eventList.children.length > 12) eventList.firstElementChild.remove();
 }
 
+const LIVE_AUTHORITY_POLL_MS = 500;
+const STALE_AUTHORITY_RELOAD_DELAY_MS = 100;
+
 function invalidateStalePlayerForms(card, connection, output) {
   if (card.dataset.authorityState === "stale") return;
   card.dataset.authorityState = "stale";
@@ -3668,7 +3671,7 @@ function invalidateStalePlayerForms(card, connection, output) {
     window.location.reload();
   };
   recordProductEvent("stale_ui_reload", { paperId }).finally(reloadCurrentAuthority);
-  window.setTimeout(reloadCurrentAuthority, 400);
+  window.setTimeout(reloadCurrentAuthority, STALE_AUTHORITY_RELOAD_DELAY_MS);
 }
 
 function createLiveRaidSync(card) {
@@ -3753,7 +3756,7 @@ function createLiveRaidSync(card) {
         const sequences = Array.from(nakamaSessions.values(), state => state.sequence);
         const maxSequence = sequences.length > 0 ? Math.max(...sequences) : 0;
         show(output, `cursor ${cursor.hepta} · ${sequences.length} session(s) · max sequence ${maxSequence}`, true);
-        schedule(catchingUp ? 25 : 1250);
+        schedule(catchingUp ? 25 : LIVE_AUTHORITY_POLL_MS);
       } catch (error) {
         failures += 1;
         wasDisconnected = true;

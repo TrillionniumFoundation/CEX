@@ -90,6 +90,12 @@ assert.ok(source.includes("new Blob([plainText]"));
 assert.ok(source.includes("function invalidateStalePlayerForms("));
 assert.ok(source.includes('connection.dataset.state = "stale-authority"'));
 assert.ok(source.includes("newHeptaEvents > 0 || currentPhase !== synchronizedPhase"));
+assert.ok(source.includes("const LIVE_AUTHORITY_POLL_MS = 500;"));
+assert.ok(source.includes("const STALE_AUTHORITY_RELOAD_DELAY_MS = 100;"));
+assert.ok(source.includes("schedule(catchingUp ? 25 : LIVE_AUTHORITY_POLL_MS);"));
+assert.ok(source.includes(
+  "window.setTimeout(reloadCurrentAuthority, STALE_AUTHORITY_RELOAD_DELAY_MS);",
+));
 const htmlSource = await readFile(new URL("../src/html.rs", import.meta.url), "utf8");
 assert.ok(htmlSource.includes('class=\"human-key-import-form\"'));
 assert.ok(htmlSource.includes('<button type=\"submit\" disabled>Decrypt into this tab'));
