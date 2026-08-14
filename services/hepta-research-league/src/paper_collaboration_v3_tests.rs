@@ -29,8 +29,201 @@ fn request_for(bundle: NeutralArtifactBundleV1) -> CreateArtifactManifestRequest
         expected_source_manifest_sha256,
         source_bundle: bundle,
         storage_locations,
+        review_ready_assembly: None,
         idempotency_key: "integration-artifact-fixture".to_string(),
     }
+}
+
+fn review_source_manifest(
+    paper_id: Uuid,
+    challenge_id: Uuid,
+    manifest_id: Uuid,
+    objects: &[(&str, &str, &str, u8)],
+) -> ArtifactManifest {
+    let objects = objects
+        .iter()
+        .map(
+            |(role, path, media_type, digest_byte)| NeutralArtifactObjectV1 {
+                canonical_json: false,
+                dependencies: Vec::new(),
+                logical_path: (*path).to_string(),
+                media_type: (*media_type).to_string(),
+                role: (*role).to_string(),
+                sha256: format!("{digest_byte:064x}"),
+                size: 16,
+            },
+        )
+        .collect::<Vec<_>>();
+    let storage_locations = objects
+        .iter()
+        .map(|object| ArtifactReference {
+            logical_path: object.logical_path.clone(),
+            sha256: object.sha256.clone(),
+            uri: format!("cas://sha256/{}", object.sha256),
+            acl: ArtifactAcl::Team,
+        })
+        .collect::<Vec<_>>();
+    let object_count = u64::try_from(objects.len()).unwrap();
+    let source_manifest_sha256 = format!("{:064x}", manifest_id.as_u128());
+    ArtifactManifest {
+        manifest_id,
+        paper_project_id: paper_id,
+        binding_schema: ARTIFACT_MANIFEST_BINDING_SCHEMA_V1.to_string(),
+        source_bundle_schema: SOURCE_ARTIFACT_BUNDLE_SCHEMA_V1.to_string(),
+        source_bundle_id: format!("source-{manifest_id}"),
+        source_challenge_id: challenge_id.to_string(),
+        source_created_at: "2026-08-14T00:00:00Z".to_string(),
+        source_manifest_sha256: source_manifest_sha256.clone(),
+        manifest_hash: format!("sha256:{source_manifest_sha256}"),
+        object_count,
+        objects,
+        required_run_ids: vec!["run-1".to_string()],
+        storage_locations,
+        total_size_bytes: 16 * object_count,
+        review_ready_assembly: None,
+        version: 1,
+        created_at: Utc::now(),
+    }
+}
+
+fn review_ready_fixture() -> (
+    Uuid,
+    Uuid,
+    Vec<ArtifactManifest>,
+    CreateArtifactManifestRequest,
+    ArtifactManifest,
+) {
+    let paper_id = Uuid::from_u128(0x9100_0000_0000_4000_8000_0000_0000_0001);
+    let challenge_id = Uuid::from_u128(0x9100_0000_0000_4000_8000_0000_0000_0002);
+    let source = vec![
+        review_source_manifest(
+            paper_id,
+            challenge_id,
+            Uuid::from_u128(0x9100_0000_0000_4000_8000_0000_0000_0010),
+            &[
+                (
+                    "bibliography",
+                    "bibliography/references.bib",
+                    "application/x-bibtex",
+                    1,
+                ),
+                (
+                    "claim_evidence_graph",
+                    "evidence/claims.json",
+                    "application/json",
+                    2,
+                ),
+                (
+                    "paper_source",
+                    "paper/paper.md",
+                    "text/markdown; charset=utf-8",
+                    3,
+                ),
+            ],
+        ),
+        review_source_manifest(
+            paper_id,
+            challenge_id,
+            Uuid::from_u128(0x9100_0000_0000_4000_8000_0000_0000_0011),
+            &[(
+                "frozen_evaluator",
+                "evaluator/evaluator.py",
+                "text/x-python; charset=utf-8",
+                4,
+            )],
+        ),
+        review_source_manifest(
+            paper_id,
+            challenge_id,
+            Uuid::from_u128(0x9100_0000_0000_4000_8000_0000_0000_0012),
+            &[("dataset", "inputs/dataset.json", "application/json", 5)],
+        ),
+        review_source_manifest(
+            paper_id,
+            challenge_id,
+            Uuid::from_u128(0x9100_0000_0000_4000_8000_0000_0000_0013),
+            &[("candidate", "inputs/candidate.json", "application/json", 6)],
+        ),
+    ];
+    let manifest_id = Uuid::from_u128(0x9100_0000_0000_4000_8000_0000_0000_0020);
+    let mut objects = source
+        .iter()
+        .flat_map(|manifest| manifest.objects.iter().cloned())
+        .collect::<Vec<_>>();
+    objects.sort_by(|left, right| left.logical_path.cmp(&right.logical_path));
+    let storage_locations = objects
+        .iter()
+        .map(|object| ArtifactReference {
+            logical_path: object.logical_path.clone(),
+            sha256: object.sha256.clone(),
+            uri: format!("cas://sha256/{}", object.sha256),
+            acl: ArtifactAcl::Reviewers,
+        })
+        .collect::<Vec<_>>();
+    let assembly = ReviewReadyArtifactAssemblyV1 {
+        schema: REVIEW_READY_ARTIFACT_ASSEMBLY_SCHEMA_V1.to_string(),
+        draft: ArtifactManifestPinV1 {
+            manifest_id: source[0].manifest_id,
+            manifest_hash: source[0].manifest_hash.clone(),
+        },
+        frozen_evaluator: ArtifactManifestPinV1 {
+            manifest_id: source[1].manifest_id,
+            manifest_hash: source[1].manifest_hash.clone(),
+        },
+        dataset: ArtifactManifestPinV1 {
+            manifest_id: source[2].manifest_id,
+            manifest_hash: source[2].manifest_hash.clone(),
+        },
+        candidate: ArtifactManifestPinV1 {
+            manifest_id: source[3].manifest_id,
+            manifest_hash: source[3].manifest_hash.clone(),
+        },
+    };
+    let source_bundle = NeutralArtifactBundleV1 {
+        artifact_root: NeutralArtifactRootV1 {
+            algorithm: "sha256-canonical-manifest-v1".to_string(),
+            digest_file: "artifact-bundle.v1.sha256".to_string(),
+        },
+        bundle_id: format!("review-ready-{manifest_id}"),
+        challenge_id: challenge_id.to_string(),
+        created_at: "2026-08-14T00:00:00Z".to_string(),
+        hepta_binding_status: "unbound".to_string(),
+        human_authority_materialized: false,
+        object_count: u64::try_from(objects.len()).unwrap(),
+        objects,
+        required_run_ids: vec!["run-1".to_string()],
+        schema: SOURCE_ARTIFACT_BUNDLE_SCHEMA_V1.to_string(),
+    };
+    let expected_source_manifest_sha256 = neutral_bundle_sha256(&source_bundle).unwrap();
+    let request = CreateArtifactManifestRequest {
+        manifest_id,
+        expected_paper_version: 1,
+        expected_source_manifest_sha256: expected_source_manifest_sha256.clone(),
+        source_bundle: source_bundle.clone(),
+        storage_locations: storage_locations.clone(),
+        review_ready_assembly: Some(assembly.clone()),
+        idempotency_key: "review-ready-fixture".to_string(),
+    };
+    let manifest = ArtifactManifest {
+        manifest_id,
+        paper_project_id: paper_id,
+        binding_schema: REVIEW_READY_ARTIFACT_MANIFEST_BINDING_SCHEMA_V1.to_string(),
+        source_bundle_schema: source_bundle.schema.clone(),
+        source_bundle_id: source_bundle.bundle_id.clone(),
+        source_challenge_id: source_bundle.challenge_id.clone(),
+        source_created_at: source_bundle.created_at.clone(),
+        source_manifest_sha256: expected_source_manifest_sha256.clone(),
+        manifest_hash: format!("sha256:{expected_source_manifest_sha256}"),
+        object_count: source_bundle.object_count,
+        objects: source_bundle.objects.clone(),
+        required_run_ids: source_bundle.required_run_ids.clone(),
+        storage_locations,
+        total_size_bytes: source_bundle.objects.iter().map(|object| object.size).sum(),
+        review_ready_assembly: Some(assembly),
+        version: 1,
+        created_at: Utc::now(),
+    };
+    (paper_id, challenge_id, source, request, manifest)
 }
 
 #[test]
@@ -51,6 +244,9 @@ fn cancelled_only_work_does_not_satisfy_preregistration_progress() {
         challenge_ruleset_snapshot_hash: None,
         deadline_at: None,
         grace_expires_at: None,
+        active_rework_id: None,
+        active_rework_cycle: None,
+        rework_expires_at: None,
         outcome: PaperChallengeOutcomeV1::InProgress,
         outcome_reason: None,
         terminal_at: None,
@@ -139,6 +335,9 @@ fn whole_paper_revision_must_snapshot_current_merged_section_head_and_inherit_it
         challenge_ruleset_snapshot_hash: None,
         deadline_at: None,
         grace_expires_at: None,
+        active_rework_id: None,
+        active_rework_cycle: None,
+        rework_expires_at: None,
         outcome: PaperChallengeOutcomeV1::InProgress,
         outcome_reason: None,
         terminal_at: None,
@@ -401,6 +600,9 @@ fn authoritative_author_approval_projects_victory_gates_not_a_phase_transition()
         challenge_ruleset_snapshot: Some(snapshot),
         deadline_at: Some(now + chrono::Duration::minutes(45)),
         grace_expires_at: Some(now + chrono::Duration::minutes(60)),
+        active_rework_id: None,
+        active_rework_cycle: None,
+        rework_expires_at: None,
         outcome: PaperChallengeOutcomeV1::InProgress,
         outcome_reason: None,
         terminal_at: None,
@@ -570,6 +772,146 @@ fn neutral_manifest_tamper_and_unsafe_locations_fail_closed() {
     let error = validate_artifact_manifest_request(&unsafe_uri)
         .expect_err("credential-bearing storage URI must fail");
     assert_eq!(error.code, "unsafe_artifact_uri");
+}
+
+#[test]
+fn review_ready_assembly_re_resolves_exact_same_paper_sources() {
+    let (paper_id, challenge_id, source, request, manifest) = review_ready_fixture();
+    validate_artifact_manifest_request(&request).expect("canonical aggregate request");
+    validate_review_ready_artifact_assembly(&request, &manifest, paper_id, challenge_id, &source)
+        .expect("server-resolved Review-ready assembly");
+    validate_review_ready_artifact_manifest(&manifest).expect("Review claim-ready manifest");
+}
+
+#[test]
+fn review_ready_assembly_rejects_role_media_and_cross_paper_tamper() {
+    let (paper_id, challenge_id, source, request, manifest) = review_ready_fixture();
+
+    let mut missing_role = source.clone();
+    missing_role[0].objects[0].role = "paper_source".to_string();
+    missing_role[0].objects[0].media_type = "text/markdown; charset=utf-8".to_string();
+    let error = validate_review_ready_artifact_assembly(
+        &request,
+        &manifest,
+        paper_id,
+        challenge_id,
+        &missing_role,
+    )
+    .expect_err("missing bibliography role must fail");
+    assert_eq!(error.code, "review_ready_source_role_coverage_invalid");
+
+    let mut wrong_media = source.clone();
+    wrong_media[3].objects[0].media_type = "text/plain; charset=utf-8".to_string();
+    let error = validate_review_ready_artifact_assembly(
+        &request,
+        &manifest,
+        paper_id,
+        challenge_id,
+        &wrong_media,
+    )
+    .expect_err("candidate media mismatch must fail");
+    assert_eq!(error.code, "review_ready_source_role_or_media_mismatch");
+
+    let mut cross_paper = source.clone();
+    cross_paper[2].paper_project_id = Uuid::new_v4();
+    let error = validate_review_ready_artifact_assembly(
+        &request,
+        &manifest,
+        paper_id,
+        challenge_id,
+        &cross_paper,
+    )
+    .expect_err("foreign Paper dataset must fail");
+    assert_eq!(error.code, "review_ready_source_manifest_cross_paper");
+}
+
+#[test]
+fn review_ready_assembly_rejects_digest_reuse_reordering_extras_and_stale_pins() {
+    let (paper_id, challenge_id, source, request, manifest) = review_ready_fixture();
+
+    let mut reused = source.clone();
+    reused[3].objects[0].sha256 = reused[2].objects[0].sha256.clone();
+    reused[3].storage_locations[0].sha256 = reused[3].objects[0].sha256.clone();
+    reused[3].storage_locations[0].uri = format!("cas://sha256/{}", reused[3].objects[0].sha256);
+    let error = validate_review_ready_artifact_assembly(
+        &request,
+        &manifest,
+        paper_id,
+        challenge_id,
+        &reused,
+    )
+    .expect_err("cross-role digest reuse must fail");
+    assert_eq!(error.code, "review_ready_source_object_reused");
+
+    let mut reordered_request = request.clone();
+    reordered_request.source_bundle.objects.reverse();
+    let mut reordered_manifest = manifest.clone();
+    reordered_manifest.objects = reordered_request.source_bundle.objects.clone();
+    let error = validate_review_ready_artifact_assembly(
+        &reordered_request,
+        &reordered_manifest,
+        paper_id,
+        challenge_id,
+        &source,
+    )
+    .expect_err("client object reordering must fail");
+    assert_eq!(error.code, "review_ready_assembly_projection_mismatch");
+
+    let mut appended_request = request.clone();
+    let mut appended = appended_request.source_bundle.objects[0].clone();
+    appended.logical_path = "z/extra.json".to_string();
+    appended.sha256 = format!("{:064x}", 99);
+    appended_request
+        .source_bundle
+        .objects
+        .push(appended.clone());
+    appended_request.source_bundle.object_count += 1;
+    appended_request.storage_locations.push(ArtifactReference {
+        logical_path: appended.logical_path.clone(),
+        sha256: appended.sha256.clone(),
+        uri: format!("cas://sha256/{}", appended.sha256),
+        acl: ArtifactAcl::Reviewers,
+    });
+    let mut appended_manifest = manifest.clone();
+    appended_manifest.objects = appended_request.source_bundle.objects.clone();
+    appended_manifest.object_count = appended_request.source_bundle.object_count;
+    appended_manifest.storage_locations = appended_request.storage_locations.clone();
+    let error = validate_review_ready_artifact_assembly(
+        &appended_request,
+        &appended_manifest,
+        paper_id,
+        challenge_id,
+        &source,
+    )
+    .expect_err("appended object must fail");
+    assert_eq!(error.code, "review_ready_assembly_projection_mismatch");
+
+    let mut stale_request = request.clone();
+    stale_request
+        .review_ready_assembly
+        .as_mut()
+        .unwrap()
+        .dataset
+        .manifest_hash = format!("sha256:{:064x}", 1000);
+    let error = validate_review_ready_artifact_assembly(
+        &stale_request,
+        &manifest,
+        paper_id,
+        challenge_id,
+        &source,
+    )
+    .expect_err("stale source hash must fail");
+    assert_eq!(error.code, "review_ready_source_manifest_stale");
+}
+
+#[test]
+fn legacy_author_manifest_remains_readable_but_cannot_enter_review() {
+    let (_, _, _, _, mut manifest) = review_ready_fixture();
+    manifest.binding_schema = ARTIFACT_MANIFEST_BINDING_SCHEMA_V1.to_string();
+    manifest.review_ready_assembly = None;
+    let error = validate_review_ready_artifact_manifest(&manifest)
+        .expect_err("legacy Author manifest must fail closed at Review claim");
+    assert_eq!(error.code, "review_ready_artifact_manifest_required");
 }
 
 #[test]
@@ -1841,6 +2183,9 @@ fn expiring_paper(grace_expires_at: DateTime<Utc>) -> PaperProject {
         challenge_ruleset_snapshot_hash: None,
         deadline_at: Some(grace_expires_at - chrono::Duration::minutes(15)),
         grace_expires_at: Some(grace_expires_at),
+        active_rework_id: None,
+        active_rework_cycle: None,
+        rework_expires_at: None,
         outcome: PaperChallengeOutcomeV1::InProgress,
         outcome_reason: None,
         terminal_at: None,
@@ -1865,13 +2210,11 @@ fn automatic_challenge_expiry_uses_a_half_open_grace_boundary_and_is_idempotent(
     assert!(!apply_automatic_challenge_expiry(
         &mut paper,
         grace_expires_at - chrono::Duration::nanoseconds(1),
-    ));
+    )
+    .unwrap());
     assert_eq!(paper, original);
 
-    assert!(apply_automatic_challenge_expiry(
-        &mut paper,
-        grace_expires_at,
-    ));
+    assert!(apply_automatic_challenge_expiry(&mut paper, grace_expires_at,).unwrap());
     assert_eq!(paper.outcome, PaperChallengeOutcomeV1::Expired);
     assert_eq!(
         paper.outcome_reason.as_deref(),
@@ -1885,7 +2228,8 @@ fn automatic_challenge_expiry_uses_a_half_open_grace_boundary_and_is_idempotent(
     assert!(!apply_automatic_challenge_expiry(
         &mut paper,
         grace_expires_at + chrono::Duration::hours(1),
-    ));
+    )
+    .unwrap());
     assert_eq!(paper, materialized, "retry must be a no-op");
 }
 
@@ -1905,15 +2249,18 @@ fn automatic_challenge_expiry_memory_writes_one_room_and_outbox_event() {
         paper_id,
         grace_expires_at - chrono::Duration::nanoseconds(1),
     )
+    .unwrap()
     .is_none());
     let response =
         materialize_automatic_challenge_expiry_memory(&mut memory, paper_id, grace_expires_at)
+            .expect("expiry transition succeeds")
             .expect("boundary materializes expiry");
     assert!(materialize_automatic_challenge_expiry_memory(
         &mut memory,
         paper_id,
         grace_expires_at + chrono::Duration::seconds(1),
     )
+    .unwrap()
     .is_none());
 
     let room_events = memory
@@ -1941,7 +2288,7 @@ fn automatic_challenge_expiry_memory_writes_one_room_and_outbox_event() {
         outbox_events[0].idempotency_key,
         format!(
             "paper-raid:{AUTOMATIC_CHALLENGE_EXPIRY_OPERATION}:{}",
-            automatic_challenge_expiry_idempotency_key(paper_id)
+            automatic_challenge_expiry_idempotency_key(&response)
         )
     );
 }
@@ -1960,6 +2307,7 @@ async fn concurrent_automatic_challenge_expiry_reads_materialize_once() {
     let materialize = |memory: std::sync::Arc<tokio::sync::RwLock<PaperRaidMemory>>| async move {
         let mut memory = memory.write().await;
         materialize_automatic_challenge_expiry_memory(&mut memory, paper_id, grace_expires_at)
+            .expect("expiry transition succeeds")
             .is_some()
     };
     let (left, right) = tokio::join!(materialize(memory.clone()), materialize(memory.clone()));
@@ -2141,8 +2489,8 @@ fn automatic_challenge_expiry_transition_is_backend_neutral() {
     let mut memory_record = expiring_paper(grace_expires_at);
     let mut postgres_record = memory_record.clone();
 
-    assert!(apply_automatic_challenge_expiry(&mut memory_record, now));
-    assert!(apply_automatic_challenge_expiry(&mut postgres_record, now));
+    assert!(apply_automatic_challenge_expiry(&mut memory_record, now).unwrap());
+    assert!(apply_automatic_challenge_expiry(&mut postgres_record, now).unwrap());
     assert_eq!(memory_record, postgres_record);
     assert_eq!(
         memory_record.terminal_at,
@@ -2156,10 +2504,10 @@ fn automatic_challenge_expiry_transition_is_backend_neutral() {
 
     memory_record.outcome = PaperChallengeOutcomeV1::SubmissionReady;
     postgres_record = memory_record.clone();
-    assert!(!apply_automatic_challenge_expiry(
-        &mut memory_record,
-        now + chrono::Duration::days(1),
-    ));
+    assert!(
+        !apply_automatic_challenge_expiry(&mut memory_record, now + chrono::Duration::days(1),)
+            .unwrap()
+    );
     assert_eq!(memory_record, postgres_record);
 }
 

@@ -17,10 +17,16 @@ pub use canonical::{
 pub use command::{AuthorityRole, SignedResearchCommandV1, SignedResearchCommandValidationError};
 pub use paper_raid::{
     PaperRaidAppealStatusV2, PaperRaidAppealStatusV3, PaperRaidFinalityCommitmentDecodeError,
-    PaperRaidFinalityCommitmentV2, PaperRaidFinalityCommitmentV3, PaperRaidFinalityValidationError,
-    SignedPaperRaidFinalityCommandV2, SignedPaperRaidFinalityCommandV3,
-    SignedPaperRaidFinalityCommandValidationError, PAPER_RAID_FINALITY_COMMITMENT_VERSION_V2,
-    PAPER_RAID_FINALITY_COMMITMENT_VERSION_V3,
+    PaperRaidFinalityCommitmentV2, PaperRaidFinalityCommitmentV3, PaperRaidFinalityCommitmentV4,
+    PaperRaidFinalityValidationError, PaperRaidReworkLineageV1, SignedPaperRaidFinalityCommandV2,
+    SignedPaperRaidFinalityCommandV3, SignedPaperRaidFinalityCommandV4,
+    SignedPaperRaidFinalityCommandValidationError, HEPTA_APPEAL_EXTERNAL_KEY_NAMESPACE_V1,
+    HEPTA_EVALUATION_EXTERNAL_KEY_NAMESPACE_V1, HEPTA_PAPER_EXTERNAL_KEY_NAMESPACE_V1,
+    HEPTA_PAPER_RAID_FINALITY_PREPARATION_EXTERNAL_KEY_NAMESPACE_V1,
+    HEPTA_REPRODUCTION_EXTERNAL_KEY_NAMESPACE_V1, HEPTA_REVISION_EXTERNAL_KEY_NAMESPACE_V1,
+    HEPTA_REWORK_EXTERNAL_KEY_NAMESPACE_V1, HEPTA_SUBMISSION_EXTERNAL_KEY_NAMESPACE_V1,
+    PAPER_RAID_FINALITY_COMMITMENT_VERSION_V2, PAPER_RAID_FINALITY_COMMITMENT_VERSION_V3,
+    PAPER_RAID_FINALITY_COMMITMENT_VERSION_V4, PAPER_RAID_REWORK_LINEAGE_VERSION_V1,
 };
 pub use state::{
     AppliedCommandRecordV1, ApplyOutcome, AuthorityIdentityV1, AuthoritySetV1,

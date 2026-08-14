@@ -17,6 +17,116 @@ Bridge v2 supports:
   pairing recovery without a disk-backed pairing-code transaction;
 - optional frozen research-session action signing.
 
+## Signed installation and service lifecycle
+
+The dependency-free runtime is also an installable, per-user background
+service. Release construction is deterministic and contains exactly the fixed
+runtime closure compiled into `src/release.mjs`; tests, package-manager
+dependencies, arbitrary executables, links, devices, and additional files
+cannot be introduced by a manifest.
+
+An offline release operator builds the unsigned bundle and canonical manifest
+twice and compares their bytes before signing:
+
+```sh
+npm run build-release -- --version 0.3.0 --sequence 1 --out ./release-a
+npm run build-release -- --version 0.3.0 --sequence 1 --out ./release-b
+cmp ./release-a/*.bundle.json ./release-b/*.bundle.json
+cmp ./release-a/*.manifest.json ./release-b/*.manifest.json
+
+openssl pkeyutl -sign -rawin \
+  -inkey bridge-release-ed25519-private.pem \
+  -in ./release-a/paper-raid-agent-bridge-000000000001-0.3.0.manifest.json \
+  -out ./release-a/paper-raid-agent-bridge-000000000001-0.3.0.manifest.sig
+openssl pkey -pubin -in bridge-release-ed25519-public.pem -outform DER \
+  | sha256sum | awk '{print "sha256:" $1}'
+```
+
+The last command supplies the explicit `sha256:` public-key fingerprint pin.
+The private signing key is never installed. The installer reads the package,
+manifest, raw 64-byte detached Ed25519 signature, and public key through held
+file descriptors with `O_NOFOLLOW`; it rejects wrong ownership or modes,
+hardlinks, symlinks, in-place mutation, noncanonical JSON, duplicate/unknown
+fields, traversal, and every file-set or digest mismatch.
+
+Install defaults to Confirm mode:
+
+```sh
+paper-raid-agent-bridge install \
+  --package ./release-a/paper-raid-agent-bridge-000000000001-0.3.0.bundle.json \
+  --manifest ./release-a/paper-raid-agent-bridge-000000000001-0.3.0.manifest.json \
+  --signature ./release-a/paper-raid-agent-bridge-000000000001-0.3.0.manifest.sig \
+  --trusted-key bridge-release-ed25519-public.pem \
+  --fingerprint sha256:REPLACE_WITH_64_LOWERCASE_HEX \
+  --bff-url https://paper-raid.example \
+  --agent-id agent.example \
+  --capabilities artifact_analysis,evidence_search,section_drafting \
+  --resource-classes artifact_io,cpu,sandbox
+```
+
+The default root is
+`$XDG_DATA_HOME/paper-raid-agent-bridge` (or
+`~/.local/share/paper-raid-agent-bridge`). The launcher is
+`~/.local/bin/paper-raid-agent-bridge`; the hardened user unit is
+`$XDG_CONFIG_HOME/systemd/user/paper-raid-agent-bridge.service`. Production
+commands invoke only the fixed `/usr/bin/systemctl` or `/bin/systemctl` path
+and every call has a bounded timeout. On commands that invoke the service
+manager, `--root` and `--systemctl` must appear together and exist only for
+the rootless, no-network mock-systemd test harness; they cannot replace host
+`systemctl` independently.
+
+Complete the player flow without JSON, UUID, or digest input:
+
+```sh
+paper-raid-agent-bridge pair
+paper-raid-agent-bridge diagnose
+paper-raid-agent-bridge confirm
+paper-raid-agent-bridge mode --mode auto --acknowledge-auto
+```
+
+`diagnose` reports `ready` only when the installed release verifies, the
+identity parses, a complete binding state matches that identity, and the user
+service is active. Confirm never runs while the service is in Auto. Auto must
+be acknowledged explicitly and submits only one unambiguous actionable item;
+concurrent in-process cycles are serialized and suppress an already accepted
+item. The BFF's deterministic request/receipt identities remain the
+cross-process lost-response boundary.
+
+Updates must use the same pinned release key and a sequence greater than both
+`current` and `previous`:
+
+```sh
+paper-raid-agent-bridge update \
+  --package NEW.bundle.json --manifest NEW.manifest.json \
+  --signature NEW.manifest.sig --trusted-key bridge-release-ed25519-public.pem \
+  --fingerprint sha256:REPLACE_WITH_64_LOWERCASE_HEX
+paper-raid-agent-bridge rollback \
+  --signature PREVIOUS.manifest.sig \
+  --trusted-key bridge-release-ed25519-public.pem \
+  --fingerprint sha256:REPLACE_WITH_64_LOWERCASE_HEX
+```
+
+Publication reserves a new final directory with kernel `EEXIST` semantics, so
+an existing release is never replaced. `current` and `previous` switch only
+after complete verification. Any failure after publication, either pointer
+phase, verification, restart, or active check restores both pointers and the
+running release; a failed mode restart restores the exact prior service-config
+inode. A failed first install restores preserved identity/configuration data,
+deletes only inodes created by that attempt, and removes a newly empty root.
+
+Uninstall stops and removes only byte-exact managed unit, launcher, release,
+pointer, trust, and installation files. Player identity, pairing state, and
+configuration are preserved by default:
+
+```sh
+paper-raid-agent-bridge uninstall
+```
+
+`--purge-data` is intentionally accepted only with an explicit isolated test
+root. Production data deletion is never coupled to executable removal; back
+up and inspect the preserved owner-only `data/` directory before any separate
+operator-approved deletion.
+
 ## Configuration
 
 Copy `example.config.json`, then adjust only its public origin, local paths,
@@ -283,6 +393,8 @@ transport. It does not create a login or introduce another mutation route.
 
 ```sh
 npm test
+npm run test:lifecycle
+npm run check:lifecycle
 ```
 
 The Node suite freezes the V3 disclosure vector and Agent request-proof frame,
@@ -293,3 +405,11 @@ path. It also runs a real allowlisted frozen evaluator, rejects role/assignment,
 path, route, digest, byte, expiry, adapter and command-shape mutants, freezes a
 language-neutral ReviewExecutionReceipt frame vector, and proves owner-only
 outbox recovery after a committed/lost receipt response.
+
+The independent lifecycle-hostile suite is rootless, offline, and uses only a
+temporary install root plus a mock `systemctl`. It covers detached signatures
+and fingerprint pins; canonical/duplicate/unknown/missing/traversal mutants;
+symlink, hardlink, mode, held-file and no-replace races; failed-install data
+rollback; every update/rollback pointer phase; anti-rollback sequences; mode
+restart recovery; Confirm/Auto concurrency; paired readiness; bounded
+systemctl failure/timeout; and preserve-versus-test-purge uninstall behavior.

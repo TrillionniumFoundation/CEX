@@ -4069,9 +4069,10 @@ fn guided_paper_room(
         phase,
         current_player_id: &current_player_id,
     });
+    let rework_controls = author_rework_panel(paper_id, phase, paper, room, review);
     let appeal_controls = author_appeal_panel(paper_id, phase, room, review);
     format!(
-        r#"{}<section class="panel raid-command-center" data-paper-phase="{}" data-player-phase="{}"><div class="phase-objective"><span class="eyebrow">CURRENT OBJECTIVE / 当前目标</span><h2>{}</h2><p>{}</p><span class="pill">{} · {}</span>{}</div><div class="phase-readiness"><h3>Blockers / 阻塞项</h3><ul>{}</ul><p class="muted">Hepta's Author Raid projection is authoritative when present; local derivation is only a compatibility fallback.</p></div>{}</section>{}{}{}{}{}{}{}<section class="panel material-panel"><h2>Research Materials / 研究材料</h2><p>Upload immutable bytes here. A registered ArtifactManifest is still required before a revision can bind those bytes.</p><div class="action-grid">{}</div></section>"#,
+        r#"{}<section class="panel raid-command-center" data-paper-phase="{}" data-player-phase="{}"><div class="phase-objective"><span class="eyebrow">CURRENT OBJECTIVE / 当前目标</span><h2>{}</h2><p>{}</p><span class="pill">{} · {}</span>{}</div><div class="phase-readiness"><h3>Blockers / 阻塞项</h3><ul>{}</ul><p class="muted">Hepta's Author Raid projection is authoritative when present; local derivation is only a compatibility fallback.</p></div>{}</section>{}{}{}{}{}{}{}{}<section class="panel material-panel"><h2>Research Materials / 研究材料</h2><p>Upload immutable bytes here. A registered ArtifactManifest is still required before a revision can bind those bytes.</p><div class="action-grid">{}</div></section>"#,
         challenge_controls,
         escape(phase),
         escape(player_phase),
@@ -4088,6 +4089,7 @@ fn guided_paper_room(
         science_controls,
         revision_controls,
         section_controls,
+        rework_controls,
         appeal_controls,
         artifact_upload(paper_id),
     )
@@ -4457,6 +4459,247 @@ fn challenge_requirement_label(kind: &str) -> &'static str {
         "all_author_consents" => "all author consents / 全部作者同意",
         _ => "unknown authoritative requirement / 未知权威要求",
     }
+}
+
+fn author_rework_panel(
+    paper_id: &str,
+    phase: &str,
+    paper: &Value,
+    room: &Value,
+    review: Option<&Value>,
+) -> String {
+    let active = match (
+        paper.get("active_rework_id"),
+        paper.get("active_rework_cycle"),
+        paper.get("rework_expires_at"),
+    ) {
+        (Some(Value::Null), Some(Value::Null), Some(Value::Null)) => None,
+        (Some(rework_id), Some(cycle), Some(expires_at)) => {
+            let Some(_rework_id) = canonical_uuid_value(rework_id) else {
+                return unavailable_card(
+                    "Rework state unavailable / 返工状态不可用",
+                    "one canonical active rework lease",
+                );
+            };
+            let Some(cycle) = cycle.as_u64().filter(|cycle| *cycle >= 2) else {
+                return unavailable_card(
+                    "Rework state unavailable / 返工状态不可用",
+                    "one canonical active rework lease",
+                );
+            };
+            let Some(expires_at) = expires_at.as_str() else {
+                return unavailable_card(
+                    "Rework state unavailable / 返工状态不可用",
+                    "one canonical active rework lease",
+                );
+            };
+            let Some(deadline) = DateTime::parse_from_rfc3339(expires_at)
+                .ok()
+                .map(|value| value.with_timezone(&Utc))
+            else {
+                return unavailable_card(
+                    "Rework state unavailable / 返工状态不可用",
+                    "one canonical active rework lease",
+                );
+            };
+            Some((cycle, expires_at, deadline))
+        }
+        _ => {
+            return unavailable_card(
+                "Rework state unavailable / 返工状态不可用",
+                "explicit inactive fields or one canonical active rework lease",
+            )
+        }
+    };
+
+    if let Some((cycle, expires_at, deadline)) = active {
+        let expired = deadline <= Utc::now();
+        let state = if expired { "expired" } else { "active" };
+        let pill = if expired {
+            "REWORK LEASE EXPIRED"
+        } else {
+            "REWORK ACTIVE"
+        };
+        let heading = if expired {
+            "This replacement window has expired / 本次返工窗口已过期"
+        } else {
+            "Revise the rejected Paper / 修订被拒论文"
+        };
+        let detail = if expired {
+            "Author mutations are disabled. Reload after the server resolves the expired lease; the browser will not invent a replacement deadline."
+        } else {
+            "The prior submission and Review remain immutable. Reuse the normal section, revision, promotion, three-consent, and finalize controls below to create a new PaperBundle."
+        };
+        return format!(
+            r#"<section class="panel author-rework-lease" data-paper-id="{}" data-rework-state="{}" data-rework-expires-at="{}"><span class="pill">{}</span><h2>{}</h2><div class="facts"><article><strong>{}</strong><span>Rework cycle / 返工轮次</span></article><article><strong class="paper-rework-countdown" aria-live="polite">{}</strong><span>Time remaining / 剩余时间</span></article></div><p>{}</p><p class="muted">Server deadline: <time datetime="{}">{}</time></p><a class="button continue-raid-link" data-paper-id="{}" href="/league/papers/{}">Continue rework / 继续返工</a></section>"#,
+            escape(paper_id),
+            state,
+            escape(expires_at),
+            pill,
+            heading,
+            cycle,
+            if expired {
+                "Expired / 已过期"
+            } else {
+                "Loading…"
+            },
+            detail,
+            escape(expires_at),
+            escape(expires_at),
+            escape(paper_id),
+            escape(paper_id),
+        );
+    }
+
+    if phase != "submission_ready" {
+        return String::new();
+    }
+    let Some(review) = review else {
+        return unavailable_card(
+            "Rework decision unavailable / 返工决策不可用",
+            "current immutable Review state",
+        );
+    };
+    let Some(submission) = room
+        .get("joint_submission")
+        .filter(|value| value.is_object())
+    else {
+        return unavailable_card(
+            "Rework decision unavailable / 返工决策不可用",
+            "current submission-ready PaperBundle",
+        );
+    };
+    let Some(submission_id) = submission
+        .get("submission_id")
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
+    else {
+        return unavailable_card(
+            "Rework decision unavailable / 返工决策不可用",
+            "current submission-ready PaperBundle",
+        );
+    };
+    if submission.get("paper_project_id").and_then(Value::as_str) != Some(paper_id)
+        || submission.get("status").and_then(Value::as_str) != Some("submission_ready")
+    {
+        return unavailable_card(
+            "Rework decision unavailable / 返工决策不可用",
+            "current submission-ready PaperBundle",
+        );
+    }
+    let Some(evaluations) = review.get("evaluations").and_then(Value::as_array) else {
+        return unavailable_card(
+            "Rework decision unavailable / 返工决策不可用",
+            "current immutable Review state",
+        );
+    };
+    let submission_id = submission_id.to_string();
+    let mut current = evaluations
+        .iter()
+        .filter_map(|evaluation| {
+            if evaluation.get("paper_project_id").and_then(Value::as_str) != Some(paper_id)
+                || evaluation.get("submission_id").and_then(Value::as_str)
+                    != Some(submission_id.as_str())
+            {
+                return None;
+            }
+            let version = evaluation.get("version").and_then(Value::as_u64)?;
+            let evaluation_id = evaluation
+                .get("evaluation_id")
+                .and_then(Value::as_str)
+                .and_then(|value| Uuid::parse_str(value).ok())?;
+            Some((version, evaluation_id, evaluation))
+        })
+        .collect::<Vec<_>>();
+    current.sort_by_key(|(version, evaluation_id, _)| (*version, *evaluation_id));
+    let Some((_, evaluation_id, evaluation)) = current.last().copied() else {
+        return String::new();
+    };
+    if evaluation.get("status").and_then(Value::as_str) != Some("rejected") {
+        return String::new();
+    }
+    let evaluation_id_text = evaluation_id.to_string();
+    if current.iter().any(|(_, _, candidate)| {
+        candidate
+            .get("supersedes_evaluation_id")
+            .and_then(Value::as_str)
+            == Some(evaluation_id_text.as_str())
+    }) {
+        return unavailable_card(
+            "Rework decision unavailable / 返工决策不可用",
+            "latest unsuperseded rejected evaluation",
+        );
+    }
+
+    let appeals = review
+        .get("appeals")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let resolutions = review
+        .get("resolutions")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let open_appeal = appeals.iter().any(|appeal| {
+        appeal.get("evaluation_id").and_then(Value::as_str) == Some(evaluation_id_text.as_str())
+            && appeal
+                .get("appeal_id")
+                .and_then(Value::as_str)
+                .is_some_and(|appeal_id| {
+                    !resolutions.iter().any(|resolution| {
+                        resolution.get("appeal_id").and_then(Value::as_str) == Some(appeal_id)
+                    })
+                })
+    });
+    if open_appeal {
+        return r#"<section class="panel author-rework-status"><span class="pill">REWORK ON HOLD</span><h2>Resolve the open Appeal first / 请先完成申诉裁决</h2><p>The rejected Paper stays immutable while an independent resolver decides the open Appeal.</p></section>"#.into();
+    }
+
+    let failed_gates = evaluation
+        .get("paper_score")
+        .and_then(|value| value.get("hard_gates"))
+        .and_then(Value::as_object)
+        .map(|gates| {
+            [
+                (
+                    "citations_and_data_authentic",
+                    "Citations and data authenticity / 引用与数据真实性",
+                ),
+                (
+                    "failed_runs_disclosed",
+                    "Failed-run disclosure / 失败运行披露",
+                ),
+                ("all_authors_consented", "All-author consent / 全体作者同意"),
+                (
+                    "core_claims_have_evidence",
+                    "Evidence for core claims / 核心论断证据",
+                ),
+                (
+                    "artifact_lineage_complete",
+                    "Complete artifact lineage / 完整工件谱系",
+                ),
+                (
+                    "license_ethics_coi_complete",
+                    "License, ethics, and COI / 许可、伦理与利益冲突",
+                ),
+            ]
+            .into_iter()
+            .filter(|(key, _)| gates.get(*key).and_then(Value::as_bool) == Some(false))
+            .map(|(_, label)| format!("<li>{}</li>", escape(label)))
+            .collect::<String>()
+        })
+        .unwrap_or_default();
+    let reasons = if failed_gates.is_empty() {
+        "<li>The independent panel did not accept this release under the frozen score and reviewer quorum / 独立评审未按冻结评分与双评审条件接受本版本</li>".to_string()
+    } else {
+        failed_gates
+    };
+    format!(
+        r#"<section class="panel author-rework-start"><span class="pill">REVIEW REJECTED</span><h2>Choose a replacement path / 选择返工路径</h2><p>The rejected submission, Review, and receipts remain immutable. Address the visible findings in a new revision; the browser hashes your plain-language intent locally and your current human key signs the server-derived lineage.</p><h3>Review findings / 评审问题</h3><ul class="review-findings">{}</ul><form class="author-rework-start-form" data-paper-id="{}"><label>Rework intent / 返工说明<textarea name="reason" rows="5" minlength="10" maxlength="4000" required placeholder="Describe what the team will change and how it addresses the rejected Review."></textarea></label><button type="submit">Sign and start rework / 签名开始返工</button><output></output></form></section>"#,
+        reasons,
+        escape(paper_id),
+    )
 }
 
 fn author_appeal_panel(
@@ -5334,6 +5577,15 @@ fn science_action_panel_for_role(
                 artifact_media_options("text/markdown; charset=utf-8"),
                 artifact_media_options("application/x-bibtex"),
                 artifact_media_options("application/json"),
+            ));
+            actions.push_str(&format!(
+                r#"<form class="review-ready-manifest-wizard-form primary-action" data-paper-id="{}" data-paper-version="{}" data-challenge-id="{}" data-required-run-ids="{}"><h3>Freeze a Review-ready release / 冻结可评审版本</h3><p class="muted">Choose the human paper, the exact frozen evaluator and dataset supplied by this challenge, and one candidate JSON result. The browser first registers four human-readable same-Paper sources. Hepta then independently resolves their IDs and hashes, checks exact roles, media, CAS provenance, ordering, and duplicate objects, and freezes one reviewer-readable manifest. No UUID or digest is pasted.</p><fieldset><legend>Human paper / 人类论文</legend><label>Paper source / 论文正文<input name="paper_file" type="file" required></label><select name="paper_media_type" required>{}</select><label>Bibliography / 参考文献<input name="bibliography_file" type="file" required></label><select name="bibliography_media_type" required>{}</select><label>Claim–evidence graph JSON / 论断证据图 JSON<input name="claim_graph_file" type="file" accept="application/json,.json" required></label></fieldset><fieldset><legend>Frozen challenge authority / 冻结挑战权威</legend><label>Frozen evaluator Python / 冻结评估器<input name="evaluator_file" type="file" accept="text/x-python,.py" required></label><label>Exact challenge dataset / 精确挑战数据集<input name="review_dataset_file" type="file" accept="application/json,text/csv,.json,.csv" required></label><select name="review_dataset_media_type" required><option value="application/json" selected>application/json</option><option value="text/csv; charset=utf-8">text/csv; charset=utf-8</option></select></fieldset><fieldset><legend>Candidate result / 候选结果</legend><label>Candidate JSON / 候选 JSON<input name="candidate_file" type="file" accept="application/json,.json" required></label></fieldset><button type="submit">Register sources and freeze Review bundle / 登记源并冻结评审包</button><output></output></form>"#,
+                escape(paper_id),
+                paper_version,
+                escape(challenge_id),
+                escape(&required_runs),
+                artifact_media_options("text/markdown; charset=utf-8"),
+                artifact_media_options("application/x-bibtex"),
             ));
         }
     }
@@ -6513,12 +6765,12 @@ fn contribution_ledger_repair_form(
 pub fn review_queue(identity: &AlphaIdentity, queue: ReadState<'_>) -> Response {
     let queue_cards = review_queue_cards(identity, queue);
     let body = format!(
-        r#"<section class="hero"><span class="eyebrow">REVIEWER RAID · 独立评审</span><h1>Frozen-bundle Review Queue</h1><p>Author Raid ends at <code>submission_ready</code>. Independent evaluators, reviewers, and reproducers enter through this separate authority boundary.</p></section>
-        <section class="panel review-boundary"><div><span class="pill">Independent authority / 独立权威</span><h2>Claim a precise role, never an Author Room</h2><p>Only a frozen, submission-ready PaperBundle is listed. Claiming creates a time-bounded assignment; it never grants team membership or access to an in-progress Paper Room.</p></div><dl><div><dt>Queue source</dt><dd>{}</dd></div><div><dt>Your player</dt><dd><code>{}</code></dd></div></dl></section>
+        r#"<section class="hero"><span class="eyebrow">REVIEWER RAID · 独立评审</span><h1>Frozen-bundle Review Queue</h1><p>Author Raid ends at its frozen handoff checkpoint. Independent evaluators, reviewers, and reproducers enter through this separate authority boundary.</p></section>
+        <section class="panel review-boundary"><div><span class="pill">Independent authority / 独立权威</span><h2>Claim a precise role, never an Author Room</h2><p>Only a frozen, submission-ready PaperBundle is listed. Claiming creates a time-bounded assignment; it never grants team membership or access to an in-progress Paper Room.</p></div><dl><div><dt>Queue status</dt><dd>{}</dd></div><div><dt>Signed in as</dt><dd>{}</dd></div></dl></section>
         <section class="review-queue-grid">{}</section>
         <section class="panel"><span class="pill">PLAYER-SIGNED QUORUM</span><h2>Evaluation → two independent attestations → reproduction</h2><p>Each assigned actor sees only the frozen bundle and their own active assignment. Evaluation drafts and reviewer votes are immutable, locally human-signed records; the evaluator can finalize only after both reviewer slots attest to the exact same signing hash.</p></section>"#,
         escape(queue.label()),
-        escape(&identity.player_id.to_string()),
+        escape(&identity.display_name),
         queue_cards,
     );
     page(
@@ -6549,8 +6801,6 @@ fn review_queue_cards(identity: &AlphaIdentity, queue: ReadState<'_>) -> String 
         let abstract_text = scalar(item.get("abstract_text"));
         let target_format = scalar(item.get("target_format"));
         let submitted_at = scalar(item.get("submitted_at"));
-        let release_hash = scalar(item.get("release_candidate_hash"));
-        let bundle_hash = scalar(item.get("paper_bundle_hash"));
         let author_count = scalar(item.get("author_count"));
 
         let mut assignment_rows = String::new();
@@ -6600,14 +6850,12 @@ fn review_queue_cards(identity: &AlphaIdentity, queue: ReadState<'_>) -> String 
         }
 
         cards.push_str(&format!(
-            r#"<article class="panel review-queue-card"><header><div><span class="eyebrow">FROZEN PAPERBUNDLE</span><h2>{}</h2></div><span class="pill">{} authors</span></header><p>{}</p><dl class="review-facts"><div><dt>Target</dt><dd>{}</dd></div><div><dt>Submitted</dt><dd>{}</dd></div><div><dt>Release hash</dt><dd><code>{}</code></dd></div><div><dt>PaperBundle hash</dt><dd><code>{}</code></dd></div></dl><div class="review-columns"><section><h3>My assignment / 我的任务</h3><ul class="review-assignments">{}</ul></section><section><h3>Open slots / 可领取角色</h3><div class="review-open-slots">{}</div></section></div></article>"#,
+            r#"<article class="panel review-queue-card"><header><div><span class="eyebrow">FROZEN PAPERBUNDLE</span><h2>{}</h2></div><span class="pill">{} authors</span></header><p>{}</p><dl class="review-facts"><div><dt>Target</dt><dd>{}</dd></div><div><dt>Submitted</dt><dd>{}</dd></div><div><dt>Release freeze</dt><dd>Verified / 已验证</dd></div><div><dt>PaperBundle seal</dt><dd>Verified / 已验证</dd></div></dl><div class="review-columns"><section><h3>My assignment / 我的任务</h3><ul class="review-assignments">{}</ul></section><section><h3>Open slots / 可领取角色</h3><div class="review-open-slots">{}</div></section></div></article>"#,
             escape(&title),
             escape(&author_count),
             escape(&abstract_text),
             escape(&target_format),
             escape(&submitted_at),
-            escape(&release_hash),
-            escape(&bundle_hash),
             assignment_rows,
             open_slots,
         ));
@@ -6630,9 +6878,6 @@ pub fn review_bundle(
     receipt_projection: &Value,
 ) -> Response {
     let paper_id = scalar(submission.get("paper_project_id"));
-    let submission_id = scalar(submission.get("submission_id"));
-    let release_hash = scalar(submission.get("release_candidate_hash"));
-    let bundle_hash = scalar(submission.get("paper_bundle_hash"));
     let status = scalar(submission.get("status"));
     let candidate = submission
         .get("paper_bundle")
@@ -6692,25 +6937,22 @@ pub fn review_bundle(
         .unwrap_or_default();
     let raid_controls =
         review_raid_controls(identity, submission, review_state, receipt_projection);
+    let authority_revision =
+        review_authority_revision(queue_item, submission, review_state, receipt_projection);
     let body = format!(
         r#"<section class="hero"><span class="eyebrow">REVIEW RAID · FROZEN BUNDLE</span><h1>{}</h1><p>{}</p><a class="button" href="/league/review">Back to queue / 返回评审队列</a></section>
-        <section class="grid"><article class="panel"><h2>Your immutable assignment / 你的不可变任务</h2><ul class="review-assignments">{}</ul></article><article class="panel"><h2>Authority facts / 权威事实</h2><dl class="review-facts"><div><dt>Status</dt><dd>{}</dd></div><div><dt>Submission</dt><dd><code>{}</code></dd></div><div><dt>Paper</dt><dd><code>{}</code></dd></div></dl></article></section>
-        <section class="panel"><span class="pill">FROZEN PAPERBUNDLE</span><h2>Review target / 评审对象</h2><dl class="review-facts"><div><dt>Target format</dt><dd>{}</dd></div><div><dt>License</dt><dd>{}</dd></div><div><dt>Release hash</dt><dd><code>{}</code></dd></div><div><dt>PaperBundle hash</dt><dd><code>{}</code></dd></div><div><dt>Source manifest</dt><dd><code>{}</code></dd></div><div><dt>Artifact manifest</dt><dd><code>{}</code></dd></div><div><dt>Bibliography</dt><dd><code>{}</code></dd></div><div><dt>Claim/evidence graph</dt><dd><code>{}</code></dd></div></dl><h3>Frozen author roster / 冻结作者阵容</h3><ul class="review-assignments">{}</ul></section>
+        <section class="panel review-authority-watch" data-paper-id="{}" data-authority-revision="{}"><span class="pill">LIVE REVIEW AUTHORITY / 实时评审权威</span><h2>Current frozen assignment / 当前冻结任务</h2><p>This page checks the authoritative Review state in the background. If another participant advances the Raid, old controls are disabled and the current action is reloaded automatically.</p><div class="live-status"><span class="review-authority-connection" data-state="connecting">Connecting / 正在连接</span></div><button class="review-authority-refresh" type="button">Sync now / 立即同步</button><output class="review-authority-detail"></output></section>
+        <section class="grid"><article class="panel"><h2>Your immutable assignment / 你的不可变任务</h2><ul class="review-assignments">{}</ul></article><article class="panel"><h2>Authority facts / 权威事实</h2><dl class="review-facts"><div><dt>Status</dt><dd>{}</dd></div><div><dt>Submission</dt><dd>Frozen and verified / 已冻结验证</dd></div><div><dt>Paper scope</dt><dd>Assignment-scoped / 仅限当前任务</dd></div></dl></article></section>
+        <section class="panel"><span class="pill">FROZEN PAPERBUNDLE</span><h2>Review target / 评审对象</h2><dl class="review-facts"><div><dt>Target format</dt><dd>{}</dd></div><div><dt>License</dt><dd>{}</dd></div><div><dt>Release freeze</dt><dd>Verified / 已验证</dd></div><div><dt>PaperBundle seal</dt><dd>Verified / 已验证</dd></div><div><dt>Source record</dt><dd>Verified / 已验证</dd></div><div><dt>Artifact set</dt><dd>Verified / 已验证</dd></div><div><dt>Bibliography</dt><dd>Verified / 已验证</dd></div><div><dt>Claim/evidence graph</dt><dd>Verified / 已验证</dd></div></dl><h3>Frozen author roster / 冻结作者阵容</h3><ul class="review-assignments">{}</ul></section>
         {}"#,
         escape(&scalar(candidate.get("title"))),
         escape(&scalar(candidate.get("abstract_text"))),
+        escape(&paper_id),
+        escape(&authority_revision),
         assignments,
         escape(&status),
-        escape(&submission_id),
-        escape(&paper_id),
         escape(&scalar(candidate.get("target_format"))),
         escape(&scalar(candidate.get("license"))),
-        escape(&release_hash),
-        escape(&bundle_hash),
-        escape(&scalar(candidate.get("source_manifest_hash"))),
-        escape(&scalar(candidate.get("artifact_manifest_hash"))),
-        escape(&scalar(candidate.get("bibliography_hash"))),
-        escape(&scalar(candidate.get("claim_evidence_graph_hash"))),
         authors,
         raid_controls,
     );
@@ -6720,6 +6962,30 @@ pub fn review_bundle(
         &body,
         true,
     )
+}
+
+fn review_authority_revision(
+    queue_item: &Value,
+    submission: &Value,
+    review_state: ReadState<'_>,
+    receipt_projection: &Value,
+) -> String {
+    let review = review_state
+        .value()
+        .cloned()
+        .unwrap_or_else(|| Value::String(review_state.label().to_string()));
+    let snapshot = serde_json::json!({
+        "schema": "hepta.paper_raid.review_authority_watch.v1",
+        "queue_item": queue_item,
+        "submission": submission,
+        "review_state": review,
+        "receipt_projection": receipt_projection,
+    });
+    let bytes = serde_json::to_vec(&snapshot).unwrap_or_default();
+    sha256_digest(&bytes)
+        .strip_prefix("sha256:")
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn has_review_assignment(bundle: &Value, identity: &AlphaIdentity, slots: &[&str]) -> bool {
@@ -6808,7 +7074,7 @@ fn review_raid_controls(
                     });
                 if already_attested {
                     controls.push_str(
-                        r#"<section class="panel"><span class="pill">ATTESTATION RECORDED</span><h2>Your immutable reviewer decision is authoritative</h2><p>Reload and lost-response recovery use the quorum read model; no signature JSON needs to be copied or resubmitted.</p></section>"#,
+                        r#"<section class="panel"><span class="pill">ATTESTATION RECORDED</span><h2>Your immutable reviewer decision is authoritative</h2><p>Reload and lost-response recovery use the quorum read model; no signature data needs to be copied or resubmitted.</p></section>"#,
                     );
                 } else {
                     controls.push_str(&review_attestation_form(&paper_id, &evaluation_id, draft));
@@ -6928,22 +7194,12 @@ fn review_receipt_confirmation_card(
         };
     let seals = receipt.get("seals").unwrap_or(&Value::Null);
     format!(
-        r#"<section class="panel"><span class="pill">SERVER-VERIFIED AGENT RECEIPT</span><h2>{}</h2><p>The values below came only from the signed Bridge execution receipt. This page has no metric, seed, environment or run-manifest input.</p><div class="review-columns"><div><h3>Machine result</h3><ul class="review-assignments">{}</ul></div><div><h3>{}</h3><ul class="review-assignments">{}</ul></div></div><dl class="review-facts"><div><dt>Rules / evidence records</dt><dd>{}</dd></div><div><dt>Evaluator</dt><dd><code>{}</code></dd></div><div><dt>Receipt seal</dt><dd><code>{}</code></dd></div><div><dt>Frozen bundle seal</dt><dd><code>{}</code></dd></div><div><dt>Input seal</dt><dd><code>{}</code></dd></div><div><dt>Output seal</dt><dd><code>{}</code></dd></div><div><dt>Metrics seal</dt><dd><code>{}</code></dd></div><div><dt>Seed-set seal</dt><dd><code>{}</code></dd></div><div><dt>Environment seal</dt><dd><code>{}</code></dd></div><div><dt>Run seal</dt><dd><code>{}</code></dd></div><div><dt>Logs seal</dt><dd><code>{}</code></dd></div><div><dt>Exit code</dt><dd>{}</dd></div></dl><form class="review-receipt-confirm-form" data-paper-id="{}" data-receipt-id="{}" data-kind="{}">{}<label>Conflict-of-interest attestation / 利益冲突声明<textarea name="coi_statement" rows="4" required placeholder="State no conflict, or disclose the exact relationship and mitigation."></textarea></label><button type="submit">Review, sign and confirm / 审阅、签名并确认</button><output></output></form></section>"#,
+        r#"<section class="panel"><span class="pill">SERVER-VERIFIED AGENT RECEIPT</span><h2>{}</h2><p>The values below came only from the signed Bridge execution receipt. This page has no metric, seed, environment or run-manifest input.</p><div class="review-columns"><div><h3>Machine result</h3><ul class="review-assignments">{}</ul></div><div><h3>{}</h3><ul class="review-assignments">{}</ul></div></div><dl class="review-facts"><div><dt>Rules / evidence records</dt><dd>{}</dd></div><div><dt>Release-pinned evaluator</dt><dd>Verified / 已验证</dd></div><div><dt>Receipt signature</dt><dd>Verified / 已验证</dd></div><div><dt>Frozen bundle</dt><dd>Verified / 已验证</dd></div><div><dt>Inputs and outputs</dt><dd>Verified / 已验证</dd></div><div><dt>Metrics and seed set</dt><dd>Verified / 已验证</dd></div><div><dt>Environment and run</dt><dd>Verified / 已验证</dd></div><div><dt>Logs</dt><dd>Verified / 已验证</dd></div><div><dt>Exit code</dt><dd>{}</dd></div></dl><form class="review-receipt-confirm-form" data-paper-id="{}" data-receipt-id="{}" data-kind="{}">{}<label>Conflict-of-interest attestation / 利益冲突声明<textarea name="coi_statement" rows="4" required placeholder="State no conflict, or disclose the exact relationship and mitigation."></textarea></label><button type="submit">Review, sign and confirm / 审阅、签名并确认</button><output></output></form></section>"#,
         escape(heading),
         primary,
         escape(secondary_heading),
         secondary,
         rule_count,
-        escape(&scalar(seals.get("evaluator_version"))),
-        escape(&scalar(seals.get("receipt_hash"))),
-        escape(&scalar(seals.get("bundle_hash"))),
-        escape(&scalar(seals.get("input_root"))),
-        escape(&scalar(seals.get("output_root"))),
-        escape(&scalar(seals.get("metrics_hash"))),
-        escape(&scalar(seals.get("seed_set_hash"))),
-        escape(&scalar(seals.get("environment_hash"))),
-        escape(&scalar(seals.get("run_manifest_hash"))),
-        escape(&scalar(seals.get("logs_hash"))),
         escape(&scalar(seals.get("exit_code"))),
         escape(paper_id),
         escape(receipt_id),
@@ -7172,14 +7428,13 @@ fn reproduction_controls(
         })
     {
         return format!(
-            r#"<section class="panel"><span class="pill">REPRODUCTION RECORDED</span><h2>{}</h2><dl class="review-facts"><div><dt>Version</dt><dd>{}</dd></div><div><dt>Rule results</dt><dd>{}</dd></div><div><dt>Report hash</dt><dd><code>{}</code></dd></div></dl><p>The immutable authority record restores this result after reload or a lost response.</p></section>"#,
+            r#"<section class="panel"><span class="pill">REPRODUCTION RECORDED</span><h2>{}</h2><dl class="review-facts"><div><dt>Version</dt><dd>{}</dd></div><div><dt>Rule results</dt><dd>{}</dd></div><div><dt>Signed report</dt><dd>Verified / 已验证</dd></div></dl><p>The immutable authority record restores this result after reload or a lost response.</p></section>"#,
             escape(&scalar(report.get("status"))),
             escape(&scalar(report.get("version"))),
             report
                 .get("rule_results")
                 .and_then(Value::as_array)
                 .map_or(0, Vec::len),
-            escape(&scalar(report.get("report_hash"))),
         );
     }
 
@@ -7269,7 +7524,7 @@ fn appeal_resolution_controls(
             && resolution.get("resolver_player_id").and_then(Value::as_str)
                 == Some(player_id.as_str())
     }) {
-        return r#"<section class="panel resolver-appeal-status"><span class="pill">APPEAL RESOLVED</span><h2>Your independent decision is authoritative / 你的独立裁决已生效</h2><p>The read model restored the immutable resolution after reload or a lost response. No signature or protocol JSON needs to be resubmitted.</p></section>"#.into();
+        return r#"<section class="panel resolver-appeal-status"><span class="pill">APPEAL RESOLVED</span><h2>Your independent decision is authoritative / 你的独立裁决已生效</h2><p>The read model restored the immutable resolution after reload or a lost response. No signature or protocol data needs to be resubmitted.</p></section>"#.into();
     }
     if resolutions
         .iter()
@@ -10188,6 +10443,120 @@ mod tests {
         assert!(!body.contains("class=\"author-appeal-form\""));
     }
 
+    #[test]
+    fn rejected_author_room_exposes_only_plain_language_rework_and_server_lease_state() {
+        let paper_id = Uuid::new_v4();
+        let submission_id = Uuid::new_v4();
+        let evaluation_id = Uuid::new_v4();
+        let paper_id_text = paper_id.to_string();
+        let inactive_paper = serde_json::json!({
+            "paper_project_id":paper_id,
+            "phase":"submission_ready",
+            "outcome":"submission_ready",
+            "version":9,
+            "active_rework_id":null,
+            "active_rework_cycle":null,
+            "rework_expires_at":null
+        });
+        let room = serde_json::json!({
+            "joint_submission":{
+                "submission_id":submission_id,
+                "paper_project_id":paper_id,
+                "status":"submission_ready"
+            }
+        });
+        let mut review = serde_json::json!({
+            "evaluations":[{
+                "evaluation_id":evaluation_id,
+                "paper_project_id":paper_id,
+                "submission_id":submission_id,
+                "version":1,
+                "status":"rejected",
+                "supersedes_evaluation_id":null,
+                "paper_score":{
+                    "hard_gates":{
+                        "citations_and_data_authentic":false,
+                        "failed_runs_disclosed":true,
+                        "all_authors_consented":true,
+                        "core_claims_have_evidence":false,
+                        "artifact_lineage_complete":true,
+                        "license_ethics_coi_complete":true
+                    }
+                }
+            }],
+            "appeals":[],
+            "resolutions":[]
+        });
+        let rendered = author_rework_panel(
+            &paper_id_text,
+            "submission_ready",
+            &inactive_paper,
+            &room,
+            Some(&review),
+        );
+        assert!(rendered.contains("class=\"author-rework-start-form\""));
+        assert!(rendered.contains("Citations and data authenticity"));
+        assert!(rendered.contains("Evidence for core claims"));
+        let form_start = rendered
+            .find("class=\"author-rework-start-form\"")
+            .expect("ordinary rework form");
+        let form_end = rendered[form_start..].find("</form>").expect("form closes") + form_start;
+        let form = &rendered[form_start..form_end];
+        assert!(form.contains("name=\"reason\""));
+        for forbidden in [
+            "name=\"rework_id\"",
+            "name=\"submission_id\"",
+            "name=\"evaluation_id\"",
+            "name=\"reason_hash\"",
+            "name=\"signature\"",
+            "name=\"payload\"",
+            "sha256:",
+            "JSON",
+        ] {
+            assert!(
+                !form.contains(forbidden),
+                "ordinary form exposed {forbidden}"
+            );
+        }
+
+        let appeal_id = Uuid::new_v4();
+        review["appeals"] = serde_json::json!([{
+            "appeal_id":appeal_id,
+            "evaluation_id":evaluation_id
+        }]);
+        let held = author_rework_panel(
+            &paper_id_text,
+            "submission_ready",
+            &inactive_paper,
+            &room,
+            Some(&review),
+        );
+        assert!(held.contains("REWORK ON HOLD"));
+        assert!(!held.contains("author-rework-start-form"));
+
+        let active_paper = serde_json::json!({
+            "active_rework_id":Uuid::new_v4(),
+            "active_rework_cycle":2,
+            "rework_expires_at":"2099-08-15T00:00:00Z"
+        });
+        let active = author_rework_panel(&paper_id_text, "drafting", &active_paper, &room, None);
+        assert!(active.contains("data-rework-state=\"active\""));
+        assert!(active.contains("class=\"paper-rework-countdown\""));
+        assert!(active.contains("class=\"button continue-raid-link\""));
+        assert!(!active.contains("sha256:"));
+        assert!(!active.contains("signature"));
+
+        let expired_paper = serde_json::json!({
+            "active_rework_id":Uuid::new_v4(),
+            "active_rework_cycle":2,
+            "rework_expires_at":"2000-01-01T00:00:00Z"
+        });
+        let expired = author_rework_panel(&paper_id_text, "drafting", &expired_paper, &room, None);
+        assert!(expired.contains("data-rework-state=\"expired\""));
+        assert!(expired.contains("Author mutations are disabled"));
+        assert!(!expired.contains("author-rework-start-form"));
+    }
+
     #[tokio::test]
     async fn authoritative_challenge_rules_and_typed_terminal_controls_are_player_visible() {
         let paper_id = Uuid::new_v4();
@@ -10727,6 +11096,11 @@ mod tests {
 
         let drafting = science_action_panel("paper-a", "drafting", &room);
         assert!(drafting.contains("class=\"draft-manifest-wizard-form primary-action\""));
+        assert!(drafting.contains("class=\"review-ready-manifest-wizard-form primary-action\""));
+        for field in ["evaluator_file", "review_dataset_file", "candidate_file"] {
+            assert!(drafting.contains(&format!("name=\"{field}\"")));
+        }
+        assert!(drafting.contains("No UUID or digest is pasted"));
         assert!(drafting.contains(&run_id.to_string()));
     }
 
@@ -10967,7 +11341,7 @@ mod tests {
             .to_bytes();
         let body = std::str::from_utf8(&body).expect("UTF-8 review queue");
         assert!(body.contains("REVIEWER RAID · 独立评审"));
-        assert!(body.contains("Author Raid ends at <code>submission_ready</code>"));
+        assert!(body.contains("Author Raid ends at its frozen handoff checkpoint"));
         assert!(body.contains("No assigned or open frozen bundles"));
         assert!(!body.contains("data-paper-id"));
         assert!(!body.contains("/league/papers/"));
@@ -11015,6 +11389,12 @@ mod tests {
         assert!(!body.contains("data-slot=\"evaluator\""));
         assert!(!body.contains("data-slot=\"reproducer\""));
         assert!(!body.contains("/league/papers/"));
+        assert!(body.contains("Release freeze"));
+        assert!(body.contains("PaperBundle seal"));
+        assert!(!body.contains(&format!("sha256:{}", "1".repeat(64))));
+        assert!(!body.contains(&format!("sha256:{}", "2".repeat(64))));
+        assert!(!body.contains(&format!("<code>{}</code>", identity.player_id)));
+        assert!(body.contains(&identity.display_name));
         assert!(body.contains("PLAYER-SIGNED QUORUM"));
         assert!(body.contains("Evaluation → two independent attestations → reproduction"));
     }
@@ -11085,6 +11465,14 @@ mod tests {
         .expect("collect evaluator bundle")
         .to_bytes();
         let body = std::str::from_utf8(&body).expect("UTF-8 evaluator bundle");
+        assert!(body.contains("review-authority-watch"));
+        assert!(body.contains("data-authority-revision=\""));
+        assert!(body.contains("LIVE REVIEW AUTHORITY"));
+        assert!(body.contains("Release-pinned evaluator</dt><dd>Verified"));
+        for raw_digest in ["1", "2", "3", "4", "5", "6", "7", "8", "9"] {
+            assert!(!body.contains(&format!("sha256:{}", raw_digest.repeat(64))));
+        }
+        assert!(!body.contains(&submission_id.to_string()));
         assert!(body.contains("review-receipt-confirm-form"));
         assert!(body.contains("SERVER-VERIFIED AGENT RECEIPT"));
         assert!(body.contains("Candidate</strong><span>passed"));
@@ -11182,6 +11570,53 @@ mod tests {
         assert!(body.contains("995000 micros"));
         assert!(!body.contains("name=\"seed_statement\""));
         assert!(body.contains("Chain finality"));
+    }
+
+    #[test]
+    fn review_authority_revision_is_stable_and_changes_with_authority() {
+        let paper_id = Uuid::new_v4();
+        let queue_item = serde_json::json!({
+            "paper_project_id": paper_id,
+            "status": "submission_ready"
+        });
+        let submission = serde_json::json!({
+            "paper_project_id": paper_id,
+            "submission_id": Uuid::new_v4(),
+            "status": "submission_ready"
+        });
+        let review = serde_json::json!({
+            "evaluation": null,
+            "reproductions": []
+        });
+        let receipts = serde_json::json!({"status": "not_found"});
+
+        let first = review_authority_revision(
+            &queue_item,
+            &submission,
+            ReadState::Available(&review),
+            &receipts,
+        );
+        let again = review_authority_revision(
+            &queue_item,
+            &submission,
+            ReadState::Available(&review),
+            &receipts,
+        );
+        assert_eq!(first, again);
+        assert_eq!(first.len(), 64);
+        assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
+
+        let advanced_review = serde_json::json!({
+            "evaluation": {"status": "accepted"},
+            "reproductions": []
+        });
+        let advanced = review_authority_revision(
+            &queue_item,
+            &submission,
+            ReadState::Available(&advanced_review),
+            &receipts,
+        );
+        assert_ne!(first, advanced);
     }
 
     #[tokio::test]

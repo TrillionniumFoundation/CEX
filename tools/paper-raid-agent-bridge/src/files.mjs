@@ -11,8 +11,16 @@ import { basename, dirname, join } from "node:path";
 
 const MAX_LOCAL_FILE_BYTES = 1024 * 1024;
 
-async function assertSafeFileStat(path, stats, { privateFile, ownerOnly }) {
-  if (!stats.isFile() || stats.isSymbolicLink()) {
+async function assertSafeFileStat(
+  path,
+  stats,
+  { privateFile, ownerOnly, expectedLinks = 1 },
+) {
+  if (
+    !stats.isFile() ||
+    stats.isSymbolicLink() ||
+    stats.nlink !== expectedLinks
+  ) {
     throw new Error(`${path} must be a regular non-symlink file`);
   }
   if (privateFile && (stats.mode & 0o077) !== 0) {
@@ -46,10 +54,34 @@ export async function readSafeFile(
   try {
     const after = await handle.stat();
     await assertSafeFileStat(path, after, { privateFile, ownerOnly });
-    if (after.dev !== before.dev || after.ino !== before.ino || after.size > maxBytes) {
+    if (
+      after.dev !== before.dev ||
+      after.ino !== before.ino ||
+      after.uid !== before.uid ||
+      after.mode !== before.mode ||
+      after.size !== before.size ||
+      after.mtimeMs !== before.mtimeMs ||
+      after.ctimeMs !== before.ctimeMs ||
+      after.size > maxBytes
+    ) {
       throw new Error(`${path} changed while it was being opened`);
     }
-    return await handle.readFile();
+    const bytes = await handle.readFile();
+    const final = await handle.stat();
+    await assertSafeFileStat(path, final, { privateFile, ownerOnly });
+    if (
+      final.dev !== after.dev ||
+      final.ino !== after.ino ||
+      final.uid !== after.uid ||
+      final.mode !== after.mode ||
+      final.size !== after.size ||
+      final.mtimeMs !== after.mtimeMs ||
+      final.ctimeMs !== after.ctimeMs ||
+      bytes.length !== final.size
+    ) {
+      throw new Error(`${path} changed while it was being read`);
+    }
+    return bytes;
   } finally {
     await handle.close();
   }
@@ -94,7 +126,10 @@ export async function writePrivateJsonExclusive(path, value) {
   }
 }
 
-export async function preparePrivateJsonDestination(path, { replace = false } = {}) {
+export async function preparePrivateJsonDestination(
+  path,
+  { replace = false, expectedExistingIdentity = null } = {},
+) {
   const directory = dirname(path);
   const directoryStats = await lstat(directory);
   if (!directoryStats.isDirectory() || directoryStats.isSymbolicLink()) {
@@ -115,7 +150,15 @@ export async function preparePrivateJsonDestination(path, { replace = false } = 
     await assertSafeFileStat(path, existing, {
       privateFile: true,
       ownerOnly: true,
+      expectedLinks: expectedExistingIdentity ? 2 : 1,
     });
+    if (
+      expectedExistingIdentity &&
+      (existing.dev !== expectedExistingIdentity.dev ||
+        existing.ino !== expectedExistingIdentity.ino)
+    ) {
+      throw new Error(`${path} no longer names the lifecycle transaction inode`);
+    }
   } catch (error) {
     if (error?.code !== "ENOENT") throw error;
   }
@@ -138,8 +181,15 @@ export async function preparePrivateJsonDestination(path, { replace = false } = 
   await syncDirectory(directory);
 }
 
-export async function writePrivateJsonReplacing(path, value) {
-  await preparePrivateJsonDestination(path, { replace: true });
+export async function writePrivateJsonReplacing(
+  path,
+  value,
+  { expectedExistingIdentity = null } = {},
+) {
+  await preparePrivateJsonDestination(path, {
+    replace: true,
+    expectedExistingIdentity,
+  });
   const bytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`, "utf8");
   const directory = dirname(path);
   const temporaryPath = join(
@@ -165,6 +215,17 @@ export async function writePrivateJsonReplacing(path, value) {
       if (error?.code !== "ENOENT") throw error;
     });
   }
+  const installed = await lstat(path);
+  if (
+    !installed.isFile() ||
+    installed.isSymbolicLink() ||
+    installed.nlink !== 1 ||
+    (installed.mode & 0o077) !== 0 ||
+    (typeof process.getuid === "function" && installed.uid !== process.getuid())
+  ) {
+    throw new Error(`${path} replacement did not produce one owner-only regular file`);
+  }
+  return Object.freeze({ dev: installed.dev, ino: installed.ino });
 }
 
 async function syncDirectory(path) {

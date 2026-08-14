@@ -942,6 +942,7 @@ dependencies = [
  "tracing-subscriber",
  "trnm-finality-types",
  "trnm-finality-verifier",
+ "trnm-protocol",
  "trnm-research-protocol",
  "uuid",
 ]
@@ -3091,9 +3092,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "chrono",
  "ed25519-dalek",
  "hex",
  "ics23",
+ "libc",
  "prost",
  "serde",
  "serde_json",

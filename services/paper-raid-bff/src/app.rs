@@ -1008,6 +1008,7 @@ fn identity_scope_allows_command(identity: &AlphaIdentity, command: CommandName)
         | CommandName::PromotePaperReleaseCandidate
         | CommandName::CreateAuthorshipConsent
         | CommandName::FinalizeJointPaperSubmission
+        | CommandName::StartPaperRework
         | CommandName::IssueResearchSessionAuthorizationSet
         | CommandName::ReplaceResearchSessionAuthorizationSet
         | CommandName::CreateNakamaResearchSessionControl
@@ -1128,6 +1129,14 @@ fn identity_payload_allows_command(identity: &AlphaIdentity, command: &BrowserCo
             command
                 .payload
                 .get("appellant_player_id")
+                .and_then(Value::as_str)
+                .and_then(|value| Uuid::parse_str(value).ok())
+                == Some(identity.player_id)
+        }
+        CommandName::StartPaperRework => {
+            command
+                .payload
+                .get("author_player_id")
                 .and_then(Value::as_str)
                 .and_then(|value| Uuid::parse_str(value).ok())
                 == Some(identity.player_id)
@@ -2075,6 +2084,10 @@ mod tests {
             &author,
             CommandName::CreateRoleResourceAction
         ));
+        assert!(identity_scope_allows_command(
+            &author,
+            CommandName::StartPaperRework
+        ));
         assert!(!identity_scope_allows_command(
             &author,
             CommandName::TransitionPaperChallengeOutcome
@@ -2117,6 +2130,10 @@ mod tests {
         assert!(!identity_scope_allows_command(
             &evaluator,
             CommandName::CreateRoleResourceAction
+        ));
+        assert!(!identity_scope_allows_command(
+            &evaluator,
+            CommandName::StartPaperRework
         ));
 
         let mut reproducer =

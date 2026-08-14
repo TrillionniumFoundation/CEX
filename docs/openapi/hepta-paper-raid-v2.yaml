@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Hepta Paper Raid API
-  version: 4.4.0-alpha.2
+  version: 4.6.0-alpha.1
   description: >-
     Versioned Team + Paper collaboration control-plane API for 3-5 human players using
     independently operated external Agents to create one signed, reproducible
@@ -20,11 +20,11 @@ paths:
         Edge, distinct authorization/control/completion keys, the signed
         Nakama control origin/runtime key, and configured finality trust
         anchors are internally valid. It also reports the frozen 24-hour
-        scientific-finality policy and exposes the Paper-V2 command lane as
-        awaiting_chain_verifier_upgrade until the reviewed Chain verifier is
-        vendored; that capability disclosure does not make otherwise healthy
-        legacy/Receipt-V2 service dependencies unready. Returns 503 with
-        ready=false otherwise.
+        scientific-finality policy and exposes the immutable Paper-V2
+        preparation status as awaiting_chain_verifier_upgrade. App-v7 Paper
+        Raid V4 finality is represented by a separate verified projection and
+        never rewrites that compatibility status. Returns 503 with ready=false
+        otherwise.
       responses:
         "200": {description: Durable dependencies and trust configuration ready}
         "503": {description: Database unavailable or trust configuration invalid}
@@ -504,6 +504,10 @@ paths:
         Adapts an exact paper-raid.artifact-bundle.v1 object from the pinned
         Integration revision, independently recomputes its canonical JSON plus
         newline root, and binds every object to an immutable CAS or Git URI.
+        A review_ready_assembly additionally pins four distinct registered
+        same-Paper source manifests; Hepta re-resolves their hashes, exact role
+        and media coverage, CAS provenance, object set and canonical order
+        before producing a reviewer-readable frozen release manifest.
       requestBody:
         required: true
         content:
@@ -808,6 +812,43 @@ paths:
       description: Requires a signed assertion from a current team member.
       responses:
         "200": {description: Signed PaperBundle and joint submission}
+  /v2/hepta/papers/{paper_id}/reworks:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    get:
+      operationId: getPaperReworks
+      description: >-
+        Returns immutable rejected-submission rework lineage and its optional
+        replacement submission binding to a current frozen Author.
+      responses:
+        "200":
+          description: Ordered immutable rework generations
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/PaperReworkStateV1"}
+    post:
+      operationId: startPaperRework
+      description: >-
+        Reopens the exact current terminal rejected submission under a
+        server-owned 24-hour lease without changing its original Challenge
+        grace deadline. Requires an active signing key and an Author frozen in
+        the rejected PaperBundle. The eventual replacement must change the
+        identity-free scientific content commitment; its Review root resets to
+        round/version 1 while Appeal repanels remain same-submission children.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/StartPaperReworkRequestV1"}
+      responses:
+        "201":
+          description: Rework lease started and rejected ready submission withdrawn atomically
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaperReworkRecordV1"}
+        "409": {description: Evaluation, Paper version, Appeal, finality, assignment, or rework lineage drifted}
   /v2/hepta/review-queue:
     get:
       operationId: getPaperReviewQueue
@@ -1356,9 +1397,10 @@ paths:
         reach the arm's consensus-time deadline. A halted Chain therefore
         remains unsealed rather than falling back to an ambient server clock.
         This preparation is deliberately marked
-        awaiting_chain_verifier_upgrade: it is not a signed or queued Chain
-        command and cannot receive a Receipt until the canonical Chain
-        Paper-V2 verifier is vendored. A successful preparation permanently
+        awaiting_chain_verifier_upgrade: it is not itself a signed or queued
+        Chain command and its immutable status is never rewritten. A verified
+        App-v7 Paper Raid V4 Receipt may consume its exact binding through the
+        separate chain-finality projection endpoint. A successful preparation permanently
         seals the bound Paper/submission, Research Session authority/completion,
         evaluation, reproduction, and Appeal sources against later mutation.
         Exactly zero or one resolved Appeal is representable in the final
@@ -1409,11 +1451,17 @@ paths:
         never above Hepta's 1 MiB deployment ceiling; the upstream generic wire
         type remains 128 MiB) and the exact canonical
         Receipt V2 decoder. The selected stored trust anchor and server clock
-        verify CometBFT finality. The verified domain command_id binds
-        TrnmCommand.idempotency_key (never its local UUID), and the full signed
-        EvaluationCommitmentV1 is rebound to immutable Paper/submission/
-        evaluation/reproduction records. Integrity hold, open Appeal, or
-        superseded evaluation/reproduction fails closed.
+        verify CometBFT finality. ResearchV1 keeps the legacy rule in which the
+        verified command_id binds TrnmCommand.idempotency_key and the full
+        signed EvaluationCommitmentV1 is rebound to immutable Paper facts.
+        Paper Raid V2/V3 fail closed as lane mismatches. Paper Raid V4 instead
+        derives command_id from the immutable preparation UUID, bypasses the
+        legacy queue, reconstructs the exact V4 commitment locally, and checks
+        canonical signed CBOR, payload/fingerprint, applied-object key, Chain
+        ID, execution height, relational/JSON preparation parity, and locked
+        zero eligibility before one atomic inbox/receipt/projection/outbox
+        commit. Integrity hold, open Appeal, supersession, cross-Paper binding,
+        or any replay drift fails closed.
       parameters:
         - name: x-hepta-trnm-trust-anchor-hash
           in: header
@@ -1429,14 +1477,14 @@ paths:
               additionalProperties: true
       responses:
         "201":
-          description: pending_finality transitioned to verified_finality atomically
+          description: Legacy pending command or immutable V4 preparation projected to verified_finality atomically
           content:
             application/json:
               schema: {$ref: "#/components/schemas/PaperChainFinalityProjectionV2"}
         "200": {description: Exact applied receipt replay; no duplicate event/outbox}
         "400": {description: Noncanonical, malformed, or structurally invalid receipt}
         "403": {description: TRNM authentication or trust verification failed}
-        "404": {description: Bound queued command or immutable Paper record missing}
+        "404": {description: Bound queued command, immutable V4 preparation, or Paper record missing}
         "409": {description: Binding, hold, Appeal, supersession, finality, or replay conflict}
         "413": {description: Body exceeds the configured deployment ingress cap}
         "503": {description: Authenticated Receipt V2 verification capacity is busy; body was not read}
@@ -1695,6 +1743,77 @@ components:
           anyOf:
             - {$ref: "#/components/schemas/ChallengeRulesetV1"}
             - {type: "null"}
+    StartPaperReworkRequestV1:
+      type: object
+      additionalProperties: false
+      required: [rework_id, rejected_evaluation_id, rejected_submission_id, expected_paper_version, rework_cycle, author_player_id, signing_key_id, signing_public_key, signing_public_key_hash, reason_hash, signed_at_unix, signature, idempotency_key]
+      properties:
+        rework_id: {type: string, format: uuid}
+        rejected_evaluation_id: {type: string, format: uuid}
+        rejected_submission_id: {type: string, format: uuid}
+        expected_paper_version: {type: integer, format: int64, minimum: 1, maximum: 9007199254740991}
+        rework_cycle: {type: integer, format: int64, minimum: 2, maximum: 9007199254740991}
+        author_player_id: {type: string, format: uuid}
+        signing_key_id: {type: string, minLength: 1, maxLength: 512}
+        signing_public_key: {type: string, contentEncoding: base64}
+        signing_public_key_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        reason_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        signed_at_unix: {type: integer, format: int64, minimum: 0}
+        signature: {type: string, contentEncoding: base64}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    PaperReworkRecordV1:
+      type: object
+      additionalProperties: false
+      required: [schema, rework_id, paper_project_id, rejected_evaluation_id, rejected_submission_id, rejected_revision_id, rejected_release_candidate_hash, rejected_paper_bundle_hash, rejected_rework_content_commitment_sha256, rework_cycle, author_player_id, signing_key_id, signing_public_key, signing_public_key_hash, reason_hash, signed_at_unix, signature, request_hash, rework_expires_at, version, created_at]
+      properties:
+        schema: {type: string, const: hepta.paper_raid.rework_record.v1}
+        rework_id: {type: string, format: uuid}
+        paper_project_id: {type: string, format: uuid}
+        rejected_evaluation_id: {type: string, format: uuid}
+        rejected_submission_id: {type: string, format: uuid}
+        rejected_revision_id: {type: string, format: uuid}
+        rejected_release_candidate_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        rejected_paper_bundle_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        rejected_rework_content_commitment_sha256: {$ref: "#/components/schemas/Sha256Digest"}
+        rework_cycle: {type: integer, format: int64, minimum: 2, maximum: 9007199254740991}
+        author_player_id: {type: string, format: uuid}
+        signing_key_id: {type: string}
+        signing_public_key: {type: string, contentEncoding: base64}
+        signing_public_key_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        reason_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        signed_at_unix: {type: integer, format: int64, minimum: 0}
+        signature: {type: string, contentEncoding: base64}
+        request_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        rework_expires_at: {type: string, format: date-time, description: Exactly 24 hours after server-created created_at.}
+        version: {type: integer, const: 1}
+        created_at: {type: string, format: date-time}
+    PaperReworkResubmissionV1:
+      type: object
+      additionalProperties: false
+      required: [schema, rework_id, paper_project_id, rejected_submission_id, replacement_submission_id, replacement_revision_id, replacement_release_candidate_hash, replacement_paper_bundle_hash, replacement_rework_content_commitment_sha256, replacement_review_round, version, created_at]
+      properties:
+        schema: {type: string, const: hepta.paper_raid.rework_resubmission.v1}
+        rework_id: {type: string, format: uuid}
+        paper_project_id: {type: string, format: uuid}
+        rejected_submission_id: {type: string, format: uuid}
+        replacement_submission_id: {type: string, format: uuid}
+        replacement_revision_id: {type: string, format: uuid}
+        replacement_release_candidate_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        replacement_paper_bundle_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        replacement_rework_content_commitment_sha256: {$ref: "#/components/schemas/Sha256Digest"}
+        replacement_review_round: {type: integer, const: 1}
+        version: {type: integer, const: 1}
+        created_at: {type: string, format: date-time}
+    PaperReworkStateV1:
+      type: object
+      additionalProperties: false
+      required: [rework, resubmission]
+      properties:
+        rework: {$ref: "#/components/schemas/PaperReworkRecordV1"}
+        resubmission:
+          anyOf:
+            - {$ref: "#/components/schemas/PaperReworkResubmissionV1"}
+            - {type: "null"}
     PaperProject:
       type: object
       additionalProperties: false
@@ -1716,6 +1835,9 @@ components:
             - {type: "null"}
         deadline_at: {type: [string, "null"], format: date-time}
         grace_expires_at: {type: [string, "null"], format: date-time}
+        active_rework_id: {type: [string, "null"], format: uuid}
+        active_rework_cycle: {type: [integer, "null"], format: int64, minimum: 2, maximum: 9007199254740991}
+        rework_expires_at: {type: [string, "null"], format: date-time, description: Server-owned 24-hour rework deadline; original grace_expires_at remains immutable.}
         outcome: {type: string, enum: [in_progress, submission_ready, failed, expired, abandoned]}
         outcome_reason: {type: [string, "null"], maxLength: 512}
         terminal_at: {type: [string, "null"], format: date-time}
@@ -2122,6 +2244,8 @@ components:
         paper_bundle_hash: {$ref: "#/components/schemas/Sha256Digest"}
         submission_commitment_hash: {$ref: "#/components/schemas/Sha256Digest"}
         author_consent_set_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        rework_lineage:
+          $ref: "#/components/schemas/PaperTrnmFinalityReworkLineageV1"
         tolerance_policy_hash: {$ref: "#/components/schemas/Sha256Digest"}
         evaluation_id: {type: string, format: uuid}
         evaluation_signing_hash: {$ref: "#/components/schemas/Sha256Digest"}
@@ -2172,6 +2296,24 @@ components:
         reward_eligible: {type: boolean, const: false}
         economic_eligible: {type: boolean, const: false}
         finalized_at_unix_s: {type: integer, minimum: 1}
+    PaperTrnmFinalityReworkLineageV1:
+      type: object
+      additionalProperties: false
+      required: [schema, rework_id, rework_cycle, rejected_submission_id, replacement_submission_id, rejected_revision_id, replacement_revision_id, rejected_release_candidate_hash, replacement_release_candidate_hash, rejected_paper_bundle_hash, replacement_paper_bundle_hash, rejected_rework_content_commitment_sha256, replacement_rework_content_commitment_sha256]
+      properties:
+        schema: {type: string, const: hepta.paper_raid.trnm_finality_rework_lineage.v1}
+        rework_id: {type: string, format: uuid}
+        rework_cycle: {type: integer, minimum: 2, maximum: 9007199254740991}
+        rejected_submission_id: {type: string, format: uuid}
+        replacement_submission_id: {type: string, format: uuid}
+        rejected_revision_id: {type: string, format: uuid}
+        replacement_revision_id: {type: string, format: uuid}
+        rejected_release_candidate_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        replacement_release_candidate_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        rejected_paper_bundle_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        replacement_paper_bundle_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        rejected_rework_content_commitment_sha256: {$ref: "#/components/schemas/Sha256Digest"}
+        replacement_rework_content_commitment_sha256: {$ref: "#/components/schemas/Sha256Digest"}
     PaperTrnmFinalityPreparationV2:
       type: object
       additionalProperties: false
@@ -2544,7 +2686,30 @@ components:
           minItems: 1
           maxItems: 4096
           items: {$ref: "#/components/schemas/ArtifactReference"}
+        review_ready_assembly:
+          oneOf:
+            - {$ref: "#/components/schemas/ReviewReadyArtifactAssemblyV1"}
+            - {type: "null"}
         idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    ArtifactManifestPinV1:
+      type: object
+      additionalProperties: false
+      required: [manifest_id, manifest_hash]
+      properties:
+        manifest_id: {type: string, format: uuid}
+        manifest_hash: {$ref: "#/components/schemas/Sha256Digest"}
+    ReviewReadyArtifactAssemblyV1:
+      type: object
+      additionalProperties: false
+      required: [schema, draft, frozen_evaluator, dataset, candidate]
+      properties:
+        schema:
+          type: string
+          const: hepta.paper_raid.review_ready_artifact_assembly.v1
+        draft: {$ref: "#/components/schemas/ArtifactManifestPinV1"}
+        frozen_evaluator: {$ref: "#/components/schemas/ArtifactManifestPinV1"}
+        dataset: {$ref: "#/components/schemas/ArtifactManifestPinV1"}
+        candidate: {$ref: "#/components/schemas/ArtifactManifestPinV1"}
     CreateEvidenceCardRequest:
       type: object
       additionalProperties: false

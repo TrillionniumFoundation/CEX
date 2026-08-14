@@ -7,7 +7,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chrono::Utc;
 use ed25519_dalek::{Signer, SigningKey};
 use serde_json::{json, Value};
-use sqlx::{Connection, PgConnection, Row};
+use sqlx::{Connection, PgConnection, Postgres, Row, Transaction};
 use std::{
     collections::BTreeMap,
     sync::Arc,
@@ -35,9 +35,9 @@ use crate::{
         human_decision_signing_bytes, human_evidence_verification_signing_bytes,
         human_key_registration_signing_bytes, human_key_revocation_signing_bytes,
         human_key_rotation_signing_bytes, paper_appeal_resolution_signing_bytes,
-        paper_appeal_signing_bytes, paper_evaluation_signing_bytes,
+        paper_appeal_signing_bytes, paper_evaluation_signing_bytes, paper_release_candidate_hash,
         paper_reproduction_signing_bytes, paper_review_attestation_signing_bytes,
-        research_session_archive_hash, research_session_commitment_id,
+        paper_rework_signing_bytes, research_session_archive_hash, research_session_commitment_id,
         research_session_completion_signing_bytes, research_session_event_hash,
         research_session_event_id, research_session_event_root,
         research_session_terminal_facts_frame, section_merge_signing_bytes,
@@ -49,14 +49,15 @@ use crate::{
         ConsumerUserAssertionClaimV2, HumanDecisionSigningV1, HumanEvidenceVerificationSigningV1,
         HumanKeyRegistrationClaimV2, HumanKeyRevocationClaimV2, HumanKeyRotationClaimV2,
         PaperAppealResolutionSigningV1, PaperAppealSigningV1, PaperEvaluationSigningV1,
-        PaperReproductionSigningV1, PaperReviewAttestationSigningV1, ResearchSessionCompletionV1,
-        ResearchSessionEventV1, ResearchSessionTerminalFactsV1, SectionMergeSigningV1,
-        SectionReviewSigningV1, TeamMemberAcceptanceSigningV2, AGENT_BINDING_KEY_ROTATION_V2,
-        AGENT_BINDING_PROOF_V2, AGENT_BINDING_PROOF_V3, AGENT_CAPABILITY_DISCLOSURE_V1,
-        AGENT_PROPOSAL_V2, AUTHORSHIP_CONSENT_V2, CONSUMER_USER_ASSERTION_V2, HUMAN_DECISION_V1,
-        HUMAN_EVIDENCE_VERIFICATION_V1, HUMAN_KEY_REGISTRATION_V2, HUMAN_KEY_REVOCATION_V2,
-        HUMAN_KEY_ROTATION_V2, JSON_SAFE_U64_MAX, PAPER_APPEAL_RESOLUTION_V1, PAPER_APPEAL_V1,
-        PAPER_EVALUATION_V1, PAPER_REPRODUCTION_V1, PAPER_REVIEW_ATTESTATION_V1,
+        PaperReproductionSigningV1, PaperReviewAttestationSigningV1, PaperReworkSigningV1,
+        ResearchSessionCompletionV1, ResearchSessionEventV1, ResearchSessionTerminalFactsV1,
+        SectionMergeSigningV1, SectionReviewSigningV1, TeamMemberAcceptanceSigningV2,
+        AGENT_BINDING_KEY_ROTATION_V2, AGENT_BINDING_PROOF_V2, AGENT_BINDING_PROOF_V3,
+        AGENT_CAPABILITY_DISCLOSURE_V1, AGENT_PROPOSAL_V2, AUTHORSHIP_CONSENT_V2,
+        CONSUMER_USER_ASSERTION_V2, HUMAN_DECISION_V1, HUMAN_EVIDENCE_VERIFICATION_V1,
+        HUMAN_KEY_REGISTRATION_V2, HUMAN_KEY_REVOCATION_V2, HUMAN_KEY_ROTATION_V2,
+        JSON_SAFE_U64_MAX, PAPER_APPEAL_RESOLUTION_V1, PAPER_APPEAL_V1, PAPER_EVALUATION_V1,
+        PAPER_REPRODUCTION_V1, PAPER_REVIEW_ATTESTATION_V1, PAPER_REWORK_V1,
         RESEARCH_SESSION_COMPLETION_V1, RESEARCH_SESSION_EVENT_V1, SECTION_MATERIALIZATION_V1,
         SECTION_MERGE_V1, SECTION_REVIEW_V1, TEAM_MEMBER_ACCEPTANCE_V2,
     },
@@ -171,6 +172,9 @@ fn author_phase_transitions_are_server_gated_by_scientific_milestones() {
         challenge_ruleset_snapshot_hash: None,
         deadline_at: None,
         grace_expires_at: None,
+        active_rework_id: None,
+        active_rework_cycle: None,
+        rework_expires_at: None,
         outcome: PaperChallengeOutcomeV1::InProgress,
         outcome_reason: None,
         terminal_at: None,
@@ -506,6 +510,9 @@ fn typed_challenge_snapshot_overrides_legacy_phase_gate_and_deadline_is_fail_clo
         challenge_ruleset_snapshot: Some(snapshot),
         deadline_at: Some(now + chrono::Duration::minutes(90)),
         grace_expires_at: Some(now + chrono::Duration::minutes(105)),
+        active_rework_id: None,
+        active_rework_cycle: None,
+        rework_expires_at: None,
         outcome: PaperChallengeOutcomeV1::InProgress,
         outcome_reason: None,
         terminal_at: None,
@@ -595,7 +602,7 @@ fn integration_artifact_bundle(
         let review_role = match object["logical_path"].as_str().expect("logical path") {
             "code/baseline.py" => Some("frozen_evaluator"),
             "data/synthetic-observations.csv" => Some("dataset"),
-            "code/ablation.py" => Some("candidate"),
+            "experiments/runs/baseline-seed-17/metrics.json" => Some("candidate"),
             _ => None,
         };
         if let Some(review_role) = review_role {
@@ -652,11 +659,173 @@ async fn create_verified_artifact_manifest(
     expected_paper_version: u64,
     suffix: &str,
 ) -> VerifiedArtifactHashes {
-    let (source_bundle, expected_source_manifest_sha256, storage_locations) =
-        integration_artifact_bundle(challenge_id, suffix);
     let manifest_id = Uuid::new_v4();
     let key = format!("artifact-{paper_id}-{suffix}");
     let path = format!("/v2/hepta/papers/{paper_id}/artifact-manifests");
+    let (full_bundle, _, _) = integration_artifact_bundle(challenge_id, suffix);
+    let source_specs = [
+        (
+            "draft",
+            vec!["paper_source", "bibliography", "claim_evidence_graph"],
+        ),
+        ("frozen-evaluator", vec!["frozen_evaluator"]),
+        ("dataset", vec!["dataset"]),
+        ("candidate", vec!["candidate"]),
+    ];
+    let mut registered_sources = Vec::new();
+    for (source_name, roles) in source_specs {
+        let mut objects = full_bundle["objects"]
+            .as_array()
+            .expect("full fixture objects")
+            .iter()
+            .filter(|object| {
+                object["role"]
+                    .as_str()
+                    .is_some_and(|role| roles.contains(&role))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let source_paths = objects
+            .iter()
+            .map(|object| {
+                object["logical_path"]
+                    .as_str()
+                    .expect("source logical path")
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        for object in &mut objects {
+            object["dependencies"]
+                .as_array_mut()
+                .expect("source dependencies")
+                .retain(|dependency| {
+                    dependency.as_str().is_some_and(|dependency| {
+                        source_paths.iter().any(|path| path == dependency)
+                    })
+                });
+        }
+        let expected_count = if source_name == "draft" { 3 } else { 1 };
+        assert_eq!(objects.len(), expected_count, "exact source role coverage");
+        let source_manifest_id = Uuid::new_v4();
+        let source_bundle = json!({
+            "artifact_root": full_bundle["artifact_root"],
+            "bundle_id": format!("review-source-{source_name}-{source_manifest_id}"),
+            "challenge_id": challenge_id,
+            "created_at": full_bundle["created_at"],
+            "hepta_binding_status": "unbound",
+            "human_authority_materialized": false,
+            "object_count": objects.len(),
+            "objects": objects,
+            "required_run_ids": full_bundle["required_run_ids"],
+            "schema": "paper-raid.artifact-bundle.v1",
+        });
+        let mut canonical = canonical_json_bytes(&source_bundle).expect("source bundle canonical");
+        canonical.push(b'\n');
+        let source_sha256 = sha256_digest(&canonical)
+            .strip_prefix("sha256:")
+            .expect("source hash prefix")
+            .to_string();
+        let source_locations = source_bundle["objects"]
+            .as_array()
+            .expect("source objects")
+            .iter()
+            .map(|object| {
+                let sha256 = object["sha256"].as_str().expect("source digest");
+                json!({
+                    "logical_path": object["logical_path"],
+                    "sha256": sha256,
+                    "uri": format!("cas://sha256/{sha256}"),
+                    "acl": "team",
+                })
+            })
+            .collect::<Vec<_>>();
+        let source_key = format!("{key}-source-{source_name}");
+        let source_manifest = assert_status(
+            user_post(
+                router,
+                actor,
+                "create_artifact_manifest_v3",
+                &path,
+                &source_key,
+                json!({
+                    "manifest_id": source_manifest_id,
+                    "expected_paper_version": expected_paper_version,
+                    "expected_source_manifest_sha256": source_sha256,
+                    "source_bundle": source_bundle,
+                    "storage_locations": source_locations,
+                    "idempotency_key": source_key,
+                }),
+            )
+            .await,
+            StatusCode::CREATED,
+        );
+        registered_sources.push((source_name, source_manifest));
+    }
+    let mut objects = registered_sources
+        .iter()
+        .flat_map(|(_, manifest)| {
+            manifest["objects"]
+                .as_array()
+                .expect("registered source objects")
+                .iter()
+                .cloned()
+        })
+        .collect::<Vec<_>>();
+    objects.sort_by(|left, right| {
+        left["logical_path"]
+            .as_str()
+            .cmp(&right["logical_path"].as_str())
+    });
+    let mut required_run_ids = full_bundle["required_run_ids"]
+        .as_array()
+        .expect("required run IDs")
+        .iter()
+        .map(|run_id| run_id.as_str().expect("required run ID").to_string())
+        .collect::<Vec<_>>();
+    required_run_ids.sort();
+    let source_bundle = json!({
+        "artifact_root": full_bundle["artifact_root"],
+        "bundle_id": format!("review-ready-{manifest_id}"),
+        "challenge_id": challenge_id,
+        "created_at": full_bundle["created_at"],
+        "hepta_binding_status": "unbound",
+        "human_authority_materialized": false,
+        "object_count": objects.len(),
+        "objects": objects,
+        "required_run_ids": required_run_ids,
+        "schema": "paper-raid.artifact-bundle.v1",
+    });
+    let mut canonical = canonical_json_bytes(&source_bundle).expect("Review bundle canonical");
+    canonical.push(b'\n');
+    let expected_source_manifest_sha256 = sha256_digest(&canonical)
+        .strip_prefix("sha256:")
+        .expect("Review bundle hash prefix")
+        .to_string();
+    let storage_locations = source_bundle["objects"]
+        .as_array()
+        .expect("Review bundle objects")
+        .iter()
+        .map(|object| {
+            let sha256 = object["sha256"].as_str().expect("Review object digest");
+            json!({
+                "logical_path": object["logical_path"],
+                "sha256": sha256,
+                "uri": format!("cas://sha256/{sha256}"),
+                "acl": "reviewers",
+            })
+        })
+        .collect::<Vec<_>>();
+    let pin = |name: &str| {
+        let manifest = &registered_sources
+            .iter()
+            .find(|(source_name, _)| *source_name == name)
+            .expect("registered Review source")
+            .1;
+        json!({
+            "manifest_id": manifest["manifest_id"],
+            "manifest_hash": manifest["manifest_hash"],
+        })
+    };
     let manifest = assert_status(
         user_post(
             router,
@@ -670,6 +839,13 @@ async fn create_verified_artifact_manifest(
                 "expected_source_manifest_sha256": expected_source_manifest_sha256,
                 "source_bundle": source_bundle,
                 "storage_locations": storage_locations,
+                "review_ready_assembly": {
+                    "schema": "hepta.paper_raid.review_ready_artifact_assembly.v1",
+                    "draft": pin("draft"),
+                    "frozen_evaluator": pin("frozen-evaluator"),
+                    "dataset": pin("dataset"),
+                    "candidate": pin("candidate"),
+                },
                 "idempotency_key": key,
             }),
         )
@@ -2714,12 +2890,12 @@ pub(crate) async fn reset_postgres(database_url: &str) {
     let pool = sqlx::PgPool::connect(database_url)
         .await
         .expect("maintenance pool");
-    // 0038, 0040, and 0047 intentionally make TRUNCATE impossible for
+    // 0038, 0040, 0047, and 0050 intentionally make TRUNCATE impossible for
     // immutable evidence, evaluation drafts, attestations, contribution
     // ledgers, reservations, and their source tables.
     // These PostgreSQL tests run in a dedicated disposable database, so reset
     // removes only statement-level TRUNCATE guards, clears fixture data, and
-    // then reapplies all three migrations to reconstruct the production guard
+    // then reapplies all five migrations to reconstruct the production guard
     // set and verifies the exact contribution-authority catalog.
     sqlx::raw_sql(
         "drop trigger if exists hepta_trnm_time_checkpoint_v1_truncate_guard
@@ -2730,6 +2906,10 @@ pub(crate) async fn reset_postgres(database_url: &str) {
              on hepta_paper_chain_finality_preparations_v2;
          drop trigger if exists hepta_paper_projects_finality_v2_truncate_guard
              on hepta_paper_projects;
+         drop trigger if exists hepta_paper_reworks_truncate_guard
+             on hepta_paper_reworks;
+         drop trigger if exists hepta_paper_rework_resubmissions_truncate_guard
+             on hepta_paper_rework_resubmissions;
          drop trigger if exists hepta_joint_submissions_finality_v2_truncate_guard
              on hepta_joint_paper_submissions;
          drop trigger if exists hepta_paper_evaluations_finality_v2_truncate_guard
@@ -2758,6 +2938,8 @@ pub(crate) async fn reset_postgres(database_url: &str) {
     .expect("drop test-only immutable TRUNCATE guards before reset");
     sqlx::raw_sql(
         "truncate table
+           hepta_paper_rework_resubmissions,
+           hepta_paper_reworks,
            hepta_paper_chain_finality_preparations_v2,
            hepta_paper_chain_finality_window_arms_v2,
            hepta_trnm_cometbft_time_checkpoints_v1,
@@ -2855,6 +3037,133 @@ pub(crate) async fn reset_postgres(database_url: &str) {
     verify_contribution_ledger_authority_catalog(&pool)
         .await
         .expect("verify exact contribution authority catalog after test reset");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0050_add_hepta_paper_rework.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("restore Author rework constraints and guards after test reset");
+    super::verify_rework_migration_catalog(&pool)
+        .await
+        .expect("verify exact Author rework catalog after test reset");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0051_bind_legacy_evaluation_panel_lifecycle.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("restore legacy evaluation frozen-panel lifecycle after test reset");
+    super::verify_legacy_evaluation_panel_lifecycle_catalog(&pool)
+        .await
+        .expect("verify exact legacy evaluation frozen-panel catalog after test reset");
+}
+
+fn postgres_review_assignment_probe(
+    paper_project_id: Uuid,
+    submission_id: Uuid,
+    player_id: Uuid,
+    review_round: u64,
+    slot: ReviewAssignmentSlot,
+    now: chrono::DateTime<Utc>,
+) -> ReviewAssignment {
+    ReviewAssignment {
+        schema: REVIEW_ASSIGNMENT_SCHEMA_V1.to_string(),
+        assignment_id: Uuid::new_v4(),
+        paper_project_id,
+        submission_id,
+        player_id,
+        review_round,
+        slot,
+        pinned_evaluation_id: None,
+        status: ReviewAssignmentStatus::Claimed,
+        version: 1,
+        claimed_at: now,
+        expires_at: now + chrono::Duration::hours(1),
+        updated_at: now,
+    }
+}
+
+async fn insert_postgres_review_assignment_probe(
+    tx: &mut Transaction<'_, Postgres>,
+    assignment: &ReviewAssignment,
+) {
+    let slot = serde_json::to_value(assignment.slot)
+        .expect("serialize probe slot")
+        .as_str()
+        .expect("probe slot string")
+        .to_string();
+    let status = serde_json::to_value(assignment.status)
+        .expect("serialize probe status")
+        .as_str()
+        .expect("probe status string")
+        .to_string();
+    sqlx::query(
+        "insert into hepta_paper_review_assignments (
+           assignment_id,paper_project_id,submission_id,player_id,review_round,slot,
+           pinned_evaluation_id,status,version,record_json,created_at,expires_at,updated_at
+         ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13)",
+    )
+    .bind(assignment.assignment_id)
+    .bind(assignment.paper_project_id)
+    .bind(assignment.submission_id)
+    .bind(assignment.player_id)
+    .bind(i64::try_from(assignment.review_round).expect("probe round fits i64"))
+    .bind(slot)
+    .bind(assignment.pinned_evaluation_id)
+    .bind(status)
+    .bind(i64::try_from(assignment.version).expect("probe version fits i64"))
+    .bind(serde_json::to_value(assignment).expect("serialize probe assignment"))
+    .bind(assignment.claimed_at)
+    .bind(assignment.expires_at)
+    .bind(assignment.updated_at)
+    .execute(&mut **tx)
+    .await
+    .expect("insert Review assignment probe");
+}
+
+async fn update_postgres_review_assignment_probe(
+    tx: &mut Transaction<'_, Postgres>,
+    assignment: &ReviewAssignment,
+    expected_version: u64,
+    expected_status: ReviewAssignmentStatus,
+) -> Result<u64, sqlx::Error> {
+    let status = serde_json::to_value(assignment.status)
+        .expect("serialize probe update status")
+        .as_str()
+        .expect("probe update status string")
+        .to_string();
+    let expected_status = serde_json::to_value(expected_status)
+        .expect("serialize expected probe status")
+        .as_str()
+        .expect("expected probe status string")
+        .to_string();
+    sqlx::query(
+        "update hepta_paper_review_assignments
+         set pinned_evaluation_id=$1,status=$2,version=$3,record_json=$4::jsonb,updated_at=$5
+         where assignment_id=$6 and version=$7 and status=$8",
+    )
+    .bind(assignment.pinned_evaluation_id)
+    .bind(status)
+    .bind(i64::try_from(assignment.version).expect("probe version fits i64"))
+    .bind(serde_json::to_value(assignment).expect("serialize probe update"))
+    .bind(assignment.updated_at)
+    .bind(assignment.assignment_id)
+    .bind(i64::try_from(expected_version).expect("expected probe version fits i64"))
+    .bind(expected_status)
+    .execute(&mut **tx)
+    .await
+    .map(|result| result.rows_affected())
+}
+
+async fn restore_legacy_panel_lifecycle_0051(pool: &sqlx::PgPool, label: &str) {
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0051_bind_legacy_evaluation_panel_lifecycle.sql"
+    ))
+    .execute(pool)
+    .await
+    .unwrap_or_else(|error| panic!("restore 0051 after {label}: {error}"));
+    super::verify_legacy_evaluation_panel_lifecycle_catalog(pool)
+        .await
+        .unwrap_or_else(|error| panic!("verify restored 0051 after {label}: {error}"));
 }
 
 async fn register_prerequisites(router: &Router, _actors: &[Actor]) -> Uuid {
@@ -9011,6 +9320,183 @@ fn evaluation_body(
     supersedes_evaluation_id: Option<Uuid>,
     idempotency_key: &str,
 ) -> Value {
+    evaluation_body_with_acceptance(
+        paper_id,
+        submission,
+        evaluator,
+        reviewers,
+        evaluation_id,
+        supersedes_evaluation_id,
+        idempotency_key,
+        true,
+    )
+}
+
+fn rejected_evaluation_body(
+    paper_id: Uuid,
+    submission: &Value,
+    evaluator: &Actor,
+    reviewers: [&Actor; 2],
+    evaluation_id: Uuid,
+    idempotency_key: &str,
+) -> Value {
+    evaluation_body_with_acceptance(
+        paper_id,
+        submission,
+        evaluator,
+        reviewers,
+        evaluation_id,
+        None,
+        idempotency_key,
+        false,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the test fixture mirrors every exact signed Paper Rework V1 field"
+)]
+fn paper_rework_body(
+    paper_id: Uuid,
+    rejected_submission_id: Uuid,
+    rejected_evaluation_id: Uuid,
+    expected_paper_version: u64,
+    rework_id: Uuid,
+    rework_cycle: u64,
+    author: &Actor,
+    reason_hash: String,
+    signed_at_unix: i64,
+    idempotency_key: &str,
+) -> Value {
+    let signing = PaperReworkSigningV1 {
+        schema: PAPER_REWORK_V1.to_string(),
+        rework_id,
+        paper_project_id: paper_id,
+        rejected_evaluation_id,
+        rejected_submission_id,
+        expected_paper_version,
+        rework_cycle,
+        author_player_id: author.player_id,
+        signing_key_id: author.human_key_id.clone(),
+        signing_public_key_hash: author.human_public_key_hash.clone(),
+        reason_hash: reason_hash.clone(),
+        signed_at_unix,
+    };
+    let frame = paper_rework_signing_bytes(&signing).expect("Paper rework signing frame");
+    json!({
+        "rework_id":rework_id,
+        "rejected_evaluation_id":rejected_evaluation_id,
+        "rejected_submission_id":rejected_submission_id,
+        "expected_paper_version":expected_paper_version,
+        "rework_cycle":rework_cycle,
+        "author_player_id":author.player_id,
+        "signing_key_id":author.human_key_id,
+        "signing_public_key":author.human_public_key,
+        "signing_public_key_hash":author.human_public_key_hash,
+        "reason_hash":reason_hash,
+        "signed_at_unix":signed_at_unix,
+        "signature":BASE64.encode(author.human_key.sign(&frame).to_bytes()),
+        "idempotency_key":idempotency_key,
+    })
+}
+
+async fn seed_rework_release_candidate_memory(
+    state: &AppState,
+    rejected_submission: &JointPaperSubmission,
+    authors: &[Actor],
+    change_scientific_content: bool,
+) -> (Uuid, String, u64) {
+    let now = Utc::now();
+    let mut memory = state.paper_raid.write().await;
+    let rejected_revision = memory
+        .revisions
+        .get(&rejected_submission.revision_id)
+        .cloned()
+        .expect("rejected revision fixture");
+    let revision_id = Uuid::new_v4();
+    let mut candidate = rejected_submission.paper_bundle.release_candidate.clone();
+    candidate.revision_id = revision_id;
+    if change_scientific_content {
+        candidate.claim_evidence_graph_hash = digest("reworked-claim-evidence-graph");
+    }
+    let release_candidate_hash =
+        paper_release_candidate_hash(&candidate).expect("rework release candidate hash");
+    let revision = PaperRevision {
+        revision_id,
+        paper_project_id: rejected_submission.paper_project_id,
+        parent_revision_id: Some(rejected_submission.revision_id),
+        revision_number: rejected_revision
+            .revision_number
+            .checked_add(1)
+            .expect("fixture revision number"),
+        source_manifest_hash: candidate.source_manifest_hash.clone(),
+        artifact_manifest_hash: candidate.artifact_manifest_hash.clone(),
+        bibliography_hash: candidate.bibliography_hash.clone(),
+        claim_evidence_graph_hash: candidate.claim_evidence_graph_hash.clone(),
+        section_materialization: rejected_revision.section_materialization.clone(),
+        section_materialization_root: rejected_revision.section_materialization_root.clone(),
+        status: PaperRevisionStatus::ReleaseCandidate,
+        release_candidate: Some(candidate),
+        release_candidate_hash: Some(release_candidate_hash.clone()),
+        version: 2,
+        created_at: now,
+        updated_at: now,
+    };
+    memory.revisions.insert(revision_id, revision);
+    for author in authors {
+        let consent_id = Uuid::new_v4();
+        let signing = AuthorshipConsentSigningV2 {
+            schema: AUTHORSHIP_CONSENT_V2.to_string(),
+            consent_id,
+            paper_project_id: rejected_submission.paper_project_id,
+            revision_id,
+            player_id: author.player_id,
+            signing_key_id: author.human_key_id.clone(),
+            signing_public_key: author.human_public_key.clone(),
+            signing_public_key_hash: author.human_public_key_hash.clone(),
+            release_candidate_hash: release_candidate_hash.clone(),
+            signed_at_unix: now.timestamp(),
+        };
+        memory.consents.insert(
+            consent_id,
+            AuthorshipConsent {
+                consent_id,
+                paper_project_id: rejected_submission.paper_project_id,
+                revision_id,
+                player_id: author.player_id,
+                signing_key_id: author.human_key_id.clone(),
+                signing_public_key: author.human_public_key.clone(),
+                signing_public_key_hash: author.human_public_key_hash.clone(),
+                release_candidate_hash: release_candidate_hash.clone(),
+                signed_at: now,
+                signature: sign_authorship_consent(&signing, &author.human_key)
+                    .expect("rework authorship consent signature"),
+            },
+        );
+    }
+    let paper = memory
+        .papers
+        .get_mut(&rejected_submission.paper_project_id)
+        .expect("rework Paper fixture");
+    paper.current_revision_id = Some(revision_id);
+    paper.release_candidate_revision_id = Some(revision_id);
+    paper.phase = PaperPhase::AuthorApproval;
+    paper.version = paper.version.checked_add(1).expect("fixture Paper version");
+    paper.updated_at = now;
+    (revision_id, release_candidate_hash, paper.version)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluation_body_with_acceptance(
+    paper_id: Uuid,
+    submission: &Value,
+    evaluator: &Actor,
+    reviewers: [&Actor; 2],
+    evaluation_id: Uuid,
+    supersedes_evaluation_id: Option<Uuid>,
+    idempotency_key: &str,
+    accepted: bool,
+) -> Value {
     let tolerance_policy = TolerancePolicy {
         schema: TOLERANCE_POLICY_SCHEMA_V1.to_string(),
         version: "1".to_string(),
@@ -9106,17 +9592,23 @@ fn evaluation_body(
     let evaluation_signing_hash = sha256_digest(&frame);
     let reviewer_attestations = reviewers
         .iter()
-        .map(|reviewer| {
+        .enumerate()
+        .map(|(index, reviewer)| {
             let attestation_id = Uuid::new_v4();
             let reviewer_signed_at = Utc::now().timestamp();
             let coi = digest(&format!("coi-reviewer-{}", reviewer.player_id));
+            let verdict = if accepted || index > 0 {
+                "approve"
+            } else {
+                "reject"
+            };
             let signing = PaperReviewAttestationSigningV1 {
                 schema: PAPER_REVIEW_ATTESTATION_V1.to_string(),
                 attestation_id,
                 evaluation_id,
                 evaluation_signing_hash: evaluation_signing_hash.clone(),
                 reviewer_player_id: reviewer.player_id,
-                verdict: "approve".to_string(),
+                verdict: verdict.to_string(),
                 signing_key_id: reviewer.human_key_id.clone(),
                 signing_public_key_hash: reviewer.human_public_key_hash.clone(),
                 coi_attestation_hash: coi.clone(),
@@ -9127,7 +9619,7 @@ fn evaluation_body(
             json!({
                 "attestation_id":attestation_id,
                 "reviewer_player_id":reviewer.player_id,
-                "verdict":"approve",
+                "verdict":verdict,
                 "signing_key_id":reviewer.human_key_id,
                 "signing_public_key":reviewer.human_public_key,
                 "signing_public_key_hash":reviewer.human_public_key_hash,
@@ -10381,6 +10873,784 @@ async fn memory_review_reproduction_and_appeal_are_signed_independent_and_immuta
 }
 
 #[tokio::test]
+async fn memory_legacy_evaluation_consumes_exact_panel_atomically_and_replays() {
+    let state = AppState::new(security());
+    let _ = run_full_flow(state.clone(), 3, FlowOptions::default()).await;
+    let router = app(state.clone());
+    let authors = actors(3);
+    let external = actors(11);
+    register_prerequisites(&router, &external).await;
+    create_players_and_bindings(&router, &external).await;
+    let paper_id = Uuid::from_u128(0x5000_0000_0000_4000_8000_0000_0000_0000 + 3 * 0x100);
+    let submission = assert_status(
+        user_get(
+            &router,
+            &authors[0],
+            "get_joint_paper_submission_v2",
+            &format!("/v2/hepta/papers/{paper_id}/submission"),
+            "legacy-panel-submission",
+        )
+        .await,
+        StatusCode::OK,
+    );
+    let submission_id = Uuid::parse_str(
+        submission["submission_id"]
+            .as_str()
+            .expect("legacy panel submission ID"),
+    )
+    .expect("legacy panel submission UUID");
+    claim_evaluation_panel_fixture(
+        &router,
+        paper_id,
+        1,
+        &external[0],
+        [&external[1], &external[2]],
+        "legacy-panel-round-1",
+    )
+    .await;
+    let evaluation_path = format!("/v2/hepta/papers/{paper_id}/evaluations");
+    let evaluation_id = Uuid::new_v4();
+
+    let failed_key = "legacy-panel-signature-failure";
+    let mut failed_body = evaluation_body(
+        paper_id,
+        &submission,
+        &external[0],
+        [&external[1], &external[2]],
+        evaluation_id,
+        None,
+        failed_key,
+    );
+    failed_body["evaluator_signature"] = json!(BASE64.encode([0_u8; 64]));
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                &external[0],
+                "create_paper_evaluation_v1",
+                &evaluation_path,
+                failed_key,
+                failed_body,
+            )
+            .await,
+            StatusCode::FORBIDDEN,
+        ),
+        "evaluation_signature_failed"
+    );
+    {
+        let memory = state.paper_raid.read().await;
+        let claimed = memory
+            .review
+            .assignments
+            .values()
+            .filter(|assignment| assignment.submission_id == submission_id)
+            .collect::<Vec<_>>();
+        assert_eq!(claimed.len(), 3);
+        assert!(claimed.iter().all(|assignment| {
+            assignment.status == ReviewAssignmentStatus::Claimed
+                && assignment.pinned_evaluation_id.is_none()
+                && assignment.version == 1
+        }));
+        assert!(!memory.review.evaluations.contains_key(&evaluation_id));
+    }
+
+    let key = "legacy-panel-evaluation";
+    let body = evaluation_body(
+        paper_id,
+        &submission,
+        &external[0],
+        [&external[1], &external[2]],
+        evaluation_id,
+        None,
+        key,
+    );
+    let first = user_post(
+        &router,
+        &external[0],
+        "create_paper_evaluation_v1",
+        &evaluation_path,
+        key,
+        body.clone(),
+    );
+    let lost_response_retry = user_post(
+        &router,
+        &external[0],
+        "create_paper_evaluation_v1",
+        &evaluation_path,
+        key,
+        body.clone(),
+    );
+    let (first, retry) = tokio::join!(first, lost_response_retry);
+    let first = assert_status(first, StatusCode::CREATED);
+    let retry = assert_status(retry, StatusCode::CREATED);
+    assert_eq!(
+        retry, first,
+        "concurrent lost-response retry must replay exactly"
+    );
+    assert_eq!(
+        assert_status(
+            user_post(
+                &router,
+                &external[0],
+                "create_paper_evaluation_v1",
+                &evaluation_path,
+                key,
+                body,
+            )
+            .await,
+            StatusCode::CREATED,
+        ),
+        first
+    );
+
+    let drift = evaluation_body(
+        paper_id,
+        &submission,
+        &external[0],
+        [&external[1], &external[2]],
+        Uuid::new_v4(),
+        None,
+        key,
+    );
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                &external[0],
+                "create_paper_evaluation_v1",
+                &evaluation_path,
+                key,
+                drift,
+            )
+            .await,
+            StatusCode::CONFLICT,
+        ),
+        "idempotency_key_conflict"
+    );
+    {
+        let memory = state.paper_raid.read().await;
+        let consumed = memory
+            .review
+            .assignments
+            .values()
+            .filter(|assignment| assignment.submission_id == submission_id)
+            .collect::<Vec<_>>();
+        assert_eq!(consumed.len(), 3);
+        assert!(consumed.iter().all(|assignment| {
+            assignment.status == ReviewAssignmentStatus::Consumed
+                && assignment.pinned_evaluation_id == Some(evaluation_id)
+                && assignment.version == 3
+        }));
+        assert_eq!(
+            memory
+                .review
+                .evaluations
+                .values()
+                .filter(|evaluation| evaluation.evaluation_id == evaluation_id)
+                .count(),
+            1
+        );
+    }
+    assert_eq!(
+        paper_raid_event_types(&state)
+            .await
+            .iter()
+            .filter(|event_type| *event_type == "hepta.paper_raid.evaluation.recorded.v1")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn memory_author_rework_is_signed_scientific_and_resets_review_root() {
+    let state = AppState::new(security());
+    let _ = run_full_flow(state.clone(), 3, FlowOptions::default()).await;
+    let router = app(state.clone());
+    let mut authors = actors(3);
+    let external = actors(11);
+    register_prerequisites(&router, &external).await;
+    create_players_and_bindings(&router, &external).await;
+    let paper_id = Uuid::from_u128(0x5000_0000_0000_4000_8000_0000_0000_0000 + 3 * 0x100);
+    let submission_path = format!("/v2/hepta/papers/{paper_id}/submission");
+    let submission = assert_status(
+        user_get(
+            &router,
+            &authors[0],
+            "get_joint_paper_submission_v2",
+            &submission_path,
+            "rework-read-rejected-submission",
+        )
+        .await,
+        StatusCode::OK,
+    );
+    let rejected_submission: JointPaperSubmission =
+        serde_json::from_value(submission.clone()).expect("decode rejected submission");
+    claim_evaluation_panel_fixture(
+        &router,
+        paper_id,
+        1,
+        &external[0],
+        [&external[1], &external[2]],
+        "rework-rejected-round-1",
+    )
+    .await;
+    let rejected_evaluation_id = Uuid::new_v4();
+    let rejected_key = "rework-rejected-evaluation";
+    let rejected_evaluation = assert_status(
+        user_post(
+            &router,
+            &external[0],
+            "create_paper_evaluation_v1",
+            &format!("/v2/hepta/papers/{paper_id}/evaluations"),
+            rejected_key,
+            rejected_evaluation_body(
+                paper_id,
+                &submission,
+                &external[0],
+                [&external[1], &external[2]],
+                rejected_evaluation_id,
+                rejected_key,
+            ),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(rejected_evaluation["status"], "rejected");
+    let rejected_submission_id = rejected_submission.submission_id;
+    {
+        let memory = state.paper_raid.read().await;
+        let consumed_panel = memory
+            .review
+            .assignments
+            .values()
+            .filter(|assignment| {
+                assignment.submission_id == rejected_submission_id
+                    && assignment.review_round == 1
+                    && assignment.slot != ReviewAssignmentSlot::Reproducer
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(consumed_panel.len(), 3);
+        assert!(consumed_panel.iter().all(|assignment| {
+            assignment.status == ReviewAssignmentStatus::Consumed
+                && assignment.pinned_evaluation_id == Some(rejected_evaluation_id)
+                && assignment.version == 3
+        }));
+    }
+    let rework_path = format!("/v2/hepta/papers/{paper_id}/reworks");
+    let paper_version = state
+        .paper_raid
+        .read()
+        .await
+        .papers
+        .get(&paper_id)
+        .expect("Paper fixture")
+        .version;
+
+    let expired_key = "rework-expired-signature";
+    let expired_body = paper_rework_body(
+        paper_id,
+        rejected_submission_id,
+        rejected_evaluation_id,
+        paper_version,
+        Uuid::new_v4(),
+        2,
+        &authors[0],
+        digest("rework-expired"),
+        (Utc::now() - chrono::Duration::hours(25)).timestamp(),
+        expired_key,
+    );
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                &authors[0],
+                "start_paper_rework_v1",
+                &rework_path,
+                expired_key,
+                expired_body,
+            )
+            .await,
+            StatusCode::FORBIDDEN,
+        ),
+        "signed_at_outside_window"
+    );
+
+    let active_assignment_id = {
+        let mut memory = state.paper_raid.write().await;
+        let mut assignment = memory
+            .review
+            .assignments
+            .values()
+            .find(|assignment| assignment.submission_id == rejected_submission_id)
+            .cloned()
+            .expect("consumed rejected Review assignment");
+        assignment.assignment_id = Uuid::new_v4();
+        assignment.status = ReviewAssignmentStatus::Claimed;
+        assignment.pinned_evaluation_id = None;
+        assignment.expires_at = Utc::now() + chrono::Duration::hours(1);
+        assignment.updated_at = Utc::now();
+        let assignment_id = assignment.assignment_id;
+        memory
+            .review
+            .assignments
+            .insert(assignment.assignment_id, assignment);
+        assignment_id
+    };
+    let assignment_key = "rework-active-assignment";
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                &authors[0],
+                "start_paper_rework_v1",
+                &rework_path,
+                assignment_key,
+                paper_rework_body(
+                    paper_id,
+                    rejected_submission_id,
+                    rejected_evaluation_id,
+                    paper_version,
+                    Uuid::new_v4(),
+                    2,
+                    &authors[0],
+                    digest("rework-active-assignment"),
+                    Utc::now().timestamp(),
+                    assignment_key,
+                ),
+            )
+            .await,
+            StatusCode::CONFLICT,
+        ),
+        "paper_rework_review_assignment_active"
+    );
+    {
+        let mut memory = state.paper_raid.write().await;
+        memory
+            .review
+            .assignments
+            .remove(&active_assignment_id)
+            .expect("remove only the synthetic active assignment");
+        assert!(memory.review.assignments.values().all(|assignment| {
+            assignment.submission_id != rejected_submission_id
+                || matches!(
+                    assignment.status,
+                    ReviewAssignmentStatus::Consumed | ReviewAssignmentStatus::Expired
+                )
+        }));
+    }
+
+    let appeal_id = Uuid::new_v4();
+    let appeal_key = "rework-open-appeal";
+    assert_status(
+        user_post(
+            &router,
+            &authors[0],
+            "create_paper_appeal_v1",
+            &format!("/v2/hepta/papers/{paper_id}/evaluations/{rejected_evaluation_id}/appeals"),
+            appeal_key,
+            appeal_body(
+                paper_id,
+                &rejected_evaluation,
+                &authors[0],
+                appeal_id,
+                appeal_key,
+            ),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    let open_appeal_key = "rework-blocked-open-appeal";
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                &authors[0],
+                "start_paper_rework_v1",
+                &rework_path,
+                open_appeal_key,
+                paper_rework_body(
+                    paper_id,
+                    rejected_submission_id,
+                    rejected_evaluation_id,
+                    paper_version,
+                    Uuid::new_v4(),
+                    2,
+                    &authors[0],
+                    digest("rework-open-appeal-block"),
+                    Utc::now().timestamp(),
+                    open_appeal_key,
+                ),
+            )
+            .await,
+            StatusCode::CONFLICT,
+        ),
+        "paper_rework_open_appeal"
+    );
+    state
+        .paper_raid
+        .write()
+        .await
+        .review
+        .appeals
+        .remove(&appeal_id);
+
+    let superseding_evaluation_id = {
+        let mut memory = state.paper_raid.write().await;
+        let mut child = memory
+            .review
+            .evaluations
+            .get(&rejected_evaluation_id)
+            .cloned()
+            .expect("rejected evaluation fixture");
+        child.evaluation_id = Uuid::new_v4();
+        child.supersedes_evaluation_id = Some(rejected_evaluation_id);
+        child.version = child
+            .version
+            .checked_add(1)
+            .expect("fixture evaluation version");
+        child.created_at = Utc::now();
+        let child_id = child.evaluation_id;
+        memory.review.evaluations.insert(child_id, child);
+        child_id
+    };
+    let superseded_key = "rework-superseded-evaluation";
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                &authors[0],
+                "start_paper_rework_v1",
+                &rework_path,
+                superseded_key,
+                paper_rework_body(
+                    paper_id,
+                    rejected_submission_id,
+                    rejected_evaluation_id,
+                    paper_version,
+                    Uuid::new_v4(),
+                    2,
+                    &authors[0],
+                    digest("rework-superseded"),
+                    Utc::now().timestamp(),
+                    superseded_key,
+                ),
+            )
+            .await,
+            StatusCode::CONFLICT,
+        ),
+        "paper_rework_evaluation_not_final_rejected"
+    );
+    state
+        .paper_raid
+        .write()
+        .await
+        .review
+        .evaluations
+        .remove(&superseding_evaluation_id);
+
+    let frozen_consents = {
+        let mut memory = state.paper_raid.write().await;
+        let submission = memory
+            .submissions
+            .get_mut(&rejected_submission_id)
+            .expect("rejected submission fixture");
+        let frozen = submission.paper_bundle.author_consents.clone();
+        submission
+            .paper_bundle
+            .author_consents
+            .retain(|consent| consent.player_id != authors[0].player_id);
+        frozen
+    };
+    let non_frozen_key = "rework-non-frozen-author";
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                &authors[0],
+                "start_paper_rework_v1",
+                &rework_path,
+                non_frozen_key,
+                paper_rework_body(
+                    paper_id,
+                    rejected_submission_id,
+                    rejected_evaluation_id,
+                    paper_version,
+                    Uuid::new_v4(),
+                    2,
+                    &authors[0],
+                    digest("rework-non-frozen"),
+                    Utc::now().timestamp(),
+                    non_frozen_key,
+                ),
+            )
+            .await,
+            StatusCode::FORBIDDEN,
+        ),
+        "paper_rework_author_not_frozen"
+    );
+    state
+        .paper_raid
+        .write()
+        .await
+        .submissions
+        .get_mut(&rejected_submission_id)
+        .expect("rejected submission fixture")
+        .paper_bundle
+        .author_consents = frozen_consents;
+
+    let retired_author = authors[0].clone();
+    rotate_human_key(&router, &mut authors[0]).await;
+    let retired_key = "rework-retired-key";
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                &retired_author,
+                "start_paper_rework_v1",
+                &rework_path,
+                retired_key,
+                paper_rework_body(
+                    paper_id,
+                    rejected_submission_id,
+                    rejected_evaluation_id,
+                    paper_version,
+                    Uuid::new_v4(),
+                    2,
+                    &retired_author,
+                    digest("rework-retired-key"),
+                    Utc::now().timestamp(),
+                    retired_key,
+                ),
+            )
+            .await,
+            StatusCode::FORBIDDEN,
+        ),
+        "paper_rework_author_key_inactive"
+    );
+
+    let rework_id = Uuid::new_v4();
+    let start_key = "rework-start-valid";
+    let start_body = paper_rework_body(
+        paper_id,
+        rejected_submission_id,
+        rejected_evaluation_id,
+        paper_version,
+        rework_id,
+        2,
+        &authors[0],
+        digest("rework-valid-reason"),
+        Utc::now().timestamp(),
+        start_key,
+    );
+    let started = assert_status(
+        user_post(
+            &router,
+            &authors[0],
+            "start_paper_rework_v1",
+            &rework_path,
+            start_key,
+            start_body.clone(),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    assert_ne!(
+        started["rejected_rework_content_commitment_sha256"],
+        format!("sha256:{}", "0".repeat(64))
+    );
+    assert_eq!(
+        assert_status(
+            user_post(
+                &router,
+                &authors[0],
+                "start_paper_rework_v1",
+                &rework_path,
+                start_key,
+                start_body,
+            )
+            .await,
+            StatusCode::CREATED,
+        ),
+        started
+    );
+    let drift_body = paper_rework_body(
+        paper_id,
+        rejected_submission_id,
+        rejected_evaluation_id,
+        paper_version,
+        rework_id,
+        2,
+        &authors[0],
+        digest("rework-drifted-reason"),
+        Utc::now().timestamp(),
+        start_key,
+    );
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                &authors[0],
+                "start_paper_rework_v1",
+                &rework_path,
+                start_key,
+                drift_body,
+            )
+            .await,
+            StatusCode::CONFLICT,
+        ),
+        "idempotency_key_conflict"
+    );
+    {
+        let memory = state.paper_raid.read().await;
+        assert_eq!(
+            memory
+                .submissions
+                .get(&rejected_submission_id)
+                .expect("withdrawn rejected submission")
+                .status,
+            JointSubmissionStatus::Withdrawn
+        );
+    }
+    let active_lineage = assert_status(
+        user_get(
+            &router,
+            &authors[0],
+            "get_paper_reworks_v1",
+            &rework_path,
+            "rework-get-active-lineage",
+        )
+        .await,
+        StatusCode::OK,
+    );
+    assert_eq!(active_lineage.as_array().unwrap().len(), 1);
+    assert!(active_lineage[0]["resubmission"].is_null());
+
+    let (identity_revision_id, identity_release_hash, identity_paper_version) =
+        seed_rework_release_candidate_memory(&state, &rejected_submission, &authors, false).await;
+    let identity_key = "rework-finalize-identity-only";
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                &authors[0],
+                "finalize_joint_paper_submission_v2",
+                &format!("/v2/hepta/papers/{paper_id}/finalize"),
+                identity_key,
+                json!({
+                    "submission_id":Uuid::new_v4(),
+                    "expected_paper_version":identity_paper_version,
+                    "revision_id":identity_revision_id,
+                    "release_candidate_hash":identity_release_hash,
+                    "idempotency_key":identity_key,
+                }),
+            )
+            .await,
+            StatusCode::CONFLICT,
+        ),
+        "paper_rework_replacement_not_new"
+    );
+
+    let (replacement_revision_id, replacement_release_hash, replacement_paper_version) =
+        seed_rework_release_candidate_memory(&state, &rejected_submission, &authors, true).await;
+    let replacement_submission_id = Uuid::new_v4();
+    let replacement_key = "rework-finalize-scientific-change";
+    let replacement = assert_status(
+        user_post(
+            &router,
+            &authors[0],
+            "finalize_joint_paper_submission_v2",
+            &format!("/v2/hepta/papers/{paper_id}/finalize"),
+            replacement_key,
+            json!({
+                "submission_id":replacement_submission_id,
+                "expected_paper_version":replacement_paper_version,
+                "revision_id":replacement_revision_id,
+                "release_candidate_hash":replacement_release_hash,
+                "idempotency_key":replacement_key,
+            }),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(replacement["status"], "submission_ready");
+    let closed_lineage = assert_status(
+        user_get(
+            &router,
+            &authors[0],
+            "get_paper_reworks_v1",
+            &rework_path,
+            "rework-get-closed-lineage",
+        )
+        .await,
+        StatusCode::OK,
+    );
+    assert_eq!(
+        closed_lineage[0]["resubmission"]["replacement_submission_id"],
+        replacement_submission_id.to_string()
+    );
+    assert_eq!(
+        closed_lineage[0]["resubmission"]["replacement_review_round"],
+        1
+    );
+    assert_ne!(
+        closed_lineage[0]["rework"]["rejected_rework_content_commitment_sha256"],
+        closed_lineage[0]["resubmission"]["replacement_rework_content_commitment_sha256"]
+    );
+    {
+        let memory = state.paper_raid.read().await;
+        let paper = memory
+            .papers
+            .get(&paper_id)
+            .expect("completed rework Paper");
+        assert_eq!(paper.phase, PaperPhase::SubmissionReady);
+        assert!(paper.active_rework_id.is_none());
+        assert!(paper.active_rework_cycle.is_none());
+        assert!(paper.rework_expires_at.is_none());
+    }
+
+    let queue = assert_status(
+        user_get(
+            &router,
+            &external[0],
+            "get_review_queue_v1",
+            "/v2/hepta/review-queue",
+            "rework-review-queue",
+        )
+        .await,
+        StatusCode::OK,
+    );
+    let paper_items = queue
+        .as_array()
+        .expect("Review queue")
+        .iter()
+        .filter(|item| item["paper_project_id"] == paper_id.to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(paper_items.len(), 1);
+    assert_eq!(
+        paper_items[0]["submission_id"],
+        replacement_submission_id.to_string()
+    );
+    assert!(paper_items[0]["open_slots"]
+        .as_array()
+        .expect("replacement open slots")
+        .iter()
+        .all(|slot| slot["review_round"] == 1));
+    let assignment = claim_review_assignment_fixture(
+        &router,
+        &external[0],
+        paper_id,
+        1,
+        "evaluator",
+        "rework-replacement-round-1",
+    )
+    .await;
+    assert_eq!(
+        assignment["submission_id"],
+        replacement_submission_id.to_string()
+    );
+}
+
+#[tokio::test]
 async fn memory_expired_evaluation_draft_reassigns_and_finalizes_without_revival() {
     let outcome = run_draft_lease_recovery_flow(AppState::new(security())).await;
     assert_eq!(
@@ -10904,6 +12174,77 @@ async fn postgres_review_flow_matches_memory_and_migration_is_repeatable() {
     .execute(pool)
     .await
     .expect("0040 third application");
+    let draft_only_fk: i64 = sqlx::query_scalar(
+        "select count(*)::bigint from pg_constraint
+         where conrelid='public.hepta_paper_review_assignments'::regclass
+           and conname='hepta_paper_review_assignments_pinned_evaluation_fkey'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("inspect pre-0051 draft-only pinned authority");
+    assert_eq!(draft_only_fk, 1);
+    let pre_0051_definition: String = sqlx::query_scalar(
+        "select pg_get_functiondef(
+           'public.hepta_guard_review_assignment_draft_lifecycle_v1()'::regprocedure
+         )",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("inspect pre-0051 assignment lifecycle");
+    assert!(!pre_0051_definition.contains("hepta_paper_evaluation_panel_attestations"));
+    let failing_0051 =
+        include_str!("../../../migrations/0051_bind_legacy_evaluation_panel_lifecycle.sql")
+            .replacen("\ncommit;", "\nselect 1 / 0;\ncommit;", 1);
+    let mut atomicity_connection = PgConnection::connect(&database_url)
+        .await
+        .expect("dedicated 0051 atomicity connection");
+    sqlx::raw_sql(&failing_0051)
+        .execute(&mut atomicity_connection)
+        .await
+        .expect_err("synthetic 0051 failure must abort the whole migration transaction");
+    sqlx::query("rollback")
+        .execute(&mut atomicity_connection)
+        .await
+        .expect("rollback expected-failing 0051 probe");
+    atomicity_connection
+        .close()
+        .await
+        .expect("close 0051 atomicity connection");
+    let rollback_fk: i64 = sqlx::query_scalar(
+        "select count(*)::bigint from pg_constraint
+         where conrelid='public.hepta_paper_review_assignments'::regclass
+           and conname='hepta_paper_review_assignments_pinned_evaluation_fkey'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("inspect 0051 rollback constraint state");
+    assert_eq!(
+        rollback_fk, 1,
+        "failed 0051 must not leave a partial FK drop"
+    );
+    let rollback_definition: String = sqlx::query_scalar(
+        "select pg_get_functiondef(
+           'public.hepta_guard_review_assignment_draft_lifecycle_v1()'::regprocedure
+         )",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("inspect 0051 rollback function state");
+    assert!(
+        !rollback_definition.contains("hepta_paper_evaluation_panel_attestations"),
+        "failed 0051 must not leave a partial function upgrade"
+    );
+    for ordinal in 1..=2 {
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/0051_bind_legacy_evaluation_panel_lifecycle.sql"
+        ))
+        .execute(pool)
+        .await
+        .unwrap_or_else(|error| panic!("0051 repeat application {ordinal}: {error}"));
+        super::verify_legacy_evaluation_panel_lifecycle_catalog(pool)
+            .await
+            .unwrap_or_else(|error| panic!("0051 catalog after application {ordinal}: {error}"));
+    }
     sqlx::raw_sql(include_str!(
         "../../../migrations/0047_add_hepta_contribution_ledger_authority.sql"
     ))
@@ -11094,16 +12435,56 @@ async fn postgres_review_flow_matches_memory_and_migration_is_repeatable() {
         draft_count >= 1,
         "review flow must persist an evaluation draft"
     );
-    let consumed_panel_assignments: i64 = sqlx::query_scalar(
-        "select count(*) from hepta_paper_review_assignments where status='consumed'",
+    let consumed_panels = sqlx::query(
+        "select a.pinned_evaluation_id,
+                bool_or(d.evaluation_id is not null) as draft_backed,
+                count(*) as assignment_count,
+                count(distinct a.slot) as slot_count,
+                min(a.version) as minimum_version,
+                max(a.version) as maximum_version
+         from hepta_paper_review_assignments a
+         left join hepta_paper_evaluation_drafts d
+           on d.evaluation_id=a.pinned_evaluation_id
+         where a.status='consumed'
+         group by a.pinned_evaluation_id
+         order by draft_backed",
     )
-    .fetch_one(pool)
+    .fetch_all(pool)
     .await
-    .expect("consumed evaluation panel assignment count");
+    .expect("consumed evaluation panel assignment groups");
     assert_eq!(
-        consumed_panel_assignments, 3,
-        "draft finalization must consume exactly its evaluator and two reviewer assignments"
+        consumed_panels.len(),
+        2,
+        "the review flow must consume exactly one draft-backed panel and one legacy superseding panel"
     );
+    assert_eq!(
+        consumed_panels
+            .iter()
+            .filter(|row| row.get::<bool, _>("draft_backed"))
+            .count(),
+        1,
+        "exactly one consumed panel must be backed by the finalized evaluation draft"
+    );
+    for panel in consumed_panels {
+        assert!(
+            panel
+                .get::<Option<Uuid>, _>("pinned_evaluation_id")
+                .is_some(),
+            "every consumed panel must retain its immutable evaluation identity"
+        );
+        assert_eq!(
+            panel.get::<i64, _>("assignment_count"),
+            3,
+            "each consumed panel must contain exactly its evaluator and two reviewers"
+        );
+        assert_eq!(
+            panel.get::<i64, _>("slot_count"),
+            3,
+            "each consumed panel must contain three distinct frozen slots"
+        );
+        assert_eq!(panel.get::<i64, _>("minimum_version"), 3);
+        assert_eq!(panel.get::<i64, _>("maximum_version"), 3);
+    }
     let pinned_panel_assignments: i64 = sqlx::query_scalar(
         "select count(*) from hepta_paper_review_assignments where status='pinned'",
     )
@@ -11201,6 +12582,744 @@ async fn postgres_review_flow_matches_memory_and_migration_is_repeatable() {
         .execute(&mut lock)
         .await
         .expect("release Hepta PostgreSQL test lock");
+}
+
+#[tokio::test]
+async fn postgres_legacy_panel_and_rework_commitment_hostile_guards_are_atomic() {
+    let Ok(database_url) = std::env::var("HEPTA_TEST_DATABASE_URL") else {
+        eprintln!(
+            "HEPTA_TEST_DATABASE_URL unset; legacy panel/rework PostgreSQL hostile test skipped"
+        );
+        return;
+    };
+    let mut lock = PgConnection::connect(&database_url)
+        .await
+        .expect("PostgreSQL legacy panel/rework test lock");
+    sqlx::query("select pg_advisory_lock(hashtext('hepta-research-league-pg-tests'))")
+        .execute(&mut lock)
+        .await
+        .expect("serialize Hepta PostgreSQL tests");
+    let state = AppState::connect(&database_url, security())
+        .await
+        .expect("legacy panel/rework PostgreSQL state");
+    reset_postgres(&database_url).await;
+    let pool = state.pool.as_ref().expect("PostgreSQL pool");
+    sqlx::raw_sql(
+        "drop trigger if exists hepta_paper_rework_finality_v2_lineage_guard
+           on hepta_paper_chain_finality_preparations_v2;
+         drop trigger if exists hepta_joint_submission_rework_withdrawal_trigger
+           on hepta_joint_paper_submissions;
+         drop table if exists hepta_paper_rework_resubmissions cascade;
+         drop table if exists hepta_paper_reworks cascade;
+         alter table hepta_paper_projects
+           drop constraint if exists hepta_paper_projects_active_rework_shape_check,
+           drop column if exists active_rework_id,
+           drop column if exists active_rework_cycle,
+           drop column if exists rework_expires_at;
+         drop function if exists hepta_validate_paper_rework_insert();
+         drop function if exists hepta_validate_paper_rework_resubmission_insert();
+         drop function if exists hepta_guard_joint_submission_rework_withdrawal();
+         drop function if exists hepta_reject_paper_rework_mutation();
+         drop function if exists hepta_validate_paper_rework_finality_lineage();
+         drop function if exists hepta_paper_rework_content_commitment_sha256(jsonb);
+         drop function if exists hepta_paper_rework_content_projection(jsonb);",
+    )
+    .execute(pool)
+    .await
+    .expect("construct pre-0050 schema for atomicity proof");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0043_add_hepta_challenge_ruleset_v1.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("restore pre-0050 ChallengeRuleset guard");
+    let failing_0050 = include_str!("../../../migrations/0050_add_hepta_paper_rework.sql")
+        .replacen("\ncommit;", "\nselect 1 / 0;\ncommit;", 1);
+    let mut rework_atomicity_connection = PgConnection::connect(&database_url)
+        .await
+        .expect("dedicated 0050 atomicity connection");
+    sqlx::raw_sql(&failing_0050)
+        .execute(&mut rework_atomicity_connection)
+        .await
+        .expect_err("synthetic 0050 failure must abort the whole migration transaction");
+    sqlx::query("rollback")
+        .execute(&mut rework_atomicity_connection)
+        .await
+        .expect("rollback expected-failing 0050 probe");
+    rework_atomicity_connection
+        .close()
+        .await
+        .expect("close 0050 atomicity connection");
+    let partial_0050_tables: i64 = sqlx::query_scalar(
+        "select count(*)::bigint from pg_class
+         where oid in (
+           to_regclass('public.hepta_paper_reworks'),
+           to_regclass('public.hepta_paper_rework_resubmissions')
+         ) and relkind='r'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("inspect failed 0050 tables");
+    let partial_0050_columns: i64 = sqlx::query_scalar(
+        "select count(*)::bigint from pg_attribute
+         where attrelid='public.hepta_paper_projects'::regclass
+           and attname in ('active_rework_id','active_rework_cycle','rework_expires_at')
+           and attnum>0 and not attisdropped",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("inspect failed 0050 columns");
+    assert_eq!(partial_0050_tables, 0);
+    assert_eq!(partial_0050_columns, 0);
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0050_add_hepta_paper_rework.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("apply 0050 after atomicity proof");
+    super::verify_rework_migration_catalog(pool)
+        .await
+        .expect("verify 0050 after atomicity proof");
+
+    sqlx::raw_sql(
+        "alter table hepta_paper_review_assignments
+           disable trigger hepta_review_assignment_draft_lifecycle_guard;",
+    )
+    .execute(pool)
+    .await
+    .expect("disable 0051 lifecycle guard hostile");
+    assert!(
+        super::verify_legacy_evaluation_panel_lifecycle_catalog(pool)
+            .await
+            .expect_err("disabled 0051 trigger must fail readiness")
+            .contains("globally unique, exact, and ALWAYS")
+    );
+    restore_legacy_panel_lifecycle_0051(pool, "disabled trigger").await;
+
+    sqlx::raw_sql(
+        "create or replace function hepta_test_permissive_panel_lifecycle()
+         returns trigger language plpgsql as $$ begin return new; end; $$;
+         drop trigger hepta_review_assignment_draft_lifecycle_guard
+           on hepta_paper_review_assignments;
+         create trigger hepta_review_assignment_draft_lifecycle_guard
+           before update on hepta_paper_review_assignments
+           for each row execute function hepta_test_permissive_panel_lifecycle();
+         alter table hepta_paper_review_assignments
+           enable always trigger hepta_review_assignment_draft_lifecycle_guard;",
+    )
+    .execute(pool)
+    .await
+    .expect("install wrong-function 0051 trigger hostile");
+    assert!(
+        super::verify_legacy_evaluation_panel_lifecycle_catalog(pool)
+            .await
+            .expect_err("wrong-function 0051 trigger must fail readiness")
+            .contains("globally unique, exact, and ALWAYS")
+    );
+    restore_legacy_panel_lifecycle_0051(pool, "wrong trigger function").await;
+    sqlx::query("drop function hepta_test_permissive_panel_lifecycle()")
+        .execute(pool)
+        .await
+        .expect("remove wrong-function hostile helper");
+
+    sqlx::raw_sql(
+        "drop trigger hepta_review_assignment_draft_lifecycle_guard
+           on hepta_paper_review_assignments;
+         create trigger hepta_review_assignment_draft_lifecycle_guard
+           before update on hepta_paper_projects
+           for each row execute function hepta_guard_review_assignment_draft_lifecycle_v1();
+         alter table hepta_paper_projects
+           enable always trigger hepta_review_assignment_draft_lifecycle_guard;",
+    )
+    .execute(pool)
+    .await
+    .expect("install wrong-relation 0051 trigger hostile");
+    assert!(
+        super::verify_legacy_evaluation_panel_lifecycle_catalog(pool)
+            .await
+            .expect_err("wrong-relation 0051 trigger must fail readiness")
+            .contains("globally unique, exact, and ALWAYS")
+    );
+    sqlx::query(
+        "drop trigger hepta_review_assignment_draft_lifecycle_guard on hepta_paper_projects",
+    )
+    .execute(pool)
+    .await
+    .expect("remove wrong-relation trigger hostile");
+    restore_legacy_panel_lifecycle_0051(pool, "wrong trigger relation").await;
+
+    sqlx::raw_sql(
+        "create or replace function hepta_guard_review_assignment_draft_lifecycle_v1()
+         returns trigger language plpgsql
+         set search_path = pg_catalog, public
+         as $$ begin if true or false then return new; end if; return new; end; $$;",
+    )
+    .execute(pool)
+    .await
+    .expect("install permissive OR TRUE lifecycle hostile");
+    assert!(
+        super::verify_legacy_evaluation_panel_lifecycle_catalog(pool)
+            .await
+            .expect_err("permissive 0051 function must fail readiness")
+            .contains("not the exact 0051 authority")
+    );
+    restore_legacy_panel_lifecycle_0051(pool, "permissive function body").await;
+
+    sqlx::raw_sql(
+        "alter table hepta_paper_review_assignments
+         add constraint hepta_paper_review_assignments_pinned_evaluation_fkey
+         foreign key (pinned_evaluation_id)
+         references hepta_paper_evaluation_drafts(evaluation_id);",
+    )
+    .execute(pool)
+    .await
+    .expect("install stale draft-only FK hostile");
+    assert!(
+        super::verify_legacy_evaluation_panel_lifecycle_catalog(pool)
+            .await
+            .expect_err("stale draft-only FK must fail readiness")
+            .contains("draft-only authority")
+    );
+    restore_legacy_panel_lifecycle_0051(pool, "stale draft-only FK").await;
+
+    let _ = run_full_flow(state.clone(), 3, FlowOptions::default()).await;
+    let router = app(state.clone());
+    let authors = actors(3);
+    let external = actors(11);
+    register_prerequisites(&router, &external).await;
+    create_players_and_bindings(&router, &external).await;
+    let paper_id = Uuid::from_u128(0x5000_0000_0000_4000_8000_0000_0000_0000 + 3 * 0x100);
+    let submission = assert_status(
+        user_get(
+            &router,
+            &authors[0],
+            "get_joint_paper_submission_v2",
+            &format!("/v2/hepta/papers/{paper_id}/submission"),
+            "pg-rework-submission",
+        )
+        .await,
+        StatusCode::OK,
+    );
+    let rejected_submission: JointPaperSubmission =
+        serde_json::from_value(submission.clone()).expect("decode PostgreSQL rejected submission");
+    claim_evaluation_panel_fixture(
+        &router,
+        paper_id,
+        1,
+        &external[0],
+        [&external[1], &external[2]],
+        "pg-rework-rejected-round-1",
+    )
+    .await;
+    let rejected_evaluation_id = Uuid::new_v4();
+    let rejected_key = "pg-rework-rejected-evaluation";
+    let rejected_body = rejected_evaluation_body(
+        paper_id,
+        &submission,
+        &external[0],
+        [&external[1], &external[2]],
+        rejected_evaluation_id,
+        rejected_key,
+    );
+
+    sqlx::raw_sql(
+        "create or replace function hepta_test_fail_legacy_panel_consume()
+         returns trigger language plpgsql as $$
+         begin
+           if new.status='consumed' and new.slot='reviewer_1' then
+             raise exception 'hepta_test_fail_legacy_panel_consume' using errcode='55000';
+           end if;
+           return new;
+         end;
+         $$;
+         drop trigger if exists aaa_hepta_test_fail_legacy_panel_consume
+           on hepta_paper_review_assignments;
+         create trigger aaa_hepta_test_fail_legacy_panel_consume
+           before update on hepta_paper_review_assignments
+           for each row execute function hepta_test_fail_legacy_panel_consume();",
+    )
+    .execute(pool)
+    .await
+    .expect("install deterministic second-panel-transition failure");
+    let failed = user_post(
+        &router,
+        &external[0],
+        "create_paper_evaluation_v1",
+        &format!("/v2/hepta/papers/{paper_id}/evaluations"),
+        rejected_key,
+        rejected_body.clone(),
+    )
+    .await;
+    assert_eq!(failed.0, StatusCode::INTERNAL_SERVER_ERROR, "{}", failed.1);
+    sqlx::raw_sql(
+        "drop trigger aaa_hepta_test_fail_legacy_panel_consume
+           on hepta_paper_review_assignments;
+         drop function hepta_test_fail_legacy_panel_consume();",
+    )
+    .execute(pool)
+    .await
+    .expect("remove deterministic panel transition failure");
+    let failed_evaluation_count: i64 = sqlx::query_scalar(
+        "select count(*)::bigint from hepta_paper_evaluations where evaluation_id=$1",
+    )
+    .bind(rejected_evaluation_id)
+    .fetch_one(pool)
+    .await
+    .expect("count rolled-back evaluation");
+    assert_eq!(failed_evaluation_count, 0);
+    let rolled_back_panel = sqlx::query(
+        "select status,version,pinned_evaluation_id
+         from hepta_paper_review_assignments
+         where submission_id=$1 and review_round=1 and slot<>'reproducer'
+         order by slot",
+    )
+    .bind(rejected_submission.submission_id)
+    .fetch_all(pool)
+    .await
+    .expect("inspect rolled-back exact panel");
+    assert_eq!(rolled_back_panel.len(), 3);
+    for row in &rolled_back_panel {
+        assert_eq!(row.get::<String, _>("status"), "claimed");
+        assert_eq!(row.get::<i64, _>("version"), 1);
+        assert_eq!(row.get::<Option<Uuid>, _>("pinned_evaluation_id"), None);
+    }
+    let failed_idempotency_count: i64 = sqlx::query_scalar(
+        "select count(*)::bigint from hepta_paper_raid_idempotency
+         where operation='create_paper_evaluation_v1' and idempotency_key=$1",
+    )
+    .bind(rejected_key)
+    .fetch_one(pool)
+    .await
+    .expect("count rolled-back evaluation idempotency");
+    assert_eq!(failed_idempotency_count, 0);
+
+    let rejected = assert_status(
+        user_post(
+            &router,
+            &external[0],
+            "create_paper_evaluation_v1",
+            &format!("/v2/hepta/papers/{paper_id}/evaluations"),
+            rejected_key,
+            rejected_body,
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(rejected["status"], "rejected");
+    let consumed_panel = sqlx::query(
+        "select status,version,pinned_evaluation_id
+         from hepta_paper_review_assignments
+         where submission_id=$1 and review_round=1 and slot<>'reproducer'
+         order by slot",
+    )
+    .bind(rejected_submission.submission_id)
+    .fetch_all(pool)
+    .await
+    .expect("inspect consumed exact panel");
+    assert_eq!(consumed_panel.len(), 3);
+    for row in &consumed_panel {
+        assert_eq!(row.get::<String, _>("status"), "consumed");
+        assert_eq!(row.get::<i64, _>("version"), 3);
+        assert_eq!(
+            row.get::<Option<Uuid>, _>("pinned_evaluation_id"),
+            Some(rejected_evaluation_id)
+        );
+    }
+
+    let probe_now: chrono::DateTime<Utc> = sqlx::query_scalar("select clock_timestamp()")
+        .fetch_one(pool)
+        .await
+        .expect("PostgreSQL panel probe clock");
+    for (label, player_id, review_round, slot) in [
+        (
+            "wrong-player",
+            external[3].player_id,
+            1_u64,
+            ReviewAssignmentSlot::Reviewer1,
+        ),
+        (
+            "wrong-slot",
+            external[0].player_id,
+            1_u64,
+            ReviewAssignmentSlot::Reviewer1,
+        ),
+        (
+            "wrong-round",
+            external[0].player_id,
+            2_u64,
+            ReviewAssignmentSlot::Evaluator,
+        ),
+    ] {
+        let mut tx = pool.begin().await.expect("begin hostile panel probe");
+        let claimed = postgres_review_assignment_probe(
+            paper_id,
+            rejected_submission.submission_id,
+            player_id,
+            review_round,
+            slot,
+            probe_now,
+        );
+        insert_postgres_review_assignment_probe(&mut tx, &claimed).await;
+        let mut pinned = claimed.clone();
+        pinned.status = ReviewAssignmentStatus::Pinned;
+        pinned.pinned_evaluation_id = Some(rejected_evaluation_id);
+        pinned.version = 2;
+        pinned.updated_at = probe_now;
+        let error = update_postgres_review_assignment_probe(
+            &mut tx,
+            &pinned,
+            1,
+            ReviewAssignmentStatus::Claimed,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.as_database_error().is_some_and(|database| database
+                .message()
+                .contains("review assignment identity or frozen panel lifecycle changed")),
+            "{label} pin failed with unexpected error: {error}"
+        );
+        tx.rollback()
+            .await
+            .unwrap_or_else(|rollback| panic!("rollback {label} panel probe: {rollback}"));
+    }
+
+    let mut exact_tx = pool
+        .begin()
+        .await
+        .expect("begin exact panel lifecycle probe");
+    let mut exact_panel = vec![
+        postgres_review_assignment_probe(
+            paper_id,
+            rejected_submission.submission_id,
+            external[0].player_id,
+            1,
+            ReviewAssignmentSlot::Evaluator,
+            probe_now,
+        ),
+        postgres_review_assignment_probe(
+            paper_id,
+            rejected_submission.submission_id,
+            external[1].player_id,
+            1,
+            ReviewAssignmentSlot::Reviewer1,
+            probe_now,
+        ),
+        postgres_review_assignment_probe(
+            paper_id,
+            rejected_submission.submission_id,
+            external[2].player_id,
+            1,
+            ReviewAssignmentSlot::Reviewer2,
+            probe_now,
+        ),
+    ];
+    for assignment in &exact_panel {
+        insert_postgres_review_assignment_probe(&mut exact_tx, assignment).await;
+    }
+    for assignment in &mut exact_panel {
+        assignment.status = ReviewAssignmentStatus::Pinned;
+        assignment.pinned_evaluation_id = Some(rejected_evaluation_id);
+        assignment.version = 2;
+        assignment.updated_at = probe_now;
+        assert_eq!(
+            update_postgres_review_assignment_probe(
+                &mut exact_tx,
+                assignment,
+                1,
+                ReviewAssignmentStatus::Claimed,
+            )
+            .await
+            .expect("exact claimed-to-pinned transition"),
+            1
+        );
+    }
+    let pinned_versions = sqlx::query(
+        "select status,version,pinned_evaluation_id
+         from hepta_paper_review_assignments
+         where assignment_id = any($1) order by slot",
+    )
+    .bind(
+        exact_panel
+            .iter()
+            .map(|assignment| assignment.assignment_id)
+            .collect::<Vec<_>>(),
+    )
+    .fetch_all(&mut *exact_tx)
+    .await
+    .expect("inspect exact pinned panel");
+    assert_eq!(pinned_versions.len(), 3);
+    assert!(pinned_versions.iter().all(|row| {
+        row.get::<String, _>("status") == "pinned"
+            && row.get::<i64, _>("version") == 2
+            && row.get::<Option<Uuid>, _>("pinned_evaluation_id") == Some(rejected_evaluation_id)
+    }));
+    for assignment in &mut exact_panel {
+        assignment.status = ReviewAssignmentStatus::Consumed;
+        assignment.version = 3;
+        assignment.updated_at = probe_now;
+        assert_eq!(
+            update_postgres_review_assignment_probe(
+                &mut exact_tx,
+                assignment,
+                2,
+                ReviewAssignmentStatus::Pinned,
+            )
+            .await
+            .expect("exact pinned-to-consumed transition"),
+            1
+        );
+    }
+    let consumed_versions = sqlx::query(
+        "select status,version,pinned_evaluation_id
+         from hepta_paper_review_assignments
+         where assignment_id = any($1) order by slot",
+    )
+    .bind(
+        exact_panel
+            .iter()
+            .map(|assignment| assignment.assignment_id)
+            .collect::<Vec<_>>(),
+    )
+    .fetch_all(&mut *exact_tx)
+    .await
+    .expect("inspect exact consumed panel");
+    assert_eq!(consumed_versions.len(), 3);
+    assert!(consumed_versions.iter().all(|row| {
+        row.get::<String, _>("status") == "consumed"
+            && row.get::<i64, _>("version") == 3
+            && row.get::<Option<Uuid>, _>("pinned_evaluation_id") == Some(rejected_evaluation_id)
+    }));
+    exact_tx
+        .rollback()
+        .await
+        .expect("rollback exact panel lifecycle probe");
+
+    let _ = run_full_flow(state.clone(), 4, FlowOptions::default()).await;
+    let other_paper_id = Uuid::from_u128(0x5000_0000_0000_4000_8000_0000_0000_0000 + 4 * 0x100);
+    let other_submission_id: Uuid = sqlx::query_scalar(
+        "select submission_id from hepta_joint_paper_submissions
+         where paper_project_id=$1 and status='submission_ready'",
+    )
+    .bind(other_paper_id)
+    .fetch_one(pool)
+    .await
+    .expect("load other Paper submission probe");
+    let mut cross_tx = pool.begin().await.expect("begin cross-Paper panel probe");
+    let cross_claimed = postgres_review_assignment_probe(
+        other_paper_id,
+        other_submission_id,
+        external[4].player_id,
+        1,
+        ReviewAssignmentSlot::Evaluator,
+        probe_now,
+    );
+    insert_postgres_review_assignment_probe(&mut cross_tx, &cross_claimed).await;
+    let mut cross_pinned = cross_claimed.clone();
+    cross_pinned.status = ReviewAssignmentStatus::Pinned;
+    cross_pinned.pinned_evaluation_id = Some(rejected_evaluation_id);
+    cross_pinned.version = 2;
+    cross_pinned.updated_at = probe_now;
+    let cross_error = update_postgres_review_assignment_probe(
+        &mut cross_tx,
+        &cross_pinned,
+        1,
+        ReviewAssignmentStatus::Claimed,
+    )
+    .await
+    .expect_err("cross-Paper/submission evaluation pin must fail");
+    assert!(cross_error
+        .as_database_error()
+        .is_some_and(|database| database
+            .message()
+            .contains("review assignment identity or frozen panel lifecycle changed")));
+    cross_tx
+        .rollback()
+        .await
+        .expect("rollback cross-Paper/submission panel probe");
+
+    let rust_commitment = rework_content_commitment_sha256(&rejected_submission)
+        .expect("Rust rejected scientific commitment");
+    let sql_commitment: String = sqlx::query_scalar(
+        "select hepta_paper_rework_content_commitment_sha256(record_json)
+         from hepta_joint_paper_submissions where submission_id=$1",
+    )
+    .bind(rejected_submission.submission_id)
+    .fetch_one(pool)
+    .await
+    .expect("PostgreSQL rejected scientific commitment");
+    assert_eq!(sql_commitment, rust_commitment);
+
+    let paper_version: i64 =
+        sqlx::query_scalar("select version from hepta_paper_projects where paper_project_id=$1")
+            .bind(paper_id)
+            .fetch_one(pool)
+            .await
+            .expect("load rejected Paper version");
+    let active_probe = postgres_review_assignment_probe(
+        paper_id,
+        rejected_submission.submission_id,
+        external[0].player_id,
+        1,
+        ReviewAssignmentSlot::Evaluator,
+        probe_now,
+    );
+    let mut active_tx = pool
+        .begin()
+        .await
+        .expect("begin partial active panel probe");
+    insert_postgres_review_assignment_probe(&mut active_tx, &active_probe).await;
+    active_tx
+        .commit()
+        .await
+        .expect("commit partial active panel probe");
+    let partial_key = "pg-rework-partial-active-panel";
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                &authors[0],
+                "start_paper_rework_v1",
+                &format!("/v2/hepta/papers/{paper_id}/reworks"),
+                partial_key,
+                paper_rework_body(
+                    paper_id,
+                    rejected_submission.submission_id,
+                    rejected_evaluation_id,
+                    u64::try_from(paper_version).expect("Paper version fits u64"),
+                    Uuid::new_v4(),
+                    2,
+                    &authors[0],
+                    digest("pg-rework-partial-panel"),
+                    Utc::now().timestamp(),
+                    partial_key,
+                ),
+            )
+            .await,
+            StatusCode::CONFLICT,
+        ),
+        "paper_rework_review_assignment_active"
+    );
+    assert_eq!(
+        sqlx::query("delete from hepta_paper_review_assignments where assignment_id=$1")
+            .bind(active_probe.assignment_id)
+            .execute(pool)
+            .await
+            .expect("remove partial active panel probe")
+            .rows_affected(),
+        1
+    );
+
+    let forged_created_at: chrono::DateTime<Utc> = sqlx::query_scalar("select clock_timestamp()")
+        .fetch_one(pool)
+        .await
+        .expect("PostgreSQL forged rework clock");
+    let forged_commitment = digest("forged-rework-content-commitment");
+    assert_ne!(forged_commitment, rust_commitment);
+    let forged_rework = PaperReworkRecordV1 {
+        schema: "hepta.paper_raid.rework_record.v1".to_string(),
+        rework_id: Uuid::new_v4(),
+        paper_project_id: paper_id,
+        rejected_evaluation_id,
+        rejected_submission_id: rejected_submission.submission_id,
+        rejected_revision_id: rejected_submission.revision_id,
+        rejected_release_candidate_hash: rejected_submission.release_candidate_hash.clone(),
+        rejected_paper_bundle_hash: rejected_submission.paper_bundle_hash.clone(),
+        rejected_rework_content_commitment_sha256: forged_commitment,
+        rework_cycle: 2,
+        author_player_id: authors[0].player_id,
+        signing_key_id: authors[0].human_key_id.clone(),
+        signing_public_key: authors[0].human_public_key.clone(),
+        signing_public_key_hash: authors[0].human_public_key_hash.clone(),
+        reason_hash: digest("forged-rework-reason"),
+        signed_at_unix: forged_created_at.timestamp(),
+        signature: BASE64.encode([0_u8; 64]),
+        request_hash: digest("forged-rework-request"),
+        rework_expires_at: forged_created_at + chrono::Duration::hours(24),
+        version: 1,
+        created_at: forged_created_at,
+    };
+    let forged_error = sqlx::query(
+        "insert into hepta_paper_reworks (
+           rework_id,paper_project_id,rejected_evaluation_id,rejected_submission_id,
+           rejected_revision_id,rejected_release_candidate_hash,rejected_paper_bundle_hash,
+           rejected_rework_content_commitment_sha256,rework_cycle,author_player_id,
+           signing_key_id,signing_public_key,signing_public_key_hash,reason_hash,
+           signed_at_unix,request_hash,signature,rework_expires_at,version,record_json,created_at
+         ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb,$21)",
+    )
+    .bind(forged_rework.rework_id)
+    .bind(forged_rework.paper_project_id)
+    .bind(forged_rework.rejected_evaluation_id)
+    .bind(forged_rework.rejected_submission_id)
+    .bind(forged_rework.rejected_revision_id)
+    .bind(&forged_rework.rejected_release_candidate_hash)
+    .bind(&forged_rework.rejected_paper_bundle_hash)
+    .bind(&forged_rework.rejected_rework_content_commitment_sha256)
+    .bind(i64::try_from(forged_rework.rework_cycle).expect("rework cycle fits i64"))
+    .bind(forged_rework.author_player_id)
+    .bind(&forged_rework.signing_key_id)
+    .bind(&forged_rework.signing_public_key)
+    .bind(&forged_rework.signing_public_key_hash)
+    .bind(&forged_rework.reason_hash)
+    .bind(forged_rework.signed_at_unix)
+    .bind(&forged_rework.request_hash)
+    .bind(&forged_rework.signature)
+    .bind(forged_rework.rework_expires_at)
+    .bind(i64::try_from(forged_rework.version).expect("rework version fits i64"))
+    .bind(serde_json::to_value(&forged_rework).expect("serialize forged rework"))
+    .bind(forged_rework.created_at)
+    .execute(pool)
+    .await
+    .expect_err("direct forged scientific commitment must fail at the database");
+    assert!(
+        forged_error
+            .as_database_error()
+            .is_some_and(|database| database
+                .message()
+                .contains("hepta_paper_rework_state_invalid")),
+        "forged commitment failed with unexpected error: {forged_error}"
+    );
+    let forged_count: i64 = sqlx::query_scalar("select count(*)::bigint from hepta_paper_reworks")
+        .fetch_one(pool)
+        .await
+        .expect("count rejected forged reworks");
+    assert_eq!(forged_count, 0);
+
+    let valid_key = "pg-rework-valid-after-hostile";
+    let valid = assert_status(
+        user_post(
+            &router,
+            &authors[0],
+            "start_paper_rework_v1",
+            &format!("/v2/hepta/papers/{paper_id}/reworks"),
+            valid_key,
+            paper_rework_body(
+                paper_id,
+                rejected_submission.submission_id,
+                rejected_evaluation_id,
+                u64::try_from(paper_version).expect("Paper version fits u64"),
+                Uuid::new_v4(),
+                2,
+                &authors[0],
+                digest("pg-rework-valid-after-hostile"),
+                Utc::now().timestamp(),
+                valid_key,
+            ),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(
+        valid["rejected_rework_content_commitment_sha256"],
+        rust_commitment
+    );
+
+    reset_postgres(&database_url).await;
+    sqlx::query("select pg_advisory_unlock(hashtext('hepta-research-league-pg-tests'))")
+        .execute(&mut lock)
+        .await
+        .expect("release Hepta PostgreSQL legacy panel/rework lock");
 }
 
 async fn assert_paper_finality_v2_trigger_replay_repairs_tampering(pool: &sqlx::PgPool) {

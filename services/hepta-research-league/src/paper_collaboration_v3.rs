@@ -44,6 +44,10 @@ pub const PAPER_COLLABORATION_PROTOCOL_V3: &str = "hepta.paper_raid.collaboratio
 pub const SOURCE_ARTIFACT_BUNDLE_SCHEMA_V1: &str = "paper-raid.artifact-bundle.v1";
 pub const ARTIFACT_MANIFEST_BINDING_SCHEMA_V1: &str =
     "hepta.paper_raid.artifact_manifest_binding.v1";
+pub const REVIEW_READY_ARTIFACT_MANIFEST_BINDING_SCHEMA_V1: &str =
+    "hepta.paper_raid.review_ready_artifact_manifest_binding.v1";
+pub const REVIEW_READY_ARTIFACT_ASSEMBLY_SCHEMA_V1: &str =
+    "hepta.paper_raid.review_ready_artifact_assembly.v1";
 pub const ARTIFACT_BUNDLE_ADAPTER_CONTRACT_HASH_V1: &str =
     "sha256:aba8fd6d1059c59f63cdb258a2e507de1bed3ff74f935b7dd0214e4640ad9bb6";
 pub const ARTIFACT_BUNDLE_ADAPTER_SOURCE_REVISION: &str =
@@ -56,6 +60,7 @@ pub const MATCHMAKING_SOLVER_VERSION_V2: &str = "hepta.paper_raid.alpha_matcher.
 const AUTOMATIC_CHALLENGE_EXPIRY_OPERATION: &str = "materialize_paper_challenge_expiry_v1";
 const AUTOMATIC_CHALLENGE_EXPIRY_EVENT: &str = "hepta.paper_raid.challenge_outcome.terminal.v1";
 const AUTOMATIC_CHALLENGE_EXPIRY_REASON: &str = "challenge_grace_deadline_elapsed";
+const AUTOMATIC_REWORK_EXPIRY_REASON: &str = "rework_window_elapsed";
 
 /// Read one database-authoritative, microsecond-precision timestamp and reuse
 /// it for both relational columns and their immutable JSON projection.
@@ -647,6 +652,8 @@ pub struct ArtifactManifest {
     pub required_run_ids: Vec<String>,
     pub storage_locations: Vec<ArtifactReference>,
     pub total_size_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_ready_assembly: Option<ReviewReadyArtifactAssemblyV1>,
     pub version: u64,
     pub created_at: DateTime<Utc>,
 }
@@ -683,7 +690,26 @@ pub struct CreateArtifactManifestRequest {
     pub expected_source_manifest_sha256: String,
     pub source_bundle: NeutralArtifactBundleV1,
     pub storage_locations: Vec<ArtifactReference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_ready_assembly: Option<ReviewReadyArtifactAssemblyV1>,
     pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactManifestPinV1 {
+    pub manifest_id: Uuid,
+    pub manifest_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewReadyArtifactAssemblyV1 {
+    pub schema: String,
+    pub draft: ArtifactManifestPinV1,
+    pub frozen_evaluator: ArtifactManifestPinV1,
+    pub dataset: ArtifactManifestPinV1,
+    pub candidate: ArtifactManifestPinV1,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1660,7 +1686,11 @@ fn project_author_raid_progress(
         // a Captain-only action in case a caller projects an old snapshot.
         next_phase = None;
         objective = "challenge_expiry_materialization_pending";
-        blockers = vec!["challenge_grace_deadline_elapsed".to_string()];
+        blockers = vec![if paper.active_rework_id.is_some() {
+            AUTOMATIC_REWORK_EXPIRY_REASON.to_string()
+        } else {
+            AUTOMATIC_CHALLENGE_EXPIRY_REASON.to_string()
+        }];
         next_actions.clear();
     }
     let actor_role = team
@@ -2232,32 +2262,74 @@ fn paper_and_team_memory(
 }
 
 fn automatic_challenge_expiry_due(paper: &PaperProject, now: DateTime<Utc>) -> bool {
-    paper.outcome == PaperChallengeOutcomeV1::InProgress
+    if paper.outcome != PaperChallengeOutcomeV1::InProgress {
+        return false;
+    }
+    if paper.active_rework_id.is_some()
+        && paper.active_rework_cycle.is_some()
+        && paper.rework_expires_at.is_some()
+    {
+        return paper
+            .rework_expires_at
+            .is_some_and(|expires_at| now >= expires_at);
+    }
+    paper.active_rework_id.is_none()
+        && paper.active_rework_cycle.is_none()
+        && paper.rework_expires_at.is_none()
         && paper
             .grace_expires_at
             .is_some_and(|grace_expires_at| now >= grace_expires_at)
 }
 
-fn apply_automatic_challenge_expiry(paper: &mut PaperProject, now: DateTime<Utc>) -> bool {
+fn apply_automatic_challenge_expiry(
+    paper: &mut PaperProject,
+    now: DateTime<Utc>,
+) -> Result<bool, ApiError> {
     if !automatic_challenge_expiry_due(paper, now) {
-        return false;
+        return Ok(false);
     }
-    let grace_expires_at = paper
-        .grace_expires_at
-        .expect("automatic expiry due implies an immutable grace deadline");
+    let rework_expiry = paper.active_rework_id.is_some();
+    let expires_at = if rework_expiry {
+        paper
+            .rework_expires_at
+            .expect("automatic rework expiry due implies an immutable lease deadline")
+    } else {
+        paper
+            .grace_expires_at
+            .expect("automatic expiry due implies an immutable grace deadline")
+    };
     paper.outcome = PaperChallengeOutcomeV1::Expired;
-    paper.outcome_reason = Some(AUTOMATIC_CHALLENGE_EXPIRY_REASON.to_string());
+    paper.outcome_reason = Some(
+        if rework_expiry {
+            AUTOMATIC_REWORK_EXPIRY_REASON
+        } else {
+            AUTOMATIC_CHALLENGE_EXPIRY_REASON
+        }
+        .to_string(),
+    );
     // The gameplay terminal fact is the immutable grace boundary. `updated_at`
     // and the emitted event timestamp below record when lazy materialization
     // actually happened, so polling frequency cannot change the terminal fact.
-    paper.terminal_at = Some(grace_expires_at);
-    paper.version += 1;
+    paper.terminal_at = Some(expires_at);
+    paper.active_rework_id = None;
+    paper.active_rework_cycle = None;
+    paper.rework_expires_at = None;
+    paper.version = paper
+        .version
+        .checked_add(1)
+        .ok_or_else(|| ApiError::internal("automatic Paper expiry version overflow"))?;
     paper.updated_at = now;
-    true
+    Ok(true)
 }
 
-fn automatic_challenge_expiry_idempotency_key(paper_id: Uuid) -> String {
-    format!("automatic-challenge-expiry:{paper_id}")
+fn automatic_challenge_expiry_idempotency_key(paper: &PaperProject) -> String {
+    match paper.active_rework_id {
+        Some(rework_id) => format!(
+            "automatic-rework-expiry:{}:{rework_id}",
+            paper.paper_project_id
+        ),
+        None => format!("automatic-challenge-expiry:{}", paper.paper_project_id),
+    }
 }
 
 fn automatic_challenge_expiry_payload(paper: &PaperProject) -> Value {
@@ -2274,23 +2346,26 @@ fn materialize_automatic_challenge_expiry_memory(
     memory: &mut PaperRaidMemory,
     paper_id: Uuid,
     now: DateTime<Utc>,
-) -> Option<PaperProject> {
-    let paper = memory.papers.get_mut(&paper_id)?;
-    if !apply_automatic_challenge_expiry(paper, now) {
-        return None;
+) -> Result<Option<PaperProject>, ApiError> {
+    let Some(paper) = memory.papers.get_mut(&paper_id) else {
+        return Ok(None);
+    };
+    let idempotency_key = automatic_challenge_expiry_idempotency_key(paper);
+    if !apply_automatic_challenge_expiry(paper, now)? {
+        return Ok(None);
     }
     let response = paper.clone();
     push_room_event_memory(
         memory,
         AUTOMATIC_CHALLENGE_EXPIRY_OPERATION,
-        &automatic_challenge_expiry_idempotency_key(paper_id),
+        &idempotency_key,
         AUTOMATIC_CHALLENGE_EXPIRY_EVENT,
         paper_id,
         paper_id,
         response.version,
         automatic_challenge_expiry_payload(&response),
     );
-    Some(response)
+    Ok(Some(response))
 }
 
 async fn materialize_automatic_challenge_expiry_postgres(
@@ -2298,7 +2373,8 @@ async fn materialize_automatic_challenge_expiry_postgres(
     mut paper: PaperProject,
     now: DateTime<Utc>,
 ) -> Result<Option<PaperProject>, ApiError> {
-    if !apply_automatic_challenge_expiry(&mut paper, now) {
+    let idempotency_key = automatic_challenge_expiry_idempotency_key(&paper);
+    if !apply_automatic_challenge_expiry(&mut paper, now)? {
         return Ok(None);
     }
     let previous_version = paper
@@ -2310,6 +2386,7 @@ async fn materialize_automatic_challenge_expiry_postgres(
     let updated = sqlx::query(
         "update hepta_paper_projects
          set outcome='expired',outcome_reason=$1,terminal_at=$2,version=$3,
+             active_rework_id=null,active_rework_cycle=null,rework_expires_at=null,
              record_json=$4::jsonb,updated_at=$5
          where paper_project_id=$6 and outcome='in_progress' and version=$7",
     )
@@ -2338,7 +2415,7 @@ async fn materialize_automatic_challenge_expiry_postgres(
     insert_room_event_postgres(
         tx,
         AUTOMATIC_CHALLENGE_EXPIRY_OPERATION,
-        &automatic_challenge_expiry_idempotency_key(paper.paper_project_id),
+        &idempotency_key,
         AUTOMATIC_CHALLENGE_EXPIRY_EVENT,
         paper.paper_project_id,
         paper.paper_project_id,
@@ -2376,7 +2453,7 @@ pub(super) async fn ensure_automatic_challenge_expiry_materialized(
             return Ok(());
         }
         ensure_paper_finality_v2_source_unsealed_memory(state, paper_id).await?;
-        let _ = materialize_automatic_challenge_expiry_memory(&mut memory, paper_id, now);
+        let _ = materialize_automatic_challenge_expiry_memory(&mut memory, paper_id, now)?;
         return Ok(());
     }
 
@@ -2430,8 +2507,15 @@ async fn ensure_player_automatic_challenge_expiries_materialized(
              from hepta_paper_projects p
              join hepta_research_team_members m on m.team_id=p.team_id
              where m.player_id=$1 and p.outcome='in_progress'
-               and p.grace_expires_at is not null and p.grace_expires_at <= $2
-             order by p.grace_expires_at,p.paper_project_id",
+               and (
+                 (p.active_rework_id is not null and p.active_rework_cycle is not null
+                    and p.rework_expires_at is not null and p.rework_expires_at <= $2)
+                 or
+                 (p.active_rework_id is null and p.active_rework_cycle is null
+                    and p.rework_expires_at is null and p.grace_expires_at is not null
+                    and p.grace_expires_at <= $2)
+               )
+             order by coalesce(p.rework_expires_at,p.grace_expires_at),p.paper_project_id",
         )
         .bind(assertion.player_id)
         .bind(now)
@@ -7389,6 +7473,340 @@ fn validate_artifact_challenge_id(
     Ok(())
 }
 
+fn review_ready_source_manifest<'a>(
+    manifests: &'a [ArtifactManifest],
+    pin: &ArtifactManifestPinV1,
+    paper_id: Uuid,
+    challenge_id: Uuid,
+    source_name: &'static str,
+) -> Result<&'a ArtifactManifest, ApiError> {
+    validate_digest_v2("review_ready_source_manifest_hash", &pin.manifest_hash)?;
+    let matches = manifests
+        .iter()
+        .filter(|manifest| manifest.manifest_id == pin.manifest_id)
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        return Err(ApiError::conflict(
+            "review_ready_source_manifest_unavailable",
+            format!("{source_name} must resolve to exactly one registered ArtifactManifest"),
+        ));
+    }
+    let manifest = matches[0];
+    if manifest.manifest_hash != pin.manifest_hash {
+        return Err(ApiError::conflict(
+            "review_ready_source_manifest_stale",
+            format!("{source_name} manifest hash no longer matches its exact registered pin"),
+        ));
+    }
+    if manifest.paper_project_id != paper_id {
+        return Err(ApiError::forbidden(
+            "review_ready_source_manifest_cross_paper",
+            format!("{source_name} belongs to a different Paper"),
+        ));
+    }
+    validate_artifact_challenge_id(&manifest.source_challenge_id, challenge_id)?;
+    if manifest.binding_schema != ARTIFACT_MANIFEST_BINDING_SCHEMA_V1
+        || manifest.review_ready_assembly.is_some()
+    {
+        return Err(ApiError::conflict(
+            "review_ready_source_manifest_nested",
+            format!("{source_name} must be one original registered source manifest"),
+        ));
+    }
+    Ok(manifest)
+}
+
+fn validate_review_ready_source_roles(
+    manifest: &ArtifactManifest,
+    source_name: &'static str,
+) -> Result<(), ApiError> {
+    let mut role_counts = HashMap::<&str, usize>::new();
+    for object in &manifest.objects {
+        *role_counts.entry(object.role.as_str()).or_default() += 1;
+        let media_allowed = match object.role.as_str() {
+            "paper_source" => matches!(
+                object.media_type.as_str(),
+                "text/markdown; charset=utf-8" | "application/pdf"
+            ),
+            "bibliography" => matches!(
+                object.media_type.as_str(),
+                "application/x-bibtex" | "text/plain; charset=utf-8"
+            ),
+            "claim_evidence_graph" | "candidate" => object.media_type == "application/json",
+            "frozen_evaluator" | "evaluator_support" => {
+                object.media_type == "text/x-python; charset=utf-8"
+            }
+            "dataset" => matches!(
+                object.media_type.as_str(),
+                "application/json" | "text/csv; charset=utf-8"
+            ),
+            _ => false,
+        };
+        if !media_allowed {
+            return Err(ApiError::conflict(
+                "review_ready_source_role_or_media_mismatch",
+                format!(
+                    "{source_name} contains an unsupported role/media pair: {}/{}",
+                    object.role, object.media_type
+                ),
+            ));
+        }
+    }
+    let exact = |role: &str, count: usize| role_counts.get(role).copied().unwrap_or(0) == count;
+    let valid = match source_name {
+        "draft" => {
+            manifest.objects.len() == 3
+                && exact("paper_source", 1)
+                && exact("bibliography", 1)
+                && exact("claim_evidence_graph", 1)
+        }
+        "frozen_evaluator" => {
+            exact("frozen_evaluator", 1)
+                && manifest.objects.iter().all(|object| {
+                    matches!(
+                        object.role.as_str(),
+                        "frozen_evaluator" | "evaluator_support"
+                    )
+                })
+        }
+        "dataset" => manifest.objects.len() == 1 && exact("dataset", 1),
+        "candidate" => manifest.objects.len() == 1 && exact("candidate", 1),
+        _ => false,
+    };
+    if !valid {
+        return Err(ApiError::conflict(
+            "review_ready_source_role_coverage_invalid",
+            format!("{source_name} does not have its exact required role coverage"),
+        ));
+    }
+    if manifest.objects.iter().any(|object| object.size == 0) {
+        return Err(ApiError::conflict(
+            "review_ready_source_object_empty",
+            format!("{source_name} contains an empty executable or scientific object"),
+        ));
+    }
+    Ok(())
+}
+
+type ExpectedReviewReadyContents = (
+    Vec<NeutralArtifactObjectV1>,
+    Vec<ArtifactReference>,
+    Vec<String>,
+);
+
+fn expected_review_ready_contents(
+    request: &CreateArtifactManifestRequest,
+    paper_id: Uuid,
+    challenge_id: Uuid,
+    manifests: &[ArtifactManifest],
+) -> Result<ExpectedReviewReadyContents, ApiError> {
+    let assembly = request.review_ready_assembly.as_ref().ok_or_else(|| {
+        ApiError::conflict(
+            "review_ready_assembly_missing",
+            "review-ready validation requires immutable source-manifest pins",
+        )
+    })?;
+    if assembly.schema != REVIEW_READY_ARTIFACT_ASSEMBLY_SCHEMA_V1 {
+        return Err(ApiError::bad_request(
+            "review_ready_assembly_schema_mismatch",
+            "review-ready assembly must use the exact supported schema",
+        ));
+    }
+    let pins = [
+        (&assembly.draft, "draft"),
+        (&assembly.frozen_evaluator, "frozen_evaluator"),
+        (&assembly.dataset, "dataset"),
+        (&assembly.candidate, "candidate"),
+    ];
+    if pins
+        .iter()
+        .any(|(pin, _)| pin.manifest_id == request.manifest_id)
+        || pins
+            .iter()
+            .map(|(pin, _)| pin.manifest_id)
+            .collect::<HashSet<_>>()
+            .len()
+            != pins.len()
+        || pins
+            .iter()
+            .map(|(pin, _)| pin.manifest_hash.as_str())
+            .collect::<HashSet<_>>()
+            .len()
+            != pins.len()
+    {
+        return Err(ApiError::conflict(
+            "review_ready_source_manifest_reused",
+            "review-ready assembly requires four distinct source manifests and may not self-reference",
+        ));
+    }
+
+    let mut expected_objects = Vec::new();
+    let mut expected_locations = Vec::new();
+    let mut required_run_ids = HashSet::new();
+    for (pin, source_name) in pins {
+        let source =
+            review_ready_source_manifest(manifests, pin, paper_id, challenge_id, source_name)?;
+        validate_review_ready_source_roles(source, source_name)?;
+        let locations = source
+            .storage_locations
+            .iter()
+            .map(|location| (location.logical_path.as_str(), location))
+            .collect::<HashMap<_, _>>();
+        if locations.len() != source.storage_locations.len()
+            || source.objects.len() != source.storage_locations.len()
+        {
+            return Err(ApiError::conflict(
+                "review_ready_source_storage_invalid",
+                format!("{source_name} does not have one exact CAS location per object"),
+            ));
+        }
+        for object in &source.objects {
+            let location = locations.get(object.logical_path.as_str()).ok_or_else(|| {
+                ApiError::conflict(
+                    "review_ready_source_storage_invalid",
+                    format!("{source_name} has an object without an exact CAS location"),
+                )
+            })?;
+            if location.sha256 != object.sha256
+                || location.uri != format!("cas://sha256/{}", object.sha256)
+                || location.acl != ArtifactAcl::Team
+            {
+                return Err(ApiError::conflict(
+                    "review_ready_source_storage_invalid",
+                    format!("{source_name} CAS provenance is not exact and Paper-scoped"),
+                ));
+            }
+            expected_objects.push(object.clone());
+            expected_locations.push(ArtifactReference {
+                logical_path: location.logical_path.clone(),
+                sha256: location.sha256.clone(),
+                uri: location.uri.clone(),
+                acl: ArtifactAcl::Reviewers,
+            });
+        }
+        required_run_ids.extend(source.required_run_ids.iter().cloned());
+    }
+    expected_objects.sort_by(|left, right| left.logical_path.cmp(&right.logical_path));
+    expected_locations.sort_by(|left, right| left.logical_path.cmp(&right.logical_path));
+    let mut required_run_ids = required_run_ids.into_iter().collect::<Vec<_>>();
+    required_run_ids.sort();
+    if expected_objects
+        .windows(2)
+        .any(|pair| pair[0].logical_path == pair[1].logical_path)
+        || expected_objects
+            .iter()
+            .map(|object| object.sha256.as_str())
+            .collect::<HashSet<_>>()
+            .len()
+            != expected_objects.len()
+    {
+        return Err(ApiError::conflict(
+            "review_ready_source_object_reused",
+            "review-ready source objects must have distinct logical paths and distinct digests",
+        ));
+    }
+    Ok((expected_objects, expected_locations, required_run_ids))
+}
+
+fn validate_review_ready_artifact_assembly(
+    request: &CreateArtifactManifestRequest,
+    manifest: &ArtifactManifest,
+    paper_id: Uuid,
+    challenge_id: Uuid,
+    manifests: &[ArtifactManifest],
+) -> Result<(), ApiError> {
+    let (expected_objects, expected_locations, expected_run_ids) =
+        expected_review_ready_contents(request, paper_id, challenge_id, manifests)?;
+    if request.source_bundle.bundle_id != format!("review-ready-{}", request.manifest_id)
+        || request.source_bundle.objects != expected_objects
+        || request.storage_locations != expected_locations
+        || request.source_bundle.required_run_ids != expected_run_ids
+        || request.source_bundle.object_count
+            != u64::try_from(expected_objects.len()).expect("bounded review-ready object count")
+        || manifest.review_ready_assembly != request.review_ready_assembly
+    {
+        return Err(ApiError::conflict(
+            "review_ready_assembly_projection_mismatch",
+            "the proposed review-ready manifest is not the exact canonical projection of its registered same-Paper sources",
+        ));
+    }
+    validate_review_ready_artifact_manifest(manifest)
+}
+
+pub(super) fn validate_review_ready_artifact_manifest(
+    manifest: &ArtifactManifest,
+) -> Result<(), ApiError> {
+    if manifest.binding_schema != REVIEW_READY_ARTIFACT_MANIFEST_BINDING_SCHEMA_V1
+        || manifest.review_ready_assembly.is_none()
+    {
+        return Err(ApiError::conflict(
+            "review_ready_artifact_manifest_required",
+            "Review claim requires a server-validated review-ready release ArtifactManifest",
+        ));
+    }
+    let role_count = |role: &str| {
+        manifest
+            .objects
+            .iter()
+            .filter(|object| object.role == role)
+            .count()
+    };
+    if role_count("paper_source") != 1
+        || role_count("bibliography") != 1
+        || role_count("claim_evidence_graph") != 1
+        || role_count("frozen_evaluator") != 1
+        || role_count("dataset") != 1
+        || role_count("candidate") != 1
+        || manifest.objects.iter().any(|object| {
+            !matches!(
+                object.role.as_str(),
+                "paper_source"
+                    | "bibliography"
+                    | "claim_evidence_graph"
+                    | "frozen_evaluator"
+                    | "evaluator_support"
+                    | "dataset"
+                    | "candidate"
+            )
+        })
+    {
+        return Err(ApiError::conflict(
+            "review_ready_artifact_role_coverage_invalid",
+            "Review claim requires exact human-paper, evaluator, dataset, and candidate role coverage",
+        ));
+    }
+    let locations = manifest
+        .storage_locations
+        .iter()
+        .map(|location| (location.logical_path.as_str(), location))
+        .collect::<HashMap<_, _>>();
+    if locations.len() != manifest.objects.len()
+        || manifest.objects.len() != manifest.storage_locations.len()
+        || manifest
+            .objects
+            .iter()
+            .map(|object| object.sha256.as_str())
+            .collect::<HashSet<_>>()
+            .len()
+            != manifest.objects.len()
+        || manifest.objects.iter().any(|object| {
+            locations
+                .get(object.logical_path.as_str())
+                .is_none_or(|location| {
+                    location.sha256 != object.sha256
+                        || location.uri != format!("cas://sha256/{}", object.sha256)
+                        || location.acl != ArtifactAcl::Reviewers
+                })
+        })
+    {
+        return Err(ApiError::conflict(
+            "review_ready_artifact_storage_invalid",
+            "Review claim requires one reviewer-readable Paper-scoped CAS key per distinct object",
+        ));
+    }
+    Ok(())
+}
+
 fn unique_artifact_role_object(
     manifest: &ArtifactManifest,
     role: &'static str,
@@ -8362,7 +8780,11 @@ async fn create_artifact_manifest(
     let manifest = ArtifactManifest {
         manifest_id: request.manifest_id,
         paper_project_id: paper_id,
-        binding_schema: ARTIFACT_MANIFEST_BINDING_SCHEMA_V1.to_string(),
+        binding_schema: if request.review_ready_assembly.is_some() {
+            REVIEW_READY_ARTIFACT_MANIFEST_BINDING_SCHEMA_V1.to_string()
+        } else {
+            ARTIFACT_MANIFEST_BINDING_SCHEMA_V1.to_string()
+        },
         source_bundle_schema: request.source_bundle.schema.clone(),
         source_bundle_id: request.source_bundle.bundle_id.clone(),
         source_challenge_id: request.source_bundle.challenge_id.clone(),
@@ -8374,6 +8796,7 @@ async fn create_artifact_manifest(
         required_run_ids: request.source_bundle.required_run_ids.clone(),
         storage_locations: request.storage_locations.clone(),
         total_size_bytes: total_size,
+        review_ready_assembly: request.review_ready_assembly.clone(),
         version: 1,
         created_at: now,
     };
@@ -8390,6 +8813,21 @@ async fn create_artifact_manifest(
             ));
         }
         validate_artifact_challenge_id(&manifest.source_challenge_id, paper.challenge_id)?;
+        if request.review_ready_assembly.is_some() {
+            let source_manifests = memory
+                .collaboration
+                .artifact_manifests
+                .values()
+                .cloned()
+                .collect::<Vec<_>>();
+            validate_review_ready_artifact_assembly(
+                &request,
+                &manifest,
+                paper_id,
+                paper.challenge_id,
+                &source_manifests,
+            )?;
+        }
         if let Some(replay) =
             memory_replay(&memory, OPERATION, &request.idempotency_key, &request_hash)?
         {
@@ -8464,6 +8902,34 @@ async fn create_artifact_manifest(
         ));
     }
     validate_artifact_challenge_id(&manifest.source_challenge_id, paper.challenge_id)?;
+    if let Some(assembly) = &request.review_ready_assembly {
+        let source_ids = vec![
+            assembly.draft.manifest_id,
+            assembly.frozen_evaluator.manifest_id,
+            assembly.dataset.manifest_id,
+            assembly.candidate.manifest_id,
+        ];
+        let source_manifests = sqlx::query(
+            "select record_json from hepta_artifact_manifests
+             where paper_project_id=$1 and manifest_id=any($2::uuid[])
+             order by manifest_id for share",
+        )
+        .bind(paper_id)
+        .bind(&source_ids)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(ApiError::database)?
+        .into_iter()
+        .map(|row| decode_record(row.get("record_json"), "review-ready source manifest"))
+        .collect::<Result<Vec<ArtifactManifest>, ApiError>>()?;
+        validate_review_ready_artifact_assembly(
+            &request,
+            &manifest,
+            paper_id,
+            paper.challenge_id,
+            &source_manifests,
+        )?;
+    }
     sqlx::query(
         "insert into hepta_artifact_manifests (
             manifest_id,paper_project_id,binding_schema,source_bundle_schema,

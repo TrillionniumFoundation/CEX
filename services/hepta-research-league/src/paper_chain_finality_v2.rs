@@ -29,8 +29,8 @@ use crate::{
     paper_raid_contracts::{canonical_json_sha256, paper_bundle_hash, PaperBundleAuthorConsentV2},
     paper_raid_v2::{
         AppealOutcome, JointPaperSubmission, PaperAppeal, PaperAppealResolution, PaperEvaluation,
-        PaperEvaluationStatus, PaperProject, PaperReproduction, ReproductionStatus,
-        ResearchSessionAuthorizationSetV1,
+        PaperEvaluationStatus, PaperProject, PaperReproduction, PaperReworkRecordV1,
+        PaperReworkResubmissionV1, ReproductionStatus, ResearchSessionAuthorizationSetV1,
     },
     require_service_token, sha256_hex, ApiError, AppState, SecurityConfig, OPERATOR_TOKEN_HEADER,
 };
@@ -56,6 +56,7 @@ const CHAIN_TIME_CHECKPOINT_HASH_DOMAIN_V1: &str =
 const PAPER_TRNM_SUBMISSION_BINDING_DOMAIN_V2: &[u8] = b"HEPTA_PAPER_TRNM_SUBMISSION_BINDING_V2\0";
 const PAPER_TRNM_COMMITMENT_ID_ZERO: &str =
     "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+const JSON_SAFE_U64_MAX_V2: u64 = (1_u64 << 53) - 1;
 
 /// This duration is a versioned product rule, not an environment override.
 /// A resolved Appeal closes its own window early, but it never bypasses the
@@ -144,6 +145,8 @@ pub struct PaperTrnmCommandBindingV2 {
     pub paper_bundle_hash: String,
     pub submission_commitment_hash: String,
     pub author_consent_set_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rework_lineage: Option<PaperTrnmFinalityReworkLineageV1>,
     pub tolerance_policy_hash: String,
     pub evaluation_id: Uuid,
     pub evaluation_signing_hash: String,
@@ -185,6 +188,28 @@ pub struct PaperTrnmCommandBindingV2 {
     pub reward_eligible: bool,
     pub economic_eligible: bool,
     pub finalized_at_unix_s: u64,
+}
+
+/// Immutable Author-rework facts that are part of the scientific finality
+/// source.  They are absent for the original submission and explicit for a
+/// replacement, so finality cannot erase which rejected scientific content
+/// was changed into which replacement content.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PaperTrnmFinalityReworkLineageV1 {
+    pub schema: String,
+    pub rework_id: Uuid,
+    pub rework_cycle: u64,
+    pub rejected_submission_id: Uuid,
+    pub replacement_submission_id: Uuid,
+    pub rejected_revision_id: Uuid,
+    pub replacement_revision_id: Uuid,
+    pub rejected_release_candidate_hash: String,
+    pub replacement_release_candidate_hash: String,
+    pub rejected_paper_bundle_hash: String,
+    pub replacement_paper_bundle_hash: String,
+    pub rejected_rework_content_commitment_sha256: String,
+    pub replacement_rework_content_commitment_sha256: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -297,6 +322,7 @@ struct PaperFinalityFactsV2 {
     resolutions: Vec<PaperAppealResolution>,
     authorization_sets: Vec<ResearchSessionAuthorizationSetV1>,
     completions: Vec<crate::paper_raid_contracts::SignedNakamaCompletionReceiptV1>,
+    rework_lineage: Option<PaperTrnmFinalityReworkLineageV1>,
 }
 
 pub(crate) fn router() -> Router<AppState> {
@@ -1617,6 +1643,19 @@ fn finality_facts_memory(
                 "Paper-bound submission does not exist",
             )
         })?;
+    let rework_lineage = memory
+        .rework_resubmissions
+        .values()
+        .find(|record| {
+            record.paper_project_id == paper_id && record.replacement_submission_id == submission_id
+        })
+        .map(|resubmission| {
+            let rework = memory.reworks.get(&resubmission.rework_id).ok_or_else(|| {
+                ApiError::internal("Paper rework resubmission lost its immutable rework record")
+            })?;
+            finality_rework_lineage_v1(rework, resubmission, &submission)
+        })
+        .transpose()?;
     Ok(PaperFinalityFactsV2 {
         paper,
         submission,
@@ -1660,6 +1699,7 @@ fn finality_facts_memory(
             .filter(|completion| completion.paper_project_id == paper_id)
             .cloned()
             .collect(),
+        rework_lineage,
     })
 }
 
@@ -1695,6 +1735,8 @@ async fn finality_facts_postgres(
         )
     })?;
     let submission = decode_record(submission_row.get("record_json"), "joint submission")?;
+    let rework_lineage =
+        finality_rework_lineage_postgres(tx, paper_id, submission_id, &submission).await?;
     Ok(PaperFinalityFactsV2 {
         paper,
         submission,
@@ -1740,7 +1782,100 @@ async fn finality_facts_postgres(
             "Nakama completion",
         )
         .await?,
+        rework_lineage,
     })
+}
+
+fn finality_rework_lineage_v1(
+    rework: &PaperReworkRecordV1,
+    resubmission: &PaperReworkResubmissionV1,
+    selected_submission: &JointPaperSubmission,
+) -> Result<PaperTrnmFinalityReworkLineageV1, ApiError> {
+    const ZERO_DIGEST: &str =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    if rework.rework_id != resubmission.rework_id
+        || rework.paper_project_id != resubmission.paper_project_id
+        || rework.rejected_submission_id != resubmission.rejected_submission_id
+        || rework.paper_project_id != selected_submission.paper_project_id
+        || resubmission.replacement_submission_id != selected_submission.submission_id
+        || resubmission.replacement_revision_id != selected_submission.revision_id
+        || resubmission.replacement_release_candidate_hash
+            != selected_submission.release_candidate_hash
+        || resubmission.replacement_paper_bundle_hash != selected_submission.paper_bundle_hash
+        || rework.rejected_submission_id == resubmission.replacement_submission_id
+        || rework.rejected_revision_id == resubmission.replacement_revision_id
+        || rework.rejected_release_candidate_hash == resubmission.replacement_release_candidate_hash
+        || rework.rejected_paper_bundle_hash == resubmission.replacement_paper_bundle_hash
+        || rework.rework_cycle < 2
+        || resubmission.replacement_review_round != 1
+        || rework.rejected_rework_content_commitment_sha256 == ZERO_DIGEST
+        || resubmission.replacement_rework_content_commitment_sha256 == ZERO_DIGEST
+        || rework.rejected_rework_content_commitment_sha256
+            == resubmission.replacement_rework_content_commitment_sha256
+    {
+        return Err(ApiError::internal(
+            "Paper rework finality lineage is internally inconsistent",
+        ));
+    }
+    for (field, value) in [
+        (
+            "rejected rework content commitment",
+            &rework.rejected_rework_content_commitment_sha256,
+        ),
+        (
+            "replacement rework content commitment",
+            &resubmission.replacement_rework_content_commitment_sha256,
+        ),
+    ] {
+        crate::validate_hash(field, value).map_err(|_| {
+            ApiError::internal("Paper rework finality lineage contains an invalid commitment")
+        })?;
+    }
+    Ok(PaperTrnmFinalityReworkLineageV1 {
+        schema: "hepta.paper_raid.trnm_finality_rework_lineage.v1".to_string(),
+        rework_id: rework.rework_id,
+        rework_cycle: rework.rework_cycle,
+        rejected_submission_id: rework.rejected_submission_id,
+        replacement_submission_id: resubmission.replacement_submission_id,
+        rejected_revision_id: rework.rejected_revision_id,
+        replacement_revision_id: resubmission.replacement_revision_id,
+        rejected_release_candidate_hash: rework.rejected_release_candidate_hash.clone(),
+        replacement_release_candidate_hash: resubmission.replacement_release_candidate_hash.clone(),
+        rejected_paper_bundle_hash: rework.rejected_paper_bundle_hash.clone(),
+        replacement_paper_bundle_hash: resubmission.replacement_paper_bundle_hash.clone(),
+        rejected_rework_content_commitment_sha256: rework
+            .rejected_rework_content_commitment_sha256
+            .clone(),
+        replacement_rework_content_commitment_sha256: resubmission
+            .replacement_rework_content_commitment_sha256
+            .clone(),
+    })
+}
+
+async fn finality_rework_lineage_postgres(
+    tx: &mut Transaction<'_, Postgres>,
+    paper_id: Uuid,
+    submission_id: Uuid,
+    selected_submission: &JointPaperSubmission,
+) -> Result<Option<PaperTrnmFinalityReworkLineageV1>, ApiError> {
+    let row = sqlx::query(
+        "select w.record_json as rework_record,s.record_json as resubmission_record
+         from hepta_paper_rework_resubmissions s
+         join hepta_paper_reworks w on w.rework_id=s.rework_id
+         where s.paper_project_id=$1 and s.replacement_submission_id=$2",
+    )
+    .bind(paper_id)
+    .bind(submission_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(ApiError::database)?;
+    row.map(|row| {
+        let rework: PaperReworkRecordV1 = decode_record(row.get("rework_record"), "Paper rework")?;
+        let resubmission: PaperReworkResubmissionV1 =
+            decode_record(row.get("resubmission_record"), "Paper rework resubmission")?;
+        finality_rework_lineage_v1(&rework, &resubmission, selected_submission)
+    })
+    .transpose()
 }
 
 async fn fetch_one_record<T: DeserializeOwned>(
@@ -1956,7 +2091,7 @@ fn source_fingerprint_v2<R: FinalitySourceSelectorV2>(
     completions.sort_by(|left, right| {
         (&left.session_id, left.roster_version).cmp(&(&right.session_id, right.roster_version))
     });
-    canonical_json_sha256(&json!({
+    let source = json!({
         "domain":"hepta.paper_raid.trnm_finality_source_fingerprint.v2",
         "paper":facts.paper,
         "submission":facts.submission,
@@ -1973,8 +2108,22 @@ fn source_fingerprint_v2<R: FinalitySourceSelectorV2>(
             "research_session_id":request.research_session_id(),
             "research_session_roster_version":request.research_session_roster_version(),
         }
-    }))
-    .map_err(|message| ApiError::internal(format!("encode V2 source fingerprint: {message}")))
+    });
+    source_fingerprint_projection_v2(source, facts.rework_lineage.as_ref())
+}
+
+fn source_fingerprint_projection_v2(
+    mut source: Value,
+    rework_lineage: Option<&PaperTrnmFinalityReworkLineageV1>,
+) -> Result<String, ApiError> {
+    if let Some(lineage) = rework_lineage {
+        source
+            .as_object_mut()
+            .ok_or_else(|| ApiError::internal("V2 finality source projection is not an object"))?
+            .insert("rework_lineage".to_string(), json!(lineage));
+    }
+    canonical_json_sha256(&source)
+        .map_err(|message| ApiError::internal(format!("encode V2 source fingerprint: {message}")))
 }
 
 fn derive_binding_v2(
@@ -2021,6 +2170,7 @@ fn derive_binding_v2(
         paper_bundle_hash: facts.submission.paper_bundle_hash.clone(),
         submission_commitment_hash,
         author_consent_set_hash,
+        rework_lineage: facts.rework_lineage.clone(),
         tolerance_policy_hash: evaluation.tolerance_policy_hash.clone(),
         evaluation_id: evaluation.evaluation_id,
         evaluation_signing_hash: evaluation.evaluation_signing_hash.clone(),
@@ -2519,10 +2669,120 @@ pub(crate) fn validate_binding_v2(binding: &PaperTrnmCommandBindingV2) -> Result
         ),
         ("settlement_policy_hash", &binding.settlement_policy_hash),
     ] {
-        crate::validate_hash(field, value)?;
+        validate_canonical_sha256_v2(field, value)?;
     }
     if let Some(hash) = &binding.appeal_resolution_hash {
-        crate::validate_hash("appeal_resolution_hash", hash)?;
+        validate_canonical_sha256_v2("appeal_resolution_hash", hash)?;
+    }
+    crate::paper_raid_v2::validate_logical_session_id(&binding.research_session_id)?;
+    for (field, value) in [
+        ("window_arm_id", binding.window_arm_id),
+        ("paper_project_id", binding.paper_project_id),
+        ("submission_id", binding.submission_id),
+        ("evaluation_id", binding.evaluation_id),
+        ("latest_reproduction_id", binding.latest_reproduction_id),
+    ] {
+        validate_non_nil_uuid_v2(field, value)?;
+    }
+    for (field, value) in [
+        (
+            "evaluation_supersedes_evaluation_id",
+            binding.evaluation_supersedes_evaluation_id,
+        ),
+        (
+            "evaluation_superseded_by_evaluation_id",
+            binding.evaluation_superseded_by_evaluation_id,
+        ),
+        (
+            "reproduction_supersedes_reproduction_id",
+            binding.reproduction_supersedes_reproduction_id,
+        ),
+        (
+            "reproduction_superseded_by_reproduction_id",
+            binding.reproduction_superseded_by_reproduction_id,
+        ),
+        ("appeal_id", binding.appeal_id),
+        ("appealed_evaluation_id", binding.appealed_evaluation_id),
+        ("appeal_resolution_id", binding.appeal_resolution_id),
+    ] {
+        if let Some(value) = value {
+            validate_non_nil_uuid_v2(field, value)?;
+        }
+    }
+    if let Some(lineage) = &binding.rework_lineage {
+        if lineage.schema != "hepta.paper_raid.trnm_finality_rework_lineage.v1"
+            || !(2..=JSON_SAFE_U64_MAX_V2).contains(&lineage.rework_cycle)
+            || lineage.rejected_submission_id == lineage.replacement_submission_id
+            || lineage.replacement_submission_id != binding.submission_id
+        {
+            return Err(ApiError::bad_request(
+                "invalid_paper_trnm_rework_lineage",
+                "Finality rework lineage does not bind one valid replacement submission",
+            ));
+        }
+        for (field, value) in [
+            ("rework_lineage.rework_id", lineage.rework_id),
+            (
+                "rework_lineage.rejected_submission_id",
+                lineage.rejected_submission_id,
+            ),
+            (
+                "rework_lineage.replacement_submission_id",
+                lineage.replacement_submission_id,
+            ),
+            (
+                "rework_lineage.rejected_revision_id",
+                lineage.rejected_revision_id,
+            ),
+            (
+                "rework_lineage.replacement_revision_id",
+                lineage.replacement_revision_id,
+            ),
+        ] {
+            validate_non_nil_uuid_v2(field, value)?;
+        }
+        for (field, value) in [
+            (
+                "rework_lineage.rejected_release_candidate_hash",
+                &lineage.rejected_release_candidate_hash,
+            ),
+            (
+                "rework_lineage.replacement_release_candidate_hash",
+                &lineage.replacement_release_candidate_hash,
+            ),
+            (
+                "rework_lineage.rejected_paper_bundle_hash",
+                &lineage.rejected_paper_bundle_hash,
+            ),
+            (
+                "rework_lineage.replacement_paper_bundle_hash",
+                &lineage.replacement_paper_bundle_hash,
+            ),
+            (
+                "rework_lineage.rejected_rework_content_commitment_sha256",
+                &lineage.rejected_rework_content_commitment_sha256,
+            ),
+            (
+                "rework_lineage.replacement_rework_content_commitment_sha256",
+                &lineage.replacement_rework_content_commitment_sha256,
+            ),
+        ] {
+            validate_canonical_sha256_v2(field, value)?;
+        }
+        if lineage.rejected_rework_content_commitment_sha256
+            == lineage.replacement_rework_content_commitment_sha256
+            || lineage.rejected_submission_id == lineage.replacement_submission_id
+            || lineage.rejected_revision_id == lineage.replacement_revision_id
+            || lineage.rejected_release_candidate_hash == lineage.replacement_release_candidate_hash
+            || lineage.rejected_paper_bundle_hash == lineage.replacement_paper_bundle_hash
+            || lineage.replacement_release_candidate_hash != binding.release_candidate_hash
+            || lineage.replacement_paper_bundle_hash != binding.paper_bundle_hash
+        {
+            return Err(ApiError::bad_request(
+                "invalid_paper_trnm_rework_lineage",
+                "Finality rework lineage must bind changed scientific content and the current replacement",
+            ));
+        }
     }
     validate_raw_hex_32(
         "start_checkpoint_anchor_hash",
@@ -2552,7 +2812,7 @@ pub(crate) fn validate_binding_v2(binding: &PaperTrnmCommandBindingV2) -> Result
         || binding.economic_eligible
         || binding.evaluation_superseded_by_evaluation_id.is_some()
         || binding.reproduction_superseded_by_reproduction_id.is_some()
-        || binding.start_checkpoint_chain_id.is_empty()
+        || !is_canonical_chain_id_v2(&binding.start_checkpoint_chain_id)
         || binding.final_checkpoint_chain_id != binding.start_checkpoint_chain_id
         || binding.start_checkpoint_hash == binding.final_checkpoint_hash
         || binding.start_checkpoint_height == 0
@@ -2617,6 +2877,7 @@ pub(crate) fn validate_binding_v2(binding: &PaperTrnmCommandBindingV2) -> Result
                 || binding.appealed_evaluation_id != Some(binding.evaluation_id)
                 || binding.appeal_resolution_id.is_none()
                 || binding.appeal_resolution_hash.is_none()
+                || binding.evaluation_supersedes_evaluation_id.is_some()
             {
                 return Err(ApiError::conflict(
                     "paper_trnm_v2_appeal_inconsistent",
@@ -2676,6 +2937,52 @@ fn build_preparation(
     })
 }
 
+pub(crate) fn validate_preparation_v2(
+    preparation: &PaperTrnmFinalityPreparationV2,
+) -> Result<(), ApiError> {
+    if preparation.schema != PAPER_TRNM_FINALITY_PREPARATION_SCHEMA_V2 {
+        return Err(ApiError::conflict(
+            "paper_trnm_v2_preparation_schema_mismatch",
+            format!("expected {PAPER_TRNM_FINALITY_PREPARATION_SCHEMA_V2}"),
+        ));
+    }
+    if preparation.preparation_id.is_nil() {
+        return Err(ApiError::conflict(
+            "paper_trnm_v2_preparation_identity_invalid",
+            "preparation_id must be non-zero",
+        ));
+    }
+    validate_idempotency_key(&preparation.idempotency_key)?;
+    validate_canonical_sha256_v2("request_hash", &preparation.request_hash)?;
+    validate_canonical_sha256_v2("binding_fingerprint", &preparation.binding_fingerprint)?;
+    validate_binding_v2(&preparation.binding)?;
+    let expected_binding_fingerprint = canonical_json_sha256(&preparation.binding)
+        .map_err(|message| ApiError::internal(format!("encode V2 binding: {message}")))?;
+    if preparation.binding_fingerprint != expected_binding_fingerprint {
+        return Err(ApiError::conflict(
+            "paper_trnm_v2_binding_fingerprint_mismatch",
+            "binding_fingerprint does not bind the exact immutable V2 binding",
+        ));
+    }
+    if preparation.status != PaperTrnmFinalityPreparationStatusV2::AwaitingChainVerifierUpgrade {
+        return Err(ApiError::conflict(
+            "paper_trnm_v2_preparation_status_mismatch",
+            "the immutable V2 preparation has an unsupported status",
+        ));
+    }
+    let expected_created_at = datetime_from_unix_millis(
+        preparation.binding.final_checkpoint_consensus_time_unix_ms,
+        "final checkpoint time",
+    )?;
+    if preparation.created_at != expected_created_at {
+        return Err(ApiError::conflict(
+            "paper_trnm_v2_preparation_time_mismatch",
+            "created_at does not equal the immutable final Chain checkpoint time",
+        ));
+    }
+    Ok(())
+}
+
 fn positive_unix(value: DateTime<Utc>, field: &'static str) -> Result<u64, ApiError> {
     u64::try_from(value.timestamp()).map_err(|_| {
         ApiError::conflict(
@@ -2720,6 +3027,7 @@ fn i64_from_u64_v2(value: u64, field: &'static str) -> Result<i64, ApiError> {
 
 fn validate_raw_hex_32(field: &'static str, value: &str) -> Result<(), ApiError> {
     if value.len() != 64
+        || value.bytes().all(|byte| byte == b'0')
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
@@ -2730,6 +3038,45 @@ fn validate_raw_hex_32(field: &'static str, value: &str) -> Result<(), ApiError>
         ));
     }
     Ok(())
+}
+
+fn validate_canonical_sha256_v2(field: &'static str, value: &str) -> Result<(), ApiError> {
+    let valid = value.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && !digest.bytes().all(|byte| byte == b'0')
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    });
+    if !valid {
+        return Err(ApiError::bad_request(
+            "invalid_paper_trnm_v2_digest",
+            format!(
+                "{field} must be a non-zero sha256:<64 lowercase hexadecimal characters> commitment"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_non_nil_uuid_v2(field: &'static str, value: Uuid) -> Result<(), ApiError> {
+    if value.is_nil() {
+        return Err(ApiError::bad_request(
+            "invalid_paper_trnm_v2_identity",
+            format!("{field} must be a non-zero UUID"),
+        ));
+    }
+    Ok(())
+}
+
+fn is_canonical_chain_id_v2(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'-' | b'_' | b'.' | b':')
+        })
 }
 
 fn validate_anchor_hash(value: &str) -> Result<(), ApiError> {
@@ -2754,4 +3101,228 @@ fn validate_idempotency_key(value: &str) -> Result<(), ApiError> {
 fn decode_record<T: DeserializeOwned>(value: Value, label: &str) -> Result<T, ApiError> {
     serde_json::from_value(value)
         .map_err(|error| ApiError::internal(format!("decode stored {label}: {error}")))
+}
+
+#[cfg(test)]
+mod rework_finality_tests {
+    use super::*;
+
+    fn digest(byte: char) -> String {
+        format!("sha256:{}", byte.to_string().repeat(64))
+    }
+
+    fn lineage(replacement_commitment_byte: char) -> PaperTrnmFinalityReworkLineageV1 {
+        PaperTrnmFinalityReworkLineageV1 {
+            schema: "hepta.paper_raid.trnm_finality_rework_lineage.v1".to_string(),
+            rework_id: Uuid::from_u128(1),
+            rework_cycle: 2,
+            rejected_submission_id: Uuid::from_u128(2),
+            replacement_submission_id: Uuid::from_u128(3),
+            rejected_revision_id: Uuid::from_u128(4),
+            replacement_revision_id: Uuid::from_u128(5),
+            rejected_release_candidate_hash: digest('1'),
+            replacement_release_candidate_hash: digest('2'),
+            rejected_paper_bundle_hash: digest('3'),
+            replacement_paper_bundle_hash: digest('4'),
+            rejected_rework_content_commitment_sha256: digest('5'),
+            replacement_rework_content_commitment_sha256: digest(replacement_commitment_byte),
+        }
+    }
+
+    fn binding(
+        rework_lineage: Option<PaperTrnmFinalityReworkLineageV1>,
+    ) -> PaperTrnmCommandBindingV2 {
+        PaperTrnmCommandBindingV2 {
+            schema: PAPER_TRNM_COMMAND_BINDING_SCHEMA_V2.to_string(),
+            commitment_id: PAPER_TRNM_COMMITMENT_ID_ZERO.to_string(),
+            source_fingerprint: digest('a'),
+            window_arm_id: Uuid::from_u128(10),
+            paper_project_id: Uuid::from_u128(11),
+            submission_id: Uuid::from_u128(3),
+            research_session_id: "session".to_string(),
+            research_session_roster_version: 1,
+            match_evidence_commitment_id: digest('b'),
+            match_evidence_object_version: 1,
+            release_candidate_hash: digest('2'),
+            paper_bundle_hash: digest('4'),
+            submission_commitment_hash: digest('c'),
+            author_consent_set_hash: digest('d'),
+            rework_lineage,
+            tolerance_policy_hash: digest('e'),
+            evaluation_id: Uuid::from_u128(12),
+            evaluation_signing_hash: digest('f'),
+            evaluation_score_bps: 9_000,
+            evaluation_accepted: true,
+            evaluation_completed_at_unix_s: 1,
+            evaluation_supersedes_evaluation_id: None,
+            evaluation_superseded_by_evaluation_id: None,
+            latest_reproduction_id: Uuid::from_u128(13),
+            latest_reproduction_report_hash: digest('6'),
+            latest_reproduction_accepted: true,
+            latest_reproduction_completed_at_unix_s: 2,
+            reproduction_supersedes_reproduction_id: None,
+            reproduction_superseded_by_reproduction_id: None,
+            appeal_status: PaperTrnmAppealStatusV2::ClosedNoAppeal,
+            appeal_id: None,
+            appealed_evaluation_id: None,
+            appeal_resolution_id: None,
+            appeal_resolution_hash: None,
+            start_checkpoint_hash: digest('7'),
+            start_checkpoint_anchor_hash: "8".repeat(64),
+            start_checkpoint_chain_id: "chain".to_string(),
+            start_checkpoint_height: 1,
+            start_checkpoint_header_hash: "9".repeat(64),
+            start_checkpoint_consensus_time_unix_ms: 1_000,
+            final_checkpoint_hash: digest('0'),
+            final_checkpoint_anchor_hash: "a".repeat(64),
+            final_checkpoint_chain_id: "chain".to_string(),
+            final_checkpoint_height: 2,
+            final_checkpoint_header_hash: "b".repeat(64),
+            final_checkpoint_consensus_time_unix_ms: 2_000,
+            max_chain_time_lag_ms: PAPER_CHAIN_TIME_MAX_LAG_MS_V1,
+            appeal_window_closes_at_unix_ms: 1_000,
+            appeal_window_closes_at_unix_s: 1,
+            settlement_policy_hash: digest('c'),
+            scientific_finality: true,
+            score_eligible: false,
+            ranking_eligible: false,
+            reward_eligible: false,
+            economic_eligible: false,
+            finalized_at_unix_s: 2,
+        }
+    }
+
+    fn valid_binding(
+        rework_lineage: Option<PaperTrnmFinalityReworkLineageV1>,
+    ) -> PaperTrnmCommandBindingV2 {
+        let mut binding = binding(rework_lineage);
+        binding.final_checkpoint_hash = digest('d');
+        binding.appeal_window_closes_at_unix_ms = binding.start_checkpoint_consensus_time_unix_ms
+            + PAPER_CHAIN_TIME_MAX_LAG_MS_V1
+            + u64::try_from(PAPER_NO_APPEAL_WINDOW_SECONDS_V1).unwrap() * 1_000;
+        binding.appeal_window_closes_at_unix_s =
+            ceil_millis_to_seconds(binding.appeal_window_closes_at_unix_ms, "test window").unwrap();
+        binding.final_checkpoint_consensus_time_unix_ms =
+            binding.appeal_window_closes_at_unix_ms + 1_000;
+        binding.finalized_at_unix_s = ceil_millis_to_seconds(
+            binding.final_checkpoint_consensus_time_unix_ms,
+            "test final checkpoint",
+        )
+        .unwrap();
+        binding.commitment_id = binding_commitment_id_v2(&binding).unwrap();
+        binding
+    }
+
+    fn preparation(
+        rework_lineage: Option<PaperTrnmFinalityReworkLineageV1>,
+    ) -> PaperTrnmFinalityPreparationV2 {
+        let binding = valid_binding(rework_lineage);
+        PaperTrnmFinalityPreparationV2 {
+            schema: PAPER_TRNM_FINALITY_PREPARATION_SCHEMA_V2.to_string(),
+            preparation_id: Uuid::from_u128(20),
+            idempotency_key: "paper-finality-v2-preparation".to_string(),
+            request_hash: digest('1'),
+            binding_fingerprint: canonical_json_sha256(&binding).unwrap(),
+            status: PaperTrnmFinalityPreparationStatusV2::AwaitingChainVerifierUpgrade,
+            created_at: datetime_from_unix_millis(
+                binding.final_checkpoint_consensus_time_unix_ms,
+                "test final checkpoint",
+            )
+            .unwrap(),
+            binding,
+        }
+    }
+
+    #[test]
+    fn rework_lineage_alone_changes_source_and_binding_fingerprints() {
+        let source = json!({
+            "domain":"hepta.paper_raid.trnm_finality_source_fingerprint.v2",
+            "unchanged_source":"same"
+        });
+        let first_lineage = lineage('6');
+        let second_lineage = lineage('7');
+        let without_lineage = source_fingerprint_projection_v2(source.clone(), None).unwrap();
+        let first_source =
+            source_fingerprint_projection_v2(source.clone(), Some(&first_lineage)).unwrap();
+        let second_source =
+            source_fingerprint_projection_v2(source, Some(&second_lineage)).unwrap();
+        assert_ne!(without_lineage, first_source);
+        assert_ne!(first_source, second_source);
+
+        let without_binding_lineage = binding_commitment_id_v2(&binding(None)).unwrap();
+        let first_binding = binding_commitment_id_v2(&binding(Some(first_lineage))).unwrap();
+        let second_binding = binding_commitment_id_v2(&binding(Some(second_lineage))).unwrap();
+        assert_ne!(without_binding_lineage, first_binding);
+        assert_ne!(first_binding, second_binding);
+    }
+
+    #[test]
+    fn preparation_validation_accepts_exact_original_and_rework_sources() {
+        validate_preparation_v2(&preparation(None)).expect("original preparation");
+        validate_preparation_v2(&preparation(Some(lineage('6')))).expect("replacement preparation");
+    }
+
+    #[test]
+    fn preparation_validation_rejects_noncanonical_or_detached_sources() {
+        let base = preparation(Some(lineage('6')));
+
+        let mut uppercase_digest = base.clone();
+        uppercase_digest.binding.source_fingerprint =
+            uppercase_digest.binding.source_fingerprint.to_uppercase();
+        assert!(validate_preparation_v2(&uppercase_digest).is_err());
+
+        let mut zero_anchor = base.clone();
+        zero_anchor.binding.final_checkpoint_anchor_hash = "0".repeat(64);
+        assert!(validate_preparation_v2(&zero_anchor).is_err());
+
+        let mut nil_identity = base.clone();
+        nil_identity.binding.paper_project_id = Uuid::nil();
+        assert!(validate_preparation_v2(&nil_identity).is_err());
+
+        let mut noncanonical_chain = base.clone();
+        noncanonical_chain.binding.start_checkpoint_chain_id = "Chain".to_string();
+        noncanonical_chain.binding.final_checkpoint_chain_id = "Chain".to_string();
+        assert!(validate_preparation_v2(&noncanonical_chain).is_err());
+
+        let mut unsafe_rework_cycle = base.clone();
+        unsafe_rework_cycle
+            .binding
+            .rework_lineage
+            .as_mut()
+            .unwrap()
+            .rework_cycle = JSON_SAFE_U64_MAX_V2 + 1;
+        assert!(validate_preparation_v2(&unsafe_rework_cycle).is_err());
+
+        let mut detached_fingerprint = base.clone();
+        detached_fingerprint.binding_fingerprint = digest('e');
+        assert!(validate_preparation_v2(&detached_fingerprint).is_err());
+
+        let mut detached_time = base;
+        detached_time.created_at += chrono::Duration::milliseconds(1);
+        assert!(validate_preparation_v2(&detached_time).is_err());
+    }
+
+    #[test]
+    fn denied_appeal_cannot_carry_an_evaluation_supersession() {
+        let mut binding = valid_binding(None);
+        binding.appeal_status = PaperTrnmAppealStatusV2::ResolvedDenied;
+        binding.appeal_id = Some(Uuid::from_u128(30));
+        binding.appealed_evaluation_id = Some(binding.evaluation_id);
+        binding.appeal_resolution_id = Some(Uuid::from_u128(31));
+        binding.appeal_resolution_hash = Some(digest('e'));
+        binding.evaluation_supersedes_evaluation_id = Some(Uuid::from_u128(32));
+        binding.appeal_window_closes_at_unix_ms =
+            binding.start_checkpoint_consensus_time_unix_ms + PAPER_CHAIN_TIME_MAX_LAG_MS_V1;
+        binding.appeal_window_closes_at_unix_s =
+            ceil_millis_to_seconds(binding.appeal_window_closes_at_unix_ms, "test window").unwrap();
+        binding.final_checkpoint_consensus_time_unix_ms =
+            binding.appeal_window_closes_at_unix_ms + 1_000;
+        binding.finalized_at_unix_s = ceil_millis_to_seconds(
+            binding.final_checkpoint_consensus_time_unix_ms,
+            "test final checkpoint",
+        )
+        .unwrap();
+        binding.commitment_id = binding_commitment_id_v2(&binding).unwrap();
+        assert!(validate_binding_v2(&binding).is_err());
+    }
 }

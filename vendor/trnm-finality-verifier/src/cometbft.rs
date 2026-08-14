@@ -5,8 +5,8 @@
 //! results root are committed by the finalized header at `H + 1`.
 //! The included transaction must be the exact outer signed-command envelope
 //! committed in block `H`. Its payload must be one supported canonical typed
-//! domain transaction (Research V1, App-v6 Paper Raid finality V2, or future
-//! App-v7 Paper Raid finality V3), and both signature layers plus every shared
+//! domain transaction (Research V1, legacy Paper Raid finality V2/V3, or
+//! App-v7 rework-native Paper Raid finality V4), and both signature layers plus every shared
 //! security field are rebound to the execution header and receipt.
 //!
 //! The AppHash-v4 object-key derivation and authenticated object wrapper are
@@ -43,16 +43,19 @@ use trnm_finality_types::{
 };
 use trnm_protocol::{
     paper_raid_finality_applied_command_key, paper_raid_finality_applied_command_key_v3,
-    research_applied_command_key, CanonicalPaperRaidFinalityTxV2, CanonicalPaperRaidFinalityTxV3,
+    paper_raid_finality_applied_command_key_v4, research_applied_command_key,
+    CanonicalPaperRaidFinalityTxV2, CanonicalPaperRaidFinalityTxV3, CanonicalPaperRaidFinalityTxV4,
     CanonicalResearchTxV1, PaperRaidFinalityAppliedRecordV2, PaperRaidFinalityAppliedRecordV3,
-    CANONICAL_PAPER_RAID_FINALITY_TX_PAYLOAD_TYPE_V2,
-    CANONICAL_PAPER_RAID_FINALITY_TX_PAYLOAD_TYPE_V3, CANONICAL_RESEARCH_TX_PAYLOAD_TYPE_V1,
+    PaperRaidFinalityAppliedRecordV4, CANONICAL_PAPER_RAID_FINALITY_TX_PAYLOAD_TYPE_V2,
+    CANONICAL_PAPER_RAID_FINALITY_TX_PAYLOAD_TYPE_V3,
+    CANONICAL_PAPER_RAID_FINALITY_TX_PAYLOAD_TYPE_V4, CANONICAL_RESEARCH_TX_PAYLOAD_TYPE_V1,
     PAPER_RAID_FINALITY_APPLIED_COMMAND_OBJECT_TYPE_V2,
-    PAPER_RAID_FINALITY_APPLIED_COMMAND_OBJECT_TYPE_V3, RESEARCH_APPLIED_COMMAND_OBJECT_TYPE_V1,
+    PAPER_RAID_FINALITY_APPLIED_COMMAND_OBJECT_TYPE_V3,
+    PAPER_RAID_FINALITY_APPLIED_COMMAND_OBJECT_TYPE_V4, RESEARCH_APPLIED_COMMAND_OBJECT_TYPE_V1,
 };
 use trnm_research_protocol::{
     AppliedCommandRecordV1, AuthorityRole, CanonicalCbor, SignedPaperRaidFinalityCommandV2,
-    SignedPaperRaidFinalityCommandV3, SignedResearchCommandV1,
+    SignedPaperRaidFinalityCommandV3, SignedPaperRaidFinalityCommandV4, SignedResearchCommandV1,
 };
 
 const JMT_LEAF_DOMAIN_SEPARATOR: &[u8] = b"JMT::LeafNode";
@@ -268,6 +271,8 @@ struct ResearchTransactionBinding {
     applied_command_object_version: u64,
     applied_command_value: Vec<u8>,
     expected_gas_wanted: i64,
+    signed_command_cbor_hex: String,
+    domain_payload_hash_hex: String,
     domain_command: VerifiedCometBftDomainCommandV2,
 }
 
@@ -281,6 +286,7 @@ pub enum VerifiedCometBftDomainCommandV2 {
     ResearchV1(Box<SignedResearchCommandV1>),
     PaperRaidFinalityV2(Box<SignedPaperRaidFinalityCommandV2>),
     PaperRaidFinalityV3(Box<SignedPaperRaidFinalityCommandV3>),
+    PaperRaidFinalityV4(Box<SignedPaperRaidFinalityCommandV4>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -289,6 +295,10 @@ pub struct VerifiedCometBftReceiptV2 {
     pub chain_id: String,
     pub command_id: String,
     pub command_fingerprint_hex: String,
+    /// Exact canonical signed domain-command bytes extracted from the proven
+    /// outer transaction. Consumers must not reconstruct or reinterpret them.
+    pub signed_command_cbor_hex: String,
+    pub domain_payload_hash_hex: String,
     pub comet_tx_hash_hex: String,
     pub transaction_index: u64,
     pub applied_command_object_key_hex: String,
@@ -587,6 +597,8 @@ pub fn verify_cometbft_apphash_finality_receipt_v2(
         chain_id: receipt.chain_id.clone(),
         command_id: receipt.command_id.clone(),
         command_fingerprint_hex: receipt.command_fingerprint_hex.clone(),
+        signed_command_cbor_hex: transaction_binding.signed_command_cbor_hex.clone(),
+        domain_payload_hash_hex: transaction_binding.domain_payload_hash_hex.clone(),
         comet_tx_hash_hex: receipt.comet_tx_hash_hex.clone(),
         transaction_index: receipt.transaction_inclusion_proof.leaf_index,
         applied_command_object_key_hex: receipt.applied_command_object_proof.object_key_hex.clone(),
@@ -865,6 +877,8 @@ fn decode_research_transaction_binding(
                 "Research nonce does not match outer envelope"
             );
             let command_fingerprint_hex = hex::encode(signed.command_fingerprint());
+            let signed_command_cbor_hex = hex::encode(signed.canonical_bytes());
+            let domain_payload_hash_hex = hex::encode(signed.payload_hash());
             let applied_command_logical_key = research_applied_command_key(signed.command_id)
                 .context("derive Research applied-command logical object key")?;
             let applied_command_record = expected_applied_command_record(&signed);
@@ -878,6 +892,8 @@ fn decode_research_transaction_binding(
                 applied_command_object_version: 1,
                 applied_command_value,
                 expected_gas_wanted: i64::try_from(tx.max_gas).unwrap_or(i64::MAX),
+                signed_command_cbor_hex,
+                domain_payload_hash_hex,
                 domain_command: VerifiedCometBftDomainCommandV2::ResearchV1(Box::new(signed)),
             })
         }
@@ -921,6 +937,8 @@ fn decode_research_transaction_binding(
                 "Paper Raid nonce does not match outer envelope"
             );
             let command_fingerprint_hex = hex::encode(signed.command_fingerprint());
+            let signed_command_cbor_hex = hex::encode(signed.canonical_bytes());
+            let domain_payload_hash_hex = hex::encode(signed.payload_hash());
             let applied_command_logical_key =
                 paper_raid_finality_applied_command_key(signed.command_id)
                     .context("derive Paper Raid applied-command logical object key")?;
@@ -937,6 +955,8 @@ fn decode_research_transaction_binding(
                 applied_command_object_version: 1,
                 applied_command_value,
                 expected_gas_wanted: i64::try_from(tx.max_gas).unwrap_or(i64::MAX),
+                signed_command_cbor_hex,
+                domain_payload_hash_hex,
                 domain_command: VerifiedCometBftDomainCommandV2::PaperRaidFinalityV2(Box::new(
                     signed,
                 )),
@@ -982,6 +1002,8 @@ fn decode_research_transaction_binding(
                 "Paper Raid V3 nonce does not match outer envelope"
             );
             let command_fingerprint_hex = hex::encode(signed.command_fingerprint());
+            let signed_command_cbor_hex = hex::encode(signed.canonical_bytes());
+            let domain_payload_hash_hex = hex::encode(signed.payload_hash());
             let applied_command_logical_key =
                 paper_raid_finality_applied_command_key_v3(signed.command_id)
                     .context("derive Paper Raid V3 applied-command logical object key")?;
@@ -998,7 +1020,74 @@ fn decode_research_transaction_binding(
                 applied_command_object_version: 1,
                 applied_command_value,
                 expected_gas_wanted: i64::try_from(tx.max_gas).unwrap_or(i64::MAX),
+                signed_command_cbor_hex,
+                domain_payload_hash_hex,
                 domain_command: VerifiedCometBftDomainCommandV2::PaperRaidFinalityV3(Box::new(
+                    signed,
+                )),
+            })
+        }
+        CANONICAL_PAPER_RAID_FINALITY_TX_PAYLOAD_TYPE_V4 => {
+            let tx = CanonicalPaperRaidFinalityTxV4::from_canonical_bytes(&payload)
+                .context("decode canonical typed Paper Raid V4 finality transaction payload")?;
+            ensure!(
+                tx.payload_type == envelope.payload_type,
+                "inner Paper Raid V4 payload type does not match outer envelope"
+            );
+            ensure!(
+                tx.command_id == envelope.command_id,
+                "inner Paper Raid V4 command ID does not match outer envelope"
+            );
+            let signed = tx
+                .signed_paper_raid_finality_command()
+                .context("decode signed Paper Raid V4 finality command from raw transaction")?;
+            ensure!(
+                signed.chain_id == envelope.chain_id,
+                "inner Paper Raid V4 chain ID does not match outer envelope"
+            );
+            ensure!(
+                signed.command_id.to_hex() == envelope.command_id,
+                "signed Paper Raid V4 command ID does not match outer envelope"
+            );
+            ensure!(
+                tx.sender == envelope.signer_id && signed.signer_did == envelope.signer_id,
+                "Paper Raid V4 signer DID does not match outer envelope"
+            );
+            ensure!(
+                signed.signer_role == AuthorityRole::HeptaAuthority
+                    && envelope.signer_role == "hepta",
+                "Paper Raid V4 signer role does not match outer envelope"
+            );
+            ensure!(
+                envelope.public_key_hex == hex::encode(signed.public_key),
+                "Paper Raid V4 signer public key does not match outer envelope"
+            );
+            ensure!(
+                tx.nonce == envelope.nonce && signed.nonce == envelope.nonce,
+                "Paper Raid V4 nonce does not match outer envelope"
+            );
+            let command_fingerprint_hex = hex::encode(signed.command_fingerprint());
+            let signed_command_cbor_hex = hex::encode(signed.canonical_bytes());
+            let domain_payload_hash_hex = hex::encode(signed.payload_hash());
+            let applied_command_logical_key =
+                paper_raid_finality_applied_command_key_v4(signed.command_id)
+                    .context("derive Paper Raid V4 applied-command logical object key")?;
+            let applied_command_value = PaperRaidFinalityAppliedRecordV4::from_signed(&signed)
+                .context("derive Paper Raid V4 applied-command record")?
+                .canonical_bytes()
+                .context("encode Paper Raid V4 applied-command record")?;
+            Ok(ResearchTransactionBinding {
+                chain_id: envelope.chain_id,
+                command_id: envelope.command_id,
+                command_fingerprint_hex,
+                applied_command_logical_key,
+                applied_command_object_type: PAPER_RAID_FINALITY_APPLIED_COMMAND_OBJECT_TYPE_V4,
+                applied_command_object_version: 1,
+                applied_command_value,
+                expected_gas_wanted: i64::try_from(tx.max_gas).unwrap_or(i64::MAX),
+                signed_command_cbor_hex,
+                domain_payload_hash_hex,
+                domain_command: VerifiedCometBftDomainCommandV2::PaperRaidFinalityV4(Box::new(
                     signed,
                 )),
             })
@@ -1344,8 +1433,9 @@ mod tests {
     use trnm_research_protocol::{
         ExternalKey, MatchEvidenceCommitmentV1, ObjectRefV1, PaperRaidAppealStatusV2,
         PaperRaidAppealStatusV3, PaperRaidFinalityCommitmentV2, PaperRaidFinalityCommitmentV3,
-        ResearchCommandV1, ResearchObjectKind, SignedPaperRaidFinalityCommandV2,
-        SignedPaperRaidFinalityCommandV3, SignedResearchCommandV1,
+        PaperRaidFinalityCommitmentV4, PaperRaidReworkLineageV1, ResearchCommandV1,
+        ResearchObjectKind, SignedPaperRaidFinalityCommandV2, SignedPaperRaidFinalityCommandV3,
+        SignedPaperRaidFinalityCommandV4, SignedResearchCommandV1,
     };
 
     use super::*;
@@ -1516,6 +1606,94 @@ mod tests {
             issued_at_unix_ms,
             expires_at_unix_ms,
             CANONICAL_PAPER_RAID_FINALITY_TX_PAYLOAD_TYPE_V3,
+            &payload,
+            &paper_raid_signing_key(),
+        )
+        .unwrap();
+        (tx, envelope)
+    }
+
+    fn app_v7_paper_raid_finality_command_v4() -> SignedPaperRaidFinalityCommandV4 {
+        let v3 = signed_paper_raid_finality_command();
+        let commitment = PaperRaidFinalityCommitmentV4 {
+            commitment_id: v3.commitment.commitment_id,
+            paper_project_id: v3.commitment.paper_project_id,
+            submission_id: v3.commitment.submission_id,
+            match_evidence_ref: v3.commitment.match_evidence_ref,
+            release_candidate_hash: v3.commitment.release_candidate_hash,
+            paper_bundle_hash: v3.commitment.paper_bundle_hash,
+            submission_commitment_hash: v3.commitment.submission_commitment_hash,
+            author_consent_set_hash: v3.commitment.author_consent_set_hash,
+            tolerance_policy_hash: v3.commitment.tolerance_policy_hash,
+            evaluation_id: v3.commitment.evaluation_id,
+            evaluation_hash: v3.commitment.evaluation_hash,
+            evaluation_score_bps: v3.commitment.evaluation_score_bps,
+            evaluation_accepted: v3.commitment.evaluation_accepted,
+            evaluation_completed_at_unix_s: v3.commitment.evaluation_completed_at_unix_s,
+            latest_reproduction_id: v3.commitment.latest_reproduction_id,
+            latest_reproduction_hash: v3.commitment.latest_reproduction_hash,
+            latest_reproduction_accepted: v3.commitment.latest_reproduction_accepted,
+            latest_reproduction_completed_at_unix_s: v3
+                .commitment
+                .latest_reproduction_completed_at_unix_s,
+            evaluation_supersedes: v3.commitment.evaluation_supersedes,
+            evaluation_superseded_by: v3.commitment.evaluation_superseded_by,
+            reproduction_superseded_by: v3.commitment.reproduction_superseded_by,
+            appeal_status: v3.commitment.appeal_status,
+            appeal_id: v3.commitment.appeal_id,
+            appealed_evaluation_id: v3.commitment.appealed_evaluation_id,
+            appeal_resolution_hash: v3.commitment.appeal_resolution_hash,
+            appeal_window_closes_at_unix_s: v3.commitment.appeal_window_closes_at_unix_s,
+            settlement_policy_hash: v3.commitment.settlement_policy_hash,
+            scientific_finality: v3.commitment.scientific_finality,
+            score_eligible: v3.commitment.score_eligible,
+            ranking_eligible: v3.commitment.ranking_eligible,
+            reward_eligible: v3.commitment.reward_eligible,
+            economic_eligible: v3.commitment.economic_eligible,
+            finalized_at_unix_s: v3.commitment.finalized_at_unix_s,
+            rework_lineage: Some(PaperRaidReworkLineageV1 {
+                rework_id: external_key("hepta.rework", "rework-001"),
+                rework_cycle: 2,
+                rejected_submission_id: external_key("hepta.submission", "submission-000"),
+                replacement_submission_id: v3.commitment.submission_id,
+                rejected_revision_id: external_key("hepta.revision", "revision-000"),
+                replacement_revision_id: external_key("hepta.revision", "revision-001"),
+                rejected_release_candidate_hash: [0x31; 32],
+                replacement_release_candidate_hash: v3.commitment.release_candidate_hash,
+                rejected_paper_bundle_hash: [0x32; 32],
+                replacement_paper_bundle_hash: v3.commitment.paper_bundle_hash,
+                rejected_rework_content_commitment_sha256: [0x33; 32],
+                replacement_rework_content_commitment_sha256: [0x34; 32],
+            }),
+        };
+        SignedPaperRaidFinalityCommandV4::sign(
+            v3.chain_id,
+            v3.command_id,
+            v3.signer_did,
+            v3.nonce,
+            commitment,
+            &paper_raid_signing_key(),
+        )
+        .unwrap()
+    }
+
+    fn app_v7_paper_raid_envelope_v4(
+        signed: &SignedPaperRaidFinalityCommandV4,
+        issued_at_unix_ms: u64,
+        expires_at_unix_ms: u64,
+    ) -> (CanonicalPaperRaidFinalityTxV4, SignedCommandEnvelopeV1) {
+        let tx = CanonicalPaperRaidFinalityTxV4::from_signed_command(signed, 300_000, 1_000_000)
+            .unwrap();
+        let payload = tx.canonical_bytes().unwrap();
+        let envelope = SignedCommandEnvelopeV1::sign(
+            signed.chain_id.clone(),
+            signed.command_id.to_hex(),
+            signed.signer_did.clone(),
+            "hepta",
+            signed.nonce,
+            issued_at_unix_ms,
+            expires_at_unix_ms,
+            CANONICAL_PAPER_RAID_FINALITY_TX_PAYLOAD_TYPE_V4,
             &payload,
             &paper_raid_signing_key(),
         )
@@ -1946,11 +2124,20 @@ mod tests {
         receipt_v2_e2e_fixture_for_domain(ReceiptFixtureDomain::PaperRaidV2)
     }
 
+    fn app_v7_paper_raid_v4_receipt_e2e_fixture() -> (
+        CometBftAppHashFinalityReceiptV2,
+        block::Header,
+        validator::Set,
+    ) {
+        receipt_v2_e2e_fixture_for_domain(ReceiptFixtureDomain::PaperRaidV4)
+    }
+
     #[derive(Clone, Copy)]
     enum ReceiptFixtureDomain {
         ResearchV1,
         PaperRaidV2,
         PaperRaidV3,
+        PaperRaidV4,
     }
 
     fn receipt_v2_e2e_fixture_for_domain(
@@ -1962,6 +2149,20 @@ mod tests {
     ) {
         let (target_envelope, target_command_id, target_chain_id, envelope_signing_key) =
             match domain {
+                ReceiptFixtureDomain::PaperRaidV4 => {
+                    let signed = app_v7_paper_raid_finality_command_v4();
+                    let (_, envelope) = app_v7_paper_raid_envelope_v4(
+                        &signed,
+                        EXECUTION_TIMESTAMP_MS - 1_000,
+                        EXECUTION_TIMESTAMP_MS + 10_000,
+                    );
+                    (
+                        envelope,
+                        signed.command_id.to_hex(),
+                        signed.chain_id,
+                        paper_raid_signing_key(),
+                    )
+                }
                 ReceiptFixtureDomain::PaperRaidV3 => {
                     let signed = signed_paper_raid_finality_command();
                     let (_, envelope) = paper_raid_envelope(
@@ -2239,6 +2440,49 @@ mod tests {
         assert!(matches!(
             verify(&tampered_signed_header),
             ReceiptV2VerificationOutcome::StructuralInvalid { .. }
+        ));
+    }
+
+    #[test]
+    fn public_receipt_v2_verifier_returns_exact_app_v7_v4_domain_bytes_and_lineage() {
+        let (receipt, trusted_header, trusted_validators) =
+            app_v7_paper_raid_v4_receipt_e2e_fixture();
+        let trust_options = options();
+        let now = (trusted_header.time + Duration::from_secs(2)).unwrap();
+        let outcome = verify_cometbft_apphash_finality_receipt_v2(
+            &receipt,
+            CometBftTrustContext {
+                trusted_state: TrustedBlockState {
+                    chain_id: &trusted_header.chain_id,
+                    header_time: trusted_header.time,
+                    height: trusted_header.height,
+                    next_validators: &trusted_validators,
+                    next_validators_hash: trusted_validators.hash(),
+                },
+                options: &trust_options,
+                now,
+            },
+        );
+        let ReceiptV2VerificationOutcome::Final(verified) = outcome else {
+            panic!("App-v7 Paper Raid V4 domain command did not verify");
+        };
+        let expected = app_v7_paper_raid_finality_command_v4();
+        assert_eq!(
+            verified.signed_command_cbor_hex,
+            hex::encode(expected.canonical_bytes())
+        );
+        assert_eq!(
+            verified.domain_payload_hash_hex,
+            hex::encode(expected.payload_hash())
+        );
+        assert!(matches!(
+            verified.domain_command,
+            VerifiedCometBftDomainCommandV2::PaperRaidFinalityV4(command)
+                if *command == expected
+                    && command.commitment.rework_lineage.as_ref().is_some_and(|lineage|
+                        lineage.rework_cycle == 2
+                            && lineage.replacement_submission_id
+                                == command.commitment.submission_id)
         ));
     }
 

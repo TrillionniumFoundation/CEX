@@ -25,6 +25,7 @@ use uuid::Uuid;
 
 pub mod trnm_v1;
 pub use hepta_paper_raid_contracts as paper_raid_contracts;
+mod challenge_pack_activation;
 mod challenge_ruleset_v1;
 mod paper_chain_finality_v1;
 mod paper_chain_finality_v2;
@@ -858,11 +859,85 @@ async fn apply_hepta_migrations(pool: &PgPool) -> Result<(), String> {
             "Consumer finality V2 exact bindings",
             include_str!("../../../migrations/0048_add_hepta_consumer_finality_v2.sql"),
         ),
+        (
+            "Evidence Audit Challenge Pack activation",
+            include_str!("../../../migrations/0049_add_hepta_challenge_pack_activation.sql"),
+        ),
+        (
+            "Paper Author rework lineage",
+            include_str!("../../../migrations/0050_add_hepta_paper_rework.sql"),
+        ),
+        (
+            "legacy evaluation frozen panel lifecycle",
+            include_str!("../../../migrations/0051_bind_legacy_evaluation_panel_lifecycle.sql"),
+        ),
+        (
+            "Paper Chain finality V2 preparation ingress hardening",
+            include_str!(
+                "../../../migrations/0052_harden_hepta_paper_finality_v2_preparation_ingress.sql"
+            ),
+        ),
+        (
+            "Review-ready artifact manifest binding authority",
+            include_str!(
+                "../../../migrations/0053_allow_review_ready_artifact_manifest_binding.sql"
+            ),
+        ),
     ] {
         sqlx::raw_sql(migration)
             .execute(pool)
             .await
             .map_err(|error| format!("apply {name} migration: {error}"))?;
+    }
+    Ok(())
+}
+
+async fn verify_review_ready_artifact_manifest_binding_catalog(
+    pool: &PgPool,
+) -> Result<(), String> {
+    let constraints = sqlx::query(
+        "select c.conrelid='public.hepta_artifact_manifests'::regclass as exact_relation,
+                c.contype::text as constraint_type,
+                c.convalidated,
+                c.connoinherit,
+                pg_get_constraintdef(c.oid, true) as definition,
+                coalesce((
+                  select array_agg(a.attname::text order by key.ordinality)
+                  from unnest(c.conkey) with ordinality as key(attnum, ordinality)
+                  join pg_attribute a
+                    on a.attrelid=c.conrelid and a.attnum=key.attnum
+                ), array[]::text[]) as columns
+         from pg_constraint c
+         where c.conname='hepta_artifact_manifests_binding_schema_check'",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|error| {
+        format!("inspect Review-ready artifact manifest binding constraint: {error}")
+    })?;
+    if constraints.len() != 1 {
+        return Err(format!(
+            "Review-ready artifact manifest binding constraint must be globally unique, got {}",
+            constraints.len()
+        ));
+    }
+    let constraint = &constraints[0];
+    let columns = constraint.get::<Vec<String>, _>("columns");
+    let normalize = |value: &str| value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let expected_definition = normalize(
+        "CHECK (binding_schema = 'hepta.paper_raid.artifact_manifest_binding.v1'::text OR binding_schema = 'hepta.paper_raid.review_ready_artifact_manifest_binding.v1'::text)",
+    );
+    if !constraint.get::<bool, _>("exact_relation")
+        || constraint.get::<String, _>("constraint_type") != "c"
+        || !constraint.get::<bool, _>("convalidated")
+        || constraint.get::<bool, _>("connoinherit")
+        || columns != vec!["binding_schema".to_string()]
+        || normalize(&constraint.get::<String, _>("definition")) != expected_definition
+    {
+        return Err(
+            "Review-ready artifact manifest binding constraint catalog is non-canonical"
+                .to_string(),
+        );
     }
     Ok(())
 }
@@ -1235,6 +1310,156 @@ async fn verify_finality_v2_migration_catalog(pool: &PgPool) -> Result<(), Strin
     {
         return Err(format!(
             "Paper Chain finality V2 constraint catalog mismatch: expected 77/910d4454106f5722ad44c6c9095bf48d585dfaa9501fc40d9ef377fd57c3f3ba, got {constraint_count}/{catalog_sha256}"
+        ));
+    }
+    Ok(())
+}
+
+async fn verify_finality_v2_preparation_ingress_catalog(pool: &PgPool) -> Result<(), String> {
+    let functions = sqlx::query(
+        "select function_row.proname as function_name,
+                function_row.pronargs as argument_count,
+                case
+                    when function_row.proname=
+                        'hepta_paper_finality_v2_preparation_ingress_valid_v1'
+                    then function_row.pronargs=1
+                     and function_row.proargtypes[0]=
+                        'public.hepta_paper_chain_finality_preparations_v2'::regtype::oid
+                    else function_row.pronargs=0
+                end as arguments_exact,
+                function_row.prokind::text as function_kind,
+                function_row.provolatile::text as volatility,
+                function_row.proparallel::text as parallel_safety,
+                function_row.proisstrict as strict,
+                function_row.prosecdef as security_definer,
+                function_row.proleakproof as leakproof,
+                function_row.proretset as returns_set,
+                coalesce(function_row.proconfig,array[]::text[]) as function_config,
+                language_row.lanname as language,
+                pg_get_function_result(function_row.oid) as result_type,
+                function_row.proowner=relation.relowner as canonical_owner,
+                (select count(*) from aclexplode(coalesce(
+                    function_row.proacl,
+                    acldefault('f',function_row.proowner)
+                )))::bigint as acl_count,
+                exists(
+                    select 1 from aclexplode(coalesce(
+                        function_row.proacl,
+                        acldefault('f',function_row.proowner)
+                    )) as acl
+                    where acl.grantor=function_row.proowner
+                      and acl.grantee=function_row.proowner
+                      and acl.privilege_type='EXECUTE'
+                      and not acl.is_grantable
+                ) as owner_execute_only,
+                encode(sha256(convert_to(function_row.prosrc,'UTF8')),'hex')
+                    as body_sha256
+         from pg_proc as function_row
+         join pg_namespace as namespace on namespace.oid=function_row.pronamespace
+         join pg_language as language_row on language_row.oid=function_row.prolang
+         join pg_class as relation
+           on relation.oid='public.hepta_paper_chain_finality_preparations_v2'::regclass
+         where namespace.nspname='public'
+           and function_row.proname in (
+               'hepta_paper_finality_v2_preparation_ingress_valid_v1',
+               'hepta_validate_paper_finality_v2_preparation_ingress_v1'
+           )
+         order by function_row.proname",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|error| format!("verify Paper finality V2 preparation ingress functions: {error}"))?;
+    let expected = [
+        (
+            "hepta_paper_finality_v2_preparation_ingress_valid_v1",
+            1_i16,
+            "i",
+            true,
+            false,
+            "boolean",
+            "c861ea0fea786979507fc23dd0435002c838a4bdbaa1f23e9c4e0420953570e8",
+        ),
+        (
+            "hepta_validate_paper_finality_v2_preparation_ingress_v1",
+            0_i16,
+            "v",
+            false,
+            true,
+            "trigger",
+            "f9db620e91b35d1ae38b2c3abef60a1e44d0c8522b6c30195c0de9bac2835b87",
+        ),
+    ];
+    if functions.len() != expected.len() {
+        return Err(format!(
+            "Paper finality V2 preparation ingress catalog requires exactly two managed functions, got {}",
+            functions.len()
+        ));
+    }
+    for (row, (name, arguments, volatility, strict, security_definer, result_type, body_sha256)) in
+        functions.iter().zip(expected.iter())
+    {
+        if row.get::<String, _>("function_name") != *name
+            || row.get::<i16, _>("argument_count") != *arguments
+            || !row.get::<bool, _>("arguments_exact")
+            || row.get::<String, _>("function_kind") != "f"
+            || row.get::<String, _>("volatility") != *volatility
+            || row.get::<String, _>("parallel_safety") != "u"
+            || row.get::<bool, _>("strict") != *strict
+            || row.get::<bool, _>("security_definer") != *security_definer
+            || row.get::<bool, _>("leakproof")
+            || row.get::<bool, _>("returns_set")
+            || row.get::<Vec<String>, _>("function_config")
+                != vec!["search_path=pg_catalog".to_string()]
+            || row.get::<String, _>("language")
+                != if *name == "hepta_paper_finality_v2_preparation_ingress_valid_v1" {
+                    "sql"
+                } else {
+                    "plpgsql"
+                }
+            || row.get::<String, _>("result_type") != *result_type
+            || !row.get::<bool, _>("canonical_owner")
+            || row.get::<i64, _>("acl_count") != 1
+            || !row.get::<bool, _>("owner_execute_only")
+            || row.get::<String, _>("body_sha256") != *body_sha256
+        {
+            return Err(format!(
+                "Paper finality V2 preparation ingress function public.{name} is duplicated, misowned, callable by an unexpected role, or has non-canonical metadata/body"
+            ));
+        }
+    }
+
+    let guard_catalog = sqlx::query(
+        "select count(*) filter (
+                    where namespace.nspname='public'
+                      and relation.relname='hepta_paper_chain_finality_preparations_v2'
+                      and trigger_row.tgfoid=to_regprocedure(
+                          'public.hepta_validate_paper_finality_v2_preparation_ingress_v1()'
+                      )
+                      and trigger_row.tgtype=7
+                      and trigger_row.tgenabled='A'
+                      and trigger_row.tgnargs=0
+                      and trigger_row.tgconstraint=0
+                      and not trigger_row.tgdeferrable
+                      and not trigger_row.tginitdeferred
+                      and trigger_row.tgqual is null
+                      and trigger_row.tgoldtable is null
+                      and trigger_row.tgnewtable is null
+                )::bigint as exact_count,
+                count(*)::bigint as global_name_count
+         from pg_trigger as trigger_row
+         join pg_class as relation on relation.oid=trigger_row.tgrelid
+         join pg_namespace as namespace on namespace.oid=relation.relnamespace
+         where trigger_row.tgname='hepta_paper_finality_v2_preparation_ingress_guard'
+           and not trigger_row.tgisinternal",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|error| format!("verify Paper finality V2 preparation ingress trigger: {error}"))?;
+    let guard_count: i64 = guard_catalog.get("exact_count");
+    let global_guard_count: i64 = guard_catalog.get("global_name_count");
+    if guard_count != 1 || global_guard_count != 1 {
+        return Err(format!(
+            "Paper finality V2 preparation ingress requires one globally unique exact ENABLE ALWAYS BEFORE INSERT guard, got {guard_count}/{global_guard_count}"
         ));
     }
     Ok(())
@@ -3028,11 +3253,16 @@ impl AppState {
         apply_hepta_migrations(&pool).await?;
         initialize_hepta_state(&pool).await?;
         verify_finality_v2_migration_catalog(&pool).await?;
+        verify_finality_v2_preparation_ingress_catalog(&pool).await?;
         verify_agent_proposal_v2_migration_catalog(&pool).await?;
         verify_work_item_record_parity_catalog(&pool).await?;
         verify_matchmaking_v2_catalog(&pool).await?;
         verify_contribution_ledger_authority_catalog(&pool).await?;
         verify_consumer_finality_v2_catalog(&pool).await?;
+        challenge_pack_activation::verify_migration_catalog(&pool).await?;
+        paper_raid_v2::verify_rework_migration_catalog(&pool).await?;
+        paper_raid_v2::verify_legacy_evaluation_panel_lifecycle_catalog(&pool).await?;
+        verify_review_ready_artifact_manifest_binding_catalog(&pool).await?;
         Ok(Self::from_pools(Some(pool.clone()), Some(pool), security))
     }
 
@@ -3048,11 +3278,17 @@ impl AppState {
             apply_hepta_migrations(&migration_pool).await?;
             initialize_hepta_state(&migration_pool).await?;
             verify_finality_v2_migration_catalog(&migration_pool).await?;
+            verify_finality_v2_preparation_ingress_catalog(&migration_pool).await?;
             verify_agent_proposal_v2_migration_catalog(&migration_pool).await?;
             verify_work_item_record_parity_catalog(&migration_pool).await?;
             verify_matchmaking_v2_catalog(&migration_pool).await?;
             verify_contribution_ledger_authority_catalog(&migration_pool).await?;
             verify_consumer_finality_v2_catalog(&migration_pool).await?;
+            challenge_pack_activation::verify_migration_catalog(&migration_pool).await?;
+            paper_raid_v2::verify_rework_migration_catalog(&migration_pool).await?;
+            paper_raid_v2::verify_legacy_evaluation_panel_lifecycle_catalog(&migration_pool)
+                .await?;
+            verify_review_ready_artifact_manifest_binding_catalog(&migration_pool).await?;
             configure_database_roles(&migration_pool, runtime_role, finality_role).await
         }
         .await;
@@ -3099,11 +3335,15 @@ impl AppState {
                 );
             }
             verify_finality_v2_migration_catalog(&runtime_pool).await?;
+            verify_finality_v2_preparation_ingress_catalog(&runtime_pool).await?;
             verify_agent_proposal_v2_migration_catalog(&runtime_pool).await?;
             verify_work_item_record_parity_catalog(&runtime_pool).await?;
             verify_matchmaking_v2_catalog(&runtime_pool).await?;
             verify_contribution_ledger_authority_catalog(&runtime_pool).await?;
             verify_consumer_finality_v2_catalog(&runtime_pool).await?;
+            challenge_pack_activation::verify_migration_catalog(&runtime_pool).await?;
+            paper_raid_v2::verify_rework_migration_catalog(&runtime_pool).await?;
+            verify_review_ready_artifact_manifest_binding_catalog(&runtime_pool).await?;
             verify_unprivileged_database_role(&runtime_pool, &runtime_role, "runtime").await?;
             verify_unprivileged_database_role(&finality_pool, &finality_role, "finality").await?;
             verify_runtime_role_privileges(&runtime_pool, &runtime_role).await?;
@@ -3417,6 +3657,9 @@ impl Default for AppState {
 struct LeagueState {
     agents: HashMap<String, AgentRegistration>,
     challenges: HashMap<Uuid, ResearchChallenge>,
+    #[serde(default)]
+    challenge_pack_activations:
+        HashMap<Uuid, challenge_pack_activation::ChallengePackActivationRecordV1>,
     enrollments: HashMap<String, Enrollment>,
     match_authorizations: HashMap<String, MatchAuthorizationRecord>,
     submissions: HashMap<Uuid, SubmissionRecord>,
@@ -3780,6 +4023,7 @@ pub fn app(state: AppState) -> Router {
             "/v1/hepta/operator/challenges/:challenge_id",
             get(get_operator_challenge),
         )
+        .merge(challenge_pack_activation::router())
         .route(
             "/v1/hepta/challenges/:challenge_id/enrollments",
             post(enroll_agent),
@@ -5405,6 +5649,44 @@ mod database_role_tests {
                     preparation.status
                 ));
             }
+            let activation_fixture =
+                crate::challenge_pack_activation::seed_postgres_activation_fixture(&state)
+                    .await?;
+            let mut recovered_activation_state = AppState::connect_with_database_roles(
+                runtime_database_url,
+                finality_database_url,
+                crate::paper_raid_v2::endpoint_tests::paper_chain_finality_v2_security(),
+            )
+            .await?;
+            let migration_pool = PgPool::connect(migration_database_url)
+                .await
+                .map_err(|error| {
+                    format!("connect activation-guard migration-owner pool: {error}")
+                })?;
+            verify_finality_v2_preparation_ingress_canonical_shape_guards(
+                &migration_pool,
+                preparation.preparation_id,
+            )
+            .await?;
+            let activation_result =
+                crate::challenge_pack_activation::verify_postgres_activation_recovery_and_guards(
+                    &recovered_activation_state,
+                    &migration_pool,
+                    activation_fixture,
+                )
+                .await;
+            migration_pool.close().await;
+            let recovered_runtime_pool = recovered_activation_state
+                .pool
+                .take()
+                .expect("recovered activation state has a runtime pool");
+            let recovered_finality_pool = recovered_activation_state
+                .finality_pool
+                .take()
+                .expect("recovered activation state has a finality pool");
+            recovered_runtime_pool.close().await;
+            recovered_finality_pool.close().await;
+            activation_result?;
             Ok(())
         }
         .await;
@@ -5420,6 +5702,223 @@ mod database_role_tests {
         runtime_pool.close().await;
         finality_pool.close().await;
         verification_result
+    }
+
+    async fn verify_finality_v2_preparation_ingress_canonical_shape_guards(
+        migration_pool: &PgPool,
+        preparation_id: Uuid,
+    ) -> Result<(), String> {
+        let rows = sqlx::query(
+            "with preparation as (
+                select *
+                from public.hepta_paper_chain_finality_preparations_v2
+                where preparation_id=$1
+             ), candidate_record(label,record_json) as (
+                select 'canonical',record_json from preparation
+                union all
+                select 'created_at_offset_alias',jsonb_set(
+                    record_json,
+                    '{created_at}',
+                    to_jsonb(regexp_replace(record_json->>'created_at','Z$','+00:00')),
+                    false
+                ) from preparation
+                union all
+                select 'created_at_24_hour_alias',jsonb_set(
+                    record_json,
+                    '{created_at}',
+                    to_jsonb(regexp_replace(
+                        record_json->>'created_at',
+                        'T[0-9]{2}:[0-9]{2}:[0-9]{2}',
+                        'T24:00:00'
+                    )),
+                    false
+                ) from preparation
+                union all
+                select 'created_at_leap_second_alias',jsonb_set(
+                    record_json,
+                    '{created_at}',
+                    to_jsonb(regexp_replace(
+                        record_json->>'created_at',
+                        'T[0-9]{2}:[0-9]{2}:[0-9]{2}',
+                        'T23:59:60'
+                    )),
+                    false
+                ) from preparation
+                union all
+                select 'created_at_redundant_fraction',jsonb_set(
+                    record_json,
+                    '{created_at}',
+                    to_jsonb(case
+                        when position('.' in record_json->>'created_at') > 0
+                        then regexp_replace(record_json->>'created_at','Z$','000Z')
+                        else regexp_replace(record_json->>'created_at','Z$','.000Z')
+                    end),
+                    false
+                ) from preparation
+                union all
+                select 'created_at_submicrosecond_9_digits',jsonb_set(
+                    record_json,
+                    '{created_at}',
+                    to_jsonb(case
+                        when position('.' in record_json->>'created_at') > 0
+                        then regexp_replace(record_json->>'created_at','Z$','000001Z')
+                        else regexp_replace(record_json->>'created_at','Z$','.000000001Z')
+                    end),
+                    false
+                ) from preparation
+                union all
+                select 'compact_uuid_alias',jsonb_set(
+                    record_json,
+                    '{binding,window_arm_id}',
+                    to_jsonb(replace(
+                        record_json #>> '{binding,window_arm_id}',
+                        '-',
+                        ''
+                    )),
+                    false
+                ) from preparation
+                union all
+                select 'optional_key_missing',
+                    record_json #- '{binding,appeal_resolution_hash}'
+                from preparation
+                union all
+                select 'hidden_required_key_missing',
+                    record_json #- '{binding,release_candidate_hash}'
+                from preparation
+                union all
+                select 'unknown_top_level_key',
+                    record_json || jsonb_build_object('unexpected',true)
+                from preparation
+                union all
+                select 'unknown_binding_key',jsonb_set(
+                    record_json,
+                    '{binding}',
+                    (record_json->'binding') || jsonb_build_object('unexpected',true),
+                    false
+                ) from preparation
+                union all
+                select 'stringified_boolean',jsonb_set(
+                    record_json,
+                    '{binding,scientific_finality}',
+                    to_jsonb('true'::text),
+                    false
+                ) from preparation
+                union all
+                select 'stringified_number',jsonb_set(
+                    record_json,
+                    '{binding,research_session_roster_version}',
+                    to_jsonb(record_json #>> '{binding,research_session_roster_version}'),
+                    false
+                ) from preparation
+                union all
+                select 'decimal_integer_alias',jsonb_set(
+                    record_json,
+                    '{binding,match_evidence_object_version}',
+                    to_jsonb(1.0::numeric),
+                    false
+                ) from preparation
+                union all
+                select 'optional_wrong_raw_type',jsonb_set(
+                    record_json,
+                    '{binding,appeal_resolution_hash}',
+                    'false'::jsonb,
+                    false
+                ) from preparation
+                union all
+                select 'optional_supersession_compact_uuid',jsonb_set(
+                    record_json,
+                    '{binding,evaluation_supersedes_evaluation_id}',
+                    to_jsonb(replace(
+                        record_json #>> '{binding,evaluation_id}',
+                        '-',
+                        ''
+                    )),
+                    false
+                ) from preparation
+                union all
+                select 'rework_null_instead_of_absent',jsonb_set(
+                    record_json,
+                    '{binding,rework_lineage}',
+                    'null'::jsonb,
+                    true
+                ) from preparation
+                union all
+                select 'rework_compact_uuid',jsonb_set(
+                    record_json,
+                    '{binding,rework_lineage}',
+                    jsonb_build_object(
+                        'schema','hepta.paper_raid.trnm_finality_rework_lineage.v1',
+                        'rework_id',replace(
+                            record_json #>> '{binding,paper_project_id}',
+                            '-',
+                            ''
+                        ),
+                        'rework_cycle',2,
+                        'rejected_submission_id',
+                            record_json #>> '{binding,paper_project_id}',
+                        'replacement_submission_id',
+                            record_json #>> '{binding,submission_id}',
+                        'rejected_revision_id',
+                            record_json #>> '{binding,paper_project_id}',
+                        'replacement_revision_id',
+                            record_json #>> '{binding,submission_id}',
+                        'rejected_release_candidate_hash',
+                            record_json #>> '{binding,release_candidate_hash}',
+                        'replacement_release_candidate_hash',
+                            record_json #>> '{binding,release_candidate_hash}',
+                        'rejected_paper_bundle_hash',
+                            record_json #>> '{binding,paper_bundle_hash}',
+                        'replacement_paper_bundle_hash',
+                            record_json #>> '{binding,paper_bundle_hash}',
+                        'rejected_rework_content_commitment_sha256',
+                            record_json #>> '{binding,submission_commitment_hash}',
+                        'replacement_rework_content_commitment_sha256',
+                            record_json #>> '{binding,submission_commitment_hash}'
+                    ),
+                    true
+                ) from preparation
+             ), candidate as (
+                select
+                    candidate_record.label,
+                    jsonb_populate_record(
+                        null::public.hepta_paper_chain_finality_preparations_v2,
+                        to_jsonb(preparation) || jsonb_build_object(
+                            'record_json',candidate_record.record_json
+                        )
+                    ) as preparation
+                from preparation
+                cross join candidate_record
+             )
+             select
+                label,
+                public.hepta_paper_finality_v2_preparation_ingress_valid_v1(
+                    preparation
+                ) as accepted
+             from candidate
+             order by label",
+        )
+        .bind(preparation_id)
+        .fetch_all(migration_pool)
+        .await
+        .map_err(|error| {
+            format!("exercise Paper finality V2 canonical ingress aliases: {error}")
+        })?;
+        if rows.len() != 18 {
+            return Err(format!(
+                "Paper finality V2 canonical ingress fixture returned {} rows instead of 18",
+                rows.len()
+            ));
+        }
+        for row in rows {
+            let label: String = row.get("label");
+            let accepted: bool = row.get("accepted");
+            if accepted != (label == "canonical") {
+                return Err(format!(
+                    "Paper finality V2 canonical ingress fixture {label:?} returned {accepted}"
+                ));
+            }
+        }
+        Ok(())
     }
 
     async fn verify_runtime_role_pool(

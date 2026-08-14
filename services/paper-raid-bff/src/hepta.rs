@@ -11,18 +11,18 @@ use hepta_paper_raid_contracts::{
     human_evidence_verification_signing_bytes, human_key_registration_signing_bytes,
     paper_appeal_resolution_signing_bytes, paper_appeal_signing_bytes,
     paper_evaluation_signing_bytes, paper_reproduction_signing_bytes,
-    paper_review_attestation_signing_bytes, section_merge_signing_bytes,
-    section_review_signing_bytes, sha256_digest, sign_consumer_user_assertion,
-    team_member_acceptance_signing_bytes, verify_human_key_registration_pop,
-    AuthorshipConsentSigningV2, ConsumerUserAssertionClaimV2, HumanDecisionSigningV1,
-    HumanEvidenceVerificationSigningV1, HumanKeyRegistrationClaimV2,
+    paper_review_attestation_signing_bytes, paper_rework_signing_bytes,
+    section_merge_signing_bytes, section_review_signing_bytes, sha256_digest,
+    sign_consumer_user_assertion, team_member_acceptance_signing_bytes,
+    verify_human_key_registration_pop, AuthorshipConsentSigningV2, ConsumerUserAssertionClaimV2,
+    HumanDecisionSigningV1, HumanEvidenceVerificationSigningV1, HumanKeyRegistrationClaimV2,
     PaperAppealResolutionSigningV1, PaperAppealSigningV1, PaperEvaluationSigningV1,
-    PaperReproductionSigningV1, PaperReviewAttestationSigningV1, SectionMergeSigningV1,
-    SectionReviewSigningV1, TeamMemberAcceptanceSigningV2, AUTHORSHIP_CONSENT_V2,
-    CONSUMER_USER_ASSERTION_V2, HUMAN_DECISION_V1, HUMAN_EVIDENCE_VERIFICATION_V1,
-    HUMAN_KEY_REGISTRATION_V2, PAPER_APPEAL_RESOLUTION_V1, PAPER_APPEAL_V1, PAPER_EVALUATION_V1,
-    PAPER_REPRODUCTION_V1, PAPER_REVIEW_ATTESTATION_V1, SECTION_MERGE_V1, SECTION_REVIEW_V1,
-    TEAM_MEMBER_ACCEPTANCE_V2,
+    PaperReproductionSigningV1, PaperReviewAttestationSigningV1, PaperReworkSigningV1,
+    SectionMergeSigningV1, SectionReviewSigningV1, TeamMemberAcceptanceSigningV2,
+    AUTHORSHIP_CONSENT_V2, CONSUMER_USER_ASSERTION_V2, HUMAN_DECISION_V1,
+    HUMAN_EVIDENCE_VERIFICATION_V1, HUMAN_KEY_REGISTRATION_V2, PAPER_APPEAL_RESOLUTION_V1,
+    PAPER_APPEAL_V1, PAPER_EVALUATION_V1, PAPER_REPRODUCTION_V1, PAPER_REVIEW_ATTESTATION_V1,
+    PAPER_REWORK_V1, SECTION_MERGE_V1, SECTION_REVIEW_V1, TEAM_MEMBER_ACCEPTANCE_V2,
 };
 use reqwest::{header, Client, Method, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -62,6 +62,7 @@ pub enum CommandName {
     PromotePaperReleaseCandidate,
     CreateAuthorshipConsent,
     FinalizeJointPaperSubmission,
+    StartPaperRework,
     IssueResearchSessionAuthorizationSet,
     ReplaceResearchSessionAuthorizationSet,
     CreateNakamaResearchSessionControl,
@@ -209,6 +210,13 @@ struct AppealFramePayload {
     release_candidate_hash: Option<String>,
     #[serde(default)]
     evidence_manifest_hash: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PaperReworkFramePayload {
+    rework_id: Uuid,
+    reason_hash: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -765,6 +773,10 @@ fn sealed_digest(value: &str) -> bool {
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     })
+}
+
+fn sealed_nonzero_digest(value: &str) -> bool {
+    sealed_digest(value) && value != format!("sha256:{}", "0".repeat(64))
 }
 
 fn sealed_text(value: &str) -> bool {
@@ -1785,6 +1797,10 @@ impl BrowserCommand {
             CommandName::FinalizeJointPaperSubmission => post(
                 format!("/v2/hepta/papers/{}/finalize", resource()?),
                 "finalize_joint_paper_submission_v2",
+            ),
+            CommandName::StartPaperRework => post(
+                format!("/v2/hepta/papers/{}/reworks", resource()?),
+                "start_paper_rework_v1",
             ),
             CommandName::IssueResearchSessionAuthorizationSet => post(
                 "/v2/hepta/research-session-authorizations".into(),
@@ -2927,6 +2943,104 @@ impl HeptaClient {
                 });
                 (payload, bytes)
             }
+            CommandName::StartPaperRework => {
+                let paper_id = request
+                    .resource_id
+                    .ok_or_else(|| AppError::Invalid("resource_id is required".into()))?;
+                if request.child_id.is_some() {
+                    return Err(AppError::Invalid("child_id is not allowed".into()));
+                }
+                let input: PaperReworkFramePayload =
+                    serde_json::from_value(request.payload.clone()).map_err(|_| {
+                        AppError::Invalid("invalid Paper rework frame payload".into())
+                    })?;
+                if input.rework_id.is_nil() || !sealed_digest(&input.reason_hash) {
+                    return Err(AppError::Invalid(
+                        "Paper rework requires a fresh rework_id and canonical reason_hash".into(),
+                    ));
+                }
+
+                // The ordinary Author form supplies only a locally generated ID and the
+                // locally hashed reason.  Every scientific locator and optimistic version
+                // below comes from fresh, authenticated Hepta reads so stale browser state
+                // can never choose the rejected submission or evaluation being signed.
+                let room = self.get_paper_room(identity, paper_id).await?;
+                let room = room.value();
+                require_room_paper_id(room, paper_id)?;
+                let paper = room
+                    .get("paper")
+                    .filter(|value| value.is_object())
+                    .ok_or(AppError::Upstream)?;
+                let expected_paper_version = required_u64(paper, "version")?;
+                if expected_paper_version == 0
+                    || paper.get("phase").and_then(Value::as_str) != Some("submission_ready")
+                    || paper.get("outcome").and_then(Value::as_str) != Some("submission_ready")
+                    || paper.get("terminal_at").is_none_or(Value::is_null)
+                    || paper.get("active_rework_id") != Some(&Value::Null)
+                    || paper.get("active_rework_cycle") != Some(&Value::Null)
+                    || paper.get("rework_expires_at") != Some(&Value::Null)
+                {
+                    return Err(AppError::Conflict(
+                        "Paper rework requires the current terminal rejected submission and no active rework lease"
+                            .into(),
+                    ));
+                }
+                let submission = room
+                    .get("joint_submission")
+                    .filter(|value| value.is_object())
+                    .ok_or(AppError::NotFound)?;
+                let rejected_submission_id = required_uuid(submission, "submission_id")?;
+                if required_uuid(submission, "paper_project_id")? != paper_id
+                    || submission.get("status").and_then(Value::as_str) != Some("submission_ready")
+                {
+                    return Err(AppError::Conflict(
+                        "Paper rework must bind the exact current submission-ready PaperBundle"
+                            .into(),
+                    ));
+                }
+
+                let review = self.get_paper_review_state(identity, paper_id).await?;
+                let evaluation =
+                    latest_submission_evaluation(review.value(), paper_id, rejected_submission_id)?;
+                if evaluation.get("status").and_then(Value::as_str) != Some("rejected") {
+                    return Err(AppError::Conflict(
+                        "Paper rework requires the current immutable rejected evaluation".into(),
+                    ));
+                }
+                let rejected_evaluation_id = required_uuid(evaluation, "evaluation_id")?;
+
+                let history = self.get_paper_reworks(identity, paper_id).await?;
+                let rework_cycle = next_paper_rework_cycle(&history, paper_id)?;
+                let signing = PaperReworkSigningV1 {
+                    schema: PAPER_REWORK_V1.into(),
+                    rework_id: input.rework_id,
+                    paper_project_id: paper_id,
+                    rejected_evaluation_id,
+                    rejected_submission_id,
+                    expected_paper_version,
+                    rework_cycle,
+                    author_player_id: identity.player_id,
+                    signing_key_id: player.signing_key_id.clone(),
+                    signing_public_key_hash: player.signing_public_key_hash.clone(),
+                    reason_hash: input.reason_hash.clone(),
+                    signed_at_unix,
+                };
+                let bytes = paper_rework_signing_bytes(&signing).map_err(AppError::Invalid)?;
+                let payload = serde_json::json!({
+                    "rework_id": input.rework_id,
+                    "rejected_evaluation_id": rejected_evaluation_id,
+                    "rejected_submission_id": rejected_submission_id,
+                    "expected_paper_version": expected_paper_version,
+                    "rework_cycle": rework_cycle,
+                    "author_player_id": identity.player_id,
+                    "signing_key_id": player.signing_key_id.clone(),
+                    "signing_public_key": player.signing_public_key.clone(),
+                    "signing_public_key_hash": player.signing_public_key_hash.clone(),
+                    "reason_hash": input.reason_hash,
+                    "signed_at_unix": signed_at_unix,
+                });
+                (payload, bytes)
+            }
             CommandName::SubmitAppeal => {
                 let paper_id = request
                     .resource_id
@@ -3360,6 +3474,20 @@ impl HeptaClient {
         AuthenticatedPaperReviewState::seal(&route, paper_id, body)
     }
 
+    pub(crate) async fn get_paper_reworks(
+        &self,
+        identity: &AlphaIdentity,
+        paper_id: Uuid,
+    ) -> Result<Value, AppError> {
+        self.get_json(
+            identity,
+            format!("/v2/hepta/papers/{paper_id}/reworks"),
+            None,
+            "get_paper_reworks_v1",
+        )
+        .await
+    }
+
     pub async fn list_review_queue(&self, identity: &AlphaIdentity) -> Result<Value, AppError> {
         self.get_json(
             identity,
@@ -3736,6 +3864,9 @@ fn validate_identity_command_payload(
         CommandName::SubmitAppeal => {
             require_payload_player(identity, payload, "appellant_player_id")?;
         }
+        CommandName::StartPaperRework => {
+            require_payload_player(identity, payload, "author_player_id")?;
+        }
         CommandName::ResolveAppeal => {
             require_payload_player(identity, payload, "resolver_player_id")?;
         }
@@ -3870,6 +4001,116 @@ fn latest_paper_evaluation(review: &Value, paper_id: Uuid) -> Result<&Value, App
         ));
     }
     Ok(latest[0])
+}
+
+fn latest_submission_evaluation(
+    review: &Value,
+    paper_id: Uuid,
+    submission_id: Uuid,
+) -> Result<&Value, AppError> {
+    let evaluations = review
+        .get("evaluations")
+        .and_then(Value::as_array)
+        .ok_or(AppError::Upstream)?;
+    let mut scoped = Vec::new();
+    for evaluation in evaluations {
+        if required_uuid(evaluation, "paper_project_id")? != paper_id {
+            return Err(AppError::Upstream);
+        }
+        let evaluation_id = required_uuid(evaluation, "evaluation_id")?;
+        let version = required_u64(evaluation, "version")?;
+        if version == 0 {
+            return Err(AppError::Upstream);
+        }
+        if required_uuid(evaluation, "submission_id")? == submission_id {
+            scoped.push((version, evaluation_id, evaluation));
+        }
+    }
+    let latest_version = scoped
+        .iter()
+        .map(|(version, _, _)| *version)
+        .max()
+        .ok_or(AppError::NotFound)?;
+    let current = scoped
+        .iter()
+        .filter(|(version, _, _)| *version == latest_version)
+        .collect::<Vec<_>>();
+    if current.len() != 1 {
+        return Err(AppError::Conflict(
+            "the current rejected evaluation is ambiguous".into(),
+        ));
+    }
+    let (_, evaluation_id, latest) = *current[0];
+    let evaluation_id_text = evaluation_id.to_string();
+    if scoped.iter().any(|(_, _, candidate)| {
+        candidate
+            .get("supersedes_evaluation_id")
+            .and_then(Value::as_str)
+            == Some(evaluation_id_text.as_str())
+    }) {
+        return Err(AppError::Conflict(
+            "the rejected evaluation has already been superseded".into(),
+        ));
+    }
+    Ok(latest)
+}
+
+fn next_paper_rework_cycle(history: &Value, paper_id: Uuid) -> Result<u64, AppError> {
+    let records = history.as_array().ok_or(AppError::Upstream)?;
+    let mut ids = HashSet::with_capacity(records.len());
+    let mut cycles = HashSet::with_capacity(records.len());
+    let mut max_cycle = 1_u64;
+    for state in records {
+        let state = state.as_object().ok_or(AppError::Upstream)?;
+        if state.len() != 2 {
+            return Err(AppError::Upstream);
+        }
+        let rework = state
+            .get("rework")
+            .filter(|value| value.is_object())
+            .ok_or(AppError::Upstream)?;
+        let rework_id = required_uuid(rework, "rework_id")?;
+        let cycle = required_u64(rework, "rework_cycle")?;
+        let rejected_commitment =
+            required_string(rework, "rejected_rework_content_commitment_sha256")?;
+        if rework.get("schema").and_then(Value::as_str) != Some("hepta.paper_raid.rework_record.v1")
+            || required_uuid(rework, "paper_project_id")? != paper_id
+            || cycle < 2
+            || !sealed_nonzero_digest(&rejected_commitment)
+            || !ids.insert(rework_id)
+            || !cycles.insert(cycle)
+        {
+            return Err(AppError::Upstream);
+        }
+        let resubmission = state.get("resubmission").ok_or(AppError::Upstream)?;
+        if resubmission.is_null() {
+            return Err(AppError::Conflict(
+                "Paper already has an active replacement workflow".into(),
+            ));
+        }
+        if resubmission.get("schema").and_then(Value::as_str)
+            != Some("hepta.paper_raid.rework_resubmission.v1")
+            || required_uuid(resubmission, "rework_id")? != rework_id
+            || required_uuid(resubmission, "paper_project_id")? != paper_id
+            || required_u64(resubmission, "replacement_review_round")? != 1
+        {
+            return Err(AppError::Upstream);
+        }
+        let replacement_commitment =
+            required_string(resubmission, "replacement_rework_content_commitment_sha256")?;
+        if !sealed_nonzero_digest(&replacement_commitment)
+            || replacement_commitment == rejected_commitment
+        {
+            return Err(AppError::Upstream);
+        }
+        max_cycle = max_cycle.max(cycle);
+    }
+    if (2..=max_cycle).any(|cycle| !cycles.contains(&cycle)) {
+        return Err(AppError::Upstream);
+    }
+    max_cycle
+        .checked_add(1)
+        .ok_or_else(|| AppError::Conflict("Paper rework cycle overflow".into()))
 }
 
 fn paper_evaluation_by_id(
@@ -4749,6 +4990,93 @@ mod tests {
     }
 
     #[test]
+    fn paper_rework_adapter_selects_current_submission_and_monotonic_cycle() {
+        let paper_id = Uuid::new_v4();
+        let submission_id = Uuid::new_v4();
+        let old_submission_id = Uuid::new_v4();
+        let evaluation_id = Uuid::new_v4();
+        let review = serde_json::json!({
+            "evaluations":[
+                {
+                    "evaluation_id":Uuid::new_v4(),
+                    "paper_project_id":paper_id,
+                    "submission_id":old_submission_id,
+                    "version":1,
+                    "status":"rejected",
+                    "supersedes_evaluation_id":null
+                },
+                {
+                    "evaluation_id":evaluation_id,
+                    "paper_project_id":paper_id,
+                    "submission_id":submission_id,
+                    "version":1,
+                    "status":"rejected",
+                    "supersedes_evaluation_id":null
+                }
+            ]
+        });
+        assert_eq!(
+            required_uuid(
+                latest_submission_evaluation(&review, paper_id, submission_id)
+                    .expect("current submission evaluation"),
+                "evaluation_id",
+            )
+            .expect("evaluation ID"),
+            evaluation_id,
+        );
+
+        let rework_id_2 = Uuid::new_v4();
+        let rework_id_3 = Uuid::new_v4();
+        let completed = |rework_id: Uuid, cycle: u64| {
+            let rejected_commitment =
+                format!("sha256:{}", if cycle == 2 { "1" } else { "3" }.repeat(64));
+            let replacement_commitment =
+                format!("sha256:{}", if cycle == 2 { "2" } else { "4" }.repeat(64));
+            serde_json::json!({
+                "rework":{
+                    "schema":"hepta.paper_raid.rework_record.v1",
+                    "rework_id":rework_id,
+                    "paper_project_id":paper_id,
+                    "rework_cycle":cycle,
+                    "rejected_rework_content_commitment_sha256":rejected_commitment
+                },
+                "resubmission":{
+                    "schema":"hepta.paper_raid.rework_resubmission.v1",
+                    "rework_id":rework_id,
+                    "paper_project_id":paper_id,
+                    "replacement_review_round":1,
+                    "replacement_rework_content_commitment_sha256":replacement_commitment
+                }
+            })
+        };
+        let history = serde_json::json!([completed(rework_id_2, 2), completed(rework_id_3, 3)]);
+        assert_eq!(
+            next_paper_rework_cycle(&history, paper_id).expect("next cycle"),
+            4
+        );
+
+        let mut active = history.clone();
+        active[1]["resubmission"] = Value::Null;
+        assert!(matches!(
+            next_paper_rework_cycle(&active, paper_id),
+            Err(AppError::Conflict(_))
+        ));
+        let gap = serde_json::json!([completed(rework_id_3, 3)]);
+        assert!(matches!(
+            next_paper_rework_cycle(&gap, paper_id),
+            Err(AppError::Upstream)
+        ));
+
+        let mut identity_only = history.clone();
+        identity_only[1]["resubmission"]["replacement_rework_content_commitment_sha256"] =
+            identity_only[1]["rework"]["rejected_rework_content_commitment_sha256"].clone();
+        assert!(matches!(
+            next_paper_rework_cycle(&identity_only, paper_id),
+            Err(AppError::Upstream)
+        ));
+    }
+
+    #[test]
     fn appeal_evidence_selector_resolves_only_one_paper_manifest() {
         let paper_id = Uuid::new_v4();
         let manifest_id = Uuid::new_v4();
@@ -4955,6 +5283,20 @@ mod tests {
     #[test]
     fn appeal_actor_fields_are_bound_to_the_authenticated_identity() {
         let author = AlphaIdentity::test_identity("author", Uuid::new_v4(), Uuid::new_v4());
+        validate_identity_command_payload(
+            &author,
+            CommandName::StartPaperRework,
+            &serde_json::json!({"author_player_id":author.player_id}),
+        )
+        .expect("author identity matches Paper rework payload");
+        assert!(matches!(
+            validate_identity_command_payload(
+                &author,
+                CommandName::StartPaperRework,
+                &serde_json::json!({"author_player_id":Uuid::new_v4()}),
+            ),
+            Err(AppError::Forbidden)
+        ));
         validate_identity_command_payload(
             &author,
             CommandName::SubmitAppeal,
@@ -5273,6 +5615,11 @@ mod tests {
                 ),
                 format!("/v2/hepta/papers/{paper}/evaluations/{revision}/reproductions"),
                 "create_paper_reproduction_v1",
+            ),
+            (
+                command(CommandName::StartPaperRework, Some(paper), None, None),
+                format!("/v2/hepta/papers/{paper}/reworks"),
+                "start_paper_rework_v1",
             ),
             (
                 command(CommandName::SubmitAppeal, Some(paper), Some(revision), None),

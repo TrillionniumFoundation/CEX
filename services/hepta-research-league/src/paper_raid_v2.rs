@@ -35,7 +35,8 @@ use crate::{
         TeamMemberAcceptanceSigningV2, AGENT_BINDING_KEY_ROTATION_V2, AGENT_BINDING_PROOF_V2,
         AGENT_BINDING_PROOF_V3, AUTHORSHIP_CONSENT_V2, HUMAN_KEY_REGISTRATION_V2,
         HUMAN_KEY_REVOCATION_V2, HUMAN_KEY_ROTATION_V2, JSON_SAFE_U64_MAX, PAPER_BUNDLE_V2,
-        PAPER_RAID_PROTOCOL_V2, PAPER_RELEASE_CANDIDATE_V2, TEAM_MEMBER_ACCEPTANCE_V2,
+        PAPER_RAID_PROTOCOL_V2, PAPER_RELEASE_CANDIDATE_V2, PAPER_REWORK_V1,
+        TEAM_MEMBER_ACCEPTANCE_V2,
     },
     require_service_token, validate_contract_text_api, validate_non_empty, ApiError, AppState,
     ChallengeForwardTransitionV1, ChallengeMinimumV1, ChallengeRequirementKindV1,
@@ -50,6 +51,10 @@ pub use collaboration_v3::*;
 #[path = "paper_review_v4.rs"]
 mod review_v4;
 pub use review_v4::*;
+
+#[path = "paper_rework_v1.rs"]
+mod rework_v1;
+pub use rework_v1::*;
 
 #[path = "paper_raid_v2/nakama_control_v2.rs"]
 mod nakama_control_v2;
@@ -75,6 +80,8 @@ pub(crate) struct PaperRaidMemory {
     revisions: HashMap<Uuid, PaperRevision>,
     consents: HashMap<Uuid, AuthorshipConsent>,
     pub(crate) submissions: HashMap<Uuid, JointPaperSubmission>,
+    pub(crate) reworks: HashMap<Uuid, PaperReworkRecordV1>,
+    pub(crate) rework_resubmissions: HashMap<Uuid, PaperReworkResubmissionV1>,
     pub(crate) research_session_authorization_sets:
         HashMap<(String, u64), ResearchSessionAuthorizationSetV1>,
     research_session_consumption_receipts:
@@ -129,6 +136,8 @@ impl PaperRaidMemory {
         json!({
             "papers": self.papers,
             "submissions": self.submissions,
+            "reworks": self.reworks,
+            "rework_resubmissions": self.rework_resubmissions,
             "authorization_sets": authorization_sets,
             "completions": completions,
             "evaluations": self.review.evaluations,
@@ -632,6 +641,12 @@ pub struct PaperProject {
     pub deadline_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grace_expires_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_rework_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_rework_cycle: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rework_expires_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub outcome: PaperChallengeOutcomeV1,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1027,6 +1042,9 @@ struct PaperRaidManifestResponse {
     source_artifact_bundle_contract_hash: &'static str,
     artifact_adapter_source_revision: &'static str,
     review_protocol: &'static str,
+    rework_protocol: &'static str,
+    rework_lease_seconds: u64,
+    rework_content_commitment_schema: &'static str,
     challenge_ruleset_protocol: &'static str,
     legacy_challenge_policy: &'static str,
     tolerance_policy_schema: &'static str,
@@ -1116,6 +1134,7 @@ pub(crate) fn router() -> Router<AppState> {
         .merge(nakama_control_v2::router())
         .merge(collaboration_v3::router())
         .merge(review_v4::router())
+        .merge(rework_v1::router())
 }
 
 async fn manifest(State(state): State<AppState>) -> Json<PaperRaidManifestResponse> {
@@ -1138,6 +1157,10 @@ async fn manifest(State(state): State<AppState>) -> Json<PaperRaidManifestRespon
         source_artifact_bundle_contract_hash: ARTIFACT_BUNDLE_ADAPTER_CONTRACT_HASH_V1,
         artifact_adapter_source_revision: ARTIFACT_BUNDLE_ADAPTER_SOURCE_REVISION,
         review_protocol: PAPER_REVIEW_PROTOCOL_V4,
+        rework_protocol: PAPER_REWORK_V1,
+        rework_lease_seconds: u64::try_from(rework_v1::PAPER_REWORK_LEASE_HOURS * 3_600)
+            .expect("positive fixed rework lease"),
+        rework_content_commitment_schema: "hepta.paper_raid.rework_content_commitment.v1",
         challenge_ruleset_protocol: crate::CHALLENGE_RULESET_V1,
         legacy_challenge_policy: "readable_conservative_gates_unranked_no_deadline",
         tolerance_policy_schema: TOLERANCE_POLICY_SCHEMA_V1,
@@ -4481,13 +4504,33 @@ pub(super) fn ensure_paper_gameplay_active(
             ),
         ));
     }
-    if paper
-        .grace_expires_at
-        .is_some_and(|grace_expires_at| now >= grace_expires_at)
+    let deadline = if paper.active_rework_id.is_some()
+        && paper.active_rework_cycle.is_some()
+        && paper.rework_expires_at.is_some()
     {
+        paper.rework_expires_at
+    } else if paper.active_rework_id.is_none()
+        && paper.active_rework_cycle.is_none()
+        && paper.rework_expires_at.is_none()
+    {
+        paper.grace_expires_at
+    } else {
+        return Err(ApiError::internal(
+            "Paper rework lease fields are incomplete",
+        ));
+    };
+    if deadline.is_some_and(|expires_at| now >= expires_at) {
         return Err(ApiError::conflict(
-            "paper_challenge_deadline_elapsed",
-            "paper challenge grace deadline elapsed; record the expired terminal outcome",
+            if paper.active_rework_id.is_some() {
+                "paper_rework_window_elapsed"
+            } else {
+                "paper_challenge_deadline_elapsed"
+            },
+            if paper.active_rework_id.is_some() {
+                "Paper rework lease elapsed; record the expired terminal outcome"
+            } else {
+                "paper challenge grace deadline elapsed; record the expired terminal outcome"
+            },
         ));
     }
     Ok(())
@@ -4599,6 +4642,9 @@ async fn create_paper(
             challenge_ruleset_snapshot_hash: Some(ruleset_snapshot_hash),
             deadline_at,
             grace_expires_at,
+            active_rework_id: None,
+            active_rework_cycle: None,
+            rework_expires_at: None,
             outcome: PaperChallengeOutcomeV1::InProgress,
             outcome_reason: None,
             terminal_at: None,
@@ -4679,6 +4725,9 @@ async fn create_paper(
         challenge_ruleset_snapshot_hash: Some(ruleset_snapshot_hash),
         deadline_at,
         grace_expires_at,
+        active_rework_id: None,
+        active_rework_cycle: None,
+        rework_expires_at: None,
         outcome: PaperChallengeOutcomeV1::InProgress,
         outcome_reason: None,
         terminal_at: None,
@@ -4819,30 +4868,47 @@ fn validate_requested_terminal_outcome(
             "paper challenge already has a terminal outcome",
         ));
     }
-    let grace_elapsed = paper
-        .grace_expires_at
-        .is_some_and(|grace_expires_at| now >= grace_expires_at);
+    let active_rework = paper.active_rework_id.is_some()
+        && paper.active_rework_cycle.is_some()
+        && paper.rework_expires_at.is_some();
+    let expiry_boundary = if active_rework {
+        paper.rework_expires_at
+    } else if paper.active_rework_id.is_none()
+        && paper.active_rework_cycle.is_none()
+        && paper.rework_expires_at.is_none()
+    {
+        paper.grace_expires_at
+    } else {
+        return Err(ApiError::internal(
+            "Paper rework lease fields are incomplete",
+        ));
+    };
+    let expiry_elapsed = expiry_boundary.is_some_and(|expires_at| now >= expires_at);
     match requested {
         PaperChallengeOutcomeV1::Failed | PaperChallengeOutcomeV1::Abandoned => {
-            if grace_elapsed {
+            if expiry_elapsed {
                 return Err(ApiError::conflict(
-                    "paper_challenge_deadline_elapsed",
-                    "an authoritative challenge at or after its grace deadline must record expired",
+                    if active_rework {
+                        "paper_rework_window_elapsed"
+                    } else {
+                        "paper_challenge_deadline_elapsed"
+                    },
+                    "an authoritative Paper at or after its active deadline must record expired",
                 ));
             }
             Ok(())
         }
         PaperChallengeOutcomeV1::Expired => {
-            if paper.grace_expires_at.is_none() {
+            if expiry_boundary.is_none() {
                 return Err(ApiError::conflict(
                     "legacy_challenge_has_no_deadline",
                     "legacy-unranked paper projects have no authoritative deadline to expire",
                 ));
             }
-            if !grace_elapsed {
+            if !expiry_elapsed {
                 return Err(ApiError::conflict(
                     "paper_challenge_not_expired",
-                    "expired outcome is only valid at or after the immutable grace deadline",
+                    "expired outcome is only valid at or after the immutable challenge or rework deadline",
                 ));
             }
             Ok(())
@@ -4922,7 +4988,13 @@ async fn transition_paper_outcome(
         paper.outcome = request.outcome;
         paper.outcome_reason = Some(request.reason_code.clone());
         paper.terminal_at = Some(now);
-        paper.version += 1;
+        paper.active_rework_id = None;
+        paper.active_rework_cycle = None;
+        paper.rework_expires_at = None;
+        paper.version = paper
+            .version
+            .checked_add(1)
+            .ok_or_else(|| ApiError::internal("paper version overflow"))?;
         paper.updated_at = now;
         let response = paper.clone();
         push_memory_event(
@@ -4999,13 +5071,21 @@ async fn transition_paper_outcome(
     paper.outcome = request.outcome;
     paper.outcome_reason = Some(request.reason_code.clone());
     paper.terminal_at = Some(now);
-    paper.version += 1;
+    paper.active_rework_id = None;
+    paper.active_rework_cycle = None;
+    paper.rework_expires_at = None;
+    paper.version = paper
+        .version
+        .checked_add(1)
+        .ok_or_else(|| ApiError::internal("paper version overflow"))?;
     paper.updated_at = now;
     let record_json = serde_json::to_value(&paper)
         .map_err(|error| ApiError::internal(format!("encode paper project: {error}")))?;
     let updated = sqlx::query(
         "update hepta_paper_projects
-         set outcome=$1,outcome_reason=$2,terminal_at=$3,version=$4,record_json=$5::jsonb,updated_at=$6
+         set outcome=$1,outcome_reason=$2,terminal_at=$3,
+             active_rework_id=null,active_rework_cycle=null,rework_expires_at=null,
+             version=$4,record_json=$5::jsonb,updated_at=$6
          where paper_project_id=$7 and version=$8",
     )
     .bind(paper.outcome.as_str())
@@ -8051,9 +8131,20 @@ async fn finalize_paper(
             paper_bundle: bundle,
             created_at: now,
         };
+        let rework_resubmission =
+            rework_v1::prepare_rework_resubmission_memory(&memory, &submission, now)?;
+        let rework_cycle = rework_resubmission
+            .as_ref()
+            .and_then(|record| memory.reworks.get(&record.rework_id))
+            .map(|record| record.rework_cycle);
         memory
             .submissions
             .insert(submission.submission_id, submission.clone());
+        if let Some(record) = &rework_resubmission {
+            memory
+                .rework_resubmissions
+                .insert(record.rework_id, record.clone());
+        }
         let paper_version = {
             let paper = memory.papers.get_mut(&paper_id).expect("paper exists");
             paper.phase = if integrity_hold {
@@ -8065,6 +8156,9 @@ async fn finalize_paper(
                 paper.outcome = PaperChallengeOutcomeV1::SubmissionReady;
                 paper.outcome_reason = None;
                 paper.terminal_at = Some(now);
+                paper.active_rework_id = None;
+                paper.active_rework_cycle = None;
+                paper.rework_expires_at = None;
             }
             paper.version += 1;
             paper.updated_at = now;
@@ -8089,6 +8183,9 @@ async fn finalize_paper(
                 "release_candidate_hash": submission.release_candidate_hash,
                 "author_count": submission.paper_bundle.author_consents.len(),
                 "settlement_state": if integrity_hold { "integrity_hold" } else { "pending_finality" },
+                "rework_id": rework_resubmission.as_ref().map(|record| record.rework_id),
+                "rework_cycle": rework_cycle,
+                "replacement_review_round": rework_resubmission.as_ref().map(|record| record.replacement_review_round),
             }),
         )?;
         memory_remember(
@@ -8252,6 +8349,8 @@ async fn finalize_paper(
         paper_bundle: bundle,
         created_at: now,
     };
+    let rework_resubmission =
+        rework_v1::prepare_rework_resubmission_postgres(&mut tx, &submission, now).await?;
     let submission_json = serde_json::to_value(&submission)
         .map_err(|error| ApiError::internal(format!("encode joint submission: {error}")))?;
     let result = sqlx::query(
@@ -8282,6 +8381,9 @@ async fn finalize_paper(
         }
         return Err(ApiError::database(error));
     }
+    if let Some(record) = &rework_resubmission {
+        rework_v1::insert_rework_resubmission_postgres(&mut tx, record).await?;
+    }
     paper.phase = if integrity_hold {
         PaperPhase::IntegrityHold
     } else {
@@ -8291,6 +8393,9 @@ async fn finalize_paper(
         paper.outcome = PaperChallengeOutcomeV1::SubmissionReady;
         paper.outcome_reason = None;
         paper.terminal_at = Some(now);
+        paper.active_rework_id = None;
+        paper.active_rework_cycle = None;
+        paper.rework_expires_at = None;
     }
     paper.version += 1;
     paper.updated_at = now;
@@ -8299,13 +8404,17 @@ async fn finalize_paper(
     let updated = sqlx::query(
         "update hepta_paper_projects
          set phase = $1, outcome = $2, outcome_reason = $3, terminal_at = $4,
-             version = $5, record_json = $6::jsonb, updated_at = $7
-         where paper_project_id = $8 and version = $9",
+             active_rework_id = $5, active_rework_cycle = $6, rework_expires_at = $7,
+             version = $8, record_json = $9::jsonb, updated_at = $10
+         where paper_project_id = $11 and version = $12",
     )
     .bind(paper.phase.as_str())
     .bind(paper.outcome.as_str())
     .bind(&paper.outcome_reason)
     .bind(paper.terminal_at)
+    .bind(paper.active_rework_id)
+    .bind(paper.active_rework_cycle.map(|cycle| cycle as i64))
+    .bind(paper.rework_expires_at)
     .bind(paper.version as i64)
     .bind(paper_json)
     .bind(paper.updated_at)
@@ -8339,6 +8448,8 @@ async fn finalize_paper(
             "release_candidate_hash": submission.release_candidate_hash,
             "author_count": submission.paper_bundle.author_consents.len(),
             "settlement_state": if integrity_hold { "integrity_hold" } else { "pending_finality" },
+            "rework_id": rework_resubmission.as_ref().map(|record| record.rework_id),
+            "replacement_review_round": rework_resubmission.as_ref().map(|record| record.replacement_review_round),
         }),
     )
     .await?;
@@ -8505,14 +8616,22 @@ fn build_research_session_authorization_set(
     let ttl_seconds = ttl_seconds.unwrap_or(300).clamp(60, 900);
     let issued_at = Utc::now();
     let requested_expires_at = issued_at + chrono::Duration::seconds(ttl_seconds as i64);
-    let expires_at = paper
-        .grace_expires_at
-        .map(|grace_expires_at| requested_expires_at.min(grace_expires_at))
+    let active_deadline = if paper.active_rework_id.is_some() {
+        paper.rework_expires_at
+    } else {
+        paper.grace_expires_at
+    };
+    let expires_at = active_deadline
+        .map(|active_deadline| requested_expires_at.min(active_deadline))
         .unwrap_or(requested_expires_at);
     if expires_at <= issued_at {
         return Err(ApiError::conflict(
-            "paper_challenge_deadline_elapsed",
-            "research session authorization cannot extend beyond the challenge grace deadline",
+            if paper.active_rework_id.is_some() {
+                "paper_rework_window_elapsed"
+            } else {
+                "paper_challenge_deadline_elapsed"
+            },
+            "research session authorization cannot extend beyond the active Paper deadline",
         ));
     }
     let mut roster_entries = Vec::with_capacity(team.members.len());

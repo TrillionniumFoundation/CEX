@@ -19,6 +19,18 @@ use trnm_finality_verifier::{
     verify_cometbft_apphash_finality_receipt_v2_with_trust_anchor, ReceiptV2VerificationOutcome,
     ValidatedCometBftTrustAnchorV1, VerifiedCometBftDomainCommandV2, VerifiedCometBftReceiptV2,
 };
+use trnm_protocol::paper_raid_finality_applied_command_key_v4;
+use trnm_research_protocol::{
+    AuthorityRole as TrnmAuthorityRoleV4, CanonicalCbor, ExternalKey as TrnmExternalKeyV4,
+    ObjectRefV1 as TrnmObjectRefV4, PaperRaidAppealStatusV3 as TrnmAppealStatusV4,
+    PaperRaidFinalityCommitmentV4, PaperRaidReworkLineageV1,
+    ResearchObjectKind as TrnmResearchObjectKindV4, SignedPaperRaidFinalityCommandV4,
+    HEPTA_APPEAL_EXTERNAL_KEY_NAMESPACE_V1, HEPTA_EVALUATION_EXTERNAL_KEY_NAMESPACE_V1,
+    HEPTA_PAPER_EXTERNAL_KEY_NAMESPACE_V1,
+    HEPTA_PAPER_RAID_FINALITY_PREPARATION_EXTERNAL_KEY_NAMESPACE_V1,
+    HEPTA_REPRODUCTION_EXTERNAL_KEY_NAMESPACE_V1, HEPTA_REVISION_EXTERNAL_KEY_NAMESPACE_V1,
+    HEPTA_REWORK_EXTERNAL_KEY_NAMESPACE_V1, HEPTA_SUBMISSION_EXTERNAL_KEY_NAMESPACE_V1,
+};
 use uuid::Uuid;
 
 use crate::{
@@ -665,6 +677,43 @@ async fn ingest_verified_paper_chain_finality_memory(
     verified: VerifiedCometBftReceiptV2,
     verified_at: DateTime<Utc>,
 ) -> Result<(StatusCode, Json<PaperChainFinalityProjectionV2>), ApiError> {
+    if matches!(
+        &verified.domain_command,
+        VerifiedCometBftDomainCommandV2::PaperRaidFinalityV4(_)
+    ) {
+        return ingest_verified_paper_chain_finality_v4_memory(
+            state,
+            paper_id,
+            trust_anchor_hash,
+            canonical,
+            canonical_sha256,
+            verified,
+            verified_at,
+        )
+        .await;
+    }
+    ingest_verified_paper_chain_finality_legacy_memory(
+        state,
+        paper_id,
+        trust_anchor_hash,
+        canonical,
+        canonical_sha256,
+        verified,
+        verified_at,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn ingest_verified_paper_chain_finality_legacy_memory(
+    state: &AppState,
+    paper_id: Uuid,
+    trust_anchor_hash: String,
+    canonical: Bytes,
+    canonical_sha256: String,
+    verified: VerifiedCometBftReceiptV2,
+    verified_at: DateTime<Utc>,
+) -> Result<(StatusCode, Json<PaperChainFinalityProjectionV2>), ApiError> {
     let verified_domain_command = require_legacy_research_domain(&verified)?;
     // Paper writes take this same lock. Holding it across the command and new
     // projection updates prevents an Appeal/integrity transition from racing
@@ -720,6 +769,70 @@ async fn ingest_verified_paper_chain_finality_memory(
         verified_at,
     )?;
     command.status = TrnmProjectionStatus::VerifiedFinality;
+    push_event(
+        &mut league,
+        PAPER_CHAIN_VERIFIED_EVENT_V2,
+        paper_id.to_string(),
+        projection_event_payload(&projection),
+    );
+    finality
+        .inbox
+        .insert(verified.receipt_hash_hex.clone(), canonical_sha256.clone());
+    finality.receipts.insert(
+        verified.receipt_hash_hex.clone(),
+        MemoryReceipt {
+            canonical_sha256,
+            trust_anchor_hash,
+            canonical,
+            projection: projection.clone(),
+        },
+    );
+    finality.projections.insert(paper_id, projection.clone());
+    Ok((StatusCode::CREATED, Json(projection)))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn ingest_verified_paper_chain_finality_v4_memory(
+    state: &AppState,
+    paper_id: Uuid,
+    trust_anchor_hash: String,
+    canonical: Bytes,
+    canonical_sha256: String,
+    verified: VerifiedCometBftReceiptV2,
+    verified_at: DateTime<Utc>,
+) -> Result<(StatusCode, Json<PaperChainFinalityProjectionV2>), ApiError> {
+    let signed = require_paper_raid_finality_v4_domain(&verified)?;
+    // Preserve the global Paper -> league -> finality lock order. Although the
+    // preparation itself is immutable, holding the Paper guard proves that a
+    // local scientific transition cannot race the terminal projection.
+    let _paper_guard = state.paper_raid.write().await;
+    let mut league = state.inner.write().await;
+    let mut finality = state.paper_chain_finality.write().await;
+    let preparation = preparation_v2_memory_for_projection(&finality, paper_id)?;
+    validate_paper_raid_finality_v4_projection(paper_id, &preparation, signed, &verified)?;
+    if let Some(replay) = receipt_replay_memory(
+        &finality,
+        paper_id,
+        &verified.receipt_hash_hex,
+        &trust_anchor_hash,
+        &canonical,
+        &canonical_sha256,
+    )? {
+        return Ok((StatusCode::OK, Json(replay)));
+    }
+    if finality.projections.contains_key(&paper_id) {
+        return Err(ApiError::conflict(
+            "paper_chain_finality_conflict",
+            "Paper already has a different immutable Chain finality projection",
+        ));
+    }
+    let projection = build_projection_v4(
+        paper_id,
+        &preparation,
+        &verified,
+        &trust_anchor_hash,
+        verified_at,
+    )?;
     push_event(
         &mut league,
         PAPER_CHAIN_VERIFIED_EVENT_V2,
@@ -834,6 +947,45 @@ async fn ingest_verified_paper_chain_finality_postgres(
     verified: &VerifiedCometBftReceiptV2,
     verified_at: DateTime<Utc>,
 ) -> Result<(StatusCode, Json<PaperChainFinalityProjectionV2>), ApiError> {
+    if matches!(
+        &verified.domain_command,
+        VerifiedCometBftDomainCommandV2::PaperRaidFinalityV4(_)
+    ) {
+        return ingest_verified_paper_chain_finality_v4_postgres(
+            tx,
+            paper_id,
+            trust_anchor_hash,
+            canonical,
+            canonical_sha256,
+            verified,
+            verified_at,
+        )
+        .await;
+    }
+    ingest_verified_paper_chain_finality_legacy_postgres(
+        state,
+        tx,
+        paper_id,
+        trust_anchor_hash,
+        canonical,
+        canonical_sha256,
+        verified,
+        verified_at,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn ingest_verified_paper_chain_finality_legacy_postgres(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    paper_id: Uuid,
+    trust_anchor_hash: &str,
+    canonical: &[u8],
+    canonical_sha256: &str,
+    verified: &VerifiedCometBftReceiptV2,
+    verified_at: DateTime<Utc>,
+) -> Result<(StatusCode, Json<PaperChainFinalityProjectionV2>), ApiError> {
     let verified_domain_command = require_legacy_research_domain(verified)?;
 
     let state_row = sqlx::query(
@@ -894,6 +1046,140 @@ async fn ingest_verified_paper_chain_finality_postgres(
         verified_at,
     )?;
     command.status = TrnmProjectionStatus::VerifiedFinality;
+    push_event(
+        &mut league,
+        PAPER_CHAIN_VERIFIED_EVENT_V2,
+        paper_id.to_string(),
+        projection_event_payload(&projection),
+    );
+    let event = league
+        .events
+        .last()
+        .cloned()
+        .ok_or_else(|| ApiError::internal("Paper Chain finality event was not created"))?;
+    let state_json = serde_json::to_value(&league)
+        .map_err(|error| ApiError::internal(format!("encode Hepta state: {error}")))?;
+    sqlx::query(
+        "update hepta_league_state set revision=$1,state_json=$2::jsonb,updated_at=now()
+         where state_key='primary' and revision=$3",
+    )
+    .bind(revision + 1)
+    .bind(state_json)
+    .bind(revision)
+    .execute(&mut **tx)
+    .await
+    .map_err(ApiError::database)?;
+
+    let projection_json = serde_json::to_value(&projection).map_err(|error| {
+        ApiError::internal(format!("encode Paper Chain finality projection: {error}"))
+    })?;
+    sqlx::query(
+        "insert into hepta_paper_chain_finality_inbox (
+            receipt_hash,canonical_sha256,anchor_hash,paper_project_id,received_at
+         ) values ($1,$2,$3,$4,$5)",
+    )
+    .bind(&projection.receipt_hash)
+    .bind(canonical_sha256)
+    .bind(trust_anchor_hash)
+    .bind(paper_id)
+    .bind(projection.verified_at)
+    .execute(&mut **tx)
+    .await
+    .map_err(ApiError::database)?;
+    sqlx::query(
+        "insert into hepta_paper_chain_receipts (
+            receipt_hash,paper_project_id,local_command_id,command_idempotency_key,
+            command_fingerprint,paper_binding_fingerprint,anchor_hash,chain_id,
+            execution_height,commitment_height,comet_tx_hash,app_hash,
+            canonical_receipt,canonical_sha256,verified_at,record_json
+         ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb)",
+    )
+    .bind(&projection.receipt_hash)
+    .bind(paper_id)
+    .bind(projection.local_command_id)
+    .bind(&projection.command_idempotency_key)
+    .bind(&projection.command_fingerprint)
+    .bind(&projection.paper_binding_fingerprint)
+    .bind(trust_anchor_hash)
+    .bind(&projection.chain_id)
+    .bind(i64_from_u64(
+        projection.execution_height,
+        "execution_height",
+    )?)
+    .bind(i64_from_u64(
+        projection.commitment_height,
+        "commitment_height",
+    )?)
+    .bind(&projection.comet_tx_hash)
+    .bind(&projection.app_hash)
+    .bind(canonical)
+    .bind(canonical_sha256)
+    .bind(projection.verified_at)
+    .bind(&projection_json)
+    .execute(&mut **tx)
+    .await
+    .map_err(ApiError::database)?;
+    insert_finality_projection_postgres(tx, &projection, &projection_json).await?;
+    insert_outbox_event(tx, &event).await?;
+    Ok((StatusCode::CREATED, Json(projection)))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn ingest_verified_paper_chain_finality_v4_postgres(
+    tx: &mut Transaction<'_, Postgres>,
+    paper_id: Uuid,
+    trust_anchor_hash: &str,
+    canonical: &[u8],
+    canonical_sha256: &str,
+    verified: &VerifiedCometBftReceiptV2,
+    verified_at: DateTime<Utc>,
+) -> Result<(StatusCode, Json<PaperChainFinalityProjectionV2>), ApiError> {
+    let signed = require_paper_raid_finality_v4_domain(verified)?;
+    let preparation = load_preparation_v2_postgres_for_projection(tx, paper_id).await?;
+    validate_paper_raid_finality_v4_projection(paper_id, &preparation, signed, verified)?;
+    if let Some(replay) = receipt_replay_postgres(
+        tx,
+        paper_id,
+        &verified.receipt_hash_hex,
+        trust_anchor_hash,
+        canonical,
+        canonical_sha256,
+    )
+    .await?
+    {
+        return Ok((StatusCode::OK, Json(replay)));
+    }
+    if sqlx::query_scalar::<_, bool>(
+        "select exists(select 1 from hepta_paper_chain_finality_projections
+         where paper_project_id=$1)",
+    )
+    .bind(paper_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(ApiError::database)?
+    {
+        return Err(ApiError::conflict(
+            "paper_chain_finality_conflict",
+            "Paper already has a different immutable Chain finality projection",
+        ));
+    }
+    let projection = build_projection_v4(
+        paper_id,
+        &preparation,
+        verified,
+        trust_anchor_hash,
+        verified_at,
+    )?;
+
+    let state_row = sqlx::query(
+        "select revision,state_json from hepta_league_state
+         where state_key='primary' for update",
+    )
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(ApiError::database)?;
+    let revision: i64 = state_row.get("revision");
+    let mut league: crate::LeagueState = decode_record(state_row.get("state_json"), "Hepta state")?;
     push_event(
         &mut league,
         PAPER_CHAIN_VERIFIED_EVENT_V2,
@@ -1043,6 +1329,108 @@ async fn receipt_replay_postgres(
     )?))
 }
 
+async fn load_preparation_v2_postgres_for_projection(
+    tx: &mut Transaction<'_, Postgres>,
+    paper_id: Uuid,
+) -> Result<crate::paper_chain_finality_v2::PaperTrnmFinalityPreparationV2, ApiError> {
+    let row = sqlx::query(
+        "select preparation_id,paper_project_id,submission_id,evaluation_id,
+                latest_reproduction_id,arm_id,source_fingerprint,final_checkpoint_hash,
+                final_anchor_hash,final_chain_id,final_height,final_header_hash,
+                final_consensus_time_unix_ms,research_session_id,
+                research_session_roster_version,match_evidence_commitment_id,
+                appeal_status,appeal_id,appealed_evaluation_id,appeal_resolution_id,
+                commitment_id,binding_fingerprint,idempotency_key,request_hash,status,
+                scientific_finality,score_eligible,ranking_eligible,reward_eligible,
+                economic_eligible,record_json,created_at
+         from hepta_paper_chain_finality_preparations_v2
+         where paper_project_id=$1 for share",
+    )
+    .bind(paper_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(ApiError::database)?
+    .ok_or_else(|| {
+        ApiError::not_found(
+            "paper_trnm_v2_preparation_not_found",
+            "Paper has no immutable V2 finality preparation",
+        )
+    })?;
+    let stored_record_json: Value = row.get("record_json");
+    let preparation: crate::paper_chain_finality_v2::PaperTrnmFinalityPreparationV2 =
+        decode_record(stored_record_json.clone(), "Paper V2 finality preparation")?;
+    crate::paper_chain_finality_v2::validate_preparation_v2(&preparation)?;
+    let canonical_record_json = serde_json::to_value(&preparation).map_err(|error| {
+        ApiError::internal(format!(
+            "encode canonical Paper V2 finality preparation: {error}"
+        ))
+    })?;
+    if stored_record_json != canonical_record_json {
+        return Err(ApiError::internal(
+            "Paper V2 finality preparation record_json is not the exact canonical typed projection",
+        ));
+    }
+    let binding = &preparation.binding;
+    let final_height = u64_from_i64(row.get("final_height"), "final_height")?;
+    let final_time = u64_from_i64(
+        row.get("final_consensus_time_unix_ms"),
+        "final_consensus_time_unix_ms",
+    )?;
+    let roster_version = u64_from_i64(
+        row.get("research_session_roster_version"),
+        "research_session_roster_version",
+    )?;
+    let appeal_status = match binding.appeal_status {
+        crate::paper_chain_finality_v2::PaperTrnmAppealStatusV2::ClosedNoAppeal => {
+            "closed_no_appeal"
+        }
+        crate::paper_chain_finality_v2::PaperTrnmAppealStatusV2::ResolvedDenied => {
+            "resolved_denied"
+        }
+        crate::paper_chain_finality_v2::PaperTrnmAppealStatusV2::ResolvedUpheld => {
+            "resolved_upheld"
+        }
+    };
+    let columns_match = row.get::<Uuid, _>("preparation_id") == preparation.preparation_id
+        && row.get::<Uuid, _>("paper_project_id") == binding.paper_project_id
+        && row.get::<Uuid, _>("submission_id") == binding.submission_id
+        && row.get::<Uuid, _>("evaluation_id") == binding.evaluation_id
+        && row.get::<Uuid, _>("latest_reproduction_id") == binding.latest_reproduction_id
+        && row.get::<Uuid, _>("arm_id") == binding.window_arm_id
+        && row.get::<String, _>("source_fingerprint") == binding.source_fingerprint
+        && row.get::<String, _>("final_checkpoint_hash") == binding.final_checkpoint_hash
+        && row.get::<String, _>("final_anchor_hash") == binding.final_checkpoint_anchor_hash
+        && row.get::<String, _>("final_chain_id") == binding.final_checkpoint_chain_id
+        && final_height == binding.final_checkpoint_height
+        && row.get::<String, _>("final_header_hash") == binding.final_checkpoint_header_hash
+        && final_time == binding.final_checkpoint_consensus_time_unix_ms
+        && row.get::<String, _>("research_session_id") == binding.research_session_id
+        && roster_version == binding.research_session_roster_version
+        && row.get::<String, _>("match_evidence_commitment_id")
+            == binding.match_evidence_commitment_id
+        && row.get::<String, _>("appeal_status") == appeal_status
+        && row.get::<Option<Uuid>, _>("appeal_id") == binding.appeal_id
+        && row.get::<Option<Uuid>, _>("appealed_evaluation_id") == binding.appealed_evaluation_id
+        && row.get::<Option<Uuid>, _>("appeal_resolution_id") == binding.appeal_resolution_id
+        && row.get::<String, _>("commitment_id") == binding.commitment_id
+        && row.get::<String, _>("binding_fingerprint") == preparation.binding_fingerprint
+        && row.get::<String, _>("idempotency_key") == preparation.idempotency_key
+        && row.get::<String, _>("request_hash") == preparation.request_hash
+        && row.get::<String, _>("status") == "awaiting_chain_verifier_upgrade"
+        && row.get::<bool, _>("scientific_finality") == binding.scientific_finality
+        && row.get::<bool, _>("score_eligible") == binding.score_eligible
+        && row.get::<bool, _>("ranking_eligible") == binding.ranking_eligible
+        && row.get::<bool, _>("reward_eligible") == binding.reward_eligible
+        && row.get::<bool, _>("economic_eligible") == binding.economic_eligible
+        && row.get::<DateTime<Utc>, _>("created_at") == preparation.created_at;
+    if !columns_match {
+        return Err(ApiError::internal(
+            "Paper V2 finality preparation canonical columns differ from immutable record_json",
+        ));
+    }
+    Ok(preparation)
+}
+
 fn verify_receipt(
     receipt: &CometBftAppHashFinalityReceiptV2,
     anchor_canonical: &[u8],
@@ -1095,11 +1483,331 @@ fn require_legacy_research_domain(
     match &verified.domain_command {
         VerifiedCometBftDomainCommandV2::ResearchV1(command) => Ok(command.as_ref()),
         VerifiedCometBftDomainCommandV2::PaperRaidFinalityV2(_)
-        | VerifiedCometBftDomainCommandV2::PaperRaidFinalityV3(_) => Err(ApiError::conflict(
+        | VerifiedCometBftDomainCommandV2::PaperRaidFinalityV3(_)
+        | VerifiedCometBftDomainCommandV2::PaperRaidFinalityV4(_) => Err(ApiError::conflict(
             "trnm_receipt_domain_lane_mismatch",
             "typed Paper Raid finality commands cannot enter the legacy Paper finality V1 lane",
         )),
     }
+}
+
+fn require_paper_raid_finality_v4_domain(
+    verified: &VerifiedCometBftReceiptV2,
+) -> Result<&SignedPaperRaidFinalityCommandV4, ApiError> {
+    match &verified.domain_command {
+        VerifiedCometBftDomainCommandV2::PaperRaidFinalityV4(command) => Ok(command.as_ref()),
+        VerifiedCometBftDomainCommandV2::ResearchV1(_)
+        | VerifiedCometBftDomainCommandV2::PaperRaidFinalityV2(_)
+        | VerifiedCometBftDomainCommandV2::PaperRaidFinalityV3(_) => Err(ApiError::conflict(
+            "trnm_receipt_domain_lane_mismatch",
+            "only a Paper Raid V4 finality command can consume an immutable V2 preparation",
+        )),
+    }
+}
+
+fn preparation_v2_memory_for_projection(
+    memory: &PaperChainFinalityMemory,
+    paper_id: Uuid,
+) -> Result<crate::paper_chain_finality_v2::PaperTrnmFinalityPreparationV2, ApiError> {
+    let preparation = memory
+        .preparations_v2
+        .by_paper_id
+        .get(&paper_id)
+        .cloned()
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "paper_trnm_v2_preparation_not_found",
+                "Paper has no immutable V2 finality preparation",
+            )
+        })?;
+    crate::paper_chain_finality_v2::validate_preparation_v2(&preparation)?;
+    if memory
+        .preparations_v2
+        .by_commitment_id
+        .get(&preparation.binding.commitment_id)
+        != Some(&preparation)
+        || memory
+            .preparations_v2
+            .by_idempotency_key
+            .get(&preparation.idempotency_key)
+            != Some(&preparation)
+    {
+        return Err(ApiError::internal(
+            "Paper V2 finality preparation indexes are internally inconsistent",
+        ));
+    }
+    Ok(preparation)
+}
+
+fn validate_paper_raid_finality_v4_projection(
+    paper_id: Uuid,
+    preparation: &crate::paper_chain_finality_v2::PaperTrnmFinalityPreparationV2,
+    signed: &SignedPaperRaidFinalityCommandV4,
+    verified: &VerifiedCometBftReceiptV2,
+) -> Result<(), ApiError> {
+    crate::paper_chain_finality_v2::validate_preparation_v2(preparation)?;
+    if preparation.binding.paper_project_id != paper_id {
+        return Err(ApiError::conflict(
+            "paper_trnm_v2_preparation_cross_paper",
+            "immutable V2 preparation belongs to a different Paper",
+        ));
+    }
+    let expected_command_id = hepta_uuid_external_key_v4(
+        "preparation_id",
+        HEPTA_PAPER_RAID_FINALITY_PREPARATION_EXTERNAL_KEY_NAMESPACE_V1,
+        preparation.preparation_id,
+    )?;
+    let expected_commitment = expected_paper_raid_finality_v4(preparation)?;
+    let expected_command_fingerprint = lowercase_hex_v4(&signed.command_fingerprint());
+    let expected_signed_cbor = lowercase_hex_v4(&signed.canonical_bytes());
+    let expected_domain_payload_hash = lowercase_hex_v4(&signed.payload_hash());
+    let expected_applied_key = paper_raid_finality_applied_command_key_v4(expected_command_id)
+        .map_err(|error| {
+            ApiError::internal(format!("derive Paper Raid V4 applied-command key: {error}"))
+        })?;
+    if signed.signer_role != TrnmAuthorityRoleV4::HeptaAuthority
+        || signed.chain_id != preparation.binding.final_checkpoint_chain_id
+        || verified.chain_id != preparation.binding.final_checkpoint_chain_id
+        || signed.command_id != expected_command_id
+        || verified.command_id != expected_command_id.to_hex()
+        || signed.commitment != expected_commitment
+        || verified.command_fingerprint_hex != expected_command_fingerprint
+        || verified.signed_command_cbor_hex != expected_signed_cbor
+        || verified.domain_payload_hash_hex != expected_domain_payload_hash
+        || verified.applied_command_object_key_hex != expected_applied_key
+        || verified.execution_height <= preparation.binding.final_checkpoint_height
+        || signed.commitment.score_eligible
+        || signed.commitment.ranking_eligible
+        || signed.commitment.reward_eligible
+        || signed.commitment.economic_eligible
+    {
+        return Err(ApiError::conflict(
+            "paper_trnm_v4_projection_mismatch",
+            "verified Paper Raid V4 command does not exactly consume the immutable local preparation",
+        ));
+    }
+    Ok(())
+}
+
+fn expected_paper_raid_finality_v4(
+    preparation: &crate::paper_chain_finality_v2::PaperTrnmFinalityPreparationV2,
+) -> Result<PaperRaidFinalityCommitmentV4, ApiError> {
+    use crate::paper_chain_finality_v2::PaperTrnmAppealStatusV2;
+
+    let binding = &preparation.binding;
+    let rework_lineage = binding
+        .rework_lineage
+        .as_ref()
+        .map(|lineage| {
+            Ok(PaperRaidReworkLineageV1 {
+                rework_id: hepta_uuid_external_key_v4(
+                    "rework_id",
+                    HEPTA_REWORK_EXTERNAL_KEY_NAMESPACE_V1,
+                    lineage.rework_id,
+                )?,
+                rework_cycle: lineage.rework_cycle,
+                rejected_submission_id: hepta_uuid_external_key_v4(
+                    "rejected_submission_id",
+                    HEPTA_SUBMISSION_EXTERNAL_KEY_NAMESPACE_V1,
+                    lineage.rejected_submission_id,
+                )?,
+                replacement_submission_id: hepta_uuid_external_key_v4(
+                    "replacement_submission_id",
+                    HEPTA_SUBMISSION_EXTERNAL_KEY_NAMESPACE_V1,
+                    lineage.replacement_submission_id,
+                )?,
+                rejected_revision_id: hepta_uuid_external_key_v4(
+                    "rejected_revision_id",
+                    HEPTA_REVISION_EXTERNAL_KEY_NAMESPACE_V1,
+                    lineage.rejected_revision_id,
+                )?,
+                replacement_revision_id: hepta_uuid_external_key_v4(
+                    "replacement_revision_id",
+                    HEPTA_REVISION_EXTERNAL_KEY_NAMESPACE_V1,
+                    lineage.replacement_revision_id,
+                )?,
+                rejected_release_candidate_hash: digest32_v4(
+                    "rejected_release_candidate_hash",
+                    &lineage.rejected_release_candidate_hash,
+                )?,
+                replacement_release_candidate_hash: digest32_v4(
+                    "replacement_release_candidate_hash",
+                    &lineage.replacement_release_candidate_hash,
+                )?,
+                rejected_paper_bundle_hash: digest32_v4(
+                    "rejected_paper_bundle_hash",
+                    &lineage.rejected_paper_bundle_hash,
+                )?,
+                replacement_paper_bundle_hash: digest32_v4(
+                    "replacement_paper_bundle_hash",
+                    &lineage.replacement_paper_bundle_hash,
+                )?,
+                rejected_rework_content_commitment_sha256: digest32_v4(
+                    "rejected_rework_content_commitment_sha256",
+                    &lineage.rejected_rework_content_commitment_sha256,
+                )?,
+                replacement_rework_content_commitment_sha256: digest32_v4(
+                    "replacement_rework_content_commitment_sha256",
+                    &lineage.replacement_rework_content_commitment_sha256,
+                )?,
+            })
+        })
+        .transpose()?;
+    let commitment = PaperRaidFinalityCommitmentV4 {
+        commitment_id: TrnmExternalKeyV4::from_bytes(digest32_v4(
+            "commitment_id",
+            &binding.commitment_id,
+        )?),
+        paper_project_id: hepta_uuid_external_key_v4(
+            "paper_project_id",
+            HEPTA_PAPER_EXTERNAL_KEY_NAMESPACE_V1,
+            binding.paper_project_id,
+        )?,
+        submission_id: hepta_uuid_external_key_v4(
+            "submission_id",
+            HEPTA_SUBMISSION_EXTERNAL_KEY_NAMESPACE_V1,
+            binding.submission_id,
+        )?,
+        match_evidence_ref: TrnmObjectRefV4::new(
+            TrnmResearchObjectKindV4::MatchEvidence,
+            TrnmExternalKeyV4::from_bytes(digest32_v4(
+                "match_evidence_commitment_id",
+                &binding.match_evidence_commitment_id,
+            )?),
+            binding.match_evidence_object_version,
+        ),
+        release_candidate_hash: digest32_v4(
+            "release_candidate_hash",
+            &binding.release_candidate_hash,
+        )?,
+        paper_bundle_hash: digest32_v4("paper_bundle_hash", &binding.paper_bundle_hash)?,
+        submission_commitment_hash: digest32_v4(
+            "submission_commitment_hash",
+            &binding.submission_commitment_hash,
+        )?,
+        author_consent_set_hash: digest32_v4(
+            "author_consent_set_hash",
+            &binding.author_consent_set_hash,
+        )?,
+        tolerance_policy_hash: digest32_v4(
+            "tolerance_policy_hash",
+            &binding.tolerance_policy_hash,
+        )?,
+        evaluation_id: hepta_uuid_external_key_v4(
+            "evaluation_id",
+            HEPTA_EVALUATION_EXTERNAL_KEY_NAMESPACE_V1,
+            binding.evaluation_id,
+        )?,
+        evaluation_hash: digest32_v4("evaluation_signing_hash", &binding.evaluation_signing_hash)?,
+        evaluation_score_bps: binding.evaluation_score_bps,
+        evaluation_accepted: binding.evaluation_accepted,
+        evaluation_completed_at_unix_s: binding.evaluation_completed_at_unix_s,
+        latest_reproduction_id: hepta_uuid_external_key_v4(
+            "latest_reproduction_id",
+            HEPTA_REPRODUCTION_EXTERNAL_KEY_NAMESPACE_V1,
+            binding.latest_reproduction_id,
+        )?,
+        latest_reproduction_hash: digest32_v4(
+            "latest_reproduction_report_hash",
+            &binding.latest_reproduction_report_hash,
+        )?,
+        latest_reproduction_accepted: binding.latest_reproduction_accepted,
+        latest_reproduction_completed_at_unix_s: binding.latest_reproduction_completed_at_unix_s,
+        evaluation_supersedes: optional_hepta_uuid_external_key_v4(
+            "evaluation_supersedes_evaluation_id",
+            HEPTA_EVALUATION_EXTERNAL_KEY_NAMESPACE_V1,
+            binding.evaluation_supersedes_evaluation_id,
+        )?,
+        evaluation_superseded_by: optional_hepta_uuid_external_key_v4(
+            "evaluation_superseded_by_evaluation_id",
+            HEPTA_EVALUATION_EXTERNAL_KEY_NAMESPACE_V1,
+            binding.evaluation_superseded_by_evaluation_id,
+        )?,
+        reproduction_superseded_by: optional_hepta_uuid_external_key_v4(
+            "reproduction_superseded_by_reproduction_id",
+            HEPTA_REPRODUCTION_EXTERNAL_KEY_NAMESPACE_V1,
+            binding.reproduction_superseded_by_reproduction_id,
+        )?,
+        appeal_status: match binding.appeal_status {
+            PaperTrnmAppealStatusV2::ClosedNoAppeal => TrnmAppealStatusV4::ClosedNoAppeal,
+            PaperTrnmAppealStatusV2::ResolvedDenied => TrnmAppealStatusV4::ResolvedDenied,
+            PaperTrnmAppealStatusV2::ResolvedUpheld => TrnmAppealStatusV4::ResolvedUpheld,
+        },
+        appeal_id: optional_hepta_uuid_external_key_v4(
+            "appeal_id",
+            HEPTA_APPEAL_EXTERNAL_KEY_NAMESPACE_V1,
+            binding.appeal_id,
+        )?,
+        appealed_evaluation_id: optional_hepta_uuid_external_key_v4(
+            "appealed_evaluation_id",
+            HEPTA_EVALUATION_EXTERNAL_KEY_NAMESPACE_V1,
+            binding.appealed_evaluation_id,
+        )?,
+        appeal_resolution_hash: binding
+            .appeal_resolution_hash
+            .as_ref()
+            .map(|value| digest32_v4("appeal_resolution_hash", value))
+            .transpose()?,
+        appeal_window_closes_at_unix_s: binding.appeal_window_closes_at_unix_s,
+        settlement_policy_hash: digest32_v4(
+            "settlement_policy_hash",
+            &binding.settlement_policy_hash,
+        )?,
+        scientific_finality: binding.scientific_finality,
+        score_eligible: binding.score_eligible,
+        ranking_eligible: binding.ranking_eligible,
+        reward_eligible: binding.reward_eligible,
+        economic_eligible: binding.economic_eligible,
+        finalized_at_unix_s: binding.finalized_at_unix_s,
+        rework_lineage,
+    };
+    commitment.validate().map_err(|error| {
+        ApiError::internal(format!(
+            "immutable Hepta preparation cannot project to valid Paper Raid V4: {error}"
+        ))
+    })?;
+    Ok(commitment)
+}
+
+fn digest32_v4(field: &'static str, value: &str) -> Result<[u8; 32], ApiError> {
+    let digest = crate::decode_digest(value)
+        .map_err(|message| ApiError::internal(format!("decode {field}: {message}")))?;
+    if digest == [0; 32] {
+        return Err(ApiError::internal(format!("{field} is the zero digest")));
+    }
+    Ok(digest)
+}
+
+fn hepta_uuid_external_key_v4(
+    field: &'static str,
+    namespace: &str,
+    value: Uuid,
+) -> Result<TrnmExternalKeyV4, ApiError> {
+    if value.is_nil() {
+        return Err(ApiError::internal(format!("{field} is the nil UUID")));
+    }
+    TrnmExternalKeyV4::from_uuid(namespace, &value.to_string())
+        .map_err(|error| ApiError::internal(format!("derive {field} ExternalKey: {error}")))
+}
+
+fn optional_hepta_uuid_external_key_v4(
+    field: &'static str,
+    namespace: &str,
+    value: Option<Uuid>,
+) -> Result<Option<TrnmExternalKeyV4>, ApiError> {
+    value
+        .map(|value| hepta_uuid_external_key_v4(field, namespace, value))
+        .transpose()
+}
+
+fn lowercase_hex_v4(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
 }
 
 fn validate_verified_domain_command(
@@ -1801,6 +2509,55 @@ fn build_projection(
     })
 }
 
+fn build_projection_v4(
+    paper_id: Uuid,
+    preparation: &crate::paper_chain_finality_v2::PaperTrnmFinalityPreparationV2,
+    verified: &VerifiedCometBftReceiptV2,
+    trust_anchor_hash: &str,
+    verified_at: DateTime<Utc>,
+) -> Result<PaperChainFinalityProjectionV2, ApiError> {
+    validate_paper_raid_finality_v4_projection(
+        paper_id,
+        preparation,
+        require_paper_raid_finality_v4_domain(verified)?,
+        verified,
+    )?;
+    let binding = &preparation.binding;
+    Ok(PaperChainFinalityProjectionV2 {
+        schema: PAPER_CHAIN_FINALITY_PROJECTION_SCHEMA_V2.to_string(),
+        paper_project_id: paper_id,
+        submission_id: binding.submission_id,
+        evaluation_id: binding.evaluation_id,
+        reproduction_id: binding.latest_reproduction_id,
+        appeal_resolution_id: binding.appeal_resolution_id,
+        local_command_id: preparation.preparation_id,
+        // This projection field is the authenticated Chain command identity,
+        // not the local prepare endpoint's retry token.  Keeping those
+        // namespaces separate also prevents a caller-chosen preparation token
+        // from colliding with an existing legacy receipt row's global UNIQUE
+        // command identity.
+        command_idempotency_key: verified.command_id.clone(),
+        command_fingerprint: format!("sha256:{}", verified.command_fingerprint_hex),
+        paper_binding_fingerprint: preparation.binding_fingerprint.clone(),
+        receipt_hash: verified.receipt_hash_hex.clone(),
+        trust_anchor_hash: trust_anchor_hash.to_string(),
+        chain_id: verified.chain_id.clone(),
+        comet_tx_hash: verified.comet_tx_hash_hex.clone(),
+        transaction_index: verified.transaction_index,
+        execution_height: verified.execution_height,
+        commitment_height: verified.commitment_height,
+        commitment_header_hash: verified.commitment_header_hash_hex.clone(),
+        app_hash: verified.app_hash_hex.clone(),
+        status: PaperChainFinalityStatusV1::VerifiedFinality,
+        ranking_eligible: false,
+        reward_eligible: false,
+        score_eligible: false,
+        economic_eligible: false,
+        version: 2,
+        verified_at,
+    })
+}
+
 fn projection_event_payload(projection: &PaperChainFinalityProjectionV2) -> Value {
     json!({
         "paper_project_id": projection.paper_project_id,
@@ -1990,12 +2747,77 @@ mod tests {
     const RECEIPT_FILE: &[u8] = include_bytes!(
         "../../../vendor/trnm-finality-verifier/fixtures/cometbft-apphash-finality-receipt-v2.json"
     );
+    const PAPER_RAID_V4_PROJECTION_GOLDEN: &str = include_str!(
+        "../../../vendor/trnm-finality-verifier/fixtures/hepta-paper-raid-v4-projection-golden-v1.json"
+    );
     const ANCHOR_HASH: &str = "88b73fc902dd554c35b9a44ff582ec6d76e59085a2e4fdf14292183f4b3846d5";
     const VERIFICATION_TIME: u64 = 1_786_034_510;
 
     fn canonical_fixture_payload(file: &'static [u8]) -> &'static [u8] {
         file.strip_suffix(b"\n")
             .expect("repository JSON fixture must end in one transport newline")
+    }
+
+    #[test]
+    fn hepta_independently_consumes_chain_v4_projection_goldens() {
+        let fixture: Value =
+            serde_json::from_str(PAPER_RAID_V4_PROJECTION_GOLDEN).expect("V4 golden JSON");
+        assert_eq!(
+            fixture["schema"],
+            "trnm_hepta_paper_raid_v4_projection_golden_v1"
+        );
+        let cases = fixture["cases"].as_array().expect("V4 golden cases");
+        assert_eq!(cases.len(), 4);
+        assert_eq!(
+            cases
+                .iter()
+                .map(|case| case["name"].as_str().expect("case name"))
+                .collect::<Vec<_>>(),
+            ["original", "rework", "denied", "upheld"]
+        );
+        for case in cases {
+            let preparation: crate::paper_chain_finality_v2::PaperTrnmFinalityPreparationV2 =
+                serde_json::from_value(case["preparation"].clone())
+                    .expect("typed Hepta preparation");
+            crate::paper_chain_finality_v2::validate_preparation_v2(&preparation)
+                .expect("canonical preparation");
+            let expected = &case["expected"];
+            assert_eq!(
+                preparation.binding.commitment_id,
+                expected["binding_commitment_id"].as_str().unwrap()
+            );
+            assert_eq!(
+                preparation.binding_fingerprint,
+                expected["binding_fingerprint"].as_str().unwrap()
+            );
+            let command_id = hepta_uuid_external_key_v4(
+                "preparation_id",
+                HEPTA_PAPER_RAID_FINALITY_PREPARATION_EXTERNAL_KEY_NAMESPACE_V1,
+                preparation.preparation_id,
+            )
+            .expect("preparation command ID");
+            assert_eq!(
+                command_id.to_hex(),
+                expected["command_id_hex"].as_str().unwrap()
+            );
+            let commitment =
+                expected_paper_raid_finality_v4(&preparation).expect("local V4 projection");
+            let canonical = commitment.canonical_bytes();
+            assert_eq!(
+                lowercase_hex_v4(&canonical),
+                expected["v4_commitment_cbor_hex"].as_str().unwrap()
+            );
+            assert_eq!(
+                sha256_hex(&canonical),
+                expected["v4_commitment_cbor_sha256_hex"].as_str().unwrap()
+            );
+            assert_eq!(
+                lowercase_hex_v4(
+                    &commitment.canonical_hash("trnm-paper-raid-finality-commitment-v4")
+                ),
+                expected["domain_payload_hash_hex"].as_str().unwrap()
+            );
+        }
     }
 
     fn lower_hex(bytes: &[u8]) -> String {
@@ -2613,18 +3435,41 @@ mod tests {
     fn synthetic_verified_domain(
         domain_command: VerifiedCometBftDomainCommandV2,
     ) -> VerifiedCometBftReceiptV2 {
-        let (command_id, command_fingerprint_hex) = match &domain_command {
+        let (
+            command_id,
+            command_fingerprint_hex,
+            signed_command_cbor_hex,
+            domain_payload_hash_hex,
+            applied_command_object_key_hex,
+        ) = match &domain_command {
             VerifiedCometBftDomainCommandV2::ResearchV1(command) => (
                 command.command_id.to_hex(),
                 lower_hex(&command.command_fingerprint()),
+                lower_hex(&command.canonical_bytes()),
+                lower_hex(&command.payload_hash()),
+                "b3".repeat(32),
             ),
             VerifiedCometBftDomainCommandV2::PaperRaidFinalityV2(command) => (
                 command.command_id.to_hex(),
                 lower_hex(&command.command_fingerprint()),
+                lower_hex(&command.canonical_bytes()),
+                lower_hex(&command.payload_hash()),
+                "b3".repeat(32),
             ),
             VerifiedCometBftDomainCommandV2::PaperRaidFinalityV3(command) => (
                 command.command_id.to_hex(),
                 lower_hex(&command.command_fingerprint()),
+                lower_hex(&command.canonical_bytes()),
+                lower_hex(&command.payload_hash()),
+                "b3".repeat(32),
+            ),
+            VerifiedCometBftDomainCommandV2::PaperRaidFinalityV4(command) => (
+                command.command_id.to_hex(),
+                lower_hex(&command.command_fingerprint()),
+                lower_hex(&command.canonical_bytes()),
+                lower_hex(&command.payload_hash()),
+                paper_raid_finality_applied_command_key_v4(command.command_id)
+                    .expect("synthetic V4 applied-command key"),
             ),
         };
         VerifiedCometBftReceiptV2 {
@@ -2632,9 +3477,11 @@ mod tests {
             chain_id: "trnm-comet-spike".to_string(),
             command_id,
             command_fingerprint_hex,
+            signed_command_cbor_hex,
+            domain_payload_hash_hex,
             comet_tx_hash_hex: "b2".repeat(32),
             transaction_index: 0,
-            applied_command_object_key_hex: "b3".repeat(32),
+            applied_command_object_key_hex,
             execution_height: 7,
             commitment_height: 8,
             commitment_header_hash_hex: "b4".repeat(32),
@@ -2662,6 +3509,520 @@ mod tests {
             _ => panic!("unsupported synthetic Paper Raid domain version"),
         };
         synthetic_verified_domain(domain_command)
+    }
+
+    fn synthetic_verified_v4_for_preparation(
+        preparation: &crate::paper_chain_finality_v2::PaperTrnmFinalityPreparationV2,
+    ) -> VerifiedCometBftReceiptV2 {
+        let command_id = hepta_uuid_external_key_v4(
+            "preparation_id",
+            HEPTA_PAPER_RAID_FINALITY_PREPARATION_EXTERNAL_KEY_NAMESPACE_V1,
+            preparation.preparation_id,
+        )
+        .expect("V4 preparation command ID");
+        let commitment =
+            expected_paper_raid_finality_v4(preparation).expect("V4 preparation projection");
+        let signed = SignedPaperRaidFinalityCommandV4::sign(
+            preparation.binding.final_checkpoint_chain_id.clone(),
+            command_id,
+            "did:trnm:hepta-authority".to_string(),
+            1,
+            commitment,
+            &SigningKey::from_bytes(&[0x5a; 32]),
+        )
+        .expect("valid signed Paper Raid V4 command");
+        let mut verified = synthetic_verified_domain(
+            VerifiedCometBftDomainCommandV2::PaperRaidFinalityV4(Box::new(signed)),
+        );
+        verified.chain_id = preparation.binding.final_checkpoint_chain_id.clone();
+        verified.execution_height = preparation.binding.final_checkpoint_height + 1;
+        verified.commitment_height = verified.execution_height + 1;
+        verified
+    }
+
+    async fn insert_postgres_receipt_command_key_collision(
+        pool: &sqlx::PgPool,
+        preparation: &crate::paper_chain_finality_v2::PaperTrnmFinalityPreparationV2,
+        receipt_hash: &str,
+        command_idempotency_key: &str,
+    ) {
+        let canonical = format!("legacy-receipt-key-collision:{receipt_hash}");
+        let canonical_sha256 = format!("sha256:{}", sha256_hex(canonical.as_bytes()));
+        sqlx::query(
+            "insert into hepta_paper_chain_receipts (
+                receipt_hash,paper_project_id,local_command_id,command_idempotency_key,
+                command_fingerprint,paper_binding_fingerprint,anchor_hash,chain_id,
+                execution_height,commitment_height,comet_tx_hash,app_hash,
+                canonical_receipt,canonical_sha256,verified_at,record_json
+             ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb)",
+        )
+        .bind(receipt_hash)
+        .bind(preparation.binding.paper_project_id)
+        .bind(Uuid::new_v4())
+        .bind(command_idempotency_key)
+        .bind(format!("sha256:{}", "c3".repeat(32)))
+        .bind(&preparation.binding_fingerprint)
+        .bind(ANCHOR_HASH)
+        .bind(&preparation.binding.final_checkpoint_chain_id)
+        .bind(
+            i64_from_u64(
+                preparation.binding.final_checkpoint_height + 1,
+                "collision execution height",
+            )
+            .expect("collision execution height fits PostgreSQL"),
+        )
+        .bind(
+            i64_from_u64(
+                preparation.binding.final_checkpoint_height + 2,
+                "collision commitment height",
+            )
+            .expect("collision commitment height fits PostgreSQL"),
+        )
+        .bind("c4".repeat(32))
+        .bind("c5".repeat(32))
+        .bind(canonical.as_bytes())
+        .bind(canonical_sha256)
+        .bind(preparation.created_at)
+        .bind(json!({
+            "schema":"test.legacy_paper_chain_receipt_key_collision.v1",
+            "command_idempotency_key":command_idempotency_key,
+        }))
+        .execute(pool)
+        .await
+        .expect("seed isolated legacy receipt command-key collision");
+    }
+
+    #[tokio::test]
+    async fn v4_memory_projection_consumes_exact_preparation_without_legacy_queue() {
+        let state = fixed_state();
+        let preparation =
+            crate::paper_raid_v2::endpoint_tests::exercise_paper_chain_finality_v2_preparation(
+                state.clone(),
+            )
+            .await;
+        assert!(state.inner.read().await.trnm_commands.is_empty());
+        let verified = synthetic_verified_v4_for_preparation(&preparation);
+        let canonical = Bytes::from_static(b"canonical-v4-receipt");
+        let canonical_sha256 = format!("sha256:{}", sha256_hex(&canonical));
+        let (status, Json(projection)) = ingest_verified_paper_chain_finality_memory(
+            &state,
+            preparation.binding.paper_project_id,
+            ANCHOR_HASH.to_string(),
+            canonical.clone(),
+            canonical_sha256.clone(),
+            verified.clone(),
+            Utc::now(),
+        )
+        .await
+        .expect("exact V4 preparation projection");
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(projection.local_command_id, preparation.preparation_id);
+        assert_eq!(projection.command_idempotency_key, verified.command_id);
+        assert_ne!(
+            projection.command_idempotency_key,
+            preparation.idempotency_key
+        );
+        assert_eq!(
+            projection.paper_binding_fingerprint,
+            preparation.binding_fingerprint
+        );
+        assert_eq!(
+            projection.command_fingerprint,
+            format!("sha256:{}", verified.command_fingerprint_hex)
+        );
+        assert_eq!(
+            projection.status,
+            PaperChainFinalityStatusV1::VerifiedFinality
+        );
+        assert!(!projection.score_eligible);
+        assert!(!projection.ranking_eligible);
+        assert!(!projection.reward_eligible);
+        assert!(!projection.economic_eligible);
+        assert!(state.inner.read().await.trnm_commands.is_empty());
+
+        let (replay_status, Json(replay)) = ingest_verified_paper_chain_finality_memory(
+            &state,
+            preparation.binding.paper_project_id,
+            ANCHOR_HASH.to_string(),
+            canonical,
+            canonical_sha256,
+            verified.clone(),
+            projection.verified_at,
+        )
+        .await
+        .expect("exact V4 replay");
+        assert_eq!(replay_status, StatusCode::OK);
+        assert_eq!(replay, projection);
+
+        let mut tampered = verified;
+        {
+            let VerifiedCometBftDomainCommandV2::PaperRaidFinalityV4(command) =
+                &mut tampered.domain_command
+            else {
+                panic!("synthetic V4 receipt changed lanes")
+            };
+            command.commitment.paper_bundle_hash[0] ^= 1;
+        }
+        let command = require_paper_raid_finality_v4_domain(&tampered)
+            .expect("synthetic V4 receipt changed lanes");
+        assert_eq!(
+            validate_paper_raid_finality_v4_projection(
+                preparation.binding.paper_project_id,
+                &preparation,
+                command,
+                &tampered,
+            )
+            .expect_err("one-byte commitment drift must fail")
+            .code,
+            "paper_trnm_v4_projection_mismatch"
+        );
+    }
+
+    #[tokio::test]
+    async fn postgres_v4_admission_is_exact_atomic_and_cross_lane_collision_safe() {
+        let Ok(database_url) = std::env::var("HEPTA_TEST_DATABASE_URL") else {
+            eprintln!("HEPTA_TEST_DATABASE_URL unset; Paper Raid V4 PostgreSQL test skipped");
+            return;
+        };
+        let mut lock = PgConnection::connect(&database_url)
+            .await
+            .expect("Paper Raid V4 PostgreSQL test lock");
+        sqlx::query("select pg_advisory_lock(hashtext('hepta-research-league-pg-tests'))")
+            .execute(&mut lock)
+            .await
+            .expect("serialize Hepta PostgreSQL tests");
+        let mut state = AppState::connect(&database_url, security())
+            .await
+            .expect("Paper Raid V4 PostgreSQL state");
+        crate::paper_raid_v2::endpoint_tests::reset_postgres(&database_url).await;
+        state.cometbft_local_verification_clock =
+            Arc::new(|| std::time::UNIX_EPOCH + Duration::from_secs(VERIFICATION_TIME));
+
+        let preparation =
+            crate::paper_raid_v2::endpoint_tests::exercise_paper_chain_finality_v2_preparation(
+                state.clone(),
+            )
+            .await;
+        let pool = state.pool.as_ref().expect("PostgreSQL pool");
+
+        let raw_preparation = sqlx::query(
+            "select preparation_id,paper_project_id,submission_id,evaluation_id,
+                    latest_reproduction_id,idempotency_key,binding_fingerprint,record_json
+             from hepta_paper_chain_finality_preparations_v2
+             where paper_project_id=$1",
+        )
+        .bind(preparation.binding.paper_project_id)
+        .fetch_one(pool)
+        .await
+        .expect("stored V2 preparation");
+        assert_eq!(
+            raw_preparation.get::<Value, _>("record_json"),
+            serde_json::to_value(&preparation).expect("canonical typed preparation JSON"),
+            "immutable raw JSONB must equal the typed preparation exactly"
+        );
+        assert_eq!(
+            raw_preparation.get::<Uuid, _>("preparation_id"),
+            preparation.preparation_id
+        );
+        assert_eq!(
+            raw_preparation.get::<Uuid, _>("paper_project_id"),
+            preparation.binding.paper_project_id
+        );
+        assert_eq!(
+            raw_preparation.get::<Uuid, _>("submission_id"),
+            preparation.binding.submission_id
+        );
+        assert_eq!(
+            raw_preparation.get::<Uuid, _>("evaluation_id"),
+            preparation.binding.evaluation_id
+        );
+        assert_eq!(
+            raw_preparation.get::<Uuid, _>("latest_reproduction_id"),
+            preparation.binding.latest_reproduction_id
+        );
+        assert_eq!(
+            raw_preparation.get::<String, _>("idempotency_key"),
+            preparation.idempotency_key
+        );
+        assert_eq!(
+            raw_preparation.get::<String, _>("binding_fingerprint"),
+            preparation.binding_fingerprint
+        );
+        let mut parity_tx = pool.begin().await.expect("preparation parity transaction");
+        assert_eq!(
+            load_preparation_v2_postgres_for_projection(
+                &mut parity_tx,
+                preparation.binding.paper_project_id,
+            )
+            .await
+            .expect("all canonical preparation columns match typed JSON"),
+            preparation
+        );
+        parity_tx
+            .rollback()
+            .await
+            .expect("close preparation parity transaction");
+
+        let verified = synthetic_verified_v4_for_preparation(&preparation);
+        assert_ne!(
+            verified.command_id, preparation.idempotency_key,
+            "authenticated V4 command identity must not reuse the prepare retry token"
+        );
+        let retry_token_collision_receipt = "c1".repeat(32);
+        insert_postgres_receipt_command_key_collision(
+            pool,
+            &preparation,
+            &retry_token_collision_receipt,
+            &preparation.idempotency_key,
+        )
+        .await;
+
+        let canonical = Bytes::from_static(b"canonical-v4-postgres-receipt");
+        let canonical_sha256 = format!("sha256:{}", sha256_hex(&canonical));
+        let forced_late_collision_receipt = "c2".repeat(32);
+        insert_postgres_receipt_command_key_collision(
+            pool,
+            &preparation,
+            &forced_late_collision_receipt,
+            &verified.command_id,
+        )
+        .await;
+        let before_late_conflict = paper_finality_side_effect_snapshot(&state).await;
+        let mut late_conflict_tx = pool.begin().await.expect("late-conflict transaction");
+        sqlx::query(
+            "select pg_advisory_xact_lock(
+                hashtext('hepta-paper-chain-finality-v1'), hashtext($1)
+             )",
+        )
+        .bind(preparation.binding.paper_project_id.to_string())
+        .execute(&mut *late_conflict_tx)
+        .await
+        .expect("serialize late-conflict Paper admission");
+        let late_conflict = ingest_verified_paper_chain_finality_postgres(
+            &state,
+            &mut late_conflict_tx,
+            preparation.binding.paper_project_id,
+            ANCHOR_HASH,
+            canonical.as_ref(),
+            &canonical_sha256,
+            &verified,
+            preparation.created_at,
+        )
+        .await
+        .expect_err("a duplicate global command key must fail at the receipt insert");
+        assert_eq!(late_conflict.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(late_conflict.code, "internal_error");
+        late_conflict_tx
+            .rollback()
+            .await
+            .expect("roll back deliberately forced late receipt conflict");
+        assert_eq!(
+            paper_finality_side_effect_snapshot(&state).await,
+            before_late_conflict,
+            "a late receipt insert conflict must roll back League revision, event, inbox, projection, and outbox atomically"
+        );
+        sqlx::query("delete from hepta_paper_chain_receipts where receipt_hash=$1")
+            .bind(&forced_late_collision_receipt)
+            .execute(pool)
+            .await
+            .expect("remove isolated forced late-conflict fixture");
+
+        let before_cross_paper = paper_finality_side_effect_snapshot(&state).await;
+        let cross_paper_id = Uuid::new_v4();
+        let mut cross_paper_tx = pool.begin().await.expect("cross-Paper transaction");
+        let cross_paper_error = ingest_verified_paper_chain_finality_postgres(
+            &state,
+            &mut cross_paper_tx,
+            cross_paper_id,
+            ANCHOR_HASH,
+            canonical.as_ref(),
+            &canonical_sha256,
+            &verified,
+            preparation.created_at,
+        )
+        .await
+        .expect_err("V4 receipt must not consume a preparation through another Paper");
+        assert_eq!(cross_paper_error.status, StatusCode::NOT_FOUND);
+        assert_eq!(
+            cross_paper_error.code,
+            "paper_trnm_v2_preparation_not_found"
+        );
+        cross_paper_tx
+            .rollback()
+            .await
+            .expect("close cross-Paper rejection transaction");
+        assert_eq!(
+            paper_finality_side_effect_snapshot(&state).await,
+            before_cross_paper,
+            "cross-Paper V4 rejection must leave every finality side-effect surface unchanged"
+        );
+
+        let mut tampered = verified.clone();
+        let VerifiedCometBftDomainCommandV2::PaperRaidFinalityV4(command) =
+            &mut tampered.domain_command
+        else {
+            panic!("synthetic V4 receipt changed lanes")
+        };
+        command.commitment.paper_bundle_hash[0] ^= 1;
+        let before_tamper = paper_finality_side_effect_snapshot(&state).await;
+        let mut tamper_tx = pool.begin().await.expect("tampered V4 transaction");
+        let tamper_error = ingest_verified_paper_chain_finality_postgres(
+            &state,
+            &mut tamper_tx,
+            preparation.binding.paper_project_id,
+            ANCHOR_HASH,
+            canonical.as_ref(),
+            &canonical_sha256,
+            &tampered,
+            preparation.created_at,
+        )
+        .await
+        .expect_err("one-byte V4 commitment tamper must fail closed");
+        assert_eq!(tamper_error.status, StatusCode::CONFLICT);
+        assert_eq!(tamper_error.code, "paper_trnm_v4_projection_mismatch");
+        tamper_tx
+            .rollback()
+            .await
+            .expect("close tampered V4 rejection transaction");
+        assert_eq!(
+            paper_finality_side_effect_snapshot(&state).await,
+            before_tamper,
+            "tampered V4 rejection must leave every finality side-effect surface unchanged"
+        );
+
+        let mut create_tx = pool.begin().await.expect("V4 create transaction");
+        sqlx::query(
+            "select pg_advisory_xact_lock(
+                hashtext('hepta-paper-chain-finality-v1'), hashtext($1)
+             )",
+        )
+        .bind(preparation.binding.paper_project_id.to_string())
+        .execute(&mut *create_tx)
+        .await
+        .expect("serialize V4 create");
+        let (create_status, Json(projection)) = ingest_verified_paper_chain_finality_postgres(
+            &state,
+            &mut create_tx,
+            preparation.binding.paper_project_id,
+            ANCHOR_HASH,
+            canonical.as_ref(),
+            &canonical_sha256,
+            &verified,
+            preparation.created_at,
+        )
+        .await
+        .expect("exact V4 PostgreSQL create");
+        assert_eq!(create_status, StatusCode::CREATED);
+        assert_eq!(projection.local_command_id, preparation.preparation_id);
+        assert_eq!(projection.command_idempotency_key, verified.command_id);
+        assert_ne!(
+            projection.command_idempotency_key,
+            preparation.idempotency_key
+        );
+        create_tx
+            .commit()
+            .await
+            .expect("commit exact V4 projection");
+
+        let stored = sqlx::query(
+            "select r.command_idempotency_key,r.record_json as receipt_json,
+                    p.record_json as projection_json,p.evaluation_id,p.reproduction_id,
+                    p.appeal_resolution_id,p.version
+             from hepta_paper_chain_receipts r
+             join hepta_paper_chain_finality_projections p
+               on p.receipt_hash=r.receipt_hash
+             where r.receipt_hash=$1",
+        )
+        .bind(&verified.receipt_hash_hex)
+        .fetch_one(pool)
+        .await
+        .expect("stored exact V4 receipt and projection");
+        assert_eq!(
+            stored.get::<String, _>("command_idempotency_key"),
+            verified.command_id
+        );
+        assert_eq!(
+            stored.get::<Value, _>("receipt_json"),
+            serde_json::to_value(&projection).expect("typed V4 receipt projection JSON")
+        );
+        assert_eq!(
+            stored.get::<Value, _>("projection_json"),
+            serde_json::to_value(&projection).expect("typed V4 consumer projection JSON")
+        );
+        assert_eq!(
+            stored.get::<Uuid, _>("evaluation_id"),
+            preparation.binding.evaluation_id
+        );
+        assert_eq!(
+            stored.get::<Uuid, _>("reproduction_id"),
+            preparation.binding.latest_reproduction_id
+        );
+        assert_eq!(
+            stored.get::<Option<Uuid>, _>("appeal_resolution_id"),
+            preparation.binding.appeal_resolution_id
+        );
+        assert_eq!(stored.get::<i64, _>("version"), 2);
+        let retry_token_collision_survived = sqlx::query_scalar::<_, bool>(
+            "select exists(
+                select 1 from hepta_paper_chain_receipts
+                where receipt_hash=$1 and command_idempotency_key=$2
+             )",
+        )
+        .bind(&retry_token_collision_receipt)
+        .bind(&preparation.idempotency_key)
+        .fetch_one(pool)
+        .await
+        .expect("query retry-token collision fixture");
+        assert!(
+            retry_token_collision_survived,
+            "an unrelated legacy receipt holding the prepare retry token must not wedge V4"
+        );
+        let consumer_guard = sqlx::query(
+            "select trigger_row.tgenabled::text as enabled,
+                    function_row.proname::text as function_name
+             from pg_trigger trigger_row
+             join pg_proc function_row on function_row.oid=trigger_row.tgfoid
+             where trigger_row.tgrelid='hepta_paper_chain_finality_projections'::regclass
+               and trigger_row.tgname='hepta_consumer_finality_v2_projection_guard'
+               and not trigger_row.tgisinternal",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("0048 consumer projection guard catalog entry");
+        assert_eq!(consumer_guard.get::<String, _>("enabled"), "O");
+        assert_eq!(
+            consumer_guard.get::<String, _>("function_name"),
+            "hepta_validate_consumer_finality_v2_projection"
+        );
+
+        let after_create = paper_finality_side_effect_snapshot(&state).await;
+        let mut replay_tx = pool.begin().await.expect("V4 replay transaction");
+        let (replay_status, Json(replayed)) = ingest_verified_paper_chain_finality_postgres(
+            &state,
+            &mut replay_tx,
+            preparation.binding.paper_project_id,
+            ANCHOR_HASH,
+            canonical.as_ref(),
+            &canonical_sha256,
+            &verified,
+            projection.verified_at,
+        )
+        .await
+        .expect("exact V4 PostgreSQL replay");
+        assert_eq!(replay_status, StatusCode::OK);
+        assert_eq!(replayed, projection);
+        replay_tx.commit().await.expect("commit no-op V4 replay");
+        assert_eq!(
+            paper_finality_side_effect_snapshot(&state).await,
+            after_create,
+            "an exact V4 replay must not mutate any reachable finality surface"
+        );
+
+        crate::paper_raid_v2::endpoint_tests::reset_postgres(&database_url).await;
+        sqlx::query("select pg_advisory_unlock(hashtext('hepta-research-league-pg-tests'))")
+            .execute(&mut lock)
+            .await
+            .expect("release Paper Raid V4 PostgreSQL lock");
     }
 
     async fn exercise_legacy_lane_ordering(state: AppState) {
@@ -3563,6 +4924,8 @@ mod tests {
                 .strip_prefix("sha256:")
                 .unwrap()
                 .to_string(),
+            signed_command_cbor_hex: lower_hex(&command.signed_command.canonical_bytes()),
+            domain_payload_hash_hex: lower_hex(&command.signed_command.payload_hash()),
             comet_tx_hash_hex: "bb".repeat(32),
             transaction_index: 0,
             applied_command_object_key_hex: "cc".repeat(32),

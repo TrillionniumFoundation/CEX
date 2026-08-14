@@ -8,12 +8,15 @@ authors.workspace = true
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
+chrono = { version = "=0.4.44", default-features = false, features = ["std"] }
 ed25519-dalek = "2"
 hex = "0.4"
 ics23 = "=0.12.0"
+libc = "0.2"
 prost = "0.13"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 tendermint = "0.40.4"
 tendermint-light-client-verifier = "0.40.4"
 tendermint-proto = "0.40.4"
@@ -22,5 +25,4 @@ trnm-protocol = { version = "0.1.0", path = "../trnm-protocol" }
 trnm-research-protocol = { version = "0.1.0", path = "../trnm-research-protocol" }
 
 [dev-dependencies]
-sha2 = "0.10"
 tendermint-testgen = "0.40.4"

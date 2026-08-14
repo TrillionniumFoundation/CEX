@@ -344,6 +344,11 @@ expected_copy_sources = {
     "migrations/0046_add_hepta_matchmaking_record_parity_v2.sql",
     "migrations/0047_add_hepta_contribution_ledger_authority.sql",
     "migrations/0048_add_hepta_consumer_finality_v2.sql",
+    "migrations/0049_add_hepta_challenge_pack_activation.sql",
+    "migrations/0050_add_hepta_paper_rework.sql",
+    "migrations/0051_bind_legacy_evaluation_panel_lifecycle.sql",
+    "migrations/0052_harden_hepta_paper_finality_v2_preparation_ingress.sql",
+    "migrations/0053_allow_review_ready_artifact_manifest_binding.sql",
     "docs/openapi/hepta-research-league-v1.yaml",
     "docs/openapi/hepta-paper-raid-v2.yaml",
 }
@@ -2108,6 +2113,11 @@ require_fragments(
         'include_str!("../../../migrations/0046_add_hepta_matchmaking_record_parity_v2.sql")',
         'include_str!("../../../migrations/0047_add_hepta_contribution_ledger_authority.sql")',
         'include_str!("../../../migrations/0048_add_hepta_consumer_finality_v2.sql")',
+        'include_str!("../../../migrations/0049_add_hepta_challenge_pack_activation.sql")',
+        'include_str!("../../../migrations/0050_add_hepta_paper_rework.sql")',
+        '"../../../migrations/0051_bind_legacy_evaluation_panel_lifecycle.sql"',
+        '"../../../migrations/0052_harden_hepta_paper_finality_v2_preparation_ingress.sql"',
+        '"../../../migrations/0053_allow_review_ready_artifact_manifest_binding.sql"',
         "verify_agent_proposal_v2_migration_catalog",
         "Agent proposal V2 record parity constraint is incomplete",
         "Agent proposal V2 managed constraint catalog must contain exactly 6 entries",
@@ -2116,6 +2126,21 @@ require_fragments(
         "WorkItem record parity constraint is incomplete",
         "verify_contribution_ledger_authority_catalog",
         "verify_consumer_finality_v2_catalog",
+        "challenge_pack_activation::verify_migration_catalog",
+        "paper_raid_v2::verify_rework_migration_catalog",
+        "paper_raid_v2::verify_legacy_evaluation_panel_lifecycle_catalog",
+        "verify_finality_v2_preparation_ingress_catalog",
+        "verify_review_ready_artifact_manifest_binding_catalog",
+        "verify_finality_v2_preparation_ingress_canonical_shape_guards",
+        "Paper finality V2 preparation ingress catalog requires exactly two managed functions",
+        "Paper finality V2 preparation ingress requires one globally unique exact ENABLE ALWAYS BEFORE INSERT guard",
+        "created_at_submicrosecond_9_digits",
+        "created_at_24_hour_alias",
+        "created_at_leap_second_alias",
+        "optional_key_missing",
+        "stringified_boolean",
+        "rework_null_instead_of_absent",
+        "rework_compact_uuid",
         "contribution_authority_constraint_definition_is_exact",
         "globally unique managed names",
         "without unmanaged extras",
@@ -2133,9 +2158,30 @@ require_fragments(
         "IMMUTABLE_TRIGGER_BODY",
         "normalized_catalog_definition(&function_body) != IMMUTABLE_TRIGGER_BODY",
         'mod challenge_ruleset_v1;',
+        'mod challenge_pack_activation;',
         'pub use challenge_ruleset_v1::*;',
     ),
 )
+
+review_ready_binding_migration = (
+    repo / "migrations/0053_allow_review_ready_artifact_manifest_binding.sql"
+).read_text(encoding="utf-8")
+require_fragments(
+    "migrations/0053_allow_review_ready_artifact_manifest_binding.sql",
+    (
+        "drop constraint if exists hepta_artifact_manifests_binding_schema_check",
+        "add constraint hepta_artifact_manifests_binding_schema_check",
+        "binding_schema = 'hepta.paper_raid.artifact_manifest_binding.v1'",
+        "binding_schema = 'hepta.paper_raid.review_ready_artifact_manifest_binding.v1'",
+    ),
+)
+if (
+    review_ready_binding_migration.lower().count("begin;") != 1
+    or review_ready_binding_migration.lower().count("commit;") != 1
+    or review_ready_binding_migration.count("binding_schema = ") != 2
+    or "not valid" in review_ready_binding_migration.lower()
+):
+    fail("0053 must be one atomic, validated, exact two-schema forward migration")
 
 require_fragments(
     "migrations/0048_add_hepta_consumer_finality_v2.sql",
@@ -2145,6 +2191,347 @@ require_fragments(
         "hepta_consumer_finality_v2_projection_guard",
         "consumer-finality V2 reproduction binding is not exact",
         "consumer-finality V2 uphold does not activate the effective evaluation",
+    ),
+)
+require_fragments(
+    "migrations/0049_add_hepta_challenge_pack_activation.sql",
+    (
+        "hepta_challenge_pack_activations_v1",
+        "paper-raid-evidence-audit-seeded-v1",
+        "hepta_validate_challenge_pack_activation_v1",
+        "Challenge Pack activation record relational/JSON parity failed",
+        "hepta_challenge_pack_activation_immutable_guard",
+        "hepta_challenge_pack_activation_truncate_guard",
+        "enable always trigger hepta_challenge_pack_activation_validate_guard",
+        "enable always trigger hepta_challenge_pack_activation_immutable_guard",
+        "enable always trigger hepta_challenge_pack_activation_truncate_guard",
+        "Challenge Pack activation records are append-only",
+    ),
+)
+require_fragments(
+    "migrations/0050_add_hepta_paper_rework.sql",
+    (
+        "hepta_paper_reworks",
+        "hepta_paper_rework_resubmissions",
+        "interval '24 hours'",
+        "rework_window_elapsed",
+        "rejected_rework_content_commitment_sha256",
+        "hepta_paper_rework_content_commitment_sha256",
+        "pg_catalog.sha256",
+        "replacement_review_round = 1",
+        "hepta_joint_submission_rework_withdrawal_trigger",
+        "enable always trigger hepta_paper_reworks_finality_v2_source_guard",
+        "hepta_paper_rework_finality_v2_lineage_guard",
+        "hepta_paper_finality_v2_rework_lineage_mismatch",
+    ),
+)
+if "hepta_paper_one_active_rework_idx" in (
+    repo / "migrations/0050_add_hepta_paper_rework.sql"
+).read_text(encoding="utf-8"):
+    fail("0050 must not use a subquery-backed partial index for active reworks")
+require_fragments(
+    "migrations/0051_bind_legacy_evaluation_panel_lifecycle.sql",
+    (
+        "begin;",
+        "commit;",
+        "drop constraint if exists hepta_paper_review_assignments_pinned_evaluation_fkey",
+        "create or replace function hepta_guard_review_assignment_draft_lifecycle_v1",
+        "hepta_paper_evaluation_panel_attestations",
+        "evaluation.evaluation_id = new.pinned_evaluation_id",
+        "enable always trigger hepta_review_assignment_draft_lifecycle_guard",
+    ),
+)
+
+finality_v2_ingress_predicate_sha256 = (
+    "c861ea0fea786979507fc23dd0435002"
+    "c838a4bdbaa1f23e9c4e0420953570e8"
+)
+finality_v2_ingress_guard_sha256 = (
+    "f9db620e91b35d1ae38b2c3abef60a1e"
+    "44d0c8522b6c30195c0de9bac2835b87"
+)
+
+
+def finality_v2_ingress_function_body(text, function_name):
+    matches = re.findall(
+        rf"create or replace function public\.{re.escape(function_name)}\(.*?"
+        r"\)\nreturns .*?\nas \$function\$(.*?)\$function\$;",
+        text,
+        flags=re.DOTALL,
+    )
+    if len(matches) != 1:
+        fail(
+            f"0052 must define exactly one catalogued function body for {function_name}"
+        )
+    return matches[0]
+
+
+def validate_finality_v2_preparation_ingress_hardening(text):
+    if text.count("begin;") != 1 or text.count("commit;") != 1:
+        fail("0052 must be one explicit atomic forward migration")
+    if "drop constraint" in text.lower() or "alter constraint" in text.lower():
+        fail("0052 must not replace historical 0038 constraints")
+
+    predicate_body = finality_v2_ingress_function_body(
+        text, "hepta_paper_finality_v2_preparation_ingress_valid_v1"
+    )
+    guard_body = finality_v2_ingress_function_body(
+        text, "hepta_validate_paper_finality_v2_preparation_ingress_v1"
+    )
+    if hashlib.sha256(predicate_body.encode()).hexdigest() != (
+        finality_v2_ingress_predicate_sha256
+    ):
+        fail("0052 canonical preparation predicate body digest drifted")
+    if hashlib.sha256(guard_body.encode()).hexdigest() != (
+        finality_v2_ingress_guard_sha256
+    ):
+        fail("0052 preparation trigger body digest drifted")
+
+    zero_digest = (
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    )
+    zero_raw_hash = "0" * 64
+    if predicate_body.count(zero_digest) != 6:
+        fail("0052 must reject all six canonical all-zero preparation digests")
+    if predicate_body.count(zero_raw_hash) != 8:
+        # Six prefixed digests contain the same 64-zero suffix, plus two raw hashes.
+        fail("0052 must reject both canonical all-zero preparation raw hashes")
+    canonical_created_at_pattern = (
+        "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])"
+        "T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]"
+        "(Z|[.](?!000Z)[0-9]{3}Z|[.][0-9]{3}(?!000Z)[0-9]{3}Z)$"
+    )
+    canonical_uuid_pattern = (
+        "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+        "[0-9a-f]{4}-[0-9a-f]{12}$"
+    )
+    if canonical_created_at_pattern not in predicate_body:
+        fail("0052 must require exact Chrono UTC AutoSi created_at spelling")
+    if predicate_body.count("(?!000Z)") != 2:
+        fail("0052 must reject redundant 3/6-digit AutoSi zero padding")
+    if "date_trunc(" in predicate_body or (
+        "(($1).record_json ->> 'created_at')::timestamptz\n"
+        "                = ($1).created_at"
+    ) not in predicate_body:
+        fail("0052 created_at spelling must retain exact timestamptz cast parity")
+    if (
+        "extract(epoch from ($1).created_at) * 1000\n"
+        "                = ($1).final_consensus_time_unix_ms::numeric"
+    ) not in predicate_body:
+        fail("0052 created_at must remain the exact millisecond Chain checkpoint")
+    if "[.][0-9]{6}(?!000Z)[0-9]{3}Z" in predicate_body:
+        fail("0052 must reject unrepresentable 9-digit PostgreSQL timestamps")
+    if predicate_body.count(canonical_uuid_pattern) != 18:
+        fail("0052 must canonicalize every preparation/binding UUID spelling")
+    for uuid_path in (
+        "'preparation_id'",
+        "{binding,window_arm_id}",
+        "{binding,paper_project_id}",
+        "{binding,submission_id}",
+        "{binding,rework_lineage,rework_id}",
+        "{binding,rework_lineage,rejected_submission_id}",
+        "{binding,rework_lineage,replacement_submission_id}",
+        "{binding,rework_lineage,rejected_revision_id}",
+        "{binding,rework_lineage,replacement_revision_id}",
+        "{binding,evaluation_id}",
+        "{binding,evaluation_supersedes_evaluation_id}",
+        "{binding,evaluation_superseded_by_evaluation_id}",
+        "{binding,latest_reproduction_id}",
+        "{binding,reproduction_supersedes_reproduction_id}",
+        "{binding,reproduction_superseded_by_reproduction_id}",
+        "{binding,appeal_id}",
+        "{binding,appealed_evaluation_id}",
+        "{binding,appeal_resolution_id}",
+    ):
+        if uuid_path not in predicate_body:
+            fail(f"0052 canonical UUID predicate lost {uuid_path!r}")
+    for shape_fragment in (
+        "($1).record_json ?& array[",
+        "from jsonb_object_keys(($1).record_json) as top_key",
+        ") = 8",
+        "($1).record_json -> 'binding') ?& array[",
+        ") = 55 + case",
+        "from jsonb_each(($1).record_json) as top_field",
+        "as optional_field(field_name, field_value)",
+        "optional_field.field_value <> 'null'::jsonb",
+        "as number_field(field_name, field_value)",
+        "!~ '^(0|[1-9][0-9]*)$'",
+        "> 18446744073709551615::numeric",
+        "as boolean_field(field_name, field_value)",
+        "#> '{binding,rework_lineage}' is null",
+        "#> '{binding,rework_lineage}') ?& array[",
+        "as rework_string(field_name, field_value)",
+        ") = 13",
+    ):
+        if shape_fragment not in predicate_body:
+            fail(f"0052 exact serde JSON shape predicate lost {shape_fragment!r}")
+    for fragment in (
+        "length(($1).final_chain_id) between 1 and 64",
+        "($1).final_chain_id collate \"C\" ~ '^[a-z0-9._:-]+$'",
+        "($1).record_json ->> 'request_hash' = ($1).request_hash",
+        "($1).record_json ->> 'binding_fingerprint'",
+        "{binding,commitment_id}",
+        "{binding,source_fingerprint}",
+        "{binding,match_evidence_commitment_id}",
+        "{binding,final_checkpoint_hash}",
+        "{binding,final_checkpoint_anchor_hash}",
+        "{binding,start_checkpoint_chain_id}",
+        "{binding,final_checkpoint_chain_id}",
+        "{binding,final_checkpoint_header_hash}",
+        "{binding,final_checkpoint_consensus_time_unix_ms}",
+        "{binding,scientific_finality}",
+        "{binding,score_eligible}",
+        "{binding,ranking_eligible}",
+        "{binding,reward_eligible}",
+        "{binding,economic_eligible}",
+    ):
+        if fragment not in predicate_body:
+            fail(f"0052 canonical relational/JSON predicate lost {fragment!r}")
+
+    for fragment in (
+        "hepta_paper_finality_v2_preparation_ingress_backfill_forbidden",
+        "where not public.hepta_paper_finality_v2_preparation_ingress_valid_v1(",
+        "create trigger hepta_paper_finality_v2_preparation_ingress_guard",
+        "before insert on public.hepta_paper_chain_finality_preparations_v2",
+        "enable always trigger hepta_paper_finality_v2_preparation_ingress_guard",
+        "trigger_row.tgtype = 7",
+        "trigger_row.tgenabled = 'A'",
+        "global_trigger_name_count <> 1",
+        "hepta_paper_finality_v2_historical_constraint_catalog_mismatch",
+        "910d4454106f5722ad44c6c9095bf48d585dfaa9501fc40d9ef377fd57c3f3ba",
+        "hepta_paper_finality_v2_preparation_ingress_catalog_mismatch",
+        "hepta_paper_finality_v2_record_json_check",
+        "Historical full relational/JSON parity CHECK must remain present and validated",
+    ):
+        if fragment not in text:
+            fail(f"0052 exact ingress/catalog contract lost {fragment!r}")
+    if text.count(finality_v2_ingress_predicate_sha256) != 2:
+        fail("0052 predicate body digest must be pinned by both comparison and evidence")
+    if text.count(finality_v2_ingress_guard_sha256) != 2:
+        fail("0052 guard body digest must be pinned by both comparison and evidence")
+
+
+finality_v2_ingress_migration = (
+    repo
+    / "migrations/0052_harden_hepta_paper_finality_v2_preparation_ingress.sql"
+).read_text(encoding="utf-8")
+validate_finality_v2_preparation_ingress_hardening(finality_v2_ingress_migration)
+finality_v2_ingress_mutations = {
+    "zero digest admitted": finality_v2_ingress_migration.replace(
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "sha256:1000000000000000000000000000000000000000000000000000000000000000",
+        1,
+    ),
+    "chain id length widened": finality_v2_ingress_migration.replace(
+        "between 1 and 64", "between 1 and 128", 1
+    ),
+    "chain id uppercase admitted": finality_v2_ingress_migration.replace(
+        "^[a-z0-9._:-]+$", "^[A-Za-z0-9._:-]+$", 1
+    ),
+    "created_at offset alias admitted": finality_v2_ingress_migration.replace(
+        "[0-5][0-9](Z|[.](?!000Z)",
+        "[0-5][0-9]([+]00:00|Z|[.](?!000Z)",
+        1,
+    ),
+    "created_at normalized hour or second admitted": finality_v2_ingress_migration.replace(
+        "([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]",
+        "[0-9]{2}:[0-9]{2}:[0-9]{2}",
+        1,
+    ),
+    "created_at redundant AutoSi zeros admitted": finality_v2_ingress_migration.replace(
+        "(?!000Z)", "", 1
+    ),
+    "created_at nanoseconds admitted": finality_v2_ingress_migration.replace(
+        "|[.][0-9]{3}(?!000Z)[0-9]{3}Z)$",
+        "|[.][0-9]{3}(?!000Z)[0-9]{3}Z|[.][0-9]{6}(?!000Z)[0-9]{3}Z)$",
+        1,
+    ),
+    "top-level optional key admitted missing": finality_v2_ingress_migration.replace(
+        ") = 8", ") >= 7", 1
+    ),
+    "binding optional key admitted missing": finality_v2_ingress_migration.replace(
+        ") = 55 + case", ") >= 54 + case", 1
+    ),
+    "stringified number admitted": finality_v2_ingress_migration.replace(
+        "jsonb_typeof(number_field.field_value) <> 'number'",
+        "jsonb_typeof(number_field.field_value) <> 'string'",
+        1,
+    ),
+    "rework null admitted": finality_v2_ingress_migration.replace(
+        "#> '{binding,rework_lineage}' is null",
+        "#> '{binding,rework_lineage}' is null or "
+        "($1).record_json #> '{binding,rework_lineage}') = 'null'::jsonb",
+        1,
+    ),
+    "UUID uppercase alias admitted": finality_v2_ingress_migration.replace(
+        "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$",
+        1,
+    ),
+    "optional supersession UUID guard detached": finality_v2_ingress_migration.replace(
+        "{binding,evaluation_supersedes_evaluation_id}",
+        "{binding,evaluation_supersedes_id}",
+        1,
+    ),
+    "rework UUID guard inverted": finality_v2_ingress_migration.replace(
+        "#> '{binding,rework_lineage}' is null",
+        "#> '{binding,rework_lineage}' is not null",
+        1,
+    ),
+    "json commitment detached": finality_v2_ingress_migration.replace(
+        "{binding,commitment_id}", "{binding,commitment}", 1
+    ),
+    "legacy row preflight inverted": finality_v2_ingress_migration.replace(
+        "where not public.hepta_paper_finality_v2_preparation_ingress_valid_v1(",
+        "where public.hepta_paper_finality_v2_preparation_ingress_valid_v1(",
+        1,
+    ),
+    "always trigger downgraded": finality_v2_ingress_migration.replace(
+        "enable always trigger hepta_paper_finality_v2_preparation_ingress_guard",
+        "enable trigger hepta_paper_finality_v2_preparation_ingress_guard",
+        1,
+    ),
+    "trigger phase weakened": finality_v2_ingress_migration.replace(
+        "before insert on public.hepta_paper_chain_finality_preparations_v2",
+        "after insert on public.hepta_paper_chain_finality_preparations_v2",
+        1,
+    ),
+    "predicate digest unpinned": finality_v2_ingress_migration.replace(
+        finality_v2_ingress_predicate_sha256,
+        "0" * 64,
+        1,
+    ),
+}
+for mutation_name, mutation in finality_v2_ingress_mutations.items():
+    if mutation == finality_v2_ingress_migration:
+        fail(f"0052 hostile mutation was not applied: {mutation_name}")
+    try:
+        validate_finality_v2_preparation_ingress_hardening(mutation)
+    except AssertionError:
+        pass
+    else:
+        fail(f"0052 static proof accepted hostile mutation: {mutation_name}")
+
+require_fragments(
+    "services/hepta-research-league/src/paper_rework_v1.rs",
+    (
+        '"/v2/hepta/papers/:paper_id/reworks"',
+        "PAPER_REWORK_LEASE_HOURS: i64 = 24",
+        "rework_content_commitment_sha256",
+        "replacement_review_round: 1",
+        "verify_rework_migration_catalog",
+    ),
+)
+require_fragments(
+    "services/hepta-research-league/src/challenge_pack_activation.rs",
+    (
+        '"/v1/hepta/operator/challenges/:challenge_id/pack-activation"',
+        "OPERATOR_TOKEN_HEADER",
+        "state_json #>> array['challenges',$4::text,'status']='draft'",
+        "challenge_pack_activation_replay_conflict",
+        "hepta.challenge_pack.activated.v1",
+        "cross_paper_denial_receipt_sha256",
+        "paper-raid-evidence-audit-seeded-v1",
     ),
 )
 require_fragments(

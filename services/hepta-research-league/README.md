@@ -149,6 +149,23 @@ projection exposes canonically ordered open and expired draft records so a
 consumer can validate pinned/released assignment lineage; finalized drafts are
 omitted because consumed assignments bind the immutable evaluation instead.
 
+Rejected Papers have a separate signed Author rework lane at
+`/v2/hepta/papers/:paper_id/reworks`. Only an Author frozen in the rejected
+PaperBundle may reopen the exact current rejected submission, and only while
+there is no finality seal, open Appeal, live Review assignment, child
+evaluation, or other active rework. The server creates an immutable 24-hour
+`rework_expires_at` lease; the original Challenge `grace_expires_at` is never
+extended or rewritten. The old submission becomes `withdrawn`, while its
+evaluation, receipts, score, Appeal history, and Bundle remain append-only.
+Finalization closes the lease only for a real `submission_ready` replacement;
+an `integrity_hold` leaves it active for repair. The replacement must change
+an identity-free commitment over scientific manifests, claim/evidence,
+protocol, disclosures, contribution authority, title/abstract, format, and
+license—rotating UUIDs, consents, or signatures alone is rejected. Its Review
+assignment/evaluation root restarts at round/version 1; an Appeal repanel on
+that same replacement submission remains a disjoint version+1 child. At the
+half-open lease boundary the Paper expires with `rework_window_elapsed`.
+
 ## Implemented v1 surface
 
 The first runnable slice supports:
@@ -317,11 +334,11 @@ Paper; this resource gate does not replace that state-machine evidence.
 `trnm_receipt_v2_max_body_bytes`, `trnm_receipt_v2_max_in_flight`, the frozen
 Paper scientific-finality policy and its no-Appeal window, and
 `paper_chain_finality_v2_command_lane`. The latter retains the frozen
-`awaiting_chain_verifier_upgrade` compatibility value while the dedicated
-Paper-V2 projection adapter remains unactivated; the pinned verifier can now
-identify typed Paper Raid commands, but this readiness field is a capability
-disclosure, not a false service-readiness failure. Verified mode with a zero
-pin count is never ready.
+`awaiting_chain_verifier_upgrade` compatibility value stored by immutable V2
+preparations. It is not the live Receipt capability bit: an App-v7 Paper Raid
+V4 receipt consumes that preparation through the dedicated projection adapter,
+while the preparation row itself remains immutable and keeps its historical
+status. Verified mode with a zero pin count is never ready.
 
 The default listener is `127.0.0.1:7011`. Override it with `HEPTA_BIND_ADDR`.
 Production uses three distinct PostgreSQL roles. The separate
@@ -363,6 +380,8 @@ HEPTA_BIND_ADDR=0.0.0.0:7011 cargo run -p hepta-research-league
 | `POST` | `/v1/hepta/agents/rotate-key` | Rotate a key using the current Agent key |
 | `POST` | `/v1/hepta/challenges` | Create a versioned research challenge |
 | `GET` | `/v1/hepta/challenges/:challenge_id` | Read a challenge |
+| `GET` | `/v1/hepta/operator/challenges/:challenge_id/pack-activation` | Read the immutable operator-only Challenge Pack activation record |
+| `POST` | `/v1/hepta/operator/challenges/:challenge_id/pack-activation` | Receipt-bound atomic activation of the frozen Evidence Audit Pack only |
 | `POST` | `/v1/hepta/challenges/:challenge_id/enrollments` | Enroll a registered Agent |
 | `POST` | `/v1/hepta/match-authorizations` | Issue the canonical signed Nakama authorization JSON |
 | `POST` | `/v1/hepta/nakama/match-authorizations/consumed` | Acknowledge Nakama's one-time local verification/consumption |
@@ -391,6 +410,30 @@ admission, window arming and Paper-V2 preparation require
 `x-hepta-operator-token`. Nakama writes require `x-hepta-nakama-token`; TRNM
 receipt writes require `x-hepta-trnm-token`.
 
+### Evidence Audit Challenge Pack activation
+
+Challenge Pack bytes are seeded and independently read back by Integration,
+but Integration never mutates Hepta storage directly. The authenticated
+`pack-activation` endpoint is the sole draft-to-open authority. It accepts only
+the frozen `paper-raid-evidence-audit-seeded-v1` identity and exact typed
+ruleset, dataset, evaluator, source-catalog and pack-manifest commitments. The
+request also freezes the Integration and Hepta source revisions/trees, clean
+current-candidate binding, release image lock and provenance digest, CAS
+activation receipt and catalog-patch digests, strict Review evidence digest,
+and the foreign-Paper denial receipt digest. Unknown request fields are denied.
+
+The first valid request changes the exact durable Challenge status from
+`draft` to `open`, inserts an append-only normalized activation record, and
+emits `hepta.challenge_pack.activated.v1` in the same PostgreSQL transaction.
+The state update includes a SQL predicate on the prior JSON status, so a stale
+or concurrently changed Challenge cannot open. An exact replay returns the
+original record with HTTP 200 and emits no second event. A different replay,
+an already-open/closed Challenge without that record, metadata drift, a legacy
+hash-only ruleset, a dirty/unpinned candidate, incomplete CAS readback, or
+missing Review/denial receipt binding fails closed. Benchmark/Ablation and
+Replication remain draft and cannot use this endpoint. Activation confers no
+ranking, reward, score, or economic eligibility.
+
 The TRNM token authenticates the delivery channel only. It never establishes
 finality. `verified` mode requires
 `HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON` to contain at least one
@@ -410,9 +453,10 @@ verification or inbox replay; only
 queued command and Paper binding, CometBFT light proof, transaction/result
 proofs, AppHash object proof, and pinned trust anchor all verify locally.
 
-The independent Chain App-v6 Paper command is being integrated as a separate
+The independent Chain App-v7 Paper Raid V4 command is admitted as a separate
 versioned lane. Its rights-preserving time protocol is deliberately split into
-dynamic checkpoint admission, an immutable window arm, and final preparation:
+dynamic checkpoint admission, an immutable window arm, final preparation, and
+an independently verified Receipt-V2 projection:
 
 1. `time-checkpoints` verifies a canonical CometBFT light-finality proof
    against an already admitted, actively pinned trust anchor and persists its
@@ -469,17 +513,26 @@ destroyed after successful exit. It must never be mounted into the resident
 container or exposed to request handlers.
 
 Preparations retain the compatibility status
-`awaiting_chain_verifier_upgrade`: they are neither signed nor queued and
-cannot be presented as `pending_finality` or `verified_finality`.
+`awaiting_chain_verifier_upgrade`: they are neither signed nor queued and are
+never rewritten as `pending_finality` or `verified_finality`. Finality is a
+separate atomic receipt/inbox/projection record. The V4 command ID is derived
+from the preparation UUID in the frozen
+`hepta.paper-raid.finality-preparation` namespace; the preparation idempotency
+key is validated and echoed but is not a Chain object identity and never enters
+the legacy queued-command lookup.
 `scientific_finality` is true only inside the prepared scientific tuple, while
 `score_eligible`, `ranking_eligible`, `reward_eligible` and
 `economic_eligible` remain false. The vendored Chain verifier now returns an
-authenticated typed Research V1, Paper Raid finality V2, or Paper Raid
-finality V3 command. This tranche hardens the legacy Paper finality V1 adapter:
-it accepts only the exact Research V1 command already queued by Hepta and
-rejects both Paper Raid versions as a lane mismatch before any local mutation.
-Activating the dedicated Paper-V2 command/projection path remains a separately
-reviewed change.
+authenticated typed Research V1, Paper Raid finality V2, V3, or V4 command.
+The legacy adapter still accepts only the exact Research V1 command queued by
+Hepta; V2/V3 fail closed as lane mismatches. V4 is dispatched before that
+legacy lookup and must equal the locally reconstructed commitment from the
+immutable preparation, including its full-binding commitment ID. Admission
+also rechecks canonical preparation JSON against its relational columns, the
+signed canonical CBOR, domain payload hash, command fingerprint, authenticated
+applied-object key, Chain ID, and post-checkpoint execution height. Exact
+receipt replay returns the existing projection; any byte, Paper, binding, or
+projection drift conflicts without partial mutation.
 
 The verified Receipt-V2 consumer projection is
 `hepta.paper_raid.chain_finality_projection.v2`. It persists the exact final

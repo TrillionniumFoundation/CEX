@@ -88,9 +88,27 @@ assert.ok(source.includes('"register_artifact"'));
 assert.ok(source.includes("async function preserveDisclosure("));
 assert.ok(source.includes("new Blob([plainText]"));
 assert.ok(source.includes("function invalidateStalePlayerForms("));
+assert.ok(source.includes("function invalidateStaleReviewAuthority("));
+assert.ok(source.includes("function createReviewAuthoritySync("));
+assert.ok(source.includes("function bindReviewAuthority()"));
+assert.ok(source.includes("review_authority_marker_missing"));
+assert.ok(source.includes("review_authority_marker_invalid"));
+assert.ok(source.includes("bindReviewAuthority();"));
 assert.ok(source.includes('connection.dataset.state = "stale-authority"'));
 assert.ok(source.includes("newHeptaEvents > 0 || currentPhase !== synchronizedPhase"));
 assert.ok(source.includes("const paperWorkflowStates = new Map();"));
+const mutationGuardStart = source.indexOf("function formMutationMustStayDisabled(");
+const mutationRestoreStart = source.indexOf("function restoreAuthoritativeFormControls(", mutationGuardStart);
+assert.ok(mutationGuardStart >= 0 && mutationRestoreStart > mutationGuardStart);
+const mutationGuard = source.slice(mutationGuardStart, mutationRestoreStart);
+for (const guard of [
+  'form.dataset.authorityState === "stale"',
+  'form.dataset.reworkLeaseState === "expired"',
+  "state.pendingStaleApply",
+  "state.pendingReloadDelayMs !== null",
+  "state.reloadTimer !== null",
+  "state.reloadStarted",
+]) assert.ok(mutationGuard.includes(guard), `mutation guard is missing ${guard}`);
 assert.ok(source.includes("const PAPER_WORKFLOW_STALE_MAX_WAIT_MS = 120_000;"));
 assert.ok(source.includes("function requestPaperReload(paperId, delayMs)"));
 assert.ok(source.includes("function requestStaleAuthorityRefresh(paperId, applyInvalidation)"));
@@ -111,6 +129,7 @@ assert.ok(source.includes(
 const workflowFormSelectors = [
   ".input-manifest-wizard-form",
   ".draft-manifest-wizard-form",
+  ".review-ready-manifest-wizard-form",
   ".run-artifact-wizard-form",
   ".figure-lineage-wizard-form",
   ".promote-release-form",
@@ -143,6 +162,51 @@ for (const [index, selector] of workflowFormSelectors.entries()) {
     false,
     `${selector} bypasses the paper-scoped reload coordinator`,
   );
+  const guardedHandlerEnd = handler.indexOf("\n    });\n  }");
+  const guardedHandler = handler.slice(0, guardedHandlerEnd);
+  assert.ok(guardedHandlerEnd > 0);
+  assert.ok(
+    guardedHandler.includes("restoreAuthoritativeFormControls("),
+    `${selector} can re-enable stale or expired controls`,
+  );
+  assert.equal(guardedHandler.includes("button.disabled = false"), false);
+  assert.equal(guardedHandler.includes("button of buttons) button.disabled = false"), false);
+}
+const reviewWorkflowBoundaries = [
+  [".review-receipt-confirm-form", ".review-attestation-form"],
+  [".review-attestation-form", ".review-finalize-form"],
+  [".review-finalize-form", ".review-appeal-resolution-form"],
+  [".review-appeal-resolution-form", "function bindAuthorAppeal()"],
+  [".author-appeal-form", "function bindAuthorRework()"],
+  [".author-rework-start-form", "function disableExpiredPaperRework("],
+];
+for (const [selector, nextBoundary] of reviewWorkflowBoundaries) {
+  const start = source.indexOf(`document.querySelectorAll("${selector}")`);
+  const end = nextBoundary.startsWith(".")
+    ? source.indexOf(`document.querySelectorAll("${nextBoundary}")`, start)
+    : source.indexOf(nextBoundary, start);
+  assert.ok(start >= 0 && end > start, `${selector} Review workflow boundary is absent`);
+  const handler = source.slice(start, end);
+  assert.equal(
+    (handler.match(/beginPaperWorkflow\(form\.dataset\.paperId\)/g) || []).length,
+    1,
+    `${selector} does not begin exactly one paper workflow`,
+  );
+  assert.equal(
+    (handler.match(/finishPaperWorkflow\(\)/g) || []).length,
+    1,
+    `${selector} does not finish exactly one paper workflow`,
+  );
+  assert.ok(
+    handler.indexOf("try {") < handler.indexOf("beginPaperWorkflow(form.dataset.paperId)"),
+    `${selector} does not catch a rejected workflow start`,
+  );
+  assert.ok(
+    handler.includes("restoreAuthoritativeFormControls("),
+    `${selector} can re-enable stale or expired controls`,
+  );
+  assert.equal(handler.includes("button.disabled = false"), false);
+  assert.equal(handler.includes("button of buttons) button.disabled = false"), false);
 }
 const staleInvalidationStart = source.indexOf("function invalidateStalePlayerForms(");
 const liveSyncStart = source.indexOf("function createLiveRaidSync(", staleInvalidationStart);
@@ -168,6 +232,14 @@ assert.equal(
   staleInvalidation.slice(0, staleApplyStart).includes('connection.dataset.state = "stale-authority"'),
   false,
 );
+const staleReviewStart = source.indexOf("function invalidateStaleReviewAuthority(");
+const reviewSyncStart = source.indexOf("function createReviewAuthoritySync(", staleReviewStart);
+assert.ok(staleReviewStart >= 0 && reviewSyncStart > staleReviewStart);
+const staleReviewInvalidation = source.slice(staleReviewStart, reviewSyncStart);
+assert.ok(staleReviewInvalidation.includes("requestPaperReload(paperId, 0);"));
+assert.ok(staleReviewInvalidation.includes("requestStaleAuthorityRefresh(paperId, applyInvalidation)"));
+assert.ok(staleReviewInvalidation.includes('card.dataset.authorityState = "stale-pending-workflow"'));
+assert.ok(source.includes("fetch(`/league/review/${encodeURIComponent(paperId)}`"));
 const htmlSource = await readFile(new URL("../src/html.rs", import.meta.url), "utf8");
 assert.ok(htmlSource.includes('class=\"human-key-import-form\"'));
 assert.ok(htmlSource.includes('<button type=\"submit\" disabled>Decrypt into this tab'));
@@ -198,9 +270,26 @@ assert.ok(htmlSource.includes("review-attestation-form"));
 assert.ok(htmlSource.includes("review-finalize-form"));
 assert.ok(source.includes("confirmReviewReceipt"));
 assert.ok(htmlSource.includes("author-appeal-form"));
+assert.ok(htmlSource.includes("author-rework-start-form"));
+assert.ok(htmlSource.includes("paper-rework-countdown"));
+assert.ok(htmlSource.includes("Continue rework / 继续返工"));
 assert.ok(htmlSource.includes("review-appeal-resolution-form"));
 assert.ok(htmlSource.includes("value=\"upheld\"{}"));
 assert.ok(htmlSource.includes("Claim a precise role, never an Author Room"));
+const reworkPanelStart = htmlSource.indexOf("fn author_rework_panel(");
+const appealPanelStart = htmlSource.indexOf("fn author_appeal_panel(", reworkPanelStart);
+assert.ok(reworkPanelStart >= 0 && appealPanelStart > reworkPanelStart);
+const reworkPanelSource = htmlSource.slice(reworkPanelStart, appealPanelStart);
+assert.ok(reworkPanelSource.includes('name=\"reason\"'));
+for (const forbidden of [
+  'name=\"rework_id\"', 'name=\"submission_id\"', 'name=\"evaluation_id\"',
+  'name=\"reason_hash\"', 'name=\"signature\"', 'name=\"payload\"',
+]) assert.equal(reworkPanelSource.includes(forbidden), false);
+assert.ok(source.includes('reason_hash: await plainTextDigest(form.elements.reason.value, "paper_rework_reason")'));
+assert.ok(source.includes('"start_paper_rework"'));
+assert.ok(source.includes("frame.child_id !== null"));
+assert.ok(source.includes("function bindPaperReworkCountdowns()"));
+assert.ok(source.includes('form.dataset.reworkLeaseState = "expired"'));
 const reviewPageStart = htmlSource.indexOf("pub fn review_queue(");
 const loginPageStart = htmlSource.indexOf("pub fn login_page()", reviewPageStart);
 assert.ok(reviewPageStart >= 0 && loginPageStart > reviewPageStart);
@@ -208,6 +297,17 @@ const reviewPageSource = htmlSource.slice(reviewPageStart, loginPageStart);
 const htmlProductionSource = htmlSource.slice(0, htmlSource.indexOf("#[cfg(test)]"));
 assert.equal(reviewPageSource.includes("/league/papers/"), false);
 assert.ok(reviewPageSource.includes("/league/review/"));
+assert.ok(reviewPageSource.includes('class="panel review-authority-watch"'));
+assert.ok(reviewPageSource.includes('data-authority-revision="{}"'));
+for (const rawReviewLabel of [
+  "<dt>Release hash</dt>",
+  "<dt>PaperBundle hash</dt>",
+  "<dt>Source manifest</dt>",
+  "<dt>Artifact manifest</dt>",
+  "<dt>Evaluator</dt><dd><code>",
+  "<dt>Receipt seal</dt>",
+  "<dt>Report hash</dt>",
+]) assert.equal(reviewPageSource.includes(rawReviewLabel), false);
 assert.equal(htmlSource.includes("Use one of the three externally provisioned alpha login keys"), false);
 assert.equal(htmlProductionSource.includes("paper-raid-agent-bridge/src/cli.mjs pair"), false);
 assert.equal(htmlProductionSource.includes("prepare-delivery --input"), false);
@@ -828,6 +928,57 @@ assert.deepEqual(
   [1_000, 1_475, 1_485, 1_985, 122_085, 123_085, 123_085, 124_185],
 );
 
+const paperI = "99999999-9999-4999-8999-999999999999";
+const reviewStaleCard = { dataset: { authorityState: "current", paperId: paperI } };
+const reviewStaleConnection = { dataset: {}, textContent: "Current" };
+const reviewStaleOutput = { classList: { toggle() {} }, textContent: "" };
+const reviewStaleControl = { disabled: false };
+const reviewStaleForm = { dataset: {}, elements: [reviewStaleControl] };
+context.document.querySelectorAll = selector => selector.includes(paperI) ? [reviewStaleForm] : [];
+const finishReviewPaperI = context.beginPaperWorkflow(paperI);
+context.invalidateStaleReviewAuthority(
+  reviewStaleCard,
+  reviewStaleConnection,
+  reviewStaleOutput,
+);
+assert.equal(reviewStaleCard.dataset.authorityState, "stale-pending-workflow");
+assert.equal(reviewStaleConnection.dataset.state, "stale-authority-pending-workflow");
+assert.equal(reviewStaleControl.disabled, false);
+finishReviewPaperI();
+assert.equal(reviewStaleCard.dataset.authorityState, "stale");
+assert.equal(reviewStaleConnection.dataset.state, "stale-authority");
+assert.equal(reviewStaleControl.disabled, true);
+const reloadsBeforeReviewStaleTimer = deferredReloads.length;
+advanceFakeClock(100);
+assert.equal(deferredReloads.length, reloadsBeforeReviewStaleTimer + 1);
+
+const guardedControl = { disabled: false };
+context.restoreAuthoritativeFormControls(
+  { dataset: { paperId: paperI, reworkLeaseState: "expired" } },
+  [guardedControl],
+);
+assert.equal(guardedControl.disabled, true);
+context.restoreAuthoritativeFormControls(
+  { dataset: { paperId: paperI, authorityState: "stale" } },
+  [guardedControl],
+);
+assert.equal(guardedControl.disabled, true);
+const paperJ = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+context.requestPaperReload(paperJ, 500);
+guardedControl.disabled = false;
+context.restoreAuthoritativeFormControls(
+  { dataset: { paperId: paperJ } },
+  [guardedControl],
+);
+assert.equal(guardedControl.disabled, true);
+advanceFakeClock(500);
+guardedControl.disabled = false;
+context.restoreAuthoritativeFormControls(
+  { dataset: { paperId: paperJ } },
+  [guardedControl],
+);
+assert.equal(guardedControl.disabled, true);
+
 const appealPayload = await context.appealPayload({
   elements: {
     grounds: { value: "Retained failed-run evidence was omitted from the evaluation." },
@@ -840,6 +991,18 @@ assert.equal(appealPayload.evidence_manifest_id, "11111111-1111-4111-8111-111111
 assert.deepEqual(Object.keys(appealPayload).sort(), [
   "appeal_id", "evidence_manifest_id", "grounds_hash",
 ]);
+const reworkPayload = await context.paperReworkPayload({
+  elements: {
+    reason: { value: "Replace the unsupported core claim with retained evidence and rerun." },
+  },
+});
+assert.match(reworkPayload.rework_id, /^[0-9a-f-]{36}$/);
+assert.match(reworkPayload.reason_hash, /^sha256:[0-9a-f]{64}$/);
+assert.deepEqual(Object.keys(reworkPayload).sort(), ["reason_hash", "rework_id"]);
+await assert.rejects(
+  context.paperReworkPayload({ elements: { reason: { value: "   " } } }),
+  /paper_rework_reason_is_required/,
+);
 const resolutionPayload = await context.appealResolutionPayload(
   { elements: { decision: { value: "The frozen evaluation already considered the evidence." } } },
   "denied",

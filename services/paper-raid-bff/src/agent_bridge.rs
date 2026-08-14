@@ -21,10 +21,11 @@ use hepta_paper_raid_contracts::{
     verify_agent_bridge_request_proof, verify_frozen_review_authority, verify_frozen_review_bundle,
     verify_review_execution_receipt_signature, AgentBindingProofClaimV3, AgentBridgeRequestProofV1,
     AgentCapabilityDisclosureV1, ChallengeDatasetManifestV1, ChallengeEvaluatorManifestV1,
-    FrozenReviewAuthorityV1, FrozenReviewBundleV1, FrozenReviewExecutionPlanV1,
-    FrozenReviewInputObjectV1, FrozenReviewObjectV1, ReviewEvaluationExecutionResultV1,
-    ReviewExecutionReceiptV1, ReviewReproductionExecutionResultV1, AGENT_BINDING_PROOF_V3,
-    RESOLVED_FROZEN_REVIEW_BUNDLE_V1, REVIEW_EXECUTION_RECEIPT_V1,
+    ChallengeManifestObjectV1, FrozenReviewAuthorityV1, FrozenReviewBundleV1,
+    FrozenReviewExecutionPlanV1, FrozenReviewInputObjectV1, FrozenReviewObjectV1,
+    ReviewEvaluationExecutionResultV1, ReviewExecutionReceiptV1,
+    ReviewReproductionExecutionResultV1, AGENT_BINDING_PROOF_V3, RESOLVED_FROZEN_REVIEW_BUNDLE_V1,
+    REVIEW_EXECUTION_RECEIPT_V1,
 };
 use rand::{rngs::OsRng, RngCore};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -63,6 +64,18 @@ const DELIVERY_IDEMPOTENCY_KEY_DOMAIN: &str =
     "hepta.paper_raid.agent_bridge.delivery_idempotency_key.v1";
 const REVIEW_TASK_ID_DOMAIN: &str = "hepta.paper_raid.agent_bridge.review_task_id.v1";
 const REVIEW_EVALUATION_ID_DOMAIN: &str = "hepta.paper_raid.agent_bridge.review_evaluation_id.v1";
+const LEGACY_GOLDEN_EVALUATOR_MANIFEST_HASH: &str =
+    "sha256:805ee4ad69fa1e56cebc0721711419d211cf0fe2090e294db25bf712f10c74f8";
+const LEGACY_GOLDEN_DATASET_MANIFEST_HASH: &str =
+    "sha256:6c0494ec10383018b4a938528d179d16fcb6dd8961b8294ff6f4093dda42aeb4";
+const LEGACY_GOLDEN_FROZEN_EVALUATOR_HASH: &str =
+    "sha256:63971194ab97e1d14752795ff1ff8c39a44d1a7782ffbb9459ec2210fe8a8e3d";
+const LEGACY_GOLDEN_FROZEN_EVALUATOR_PATH: &str = "evaluator/legacy-golden-evaluator.py";
+const LEGACY_GOLDEN_FROZEN_EVALUATOR_SIZE: u64 = 3_483;
+const LEGACY_GOLDEN_DATASET_PATH: &str = "inputs/synthetic-observations.csv";
+const LEGACY_GOLDEN_DATASET_SIZE: u64 = 230;
+const LEGACY_GOLDEN_PACK_ID: &str = "paper-raid-golden-v2-strict-review-v1";
+const LEGACY_GOLDEN_DATASET_CARD: &[u8] = b"# Synthetic threshold dataset\n\nThis public integration fixture has twelve generated rows, no natural-person data, no sensitive source, and no privacy claim. License: CC0-1.0.\n";
 
 const HEADER_SCHEMA: &str = "x-paper-raid-agent-schema";
 const HEADER_BINDING_ID: &str = "x-paper-raid-agent-binding-id";
@@ -1216,6 +1229,114 @@ fn resolve_manifest_members(
     Ok(resolved)
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyGoldenExperimentPlanV1 {
+    dataset_sha256: String,
+    expected_failure_run_ids: Vec<String>,
+    metric: String,
+    required_run_ids: Vec<String>,
+    schema: String,
+    stopping_rule: String,
+}
+
+fn legacy_golden_challenge_manifests(
+    authority: &FrozenReviewAuthorityV1,
+    evaluator_pin_bytes: &[u8],
+    dataset_pin_bytes: &[u8],
+) -> Result<(ChallengeEvaluatorManifestV1, ChallengeDatasetManifestV1), AppError> {
+    if authority.evaluator_manifest_hash != LEGACY_GOLDEN_EVALUATOR_MANIFEST_HASH
+        || authority.dataset_manifest_hash != LEGACY_GOLDEN_DATASET_MANIFEST_HASH
+        || sha256_digest(evaluator_pin_bytes) != LEGACY_GOLDEN_EVALUATOR_MANIFEST_HASH
+        || sha256_digest(dataset_pin_bytes) != LEGACY_GOLDEN_DATASET_MANIFEST_HASH
+        || dataset_pin_bytes != LEGACY_GOLDEN_DATASET_CARD
+    {
+        return Err(AppError::Upstream);
+    }
+    let plan: LegacyGoldenExperimentPlanV1 =
+        serde_json::from_slice(evaluator_pin_bytes).map_err(|_| AppError::Upstream)?;
+    if plan.schema != "paper-raid.experiment-plan.v1"
+        || plan.metric != "accuracy_bps"
+        || plan.stopping_rule != "execute_every_required_run_exactly_once"
+        || plan.expected_failure_run_ids != ["baseline-invalid-threshold"]
+        || plan.required_run_ids
+            != [
+                "baseline-seed-17",
+                "ablation-seed-17",
+                "baseline-invalid-threshold",
+            ]
+        || plan.dataset_sha256 != "b002e6297f6fd781742866533b89bf781c7f21d5cfa7b42b5c97a9ecd5821314"
+    {
+        return Err(AppError::Upstream);
+    }
+    let evaluator_matches = authority
+        .artifact_objects
+        .iter()
+        .filter(|object| {
+            same_authority_object(
+                object,
+                LEGACY_GOLDEN_FROZEN_EVALUATOR_PATH,
+                LEGACY_GOLDEN_FROZEN_EVALUATOR_HASH,
+                LEGACY_GOLDEN_FROZEN_EVALUATOR_SIZE,
+                "text/x-python; charset=utf-8",
+                "frozen_evaluator",
+            )
+        })
+        .count();
+    let dataset_hash = format!("sha256:{}", plan.dataset_sha256);
+    let dataset_matches = authority
+        .artifact_objects
+        .iter()
+        .filter(|object| {
+            same_authority_object(
+                object,
+                LEGACY_GOLDEN_DATASET_PATH,
+                &dataset_hash,
+                LEGACY_GOLDEN_DATASET_SIZE,
+                "text/csv; charset=utf-8",
+                "dataset",
+            )
+        })
+        .count();
+    if evaluator_matches != 1 || dataset_matches != 1 {
+        return Err(AppError::Upstream);
+    }
+    let evaluator_member = ChallengeManifestObjectV1 {
+        cas_uri: format!(
+            "cas://sha256/{}",
+            LEGACY_GOLDEN_FROZEN_EVALUATOR_HASH
+                .strip_prefix("sha256:")
+                .expect("constant digest prefix")
+        ),
+        media_type: "text/x-python; charset=utf-8".to_string(),
+        path: LEGACY_GOLDEN_FROZEN_EVALUATOR_PATH.to_string(),
+        sha256: LEGACY_GOLDEN_FROZEN_EVALUATOR_HASH.to_string(),
+        size: LEGACY_GOLDEN_FROZEN_EVALUATOR_SIZE,
+    };
+    let dataset_member = ChallengeManifestObjectV1 {
+        cas_uri: format!("cas://sha256/{}", plan.dataset_sha256),
+        media_type: "text/csv; charset=utf-8".to_string(),
+        path: LEGACY_GOLDEN_DATASET_PATH.to_string(),
+        sha256: dataset_hash,
+        size: LEGACY_GOLDEN_DATASET_SIZE,
+    };
+    Ok((
+        ChallengeEvaluatorManifestV1 {
+            entrypoint: LEGACY_GOLDEN_FROZEN_EVALUATOR_PATH.to_string(),
+            frozen: true,
+            objects: vec![evaluator_member],
+            pack_id: LEGACY_GOLDEN_PACK_ID.to_string(),
+            runtime: "python3-stdlib".to_string(),
+            schema: "hepta.challenge_pack.evaluator_manifest.v1".to_string(),
+        },
+        ChallengeDatasetManifestV1 {
+            objects: vec![dataset_member],
+            pack_id: LEGACY_GOLDEN_PACK_ID.to_string(),
+            schema: "hepta.challenge_pack.dataset_manifest.v1".to_string(),
+        },
+    ))
+}
+
 /// Resolve Hepta's assignment/release authority against the exact challenge-manifest bytes.
 ///
 /// The Consumer BFF owns CAS transport, but does not own scientific truth: every resolved member
@@ -1275,20 +1396,36 @@ pub(crate) async fn resolve_frozen_review_bundle(
         return Err(AppError::Upstream);
     }
 
+    let legacy_golden = authority.evaluator_manifest_hash == LEGACY_GOLDEN_EVALUATOR_MANIFEST_HASH
+        && authority.dataset_manifest_hash == LEGACY_GOLDEN_DATASET_MANIFEST_HASH;
     let evaluator_bytes = state
         .cas
         .get(&authority.evaluator_manifest_hash, "application/json")
         .await?;
     let dataset_bytes = state
         .cas
-        .get(&authority.dataset_manifest_hash, "application/json")
+        .get(
+            &authority.dataset_manifest_hash,
+            if legacy_golden {
+                "text/markdown; charset=utf-8"
+            } else {
+                "application/json"
+            },
+        )
         .await?;
-    let evaluator =
-        parse_challenge_evaluator_manifest(&evaluator_bytes, &authority.evaluator_manifest_hash)
-            .map_err(|_| AppError::Upstream)?;
-    let dataset =
-        parse_challenge_dataset_manifest(&dataset_bytes, &authority.dataset_manifest_hash)
-            .map_err(|_| AppError::Upstream)?;
+    let (evaluator, dataset) = if legacy_golden {
+        legacy_golden_challenge_manifests(&authority, &evaluator_bytes, &dataset_bytes)?
+    } else {
+        (
+            parse_challenge_evaluator_manifest(
+                &evaluator_bytes,
+                &authority.evaluator_manifest_hash,
+            )
+            .map_err(|_| AppError::Upstream)?,
+            parse_challenge_dataset_manifest(&dataset_bytes, &authority.dataset_manifest_hash)
+                .map_err(|_| AppError::Upstream)?,
+        )
+    };
     let resolved = resolve_manifest_members(&authority, &evaluator, &dataset)?;
     let entrypoint = resolved
         .iter()
@@ -4110,6 +4247,84 @@ mod tests {
         authority.authority_hash =
             hepta_paper_raid_contracts::frozen_review_authority_hash(&authority).unwrap();
         authority
+    }
+
+    #[test]
+    fn legacy_golden_adapter_is_exact_pin_role_media_path_and_digest_bound() {
+        const PLAN: &[u8] = b"{\"dataset_sha256\":\"b002e6297f6fd781742866533b89bf781c7f21d5cfa7b42b5c97a9ecd5821314\",\"expected_failure_run_ids\":[\"baseline-invalid-threshold\"],\"metric\":\"accuracy_bps\",\"required_run_ids\":[\"baseline-seed-17\",\"ablation-seed-17\",\"baseline-invalid-threshold\"],\"schema\":\"paper-raid.experiment-plan.v1\",\"stopping_rule\":\"execute_every_required_run_exactly_once\"}\n";
+        assert_eq!(sha256_digest(PLAN), LEGACY_GOLDEN_EVALUATOR_MANIFEST_HASH);
+        assert_eq!(
+            sha256_digest(LEGACY_GOLDEN_DATASET_CARD),
+            LEGACY_GOLDEN_DATASET_MANIFEST_HASH
+        );
+        let mut authority = review_authority();
+        authority.evaluator_manifest_hash = LEGACY_GOLDEN_EVALUATOR_MANIFEST_HASH.to_string();
+        authority.dataset_manifest_hash = LEGACY_GOLDEN_DATASET_MANIFEST_HASH.to_string();
+        authority.artifact_objects = vec![
+            review_object(
+                "legacy-candidate",
+                "inputs/metrics.json",
+                "candidate",
+                'c',
+                "application/json",
+            ),
+            FrozenReviewObjectV1 {
+                object_key: "legacy-dataset".to_string(),
+                logical_path: LEGACY_GOLDEN_DATASET_PATH.to_string(),
+                role: "dataset".to_string(),
+                digest: format!(
+                    "sha256:{}",
+                    "b002e6297f6fd781742866533b89bf781c7f21d5cfa7b42b5c97a9ecd5821314"
+                ),
+                size_bytes: LEGACY_GOLDEN_DATASET_SIZE,
+                media_type: "text/csv; charset=utf-8".to_string(),
+                download_path: "/api/agent-bridge/review-objects".to_string(),
+            },
+            FrozenReviewObjectV1 {
+                object_key: "legacy-evaluator".to_string(),
+                logical_path: LEGACY_GOLDEN_FROZEN_EVALUATOR_PATH.to_string(),
+                role: "frozen_evaluator".to_string(),
+                digest: LEGACY_GOLDEN_FROZEN_EVALUATOR_HASH.to_string(),
+                size_bytes: LEGACY_GOLDEN_FROZEN_EVALUATOR_SIZE,
+                media_type: "text/x-python; charset=utf-8".to_string(),
+                download_path: "/api/agent-bridge/review-objects".to_string(),
+            },
+        ];
+        authority.authority_hash =
+            hepta_paper_raid_contracts::frozen_review_authority_hash(&authority).unwrap();
+
+        let (evaluator, dataset) =
+            legacy_golden_challenge_manifests(&authority, PLAN, LEGACY_GOLDEN_DATASET_CARD)
+                .expect("exact legacy authority adapter");
+        assert_eq!(evaluator.pack_id, LEGACY_GOLDEN_PACK_ID);
+        assert_eq!(evaluator.entrypoint, LEGACY_GOLDEN_FROZEN_EVALUATOR_PATH);
+        assert_eq!(evaluator.objects.len(), 1);
+        assert_eq!(dataset.objects.len(), 1);
+        assert_eq!(dataset.objects[0].path, LEGACY_GOLDEN_DATASET_PATH);
+        assert!(resolve_manifest_members(&authority, &evaluator, &dataset).is_ok());
+
+        let mut tampered_plan = PLAN.to_vec();
+        tampered_plan[0] ^= 1;
+        assert!(legacy_golden_challenge_manifests(
+            &authority,
+            &tampered_plan,
+            LEGACY_GOLDEN_DATASET_CARD,
+        )
+        .is_err());
+        let mut wrong_evaluator = authority.clone();
+        wrong_evaluator.artifact_objects[2].digest = format!("sha256:{}", "d".repeat(64));
+        assert!(legacy_golden_challenge_manifests(
+            &wrong_evaluator,
+            PLAN,
+            LEGACY_GOLDEN_DATASET_CARD,
+        )
+        .is_err());
+        let mut wrong_role = authority;
+        wrong_role.artifact_objects[1].role = "input".to_string();
+        assert!(
+            legacy_golden_challenge_manifests(&wrong_role, PLAN, LEGACY_GOLDEN_DATASET_CARD,)
+                .is_err()
+        );
     }
 
     #[test]

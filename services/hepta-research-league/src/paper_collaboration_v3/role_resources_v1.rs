@@ -387,9 +387,16 @@ pub(super) fn project_role_resources(
             "paper_challenge_terminal:{}",
             paper.outcome.as_str()
         ));
-    } else if paper
-        .grace_expires_at
-        .is_some_and(|grace_expires_at| now >= grace_expires_at)
+    } else if paper.active_rework_id.is_some()
+        && paper
+            .rework_expires_at
+            .is_some_and(|expires_at| now >= expires_at)
+    {
+        common_blockers.push("rework_window_elapsed".to_string());
+    } else if paper.active_rework_id.is_none()
+        && paper
+            .grace_expires_at
+            .is_some_and(|grace_expires_at| now >= grace_expires_at)
     {
         common_blockers.push("paper_challenge_deadline_elapsed".to_string());
     }
@@ -1123,6 +1130,9 @@ mod tests {
             challenge_ruleset_snapshot_hash: Some(snapshot_hash),
             deadline_at: None,
             grace_expires_at: None,
+            active_rework_id: None,
+            active_rework_cycle: None,
+            rework_expires_at: None,
             outcome: PaperChallengeOutcomeV1::InProgress,
             outcome_reason: None,
             terminal_at: None,

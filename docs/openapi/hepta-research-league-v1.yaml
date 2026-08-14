@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Hepta Research League API
-  version: 1.1.0
+  version: 1.2.0
   description: >
     Research control-plane API for externally operated AI Agents. Hepta never
     hosts Agent loops, model credentials, inference, or compute scheduling.
@@ -108,6 +108,52 @@ paths:
       responses:
         "200": { description: Exact durable challenge snapshot }
         "404": { $ref: "#/components/responses/NotFound" }
+  /v1/hepta/operator/challenges/{challenge_id}/pack-activation:
+    get:
+      tags: [Operator]
+      security: [{ OperatorToken: [] }]
+      operationId: getChallengePackActivation
+      parameters:
+        - $ref: "#/components/parameters/ChallengeId"
+      responses:
+        "200":
+          description: Exact immutable activation record
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChallengePackActivationRecordV1" }
+        "403": { description: Operator authentication failed }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [Operator]
+      security: [{ OperatorToken: [] }]
+      operationId: activateEvidenceAuditChallengePack
+      description: >-
+        Atomically advances only the frozen Evidence Audit Challenge from
+        draft to open after binding the exact clean candidate, release
+        provenance, CAS seed/readback receipt, and strict Review cross-Paper
+        denial receipt. An exact replay returns 200; any conflicting replay or
+        status drift fails closed.
+      parameters:
+        - $ref: "#/components/parameters/ChallengeId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ActivateChallengePackRequestV1" }
+      responses:
+        "200":
+          description: Exact idempotent replay of the immutable activation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChallengePackActivationRecordV1" }
+        "201":
+          description: Evidence Audit Challenge atomically activated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChallengePackActivationRecordV1" }
+        "400": { description: Frozen pack, candidate, provenance, or receipt binding is invalid }
+        "403": { description: Operator authentication failed }
+        "409": { $ref: "#/components/responses/Conflict" }
   /v1/hepta/challenges/{challenge_id}/enrollments:
     post:
       tags: [External Agents]
@@ -575,6 +621,73 @@ components:
             - { type: "null" }
         status: { type: string, enum: [draft, open, closed] }
         created_at: { type: string, format: date-time }
+    ChallengePackCandidateBindingV2:
+      type: object
+      additionalProperties: false
+      required: [schema, state, integration_base_revision, integration_source_tree, hepta_base_revision, hepta_source_tree, component_pins_authoritative, working_tree_clean, tracked_image_lock_status, source_fileset_sha256, release_image_lock_status, release_id, release_image_lock_sha256, release_provenance_sha256]
+      properties:
+        schema: { const: trnm.paper-raid.current-candidate-binding.v2 }
+        state: { type: string, enum: [immutable_candidate_pending_evidence, verified_candidate] }
+        integration_base_revision: { type: string, pattern: "^[0-9a-f]{40}$" }
+        integration_source_tree: { type: string, pattern: "^[0-9a-f]{40}$" }
+        hepta_base_revision: { type: string, pattern: "^[0-9a-f]{40}$" }
+        hepta_source_tree: { type: string, pattern: "^[0-9a-f]{40}$" }
+        component_pins_authoritative: { const: true }
+        working_tree_clean: { const: true }
+        tracked_image_lock_status: { const: unbound }
+        source_fileset_sha256: { $ref: "#/components/schemas/CanonicalSha256Commitment" }
+        release_image_lock_status: { const: locked }
+        release_id: { type: string, pattern: "^[a-z0-9][a-z0-9._-]{0,127}$" }
+        release_image_lock_sha256: { $ref: "#/components/schemas/CanonicalSha256Commitment" }
+        release_provenance_sha256: { $ref: "#/components/schemas/CanonicalSha256Commitment" }
+    ChallengePackActivationEvidenceV1:
+      type: object
+      additionalProperties: false
+      required: [schema, source_catalog_sha256, pack_manifest_sha256, cas_activation_receipt_schema, cas_activation_receipt_sha256, cas_activation_catalog_patch_schema, cas_activation_catalog_patch_sha256, cas_all_packs_verified, cas_scoped_readback, cas_pack_count, cas_object_count, strict_review_evidence_schema, strict_review_evidence_sha256, cross_paper_denial_receipt_sha256]
+      properties:
+        schema: { const: hepta.challenge_pack.activation_evidence.v1 }
+        source_catalog_sha256: { const: "sha256:fc649c1f55ef484bc2f8baf279dec1c668eaa610691ac4234a74df1d90aaa6bb" }
+        pack_manifest_sha256: { const: "sha256:69a695a6a75dd71e2c53c7a832298ab2ecbcd4086fa4ef653914dd2e5770b37c" }
+        cas_activation_receipt_schema: { const: hepta.challenge_pack.cas_activation_receipt.v1 }
+        cas_activation_receipt_sha256: { $ref: "#/components/schemas/CanonicalSha256Commitment" }
+        cas_activation_catalog_patch_schema: { const: hepta.challenge_pack.activation_catalog_patch.v2 }
+        cas_activation_catalog_patch_sha256: { $ref: "#/components/schemas/CanonicalSha256Commitment" }
+        cas_all_packs_verified: { const: true }
+        cas_scoped_readback: { const: true }
+        cas_pack_count: { const: 3 }
+        cas_object_count: { const: 26 }
+        strict_review_evidence_schema: { const: trnm.paper-raid.strict-review-evidence.v1 }
+        strict_review_evidence_sha256: { $ref: "#/components/schemas/CanonicalSha256Commitment" }
+        cross_paper_denial_receipt_sha256: { $ref: "#/components/schemas/CanonicalSha256Commitment" }
+    ActivateChallengePackRequestV1:
+      type: object
+      additionalProperties: false
+      required: [schema, template, pack_id, expected_status, requested_status, ruleset_version, ruleset_hash, dataset_manifest_hash, evaluator_manifest_hash, candidate, evidence]
+      properties:
+        schema: { const: hepta.challenge_pack.activation_request.v1 }
+        template: { const: evidence-audit }
+        pack_id: { const: paper-raid-evidence-audit-seeded-v1 }
+        expected_status: { const: draft }
+        requested_status: { const: open }
+        ruleset_version: { const: paper-raid-evidence-audit-v1 }
+        ruleset_hash: { const: "sha256:54a740273a82d56938a20db1669b236e8b3724defffe32fb91768632f7994453" }
+        dataset_manifest_hash: { const: "sha256:1363088a76b2dd5c77b04b2620a4806100f1125c482a3e6413691d1a8c372a75" }
+        evaluator_manifest_hash: { const: "sha256:7d7f0096261132ceda30e66586e49129aaa99bb979772ceec9b2940eda21261e" }
+        candidate: { $ref: "#/components/schemas/ChallengePackCandidateBindingV2" }
+        evidence: { $ref: "#/components/schemas/ChallengePackActivationEvidenceV1" }
+    ChallengePackActivationRecordV1:
+      type: object
+      additionalProperties: false
+      required: [schema, activation_id, challenge_id, request_sha256, request, previous_status, activated_status, activated_at]
+      properties:
+        schema: { const: hepta.challenge_pack.activation_record.v1 }
+        activation_id: { type: string, format: uuid }
+        challenge_id: { type: string, format: uuid }
+        request_sha256: { $ref: "#/components/schemas/CanonicalSha256Commitment" }
+        request: { $ref: "#/components/schemas/ActivateChallengePackRequestV1" }
+        previous_status: { const: draft }
+        activated_status: { const: open }
+        activated_at: { type: string, format: date-time }
     AgentRegistrationInput:
       type: object
       required: [agent_id, owner_id, protocol_version, public_key]

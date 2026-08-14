@@ -498,6 +498,32 @@ function beginPaperWorkflow(paperId) {
   };
 }
 
+function formMutationMustStayDisabled(form) {
+  if (!form || !form.dataset) return true;
+  if (form.dataset.authorityState === "stale" ||
+      form.dataset.reworkLeaseState === "expired") {
+    return true;
+  }
+  const paperId = form.dataset.paperId;
+  if (!paperId) return false;
+  try {
+    const state = paperWorkflowStates.get(canonicalUuid(paperId, "paper_id"));
+    return Boolean(state && (
+      state.pendingStaleApply ||
+      state.pendingReloadDelayMs !== null ||
+      state.reloadTimer !== null ||
+      state.reloadStarted
+    ));
+  } catch (_) {
+    return true;
+  }
+}
+
+function restoreAuthoritativeFormControls(form, controls) {
+  const disabled = formMutationMustStayDisabled(form);
+  for (const control of controls) control.disabled = disabled;
+}
+
 function nonNegativeInteger(value, field) {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 0) {
@@ -1051,14 +1077,102 @@ function authoritativeArtifactRegistration(result, expected) {
     manifestId,
     manifestHash,
     sourceBundleId: result.source_bundle_id,
+    requiredRunIds: [...expected.requiredRunIds],
     objects: expected.uploaded.map(item => ({
       logicalPath: item.logicalPath,
       role: item.role,
       digest: canonicalDigest(item.stored.digest, `${item.role}_digest`),
       uri: item.stored.uri,
-      size: item.stored.size
+      size: item.stored.size,
+      mediaType: item.mediaType
     }))
   };
+}
+
+async function registerReviewReadyManifest(values) {
+  const sources = [values.draft, values.frozenEvaluator, values.dataset, values.candidate];
+  if (new Set(sources.map(source => source.manifestId)).size !== 4 ||
+      new Set(sources.map(source => source.manifestHash)).size !== 4) {
+    throw new Error("review_ready_sources_must_be_four_distinct_registered_manifests");
+  }
+  const requiredRunIds = [...new Set(
+    sources.flatMap(source => source.requiredRunIds).map(String).filter(Boolean)
+  )].sort();
+  if (requiredRunIds.length === 0) throw new Error("review_ready_manifest_requires_run_lineage");
+  const sourceObjects = sources.flatMap(source => source.objects);
+  if (new Set(sourceObjects.map(object => object.logicalPath)).size !== sourceObjects.length ||
+      new Set(sourceObjects.map(object => object.digest)).size !== sourceObjects.length) {
+    throw new Error("review_ready_source_objects_must_have_distinct_paths_and_digests");
+  }
+  const objects = sourceObjects.map(object => ({
+    canonical_json: false,
+    dependencies: [],
+    logical_path: object.logicalPath,
+    media_type: object.mediaType,
+    role: object.role,
+    sha256: canonicalDigest(object.digest, `${object.role}_digest`).slice("sha256:".length),
+    size: object.size
+  })).sort((left, right) => left.logical_path < right.logical_path ? -1 :
+    left.logical_path > right.logical_path ? 1 : 0);
+  const manifestId = uuid();
+  const sourceBundle = {
+    artifact_root: {
+      algorithm: "sha256-canonical-manifest-v1",
+      digest_file: "artifact-bundle.v1.sha256"
+    },
+    bundle_id: `review-ready-${manifestId}`,
+    challenge_id: values.challengeId,
+    created_at: new Date().toISOString(),
+    hepta_binding_status: "unbound",
+    human_authority_materialized: false,
+    object_count: objects.length,
+    objects,
+    required_run_ids: requiredRunIds,
+    schema: "paper-raid.artifact-bundle.v1"
+  };
+  const reviewReadyAssembly = {
+    schema: "hepta.paper_raid.review_ready_artifact_assembly.v1",
+    draft: { manifest_id: values.draft.manifestId, manifest_hash: values.draft.manifestHash },
+    frozen_evaluator: {
+      manifest_id: values.frozenEvaluator.manifestId,
+      manifest_hash: values.frozenEvaluator.manifestHash
+    },
+    dataset: { manifest_id: values.dataset.manifestId, manifest_hash: values.dataset.manifestHash },
+    candidate: { manifest_id: values.candidate.manifestId, manifest_hash: values.candidate.manifestHash }
+  };
+  const expectedSourceManifestSha256 = await neutralBundleRawSha256(sourceBundle);
+  const payload = {
+    manifest_id: manifestId,
+    expected_paper_version: positiveInteger(values.paperVersion, "paper_version"),
+    expected_source_manifest_sha256: expectedSourceManifestSha256,
+    source_bundle: sourceBundle,
+    storage_locations: objects.map(object => {
+      const source = sourceObjects.find(item => item.logicalPath === object.logical_path);
+      return {
+        logical_path: object.logical_path,
+        sha256: object.sha256,
+        uri: source.uri,
+        acl: "reviewers"
+      };
+    }),
+    review_ready_assembly: reviewReadyAssembly
+  };
+  const response = await sendCommand("register_artifact", values.paperId, null, payload);
+  const result = await responseValue(response);
+  if (!response.ok) {
+    throw new Error(result && result.error ? result.error : "review_ready_manifest_registration_failed");
+  }
+  if (!result || canonicalUuid(result.manifest_id, "review_ready_manifest_id") !== manifestId ||
+      canonicalUuid(result.paper_project_id, "review_ready_paper_id") !==
+        canonicalUuid(values.paperId, "paper_id") ||
+      canonicalDigest(result.manifest_hash, "review_ready_manifest_hash") !==
+        `sha256:${expectedSourceManifestSha256}` ||
+      result.binding_schema !== "hepta.paper_raid.review_ready_artifact_manifest_binding.v1" ||
+      canonicalJson(result.review_ready_assembly) !== canonicalJson(reviewReadyAssembly) ||
+      result.object_count !== objects.length || result.version !== 1) {
+    throw new Error("review_ready_manifest_receipt_is_not_authoritative_or_exact");
+  }
+  return result;
 }
 
 async function createAuthoritativeRunFromArtifacts(form) {
@@ -1730,6 +1844,13 @@ async function appealPayload(form) {
   };
 }
 
+async function paperReworkPayload(form) {
+  return {
+    rework_id: uuid(),
+    reason_hash: await plainTextDigest(form.elements.reason.value, "paper_rework_reason")
+  };
+}
+
 async function appealResolutionPayload(form, outcome) {
   if (!new Set(["denied", "upheld"]).has(outcome)) {
     throw new Error("invalid_appeal_resolution_outcome");
@@ -2139,7 +2260,7 @@ async function submitGuidedCommand(form, command, resourceId, childId, payload, 
   } catch (error) {
     show(output, error.message, false);
   } finally {
-    for (const button of buttons) button.disabled = false;
+    restoreAuthoritativeFormControls(form, buttons);
   }
 }
 
@@ -2156,7 +2277,7 @@ async function submitSignedGuidedCommand(form, command, resourceId, childId, pay
   } catch (error) {
     show(output, error.message, false);
   } finally {
-    for (const button of buttons) button.disabled = false;
+    restoreAuthoritativeFormControls(form, buttons);
   }
 }
 
@@ -2179,7 +2300,29 @@ async function submitDerivedSignedGuidedCommand(form, command, payload, message)
   } catch (error) {
     show(output, error.message, false);
   } finally {
-    for (const button of buttons) button.disabled = false;
+    restoreAuthoritativeFormControls(form, buttons);
+  }
+}
+
+async function submitPaperDerivedSignedGuidedCommand(form, command, payload, message) {
+  const output = form.querySelector("output");
+  const buttons = form.querySelectorAll("button");
+  for (const button of buttons) button.disabled = true;
+  try {
+    const expectedPaperId = canonicalUuid(form.dataset.paperId, "paper_id");
+    const frame = await signHumanPayload(command, expectedPaperId, null, payload);
+    const resourceId = canonicalUuid(frame.resource_id, `${command}_resource_id`);
+    if (resourceId !== expectedPaperId || frame.command !== command || frame.child_id !== null) {
+      throw new Error(`${command}_authoritative_route_mismatch`);
+    }
+    const response = await sendCommand(command, resourceId, null, frame.payload);
+    const value = await responseValue(response);
+    show(output, response.ok ? message : value, response.ok);
+    if (response.ok) window.setTimeout(() => window.location.reload(), 450);
+  } catch (error) {
+    show(output, error.message, false);
+  } finally {
+    restoreAuthoritativeFormControls(form, buttons);
   }
 }
 
@@ -2280,8 +2423,8 @@ function bindGuidedPaperActions() {
       } catch (error) {
         show(output, error.message, false);
       } finally {
-        button.disabled = false;
         if (finishPaperWorkflow) finishPaperWorkflow();
+        restoreAuthoritativeFormControls(form, [button]);
       }
     });
   }
@@ -2335,8 +2478,122 @@ function bindGuidedPaperActions() {
       } catch (error) {
         show(output, error.message, false);
       } finally {
-        button.disabled = false;
         if (finishPaperWorkflow) finishPaperWorkflow();
+        restoreAuthoritativeFormControls(form, [button]);
+      }
+    });
+  }
+
+  for (const form of document.querySelectorAll(".review-ready-manifest-wizard-form")) {
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      const output = form.querySelector("output");
+      const button = form.querySelector("button");
+      let finishPaperWorkflow = null;
+      button.disabled = true;
+      try {
+        finishPaperWorkflow = beginPaperWorkflow(form.dataset.paperId);
+        const requiredRunIds = String(form.dataset.requiredRunIds || "")
+          .split(",")
+          .map(value => value.trim())
+          .filter(Boolean);
+        const common = {
+          paperId: form.dataset.paperId,
+          paperVersion: form.dataset.paperVersion,
+          challengeId: form.dataset.challengeId,
+          requiredRunIds
+        };
+        const paperFile = form.elements.paper_file.files[0];
+        const bibliographyFile = form.elements.bibliography_file.files[0];
+        const claimGraphFile = form.elements.claim_graph_file.files[0];
+        const evaluatorFile = form.elements.evaluator_file.files[0];
+        const datasetFile = form.elements.review_dataset_file.files[0];
+        const candidateFile = form.elements.candidate_file.files[0];
+        show(output, "Registering the four exact same-Paper Review sources…", true);
+        const draft = await uploadAndRegisterManifest({
+          ...common,
+          bundleKind: "review-draft-source",
+          objects: [
+            {
+              file: paperFile,
+              mediaType: form.elements.paper_media_type.value,
+              role: "paper_source",
+              logicalPath: `paper/${safeLogicalFilename(paperFile && paperFile.name, "paper.md")}`
+            },
+            {
+              file: bibliographyFile,
+              mediaType: form.elements.bibliography_media_type.value,
+              role: "bibliography",
+              logicalPath: `bibliography/${safeLogicalFilename(
+                bibliographyFile && bibliographyFile.name,
+                "references.bib"
+              )}`
+            },
+            {
+              file: claimGraphFile,
+              mediaType: "application/json",
+              role: "claim_evidence_graph",
+              logicalPath: `evidence/${safeLogicalFilename(
+                claimGraphFile && claimGraphFile.name,
+                "claim-evidence.json"
+              )}`
+            }
+          ]
+        });
+        const frozenEvaluator = await uploadAndRegisterManifest({
+          ...common,
+          bundleKind: "review-frozen-evaluator-source",
+          objects: [{
+            file: evaluatorFile,
+            mediaType: "text/x-python; charset=utf-8",
+            role: "frozen_evaluator",
+            logicalPath: `evaluator/${safeLogicalFilename(
+              evaluatorFile && evaluatorFile.name,
+              "evaluator.py"
+            )}`
+          }]
+        });
+        const dataset = await uploadAndRegisterManifest({
+          ...common,
+          bundleKind: "review-dataset-source",
+          objects: [{
+            file: datasetFile,
+            mediaType: form.elements.review_dataset_media_type.value,
+            role: "dataset",
+            logicalPath: `inputs/${safeLogicalFilename(
+              datasetFile && datasetFile.name,
+              "dataset.json"
+            )}`
+          }]
+        });
+        const candidate = await uploadAndRegisterManifest({
+          ...common,
+          bundleKind: "review-candidate-source",
+          objects: [{
+            file: candidateFile,
+            mediaType: "application/json",
+            role: "candidate",
+            logicalPath: `inputs/${safeLogicalFilename(
+              candidateFile && candidateFile.name,
+              "candidate.json"
+            )}`
+          }]
+        });
+        show(output, "Server-validating the exact frozen Review assembly…", true);
+        await registerReviewReadyManifest({
+          ...common,
+          draft,
+          frozenEvaluator,
+          dataset,
+          candidate
+        });
+        show(output, "Review-ready release bundle registered and frozen.", true);
+        requestPaperReload(form.dataset.paperId, 450);
+      } catch (error) {
+        show(output, error.message, false);
+      } finally {
+        if (finishPaperWorkflow) finishPaperWorkflow();
+        restoreAuthoritativeFormControls(form, [button]);
       }
     });
   }
@@ -2382,8 +2639,8 @@ function bindGuidedPaperActions() {
       } catch (error) {
         show(output, error.message, false);
       } finally {
-        button.disabled = false;
         if (finishPaperWorkflow) finishPaperWorkflow();
+        restoreAuthoritativeFormControls(form, [button]);
       }
     });
   }
@@ -2407,8 +2664,8 @@ function bindGuidedPaperActions() {
       } catch (error) {
         show(output, error.message, false);
       } finally {
-        button.disabled = false;
         if (finishPaperWorkflow) finishPaperWorkflow();
+        restoreAuthoritativeFormControls(form, [button]);
       }
     });
   }
@@ -2996,8 +3253,8 @@ function bindGuidedPaperActions() {
         );
         if (promoteAttempted) requestPaperReload(form.dataset.paperId, 900);
       } finally {
-        for (const button of buttons) button.disabled = false;
         if (finishPaperWorkflow) finishPaperWorkflow();
+        restoreAuthoritativeFormControls(form, buttons);
       }
     });
   }
@@ -3351,8 +3608,10 @@ function bindReviewRaid() {
       event.preventDefault();
       const button = form.querySelector("button");
       const output = form.querySelector("output");
+      let finishPaperWorkflow = null;
       button.disabled = true;
       try {
+        finishPaperWorkflow = beginPaperWorkflow(form.dataset.paperId);
         const response = await confirmReviewReceipt(form);
         const value = await responseValue(response);
         show(
@@ -3366,7 +3625,8 @@ function bindReviewRaid() {
       } catch (error) {
         show(output, error.message, false);
       } finally {
-        button.disabled = false;
+        if (finishPaperWorkflow) finishPaperWorkflow();
+        restoreAuthoritativeFormControls(form, [button]);
       }
     });
   }
@@ -3375,7 +3635,9 @@ function bindReviewRaid() {
       event.preventDefault();
       const button = event.submitter;
       if (!button) return;
+      let finishPaperWorkflow = null;
       try {
+        finishPaperWorkflow = beginPaperWorkflow(form.dataset.paperId);
         await submitSignedGuidedCommand(
           form,
           "submit_evaluation_draft_attestation",
@@ -3386,13 +3648,18 @@ function bindReviewRaid() {
         );
       } catch (error) {
         show(form.querySelector("output"), error.message, false);
+      } finally {
+        if (finishPaperWorkflow) finishPaperWorkflow();
+        restoreAuthoritativeFormControls(form, form.querySelectorAll("button"));
       }
     });
   }
   for (const form of document.querySelectorAll(".review-finalize-form")) {
     form.addEventListener("submit", async event => {
       event.preventDefault();
+      let finishPaperWorkflow = null;
       try {
+        finishPaperWorkflow = beginPaperWorkflow(form.dataset.paperId);
         await submitGuidedCommand(
           form,
           "finalize_paper_evaluation_draft",
@@ -3409,6 +3676,9 @@ function bindReviewRaid() {
         );
       } catch (error) {
         show(form.querySelector("output"), error.message, false);
+      } finally {
+        if (finishPaperWorkflow) finishPaperWorkflow();
+        restoreAuthoritativeFormControls(form, form.querySelectorAll("button"));
       }
     });
   }
@@ -3417,7 +3687,9 @@ function bindReviewRaid() {
       event.preventDefault();
       const button = event.submitter;
       if (!button || button.disabled) return;
+      let finishPaperWorkflow = null;
       try {
+        finishPaperWorkflow = beginPaperWorkflow(form.dataset.paperId);
         await submitDerivedSignedGuidedCommand(
           form,
           "resolve_appeal",
@@ -3426,6 +3698,9 @@ function bindReviewRaid() {
         );
       } catch (error) {
         show(form.querySelector("output"), error.message, false);
+      } finally {
+        if (finishPaperWorkflow) finishPaperWorkflow();
+        restoreAuthoritativeFormControls(form, form.querySelectorAll("button"));
       }
     });
   }
@@ -3435,7 +3710,9 @@ function bindAuthorAppeal() {
   for (const form of document.querySelectorAll(".author-appeal-form")) {
     form.addEventListener("submit", async event => {
       event.preventDefault();
+      let finishPaperWorkflow = null;
       try {
+        finishPaperWorkflow = beginPaperWorkflow(form.dataset.paperId);
         await submitDerivedSignedGuidedCommand(
           form,
           "submit_appeal",
@@ -3444,8 +3721,78 @@ function bindAuthorAppeal() {
         );
       } catch (error) {
         show(form.querySelector("output"), error.message, false);
+      } finally {
+        if (finishPaperWorkflow) finishPaperWorkflow();
+        restoreAuthoritativeFormControls(form, form.querySelectorAll("button"));
       }
     });
+  }
+}
+
+function bindAuthorRework() {
+  for (const form of document.querySelectorAll(".author-rework-start-form")) {
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      let finishPaperWorkflow = null;
+      try {
+        finishPaperWorkflow = beginPaperWorkflow(form.dataset.paperId);
+        await submitPaperDerivedSignedGuidedCommand(
+          form,
+          "start_paper_rework",
+          await paperReworkPayload(form),
+          "Rework lease signed and started. Opening the normal Author workflow…"
+        );
+      } catch (error) {
+        show(form.querySelector("output"), error.message, false);
+      } finally {
+        if (finishPaperWorkflow) finishPaperWorkflow();
+        restoreAuthoritativeFormControls(form, form.querySelectorAll("button"));
+      }
+    });
+  }
+}
+
+function disableExpiredPaperRework(paperId) {
+  for (const form of document.querySelectorAll("form[data-paper-id]")) {
+    if (form.dataset.paperId !== paperId) continue;
+    form.dataset.reworkLeaseState = "expired";
+    for (const control of form.querySelectorAll("button, input, select, textarea")) {
+      control.disabled = true;
+    }
+    const output = form.querySelector("output");
+    if (output) show(output, "Rework lease expired; reload authoritative Paper state.", false);
+  }
+}
+
+function bindPaperReworkCountdowns() {
+  for (const panel of document.querySelectorAll(".author-rework-lease")) {
+    const paperId = String(panel.dataset.paperId || "");
+    const deadline = Date.parse(panel.dataset.reworkExpiresAt || "");
+    const output = panel.querySelector(".paper-rework-countdown");
+    let timer = null;
+    const expire = () => {
+      panel.dataset.reworkState = "expired";
+      if (output) output.textContent = "Expired / 已过期";
+      disableExpiredPaperRework(paperId);
+      if (timer !== null) window.clearInterval(timer);
+    };
+    if (!output || !Number.isFinite(deadline) || !paperId) {
+      panel.dataset.reworkState = "unavailable";
+      if (output) output.textContent = "Unavailable / 不可用";
+      disableExpiredPaperRework(paperId);
+      continue;
+    }
+    const update = () => {
+      if (deadline <= Date.now()) {
+        expire();
+        return;
+      }
+      const remaining = compactChallengeDuration((deadline - Date.now()) / 1000);
+      output.textContent = `${remaining} / 剩余 ${remaining}`;
+      panel.dataset.reworkState = "active";
+    };
+    update();
+    if (panel.dataset.reworkState === "active") timer = window.setInterval(update, 1000);
   }
 }
 
@@ -3650,6 +3997,7 @@ const LIVE_AUTHORITY_POLL_MS = 500;
 const LIVE_AUTHORITY_REQUEST_TIMEOUT_MS = 750;
 const LIVE_AUTHORITY_RETRY_BASE_MS = 100;
 const LIVE_AUTHORITY_RETRY_MAX_MS = 1_000;
+const REVIEW_AUTHORITY_REVISION = /^[0-9a-f]{64}$/;
 
 function liveAuthorityRetryDelayMs(failures) {
   if (!Number.isSafeInteger(failures) || failures < 1) {
@@ -3659,6 +4007,127 @@ function liveAuthorityRetryDelayMs(failures) {
     LIVE_AUTHORITY_RETRY_MAX_MS,
     LIVE_AUTHORITY_RETRY_BASE_MS * (2 ** Math.min(failures - 1, 4))
   );
+}
+
+function reviewAuthorityRevisionFromHtml(html, paperId) {
+  const documentValue = new DOMParser().parseFromString(html, "text/html");
+  const cards = documentValue.querySelectorAll(".review-authority-watch");
+  if (cards.length !== 1) throw new Error("review_authority_marker_missing");
+  const card = cards[0];
+  if (card.dataset.paperId !== paperId ||
+      !REVIEW_AUTHORITY_REVISION.test(String(card.dataset.authorityRevision || ""))) {
+    throw new Error("review_authority_marker_invalid");
+  }
+  return card.dataset.authorityRevision;
+}
+
+async function fetchReviewAuthorityRevision(paperId) {
+  const response = await fetch(`/league/review/${encodeURIComponent(paperId)}`, {
+    credentials: "same-origin",
+    headers: { "accept": "text/html" },
+    signal: AbortSignal.timeout(LIVE_AUTHORITY_REQUEST_TIMEOUT_MS)
+  });
+  if (response.redirected || [401, 403, 404].includes(response.status)) return null;
+  if (!response.ok) throw new Error("review_authority_sync_failed");
+  return reviewAuthorityRevisionFromHtml(await response.text(), paperId);
+}
+
+function invalidateStaleReviewAuthority(card, connection, output) {
+  if (new Set(["stale", "stale-pending-workflow"]).has(card.dataset.authorityState)) return;
+  const paperId = card.dataset.paperId;
+  const applyInvalidation = () => {
+    card.dataset.authorityState = "stale";
+    connection.dataset.state = "stale-authority";
+    connection.textContent = "Review state changed · reloading / 评审状态已变化，正在刷新";
+    for (const form of document.querySelectorAll(`form[data-paper-id="${CSS.escape(paperId)}"]`)) {
+      form.dataset.authorityState = "stale";
+      for (const control of form.elements) control.disabled = true;
+    }
+    show(
+      output,
+      "Another participant advanced the Review Raid. Old controls are disabled; loading the current assignment…",
+      false
+    );
+    const reloadCurrentAuthority = () => requestPaperReload(paperId, 0);
+    recordProductEvent("stale_ui_reload", { paperId }).finally(reloadCurrentAuthority);
+    window.setTimeout(reloadCurrentAuthority, STALE_AUTHORITY_RELOAD_DELAY_MS);
+  };
+  const pendingWorkflow = requestStaleAuthorityRefresh(paperId, applyInvalidation);
+  if (pendingWorkflow) {
+    card.dataset.authorityState = "stale-pending-workflow";
+    connection.dataset.state = "stale-authority-pending-workflow";
+    connection.textContent = "Review changed · finishing this confirmation / 评审已变化，正在完成当前确认";
+  }
+}
+
+function createReviewAuthoritySync(card) {
+  const paperId = canonicalUuid(card.dataset.paperId, "paper_id");
+  const baselineRevision = String(card.dataset.authorityRevision || "");
+  if (!REVIEW_AUTHORITY_REVISION.test(baselineRevision)) {
+    throw new Error("review_authority_revision_is_invalid");
+  }
+  const button = card.querySelector(".review-authority-refresh");
+  const connection = card.querySelector(".review-authority-connection");
+  const output = card.querySelector(".review-authority-detail");
+  let timer = null;
+  let running = false;
+  let failures = 0;
+  let wasDisconnected = false;
+  const schedule = delay => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => sync.run(false), delay);
+  };
+  const sync = {
+    async run(manual) {
+      if (running || new Set(["stale", "stale-pending-workflow"]).has(card.dataset.authorityState)) {
+        return;
+      }
+      if (!manual && document.visibilityState === "hidden") {
+        schedule(1250);
+        return;
+      }
+      running = true;
+      if (manual) button.disabled = true;
+      try {
+        const revision = await fetchReviewAuthorityRevision(paperId);
+        if (revision === null || revision !== baselineRevision) {
+          invalidateStaleReviewAuthority(card, connection, output);
+          return;
+        }
+        connection.dataset.state = "live";
+        connection.textContent = "Live · current / 实时 · 当前状态";
+        show(output, "Review authority is current.", true);
+        if (wasDisconnected) {
+          try { await recordProductEvent("reconnected", { paperId }); } catch (_) {}
+          wasDisconnected = false;
+        }
+        failures = 0;
+        schedule(LIVE_AUTHORITY_POLL_MS);
+      } catch (error) {
+        failures += 1;
+        wasDisconnected = true;
+        connection.dataset.state = "reconnecting";
+        connection.textContent = "Reconnecting / 正在重连";
+        show(output, "Review authority is temporarily unreachable; retrying…", false);
+        schedule(liveAuthorityRetryDelayMs(failures));
+      } finally {
+        running = false;
+        button.disabled = false;
+      }
+    }
+  };
+  button.addEventListener("click", () => sync.run(true));
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") sync.run(true);
+  });
+  return sync;
+}
+
+function bindReviewAuthority() {
+  for (const card of document.querySelectorAll(".review-authority-watch")) {
+    const sync = createReviewAuthoritySync(card);
+    sync.run(true);
+  }
 }
 
 async function fetchTimelineValue(paperId, query) {
@@ -3975,7 +4444,9 @@ function bindProductTelemetry() {
       window.location.assign(href);
     });
   }
-  const paperMatch = window.location.pathname.match(/^\/league\/papers\/([0-9a-f-]{36})$/i);
+  const paperMatch = window.location.pathname.match(
+    /^\/league\/(?:papers|review)\/([0-9a-f-]{36})$/i
+  );
   const navigation = performance.getEntriesByType("navigation")[0];
   if (paperMatch && navigation && navigation.type === "reload") {
     recordProductEvent("reconnected", { paperId: paperMatch[1] }).catch(() => {});
@@ -3997,12 +4468,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindChallengeOutcomeForms();
   bindReviewQueue();
   bindReviewRaid();
+  bindAuthorRework();
   bindAuthorAppeal();
   bindProposalForms();
   bindFirstPlayableFormation();
   bindGuidedPaperActions();
   bindCommandForms();
   bindArtifactForms();
+  bindReviewAuthority();
+  bindPaperReworkCountdowns();
   bindTimeline();
   bindProductTelemetry();
   // Binding player controls must not depend on a network round trip.  A slow

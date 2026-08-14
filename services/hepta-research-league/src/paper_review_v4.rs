@@ -45,6 +45,96 @@ const ACCEPTED_ARTIFACT_MILESTONE_XP: u64 = 100;
 const ACCEPTED_REVIEW_MILESTONE_XP: u64 = 150;
 const ACCEPTED_AUTHOR_RAID_BASE_XP: u64 = 300;
 
+pub(crate) async fn verify_legacy_evaluation_panel_lifecycle_catalog(
+    pool: &sqlx::PgPool,
+) -> Result<(), String> {
+    let trigger_catalog = sqlx::query(
+        "select count(*)::bigint as total,
+                count(*) filter (
+                  where t.tgrelid='public.hepta_paper_review_assignments'::regclass
+                    and p.proname='hepta_guard_review_assignment_draft_lifecycle_v1'
+                    and n.nspname='public'
+                    and t.tgtype=19 and t.tgenabled='A'
+                )::bigint as exact
+         from pg_trigger t
+         join pg_proc p on p.oid=t.tgfoid
+         join pg_namespace n on n.oid=p.pronamespace
+         where t.tgname='hepta_review_assignment_draft_lifecycle_guard'
+           and not t.tgisinternal",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|error| format!("inspect legacy evaluation panel lifecycle trigger: {error}"))?;
+    if trigger_catalog.get::<i64, _>("total") != 1 || trigger_catalog.get::<i64, _>("exact") != 1 {
+        return Err(
+            "legacy evaluation frozen-panel lifecycle trigger is not globally unique, exact, and ALWAYS"
+                .to_string(),
+        );
+    }
+    let stale_draft_only_fk: i64 = sqlx::query_scalar(
+        "select count(*)::bigint from pg_constraint
+         where conname='hepta_paper_review_assignments_pinned_evaluation_fkey'",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|error| format!("inspect legacy evaluation pinned authority constraint: {error}"))?;
+    if stale_draft_only_fk != 0 {
+        return Err(
+            "legacy evaluation panel lifecycle remains constrained to draft-only authority"
+                .to_string(),
+        );
+    }
+    let function_catalog = sqlx::query(
+        "select p.prosrc,p.prosecdef,p.provolatile::text as volatility,
+                l.lanname,coalesce(array_to_string(p.proconfig,','),'') as config
+         from pg_proc p
+         join pg_namespace n on n.oid=p.pronamespace
+         join pg_language l on l.oid=p.prolang
+         where n.nspname='public'
+           and p.proname='hepta_guard_review_assignment_draft_lifecycle_v1'
+           and p.pronargs=0 and p.prokind='f'",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|error| format!("inspect legacy evaluation panel lifecycle function: {error}"))?;
+    if function_catalog.get::<bool, _>("prosecdef")
+        || function_catalog.get::<String, _>("volatility") != "v"
+        || function_catalog.get::<String, _>("lanname") != "plpgsql"
+        || function_catalog.get::<String, _>("config") != "search_path=pg_catalog, public"
+    {
+        return Err(
+            "legacy evaluation frozen-panel lifecycle function metadata is non-canonical"
+                .to_string(),
+        );
+    }
+    let migration =
+        include_str!("../../../migrations/0051_bind_legacy_evaluation_panel_lifecycle.sql");
+    let body_start = migration
+        .find("as $function$\n")
+        .map(|index| index + "as $function$\n".len())
+        .ok_or_else(|| "0051 canonical lifecycle function body start is missing".to_string())?;
+    let body_end = migration[body_start..]
+        .find("\n$function$;")
+        .map(|index| body_start + index)
+        .ok_or_else(|| "0051 canonical lifecycle function body end is missing".to_string())?;
+    let normalize = |value: &str| {
+        value
+            .split_whitespace()
+            .map(str::to_ascii_lowercase)
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let expected = normalize(&migration[body_start..body_end]);
+    let actual = normalize(&function_catalog.get::<String, _>("prosrc"));
+    if actual != expected {
+        return Err(
+            "legacy evaluation frozen-panel lifecycle function body is not the exact 0051 authority"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 /// Read the exact microsecond-precision value PostgreSQL will persist so an
 /// immutable JSON projection and its relational `timestamptz` remain equal.
 async fn postgres_contribution_ledger_now(
@@ -58,9 +148,9 @@ async fn postgres_contribution_ledger_now(
 
 #[derive(Clone, Default)]
 pub(crate) struct ReviewMemory {
-    assignments: HashMap<Uuid, ReviewAssignment>,
-    evaluation_drafts: HashMap<Uuid, PaperEvaluationDraft>,
-    draft_attestations: HashMap<Uuid, EvaluationDraftAttestation>,
+    pub(super) assignments: HashMap<Uuid, ReviewAssignment>,
+    pub(super) evaluation_drafts: HashMap<Uuid, PaperEvaluationDraft>,
+    pub(super) draft_attestations: HashMap<Uuid, EvaluationDraftAttestation>,
     pub(super) contribution_ledgers: HashMap<Uuid, ContributionLedger>,
     pub(crate) evaluations: HashMap<Uuid, PaperEvaluation>,
     pub(crate) reproductions: HashMap<Uuid, PaperReproduction>,
@@ -1164,7 +1254,7 @@ async fn active_registered_player_postgres(
     Ok(player)
 }
 
-fn review_assignment_active(assignment: &ReviewAssignment, now: DateTime<Utc>) -> bool {
+pub(super) fn review_assignment_active(assignment: &ReviewAssignment, now: DateTime<Utc>) -> bool {
     match assignment.status {
         ReviewAssignmentStatus::Claimed => assignment.expires_at > now,
         ReviewAssignmentStatus::Pinned => true,
@@ -1172,13 +1262,16 @@ fn review_assignment_active(assignment: &ReviewAssignment, now: DateTime<Utc>) -
     }
 }
 
-fn latest_review_evaluation(
+fn latest_review_evaluation_for_submission(
     paper_id: Uuid,
+    submission_id: Uuid,
     evaluations: &[PaperEvaluation],
 ) -> Option<&PaperEvaluation> {
     evaluations
         .iter()
-        .filter(|evaluation| evaluation.paper_project_id == paper_id)
+        .filter(|evaluation| {
+            evaluation.paper_project_id == paper_id && evaluation.submission_id == submission_id
+        })
         .max_by_key(|evaluation| (evaluation.version, evaluation.evaluation_id))
 }
 
@@ -1638,6 +1731,7 @@ pub(crate) fn effective_finality_resolution_id(
 #[allow(clippy::too_many_arguments)]
 fn claimable_review_vacancies(
     paper_id: Uuid,
+    submission_id: Uuid,
     player_id: Uuid,
     evaluations: &[PaperEvaluation],
     reproductions: &[PaperReproduction],
@@ -1646,7 +1740,7 @@ fn claimable_review_vacancies(
     assignments: &[ReviewAssignment],
     now: DateTime<Utc>,
 ) -> Result<Vec<ReviewAssignmentVacancy>, ApiError> {
-    let latest = latest_review_evaluation(paper_id, evaluations);
+    let latest = latest_review_evaluation_for_submission(paper_id, submission_id, evaluations);
     let mut vacancies = Vec::new();
     let panel_round = match latest {
         None => Some(1),
@@ -1665,6 +1759,7 @@ fn claimable_review_vacancies(
     if let Some(review_round) = panel_round {
         let was_prior_panel_member = evaluations.iter().any(|evaluation| {
             evaluation.paper_project_id == paper_id
+                && evaluation.submission_id == submission_id
                 && evaluation.version < review_round
                 && (evaluation.evaluator_player_id == player_id
                     || evaluation
@@ -1718,6 +1813,7 @@ fn claimable_review_vacancies(
     vacancies.retain(|vacancy| {
         !assignments.iter().any(|assignment| {
             assignment.paper_project_id == paper_id
+                && assignment.submission_id == submission_id
                 && assignment.review_round == vacancy.review_round
                 && assignment.slot == vacancy.slot
                 && review_assignment_active(assignment, now)
@@ -1749,6 +1845,7 @@ fn make_review_queue_item(
         .iter()
         .filter(|assignment| {
             assignment.paper_project_id == paper.paper_project_id
+                && assignment.submission_id == submission.submission_id
                 && assignment.player_id == player_id
                 && review_assignment_active(assignment, now)
         })
@@ -1757,6 +1854,7 @@ fn make_review_queue_item(
     my_assignments.sort_by_key(|assignment| (assignment.review_round, assignment.slot.rank()));
     let open_slots = claimable_review_vacancies(
         paper.paper_project_id,
+        submission.submission_id,
         player_id,
         evaluations,
         reproductions,
@@ -1845,6 +1943,7 @@ fn validate_review_assignment_claim(
     }
     if assignments.iter().any(|assignment| {
         assignment.paper_project_id == context.paper.paper_project_id
+            && assignment.submission_id == submission.submission_id
             && assignment.review_round == requested.review_round
             && assignment.player_id == player_id
             && review_assignment_active(assignment, now)
@@ -1856,6 +1955,7 @@ fn validate_review_assignment_claim(
     }
     let vacancies = claimable_review_vacancies(
         context.paper.paper_project_id,
+        submission.submission_id,
         player_id,
         evaluations,
         reproductions,
@@ -1875,6 +1975,7 @@ fn validate_review_assignment_claim(
             .iter()
             .filter(|evaluation| {
                 evaluation.paper_project_id == context.paper.paper_project_id
+                    && evaluation.submission_id == submission.submission_id
                     && evaluation.version < requested.review_round
             })
             .flat_map(|evaluation| {
@@ -1898,6 +1999,7 @@ fn validate_review_assignment_claim(
             .iter()
             .find(|evaluation| {
                 evaluation.paper_project_id == context.paper.paper_project_id
+                    && evaluation.submission_id == submission.submission_id
                     && evaluation.version == requested.review_round
             })
             .ok_or_else(|| {
@@ -1966,6 +2068,103 @@ fn enforce_evaluation_assignments<'a>(
         ));
     }
     Ok(())
+}
+
+fn claimed_evaluation_panel_assignment_ids(
+    paper_id: Uuid,
+    submission_id: Uuid,
+    review_round: u64,
+    request: &CreatePaperEvaluationRequest,
+    assignments: &[ReviewAssignment],
+    now: DateTime<Utc>,
+) -> Result<Vec<Uuid>, ApiError> {
+    let reviewer_ids = request
+        .reviewer_attestations
+        .iter()
+        .map(|review| review.reviewer_player_id)
+        .collect::<HashSet<_>>();
+    let expected = [
+        (ReviewAssignmentSlot::Evaluator, request.evaluator_player_id),
+        (
+            ReviewAssignmentSlot::Reviewer1,
+            assignments
+                .iter()
+                .find(|assignment| {
+                    assignment.paper_project_id == paper_id
+                        && assignment.submission_id == submission_id
+                        && assignment.review_round == review_round
+                        && assignment.slot == ReviewAssignmentSlot::Reviewer1
+                        && reviewer_ids.contains(&assignment.player_id)
+                        && assignment.status == ReviewAssignmentStatus::Claimed
+                        && assignment.pinned_evaluation_id.is_none()
+                        && assignment.expires_at > now
+                })
+                .map(|assignment| assignment.player_id)
+                .ok_or_else(|| {
+                    ApiError::conflict(
+                        "review_assignment_panel_changed",
+                        "the frozen reviewer_1 assignment is no longer claimable",
+                    )
+                })?,
+        ),
+        (
+            ReviewAssignmentSlot::Reviewer2,
+            assignments
+                .iter()
+                .find(|assignment| {
+                    assignment.paper_project_id == paper_id
+                        && assignment.submission_id == submission_id
+                        && assignment.review_round == review_round
+                        && assignment.slot == ReviewAssignmentSlot::Reviewer2
+                        && reviewer_ids.contains(&assignment.player_id)
+                        && assignment.status == ReviewAssignmentStatus::Claimed
+                        && assignment.pinned_evaluation_id.is_none()
+                        && assignment.expires_at > now
+                })
+                .map(|assignment| assignment.player_id)
+                .ok_or_else(|| {
+                    ApiError::conflict(
+                        "review_assignment_panel_changed",
+                        "the frozen reviewer_2 assignment is no longer claimable",
+                    )
+                })?,
+        ),
+    ];
+    let mut ids = Vec::with_capacity(expected.len());
+    for (slot, player_id) in expected {
+        let mut matching = assignments.iter().filter(|assignment| {
+            assignment.paper_project_id == paper_id
+                && assignment.submission_id == submission_id
+                && assignment.review_round == review_round
+                && assignment.slot == slot
+                && assignment.player_id == player_id
+                && assignment.status == ReviewAssignmentStatus::Claimed
+                && assignment.pinned_evaluation_id.is_none()
+                && assignment.expires_at > now
+        });
+        let assignment = matching.next().ok_or_else(|| {
+            ApiError::conflict(
+                "review_assignment_panel_changed",
+                "the frozen evaluation panel is no longer claimable",
+            )
+        })?;
+        if matching.next().is_some() {
+            return Err(ApiError::internal(
+                "multiple claimed Review assignments occupy one frozen panel slot",
+            ));
+        }
+        ids.push(assignment.assignment_id);
+    }
+    if ids.len() != 3
+        || ids.iter().copied().collect::<HashSet<_>>().len() != 3
+        || reviewer_ids.len() != 2
+    {
+        return Err(ApiError::conflict(
+            "review_assignment_panel_changed",
+            "the frozen evaluation panel must contain exactly three distinct assignments",
+        ));
+    }
+    Ok(ids)
 }
 
 fn pinned_evaluation_panel_assignment_ids(
@@ -2669,6 +2868,11 @@ async fn claim_review_assignment(
                     "review assignments require a frozen submission-ready PaperBundle",
                 )
             })?;
+        let release_manifest = exact_frozen_review_manifest(
+            next.collaboration.artifact_manifests.values(),
+            &submission,
+        )?;
+        validate_review_ready_artifact_manifest(&release_manifest)?;
         if next.review.assignments.contains_key(&request.assignment_id) {
             return Err(ApiError::conflict(
                 "review_assignment_exists",
@@ -2780,6 +2984,26 @@ async fn claim_review_assignment(
     })?;
     let submission: JointPaperSubmission =
         decode_record(submission_row.get("record_json"), "joint paper submission")?;
+    let manifest_rows = sqlx::query(
+        "select record_json from hepta_artifact_manifests
+         where paper_project_id=$1 and manifest_hash=$2 for share",
+    )
+    .bind(paper_id)
+    .bind(
+        &submission
+            .paper_bundle
+            .release_candidate
+            .artifact_manifest_hash,
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(ApiError::database)?;
+    let release_manifests = manifest_rows
+        .into_iter()
+        .map(|row| decode_record(row.get("record_json"), "review-ready release manifest"))
+        .collect::<Result<Vec<ArtifactManifest>, ApiError>>()?;
+    let release_manifest = exact_frozen_review_manifest(release_manifests.iter(), &submission)?;
+    validate_review_ready_artifact_manifest(&release_manifest)?;
     let assignments = expire_review_assignments_postgres(&mut tx, paper_id, now).await?;
     let evaluations = load_review_records(
         &mut tx,
@@ -3140,6 +3364,28 @@ fn exact_frozen_review_manifest<'a>(
     Ok(matches[0].clone())
 }
 
+fn paper_scoped_review_object_key(
+    paper_id: Uuid,
+    artifact_manifest_hash: &str,
+    object: &NeutralArtifactObjectV1,
+) -> Result<String, ApiError> {
+    let digest = format!("sha256:{}", object.sha256);
+    let object_scope = canonical_json_sha256(&json!({
+        "schema": "hepta.paper_raid.review_object_scope.v1",
+        "paper_project_id": paper_id,
+        "artifact_manifest_hash": artifact_manifest_hash,
+        "logical_path": &object.logical_path,
+        "digest": digest,
+    }))
+    .map_err(|error| ApiError::internal(format!("hash review object scope: {error}")))?;
+    Ok(format!(
+        "review-object-{}",
+        object_scope
+            .strip_prefix("sha256:")
+            .expect("canonical digest has sha256 prefix")
+    ))
+}
+
 fn make_frozen_review_authority(
     submission: &JointPaperSubmission,
     assignment: &ReviewAssignment,
@@ -3177,7 +3423,7 @@ fn make_frozen_review_authority(
         ));
     }
     let mut objects = Vec::with_capacity(manifest.objects.len());
-    for (index, object) in manifest.objects.iter().enumerate() {
+    for object in &manifest.objects {
         let location = location_by_path
             .get(object.logical_path.as_str())
             .ok_or_else(|| {
@@ -3209,7 +3455,11 @@ fn make_frozen_review_authority(
             continue;
         }
         objects.push(FrozenReviewObjectV1 {
-            object_key: format!("object-{index:04}"),
+            object_key: paper_scoped_review_object_key(
+                submission.paper_project_id,
+                &manifest.manifest_hash,
+                object,
+            )?,
             logical_path: object.logical_path.clone(),
             role: object.role.clone(),
             digest,
@@ -3218,6 +3468,9 @@ fn make_frozen_review_authority(
             download_path: REVIEW_OBJECT_DOWNLOAD_PATH_V1.to_string(),
         });
     }
+    objects.sort_by(|left, right| {
+        (&left.object_key, &left.logical_path).cmp(&(&right.object_key, &right.logical_path))
+    });
     let trusted_evaluators = objects
         .iter()
         .filter(|object| object.role == "frozen_evaluator")
@@ -6732,12 +6985,26 @@ async fn create_paper_evaluation(
         )?;
         let prepared =
             validate_evaluation_context(&context, &submission, &ledger, &request, now, true)?;
+        let assignments = next
+            .review
+            .assignments
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
         enforce_evaluation_assignments(
             paper_id,
             submission.submission_id,
             version,
             &request,
-            next.review.assignments.values(),
+            assignments.iter(),
+            now,
+        )?;
+        let panel_assignment_ids = claimed_evaluation_panel_assignment_ids(
+            paper_id,
+            submission.submission_id,
+            version,
+            &request,
+            &assignments,
             now,
         )?;
         let (evaluator, evaluator_key) = active_player_key_memory(
@@ -6794,6 +7061,22 @@ async fn create_paper_evaluation(
         next.review
             .raid_scores
             .insert(raid_score.raid_score_id, raid_score);
+        for assignment_id in &panel_assignment_ids {
+            transition_review_assignment_memory(
+                &mut next.review,
+                *assignment_id,
+                ReviewAssignmentStatus::Pinned,
+                Some(evaluation.evaluation_id),
+                now,
+            )?;
+            transition_review_assignment_memory(
+                &mut next.review,
+                *assignment_id,
+                ReviewAssignmentStatus::Consumed,
+                None,
+                now,
+            )?;
+        }
         push_room_event_memory(
             &mut next,
             OPERATION,
@@ -6864,6 +7147,14 @@ async fn create_paper_evaluation(
         assignments.iter(),
         now,
     )?;
+    let panel_assignment_ids = claimed_evaluation_panel_assignment_ids(
+        paper_id,
+        submission.submission_id,
+        version,
+        &request,
+        &assignments,
+        now,
+    )?;
     let (evaluator, evaluator_key) = active_player_key_postgres(
         &mut tx,
         request.evaluator_player_id,
@@ -6907,6 +7198,24 @@ async fn create_paper_evaluation(
     let evaluation = make_evaluation(&context, &request, prepared, attestations, now, version);
     let raid_score = make_raid_score(&evaluation, &ledger, now)?;
     insert_evaluation_postgres(&mut tx, &evaluation, &raid_score).await?;
+    for assignment_id in &panel_assignment_ids {
+        transition_review_assignment_postgres(
+            &mut tx,
+            *assignment_id,
+            ReviewAssignmentStatus::Pinned,
+            Some(evaluation.evaluation_id),
+            now,
+        )
+        .await?;
+        transition_review_assignment_postgres(
+            &mut tx,
+            *assignment_id,
+            ReviewAssignmentStatus::Consumed,
+            None,
+            now,
+        )
+        .await?;
+    }
     insert_room_event_postgres(
         &mut tx,
         OPERATION,
@@ -8622,7 +8931,7 @@ async fn get_paper_review_state(
     Ok(Json(model))
 }
 
-async fn load_review_records<T: serde::de::DeserializeOwned>(
+pub(super) async fn load_review_records<T: serde::de::DeserializeOwned>(
     tx: &mut Transaction<'_, Postgres>,
     table: &'static str,
     paper_id: Uuid,
@@ -8666,6 +8975,43 @@ fn sort_review_model(model: &mut PaperReviewReadModel) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migration_0051_is_atomic_and_preserves_both_panel_authority_paths() {
+        let migration =
+            include_str!("../../../migrations/0051_bind_legacy_evaluation_panel_lifecycle.sql");
+        assert!(migration.contains("\nbegin;\n"));
+        assert!(migration.trim_end().ends_with("commit;"));
+        assert!(migration.contains("public.hepta_paper_evaluation_drafts"));
+        assert!(migration.contains("public.hepta_paper_evaluations"));
+        assert!(migration.contains("public.hepta_paper_evaluation_panel_attestations"));
+        assert!(migration
+            .contains("enable always trigger hepta_review_assignment_draft_lifecycle_guard"));
+        assert!(!migration.contains(" or true"));
+    }
+
+    #[test]
+    fn review_object_keys_are_deterministic_and_paper_scoped() {
+        let object = NeutralArtifactObjectV1 {
+            canonical_json: false,
+            dependencies: Vec::new(),
+            logical_path: "inputs/dataset.json".to_string(),
+            media_type: "application/json".to_string(),
+            role: "dataset".to_string(),
+            sha256: "a".repeat(64),
+            size: 32,
+        };
+        let manifest_hash = format!("sha256:{}", "b".repeat(64));
+        let first = paper_scoped_review_object_key(Uuid::from_u128(1), &manifest_hash, &object)
+            .expect("first Paper-scoped key");
+        let same = paper_scoped_review_object_key(Uuid::from_u128(1), &manifest_hash, &object)
+            .expect("deterministic Paper-scoped key");
+        let foreign = paper_scoped_review_object_key(Uuid::from_u128(2), &manifest_hash, &object)
+            .expect("foreign Paper-scoped key");
+        assert_eq!(first, same);
+        assert_ne!(first, foreign);
+        assert!(first.starts_with("review-object-") && first.len() == 78);
+    }
 
     #[test]
     fn paper_score_hard_gate_overrides_a_perfect_component_total() {
@@ -8744,6 +9090,7 @@ mod tests {
             required_run_ids: Vec::new(),
             storage_locations: Vec::new(),
             total_size_bytes: 0,
+            review_ready_assembly: None,
             version: 1,
             created_at: Utc::now(),
         }
@@ -9294,6 +9641,7 @@ mod tests {
         assert_eq!(
             claimable_review_vacancies(
                 paper_id,
+                assignments[0].submission_id,
                 Uuid::new_v4(),
                 &[],
                 &[],
@@ -9373,6 +9721,7 @@ mod tests {
         .is_err());
         let before = claimable_review_vacancies(
             paper_id,
+            submission_id,
             player_id,
             &evaluations,
             &[],
@@ -9609,6 +9958,7 @@ mod tests {
         );
         let after = claimable_review_vacancies(
             paper_id,
+            submission_id,
             player_id,
             &evaluations,
             &[],
@@ -9770,8 +10120,10 @@ mod tests {
         let mut expired =
             assignment_fixture(paper_id, Uuid::new_v4(), ReviewAssignmentSlot::Evaluator);
         expired.expires_at = now - chrono::Duration::seconds(1);
+        let submission_id = expired.submission_id;
         let vacancies = claimable_review_vacancies(
             paper_id,
+            submission_id,
             Uuid::new_v4(),
             &[],
             &[],
@@ -9909,6 +10261,7 @@ mod tests {
         }
         assert!(claimable_review_vacancies(
             paper_id,
+            draft.submission_id,
             Uuid::new_v4(),
             &[],
             &[],

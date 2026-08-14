@@ -45,6 +45,7 @@ pub const PAPER_REVIEW_ATTESTATION_V1: &str = "hepta.paper_raid.review_attestati
 pub const PAPER_REPRODUCTION_V1: &str = "hepta.paper_raid.reproduction.v1";
 pub const PAPER_APPEAL_V1: &str = "hepta.paper_raid.appeal.v1";
 pub const PAPER_APPEAL_RESOLUTION_V1: &str = "hepta.paper_raid.appeal_resolution.v1";
+pub const PAPER_REWORK_V1: &str = "hepta.paper_raid.rework.v1";
 pub const FROZEN_REVIEW_AUTHORITY_V1: &str = "hepta.paper_raid.frozen_review_authority.v1";
 pub const RESOLVED_FROZEN_REVIEW_BUNDLE_V1: &str =
     "hepta.paper_raid.resolved_frozen_review_bundle.v1";
@@ -4862,6 +4863,71 @@ pub struct PaperAppealResolutionSigningV1 {
     pub signing_key_id: String,
     pub signing_public_key_hash: String,
     pub signed_at_unix: i64,
+}
+
+/// Human-author authorization for reopening a terminally rejected Paper.
+///
+/// The frame deliberately binds the rejected immutable evaluation and
+/// submission, plus the exact optimistic Paper version.  The replacement
+/// revision and PaperBundle do not exist yet; they are bound later by a
+/// separate immutable resubmission record.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PaperReworkSigningV1 {
+    pub schema: String,
+    pub rework_id: Uuid,
+    pub paper_project_id: Uuid,
+    pub rejected_evaluation_id: Uuid,
+    pub rejected_submission_id: Uuid,
+    pub expected_paper_version: u64,
+    pub rework_cycle: u64,
+    pub author_player_id: Uuid,
+    pub signing_key_id: String,
+    pub signing_public_key_hash: String,
+    pub reason_hash: String,
+    pub signed_at_unix: i64,
+}
+
+pub fn paper_rework_signing_bytes(rework: &PaperReworkSigningV1) -> Result<Vec<u8>, String> {
+    if rework.schema != PAPER_REWORK_V1
+        || rework.expected_paper_version == 0
+        || rework.expected_paper_version > JSON_SAFE_U64_MAX
+        || rework.rework_cycle < 2
+        || rework.rework_cycle > JSON_SAFE_U64_MAX
+        || rework.signed_at_unix < 0
+    {
+        return Err("Paper rework schema, version, cycle, or timestamp is invalid".to_string());
+    }
+    validate_key_id("signing_key_id", &rework.signing_key_id)?;
+    decode_digest(&rework.signing_public_key_hash)?;
+    decode_digest(&rework.reason_hash)?;
+    Ok(CanonicalFrame::new("hepta_paper_raid_rework_v1")
+        .string(&rework.schema)?
+        .string(&rework.rework_id.to_string())?
+        .string(&rework.paper_project_id.to_string())?
+        .string(&rework.rejected_evaluation_id.to_string())?
+        .string(&rework.rejected_submission_id.to_string())?
+        .u64(rework.expected_paper_version)
+        .u64(rework.rework_cycle)
+        .string(&rework.author_player_id.to_string())?
+        .string(&rework.signing_key_id)?
+        .digest(&rework.signing_public_key_hash)?
+        .digest(&rework.reason_hash)?
+        .i64(rework.signed_at_unix)
+        .finish())
+}
+
+pub fn verify_paper_rework_signature(
+    rework: &PaperReworkSigningV1,
+    signature: &str,
+    key: &VerifyingKey,
+) -> Result<(), String> {
+    let signature = decode_base64_exact::<64>("Paper rework signature", signature)?;
+    key.verify(
+        &paper_rework_signing_bytes(rework)?,
+        &Signature::from_bytes(&signature),
+    )
+    .map_err(|_| "Paper rework signature verification failed".to_string())
 }
 
 pub fn paper_appeal_resolution_signing_bytes(

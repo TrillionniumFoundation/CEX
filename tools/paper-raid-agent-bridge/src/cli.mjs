@@ -33,6 +33,18 @@ import {
 const HELP = `Paper Raid Agent Bridge v2
 
 Usage:
+  paper-raid-agent-bridge install --package FILE --manifest FILE --signature FILE \\
+    --trusted-key FILE --fingerprint sha256:HEX --bff-url ORIGIN --agent-id ID \\
+    --capabilities LIST --resource-classes LIST [--mode confirm|auto] [--acknowledge-auto]
+  paper-raid-agent-bridge pair [--root TEST_ROOT]
+  paper-raid-agent-bridge confirm [--root TEST_ROOT]
+  paper-raid-agent-bridge mode --mode confirm|auto [--acknowledge-auto] [--root TEST_ROOT]
+  paper-raid-agent-bridge diagnose [--json] [--root TEST_ROOT]
+  paper-raid-agent-bridge update --package FILE --manifest FILE --signature FILE \\
+    --trusted-key FILE --fingerprint sha256:HEX [--root TEST_ROOT]
+  paper-raid-agent-bridge rollback --signature FILE --trusted-key FILE \\
+    --fingerprint sha256:HEX [--root TEST_ROOT]
+  paper-raid-agent-bridge uninstall [--purge-data] [--root TEST_ROOT]
   paper-raid-agent-bridge identity-generate --agent-id ID --out FILE
   paper-raid-agent-bridge identity-import --agent-id ID --from FILE --out FILE
   paper-raid-agent-bridge describe --config FILE
@@ -44,8 +56,13 @@ Usage:
   paper-raid-agent-bridge work --config FILE [--watch] [--auto]
   paper-raid-agent-bridge sign-action --config FILE --input FILE
 
-The pair command reads its one-time code only from a silent TTY prompt or
-stdin. It never accepts pairing codes through argv, environment, or config.
+Install, update, and rollback require a detached raw Ed25519 signature plus an
+operator-pinned trusted public key fingerprint. --root and --systemctl are an
+isolated test harness and never contact the host user manager.
+
+The pair command reads its one-time code only from a silent TTY prompt or stdin.
+It never accepts pairing codes through argv, environment, or config. The
+background service defaults to Confirm; Auto requires an explicit acknowledgement.
 `;
 
 function parseArguments(argv) {
@@ -54,7 +71,16 @@ function parseArguments(argv) {
   for (let index = 0; index < rest.length; index += 1) {
     const name = rest[index];
     if (!name.startsWith("--")) throw new Error(`unexpected argument ${name}`);
-    if (["--watch", "--auto", "--help"].includes(name)) {
+    if (
+      [
+        "--watch",
+        "--auto",
+        "--help",
+        "--json",
+        "--purge-data",
+        "--acknowledge-auto",
+      ].includes(name)
+    ) {
       if (flags.has(name)) throw new Error(`duplicate flag ${name}`);
       flags.set(name, true);
       continue;
@@ -101,6 +127,28 @@ async function configured(flags) {
   const config = await loadConfig(required(flags, "--config"));
   const identity = await loadIdentity(config.identity_file);
   return { config, identity };
+}
+
+async function lifecycleModule() {
+  return import("./lifecycle.mjs");
+}
+
+function optionalString(flags, name) {
+  const value = flags.get(name);
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${name} must be a non-empty value`);
+  }
+  return value;
+}
+
+function lifecycleCommon(flags) {
+  const root = optionalString(flags, "--root");
+  const systemctlPath = optionalString(flags, "--systemctl");
+  if ((root === undefined) !== (systemctlPath === undefined)) {
+    throw new Error("--root and --systemctl are a test-harness pair and must appear together");
+  }
+  return { root, systemctlPath };
 }
 
 function readPipedLine(input) {
@@ -302,6 +350,110 @@ export async function main(argv) {
     process.stdout.write(HELP);
     return;
   }
+  if (command === "install") {
+    allowed(flags, [
+      "--package",
+      "--manifest",
+      "--signature",
+      "--trusted-key",
+      "--fingerprint",
+      "--bff-url",
+      "--agent-id",
+      "--capabilities",
+      "--resource-classes",
+      "--mode",
+      "--acknowledge-auto",
+      "--root",
+      "--systemctl",
+    ]);
+    const lifecycle = await lifecycleModule();
+    output(await lifecycle.installProduct({
+      ...lifecycleCommon(flags),
+      packagePath: required(flags, "--package"),
+      manifestPath: required(flags, "--manifest"),
+      signaturePath: required(flags, "--signature"),
+      trustedKeyPath: required(flags, "--trusted-key"),
+      fingerprint: required(flags, "--fingerprint"),
+      bffUrl: required(flags, "--bff-url"),
+      agentId: required(flags, "--agent-id"),
+      capabilities: required(flags, "--capabilities"),
+      resourceClasses: required(flags, "--resource-classes"),
+      mode: optionalString(flags, "--mode") ?? "confirm",
+      autoAcknowledged: flags.has("--acknowledge-auto"),
+    }));
+    return;
+  }
+  if (command === "update") {
+    allowed(flags, [
+      "--package",
+      "--manifest",
+      "--signature",
+      "--trusted-key",
+      "--fingerprint",
+      "--root",
+      "--systemctl",
+    ]);
+    const lifecycle = await lifecycleModule();
+    output(await lifecycle.updateProduct({
+      ...lifecycleCommon(flags),
+      packagePath: required(flags, "--package"),
+      manifestPath: required(flags, "--manifest"),
+      signaturePath: required(flags, "--signature"),
+      trustedKeyPath: required(flags, "--trusted-key"),
+      fingerprint: required(flags, "--fingerprint"),
+    }));
+    return;
+  }
+  if (command === "rollback") {
+    allowed(flags, [
+      "--signature",
+      "--trusted-key",
+      "--fingerprint",
+      "--root",
+      "--systemctl",
+    ]);
+    const lifecycle = await lifecycleModule();
+    output(await lifecycle.rollbackProduct({
+      ...lifecycleCommon(flags),
+      signaturePath: required(flags, "--signature"),
+      trustedKeyPath: required(flags, "--trusted-key"),
+      fingerprint: required(flags, "--fingerprint"),
+    }));
+    return;
+  }
+  if (command === "uninstall") {
+    allowed(flags, ["--purge-data", "--root", "--systemctl"]);
+    const lifecycle = await lifecycleModule();
+    output(await lifecycle.uninstallProduct({
+      ...lifecycleCommon(flags),
+      purgeData: flags.has("--purge-data"),
+    }));
+    return;
+  }
+  if (command === "diagnose") {
+    allowed(flags, ["--json", "--root", "--systemctl"]);
+    const lifecycle = await lifecycleModule();
+    const result = await lifecycle.diagnoseProduct(lifecycleCommon(flags));
+    if (flags.has("--json")) output(result);
+    else process.stdout.write(lifecycle.formatDiagnosis(result));
+    return;
+  }
+  if (command === "mode") {
+    allowed(flags, ["--mode", "--acknowledge-auto", "--root", "--systemctl"]);
+    const lifecycle = await lifecycleModule();
+    output(await lifecycle.setServiceMode({
+      ...lifecycleCommon(flags),
+      mode: required(flags, "--mode"),
+      autoAcknowledged: flags.has("--acknowledge-auto"),
+    }));
+    return;
+  }
+  if (command === "service") {
+    allowed(flags, ["--root"]);
+    const lifecycle = await lifecycleModule();
+    await lifecycle.runInstalledService({ root: optionalString(flags, "--root") });
+    return;
+  }
   if (command === "identity-generate") {
     allowed(flags, ["--agent-id", "--out"]);
     output(
@@ -330,13 +482,36 @@ export async function main(argv) {
     return;
   }
   if (command === "pair") {
-    allowed(flags, ["--config"]);
-    const { config, identity } = await configured(flags);
+    allowed(flags, ["--config", "--root"]);
+    if (flags.has("--config") && flags.has("--root")) {
+      throw new Error("pair accepts either --config or --root, not both");
+    }
+    let config;
+    let identity;
+    if (flags.has("--config")) {
+      ({ config, identity } = await configured(flags));
+    } else {
+      const lifecycle = await lifecycleModule();
+      config = await loadConfig(
+        await lifecycle.installedConfigPath(optionalString(flags, "--root")),
+      );
+      identity = await loadIdentity(config.identity_file);
+    }
     output(
       await pairAgent(config, identity, {
         readPairingCode: () => readPairingCodeFromInput(),
       }),
     );
+    return;
+  }
+  if (command === "confirm") {
+    allowed(flags, ["--root"]);
+    const lifecycle = await lifecycleModule();
+    const config = await loadConfig(
+      await lifecycle.installedConfirmConfigPath(optionalString(flags, "--root")),
+    );
+    const identity = await loadIdentity(config.identity_file);
+    await workOnce(config, identity, new Map());
     return;
   }
   if (command === "binding") {

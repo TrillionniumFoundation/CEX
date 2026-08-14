@@ -2,8 +2,8 @@
   "schema": "hepta.vendor.trnm_chain_crates.v1",
   "source_repository": "https://github.com/TrillionniumFoundation/Trillionnium-Chain.git",
   "source_branch": "feature/chain-paper-raid-receipt-v2",
-  "source_commit": "4adfbadaa8c35cd3515f20381eb6b80d6885f457",
-  "source_tree": "396ae6037b24037aff6983fd30d6baf906fda687",
+  "source_commit": "a691e486c2c43dfb1fb686a4866418f093f625e7",
+  "source_tree": "83580e4dbd1ecd7c0a40d9d59b7749a52d55dc6c",
   "license": "MIT",
   "update_policy": "Copy byte-for-byte from a repository-external fresh clone checked out detached at an explicitly reviewed Chain commit; update this manifest, Cargo.lock, and cross-language golden vectors in the same change.",
   "packaging_context": {
@@ -45,41 +45,42 @@
     },
     "trnm-finality-verifier": {
       "version": "0.1.0",
-      "source_git_tree": "93883497881e470e56ede755f5a20780c2989a60",
-      "content_manifest_sha256": "8c41c6e7b292bbe73b6838461e1b60ceb886da7196b6199fbf5fb209d50bf2cf",
+      "source_git_tree": "3db7fe2b40faa15d9597ea2824b1079ca93c754c",
+      "content_manifest_sha256": "c2d79a794cb6c3d7bdccd292d5480a4c970d92c3988eeba7ac612ba9e2a1aa0d",
       "files": {
-        "Cargo.toml": "dbc51406c6222868252facd3b3caf26b2dce45546a4d8bae07139100d21ec6ad",
-        "fixtures/README.md": "899ff6516f0cf5eed7179cd27190175d7ee1e744ebf73096b4c1ec3703640279",
+        "Cargo.toml": "eabfc75399b8d66f73d208a3e8fecd85ae9238fcd9d262cc551b05c428951ba9",
+        "fixtures/README.md": "a12f0fcba492f86ef8574cc22df6f00041a55f13f39bc0c488c70e618eaa1919",
         "fixtures/cometbft-apphash-finality-receipt-v2.json": "22486b4b24e5cd6c26aa3f6a8953041e94414488ca9fb3825d306103da07344e",
         "fixtures/cometbft-receipt-v2-tamper-vectors-v1.json": "d1640586367a81ae749eebebf318862f404b91d3c9b68a88a1a6a495829e979b",
         "fixtures/cometbft-receipt-v2-verified-outcome-v1.json": "d16f4358f28f576db28e69c26afa1a16f0ca351335e6c2271773111a6f1026e5",
         "fixtures/cometbft-trust-anchor-v1.json": "3f0cf0929c8da96d6a15b391eebd2214bfdc9608595d8abf657953bfc2ab85f4",
-        "src/bin/trnm-research-receipt-v2.rs": "49f5b049d460e343ae7c15ddc1a456790a42bbd9198962e084ed7588bebae0d4",
-        "src/cometbft.rs": "392f5f167f01d8f5f1cecafb60c76594669c915677182866320ebd942d179327",
+        "fixtures/hepta-paper-raid-v4-projection-golden-v1.json": "146ebee84a9a63836049ba37b00ceab79a988c3252c8f5b2378df6ef76ed5831",
+        "src/bin/trnm-research-receipt-v2.rs": "4f5d64b10309d2be6212ebbe78db7fdc39326b0539f2752d98ddf1706eb8851b",
+        "src/cometbft.rs": "a59ea2540efd1e7482e6ba148dc15bb9ff7522f5b3d6592ebe2b38512b7fbf9c",
         "src/lib.rs": "d89284107a888a9d2f0bceb49f7e7dd5bc0ec5c1ac5aa1377aa7fd38519ebda7"
       }
     },
     "trnm-protocol": {
       "version": "0.1.0",
-      "source_git_tree": "31aaec567089e341f3708dd8c243b98437593948",
-      "content_manifest_sha256": "2a8ad93918e536a6401475891049f5e3a06cfec39c6144f07ead9f7493a89a81",
+      "source_git_tree": "ee9b750ad0156a4a5e79a0373342353707a5803d",
+      "content_manifest_sha256": "66c4d508b30df7814db074ac0baf818dfe494556b7f86c94dfbff29f11116cd5",
       "files": {
         "Cargo.toml": "d345f48ee3fa72d8ff24d946816404923378fd3b745bb27964c25a67be81fd92",
-        "src/lib.rs": "77b9aabe0ce80f9b40c9ca8e8cf3bfeadac2dab4cb66798dca2bd5bde03a9098"
+        "src/lib.rs": "25eb32c51b964b7753d9b00b5b8768199b8a4898cc0f5019e29726938a9263e1"
       }
     },
     "trnm-research-protocol": {
       "version": "0.1.0",
-      "source_git_tree": "16db8325a884e66f2c7cb8305be05f71a900e9b1",
-      "content_manifest_sha256": "f79ec7608bb43d0cb501d95774bc38784ccb2ae13fec42dfb12d35422068b17d",
+      "source_git_tree": "ceb25412d0b874e99ad7b29d4cce0b6a9eb71745",
+      "content_manifest_sha256": "cf738e5ccc35f0b35da332734f8abb91deede65ebeb204690d0c48967466b3bc",
       "files": {
         "Cargo.toml": "c93aec7515bd0ecb8ef3fb7aca5e9a95a2d5517c9cb47ea22da21df9a7bb9b27",
         "README.md": "b441862118d14264b6e7b6423eac81075a1c9cc8490d2c7080aa04299185b419",
         "fixtures/protocol-v1-golden.json": "ec0974c5e6404461a130f6ee25caf31c86b1a097c8f23936fb9e8942c7bb6e98",
         "src/canonical.rs": "b63dabcfaa0342a5575a234bfcc22f3cd27abd752b47540cd4ebff0984d6ef94",
         "src/command.rs": "6ce11e6a8ed0dbd3d8fd786089840e78d69f4c48db1d08d4562cf0826aa3ccf0",
-        "src/lib.rs": "fa60d0a990b6689340ef21c6a7ecc58affeaa003dbd56853fef8c7ffdd1aaa7e",
-        "src/paper_raid.rs": "358ffc7aff2637f3f9720719a07c6af32e5ecf1a1445c16db05465b2862797e7",
+        "src/lib.rs": "24708b345d252f1594ad28413442b193dc9b1643d77f5675d8914b67d2800a0c",
+        "src/paper_raid.rs": "4c21abce890d36eb435e65c9e47932dcf6d954371ddac592c8a190fdcc855be3",
         "src/state.rs": "4c58f2aeb0532b37dd1d1ebbca509f7d76557020df6006cd1794c80f92ac4743",
         "src/types.rs": "f4ec1388fd37b15ed07a56b4c418b4bd192bcd373f96519668e119991276fe75",
         "tests/protocol_v1.rs": "58f32f24b81f1404181f95eb4ed71e97d830f20e977d652b6be497954a8f6fed"

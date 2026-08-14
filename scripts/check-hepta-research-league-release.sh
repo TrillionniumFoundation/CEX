@@ -148,8 +148,8 @@ with open(vendor_root / "trnm-chain-vendor-manifest.json", encoding="utf-8") as 
 assert provenance["schema"] == "hepta.vendor.trnm_chain_crates.v1"
 assert provenance["source_repository"] == "https://github.com/TrillionniumFoundation/Trillionnium-Chain.git"
 assert provenance["source_branch"] == "feature/chain-paper-raid-receipt-v2"
-assert provenance["source_commit"] == "4adfbadaa8c35cd3515f20381eb6b80d6885f457"
-assert provenance["source_tree"] == "396ae6037b24037aff6983fd30d6baf906fda687"
+assert provenance["source_commit"] == "a691e486c2c43dfb1fb686a4866418f093f625e7"
+assert provenance["source_tree"] == "83580e4dbd1ecd7c0a40d9d59b7749a52d55dc6c"
 assert provenance["license"] == "MIT"
 assert provenance["update_policy"].strip()
 assert provenance["packaging_context"] == {
@@ -179,9 +179,9 @@ assert set(provenance["crates"]) == {
 }
 expected_source_trees = {
     "trnm-finality-types": "81914c339c0ace155ea169da0ff01555e09e58d0",
-    "trnm-finality-verifier": "93883497881e470e56ede755f5a20780c2989a60",
-    "trnm-protocol": "31aaec567089e341f3708dd8c243b98437593948",
-    "trnm-research-protocol": "16db8325a884e66f2c7cb8305be05f71a900e9b1",
+    "trnm-finality-verifier": "3db7fe2b40faa15d9597ea2824b1079ca93c754c",
+    "trnm-protocol": "ee9b750ad0156a4a5e79a0373342353707a5803d",
+    "trnm-research-protocol": "ceb25412d0b874e99ad7b29d4cce0b6a9eb71745",
 }
 
 def git_object_id(kind, data):
