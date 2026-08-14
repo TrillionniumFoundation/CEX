@@ -200,6 +200,37 @@ for forbidden in (
 paper_raid_openapi = (
     repo / "docs/openapi/hepta-paper-raid-v2.yaml"
 ).read_text(encoding="utf-8")
+research_league_openapi = yaml.safe_load(
+    (repo / "docs/openapi/hepta-research-league-v1.yaml").read_text(encoding="utf-8")
+)["components"]["schemas"]
+if research_league_openapi.get("NonZeroCanonicalSha256Commitment") != {
+    "allOf": [
+        {"$ref": "#/components/schemas/CanonicalSha256Commitment"},
+        {
+            "not": {
+                "const": "sha256:"
+                + "0" * 64,
+            }
+        },
+    ]
+}:
+    fail("Challenge Pack activation nonzero SHA-256 OpenAPI contract is not exact")
+activation_evidence_properties = research_league_openapi[
+    "ChallengePackActivationEvidenceV1"
+]["properties"]
+for field in (
+    "cas_activation_receipt_sha256",
+    "cas_activation_catalog_patch_sha256",
+    "strict_review_evidence_sha256",
+    "strict_review_chain_proof_manifest_sha256",
+    "strict_review_chain_proof_fileset_sha256",
+    "strict_review_terminal_bundle_sha256",
+    "cross_paper_denial_receipt_sha256",
+):
+    if activation_evidence_properties[field] != {
+        "$ref": "#/components/schemas/NonZeroCanonicalSha256Commitment"
+    }:
+        fail(f"Challenge Pack activation OpenAPI permits a zero digest: {field}")
 for required in (
     "pub contribution_ledger_id: Uuid",
     "validate_contribution_ledger_id(request.contribution_ledger_id)",
@@ -349,6 +380,7 @@ expected_copy_sources = {
     "migrations/0051_bind_legacy_evaluation_panel_lifecycle.sql",
     "migrations/0052_harden_hepta_paper_finality_v2_preparation_ingress.sql",
     "migrations/0053_allow_review_ready_artifact_manifest_binding.sql",
+    "migrations/0054_bind_challenge_pack_activation_chain_proof.sql",
     "docs/openapi/hepta-research-league-v1.yaml",
     "docs/openapi/hepta-paper-raid-v2.yaml",
 }
@@ -2118,6 +2150,7 @@ require_fragments(
         '"../../../migrations/0051_bind_legacy_evaluation_panel_lifecycle.sql"',
         '"../../../migrations/0052_harden_hepta_paper_finality_v2_preparation_ingress.sql"',
         '"../../../migrations/0053_allow_review_ready_artifact_manifest_binding.sql"',
+        '"../../../migrations/0054_bind_challenge_pack_activation_chain_proof.sql"',
         "verify_agent_proposal_v2_migration_catalog",
         "Agent proposal V2 record parity constraint is incomplete",
         "Agent proposal V2 managed constraint catalog must contain exactly 6 entries",
@@ -2163,6 +2196,15 @@ require_fragments(
     ),
 )
 
+require_fragments(
+    "services/hepta-research-league/src/challenge_pack_activation.rs",
+    (
+        "activation_evidence_digest_constraint_definition_is_exact",
+        "missing fixed evidence schema plus unknown replacement unexpectedly inserted",
+        "Existing activation records are not exact 0054 Chain proof records",
+    ),
+)
+
 review_ready_binding_migration = (
     repo / "migrations/0053_allow_review_ready_artifact_manifest_binding.sql"
 ).read_text(encoding="utf-8")
@@ -2182,6 +2224,37 @@ if (
     or "not valid" in review_ready_binding_migration.lower()
 ):
     fail("0053 must be one atomic, validated, exact two-schema forward migration")
+
+require_fragments(
+    "migrations/0054_bind_challenge_pack_activation_chain_proof.sql",
+    (
+        "Existing activation records cannot be upgraded without Chain proof authority",
+        "Existing activation records are not exact 0054 Chain proof records",
+        "strict_review_chain_proof_manifest_sha256",
+        "strict_review_chain_proof_fileset_sha256",
+        "strict_review_terminal_bundle_schema",
+        "strict_review_terminal_bundle_sha256",
+        "trnm.paper-raid.strict-review-terminal-bundle-binding.v1",
+        "jsonb_object_keys(evidence_json)) <> 18",
+        "activation.record_json #> '{request,evidence}'",
+        "is distinct from activation.strict_review_chain_proof_manifest_sha256",
+        "is distinct from activation.strict_review_terminal_bundle_sha256",
+        "create or replace function public.hepta_validate_challenge_pack_activation_v1()",
+        "revoke all on function public.hepta_validate_challenge_pack_activation_v1() from public",
+    ),
+)
+chain_proof_binding_migration = (
+    repo / "migrations/0054_bind_challenge_pack_activation_chain_proof.sql"
+).read_text(encoding="utf-8")
+if (
+    chain_proof_binding_migration.lower().count("begin;") != 1
+    or chain_proof_binding_migration.lower().count("commit;") != 1
+    or "not valid" in chain_proof_binding_migration.lower()
+    or " or true" in chain_proof_binding_migration.lower()
+    or chain_proof_binding_migration.count("add column if not exists strict_review_") != 4
+    or chain_proof_binding_migration.count("alter column strict_review_") != 4
+):
+    fail("0054 must be one atomic, validated, exact Chain proof forward migration")
 
 require_fragments(
     "migrations/0048_add_hepta_consumer_finality_v2.sql",

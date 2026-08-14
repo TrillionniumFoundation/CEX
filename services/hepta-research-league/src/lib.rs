@@ -883,6 +883,10 @@ async fn apply_hepta_migrations(pool: &PgPool) -> Result<(), String> {
                 "../../../migrations/0053_allow_review_ready_artifact_manifest_binding.sql"
             ),
         ),
+        (
+            "Challenge Pack activation strict Review Chain proof binding",
+            include_str!("../../../migrations/0054_bind_challenge_pack_activation_chain_proof.sql"),
+        ),
     ] {
         sqlx::raw_sql(migration)
             .execute(pool)

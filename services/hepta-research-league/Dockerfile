@@ -43,6 +43,7 @@ COPY migrations/0050_add_hepta_paper_rework.sql migrations/0050_add_hepta_paper_
 COPY migrations/0051_bind_legacy_evaluation_panel_lifecycle.sql migrations/0051_bind_legacy_evaluation_panel_lifecycle.sql
 COPY migrations/0052_harden_hepta_paper_finality_v2_preparation_ingress.sql migrations/0052_harden_hepta_paper_finality_v2_preparation_ingress.sql
 COPY migrations/0053_allow_review_ready_artifact_manifest_binding.sql migrations/0053_allow_review_ready_artifact_manifest_binding.sql
+COPY migrations/0054_bind_challenge_pack_activation_chain_proof.sql migrations/0054_bind_challenge_pack_activation_chain_proof.sql
 COPY docs/openapi/hepta-research-league-v1.yaml docs/openapi/hepta-research-league-v1.yaml
 COPY docs/openapi/hepta-paper-raid-v2.yaml docs/openapi/hepta-paper-raid-v2.yaml
 

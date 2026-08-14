@@ -635,30 +635,34 @@ components:
         component_pins_authoritative: { const: true }
         working_tree_clean: { const: true }
         tracked_image_lock_status: { const: unbound }
-        source_fileset_sha256: { $ref: "#/components/schemas/CanonicalSha256Commitment" }
+        source_fileset_sha256: { $ref: "#/components/schemas/NonZeroCanonicalSha256Commitment" }
         release_image_lock_status: { const: locked }
         release_id: { type: string, pattern: "^[a-z0-9][a-z0-9._-]{0,127}$" }
-        release_image_lock_sha256: { $ref: "#/components/schemas/CanonicalSha256Commitment" }
-        release_provenance_sha256: { $ref: "#/components/schemas/CanonicalSha256Commitment" }
+        release_image_lock_sha256: { $ref: "#/components/schemas/NonZeroCanonicalSha256Commitment" }
+        release_provenance_sha256: { $ref: "#/components/schemas/NonZeroCanonicalSha256Commitment" }
     ChallengePackActivationEvidenceV1:
       type: object
       additionalProperties: false
-      required: [schema, source_catalog_sha256, pack_manifest_sha256, cas_activation_receipt_schema, cas_activation_receipt_sha256, cas_activation_catalog_patch_schema, cas_activation_catalog_patch_sha256, cas_all_packs_verified, cas_scoped_readback, cas_pack_count, cas_object_count, strict_review_evidence_schema, strict_review_evidence_sha256, cross_paper_denial_receipt_sha256]
+      required: [schema, source_catalog_sha256, pack_manifest_sha256, cas_activation_receipt_schema, cas_activation_receipt_sha256, cas_activation_catalog_patch_schema, cas_activation_catalog_patch_sha256, cas_all_packs_verified, cas_scoped_readback, cas_pack_count, cas_object_count, strict_review_evidence_schema, strict_review_evidence_sha256, strict_review_chain_proof_manifest_sha256, strict_review_chain_proof_fileset_sha256, strict_review_terminal_bundle_schema, strict_review_terminal_bundle_sha256, cross_paper_denial_receipt_sha256]
       properties:
         schema: { const: hepta.challenge_pack.activation_evidence.v1 }
         source_catalog_sha256: { const: "sha256:fc649c1f55ef484bc2f8baf279dec1c668eaa610691ac4234a74df1d90aaa6bb" }
         pack_manifest_sha256: { const: "sha256:69a695a6a75dd71e2c53c7a832298ab2ecbcd4086fa4ef653914dd2e5770b37c" }
         cas_activation_receipt_schema: { const: hepta.challenge_pack.cas_activation_receipt.v1 }
-        cas_activation_receipt_sha256: { $ref: "#/components/schemas/CanonicalSha256Commitment" }
+        cas_activation_receipt_sha256: { $ref: "#/components/schemas/NonZeroCanonicalSha256Commitment" }
         cas_activation_catalog_patch_schema: { const: hepta.challenge_pack.activation_catalog_patch.v2 }
-        cas_activation_catalog_patch_sha256: { $ref: "#/components/schemas/CanonicalSha256Commitment" }
+        cas_activation_catalog_patch_sha256: { $ref: "#/components/schemas/NonZeroCanonicalSha256Commitment" }
         cas_all_packs_verified: { const: true }
         cas_scoped_readback: { const: true }
         cas_pack_count: { const: 3 }
         cas_object_count: { const: 26 }
         strict_review_evidence_schema: { const: trnm.paper-raid.strict-review-evidence.v1 }
-        strict_review_evidence_sha256: { $ref: "#/components/schemas/CanonicalSha256Commitment" }
-        cross_paper_denial_receipt_sha256: { $ref: "#/components/schemas/CanonicalSha256Commitment" }
+        strict_review_evidence_sha256: { $ref: "#/components/schemas/NonZeroCanonicalSha256Commitment" }
+        strict_review_chain_proof_manifest_sha256: { $ref: "#/components/schemas/NonZeroCanonicalSha256Commitment" }
+        strict_review_chain_proof_fileset_sha256: { $ref: "#/components/schemas/NonZeroCanonicalSha256Commitment" }
+        strict_review_terminal_bundle_schema: { const: trnm.paper-raid.strict-review-terminal-bundle-binding.v1 }
+        strict_review_terminal_bundle_sha256: { $ref: "#/components/schemas/NonZeroCanonicalSha256Commitment" }
+        cross_paper_denial_receipt_sha256: { $ref: "#/components/schemas/NonZeroCanonicalSha256Commitment" }
     ActivateChallengePackRequestV1:
       type: object
       additionalProperties: false
@@ -782,6 +786,11 @@ components:
     CanonicalSha256Commitment:
       type: string
       pattern: "^sha256:[0-9a-f]{64}$"
+    NonZeroCanonicalSha256Commitment:
+      allOf:
+        - $ref: "#/components/schemas/CanonicalSha256Commitment"
+        - not:
+            const: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
     TrnmTypedCommandRequestV1:
       type: object
       additionalProperties: false

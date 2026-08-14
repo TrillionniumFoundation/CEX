@@ -16,7 +16,7 @@
 排序后的增量 migration 追加；不得回写已部署迁移的历史语义。
 
 Hepta Paper Raid 当前增量迁移推进到
-`0053_allow_review_ready_artifact_manifest_binding.sql`。0048 对已有 V1 finality
+`0054_bind_challenge_pack_activation_chain_proof.sql`。0048 对已有 V1 finality
 projection 明确失败关闭，不从其他表猜测丢失的 reproduction/resolution
 绑定；此类记录必须由运维执行显式重新验证。0050 增加不可变 Author
 rework lineage；0051 在不回写已部署 0040 的前提下，把 legacy evaluation
@@ -40,3 +40,8 @@ JSON `null`）；已存在 lineage 则必须是精确 13-key 对象。
 0053 不回写已部署的 0033，只把 artifact manifest 的 binding authority
 精确扩展到旧 Author schema 与 Review-ready schema 两个固定值；运行时启动
 会核对全局唯一约束、目标表、约束类型、验证/继承标志、列集合和完整定义。
+0054 不回写已部署的 0049，只在尚未产生旧格式 activation record 时前向增加
+strict Review Chain proof manifest/fileset 与 terminal bundle 的不可空绑定，并重建
+完整 evidence digest 约束和 relational/JSON parity guard；重复应用会核对列类型、
+not-null/default 目录形状；任何旧格式记录、带不兼容记录的部分迁移或 bundle
+schema 漂移均失败关闭。

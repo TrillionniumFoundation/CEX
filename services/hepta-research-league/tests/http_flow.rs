@@ -225,6 +225,10 @@ fn evidence_audit_activation_request() -> Value {
             "cas_object_count": 26,
             "strict_review_evidence_schema": "trnm.paper-raid.strict-review-evidence.v1",
             "strict_review_evidence_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "strict_review_chain_proof_manifest_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "strict_review_chain_proof_fileset_sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "strict_review_terminal_bundle_schema": "trnm.paper-raid.strict-review-terminal-bundle-binding.v1",
+            "strict_review_terminal_bundle_sha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
             "cross_paper_denial_receipt_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         }
     })

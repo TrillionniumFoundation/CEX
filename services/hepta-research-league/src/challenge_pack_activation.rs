@@ -24,6 +24,8 @@ pub const CAS_ACTIVATION_CATALOG_PATCH_V2: &str =
     "hepta.challenge_pack.activation_catalog_patch.v2";
 pub const CURRENT_CANDIDATE_BINDING_V2: &str = "trnm.paper-raid.current-candidate-binding.v2";
 pub const STRICT_REVIEW_EVIDENCE_V1: &str = "trnm.paper-raid.strict-review-evidence.v1";
+pub const STRICT_REVIEW_TERMINAL_BUNDLE_BINDING_V1: &str =
+    "trnm.paper-raid.strict-review-terminal-bundle-binding.v1";
 
 const EVIDENCE_AUDIT_TEMPLATE: &str = "evidence-audit";
 const EVIDENCE_AUDIT_PACK_ID: &str = "paper-raid-evidence-audit-seeded-v1";
@@ -81,6 +83,10 @@ pub struct ChallengePackActivationEvidenceV1 {
     pub cas_object_count: u16,
     pub strict_review_evidence_schema: String,
     pub strict_review_evidence_sha256: String,
+    pub strict_review_chain_proof_manifest_sha256: String,
+    pub strict_review_chain_proof_fileset_sha256: String,
+    pub strict_review_terminal_bundle_schema: String,
+    pub strict_review_terminal_bundle_sha256: String,
     pub cross_paper_denial_receipt_sha256: String,
 }
 
@@ -380,6 +386,10 @@ fn apply_activation(
             "release_provenance_sha256": record.request.candidate.release_provenance_sha256,
             "cas_activation_receipt_sha256": record.request.evidence.cas_activation_receipt_sha256,
             "strict_review_evidence_sha256": record.request.evidence.strict_review_evidence_sha256,
+            "strict_review_chain_proof_manifest_sha256": record.request.evidence.strict_review_chain_proof_manifest_sha256,
+            "strict_review_chain_proof_fileset_sha256": record.request.evidence.strict_review_chain_proof_fileset_sha256,
+            "strict_review_terminal_bundle_schema": record.request.evidence.strict_review_terminal_bundle_schema,
+            "strict_review_terminal_bundle_sha256": record.request.evidence.strict_review_terminal_bundle_sha256,
             "cross_paper_denial_receipt_sha256": record.request.evidence.cross_paper_denial_receipt_sha256,
             "activated_at": record.activated_at,
         }),
@@ -517,6 +527,11 @@ fn validate_activation_request(request: &ActivateChallengePackRequestV1) -> Resu
         &evidence.strict_review_evidence_schema,
         STRICT_REVIEW_EVIDENCE_V1,
     )?;
+    require_exact(
+        "evidence.strict_review_terminal_bundle_schema",
+        &evidence.strict_review_terminal_bundle_schema,
+        STRICT_REVIEW_TERMINAL_BUNDLE_BINDING_V1,
+    )?;
     for (field, value) in [
         (
             "evidence.cas_activation_receipt_sha256",
@@ -529,6 +544,18 @@ fn validate_activation_request(request: &ActivateChallengePackRequestV1) -> Resu
         (
             "evidence.strict_review_evidence_sha256",
             evidence.strict_review_evidence_sha256.as_str(),
+        ),
+        (
+            "evidence.strict_review_chain_proof_manifest_sha256",
+            evidence.strict_review_chain_proof_manifest_sha256.as_str(),
+        ),
+        (
+            "evidence.strict_review_chain_proof_fileset_sha256",
+            evidence.strict_review_chain_proof_fileset_sha256.as_str(),
+        ),
+        (
+            "evidence.strict_review_terminal_bundle_sha256",
+            evidence.strict_review_terminal_bundle_sha256.as_str(),
         ),
         (
             "evidence.cross_paper_denial_receipt_sha256",
@@ -663,10 +690,13 @@ async fn persist_activation(
             release_image_lock_sha256,release_provenance_sha256,source_catalog_sha256,
             pack_manifest_sha256,cas_activation_receipt_sha256,
             cas_activation_catalog_patch_sha256,strict_review_evidence_sha256,
+            strict_review_chain_proof_manifest_sha256,
+            strict_review_chain_proof_fileset_sha256,
+            strict_review_terminal_bundle_schema,strict_review_terminal_bundle_sha256,
             cross_paper_denial_receipt_sha256,activated_at,record_json
          ) values (
             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
-            $20,$21,$22,$23,$24,$25,$26::jsonb
+            $20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30::jsonb
          )",
     )
     .bind(record.activation_id)
@@ -692,6 +722,10 @@ async fn persist_activation(
     .bind(&evidence.cas_activation_receipt_sha256)
     .bind(&evidence.cas_activation_catalog_patch_sha256)
     .bind(&evidence.strict_review_evidence_sha256)
+    .bind(&evidence.strict_review_chain_proof_manifest_sha256)
+    .bind(&evidence.strict_review_chain_proof_fileset_sha256)
+    .bind(&evidence.strict_review_terminal_bundle_schema)
+    .bind(&evidence.strict_review_terminal_bundle_sha256)
     .bind(&evidence.cross_paper_denial_receipt_sha256)
     .bind(record.activated_at)
     .bind(record_json)
@@ -702,29 +736,178 @@ async fn persist_activation(
 }
 
 fn normalize_activation_catalog_sql(value: &str) -> String {
-    value
-        .split_whitespace()
-        .map(str::to_ascii_lowercase)
-        .collect::<Vec<_>>()
-        .join(" ")
+    let mut normalized = String::with_capacity(value.len());
+    let mut characters = value.chars().peekable();
+    let mut in_single_quoted_literal = false;
+    let mut in_double_quoted_identifier = false;
+    let mut pending_space = false;
+
+    while let Some(character) = characters.next() {
+        if in_single_quoted_literal {
+            normalized.push(character);
+            if character == '\'' {
+                if characters.peek() == Some(&'\'') {
+                    normalized.push(characters.next().expect("peeked escaped quote"));
+                } else {
+                    in_single_quoted_literal = false;
+                }
+            }
+            continue;
+        }
+
+        if in_double_quoted_identifier {
+            normalized.push(character);
+            if character == '"' {
+                if characters.peek() == Some(&'"') {
+                    normalized.push(characters.next().expect("peeked escaped identifier quote"));
+                } else {
+                    in_double_quoted_identifier = false;
+                }
+            }
+            continue;
+        }
+
+        if character.is_whitespace() {
+            pending_space = !normalized.is_empty();
+            continue;
+        }
+
+        if pending_space {
+            normalized.push(' ');
+            pending_space = false;
+        }
+
+        match character {
+            '\'' => {
+                normalized.push(character);
+                in_single_quoted_literal = true;
+            }
+            '"' => {
+                normalized.push(character);
+                in_double_quoted_identifier = true;
+            }
+            _ => normalized.extend(character.to_lowercase()),
+        }
+    }
+
+    normalized
+}
+
+fn compact_activation_constraint_definition(value: &str) -> String {
+    let normalized = normalize_activation_catalog_sql(value);
+    let characters = normalized.chars().collect::<Vec<_>>();
+    let mut compact = String::with_capacity(normalized.len());
+    let mut index = 0;
+    let mut in_single_quoted_literal = false;
+    let mut in_double_quoted_identifier = false;
+
+    while index < characters.len() {
+        let character = characters[index];
+
+        if in_single_quoted_literal {
+            compact.push(character);
+            if character == '\'' {
+                if characters.get(index + 1) == Some(&'\'') {
+                    compact.push('\'');
+                    index += 1;
+                } else {
+                    in_single_quoted_literal = false;
+                }
+            }
+            index += 1;
+            continue;
+        }
+
+        if in_double_quoted_identifier {
+            if character == '"' {
+                if characters.get(index + 1) == Some(&'"') {
+                    compact.push('"');
+                    index += 1;
+                } else {
+                    in_double_quoted_identifier = false;
+                }
+            } else {
+                compact.push(character);
+            }
+            index += 1;
+            continue;
+        }
+
+        match character {
+            '\'' => {
+                compact.push(character);
+                in_single_quoted_literal = true;
+                index += 1;
+            }
+            '"' => {
+                in_double_quoted_identifier = true;
+                index += 1;
+            }
+            '(' | ')' if !in_double_quoted_identifier => index += 1,
+            character if character.is_whitespace() => index += 1,
+            ':' if characters.get(index..index + 6)
+                == Some([':', ':', 't', 'e', 'x', 't'].as_slice()) =>
+            {
+                index += 6;
+            }
+            _ => {
+                compact.push(character);
+                index += 1;
+            }
+        }
+    }
+
+    compact
+}
+
+fn activation_evidence_digest_constraint_definition_is_exact(value: &str) -> bool {
+    const DIGEST_COLUMNS: [&str; 10] = [
+        "source_fileset_sha256",
+        "release_image_lock_sha256",
+        "release_provenance_sha256",
+        "cas_activation_receipt_sha256",
+        "cas_activation_catalog_patch_sha256",
+        "strict_review_evidence_sha256",
+        "strict_review_chain_proof_manifest_sha256",
+        "strict_review_chain_proof_fileset_sha256",
+        "strict_review_terminal_bundle_sha256",
+        "cross_paper_denial_receipt_sha256",
+    ];
+    let zero = format!("sha256:{}", "0".repeat(64));
+    let expected = format!(
+        "check{}and{}",
+        DIGEST_COLUMNS
+            .iter()
+            .map(|column| format!("{column}~'^sha256:[0-9a-f]{{64}}$'"))
+            .collect::<Vec<_>>()
+            .join("and"),
+        DIGEST_COLUMNS
+            .iter()
+            .map(|column| format!("{column}<>'{zero}'"))
+            .collect::<Vec<_>>()
+            .join("and")
+    );
+    compact_activation_constraint_definition(value) == expected
 }
 
 fn activation_migration_function_body<'a>(
     migration: &'a str,
     function_name: &str,
 ) -> Result<&'a str, String> {
-    let marker = format!("create or replace function {function_name}");
+    let qualified_marker = format!("create or replace function public.{function_name}");
+    let historical_marker = format!("create or replace function {function_name}");
     let function_start = migration
-        .find(&marker)
-        .ok_or_else(|| format!("0049 canonical {function_name} function is missing"))?;
+        .find(&qualified_marker)
+        .or_else(|| migration.find(&historical_marker))
+        .ok_or_else(|| format!("canonical {function_name} function is missing"))?;
     let body_start = migration[function_start..]
         .find("as $$\n")
         .map(|index| function_start + index + "as $$\n".len())
-        .ok_or_else(|| format!("0049 canonical {function_name} body start is missing"))?;
+        .ok_or_else(|| format!("canonical {function_name} body start is missing"))?;
     let body_end = migration[body_start..]
         .find("\n$$;")
         .map(|index| body_start + index)
-        .ok_or_else(|| format!("0049 canonical {function_name} body end is missing"))?;
+        .ok_or_else(|| format!("canonical {function_name} body end is missing"))?;
     Ok(&migration[body_start..body_end])
 }
 
@@ -737,6 +920,51 @@ pub(crate) async fn verify_migration_catalog(pool: &PgPool) -> Result<(), String
     .map_err(|error| format!("inspect Challenge Pack activation table: {error}"))?;
     if !table_exists {
         return Err("Challenge Pack activation table is missing".to_string());
+    }
+    let chain_proof_columns = sqlx::query(
+        "select attribute.attname,
+                pg_catalog.format_type(attribute.atttypid,attribute.atttypmod) as data_type,
+                attribute.attnotnull,
+                attribute.attgenerated::text as generated,
+                attribute.attidentity::text as identity,
+                attribute_default.oid is not null as has_default
+         from pg_attribute attribute
+         left join pg_attrdef attribute_default
+           on attribute_default.adrelid=attribute.attrelid
+          and attribute_default.adnum=attribute.attnum
+         where attribute.attrelid='public.hepta_challenge_pack_activations_v1'::regclass
+           and attribute.attname in (
+             'strict_review_chain_proof_manifest_sha256',
+             'strict_review_chain_proof_fileset_sha256',
+             'strict_review_terminal_bundle_schema',
+             'strict_review_terminal_bundle_sha256'
+           )
+           and attribute.attnum > 0 and not attribute.attisdropped
+         order by attribute.attname",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|error| format!("inspect activation Chain proof columns: {error}"))?;
+    let expected_chain_proof_columns = [
+        "strict_review_chain_proof_fileset_sha256",
+        "strict_review_chain_proof_manifest_sha256",
+        "strict_review_terminal_bundle_schema",
+        "strict_review_terminal_bundle_sha256",
+    ];
+    if chain_proof_columns.len() != expected_chain_proof_columns.len()
+        || chain_proof_columns
+            .iter()
+            .zip(expected_chain_proof_columns)
+            .any(|(actual, expected_name)| {
+                actual.get::<String, _>("attname") != expected_name
+                    || actual.get::<String, _>("data_type") != "text"
+                    || !actual.get::<bool, _>("attnotnull")
+                    || !actual.get::<String, _>("generated").is_empty()
+                    || !actual.get::<String, _>("identity").is_empty()
+                    || actual.get::<bool, _>("has_default")
+            })
+    {
+        return Err("Challenge Pack activation Chain proof columns are not exact".to_string());
     }
     let triggers = sqlx::query(
         "select t.tgname,
@@ -860,7 +1088,10 @@ pub(crate) async fn verify_migration_catalog(pool: &PgPool) -> Result<(), String
                 "release_image_lock_sha256",
                 "release_provenance_sha256",
                 "source_fileset_sha256",
+                "strict_review_chain_proof_fileset_sha256",
+                "strict_review_chain_proof_manifest_sha256",
                 "strict_review_evidence_sha256",
+                "strict_review_terminal_bundle_sha256",
             ],
             false,
         ),
@@ -927,6 +1158,8 @@ pub(crate) async fn verify_migration_catalog(pool: &PgPool) -> Result<(), String
             .zip(expected_constraints)
             .any(|(actual, expected)| {
                 let columns = actual.get::<Vec<String>, _>("column_names");
+                let name = actual.get::<String, _>("conname");
+                let definition = actual.get::<String, _>("definition");
                 actual.get::<String, _>("conname") != expected.0
                     || actual.get::<String, _>("relation_name")
                         != "public.hepta_challenge_pack_activations_v1"
@@ -935,28 +1168,31 @@ pub(crate) async fn verify_migration_catalog(pool: &PgPool) -> Result<(), String
                     || actual.get::<bool, _>("condeferrable")
                     || actual.get::<bool, _>("connoinherit") != expected.3
                     || columns.iter().map(String::as_str).collect::<Vec<_>>() != expected.2
-                    || actual
-                        .get::<String, _>("definition")
-                        .to_ascii_lowercase()
-                        .contains("or true")
+                    || (name == "hepta_challenge_pack_activations_evidence_digests_check"
+                        && !activation_evidence_digest_constraint_definition_is_exact(&definition))
+                    || definition.to_ascii_lowercase().contains("or true")
             })
     {
         return Err(
             "Challenge Pack activation constraints are not globally unique and exact".to_string(),
         );
     }
-    let migration =
+    let migration_0049 =
         include_str!("../../../migrations/0049_add_hepta_challenge_pack_activation.sql");
-    for (function_name, identity, config) in [
+    let migration_0054 =
+        include_str!("../../../migrations/0054_bind_challenge_pack_activation_chain_proof.sql");
+    for (function_name, identity, config, authority) in [
         (
             "hepta_validate_challenge_pack_activation_v1",
             "public.hepta_validate_challenge_pack_activation_v1()",
             "search_path=pg_catalog, public",
+            migration_0054,
         ),
         (
             "hepta_reject_challenge_pack_activation_mutation_v1",
             "public.hepta_reject_challenge_pack_activation_mutation_v1()",
             "search_path=pg_catalog",
+            migration_0049,
         ),
     ] {
         let globally_named: i64 =
@@ -1000,12 +1236,12 @@ pub(crate) async fn verify_migration_catalog(pool: &PgPool) -> Result<(), String
                 "Challenge Pack activation function {function_name} metadata is non-canonical"
             ));
         }
-        let expected_body = activation_migration_function_body(migration, function_name)?;
+        let expected_body = activation_migration_function_body(authority, function_name)?;
         if normalize_activation_catalog_sql(&function.get::<String, _>("prosrc"))
             != normalize_activation_catalog_sql(expected_body)
         {
             return Err(format!(
-                "Challenge Pack activation function {function_name} body is not the exact 0049 authority"
+                "Challenge Pack activation function {function_name} body is not the exact migration authority"
             ));
         }
     }
@@ -1061,6 +1297,11 @@ fn fixture_activation_request(challenge_id: Uuid) -> ActivateChallengePackReques
             cas_object_count: 26,
             strict_review_evidence_schema: STRICT_REVIEW_EVIDENCE_V1.to_string(),
             strict_review_evidence_sha256: format!("sha256:{}", "a".repeat(64)),
+            strict_review_chain_proof_manifest_sha256: format!("sha256:{}", "c".repeat(64)),
+            strict_review_chain_proof_fileset_sha256: format!("sha256:{}", "d".repeat(64)),
+            strict_review_terminal_bundle_schema: STRICT_REVIEW_TERMINAL_BUNDLE_BINDING_V1
+                .to_string(),
+            strict_review_terminal_bundle_sha256: format!("sha256:{}", "e".repeat(64)),
             cross_paper_denial_receipt_sha256: format!("sha256:{}", "b".repeat(64)),
         },
     }
@@ -1216,6 +1457,68 @@ pub(crate) async fn verify_postgres_activation_recovery_and_guards(
     if !runtime_insert {
         return Err("runtime role lacks activation INSERT authority".to_string());
     }
+    let hostile_activation_id = Uuid::new_v4();
+    let hostile_challenge_id = Uuid::new_v4();
+    let hostile_request_sha256 = format!("sha256:{}", "f".repeat(64));
+    let mut hostile_record = serde_json::to_value(&fixture.record)
+        .map_err(|error| format!("encode hostile activation record: {error}"))?;
+    hostile_record["activation_id"] = json!(hostile_activation_id);
+    hostile_record["challenge_id"] = json!(hostile_challenge_id);
+    hostile_record["request_sha256"] = json!(hostile_request_sha256);
+    let hostile_evidence = hostile_record
+        .get_mut("request")
+        .and_then(|request| request.get_mut("evidence"))
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(|| "hostile activation evidence fixture is not an object".to_string())?;
+    hostile_evidence.remove("strict_review_evidence_schema");
+    hostile_evidence.insert(
+        "unexpected_schema_alias".to_string(),
+        json!(STRICT_REVIEW_EVIDENCE_V1),
+    );
+    let hostile_error = sqlx::query(
+        "insert into hepta_challenge_pack_activations_v1 (
+           activation_id,challenge_id,request_sha256,pack_id,template,
+           ruleset_version,ruleset_hash,dataset_manifest_hash,evaluator_manifest_hash,
+           candidate_state,integration_base_revision,integration_source_tree,
+           hepta_base_revision,hepta_source_tree,source_fileset_sha256,release_id,
+           release_image_lock_sha256,release_provenance_sha256,source_catalog_sha256,
+           pack_manifest_sha256,cas_activation_receipt_sha256,
+           cas_activation_catalog_patch_sha256,strict_review_evidence_sha256,
+           strict_review_chain_proof_manifest_sha256,
+           strict_review_chain_proof_fileset_sha256,
+           strict_review_terminal_bundle_schema,strict_review_terminal_bundle_sha256,
+           cross_paper_denial_receipt_sha256,activated_at,record_json
+         )
+         select $1::uuid,$2::uuid,$3::text,pack_id,template,
+           ruleset_version,ruleset_hash,dataset_manifest_hash,evaluator_manifest_hash,
+           candidate_state,integration_base_revision,integration_source_tree,
+           hepta_base_revision,hepta_source_tree,source_fileset_sha256,release_id,
+           release_image_lock_sha256,release_provenance_sha256,source_catalog_sha256,
+           pack_manifest_sha256,cas_activation_receipt_sha256,
+           cas_activation_catalog_patch_sha256,strict_review_evidence_sha256,
+           strict_review_chain_proof_manifest_sha256,
+           strict_review_chain_proof_fileset_sha256,
+           strict_review_terminal_bundle_schema,strict_review_terminal_bundle_sha256,
+           cross_paper_denial_receipt_sha256,activated_at,$4::jsonb
+         from hepta_challenge_pack_activations_v1 where activation_id=$5::uuid",
+    )
+    .bind(hostile_activation_id)
+    .bind(hostile_challenge_id)
+    .bind(&hostile_request_sha256)
+    .bind(hostile_record)
+    .bind(fixture.record.activation_id)
+    .execute(runtime_pool)
+    .await
+    .expect_err("missing fixed evidence schema plus unknown replacement unexpectedly inserted");
+    if hostile_error
+        .as_database_error()
+        .and_then(|database| database.code())
+        .is_none_or(|code| code.as_ref() != "P0001")
+    {
+        return Err(format!(
+            "missing fixed evidence schema was not rejected by the exact-shape trigger: {hostile_error}"
+        ));
+    }
     for (operation, query) in [
         (
             "update",
@@ -1320,10 +1623,144 @@ mod activation_catalog_static_tests {
     }
 
     #[test]
+    fn migration_0054_is_atomic_exact_and_chain_proof_bound() {
+        let migration =
+            include_str!("../../../migrations/0054_bind_challenge_pack_activation_chain_proof.sql");
+        assert!(migration.trim_start().starts_with("begin;"));
+        assert!(migration.trim_end().ends_with("commit;"));
+        assert_eq!(migration.to_ascii_lowercase().matches("begin;").count(), 1);
+        assert_eq!(migration.to_ascii_lowercase().matches("commit;").count(), 1);
+        assert!(!migration.to_ascii_lowercase().contains("not valid"));
+        assert!(!migration.contains("create trigger"));
+        for column in [
+            "strict_review_chain_proof_manifest_sha256",
+            "strict_review_chain_proof_fileset_sha256",
+            "strict_review_terminal_bundle_schema",
+            "strict_review_terminal_bundle_sha256",
+        ] {
+            assert!(migration.contains(&format!("add column if not exists {column} text")));
+            assert!(migration.contains(&format!("alter column {column} set not null")));
+        }
+        let validate = activation_migration_function_body(
+            migration,
+            "hepta_validate_challenge_pack_activation_v1",
+        )
+        .expect("0054 validation function body");
+        assert!(migration
+            .contains("Existing activation records are not exact 0054 Chain proof records"));
+        for exact_binding in [
+            "jsonb_object_keys(evidence_json)) <> 18",
+            "trnm.paper-raid.strict-review-terminal-bundle-binding.v1",
+            "strict_review_chain_proof_manifest_sha256",
+            "strict_review_chain_proof_fileset_sha256",
+            "strict_review_terminal_bundle_sha256",
+        ] {
+            assert!(validate.contains(exact_binding));
+        }
+        for fixed_binding in [
+            "schema'\n            is distinct from 'hepta.challenge_pack.activation_record.v1'",
+            "schema'\n            is distinct from 'hepta.challenge_pack.activation_request.v1'",
+            "schema'\n            is distinct from 'trnm.paper-raid.current-candidate-binding.v2'",
+            "schema'\n            is distinct from 'hepta.challenge_pack.activation_evidence.v1'",
+            "cas_activation_receipt_schema'\n            is distinct from 'hepta.challenge_pack.cas_activation_receipt.v1'",
+            "strict_review_evidence_schema'\n            is distinct from 'trnm.paper-raid.strict-review-evidence.v1'",
+        ] {
+            assert!(validate.contains(fixed_binding));
+        }
+        assert!(!normalize_activation_catalog_sql(validate).contains("or true"));
+        let case_mutated_schema = validate.replacen(
+            "trnm.paper-raid.strict-review-terminal-bundle-binding.v1",
+            "TRNM.paper-raid.strict-review-terminal-bundle-binding.v1",
+            1,
+        );
+        assert_ne!(
+            normalize_activation_catalog_sql(validate),
+            normalize_activation_catalog_sql(&case_mutated_schema)
+        );
+        assert!(migration.contains("jsonb_object_keys(\n                        activation.record_json #> '{request,evidence}'"));
+        assert!(migration
+            .contains("is distinct from activation.strict_review_chain_proof_manifest_sha256"));
+        assert!(
+            migration.contains("is distinct from activation.strict_review_terminal_bundle_sha256")
+        );
+
+        let digest_columns = [
+            "source_fileset_sha256",
+            "release_image_lock_sha256",
+            "release_provenance_sha256",
+            "cas_activation_receipt_sha256",
+            "cas_activation_catalog_patch_sha256",
+            "strict_review_evidence_sha256",
+            "strict_review_chain_proof_manifest_sha256",
+            "strict_review_chain_proof_fileset_sha256",
+            "strict_review_terminal_bundle_sha256",
+            "cross_paper_denial_receipt_sha256",
+        ];
+        let zero = format!("sha256:{}", "0".repeat(64));
+        let exact_definition = format!(
+            "CHECK ({} AND {})",
+            digest_columns
+                .iter()
+                .map(|column| format!("{column} ~ '^sha256:[0-9a-f]{{64}}$'::text"))
+                .collect::<Vec<_>>()
+                .join(" AND "),
+            digest_columns
+                .iter()
+                .map(|column| format!("{column} <> '{zero}'::text"))
+                .collect::<Vec<_>>()
+                .join(" AND ")
+        );
+        assert!(activation_evidence_digest_constraint_definition_is_exact(
+            &exact_definition
+        ));
+        assert!(!activation_evidence_digest_constraint_definition_is_exact(
+            &format!("{exact_definition} OR TRUE")
+        ));
+        assert!(!activation_evidence_digest_constraint_definition_is_exact(
+            &exact_definition.replace(
+                "strict_review_terminal_bundle_sha256 ~ '^sha256:[0-9a-f]{64}$'::text",
+                "strict_review_terminal_bundle_sha256 IS NOT NULL"
+            )
+        ));
+        assert!(!activation_evidence_digest_constraint_definition_is_exact(
+            &exact_definition.replacen("[0-9a-f]", "[0-9A-F]", 1)
+        ));
+        assert!(!activation_evidence_digest_constraint_definition_is_exact(
+            &exact_definition.replacen("'^sha256:", "'^ sha256:", 1)
+        ));
+    }
+
+    #[test]
     fn activation_request_rejects_zero_digest_and_git_sentinels() {
         let challenge_id = Uuid::new_v4();
+        for digest_field in [
+            "strict_review_evidence_sha256",
+            "strict_review_chain_proof_manifest_sha256",
+            "strict_review_chain_proof_fileset_sha256",
+            "strict_review_terminal_bundle_sha256",
+        ] {
+            let mut request = fixture_activation_request(challenge_id);
+            let zero = format!("sha256:{}", "0".repeat(64));
+            match digest_field {
+                "strict_review_evidence_sha256" => {
+                    request.evidence.strict_review_evidence_sha256 = zero
+                }
+                "strict_review_chain_proof_manifest_sha256" => {
+                    request.evidence.strict_review_chain_proof_manifest_sha256 = zero
+                }
+                "strict_review_chain_proof_fileset_sha256" => {
+                    request.evidence.strict_review_chain_proof_fileset_sha256 = zero
+                }
+                "strict_review_terminal_bundle_sha256" => {
+                    request.evidence.strict_review_terminal_bundle_sha256 = zero
+                }
+                _ => unreachable!(),
+            }
+            assert!(validate_activation_request(&request).is_err());
+        }
+
         let mut request = fixture_activation_request(challenge_id);
-        request.evidence.strict_review_evidence_sha256 = format!("sha256:{}", "0".repeat(64));
+        request.evidence.strict_review_terminal_bundle_schema = "unexpected".to_string();
         assert!(validate_activation_request(&request).is_err());
 
         let mut request = fixture_activation_request(challenge_id);
