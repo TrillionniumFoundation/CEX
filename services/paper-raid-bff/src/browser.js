@@ -3646,10 +3646,26 @@ function acceptNakamaArchive(entry, state) {
   };
 }
 
+const LIVE_AUTHORITY_POLL_MS = 500;
+const LIVE_AUTHORITY_REQUEST_TIMEOUT_MS = 750;
+const LIVE_AUTHORITY_RETRY_BASE_MS = 100;
+const LIVE_AUTHORITY_RETRY_MAX_MS = 1_000;
+
+function liveAuthorityRetryDelayMs(failures) {
+  if (!Number.isSafeInteger(failures) || failures < 1) {
+    throw new Error("live_authority_failure_count_is_invalid");
+  }
+  return Math.min(
+    LIVE_AUTHORITY_RETRY_MAX_MS,
+    LIVE_AUTHORITY_RETRY_BASE_MS * (2 ** Math.min(failures - 1, 4))
+  );
+}
+
 async function fetchTimelineValue(paperId, query) {
   const response = await fetch(`/api/papers/${encodeURIComponent(paperId)}/timeline?${query}`, {
     credentials: "same-origin",
-    headers: { "accept": "application/json" }
+    headers: { "accept": "application/json" },
+    signal: AbortSignal.timeout(LIVE_AUTHORITY_REQUEST_TIMEOUT_MS)
   });
   const value = await responseValue(response);
   if (!response.ok) throw new Error(value && value.error ? value.error : "live_sync_failed");
@@ -3803,7 +3819,6 @@ function renderLiveRaid(card, value) {
   while (eventList.children.length > 12) eventList.firstElementChild.remove();
 }
 
-const LIVE_AUTHORITY_POLL_MS = 500;
 const STALE_AUTHORITY_RELOAD_DELAY_MS = 100;
 
 function invalidateStalePlayerForms(card, connection, output) {
@@ -3921,7 +3936,7 @@ function createLiveRaidSync(card) {
         connection.dataset.state = "reconnecting";
         connection.textContent = "Reconnecting / 正在重连";
         show(output, error.message, false);
-        schedule(Math.min(5000, 1250 * (2 ** Math.min(failures, 2))));
+        schedule(liveAuthorityRetryDelayMs(failures));
       } finally {
         running = false;
         button.disabled = false;

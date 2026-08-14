@@ -96,6 +96,13 @@ assert.ok(source.includes("function requestPaperReload(paperId, delayMs)"));
 assert.ok(source.includes("function requestStaleAuthorityRefresh(paperId, applyInvalidation)"));
 assert.ok(source.includes("function beginPaperWorkflow(paperId)"));
 assert.ok(source.includes("const LIVE_AUTHORITY_POLL_MS = 500;"));
+assert.ok(source.includes("const LIVE_AUTHORITY_REQUEST_TIMEOUT_MS = 750;"));
+assert.ok(source.includes("const LIVE_AUTHORITY_RETRY_BASE_MS = 100;"));
+assert.ok(source.includes("const LIVE_AUTHORITY_RETRY_MAX_MS = 1_000;"));
+assert.ok(source.includes("function liveAuthorityRetryDelayMs(failures)"));
+assert.ok(source.includes("signal: AbortSignal.timeout(LIVE_AUTHORITY_REQUEST_TIMEOUT_MS)"));
+assert.ok(source.includes("schedule(liveAuthorityRetryDelayMs(failures));"));
+assert.equal(source.includes("1250 * (2 ** Math.min(failures, 2))"), false);
 assert.ok(source.includes("const STALE_AUTHORITY_RELOAD_DELAY_MS = 100;"));
 assert.ok(source.includes("schedule(catchingUp ? 25 : LIVE_AUTHORITY_POLL_MS);"));
 assert.ok(source.includes(
@@ -529,6 +536,15 @@ const context = vm.createContext({
   },
 });
 vm.runInContext(source, context, { filename: browserUrl.pathname });
+
+assert.deepEqual(
+  [1, 2, 3, 4, 5, 6].map(context.liveAuthorityRetryDelayMs),
+  [100, 200, 400, 800, 1_000, 1_000],
+);
+assert.throws(
+  () => context.liveAuthorityRetryDelayMs(0),
+  /live_authority_failure_count_is_invalid/,
+);
 
 const paperA = "11111111-1111-4111-8111-111111111111";
 const paperB = "22222222-2222-4222-8222-222222222222";
