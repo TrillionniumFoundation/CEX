@@ -147,6 +147,9 @@ PAPER_RAID_BFF_TEST_DATABASE_URL="$test_database_url" \
 PAPER_RAID_BFF_TEST_DATABASE_URL="$test_database_url" \
   flock -n "$cargo_gate" \
   cargo test --locked -p paper-raid-bff db::invite_activation_atomic_tests::real_postgres_v3_atomic_catalog_authority_and_revocation_gate -- --exact
+PAPER_RAID_BFF_TEST_DATABASE_URL="$test_database_url" \
+  flock -n "$cargo_gate" \
+  cargo test --locked -p paper-raid-bff practice::tests::real_postgres_practice_catalog_lifecycle_and_append_only_gate -- --exact
 
 revoked_before=$(sudo -n docker exec "$container_name" \
   psql --username paper_raid_bff --dbname paper_raid_bff --tuples-only --no-align \
@@ -195,5 +198,8 @@ PAPER_RAID_BFF_TEST_DATABASE_URL="$test_database_url" \
 PAPER_RAID_BFF_TEST_DATABASE_URL="$test_database_url" \
   flock -n "$cargo_gate" \
   cargo test --locked -p paper-raid-bff db::invite_activation_atomic_tests::real_postgres_v3_atomic_catalog_authority_and_revocation_gate -- --exact
+PAPER_RAID_BFF_TEST_DATABASE_URL="$test_database_url" \
+  flock -n "$cargo_gate" \
+  cargo test --locked -p paper-raid-bff practice::tests::real_postgres_practice_catalog_lifecycle_and_append_only_gate -- --exact
 
 echo "paper-raid-bff PostgreSQL restart/revoke gate: ok"
