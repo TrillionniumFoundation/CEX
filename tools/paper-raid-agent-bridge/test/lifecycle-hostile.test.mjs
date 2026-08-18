@@ -23,11 +23,13 @@ import {
 } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
 import {
+  AGENT_BRIDGE_REQUEST_PROOF_SCHEMA,
   agentCapabilityDisclosureHash,
+  agentBridgeRequestProofFrame,
   canonicalJsonBytes,
   sha256Digest,
 } from "../src/canonical.mjs";
@@ -69,6 +71,51 @@ const BINDING_ID = "22222222-2222-4222-8222-222222222222";
 const PLAYER_ID = "11111111-1111-4111-8111-111111111111";
 const DIGEST_A = `sha256:${"a".repeat(64)}`;
 const DIGEST_B = `sha256:${"b".repeat(64)}`;
+const PRACTICE_PENDING_TOKEN = DIGEST_A;
+const PRACTICE_CLAIMED_TOKEN = DIGEST_B;
+const PRACTICE_COMPLETED_TOKEN = `sha256:${"c".repeat(64)}`;
+
+function installedPracticeTask(state) {
+  const byState = {
+    pending: { version: 3, taskToken: PRACTICE_PENDING_TOKEN, resultCode: null },
+    claimed: { version: 4, taskToken: PRACTICE_CLAIMED_TOKEN, resultCode: null },
+    completed: {
+      version: 5,
+      taskToken: PRACTICE_COMPLETED_TOKEN,
+      resultCode: "concern_confirmed",
+    },
+  };
+  const exact = byState[state];
+  assert.ok(exact, `unsupported installed practice fixture state ${state}`);
+  return {
+    schema: "hepta.paper_raid.agent_bridge.practice_tasks.v1",
+    mode: "practice_unranked",
+    status: "ready",
+    task: {
+      schema: "hepta.paper_raid.agent_bridge.practice_task.v1",
+      kind: "evidence_audit_intro",
+      state,
+      version: exact.version,
+      task_token: exact.taskToken,
+      expires_at: "2027-01-15T08:00:00Z",
+      materials: {
+        schema: "hepta.paper_raid.agent_bridge.practice_materials.v1",
+        claim: "The candidate result remains supported after the evidence audit.",
+        baseline: "Compare the stated claim with the supplied observation summary.",
+        observations: [
+          "The cited observation and the claimed scope do not fully align.",
+          "Run the bounded practice check and report only one allowed result code.",
+        ],
+      },
+      allowed_result_codes: [
+        "concern_confirmed",
+        "concern_not_detected",
+        "inconclusive",
+      ],
+      result_code: exact.resultCode,
+    },
+  };
+}
 
 async function makeTreeRemovable(path) {
   let stats;
@@ -219,6 +266,52 @@ async function absent(path) {
   await assert.rejects(lstat(path), error => error?.code === "ENOENT");
 }
 
+function assertSignedBridgePost(url, init, identity, expectedPath) {
+  const parsed = new URL(url);
+  assert.equal(parsed.pathname, expectedPath);
+  assert.equal(parsed.search, "");
+  assert.equal(init.method, "POST");
+  assert.equal(init.redirect, "error");
+  const headers = new Headers(init.headers);
+  assert.equal(headers.get("accept"), "application/json");
+  assert.equal(headers.get("content-type"), "application/json");
+  assert.equal(headers.has("authorization"), false);
+  const body = JSON.parse(init.body);
+  assert.equal(
+    Buffer.from(init.body).equals(canonicalJsonBytes(body)),
+    true,
+    "installed Bridge must sign and send one canonical JSON body",
+  );
+  const claim = Object.freeze({
+    schema: headers.get("x-paper-raid-agent-schema"),
+    binding_id: headers.get("x-paper-raid-agent-binding-id"),
+    agent_id: headers.get("x-paper-raid-agent-id"),
+    agent_key_id: headers.get("x-paper-raid-agent-key-id"),
+    http_method: "POST",
+    canonical_path: expectedPath,
+    canonical_query: "",
+    body_hash: headers.get("x-paper-raid-agent-body-sha256"),
+    nonce: headers.get("x-paper-raid-agent-nonce"),
+    issued_at_unix: Number(headers.get("x-paper-raid-agent-issued-at")),
+    expires_at_unix: Number(headers.get("x-paper-raid-agent-expires-at")),
+  });
+  assert.equal(claim.schema, AGENT_BRIDGE_REQUEST_PROOF_SCHEMA);
+  assert.equal(claim.binding_id, BINDING_ID);
+  assert.equal(claim.agent_id, identity.agent_id);
+  assert.equal(claim.agent_key_id, identity.agent_key_id);
+  assert.equal(claim.body_hash, sha256Digest(Buffer.from(init.body)));
+  assert.equal(claim.expires_at_unix, claim.issued_at_unix + 60);
+  assert.equal(
+    identity.verify(
+      agentBridgeRequestProofFrame(claim),
+      headers.get("x-paper-raid-agent-signature"),
+    ),
+    true,
+    "installed Bridge request proof must verify against the installed identity",
+  );
+  return body;
+}
+
 test("release verification pins detached Ed25519 bytes and rejects canonical-form attacks", async t => {
   const directory = await temporary(t, "release-inputs");
   const trust = signer();
@@ -231,6 +324,24 @@ test("release verification pins detached Ed25519 bytes and rejects canonical-for
   assert.equal(rebuilt.packageBytes.equals(artifact.packageBytes), true);
   assert.equal(rebuilt.manifestBytes.equals(artifact.manifestBytes), true);
   assert.equal(rebuilt.manifest.package_sha256, artifact.manifest.package_sha256);
+  assert.deepEqual(
+    artifact.manifest.files
+      .filter(entry => entry.path === "src/practice.mjs")
+      .map(entry => entry.path),
+    ["src/practice.mjs"],
+  );
+  assert.deepEqual(
+    artifact.bundle.files
+      .filter(entry => entry.path === "src/practice.mjs")
+      .map(entry => entry.path),
+    ["src/practice.mjs"],
+  );
+  assert.equal(
+    JSON.parse(artifact.packageBytes).files.some(
+      entry => entry.path === "src/practice.mjs" && entry.data_base64.length > 0,
+    ),
+    true,
+  );
   const verified = await readReleaseInputs(artifact);
   assert.equal(verified.releaseId, artifact.releaseId);
   assert.equal(verified.trusted.fingerprint, trust.fingerprint);
@@ -700,6 +811,167 @@ test("install, paired diagnose, preserve uninstall, and isolated purge form one 
   );
 });
 
+test("installed release resolves practice CLI and daemon completes signed practice without replacing inbox behavior", async t => {
+  const directory = await temporary(t, "installed-practice");
+  const trust = signer();
+  const artifact = await releaseFixture(directory, trust, "3.3.1", 14);
+  const mock = await writeMockSystemctl(directory);
+  const root = join(directory, "bridge-root");
+  await installProduct(installOptions(root, mock, artifact));
+
+  const configPath = join(root, "data", "bridge.config.json");
+  const config = await loadConfig(configPath);
+  const identity = await loadIdentity(config.identity_file);
+  const disclosure = config.capability_disclosure;
+  await saveBridgeState(config.state_file, identity, {
+    binding_id: BINDING_ID,
+    player_id: PLAYER_ID,
+    agent_id: identity.agent_id,
+    agent_key_id: identity.agent_key_id,
+    agent_public_key: identity.agent_public_key,
+    agent_public_key_hash: identity.agent_public_key_hash,
+    capability_disclosure: disclosure,
+    capability_disclosure_hash: agentCapabilityDisclosureHash(disclosure),
+    status: "active",
+    version: 1,
+    created_at: "2026-08-14T00:00:00Z",
+    updated_at: "2026-08-14T00:00:00Z",
+  }, 1_800_000_000);
+
+  const installedRelease = join(
+    root,
+    "releases",
+    await pointerIdentity(root, "current"),
+  );
+  assert.equal(
+    (await lstat(join(installedRelease, "src", "practice.mjs"))).mode & 0o777,
+    0o400,
+  );
+  const installedCli = await import(
+    pathToFileURL(join(installedRelease, "src", "cli.mjs")).href
+  );
+  const installedDaemon = await import(
+    pathToFileURL(join(installedRelease, "src", "daemon.mjs")).href
+  );
+
+  const originalFetch = globalThis.fetch;
+  const originalWrite = process.stdout.write;
+  let phase = "cli";
+  let practiceState = "pending";
+  const routes = [];
+  let output = "";
+  const jsonResponse = value => new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+  globalThis.fetch = async (url, init = {}) => {
+    const parsed = new URL(url);
+    assert.equal(parsed.origin, "http://127.0.0.1:7020");
+    const path = parsed.pathname;
+    const body = assertSignedBridgePost(url, init, identity, path);
+    routes.push(path);
+    if (path === "/api/agent-bridge/practice-tasks") {
+      assert.deepEqual(body, {
+        schema: "hepta.paper_raid.agent_bridge.practice_task_query.v1",
+      });
+      if (phase === "cli") {
+        return jsonResponse({
+          schema: "hepta.paper_raid.agent_bridge.practice_tasks.v1",
+          mode: "practice_unranked",
+          status: "absent",
+          task: null,
+        });
+      }
+      return jsonResponse(installedPracticeTask(practiceState));
+    }
+    if (path === "/api/agent-bridge/practice-claims") {
+      assert.equal(practiceState, "pending");
+      assert.deepEqual(body, {
+        schema: "hepta.paper_raid.agent_bridge.practice_claim_request.v1",
+        task_token: PRACTICE_PENDING_TOKEN,
+        expected_version: 3,
+      });
+      practiceState = "claimed";
+      return jsonResponse({
+        schema: "hepta.paper_raid.agent_bridge.practice_transition_result.v1",
+        operation: "claim",
+        status: "claimed",
+        from_version: 3,
+        version: 4,
+      });
+    }
+    if (path === "/api/agent-bridge/practice-results") {
+      assert.equal(practiceState, "claimed");
+      assert.deepEqual(body, {
+        schema: "hepta.paper_raid.agent_bridge.practice_result_request.v1",
+        task_token: PRACTICE_CLAIMED_TOKEN,
+        expected_version: 4,
+        result_code: "concern_confirmed",
+      });
+      practiceState = "completed";
+      return jsonResponse({
+        schema: "hepta.paper_raid.agent_bridge.practice_transition_result.v1",
+        operation: "result",
+        status: "completed",
+        from_version: 4,
+        version: 5,
+        result_code: "concern_confirmed",
+      });
+    }
+    if (path === "/api/agent-bridge/health") {
+      assert.equal(body.schema, "hepta.paper_raid.agent_bridge.health_report.v1");
+      assert.equal(body.assurance, "self_declared_unverified");
+      assert.equal(body.status, "healthy");
+      assert.equal(Number.isSafeInteger(body.observed_at_unix), true);
+      return jsonResponse({ accepted: true });
+    }
+    if (path === "/api/agent-bridge/inbox") {
+      assert.deepEqual(body, {
+        schema: "hepta.paper_raid.agent_bridge.inbox_request.v1",
+        paper_ids: [],
+      });
+      return jsonResponse(reviewOnlyInbox());
+    }
+    throw new Error(`unexpected installed practice route ${path}`);
+  };
+  process.stdout.write = chunk => {
+    output += String(chunk);
+    return true;
+  };
+  try {
+    await installedCli.main(["practice", "--config", configPath]);
+    assert.deepEqual(JSON.parse(output), {
+      schema: "hepta.paper_raid.agent_bridge.practice_tasks.v1",
+      mode: "practice_unranked",
+      status: "absent",
+      task: null,
+    });
+    phase = "daemon";
+    const status = await installedDaemon.daemonCycle(root);
+    assert.deepEqual(status, {
+      schema: "hepta.paper_raid.agent_bridge.service_status.v1",
+      mode: "confirm",
+      state: "ready",
+      candidate_count: 0,
+      action: "none",
+    });
+  } finally {
+    process.stdout.write = originalWrite;
+    globalThis.fetch = originalFetch;
+  }
+  assert.equal(practiceState, "completed");
+  assert.deepEqual(routes, [
+    "/api/agent-bridge/practice-tasks",
+    "/api/agent-bridge/practice-tasks",
+    "/api/agent-bridge/practice-claims",
+    "/api/agent-bridge/practice-tasks",
+    "/api/agent-bridge/practice-results",
+    "/api/agent-bridge/practice-tasks",
+    "/api/agent-bridge/health",
+    "/api/agent-bridge/inbox",
+  ]);
+});
+
 test("every update pointer phase restores current, previous, service, and new release", async t => {
   const directory = await temporary(t, "update-phases");
   const trust = signer();
@@ -1090,6 +1362,17 @@ test("daemon keeps Confirm inert, Auto exact-one, and concurrent Auto single-sub
   globalThis.fetch = async (url, init = {}) => {
     const parsed = new URL(url);
     const path = parsed.pathname;
+    if (path === "/api/agent-bridge/practice-tasks") {
+      return new Response(JSON.stringify({
+        schema: "hepta.paper_raid.agent_bridge.practice_tasks.v1",
+        mode: "practice_unranked",
+        status: "absent",
+        task: null,
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
     if (path === "/api/agent-bridge/health") {
       return new Response(JSON.stringify({ accepted: true }), {
         status: 200,

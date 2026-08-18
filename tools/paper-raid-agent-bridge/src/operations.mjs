@@ -30,6 +30,15 @@ import {
   saveReviewOutbox,
 } from "./review_outbox.mjs";
 import {
+  PRACTICE_AUTO_RESULT_SCHEMA,
+  PRACTICE_CLAIM_REQUEST_SCHEMA,
+  PRACTICE_RESULT_REQUEST_SCHEMA,
+  PRACTICE_TASK_QUERY_SCHEMA,
+  fixedPracticeResult,
+  validatePracticeTasks,
+  validatePracticeTransitionResult,
+} from "./practice.mjs";
+import {
   authorWorkStartKey,
   challengeMaterialObjectQuery,
   deliveryCandidateForAuthorOutput,
@@ -445,6 +454,154 @@ export async function getInbox(
       schema: INBOX_REQUEST_SCHEMA,
       paper_ids: config.paper_ids,
     },
+  });
+}
+
+async function getPracticeWithClient(client, state, identity, nowUnix) {
+  const value = await client.signed(identity, state, {
+    method: "POST",
+    path: AGENT_BRIDGE_ENDPOINTS.practice_tasks,
+    nowUnix,
+    body: { schema: PRACTICE_TASK_QUERY_SCHEMA },
+  });
+  return validatePracticeTasks(value);
+}
+
+export async function getPractice(
+  config,
+  identity,
+  { nowUnix = Math.floor(Date.now() / 1000), fetchImplementation } = {},
+) {
+  const { state, client } = await signedClientState(
+    config,
+    identity,
+    fetchImplementation,
+  );
+  return getPracticeWithClient(client, state, identity, nowUnix);
+}
+
+export async function executePracticeAuto(
+  config,
+  identity,
+  {
+    nowUnix = undefined,
+    clock = () => Math.floor(Date.now() / 1000),
+    fetchImplementation,
+  } = {},
+) {
+  if (nowUnix !== undefined && (!Number.isSafeInteger(nowUnix) || nowUnix < 1)) {
+    throw new Error("practice operation timestamp is invalid");
+  }
+  if (typeof clock !== "function") {
+    throw new Error("practice operation clock is invalid");
+  }
+  const freshNowUnix = () => {
+    const value = nowUnix ?? clock();
+    if (!Number.isSafeInteger(value) || value < 1) {
+      throw new Error("practice operation clock returned an invalid timestamp");
+    }
+    return value;
+  };
+  const { state, client } = await signedClientState(
+    config,
+    identity,
+    fetchImplementation,
+  );
+
+  // Discovery is the recovery authority. A prior process can have lost the
+  // claim/result response after the BFF committed it; never start a new
+  // transition until the exact owner-bound task state has been reread.
+  let tasks = await getPracticeWithClient(
+    client,
+    state,
+    identity,
+    freshNowUnix(),
+  );
+  if (tasks.status !== "ready") {
+    return Object.freeze({
+      schema: PRACTICE_AUTO_RESULT_SCHEMA,
+      mode: "practice_unranked",
+      status: tasks.status,
+      task_state: null,
+      version: null,
+      result_code: null,
+    });
+  }
+  if (tasks.task.state === "completed") {
+    return Object.freeze({
+      schema: PRACTICE_AUTO_RESULT_SCHEMA,
+      mode: "practice_unranked",
+      status: "already_completed",
+      task_state: "completed",
+      version: tasks.task.version,
+      result_code: tasks.task.result_code,
+    });
+  }
+
+  if (tasks.task.state === "pending") {
+    const fromVersion = tasks.task.version;
+    const value = await client.signed(identity, state, {
+      method: "POST",
+      path: AGENT_BRIDGE_ENDPOINTS.practice_claims,
+      nowUnix: freshNowUnix(),
+      body: {
+        schema: PRACTICE_CLAIM_REQUEST_SCHEMA,
+        expected_version: fromVersion,
+        task_token: tasks.task.task_token,
+      },
+    });
+    validatePracticeTransitionResult(value, "claim", fromVersion);
+    tasks = await getPracticeWithClient(
+      client,
+      state,
+      identity,
+      freshNowUnix(),
+    );
+  }
+  if (tasks.status !== "ready" || tasks.task.state !== "claimed") {
+    throw new Error("practice claim did not resolve to one exact claimed task");
+  }
+
+  const fromVersion = tasks.task.version;
+  const resultCode = fixedPracticeResult(tasks);
+  const value = await client.signed(identity, state, {
+    method: "POST",
+    path: AGENT_BRIDGE_ENDPOINTS.practice_results,
+    nowUnix: freshNowUnix(),
+    body: {
+      schema: PRACTICE_RESULT_REQUEST_SCHEMA,
+      expected_version: fromVersion,
+      task_token: tasks.task.task_token,
+      result_code: resultCode,
+    },
+  });
+  const result = validatePracticeTransitionResult(
+    value,
+    "result",
+    fromVersion,
+    resultCode,
+  );
+  const completed = await getPracticeWithClient(
+    client,
+    state,
+    identity,
+    freshNowUnix(),
+  );
+  if (
+    completed.status !== "ready" ||
+    completed.task.state !== "completed" ||
+    completed.task.version !== result.version ||
+    completed.task.result_code !== resultCode
+  ) {
+    throw new Error("practice result did not resolve to one exact completed task");
+  }
+  return Object.freeze({
+    schema: PRACTICE_AUTO_RESULT_SCHEMA,
+    mode: "practice_unranked",
+    status: "completed",
+    task_state: "completed",
+    version: completed.task.version,
+    result_code: completed.task.result_code,
   });
 }
 

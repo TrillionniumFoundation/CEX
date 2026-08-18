@@ -47,6 +47,7 @@ export const RELEASE_FILE_SET = Object.freeze([
   Object.freeze({ path: "src/inbox.mjs", mode: 0o400 }),
   Object.freeze({ path: "src/lifecycle.mjs", mode: 0o400 }),
   Object.freeze({ path: "src/operations.mjs", mode: 0o400 }),
+  Object.freeze({ path: "src/practice.mjs", mode: 0o400 }),
   Object.freeze({ path: "src/release.mjs", mode: 0o400 }),
   Object.freeze({ path: "src/review.mjs", mode: 0o400 }),
   Object.freeze({ path: "src/review_outbox.mjs", mode: 0o400 }),

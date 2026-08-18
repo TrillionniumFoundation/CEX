@@ -4,6 +4,7 @@ import { loadIdentity } from "./identity.mjs";
 import { readSafeJson, writePrivateJsonReplacing } from "./files.mjs";
 import {
   bridgeHealth,
+  executePracticeAuto,
   executeAndSubmitReviewTask,
   executeAndSubmitAuthorDelivery,
   executeAndSubmitAuthorWorkStart,
@@ -147,6 +148,12 @@ async function daemonCycleUnlocked(
       safeStatus({ mode: service.mode, state: "recovered", action: "recovery" }),
     );
   }
+  // The browser's explicit unranked Experiment handoff is consent for this
+  // one fixed bounded exercise in both service modes. Its executor always
+  // rediscovers the owner-bound practice task before any transition, so a
+  // lost claim/result response is recovered before new work. Confirm/Auto
+  // policy for formal Author/Review inbox work below remains unchanged.
+  await executePracticeAuto(config, identity);
   await bridgeHealth(config, identity, { status: "healthy" });
   const inbox = await getInbox(config, identity);
   const items = actionableItems(
