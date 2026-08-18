@@ -440,6 +440,7 @@ jq -e '
 ' "$accessctl_sbom" >/dev/null
 
 "$service_root/scripts/check-practice-unranked-boundary.sh"
+node "$service_root/scripts/check-practice-player-ui.mjs"
 node "$service_root/scripts/check-browser-crypto.mjs"
 node "$service_root/scripts/check-player-language-focus.mjs"
 bash "$service_root/scripts/check-observability-boundary.sh"

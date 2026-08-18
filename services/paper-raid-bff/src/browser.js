@@ -4722,9 +4722,92 @@ function bindPaperRoomProgressiveDisclosure() {
   }
 }
 
+const PRACTICE_CHOICES = Object.freeze({
+  captain_plan: new Set(["audit_highest_risk_claim", "audit_evidence_chain_first"]),
+  evidence_assessment: new Set(["unsupported_claim", "citation_mismatch", "evidence_sufficient"]),
+  experiment_interpretation: new Set(["revise_claim", "request_more_evidence", "retain_claim_with_caveat"]),
+  captain_aar: new Set(["improve_evidence_triage", "improve_experiment_design", "improve_team_coordination"]),
+});
+
+function practiceVersion(form) {
+  return positiveInteger(form.dataset.practiceVersion, "practice_version");
+}
+
+function practiceAdvancePayload(form) {
+  const action = String(form.dataset.practiceAction || "");
+  const choices = PRACTICE_CHOICES[action];
+  const selected = form.elements.choice && String(form.elements.choice.value || "");
+  if (!choices || !choices.has(selected)) throw new Error("invalid_request");
+  return {
+    expected_version: practiceVersion(form),
+    action: { action, choice: selected },
+  };
+}
+
+async function submitPracticeMutation(form, url, body, successMessage) {
+  const controls = form.querySelectorAll("button, input, select, textarea");
+  const output = form.querySelector("output");
+  for (const control of controls) control.disabled = true;
+  try {
+    const response = await mutation(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", "accept": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const value = await responseValue(response);
+    show(output, response.ok ? successMessage : value, response.ok);
+    if (response.ok) window.setTimeout(() => window.location.reload(), 250);
+  } catch (error) {
+    show(output, error.message, false);
+  } finally {
+    for (const control of controls) control.disabled = false;
+  }
+}
+
+function bindPractice() {
+  for (const form of document.querySelectorAll(".practice-start-form")) {
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      submitPracticeMutation(
+        form,
+        "/api/practice/start",
+        {},
+        "Practice ready. Loading your first role… / 练习已就绪，正在加载第一个角色……",
+      );
+    });
+  }
+  for (const form of document.querySelectorAll(".practice-advance-form")) {
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      try {
+        submitPracticeMutation(
+          form,
+          "/api/practice/advance",
+          practiceAdvancePayload(form),
+          "Choice saved. Loading the next role… / 选择已保存，正在加载下一角色……",
+        );
+      } catch (error) {
+        show(form.querySelector("output"), error.message, false);
+      }
+    });
+  }
+  for (const form of document.querySelectorAll(".practice-abandon-form")) {
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      submitPracticeMutation(
+        form,
+        "/api/practice/abandon",
+        { expected_version: practiceVersion(form) },
+        "Practice left. Returning to the local summary… / 已退出练习，正在返回本地摘要……",
+      );
+    });
+  }
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   bindPlayerFocusContext();
   bindPaperRoomProgressiveDisclosure();
+  bindPractice();
   bindLogin();
   bindHumanKeyCreate();
   bindHumanKeyRegistration();

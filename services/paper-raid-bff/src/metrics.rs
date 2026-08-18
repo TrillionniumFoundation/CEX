@@ -433,6 +433,10 @@ fn bounded_route(route: &str) -> Option<&'static str> {
         "/api/agent-bridge/delivery-drafts" => "/api/agent-bridge/delivery-drafts",
         "/api/agent-bridge/proposals" => "/api/agent-bridge/proposals",
         "/api/product-events" => "/api/product-events",
+        "/api/practice/session" => "/api/practice/session",
+        "/api/practice/start" => "/api/practice/start",
+        "/api/practice/advance" => "/api/practice/advance",
+        "/api/practice/abandon" => "/api/practice/abandon",
         "/api/papers/:paper_id/timeline" => "/api/papers/:paper_id/timeline",
         "/api/papers/:paper_id/outcome" => "/api/papers/:paper_id/outcome",
         "/api/papers/:paper_id/artifacts/:digest" => "/api/papers/:paper_id/artifacts/:digest",
@@ -441,6 +445,7 @@ fn bounded_route(route: &str) -> Option<&'static str> {
         "/league" => "/league",
         "/league/review" => "/league/review",
         "/league/review/:paper_id" => "/league/review/:paper_id",
+        "/league/practice" => "/league/practice",
         "/league/formation/:team_id" => "/league/formation/:team_id",
         "/league/papers/:paper_id" => "/league/papers/:paper_id",
         _ => return None,
@@ -469,6 +474,15 @@ mod tests {
             bounded_route("/api/papers/7c1b6b2b-9a68-4674-a44a-a90f52203f7f/timeline"),
             None
         );
+        for route in [
+            "/league/practice",
+            "/api/practice/session",
+            "/api/practice/start",
+            "/api/practice/advance",
+            "/api/practice/abandon",
+        ] {
+            assert_eq!(bounded_route(route), Some(route));
+        }
     }
 
     #[test]

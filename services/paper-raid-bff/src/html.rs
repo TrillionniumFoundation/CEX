@@ -17,10 +17,14 @@ use hepta_paper_raid_contracts::{
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::config::{AlphaAuthorRole, AlphaIdentity, AlphaIdentityScope};
-use crate::hepta::{
-    AuthenticatedPaperReviewState, AuthenticatedPaperRoom, HeptaPaperTerminalOutcome,
-    HeptaPaperTerminalReason,
+use crate::{
+    config::{AlphaAuthorRole, AlphaIdentity, AlphaIdentityScope},
+    hepta::{
+        AuthenticatedPaperReviewState, AuthenticatedPaperRoom, HeptaPaperTerminalOutcome,
+        HeptaPaperTerminalReason,
+    },
+    practice::PracticeStageV1,
+    practice_http::PracticePlayerViewV1,
 };
 
 pub enum ReadState<'a, T: ?Sized = Value> {
@@ -176,6 +180,7 @@ pub fn lobby(
     let agent_pairing = agent_bridge_pairing_panel();
     let body = format!(
         r#"<section class="hero"><span class="eyebrow">PAPER RAID · 论文远征</span><h1>Research Lobby</h1><p>Welcome, {}. Hepta is the only matchmaking and research authority.</p></section>
+        <section class="panel practice-entry"><span class="pill">15–20 MIN · SOLO</span><h2>Learn all three Author roles / 单人熟悉三个作者角色</h2><p>Preview Captain, Evidence, and Experiment decisions in a separate unranked practice. It creates no scientific finality, qualification, ranking, score, reward, or economic authority.</p><a class="button" href="/league/practice">Open solo practice / 打开单人练习</a></section>
         {}{}{}
         <section class="panel"><h2>Challenges / 研究挑战</h2><p class="source-state">Hepta: {}</p><div class="grid">{}</div></section>
         <section class="grid"><article class="card"><h2>My Queue / 我的队列</h2><p class="source-state">Hepta: {}</p>{}</article><article class="card"><h2>Team Proposals / 组队提案</h2><p class="source-state">Hepta: {}</p>{}</article><article class="card"><h2>Alpha Rules / Alpha 规则</h2><p>Each Author Raid has exactly 3 human authors with independently bound external Agents. Terminal review uses 1 evaluator, 2 reviewers, and 1 reproducer who are independent from those authors—at least 7 identities across the full flow. Login keys never leave this page except in the login request.</p></article></section>
@@ -8056,6 +8061,217 @@ pub fn login_page() -> Response {
     page("Paper Raid Login", "not signed in", body, false)
 }
 
+pub(crate) fn practice(
+    identity: &AlphaIdentity,
+    state: Option<&PracticePlayerViewV1>,
+    binding_ready: bool,
+) -> Response {
+    let role_steps = [
+        ("Captain", "Choose the audit plan / 选择审计路线"),
+        ("Evidence", "Assess the evidence gap / 判断证据缺口"),
+        ("Experiment", "Run the bounded check / 执行受限检查"),
+        ("Experiment", "Interpret the result / 解读检查结果"),
+        ("Captain", "Record one learning / 记录复盘要点"),
+    ];
+    let current_step = state.map_or(0, |view| view.step);
+    let all_done = state.is_some_and(|view| view.stage == PracticeStageV1::Completed);
+    let progress = role_steps
+        .iter()
+        .enumerate()
+        .map(|(index, (role, objective))| {
+            let step = (index + 1) as u8;
+            let status = if all_done {
+                "done"
+            } else if current_step == 0 {
+                "upcoming"
+            } else if step < current_step {
+                "done"
+            } else if step == current_step {
+                "current"
+            } else {
+                "upcoming"
+            };
+            format!(
+                r#"<li data-practice-step-state="{}"><span>{} · {}</span><strong>{}</strong></li>"#,
+                status,
+                step,
+                escape(role),
+                escape(objective),
+            )
+        })
+        .collect::<String>();
+
+    let bridge_prerequisite = || {
+        r#"<section class="primary-action practice-prerequisite"><span class="pill">PAIRING REQUIRED · 需要配对</span><h2>Pair exactly one active Agent Bridge first</h2><p>Practice uses the same owner-bound Bridge safety boundary as a real Raid. Pair through the ordinary Research Lobby flow; the browser cannot invent or choose a binding.</p><a class="button practice-primary-action" href="/league">Open Agent pairing / 前往 Agent 配对</a></section>"#.to_string()
+    };
+    let primary = match state {
+        None if !binding_ready => bridge_prerequisite(),
+        None => practice_start_form("Start the 15–20 minute practice / 开始 15–20 分钟练习"),
+        Some(view) if view.expired && !binding_ready => bridge_prerequisite(),
+        Some(view) if view.expired => format!(
+            r#"<section class="primary-action practice-expired"><span class="pill">EXPIRED · 已过期</span><h2>This practice window ended</h2><p>Your partial choices stay local and non-portable. Start a fresh practice when ready.</p>{}</section>"#,
+            practice_start_form("Start a fresh practice / 开始新的练习"),
+        ),
+        Some(view) if !binding_ready && !view.stage.is_terminal() => bridge_prerequisite(),
+        Some(view) => match view.stage {
+            PracticeStageV1::CaptainPlan => practice_choice_form(
+                view,
+                "Captain · Set the audit route / 队长：确定审计路线",
+                "Pick the first question your cell should resolve.",
+                "captain_plan",
+                &[
+                    ("audit_highest_risk_claim", "Audit the highest-risk claim / 优先审计最高风险主张"),
+                    ("audit_evidence_chain_first", "Audit the evidence chain first / 先审计证据链"),
+                ],
+                "Lock the Captain plan / 确定队长计划",
+            ),
+            PracticeStageV1::EvidenceAssessment => practice_choice_form(
+                view,
+                "Evidence · Diagnose the gap / 证据员：判断缺口",
+                "Classify what the cited evidence actually supports.",
+                "evidence_assessment",
+                &[
+                    ("unsupported_claim", "The claim is unsupported / 主张缺少支持"),
+                    ("citation_mismatch", "The citation does not match / 引文与主张不符"),
+                    ("evidence_sufficient", "The evidence is sufficient / 当前证据充分"),
+                ],
+                "Record the Evidence assessment / 记录证据判断",
+            ),
+            PracticeStageV1::ExperimentWaitingBridge => r#"<section class="primary-action practice-agent-wait" data-practice-agent-state="waiting"><span class="pill">EXPERIMENT · AGENT HANDOFF</span><h2>Run the bounded practice check / 执行受限练习检查</h2><p>The browser cannot impersonate an Agent or fabricate a result. This slice pauses here until the separately signed Agent Bridge claims and completes the local practice task.</p><a class="button practice-primary-action" href="/league/practice">Check Agent status / 检查 Agent 状态</a></section>"#.to_string(),
+            PracticeStageV1::ExperimentInterpretation => practice_choice_form(
+                view,
+                "Experiment · Interpret the result / 实验员：解读结果",
+                "Choose the safest response to the bounded check.",
+                "experiment_interpretation",
+                &[
+                    ("revise_claim", "Revise the claim / 修订主张"),
+                    ("request_more_evidence", "Request more evidence / 请求更多证据"),
+                    ("retain_claim_with_caveat", "Retain it with a caveat / 保留主张并注明限制"),
+                ],
+                "Record the Experiment decision / 记录实验判断",
+            ),
+            PracticeStageV1::CaptainAar => practice_choice_form(
+                view,
+                "Captain · One useful learning / 队长：记录一条复盘",
+                "Choose the change that would help your next real team most.",
+                "captain_aar",
+                &[
+                    ("improve_evidence_triage", "Improve evidence triage / 改进证据分诊"),
+                    ("improve_experiment_design", "Improve experiment design / 改进实验设计"),
+                    ("improve_team_coordination", "Improve team coordination / 改进团队协作"),
+                ],
+                "Finish this practice / 完成本次练习",
+            ),
+            PracticeStageV1::Completed if !binding_ready => r#"<section class="primary-action practice-complete"><span class="pill">PRACTICE COMPLETE · 练习完成</span><h2>You previewed all three Author roles</h2><p>This completion is local and non-portable. Pair one active Agent Bridge before starting another practice.</p><a class="button practice-primary-action" href="/league">Open Agent pairing / 前往 Agent 配对</a></section>"#.to_string(),
+            PracticeStageV1::Completed => format!(
+                r#"<section class="primary-action practice-complete"><span class="pill">PRACTICE COMPLETE · 练习完成</span><h2>You previewed all three Author roles</h2><p>This completion is intentionally local and non-portable. It does not qualify an account or alter any score, rank, reward, or scientific record.</p>{}</section>"#,
+                practice_start_form("Practice again / 再练一次"),
+            ),
+            PracticeStageV1::Abandoned if !binding_ready => bridge_prerequisite(),
+            PracticeStageV1::Abandoned => format!(
+                r#"<section class="primary-action practice-abandoned"><span class="pill">LEFT PRACTICE · 已退出练习</span><h2>No authoritative state was created</h2>{}</section>"#,
+                practice_start_form("Start again / 重新开始"),
+            ),
+            PracticeStageV1::Expired => unreachable!("clock expiry handled above"),
+        },
+    };
+
+    let leave = state
+        .filter(|view| !view.terminal && !view.expired)
+        .map(|view| {
+            format!(
+                r#"<details class="panel practice-leave"><summary>Leave this practice / 退出本次练习</summary><p>Leaving is final for this local practice session and creates no portable completion.</p><form class="practice-abandon-form" data-practice-version="{}"><button class="danger" type="submit">Leave practice / 退出练习</button><output></output></form></details>"#,
+                view.version,
+            )
+        })
+        .unwrap_or_default();
+
+    let status = state.map_or_else(
+        || "Not started / 尚未开始".to_string(),
+        |view| {
+            if view.expired {
+                "Expired / 已过期".to_string()
+            } else {
+                format!(
+                    "{} · step {}/{} · about {} min left",
+                    practice_stage_label(view.stage),
+                    view.step,
+                    view.total_steps,
+                    (view.remaining_seconds + 59) / 60,
+                )
+            }
+        },
+    );
+    let body = format!(
+        r#"<section class="hero practice-hero"><span class="eyebrow">PRACTICE_UNRANKED · 单人非排位练习</span><h1>Evidence Audit: first role preview</h1><p>{}，用约 15–20 分钟依次体验 Captain、Evidence、Experiment。页面刷新后会从服务器保存的同一步继续。</p><p class="status verified">{}</p></section>
+        <section class="panel practice-boundary"><h2>Practice boundary / 练习边界</h2><ul><li>No scientific finality or Challenge activation / 不产生科研最终性或挑战激活</li><li>No qualification, ranking, score, reward, or economic authority / 不产生资格、排行、积分、奖励或经济权限</li><li>No automatic submission; every browser step requires your explicit action / 不自动提交，每个浏览器步骤都需你明确操作</li><li>Completion is not portable to a real Raid / 练习完成状态不可迁移到正式远征</li></ul></section>
+        <section class="panel practice-progress"><h2>Five guided steps / 五步引导</h2><ol>{}</ol></section>
+        {}
+        {}
+        <p><a href="/league">Back to Research Lobby / 返回研究大厅</a></p>"#,
+        escape(&identity.display_name),
+        escape(&status),
+        progress,
+        primary,
+        leave,
+    );
+    page(
+        "Solo unranked practice",
+        &identity.display_name,
+        &body,
+        true,
+    )
+}
+
+fn practice_stage_label(stage: PracticeStageV1) -> &'static str {
+    match stage {
+        PracticeStageV1::CaptainPlan => "Captain plan / 队长计划",
+        PracticeStageV1::EvidenceAssessment => "Evidence assessment / 证据判断",
+        PracticeStageV1::ExperimentWaitingBridge => "Experiment handoff / 实验交接",
+        PracticeStageV1::ExperimentInterpretation => "Experiment interpretation / 实验解读",
+        PracticeStageV1::CaptainAar => "Captain AAR / 队长复盘",
+        PracticeStageV1::Completed => "Completed / 已完成",
+        PracticeStageV1::Abandoned => "Abandoned / 已退出",
+        PracticeStageV1::Expired => "Expired / 已过期",
+    }
+}
+
+fn practice_start_form(label: &str) -> String {
+    format!(
+        r#"<form class="practice-start-form primary-action"><button class="practice-primary-action" type="submit">{}</button><output></output></form>"#,
+        escape(label),
+    )
+}
+
+fn practice_choice_form(
+    view: &PracticePlayerViewV1,
+    title: &str,
+    prompt: &str,
+    action: &str,
+    choices: &[(&str, &str)],
+    button: &str,
+) -> String {
+    let options = choices
+        .iter()
+        .map(|(value, label)| {
+            format!(
+                r#"<label class="practice-choice"><input type="radio" name="choice" value="{}" required><span>{}</span></label>"#,
+                escape(value),
+                escape(label),
+            )
+        })
+        .collect::<String>();
+    format!(
+        r#"<form class="practice-advance-form primary-action" data-practice-action="{}" data-practice-version="{}"><h2>{}</h2><p>{}</p><fieldset><legend>Choose one / 请选择一项</legend>{}</fieldset><button class="practice-primary-action" type="submit">{}</button><output></output></form>"#,
+        escape(action),
+        view.version,
+        escape(title),
+        escape(prompt),
+        options,
+        escape(button),
+    )
+}
+
 pub fn onboarding(identity: &AlphaIdentity, stage: OnboardingStage) -> Response {
     let stage_content = match stage {
         OnboardingStage::HumanRegistration => r#"<section class="grid"><article class="card"><h2>1 · Browser-only key / 浏览器私钥</h2><p>Ed25519 signing happens locally with WebCrypto. The BFF never receives private-key bytes.</p></article><article class="card"><h2>2 · Encrypted recovery / 加密备份</h2><p>AES-256-GCM + PBKDF2-SHA-256 encrypts the PKCS#8 key into a downloaded bundle. Keep the file and passphrase separately.</p></article><article class="card"><h2>3 · Human authority / 人类责任</h2><p>Agent output remains a proposal. Acceptance, independent review, authorship consent, and appeal remain human-signed acts.</p></article></section>
@@ -8475,8 +8691,9 @@ main{margin:auto;max-width:1180px;padding:clamp(24px,5vw,64px) clamp(16px,4vw,44
 .paper-room-hero{margin-bottom:18px}.paper-room-basic{border-color:var(--cyan);display:grid;gap:16px;margin-bottom:16px;min-height:auto}.paper-room-basic>h2{font-size:clamp(24px,4vw,38px);letter-spacing:0;margin:0}.paper-room-personal-objective{font-size:clamp(15px,2vw,18px);margin:0;max-width:70ch}.paper-room-basic-grid{display:grid;gap:14px;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.paper-room-blocker,.paper-room-next-step{border:1px solid var(--line);border-radius:12px;min-width:0;padding:14px}.paper-room-blocker h3,.paper-room-next-step h3{font-size:13px;margin:0 0 8px}.paper-room-blocker-reason{font-weight:700;margin:0;overflow-wrap:anywhere}.paper-room-blocker-reason[data-blocker-state=blocked]{color:var(--amber)}.paper-room-blocker-reason[data-blocker-state=ready]{color:#67e8b5}.paper-room-more-blockers{color:var(--muted);font-size:12px;margin:8px 0 0}.paper-room-next-step{align-content:start;display:grid;gap:10px}.paper-room-next-step p{margin:0;overflow-wrap:anywhere}.paper-room-primary-button{justify-self:start;min-height:44px;max-width:100%;scroll-margin-block:28px}.paper-room-advanced{margin-top:16px;min-height:auto}.paper-room-advanced-summary{cursor:pointer;font-size:16px;font-weight:800}.paper-room-advanced-summary span,.paper-room-advanced-summary small{display:block}.paper-room-advanced-summary small{color:var(--muted);font-size:12px;font-weight:500;margin-top:4px}.paper-room-advanced[open]>.paper-room-advanced-summary{color:var(--cyan);margin-bottom:18px}.paper-room-advanced-content{display:grid;gap:16px;min-width:0}.paper-room-authority{border:1px solid var(--line);border-radius:12px;padding:14px}.paper-room-authority>h2{font-size:20px;margin:7px 0 14px}.paper-room-authority-facts{display:grid;gap:8px;grid-template-columns:repeat(2,minmax(0,1fr));margin:0 0 14px}.paper-room-authority-facts div{border-bottom:1px solid var(--line);display:grid;gap:3px;min-width:0;padding:7px}.paper-room-authority-facts dt{color:var(--muted);font-size:11px}.paper-room-authority-facts dd{margin:0;overflow-wrap:anywhere}.raid-command-center{border-color:var(--cyan);display:grid;gap:20px;grid-template-columns:minmax(0,1.3fr) minmax(260px,.7fr);margin-bottom:18px}.phase-objective h2{font-size:clamp(22px,4vw,36px);letter-spacing:0;margin:7px 0}.phase-readiness ul{display:grid;gap:7px;margin:0 0 8px;padding-left:20px}.phase-readiness .ready{color:#67e8b5}.projected-actions{margin-top:14px}.projected-actions ul{display:flex;flex-wrap:wrap;gap:6px;list-style:none;margin:7px 0 0;padding:0}.projected-actions li{border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:11px;padding:4px 8px}.primary-action{background:#0b2637;border:1px solid var(--cyan);border-radius:12px;padding:16px;scroll-margin-block:28px}.work-item-panel,.research-session-panel,.revision-panel,.material-panel{margin:14px 0}.work-board{display:grid;gap:10px}.work-card,.session-card,.release-approval{border:1px solid var(--line);border-radius:10px;padding:14px}.work-card h3,.session-card h3{margin:8px 0}.accepted-artifact-field[hidden]{display:none}.session-control-stack{display:grid;gap:9px}.materialization-summary{border:1px solid #3b8f78;border-radius:10px;margin:12px 0;padding:14px}.materialization-summary.missing{border-color:var(--pink)}.materialization-summary.pending{border-color:var(--line)}.materialized-sections{display:grid;gap:7px;list-style:none;margin:10px 0 0;padding:0}.materialized-sections li{border-top:1px solid var(--line);display:grid;gap:4px;padding-top:8px}.materialized-sections span,.materialized-sections small{color:var(--muted)}.release-author{border:1px solid var(--line);border-radius:8px;display:grid;gap:8px;margin:9px 0;padding:10px}.release-author legend,fieldset>legend{color:var(--amber);font-size:12px;font-weight:800}.developer-tools{margin-top:22px}.developer-tools>summary{color:var(--muted);cursor:pointer;font-size:15px;font-weight:800}.developer-tools[open]>summary{color:var(--cyan);margin-bottom:12px}.eligibility-grid{display:grid;gap:5px;grid-template-columns:repeat(2,minmax(0,1fr));list-style:none;margin:10px 0 0;padding:0}.eligibility-grid li{border:1px solid var(--line);border-radius:7px;display:flex;font-size:11px;gap:6px;justify-content:space-between;padding:6px}.eligibility-grid [data-eligible=true]{border-color:#3b8f78;color:#67e8b5}.eligibility-grid [data-eligible=false]{color:var(--muted)}.status.verified{border-color:#3b8f78;color:#67e8b5}.ticket-list .ticket-card{align-items:stretch;display:grid;gap:8px}.ticket-card>div{display:flex;gap:8px;justify-content:space-between}.ticket-card form{display:block}.review-queue-empty{text-align:center}.review-queue-empty .button{margin-top:12px}.review-boundary{border-color:var(--cyan);display:grid;gap:18px;grid-template-columns:2fr 1fr;margin-bottom:18px}.review-boundary dl,.review-facts{display:grid;gap:7px;margin:0}.review-boundary dl div,.review-facts div{border-bottom:1px solid var(--line);display:grid;gap:4px;padding:7px 0}.review-boundary dt,.review-facts dt{color:var(--muted);font-size:11px}.review-boundary dd,.review-facts dd{margin:0;overflow-wrap:anywhere}.review-queue-grid{display:grid;gap:16px}.review-queue-card>header{align-items:start;background:none;border:0;display:flex;gap:12px;justify-content:space-between;padding:0;position:static}.review-queue-card>header h2{font-size:24px;letter-spacing:0;margin:6px 0 12px}.review-facts{grid-template-columns:repeat(2,minmax(0,1fr));margin:16px 0}.review-columns{display:grid;gap:14px;grid-template-columns:repeat(2,minmax(0,1fr))}.review-columns>section{border:1px solid var(--line);border-radius:10px;padding:13px}.review-columns h3{font-size:12px;margin:0 0 10px}.review-assignments{display:grid;gap:9px;list-style:none;margin:0;padding:0}.review-assignments li{align-items:center;display:flex;gap:10px;justify-content:space-between}.review-assignments span,.review-open-slots small{color:var(--muted);display:block;font-size:11px}.review-open-slots{display:grid;gap:8px}.review-claim-form{align-items:center;border-bottom:1px solid var(--line);display:grid;gap:8px;grid-template-columns:1fr auto;padding:8px 0}.review-claim-form output{grid-column:1/-1}.review-protocol-gap{border-color:var(--amber);margin-top:18px}.review-protocol-gap li{margin:6px 0}.challenge-availability{border-left:3px solid var(--cyan);padding-left:10px}.challenge[data-challenge-status=closed] .challenge-availability,.challenge[data-challenge-status=draft] .challenge-availability,.challenge[data-challenge-status=unavailable] .challenge-availability{border-color:var(--amber);color:var(--muted)}.review-artifact-list{display:grid;gap:10px;list-style:none;margin:14px 0 0;padding:0}.review-artifact-item{align-items:center;border:1px solid var(--line);border-radius:10px;display:flex;gap:14px;justify-content:space-between;padding:13px}.review-artifact-item>div:first-child{display:grid;gap:4px;min-width:0}.review-artifact-filename{overflow-wrap:anywhere}.review-artifact-item span,.review-artifact-item small{color:var(--muted)}.review-artifact-actions{display:flex;flex-wrap:wrap;gap:8px}.review-artifact-actions .button{margin:0}
 .role-resource-panel{border-color:#3b8f78;margin:14px 0}.role-resource-panel .facts{display:grid;gap:8px;grid-template-columns:repeat(3,minmax(0,1fr));margin:12px 0}.role-resource-panel .facts article{border:1px solid var(--line);border-radius:9px;display:grid;gap:2px;min-height:auto;padding:10px}.role-resource-panel .facts strong{color:#67e8b5;font-size:20px}.role-resource-panel .facts span{color:var(--muted);font-size:11px}
 .challenge-ruleset-panel{border-color:var(--amber);display:grid;gap:16px;margin-bottom:18px}.challenge-ruleset-header{display:grid;gap:16px;grid-template-columns:minmax(220px,1fr) minmax(300px,1.2fr)}.challenge-ruleset-header h2{font-size:24px;margin:8px 0}.challenge-ruleset-facts{display:grid;gap:6px;grid-template-columns:repeat(2,minmax(0,1fr));margin:0}.challenge-ruleset-facts div{border-bottom:1px solid var(--line);display:grid;gap:3px;padding:6px}.challenge-ruleset-facts dt{color:var(--muted);font-size:11px}.challenge-ruleset-facts dd{margin:0}.challenge-clock,.challenge-outcome,.challenge-victory{border:1px solid var(--line);border-radius:10px;padding:13px}.challenge-clock strong,.challenge-outcome strong{display:block;font-size:18px;margin-top:5px}.challenge-clock p,.challenge-outcome p{color:var(--muted);margin-bottom:0}.challenge-victory ul,.challenge-phase-gates ol,.challenge-phase-gates ul{display:grid;gap:6px;margin:8px 0;padding-left:22px}.challenge-phase-gates summary,.challenge-terminal-controls summary{color:var(--cyan);cursor:pointer;font-weight:800}.challenge-terminal-grid{display:grid;gap:12px;grid-template-columns:repeat(2,minmax(0,1fr));margin-top:12px}.challenge-terminal-grid form{border:1px solid var(--line);border-radius:10px;padding:12px}.challenge-countdown[data-state=active]{color:#67e8b5}.challenge-countdown[data-state=overtime]{color:var(--amber)}.challenge-countdown[data-state=expired]{color:var(--pink)}
-@media(max-width:820px){.grid,.action-grid,.mission-board,.raid-steps,.paper-room-basic-grid,.paper-room-authority-facts,.raid-command-center,.review-boundary,.review-facts,.review-columns,.challenge-ruleset-header,.challenge-ruleset-facts,.challenge-terminal-grid,.role-resource-panel .facts{grid-template-columns:1fr}.roster li{align-items:start;grid-template-columns:1fr}.hero h1{font-size:38px}header{position:static}.card{min-height:auto}}
-@media(max-width:430px){main{padding:22px 12px}.paper-room-basic,.paper-room-advanced{border-radius:12px;padding:14px}.paper-room-primary-button{justify-self:stretch;width:100%}.paper-room-advanced-content{gap:12px}.paper-room-authority{padding:12px}}
+.practice-entry{border-color:#3b8f78;margin-bottom:18px}.practice-entry .button{margin-top:8px}.practice-boundary{border-color:var(--amber);margin-bottom:18px}.practice-boundary ul{display:grid;gap:7px;margin:0;padding-left:22px}.practice-progress{margin-bottom:18px}.practice-progress ol{display:grid;gap:8px;grid-template-columns:repeat(5,minmax(0,1fr));list-style:none;margin:0;padding:0}.practice-progress li{border:1px solid var(--line);border-radius:10px;display:grid;gap:5px;padding:11px}.practice-progress li span{color:var(--muted);font-size:11px}.practice-progress [data-practice-step-state=current]{background:#12334a;border-color:var(--cyan)}.practice-progress [data-practice-step-state=current] span{color:var(--cyan)}.practice-progress [data-practice-step-state=done]{border-color:#3b8f78}.practice-progress [data-practice-step-state=done] span{color:#67e8b5}.practice-choice{align-items:start;border:1px solid var(--line);border-radius:9px;display:grid;gap:10px;grid-template-columns:auto 1fr;padding:10px}.practice-choice input{margin-top:3px}.practice-advance-form,.practice-agent-wait,.practice-complete,.practice-expired,.practice-abandoned{margin-bottom:18px}.practice-advance-form fieldset{border:0;display:grid;gap:8px;margin:0;padding:0}.practice-primary-action{justify-self:start}.practice-leave{min-height:auto}.practice-leave summary{color:var(--muted);cursor:pointer;font-weight:800}.practice-leave[open] summary{color:var(--pink);margin-bottom:12px}
+@media(max-width:820px){.grid,.action-grid,.mission-board,.raid-steps,.practice-progress ol,.paper-room-basic-grid,.paper-room-authority-facts,.raid-command-center,.review-boundary,.review-facts,.review-columns,.challenge-ruleset-header,.challenge-ruleset-facts,.challenge-terminal-grid,.role-resource-panel .facts{grid-template-columns:1fr}.roster li{align-items:start;grid-template-columns:1fr}.hero h1{font-size:38px}header{position:static}.card{min-height:auto}}
+@media(max-width:430px){main{padding:22px 12px}.paper-room-basic,.paper-room-advanced{border-radius:12px;padding:14px}.paper-room-primary-button{justify-self:stretch;width:100%}.practice-primary-action{justify-self:stretch;width:100%}.paper-room-advanced-content{gap:12px}.paper-room-authority{padding:12px}}
 @media(max-width:390px){.paper-room-basic>h2{font-size:24px}.paper-room-blocker,.paper-room-next-step{padding:12px}.paper-room-advanced-summary small{font-size:11px}}
 "#;
 
@@ -8502,6 +8719,139 @@ mod tests {
             paper_phase_label("reproducing"),
             "Reproduction readiness / 复现准备"
         );
+    }
+
+    fn practice_view(stage: PracticeStageV1, step: u8, terminal: bool) -> PracticePlayerViewV1 {
+        let now = Utc::now();
+        PracticePlayerViewV1 {
+            schema: "hepta.paper_raid.practice_player_view.v1",
+            mode: "practice_unranked".into(),
+            scenario_id: "evidence-audit-intro-v1".into(),
+            stage,
+            version: u64::from(step.max(1)),
+            role: "practice",
+            step,
+            total_steps: 5,
+            started_at: now,
+            expires_at: now + chrono::Duration::minutes(20),
+            remaining_seconds: 1_200,
+            expired: false,
+            terminal,
+            awaiting_agent_bridge: stage == PracticeStageV1::ExperimentWaitingBridge,
+            eligibility: crate::practice::PracticeEligibilityV1::locked(),
+        }
+    }
+
+    async fn practice_html(state: Option<&PracticePlayerViewV1>, binding_ready: bool) -> String {
+        let identity =
+            AlphaIdentity::test_identity("practice-player", Uuid::new_v4(), Uuid::new_v4());
+        let bytes = practice(&identity, state, binding_ready)
+            .into_body()
+            .collect()
+            .await
+            .expect("collect practice HTML")
+            .to_bytes();
+        String::from_utf8(bytes.to_vec()).expect("UTF-8 practice HTML")
+    }
+
+    #[tokio::test]
+    async fn practice_requires_one_paired_bridge_before_start() {
+        let blocked = practice_html(None, false).await;
+        assert!(blocked.contains("Pair exactly one active Agent Bridge first"));
+        assert!(blocked.contains("href=\"/league\""));
+        assert!(!blocked.contains("practice-start-form"));
+        assert!(!blocked.contains("practice_session_id"));
+        assert!(!blocked.contains("binding_id"));
+
+        let ready = practice_html(None, true).await;
+        assert_eq!(ready.matches("practice-start-form").count(), 1);
+        assert!(ready.contains("15–20 minute practice"));
+    }
+
+    #[tokio::test]
+    async fn practice_renders_one_bounded_player_action_for_each_browser_stage() {
+        for (stage, step, action, choices) in [
+            (
+                PracticeStageV1::CaptainPlan,
+                1,
+                "captain_plan",
+                vec!["audit_highest_risk_claim", "audit_evidence_chain_first"],
+            ),
+            (
+                PracticeStageV1::EvidenceAssessment,
+                2,
+                "evidence_assessment",
+                vec![
+                    "unsupported_claim",
+                    "citation_mismatch",
+                    "evidence_sufficient",
+                ],
+            ),
+            (
+                PracticeStageV1::ExperimentInterpretation,
+                4,
+                "experiment_interpretation",
+                vec![
+                    "revise_claim",
+                    "request_more_evidence",
+                    "retain_claim_with_caveat",
+                ],
+            ),
+            (
+                PracticeStageV1::CaptainAar,
+                5,
+                "captain_aar",
+                vec![
+                    "improve_evidence_triage",
+                    "improve_experiment_design",
+                    "improve_team_coordination",
+                ],
+            ),
+        ] {
+            let view = practice_view(stage, step, false);
+            let body = practice_html(Some(&view), true).await;
+            assert_eq!(body.matches("practice-advance-form").count(), 1);
+            assert_eq!(body.matches("practice-abandon-form").count(), 1);
+            assert!(body.contains(&format!("data-practice-action=\"{action}\"")));
+            for choice in choices {
+                assert!(body.contains(&format!("value=\"{choice}\"")));
+            }
+            for forbidden in [
+                "practice_session_id",
+                "subject_id",
+                "player_id",
+                "binding_id",
+                "bridge_task_id",
+                "sha256:",
+            ] {
+                assert!(
+                    !body.contains(forbidden),
+                    "practice HTML leaked {forbidden}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn practice_waits_for_signed_agent_and_completion_marks_all_steps_done() {
+        let waiting = practice_view(PracticeStageV1::ExperimentWaitingBridge, 3, false);
+        let waiting_body = practice_html(Some(&waiting), true).await;
+        assert!(waiting_body.contains("Check Agent status"));
+        assert!(waiting_body.contains("browser cannot impersonate an Agent"));
+        assert!(!waiting_body.contains("practice-advance-form"));
+        assert_eq!(waiting_body.matches("practice-abandon-form").count(), 1);
+
+        let completed = practice_view(PracticeStageV1::Completed, 5, true);
+        let completed_body = practice_html(Some(&completed), true).await;
+        assert_eq!(
+            completed_body
+                .matches("data-practice-step-state=\"done\"")
+                .count(),
+            5
+        );
+        assert!(!completed_body.contains("data-practice-step-state=\"current\""));
+        assert_eq!(completed_body.matches("practice-start-form").count(), 1);
+        assert!(!completed_body.contains("practice-abandon-form"));
     }
 
     fn test_key_snapshot(seed: u8) -> (String, String, String) {
