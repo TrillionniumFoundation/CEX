@@ -4453,7 +4453,48 @@ function bindProductTelemetry() {
   }
 }
 
+function bindPaperRoomProgressiveDisclosure() {
+  for (const button of document.querySelectorAll("[data-paper-room-reveal]")) {
+    const controlledId = button.getAttribute("aria-controls");
+    const advanced = controlledId ? document.getElementById(controlledId) : null;
+    if (!(advanced instanceof HTMLDetailsElement)) {
+      button.disabled = true;
+      continue;
+    }
+    const updateExpandedState = () => {
+      button.setAttribute("aria-expanded", advanced.open ? "true" : "false");
+    };
+    advanced.addEventListener("toggle", updateExpandedState);
+    updateExpandedState();
+    button.addEventListener("click", () => {
+      advanced.open = true;
+      updateExpandedState();
+      const targetSelector = button.dataset.paperRoomPrimaryTarget;
+      const matchingAction = targetSelector ? advanced.querySelector(targetSelector) : null;
+      const primaryControls = Array.from(advanced.querySelectorAll(".primary-action"));
+      const focusTarget = action => action && (action.querySelector(
+          "button[type=submit]:not([disabled]), a.button[href], button:not([disabled])"
+        ) || action.querySelector(
+          "input:not([disabled]), select:not([disabled]), textarea:not([disabled])"
+        ) || (action.matches("[tabindex]") ? action : null));
+      const target = focusTarget(matchingAction)
+        || primaryControls.map(focusTarget).find(Boolean)
+        || advanced.querySelector("summary");
+      window.requestAnimationFrame(() => {
+        if (!(target instanceof HTMLElement)) return;
+        target.focus({ preventScroll: true });
+        if (typeof target.scrollIntoView === "function") {
+          const reduceMotion = window.matchMedia
+            && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+          target.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "center" });
+        }
+      });
+    });
+  }
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
+  bindPaperRoomProgressiveDisclosure();
   bindLogin();
   bindHumanKeyCreate();
   bindHumanKeyRegistration();

@@ -1059,6 +1059,10 @@ fn render_paper_room_with_finality(
             .unwrap_or_else(|| review.label().into());
         fact(title, &records)
     };
+    let basic_actions = room
+        .value()
+        .map(|value| basic_paper_room(value, review.value()))
+        .unwrap_or_else(|| unavailable("current Paper objective"));
     let guided_actions = room
         .value()
         .map(|value| guided_paper_room(identity, paper_id, value, review.value()))
@@ -1275,8 +1279,8 @@ fn render_paper_room_with_finality(
     } else {
         unavailable("developer protocol actions")
     };
-    let body = format!(
-        r#"<section class="hero"><span class="eyebrow">PAPER ROOM · 论文作战室</span><h1>{}</h1><p>Paper <code>{}</code></p><p class="source-state">Hepta paper: {}</p>{}</section>{}
+    let advanced_body = format!(
+        r#"<section class="paper-room-authority" tabindex="-1" aria-labelledby="paper-room-authority-heading"><span class="eyebrow">AUTHORITY DETAILS / 权威详情</span><h2 id="paper-room-authority-heading">Identifiers, hashes, and finality / 标识、摘要与终局</h2><dl class="paper-room-authority-facts"><div><dt>Paper ID</dt><dd><code>{}</code></dd></div><div><dt>Hepta source / Hepta 来源</dt><dd>{}</dd></div><div><dt>Author phase / 作者阶段</dt><dd><code>{}</code></dd></div><div><dt>Finality / 终局</dt><dd>{}</dd></div></dl>{}</section>{}
         <section class="grid">
           {}
           {}
@@ -1293,9 +1297,10 @@ fn render_paper_room_with_finality(
           {}
           {}
         </section>"#,
-        escape(&title),
         escape(paper_id),
         escape(room.label()),
+        escape(&phase),
+        escape(&settlement_fact),
         settlement,
         guided_actions,
         fact("Phase Gates / 阶段门", paper_phase_label(&phase)),
@@ -1311,8 +1316,8 @@ fn render_paper_room_with_finality(
         room_card("Review / 内审", "section_reviews"),
         review_card("Review State / 评审状态", "evaluations"),
     );
-    let body = format!(
-        "{body}<section class=\"grid\">{}{}{}{}{}{}</section>",
+    let advanced_body = format!(
+        "{advanced_body}<section class=\"grid\">{}{}{}{}{}{}</section>",
         review_card("Contribution / 贡献", "contribution_ledgers"),
         review_card("Evaluations / 评估", "evaluations"),
         review_card("Reproductions / 复现", "reproductions"),
@@ -1323,10 +1328,13 @@ fn render_paper_room_with_finality(
     let after_action = authenticated_aar
         .map(|(room, review)| authenticated_after_action_report(identity, paper_id, room, review))
         .unwrap_or_default();
-    let body = format!("{body}{after_action}");
+    let advanced_body = format!("{advanced_body}{after_action}");
     let artifacts = artifact_links(room, paper_id);
     let body = format!(
-        "{body}{artifacts}<details class=\"panel developer-tools\"><summary>Developer Tools / 开发者工具</summary><p class=\"muted\">Exact protocol JSON remains an Alpha fallback for commands that do not yet have a safely derived form or external connector. Needing this section is a known playability gap, never a completed normal path.</p><div class=\"action-grid\">{developer_actions}</div></details>"
+        r#"<section class="hero paper-room-hero"><span class="eyebrow">PAPER ROOM · 论文作战室</span><h1>{}</h1><p>Follow the current objective; technical authority remains available below when you need to audit it. / 先完成当前目标；需要审计时再查看下方技术权威。</p></section>{}<details class="panel paper-room-advanced" id="paper-room-advanced"><summary class="paper-room-advanced-summary"><span>Advanced / 高级详情</span><small>UUIDs, hashes, authority, all controls, and complete records / UUID、摘要、权威、全部操作与完整记录</small></summary><div class="paper-room-advanced-content">{}{artifacts}<details class="panel developer-tools"><summary>Developer Tools / 开发者工具</summary><p class="muted">Exact protocol JSON remains an Alpha fallback for commands that do not yet have a safely derived form or external connector. Needing this section is a known playability gap, never a completed normal path.</p><div class="action-grid">{developer_actions}</div></details></div></details>"#,
+        escape(&title),
+        basic_actions,
+        advanced_body,
     );
     page("Paper Raid Room", &identity.display_name, &body, true)
 }
@@ -3974,6 +3982,146 @@ fn role_resource_panel(
         checkpoint_count,
         retained_failures,
         actor_action,
+    )
+}
+
+fn projected_primary_action_code(progress: Option<&Value>) -> Option<&str> {
+    for field in ["primary_actions", "next_actions"] {
+        let Some(actions) = progress
+            .and_then(|value| value.get(field))
+            .and_then(Value::as_array)
+        else {
+            continue;
+        };
+        for action in actions {
+            let label = action.as_str().or_else(|| {
+                action
+                    .get("label")
+                    .or_else(|| action.get("action"))
+                    .or_else(|| action.get("command"))
+                    .and_then(Value::as_str)
+            });
+            if let Some(label) = label {
+                return Some(label);
+            }
+        }
+    }
+    None
+}
+
+fn paper_room_primary_action_selector(action: &str) -> Option<&'static str> {
+    match action {
+        "open_preregistration" | "transition_paper_project" => Some(".paper-phase-form"),
+        "create_paper_work_item" => Some(".create-work-item-form"),
+        "lock_research_plan" | "create_experiment_plan" => {
+            Some(".input-manifest-wizard-form, .create-experiment-plan-form")
+        }
+        "bind_claims_to_evidence" | "create_claim_record" => Some(".create-claim-record-form"),
+        "create_evidence_card" => Some(".create-evidence-card-form"),
+        "create_citation_record" => Some(".create-citation-record-form"),
+        "retain_results_and_artifacts" | "create_run_record" => {
+            Some(".run-artifact-wizard-form, .create-run-record-form")
+        }
+        "assemble_draft" => Some(".draft-manifest-wizard-form, .create-paper-revision-form"),
+        "register_artifact" => Some(".artifact-form"),
+        "assess_evidence" => {
+            Some(".role-resource-action-form[data-action-kind=evidence_assessment]")
+        }
+        "coordinate_checkpoint" => {
+            Some(".role-resource-action-form[data-action-kind=captain_checkpoint]")
+        }
+        "create_section_revision" => Some(".create-section-revision-form"),
+        "create_paper_revision" => Some(".create-paper-revision-form"),
+        "submit_review" => Some(".section-review-form"),
+        "merge_section" => Some(".merge-section-form"),
+        "promote_paper_release_candidate" => Some(".promote-release-form"),
+        "create_authorship_consent" => Some(".author-consent-form"),
+        "finalize_joint_paper_submission" => Some(".finalize-paper-form"),
+        "submit_appeal" => Some(".author-appeal-form"),
+        _ => None,
+    }
+}
+
+fn basic_paper_room(room: &Value, review: Option<&Value>) -> String {
+    let Some(paper) = room.get("paper").filter(|value| value.is_object()) else {
+        return unavailable("paper objective");
+    };
+    let progress = room
+        .get("author_raid_progress")
+        .filter(|value| value.is_object());
+    let phase = progress
+        .and_then(|value| value.get("phase"))
+        .or_else(|| paper.get("phase"))
+        .and_then(Value::as_str)
+        .unwrap_or("unavailable");
+    let fallback_objective = phase_objective(phase);
+    let objective = progress
+        .and_then(|value| value.get("objective"))
+        .and_then(Value::as_str)
+        .map(projection_label)
+        .unwrap_or(fallback_objective.0);
+    let detail = progress
+        .and_then(|value| value.get("personal_objective"))
+        .and_then(Value::as_str)
+        .map(projection_label)
+        .unwrap_or(fallback_objective.1);
+    let member_count = room
+        .get("team")
+        .and_then(|value| value.get("members"))
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    let mut blockers = progress_blockers(progress)
+        .unwrap_or_else(|| phase_blockers(phase, room, review, member_count));
+    if phase == "forming" && progress.is_none() {
+        blockers.insert(
+            0,
+            "Authoritative actions are unavailable; no mutation is guessed from local state. / \
+             权威操作暂不可用；不从本地状态猜测任何变更。"
+                .into(),
+        );
+    }
+    let (blocker_state, blocker) = blockers.first().map_or(
+        (
+            "ready",
+            "Nothing blocks the next authoritative step. / 当前无权威阻塞项。",
+        ),
+        |blocker| ("blocked", blocker.as_str()),
+    );
+    let additional_blockers = blockers.len().saturating_sub(1);
+    let additional = if additional_blockers == 0 {
+        String::new()
+    } else {
+        format!(
+            r#"<p class="paper-room-more-blockers">{} more blocking reason(s) are listed in Advanced / 高级详情中还有 {} 项阻塞原因。</p>"#,
+            additional_blockers, additional_blockers,
+        )
+    };
+    let projected_action = projected_primary_action_code(progress);
+    let (primary_action, primary_target) = if phase == "forming" && progress.is_none() {
+        (
+            "Review the authoritative status / 查看权威状态".to_string(),
+            ".paper-room-authority",
+        )
+    } else {
+        (
+            projected_action
+                .map(projection_label)
+                .unwrap_or(objective)
+                .to_string(),
+            projected_action
+                .and_then(paper_room_primary_action_selector)
+                .unwrap_or(".primary-action"),
+        )
+    };
+    format!(
+        r#"<section class="panel paper-room-basic" aria-labelledby="paper-room-current-objective"><span class="eyebrow">BASIC / 基础模式</span><h2 id="paper-room-current-objective">{}</h2><p class="paper-room-personal-objective">{}</p><div class="paper-room-basic-grid"><section class="paper-room-blocker" aria-labelledby="paper-room-blocker-heading"><h3 id="paper-room-blocker-heading">Blocking reason / 阻塞原因</h3><p class="paper-room-blocker-reason" data-blocker-state="{}" role="status">{}</p>{}</section><section class="paper-room-next-step" aria-labelledby="paper-room-primary-action-heading"><h3 id="paper-room-primary-action-heading">Primary action / 主要操作</h3><p id="paper-room-primary-action-label">{}</p><button class="paper-room-primary-button" type="button" data-paper-room-reveal data-paper-room-primary-target="{}" aria-controls="paper-room-advanced" aria-expanded="false" aria-describedby="paper-room-primary-action-label">Open this action / 打开此操作</button></section></div></section>"#,
+        escape(objective),
+        escape(detail),
+        blocker_state,
+        escape(blocker),
+        additional,
+        escape(&primary_action),
+        escape(primary_target),
     )
 }
 
@@ -8321,13 +8469,15 @@ const CSS: &str = r#"
 :root{color-scheme:dark;--bg:#070b12;--panel:#101826;--line:#253653;--text:#e9f2ff;--muted:#8ba0ba;--cyan:#55e6ff;--amber:#ffca68;--pink:#ff6ba8}
 *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 20% 0,#11213a 0,#070b12 42%);color:var(--text);font:15px/1.55 Inter,ui-sans-serif,system-ui,sans-serif;min-height:100vh}
 header{align-items:center;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;padding:16px clamp(18px,4vw,56px);position:sticky;top:0;background:#070b12e8;backdrop-filter:blur(12px)}header a{color:var(--cyan);font-weight:900;letter-spacing:.12em;text-decoration:none}header span,footer{color:var(--muted)}
-main{margin:auto;max-width:1180px;padding:clamp(24px,5vw,64px) clamp(16px,4vw,44px)}.hero{border-left:4px solid var(--cyan);padding:8px 0 12px 22px;margin-bottom:28px}.eyebrow{color:var(--amber);font-size:12px;font-weight:800;letter-spacing:.16em}.hero h1{font-size:clamp(32px,7vw,72px);line-height:1;margin:10px 0}.hero p{color:var(--muted);max-width:760px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:14px 0}.card,.panel{background:linear-gradient(145deg,#142036,#0d1421);border:1px solid var(--line);border-radius:14px;padding:18px;min-height:120px}.card h2,.panel h2{font-size:14px;letter-spacing:.05em;margin:0 0 12px}.card p{color:var(--text)}.unavailable{border-style:dashed;color:var(--muted)}.muted,.action p{color:var(--muted)}.dot{background:var(--pink);border-radius:50%;display:inline-block;height:8px;margin-right:8px;width:8px}.pill,.status{border:1px solid var(--amber);border-radius:999px;color:var(--amber);display:inline-block;font-size:12px;font-weight:800;padding:4px 9px}.status{padding:6px 12px}.status.missing{border-color:var(--pink);color:var(--pink)}.source-state{color:var(--muted);font-size:12px}.roster,.record-list{display:grid;gap:10px;list-style:none;margin:0;padding:0}.roster li{align-items:center;border-bottom:1px solid var(--line);display:grid;gap:8px;grid-template-columns:90px 1fr 1fr 1fr;padding:10px 0}.roster span{color:var(--muted);overflow-wrap:anywhere}.record-list li,.record-list a{align-items:center;display:flex;gap:8px;justify-content:space-between}.record-list a{color:var(--text);text-decoration:none;width:100%}.action-grid{display:grid;gap:14px;grid-template-columns:repeat(2,minmax(0,1fr))}.action{border:1px solid var(--line);border-radius:12px;padding:16px}.action h3{margin-top:0}form{display:grid;gap:12px}label{color:var(--muted);display:grid;font-size:12px;gap:6px}input,textarea,select,button{background:#07101d;border:1px solid var(--line);border-radius:8px;color:var(--text);font:inherit;padding:10px 12px}textarea{font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;resize:vertical}button{background:#12334a;border-color:var(--cyan);color:var(--cyan);cursor:pointer;font-weight:800}button:hover{filter:brightness(1.2)}button.danger{border-color:var(--pink);color:var(--pink)}button:disabled{cursor:wait;opacity:.55}output{color:var(--amber);font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere;white-space:pre-wrap}output.result-error{color:var(--pink)}output.result-ok{color:var(--amber)}.narrow{margin:auto;max-width:540px}#toast{background:#101826;border:1px solid var(--line);border-radius:10px;bottom:18px;display:block;max-width:min(520px,90vw);padding:12px 16px;position:fixed;right:18px;z-index:10}#toast[hidden]{display:none}code{color:var(--cyan);overflow-wrap:anywhere}footer{padding:28px;text-align:center}
+main{margin:auto;max-width:1180px;padding:clamp(24px,5vw,64px) clamp(16px,4vw,44px)}.hero{border-left:4px solid var(--cyan);padding:8px 0 12px 22px;margin-bottom:28px}.eyebrow{color:var(--amber);font-size:12px;font-weight:800;letter-spacing:.16em}.hero h1{font-size:clamp(32px,7vw,72px);line-height:1;margin:10px 0}.hero p{color:var(--muted);max-width:760px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:14px 0}.card,.panel{background:linear-gradient(145deg,#142036,#0d1421);border:1px solid var(--line);border-radius:14px;padding:18px;min-height:120px}.card h2,.panel h2{font-size:14px;letter-spacing:.05em;margin:0 0 12px}.card p{color:var(--text)}.unavailable{border-style:dashed;color:var(--muted)}.muted,.action p{color:var(--muted)}.dot{background:var(--pink);border-radius:50%;display:inline-block;height:8px;margin-right:8px;width:8px}.pill,.status{border:1px solid var(--amber);border-radius:999px;color:var(--amber);display:inline-block;font-size:12px;font-weight:800;padding:4px 9px}.status{padding:6px 12px}.status.missing{border-color:var(--pink);color:var(--pink)}.source-state{color:var(--muted);font-size:12px}.roster,.record-list{display:grid;gap:10px;list-style:none;margin:0;padding:0}.roster li{align-items:center;border-bottom:1px solid var(--line);display:grid;gap:8px;grid-template-columns:90px 1fr 1fr 1fr;padding:10px 0}.roster span{color:var(--muted);overflow-wrap:anywhere}.record-list li,.record-list a{align-items:center;display:flex;gap:8px;justify-content:space-between}.record-list a{color:var(--text);text-decoration:none;width:100%}.action-grid{display:grid;gap:14px;grid-template-columns:repeat(2,minmax(0,1fr))}.action{border:1px solid var(--line);border-radius:12px;padding:16px}.action h3{margin-top:0}form{display:grid;gap:12px}label{color:var(--muted);display:grid;font-size:12px;gap:6px}input,textarea,select,button{background:#07101d;border:1px solid var(--line);border-radius:8px;color:var(--text);font:inherit;padding:10px 12px}textarea{font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;resize:vertical}button{background:#12334a;border-color:var(--cyan);color:var(--cyan);cursor:pointer;font-weight:800}button:hover{filter:brightness(1.2)}button.danger{border-color:var(--pink);color:var(--pink)}button:disabled{cursor:wait;opacity:.55}:where(a,button,input,textarea,select,summary):focus-visible{outline:3px solid var(--amber);outline-offset:3px}output{color:var(--amber);font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere;white-space:pre-wrap}output.result-error{color:var(--pink)}output.result-ok{color:var(--amber)}.narrow{margin:auto;max-width:540px}#toast{background:#101826;border:1px solid var(--line);border-radius:10px;bottom:18px;display:block;max-width:min(520px,90vw);padding:12px 16px;position:fixed;right:18px;z-index:10}#toast[hidden]{display:none}code{color:var(--cyan);overflow-wrap:anywhere}footer{padding:28px;text-align:center}
 .key-vault{margin-bottom:18px;min-height:auto}.key-vault summary{color:var(--cyan);cursor:pointer;font-weight:800}.key-vault form{margin:14px 0}.human-key-status{display:block;margin-top:10px}.challenge-rules{display:grid;gap:7px;margin:12px 0}.challenge-rules div{border-bottom:1px solid var(--line);display:grid;gap:4px;padding:5px 0}.challenge-rules dt{color:var(--muted);font-size:11px}.challenge-rules dd{margin:0}
   .mission-board{display:grid;gap:18px;grid-template-columns:minmax(220px,.8fr) minmax(0,2fr);margin-bottom:20px}.mission-board h2{font-size:24px;letter-spacing:0;margin:6px 0}.raid-steps{display:grid;gap:8px;grid-template-columns:repeat(5,minmax(0,1fr));list-style:none;margin:0;padding:0}.raid-steps li{border:1px solid var(--line);border-radius:10px;display:grid;gap:8px;padding:12px}.raid-steps li>span{color:var(--muted);font-size:11px;font-weight:900}.raid-steps strong{display:block}.raid-steps p{color:var(--muted);font-size:11px;line-height:1.35;margin:4px 0 0}.raid-steps [data-step-state=current]{background:#12334a;border-color:var(--cyan)}.raid-steps [data-step-state=current]>span{color:var(--cyan)}.raid-steps [data-step-state=complete]{border-color:#3b8f78}.raid-steps [data-step-state=complete]>span{color:#67e8b5}.role-kit{border:1px solid var(--line);border-radius:10px;display:grid;gap:7px;margin:0;padding:12px}.role-kit legend{color:var(--amber);font-size:12px;font-weight:800;padding:0 6px}.role-kit span{color:var(--muted);font-size:12px}.role-kit strong{color:var(--text)}.role-choice{align-items:start;border:1px solid var(--line);border-radius:8px;display:grid;gap:9px;grid-template-columns:auto 1fr;margin:0;padding:9px}.role-choice input{margin-top:3px}.role-choice small{display:block;line-height:1.35;margin-top:3px}.role-choice[data-preference-rank="1"]{border-color:var(--cyan)}.advanced-action summary{color:var(--muted);cursor:pointer;font-weight:800}.advanced-action[open] summary{color:var(--cyan);margin-bottom:12px}.continue-raid{border-color:var(--cyan);margin-bottom:18px}.button{border:1px solid var(--cyan);border-radius:8px;color:var(--cyan);display:inline-block;font-weight:800;padding:10px 12px;text-decoration:none}.guided-action{border:1px solid var(--cyan);border-radius:12px;padding:16px}.guided-action.blocked{border-color:var(--amber)}.live-status{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.live-status span{border:1px solid var(--line);border-radius:999px;padding:6px 10px}.live-connection[data-state=live]{border-color:#3b8f78;color:#67e8b5}.live-connection[data-state=catching-up],.live-connection[data-state=reconnecting]{border-color:var(--amber);color:var(--amber)}.live-participants,.live-events{display:grid;gap:8px;list-style:none;padding:0}.live-participants li,.live-events li{border:1px solid var(--line);border-radius:8px;padding:10px}.live-participants [data-connected=true]{color:#67e8b5}.live-participants [data-connected=false]{color:var(--muted)}
-.raid-command-center{border-color:var(--cyan);display:grid;gap:20px;grid-template-columns:minmax(0,1.3fr) minmax(260px,.7fr);margin-bottom:18px}.phase-objective h2{font-size:clamp(22px,4vw,36px);letter-spacing:0;margin:7px 0}.phase-readiness ul{display:grid;gap:7px;margin:0 0 8px;padding-left:20px}.phase-readiness .ready{color:#67e8b5}.projected-actions{margin-top:14px}.projected-actions ul{display:flex;flex-wrap:wrap;gap:6px;list-style:none;margin:7px 0 0;padding:0}.projected-actions li{border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:11px;padding:4px 8px}.primary-action{background:#0b2637;border:1px solid var(--cyan);border-radius:12px;padding:16px}.work-item-panel,.research-session-panel,.revision-panel,.material-panel{margin:14px 0}.work-board{display:grid;gap:10px}.work-card,.session-card,.release-approval{border:1px solid var(--line);border-radius:10px;padding:14px}.work-card h3,.session-card h3{margin:8px 0}.accepted-artifact-field[hidden]{display:none}.session-control-stack{display:grid;gap:9px}.materialization-summary{border:1px solid #3b8f78;border-radius:10px;margin:12px 0;padding:14px}.materialization-summary.missing{border-color:var(--pink)}.materialization-summary.pending{border-color:var(--line)}.materialized-sections{display:grid;gap:7px;list-style:none;margin:10px 0 0;padding:0}.materialized-sections li{border-top:1px solid var(--line);display:grid;gap:4px;padding-top:8px}.materialized-sections span,.materialized-sections small{color:var(--muted)}.release-author{border:1px solid var(--line);border-radius:8px;display:grid;gap:8px;margin:9px 0;padding:10px}.release-author legend,fieldset>legend{color:var(--amber);font-size:12px;font-weight:800}.developer-tools{margin-top:22px}.developer-tools>summary{color:var(--muted);cursor:pointer;font-size:15px;font-weight:800}.developer-tools[open]>summary{color:var(--cyan);margin-bottom:12px}.eligibility-grid{display:grid;gap:5px;grid-template-columns:repeat(2,minmax(0,1fr));list-style:none;margin:10px 0 0;padding:0}.eligibility-grid li{border:1px solid var(--line);border-radius:7px;display:flex;font-size:11px;gap:6px;justify-content:space-between;padding:6px}.eligibility-grid [data-eligible=true]{border-color:#3b8f78;color:#67e8b5}.eligibility-grid [data-eligible=false]{color:var(--muted)}.status.verified{border-color:#3b8f78;color:#67e8b5}.ticket-list .ticket-card{align-items:stretch;display:grid;gap:8px}.ticket-card>div{display:flex;gap:8px;justify-content:space-between}.ticket-card form{display:block}.review-queue-empty{text-align:center}.review-queue-empty .button{margin-top:12px}.review-boundary{border-color:var(--cyan);display:grid;gap:18px;grid-template-columns:2fr 1fr;margin-bottom:18px}.review-boundary dl,.review-facts{display:grid;gap:7px;margin:0}.review-boundary dl div,.review-facts div{border-bottom:1px solid var(--line);display:grid;gap:4px;padding:7px 0}.review-boundary dt,.review-facts dt{color:var(--muted);font-size:11px}.review-boundary dd,.review-facts dd{margin:0;overflow-wrap:anywhere}.review-queue-grid{display:grid;gap:16px}.review-queue-card>header{align-items:start;background:none;border:0;display:flex;gap:12px;justify-content:space-between;padding:0;position:static}.review-queue-card>header h2{font-size:24px;letter-spacing:0;margin:6px 0 12px}.review-facts{grid-template-columns:repeat(2,minmax(0,1fr));margin:16px 0}.review-columns{display:grid;gap:14px;grid-template-columns:repeat(2,minmax(0,1fr))}.review-columns>section{border:1px solid var(--line);border-radius:10px;padding:13px}.review-columns h3{font-size:12px;margin:0 0 10px}.review-assignments{display:grid;gap:9px;list-style:none;margin:0;padding:0}.review-assignments li{align-items:center;display:flex;gap:10px;justify-content:space-between}.review-assignments span,.review-open-slots small{color:var(--muted);display:block;font-size:11px}.review-open-slots{display:grid;gap:8px}.review-claim-form{align-items:center;border-bottom:1px solid var(--line);display:grid;gap:8px;grid-template-columns:1fr auto;padding:8px 0}.review-claim-form output{grid-column:1/-1}.review-protocol-gap{border-color:var(--amber);margin-top:18px}.review-protocol-gap li{margin:6px 0}.challenge-availability{border-left:3px solid var(--cyan);padding-left:10px}.challenge[data-challenge-status=closed] .challenge-availability,.challenge[data-challenge-status=draft] .challenge-availability,.challenge[data-challenge-status=unavailable] .challenge-availability{border-color:var(--amber);color:var(--muted)}.review-artifact-list{display:grid;gap:10px;list-style:none;margin:14px 0 0;padding:0}.review-artifact-item{align-items:center;border:1px solid var(--line);border-radius:10px;display:flex;gap:14px;justify-content:space-between;padding:13px}.review-artifact-item>div:first-child{display:grid;gap:4px;min-width:0}.review-artifact-filename{overflow-wrap:anywhere}.review-artifact-item span,.review-artifact-item small{color:var(--muted)}.review-artifact-actions{display:flex;flex-wrap:wrap;gap:8px}.review-artifact-actions .button{margin:0}
+.paper-room-hero{margin-bottom:18px}.paper-room-basic{border-color:var(--cyan);display:grid;gap:16px;margin-bottom:16px;min-height:auto}.paper-room-basic>h2{font-size:clamp(24px,4vw,38px);letter-spacing:0;margin:0}.paper-room-personal-objective{font-size:clamp(15px,2vw,18px);margin:0;max-width:70ch}.paper-room-basic-grid{display:grid;gap:14px;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.paper-room-blocker,.paper-room-next-step{border:1px solid var(--line);border-radius:12px;min-width:0;padding:14px}.paper-room-blocker h3,.paper-room-next-step h3{font-size:13px;margin:0 0 8px}.paper-room-blocker-reason{font-weight:700;margin:0;overflow-wrap:anywhere}.paper-room-blocker-reason[data-blocker-state=blocked]{color:var(--amber)}.paper-room-blocker-reason[data-blocker-state=ready]{color:#67e8b5}.paper-room-more-blockers{color:var(--muted);font-size:12px;margin:8px 0 0}.paper-room-next-step{align-content:start;display:grid;gap:10px}.paper-room-next-step p{margin:0;overflow-wrap:anywhere}.paper-room-primary-button{justify-self:start;min-height:44px;max-width:100%;scroll-margin-block:28px}.paper-room-advanced{margin-top:16px;min-height:auto}.paper-room-advanced-summary{cursor:pointer;font-size:16px;font-weight:800}.paper-room-advanced-summary span,.paper-room-advanced-summary small{display:block}.paper-room-advanced-summary small{color:var(--muted);font-size:12px;font-weight:500;margin-top:4px}.paper-room-advanced[open]>.paper-room-advanced-summary{color:var(--cyan);margin-bottom:18px}.paper-room-advanced-content{display:grid;gap:16px;min-width:0}.paper-room-authority{border:1px solid var(--line);border-radius:12px;padding:14px}.paper-room-authority>h2{font-size:20px;margin:7px 0 14px}.paper-room-authority-facts{display:grid;gap:8px;grid-template-columns:repeat(2,minmax(0,1fr));margin:0 0 14px}.paper-room-authority-facts div{border-bottom:1px solid var(--line);display:grid;gap:3px;min-width:0;padding:7px}.paper-room-authority-facts dt{color:var(--muted);font-size:11px}.paper-room-authority-facts dd{margin:0;overflow-wrap:anywhere}.raid-command-center{border-color:var(--cyan);display:grid;gap:20px;grid-template-columns:minmax(0,1.3fr) minmax(260px,.7fr);margin-bottom:18px}.phase-objective h2{font-size:clamp(22px,4vw,36px);letter-spacing:0;margin:7px 0}.phase-readiness ul{display:grid;gap:7px;margin:0 0 8px;padding-left:20px}.phase-readiness .ready{color:#67e8b5}.projected-actions{margin-top:14px}.projected-actions ul{display:flex;flex-wrap:wrap;gap:6px;list-style:none;margin:7px 0 0;padding:0}.projected-actions li{border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:11px;padding:4px 8px}.primary-action{background:#0b2637;border:1px solid var(--cyan);border-radius:12px;padding:16px;scroll-margin-block:28px}.work-item-panel,.research-session-panel,.revision-panel,.material-panel{margin:14px 0}.work-board{display:grid;gap:10px}.work-card,.session-card,.release-approval{border:1px solid var(--line);border-radius:10px;padding:14px}.work-card h3,.session-card h3{margin:8px 0}.accepted-artifact-field[hidden]{display:none}.session-control-stack{display:grid;gap:9px}.materialization-summary{border:1px solid #3b8f78;border-radius:10px;margin:12px 0;padding:14px}.materialization-summary.missing{border-color:var(--pink)}.materialization-summary.pending{border-color:var(--line)}.materialized-sections{display:grid;gap:7px;list-style:none;margin:10px 0 0;padding:0}.materialized-sections li{border-top:1px solid var(--line);display:grid;gap:4px;padding-top:8px}.materialized-sections span,.materialized-sections small{color:var(--muted)}.release-author{border:1px solid var(--line);border-radius:8px;display:grid;gap:8px;margin:9px 0;padding:10px}.release-author legend,fieldset>legend{color:var(--amber);font-size:12px;font-weight:800}.developer-tools{margin-top:22px}.developer-tools>summary{color:var(--muted);cursor:pointer;font-size:15px;font-weight:800}.developer-tools[open]>summary{color:var(--cyan);margin-bottom:12px}.eligibility-grid{display:grid;gap:5px;grid-template-columns:repeat(2,minmax(0,1fr));list-style:none;margin:10px 0 0;padding:0}.eligibility-grid li{border:1px solid var(--line);border-radius:7px;display:flex;font-size:11px;gap:6px;justify-content:space-between;padding:6px}.eligibility-grid [data-eligible=true]{border-color:#3b8f78;color:#67e8b5}.eligibility-grid [data-eligible=false]{color:var(--muted)}.status.verified{border-color:#3b8f78;color:#67e8b5}.ticket-list .ticket-card{align-items:stretch;display:grid;gap:8px}.ticket-card>div{display:flex;gap:8px;justify-content:space-between}.ticket-card form{display:block}.review-queue-empty{text-align:center}.review-queue-empty .button{margin-top:12px}.review-boundary{border-color:var(--cyan);display:grid;gap:18px;grid-template-columns:2fr 1fr;margin-bottom:18px}.review-boundary dl,.review-facts{display:grid;gap:7px;margin:0}.review-boundary dl div,.review-facts div{border-bottom:1px solid var(--line);display:grid;gap:4px;padding:7px 0}.review-boundary dt,.review-facts dt{color:var(--muted);font-size:11px}.review-boundary dd,.review-facts dd{margin:0;overflow-wrap:anywhere}.review-queue-grid{display:grid;gap:16px}.review-queue-card>header{align-items:start;background:none;border:0;display:flex;gap:12px;justify-content:space-between;padding:0;position:static}.review-queue-card>header h2{font-size:24px;letter-spacing:0;margin:6px 0 12px}.review-facts{grid-template-columns:repeat(2,minmax(0,1fr));margin:16px 0}.review-columns{display:grid;gap:14px;grid-template-columns:repeat(2,minmax(0,1fr))}.review-columns>section{border:1px solid var(--line);border-radius:10px;padding:13px}.review-columns h3{font-size:12px;margin:0 0 10px}.review-assignments{display:grid;gap:9px;list-style:none;margin:0;padding:0}.review-assignments li{align-items:center;display:flex;gap:10px;justify-content:space-between}.review-assignments span,.review-open-slots small{color:var(--muted);display:block;font-size:11px}.review-open-slots{display:grid;gap:8px}.review-claim-form{align-items:center;border-bottom:1px solid var(--line);display:grid;gap:8px;grid-template-columns:1fr auto;padding:8px 0}.review-claim-form output{grid-column:1/-1}.review-protocol-gap{border-color:var(--amber);margin-top:18px}.review-protocol-gap li{margin:6px 0}.challenge-availability{border-left:3px solid var(--cyan);padding-left:10px}.challenge[data-challenge-status=closed] .challenge-availability,.challenge[data-challenge-status=draft] .challenge-availability,.challenge[data-challenge-status=unavailable] .challenge-availability{border-color:var(--amber);color:var(--muted)}.review-artifact-list{display:grid;gap:10px;list-style:none;margin:14px 0 0;padding:0}.review-artifact-item{align-items:center;border:1px solid var(--line);border-radius:10px;display:flex;gap:14px;justify-content:space-between;padding:13px}.review-artifact-item>div:first-child{display:grid;gap:4px;min-width:0}.review-artifact-filename{overflow-wrap:anywhere}.review-artifact-item span,.review-artifact-item small{color:var(--muted)}.review-artifact-actions{display:flex;flex-wrap:wrap;gap:8px}.review-artifact-actions .button{margin:0}
 .role-resource-panel{border-color:#3b8f78;margin:14px 0}.role-resource-panel .facts{display:grid;gap:8px;grid-template-columns:repeat(3,minmax(0,1fr));margin:12px 0}.role-resource-panel .facts article{border:1px solid var(--line);border-radius:9px;display:grid;gap:2px;min-height:auto;padding:10px}.role-resource-panel .facts strong{color:#67e8b5;font-size:20px}.role-resource-panel .facts span{color:var(--muted);font-size:11px}
 .challenge-ruleset-panel{border-color:var(--amber);display:grid;gap:16px;margin-bottom:18px}.challenge-ruleset-header{display:grid;gap:16px;grid-template-columns:minmax(220px,1fr) minmax(300px,1.2fr)}.challenge-ruleset-header h2{font-size:24px;margin:8px 0}.challenge-ruleset-facts{display:grid;gap:6px;grid-template-columns:repeat(2,minmax(0,1fr));margin:0}.challenge-ruleset-facts div{border-bottom:1px solid var(--line);display:grid;gap:3px;padding:6px}.challenge-ruleset-facts dt{color:var(--muted);font-size:11px}.challenge-ruleset-facts dd{margin:0}.challenge-clock,.challenge-outcome,.challenge-victory{border:1px solid var(--line);border-radius:10px;padding:13px}.challenge-clock strong,.challenge-outcome strong{display:block;font-size:18px;margin-top:5px}.challenge-clock p,.challenge-outcome p{color:var(--muted);margin-bottom:0}.challenge-victory ul,.challenge-phase-gates ol,.challenge-phase-gates ul{display:grid;gap:6px;margin:8px 0;padding-left:22px}.challenge-phase-gates summary,.challenge-terminal-controls summary{color:var(--cyan);cursor:pointer;font-weight:800}.challenge-terminal-grid{display:grid;gap:12px;grid-template-columns:repeat(2,minmax(0,1fr));margin-top:12px}.challenge-terminal-grid form{border:1px solid var(--line);border-radius:10px;padding:12px}.challenge-countdown[data-state=active]{color:#67e8b5}.challenge-countdown[data-state=overtime]{color:var(--amber)}.challenge-countdown[data-state=expired]{color:var(--pink)}
-@media(max-width:820px){.grid,.action-grid,.mission-board,.raid-steps,.raid-command-center,.review-boundary,.review-facts,.review-columns,.challenge-ruleset-header,.challenge-ruleset-facts,.challenge-terminal-grid,.role-resource-panel .facts{grid-template-columns:1fr}.roster li{align-items:start;grid-template-columns:1fr}.hero h1{font-size:38px}header{position:static}.card{min-height:auto}}
+@media(max-width:820px){.grid,.action-grid,.mission-board,.raid-steps,.paper-room-basic-grid,.paper-room-authority-facts,.raid-command-center,.review-boundary,.review-facts,.review-columns,.challenge-ruleset-header,.challenge-ruleset-facts,.challenge-terminal-grid,.role-resource-panel .facts{grid-template-columns:1fr}.roster li{align-items:start;grid-template-columns:1fr}.hero h1{font-size:38px}header{position:static}.card{min-height:auto}}
+@media(max-width:430px){main{padding:22px 12px}.paper-room-basic,.paper-room-advanced{border-radius:12px;padding:14px}.paper-room-primary-button{justify-self:stretch;width:100%}.paper-room-advanced-content{gap:12px}.paper-room-authority{padding:12px}}
+@media(max-width:390px){.paper-room-basic>h2{font-size:24px}.paper-room-blocker,.paper-room-next-step{padding:12px}.paper-room-advanced-summary small{font-size:11px}}
 "#;
 
 #[cfg(test)]
@@ -10528,6 +10678,124 @@ mod tests {
         let summary = revision_materialization_summary(Some(&mismatched));
         assert!(summary.contains("MATERIALIZATION MISMATCH"));
         assert!(summary.contains("finalization must remain locked"));
+    }
+
+    #[tokio::test]
+    async fn paper_room_defaults_to_one_basic_action_and_keeps_authority_advanced() {
+        let paper_id = Uuid::new_v4();
+        let paper_id_text = paper_id.to_string();
+        let identity = AlphaIdentity::test_identity("evidence", Uuid::new_v4(), Uuid::new_v4());
+        let room = serde_json::json!({
+            "author_raid_progress":{
+                "schema":"hepta.paper_raid.author_progress.v1",
+                "phase":"researching",
+                "next_phase":"experimenting",
+                "objective":"bind_claims_to_evidence",
+                "blockers":["evidence_card_required","artifact_manifest_required"],
+                "next_actions":["transition_paper_project"],
+                "transition_ready":false,
+                "actor_role":"evidence",
+                "personal_objective":"protect_claim_and_source_quality",
+                "primary_actions":["create_evidence_card"]
+            },
+            "paper":{
+                "paper_project_id":paper_id,
+                "title":"Progressive Paper Room",
+                "phase":"researching",
+                "version":3
+            },
+            "team":{"version":2,"members":[{
+                "player_id":identity.player_id,
+                "role":"evidence"
+            }]},
+            "work_items":[],"paper_revisions":[],"member_research_sessions":[],
+            "artifact_manifests":[],"authorship_consents":[],"section_revisions":[],
+            "evidence_cards":[],"claims":[],"citations":[],"runs":[],"figures":[],
+            "section_reviews":[]
+        });
+        let review = serde_json::json!({
+            "finality":{
+                "status":"pending_finality",
+                "ranking_eligible":false,
+                "reward_eligible":false,
+                "score_eligible":false,
+                "economic_eligible":false
+            }
+        });
+        let response = paper_room(
+            &identity,
+            &paper_id_text,
+            ReadState::Available(&room),
+            ReadState::Unavailable,
+            ReadState::Available(&review),
+        );
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect progressively disclosed Paper Room")
+            .to_bytes();
+        let body = std::str::from_utf8(&body).expect("UTF-8 Paper Room");
+        let basic_start = body
+            .find("<section class=\"panel paper-room-basic\"")
+            .expect("Basic Paper Room");
+        let advanced_start = body
+            .find("<details class=\"panel paper-room-advanced\" id=\"paper-room-advanced\">")
+            .expect("closed Advanced Paper Room");
+        assert!(basic_start < advanced_start);
+        let basic = &body[basic_start..advanced_start];
+        assert!(basic.contains("id=\"paper-room-current-objective\""));
+        assert!(basic.contains("Bind claims to evidence / 建立论断证据链"));
+        assert!(basic.contains("Evidence: protect claims and source quality"));
+        assert!(basic.contains("Register a verified evidence card / 登记已验证证据卡"));
+        assert!(basic.contains("Register verified evidence / 登记已验证证据"));
+        assert!(basic.contains("1 more blocking reason(s) are listed in Advanced"));
+        assert_eq!(basic.matches("<button").count(), 1);
+        assert!(basic.contains("type=\"button\" data-paper-room-reveal"));
+        assert!(basic.contains("data-paper-room-primary-target=\".create-evidence-card-form\""));
+        assert!(basic.contains("aria-controls=\"paper-room-advanced\""));
+        assert!(basic.contains("aria-expanded=\"false\""));
+        for technical in [
+            paper_id_text.as_str(),
+            "sha256:",
+            "data-paper-id=",
+            "Hepta source / Hepta 来源",
+            "CURRENT OBJECTIVE / 当前目标",
+        ] {
+            assert!(!basic.contains(technical), "Basic exposed {technical}");
+        }
+
+        let advanced = &body[advanced_start..];
+        assert!(advanced.contains("Advanced / 高级详情"));
+        assert!(advanced.contains("AUTHORITY DETAILS / 权威详情"));
+        assert!(advanced.contains(&format!("<code>{paper_id}</code>")));
+        assert!(advanced.contains("Hepta source / Hepta 来源"));
+        assert!(advanced.contains("pending_finality"));
+        assert!(advanced.contains("Register the canonical ArtifactManifest"));
+        assert!(advanced.contains("CURRENT OBJECTIVE / 当前目标"));
+        assert!(advanced.contains("class=\"create-evidence-card-form\""));
+        assert!(advanced.contains("data-paper-id="));
+        assert!(!body.contains(
+            "<details class=\"panel paper-room-advanced\" id=\"paper-room-advanced\" open"
+        ));
+    }
+
+    #[test]
+    fn paper_room_disclosure_assets_are_keyboard_focus_and_small_screen_ready() {
+        let script = include_str!("browser.js");
+        assert!(script.contains("function bindPaperRoomProgressiveDisclosure()"));
+        assert!(script.contains("advanced.open = true;"));
+        assert!(script.contains("advanced.querySelector(targetSelector)"));
+        assert!(script.contains("focusTarget(matchingAction)"));
+        assert!(script.contains("target.focus({ preventScroll: true });"));
+        assert!(script.contains("prefers-reduced-motion: reduce"));
+        assert!(script.contains("bindPaperRoomProgressiveDisclosure();"));
+
+        assert!(CSS.contains(":where(a,button,input,textarea,select,summary):focus-visible"));
+        assert!(CSS.contains(".paper-room-primary-button{justify-self:start;min-height:44px"));
+        assert!(CSS.contains("@media(max-width:430px)"));
+        assert!(CSS.contains("@media(max-width:390px)"));
+        assert!(CSS.contains(".paper-room-primary-button{justify-self:stretch;width:100%}"));
     }
 
     #[tokio::test]
