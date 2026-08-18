@@ -1363,6 +1363,7 @@ async fn review_bundle_page(
             .get_paper_review_state(&session.identity, paper_id),
     );
     let bundle = bundle?;
+    let bundle = crate::agent_bridge::resolve_frozen_review_bundle(&state, &bundle).await?;
     let receipt_projection =
         crate::review_receipts::pending_projection(&state, &session.identity, paper_id)
             .await
@@ -1615,6 +1616,20 @@ struct ReviewArtifactQuery {
     assignment_id: Uuid,
     bundle_hash: String,
     object_key: String,
+    presentation: Option<ReviewArtifactPresentation>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ReviewArtifactPresentation {
+    Attachment,
+    Inline,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct AuthorizedReviewArtifact {
+    logical_path: String,
+    media_type: String,
 }
 
 async fn download_artifact(
@@ -1678,37 +1693,52 @@ async fn download_review_artifact(
         .get_paper_review_bundle(&session.identity, paper_id)
         .await?;
     let bundle = crate::agent_bridge::resolve_frozen_review_bundle(&state, &hepta_bundle).await?;
-    let media_type = authorized_review_artifact_media(
+    let artifact = authorized_review_artifact(
         &bundle,
         query.assignment_id,
         &query.bundle_hash,
         &query.object_key,
         &digest,
     )?;
-    state.cas.validate_media_type(&media_type)?;
-    let bytes = state.cas.get(&digest, &media_type).await?;
-    review_artifact_response(bytes, &media_type)
+    state.cas.validate_media_type(&artifact.media_type)?;
+    let bytes = state.cas.get(&digest, &artifact.media_type).await?;
+    review_artifact_browser_response(
+        bytes,
+        &artifact.media_type,
+        &artifact.logical_path,
+        query
+            .presentation
+            .unwrap_or(ReviewArtifactPresentation::Attachment),
+    )
 }
 
-pub(crate) fn authorized_review_artifact_media(
+fn authorized_review_artifact(
     review_bundle: &Value,
     assignment_id: Uuid,
     bundle_hash: &str,
     object_key: &str,
     digest: &str,
-) -> Result<String, AppError> {
+) -> Result<AuthorizedReviewArtifact, AppError> {
     crate::cas::raw_sha256(digest)?;
+    crate::cas::raw_sha256(bundle_hash)?;
     let assignment_id_text = assignment_id.to_string();
+    let paper_id = review_bundle
+        .get("paper_project_id")
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok().map(|parsed| (value, parsed)))
+        .filter(|(value, parsed)| parsed.to_string() == *value)
+        .map(|(value, _)| value)
+        .ok_or(AppError::Upstream)?;
     let descriptor = review_bundle
         .get("resolved_frozen_review_bundle")
         .and_then(Value::as_object)
         .ok_or(AppError::Upstream)?;
-    if descriptor.get("assignment_id").and_then(Value::as_str) != Some(assignment_id_text.as_str())
+    if descriptor.get("schema").and_then(Value::as_str)
+        != Some(hepta_paper_raid_contracts::RESOLVED_FROZEN_REVIEW_BUNDLE_V1)
+        || descriptor.get("assignment_id").and_then(Value::as_str)
+            != Some(assignment_id_text.as_str())
         || descriptor.get("bundle_hash").and_then(Value::as_str) != Some(bundle_hash)
-        || descriptor.get("paper_project_id").and_then(Value::as_str)
-            != review_bundle
-                .get("paper_project_id")
-                .and_then(Value::as_str)
+        || descriptor.get("paper_project_id").and_then(Value::as_str) != Some(paper_id)
     {
         return Err(AppError::Forbidden);
     }
@@ -1719,6 +1749,10 @@ pub(crate) fn authorized_review_artifact_media(
     if assignments.len() != 1
         || assignments[0].get("assignment_id").and_then(Value::as_str)
             != Some(assignment_id_text.as_str())
+        || assignments[0]
+            .get("paper_project_id")
+            .and_then(Value::as_str)
+            != Some(paper_id)
         || !matches!(
             assignments[0].get("status").and_then(Value::as_str),
             Some("claimed" | "pinned")
@@ -1736,7 +1770,7 @@ pub(crate) fn authorized_review_artifact_media(
             object.get("object_key").and_then(Value::as_str) == Some(object_key)
                 && object.get("digest").and_then(Value::as_str) == Some(digest)
                 && object.get("download_path").and_then(Value::as_str)
-                    == Some("/api/agent-bridge/review-objects")
+                    == Some(hepta_paper_raid_contracts::REVIEW_OBJECT_DOWNLOAD_PATH_V1)
         })
         .collect::<Vec<_>>();
     if matches.len() != 1 {
@@ -1746,13 +1780,132 @@ pub(crate) fn authorized_review_artifact_media(
         .get("media_type")
         .and_then(Value::as_str)
         .ok_or(AppError::Upstream)?;
+    let logical_path = matches[0]
+        .get("logical_path")
+        .and_then(Value::as_str)
+        .filter(|value| review_artifact_logical_path_is_safe(value))
+        .ok_or(AppError::Upstream)?;
+    matches[0]
+        .get("object_key")
+        .and_then(Value::as_str)
+        .filter(|value| review_artifact_object_key_is_safe(value))
+        .ok_or(AppError::Upstream)?;
+    let role = matches[0]
+        .get("role")
+        .and_then(Value::as_str)
+        .filter(|role| {
+            matches!(
+                *role,
+                "candidate" | "dataset" | "evaluator_support" | "frozen_evaluator" | "input"
+            )
+        })
+        .ok_or(AppError::Upstream)?;
+    let size_bytes = matches[0]
+        .get("size_bytes")
+        .and_then(Value::as_u64)
+        .filter(|size| (1..=16 * 1024 * 1024).contains(size))
+        .ok_or(AppError::Upstream)?;
+    let _ = (role, size_bytes);
     crate::cas::validate_media_type(media_type).map_err(|_| AppError::Upstream)?;
-    Ok(media_type.to_string())
+    Ok(AuthorizedReviewArtifact {
+        logical_path: logical_path.to_string(),
+        media_type: media_type.to_string(),
+    })
+}
+
+fn review_artifact_logical_path_is_safe(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 192
+        && !value.starts_with('/')
+        && !value.contains('\\')
+        && !value.contains('\0')
+        && !value.bytes().any(|byte| byte.is_ascii_control())
+        && value
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+}
+
+fn review_artifact_object_key_is_safe(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    value.len() <= 128
+        && bytes
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && bytes
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+}
+
+pub(crate) fn authorized_review_artifact_media(
+    review_bundle: &Value,
+    assignment_id: Uuid,
+    bundle_hash: &str,
+    object_key: &str,
+    digest: &str,
+) -> Result<String, AppError> {
+    authorized_review_artifact(
+        review_bundle,
+        assignment_id,
+        bundle_hash,
+        object_key,
+        digest,
+    )
+    .map(|artifact| artifact.media_type)
+}
+
+fn review_artifact_download_filename(logical_path: &str) -> String {
+    let filename = logical_path.rsplit('/').next().unwrap_or_default();
+    let sanitized = filename
+        .chars()
+        .take(128)
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if sanitized.is_empty() || matches!(sanitized.as_str(), "." | "..") {
+        "paper-raid-frozen-review-object".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn review_artifact_browser_response(
+    bytes: Vec<u8>,
+    media_type: &str,
+    logical_path: &str,
+    presentation: ReviewArtifactPresentation,
+) -> Result<Response, AppError> {
+    let filename = review_artifact_download_filename(logical_path);
+    let disposition = HeaderValue::from_str(&format!(
+        "{}; filename=\"{}\"",
+        match presentation {
+            ReviewArtifactPresentation::Attachment => "attachment",
+            ReviewArtifactPresentation::Inline => "inline",
+        },
+        filename,
+    ))
+    .map_err(|_| AppError::Upstream)?;
+    review_artifact_response_with_disposition(bytes, media_type, disposition)
 }
 
 pub(crate) fn review_artifact_response(
     bytes: Vec<u8>,
     media_type: &str,
+) -> Result<Response, AppError> {
+    review_artifact_response_with_disposition(
+        bytes,
+        media_type,
+        HeaderValue::from_static("attachment; filename=paper-raid-frozen-review-object"),
+    )
+}
+
+fn review_artifact_response_with_disposition(
+    bytes: Vec<u8>,
+    media_type: &str,
+    disposition: HeaderValue,
 ) -> Result<Response, AppError> {
     let content_type = HeaderValue::from_str(media_type).map_err(|_| AppError::Upstream)?;
     let mut response = (StatusCode::OK, Body::from(bytes)).into_response();
@@ -1767,10 +1920,9 @@ pub(crate) fn review_artifact_response(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
-    response.headers_mut().insert(
-        header::CONTENT_DISPOSITION,
-        HeaderValue::from_static("attachment; filename=paper-raid-frozen-review-object"),
-    );
+    response
+        .headers_mut()
+        .insert(header::CONTENT_DISPOSITION, disposition);
     response.headers_mut().insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static("sandbox; default-src 'none'"),
@@ -2656,6 +2808,276 @@ mod tests {
             authorized_artifact_media(&room, &artifact_sha256, &expected_uri),
             Err(AppError::Invalid(_))
         ));
+    }
+
+    fn resolved_review_authorization_fixture() -> (Value, Uuid, String, String, String) {
+        let paper_id = Uuid::from_u128(0x11111111_1111_4111_8111_111111111111);
+        let assignment_id = Uuid::from_u128(0x22222222_2222_4222_8222_222222222222);
+        let bundle_hash = format!("sha256:{}", "d".repeat(64));
+        let object_key = "review-object-a".to_string();
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let fixture = json!({
+            "paper_project_id": paper_id,
+            "my_assignments": [{
+                "assignment_id": assignment_id,
+                "paper_project_id": paper_id,
+                "status": "claimed"
+            }],
+            "resolved_frozen_review_bundle": {
+                "schema": hepta_paper_raid_contracts::RESOLVED_FROZEN_REVIEW_BUNDLE_V1,
+                "assignment_id": assignment_id,
+                "paper_project_id": paper_id,
+                "bundle_hash": bundle_hash,
+                "objects": [
+                    {
+                        "object_key": object_key,
+                        "logical_path": "evaluator/main.py",
+                        "role": "frozen_evaluator",
+                        "digest": digest,
+                        "size_bytes": 321,
+                        "media_type": "text/x-python; charset=utf-8",
+                        "download_path": hepta_paper_raid_contracts::REVIEW_OBJECT_DOWNLOAD_PATH_V1
+                    },
+                    {
+                        "object_key": "review-object-b",
+                        "logical_path": "inputs/candidate.json",
+                        "role": "candidate",
+                        "digest": format!("sha256:{}", "b".repeat(64)),
+                        "size_bytes": 654,
+                        "media_type": "application/json",
+                        "download_path": hepta_paper_raid_contracts::REVIEW_OBJECT_DOWNLOAD_PATH_V1
+                    },
+                    {
+                        "object_key": "review-object-c",
+                        "logical_path": "inputs/dataset.json",
+                        "role": "dataset",
+                        "digest": format!("sha256:{}", "c".repeat(64)),
+                        "size_bytes": 987,
+                        "media_type": "application/json",
+                        "download_path": hepta_paper_raid_contracts::REVIEW_OBJECT_DOWNLOAD_PATH_V1
+                    }
+                ]
+            }
+        });
+        (fixture, assignment_id, bundle_hash, object_key, digest)
+    }
+
+    #[test]
+    fn review_artifact_authorization_is_exact_and_fail_closed() {
+        let (fixture, assignment_id, bundle_hash, object_key, digest) =
+            resolved_review_authorization_fixture();
+        assert_eq!(
+            authorized_review_artifact(
+                &fixture,
+                assignment_id,
+                &bundle_hash,
+                &object_key,
+                &digest,
+            )
+            .expect("exact assignment-scoped object"),
+            AuthorizedReviewArtifact {
+                logical_path: "evaluator/main.py".to_string(),
+                media_type: "text/x-python; charset=utf-8".to_string(),
+            }
+        );
+
+        let mut foreign_descriptor = fixture.clone();
+        foreign_descriptor["resolved_frozen_review_bundle"]["schema"] =
+            json!("hepta.paper_raid.resolved_frozen_review_bundle.v0");
+        assert!(matches!(
+            authorized_review_artifact(
+                &foreign_descriptor,
+                assignment_id,
+                &bundle_hash,
+                &object_key,
+                &digest,
+            ),
+            Err(AppError::Forbidden)
+        ));
+
+        let mut foreign_assignment = fixture.clone();
+        foreign_assignment["my_assignments"][0]["paper_project_id"] = json!(Uuid::new_v4());
+        assert!(matches!(
+            authorized_review_artifact(
+                &foreign_assignment,
+                assignment_id,
+                &bundle_hash,
+                &object_key,
+                &digest,
+            ),
+            Err(AppError::Forbidden)
+        ));
+
+        let mut expired_assignment = fixture.clone();
+        expired_assignment["my_assignments"][0]["status"] = json!("expired");
+        assert!(matches!(
+            authorized_review_artifact(
+                &expired_assignment,
+                assignment_id,
+                &bundle_hash,
+                &object_key,
+                &digest,
+            ),
+            Err(AppError::Forbidden)
+        ));
+
+        let mut ambiguous_assignment = fixture.clone();
+        let duplicate = ambiguous_assignment["my_assignments"][0].clone();
+        ambiguous_assignment["my_assignments"]
+            .as_array_mut()
+            .expect("assignment array")
+            .push(duplicate);
+        assert!(matches!(
+            authorized_review_artifact(
+                &ambiguous_assignment,
+                assignment_id,
+                &bundle_hash,
+                &object_key,
+                &digest,
+            ),
+            Err(AppError::Forbidden)
+        ));
+
+        let mut foreign_transport = fixture.clone();
+        foreign_transport["resolved_frozen_review_bundle"]["objects"][0]["download_path"] =
+            json!("https://attacker.invalid/object");
+        assert!(matches!(
+            authorized_review_artifact(
+                &foreign_transport,
+                assignment_id,
+                &bundle_hash,
+                &object_key,
+                &digest,
+            ),
+            Err(AppError::NotFound)
+        ));
+
+        for (field, value) in [
+            ("object_key", json!("../review-object-a")),
+            ("logical_path", json!("../secret.py")),
+            ("logical_path", json!("evaluator/secret\n.py")),
+            ("role", json!("paper_source")),
+            ("size_bytes", json!(0)),
+            ("media_type", json!("text/html")),
+        ] {
+            let mut unsafe_object = fixture.clone();
+            unsafe_object["resolved_frozen_review_bundle"]["objects"][0][field] = value;
+            let requested_key = unsafe_object["resolved_frozen_review_bundle"]["objects"][0]
+                ["object_key"]
+                .as_str()
+                .expect("object key");
+            assert!(matches!(
+                authorized_review_artifact(
+                    &unsafe_object,
+                    assignment_id,
+                    &bundle_hash,
+                    requested_key,
+                    &digest,
+                ),
+                Err(AppError::Upstream)
+            ));
+        }
+
+        assert!(matches!(
+            authorized_review_artifact(
+                &fixture,
+                assignment_id,
+                &bundle_hash,
+                "review-object-missing",
+                &digest,
+            ),
+            Err(AppError::NotFound)
+        ));
+        assert!(matches!(
+            authorized_review_artifact(
+                &fixture,
+                assignment_id,
+                "sha256:not-a-digest",
+                &object_key,
+                &digest,
+            ),
+            Err(AppError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn review_artifact_presentation_is_strict_and_responses_are_sandboxed() {
+        let assignment_id = Uuid::new_v4();
+        let query: ReviewArtifactQuery = serde_json::from_value(json!({
+            "assignment_id": assignment_id,
+            "bundle_hash": format!("sha256:{}", "d".repeat(64)),
+            "object_key": "review-object-a",
+            "presentation": "inline"
+        }))
+        .expect("strict inline presentation");
+        assert_eq!(query.presentation, Some(ReviewArtifactPresentation::Inline));
+
+        let default_query: ReviewArtifactQuery = serde_json::from_value(json!({
+            "assignment_id": assignment_id,
+            "bundle_hash": format!("sha256:{}", "d".repeat(64)),
+            "object_key": "review-object-a"
+        }))
+        .expect("legacy attachment default");
+        assert_eq!(
+            default_query
+                .presentation
+                .unwrap_or(ReviewArtifactPresentation::Attachment),
+            ReviewArtifactPresentation::Attachment
+        );
+
+        for hostile in [
+            json!({
+                "assignment_id": assignment_id,
+                "bundle_hash": format!("sha256:{}", "d".repeat(64)),
+                "object_key": "review-object-a",
+                "presentation": "preview"
+            }),
+            json!({
+                "assignment_id": assignment_id,
+                "bundle_hash": format!("sha256:{}", "d".repeat(64)),
+                "object_key": "review-object-a",
+                "presentation": "inline",
+                "redirect": "https://attacker.invalid"
+            }),
+        ] {
+            assert!(serde_json::from_value::<ReviewArtifactQuery>(hostile).is_err());
+        }
+
+        let response = review_artifact_browser_response(
+            b"{}".to_vec(),
+            "application/json",
+            "results/final\" report.json",
+            ReviewArtifactPresentation::Inline,
+        )
+        .expect("safe inline response");
+        assert_eq!(
+            response.headers()[header::CONTENT_DISPOSITION],
+            "inline; filename=\"final__report.json\""
+        );
+        assert_eq!(
+            response.headers()[header::CONTENT_SECURITY_POLICY],
+            "sandbox; default-src 'none'"
+        );
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "private, no-store"
+        );
+        assert_eq!(
+            response.headers()[header::X_CONTENT_TYPE_OPTIONS],
+            "nosniff"
+        );
+
+        let response = review_artifact_browser_response(
+            b"paper".to_vec(),
+            "text/markdown; charset=utf-8",
+            "paper/final.md",
+            ReviewArtifactPresentation::Attachment,
+        )
+        .expect("safe attachment response");
+        assert_eq!(
+            response.headers()[header::CONTENT_DISPOSITION],
+            "attachment; filename=\"final.md\""
+        );
     }
 
     #[tokio::test]

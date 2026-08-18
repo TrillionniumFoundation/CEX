@@ -11,7 +11,8 @@ use hepta_paper_raid_contracts::{
     paper_bundle_hash, paper_evaluation_signing_bytes, paper_release_candidate_hash,
     paper_review_attestation_signing_bytes, sha256_digest, PaperAppealResolutionSigningV1,
     PaperAppealSigningV1, PaperBundleV2, PaperEvaluationSigningV1, PaperReleaseCandidateV2,
-    PaperReviewAttestationSigningV1,
+    PaperReviewAttestationSigningV1, RESOLVED_FROZEN_REVIEW_BUNDLE_V1,
+    REVIEW_OBJECT_DOWNLOAD_PATH_V1,
 };
 use serde_json::Value;
 use uuid::Uuid;
@@ -41,6 +42,42 @@ pub enum OnboardingStage {
     HumanRegistration,
     AgentBinding,
     Unavailable,
+}
+
+struct ChallengeQueueAvailability {
+    state: &'static str,
+    explanation: &'static str,
+    button_label: &'static str,
+    is_open: bool,
+}
+
+fn challenge_queue_availability(status: &str) -> ChallengeQueueAvailability {
+    match status {
+        "open" => ChallengeQueueAvailability {
+            state: "open",
+            explanation: "Open for authoritative matchmaking / 已开放权威匹配",
+            button_label: "Start my first Raid / 开始首局",
+            is_open: true,
+        },
+        "closed" => ChallengeQueueAvailability {
+            state: "closed",
+            explanation: "Closed by Hepta; this challenge cannot accept a matchmaking ticket / Hepta 已关闭该挑战，当前无法排队",
+            button_label: "Challenge closed / 挑战已关闭",
+            is_open: false,
+        },
+        "draft" => ChallengeQueueAvailability {
+            state: "draft",
+            explanation: "Still in draft; Hepta has not opened this challenge / 仍为草稿，Hepta 尚未开放该挑战",
+            button_label: "Not open yet / 尚未开放",
+            is_open: false,
+        },
+        _ => ChallengeQueueAvailability {
+            state: "unavailable",
+            explanation: "Challenge availability is not authoritative; matchmaking stays disabled / 挑战开放状态不可验证，匹配保持禁用",
+            button_label: "Unavailable / 暂不可用",
+            is_open: false,
+        },
+    }
 }
 
 impl<'a, T: ?Sized> ReadState<'a, T> {
@@ -94,27 +131,37 @@ pub fn lobby(
                     let title = scalar(challenge.get("title"));
                     let gameplay = challenge_gameplay_summary(challenge);
                     let status = scalar(challenge.get("status"));
+                    let availability = challenge_queue_availability(&status);
                     let (role_choices, authorized_roles) = author_role_choices(identity);
+                    let queue_eligible = availability.is_open
+                        && !authorized_roles.is_empty()
+                        && queue_agent_ready;
                     format!(
-                        r#"<article class="card challenge"><span class="pill">{}</span><h2>{}</h2>{}<code>{}</code><form class="queue-form" data-challenge-id="{}" data-authorized-roles="{}" data-agent-ready="{}"><fieldset class="role-kit"><legend>Role preferences / 角色偏好</legend><p class="muted">Checked roles are acceptable; the first listed role is your preferred assignment / 勾选可接受角色，首项为首选</p>{}</fieldset><label>Play window / 开局时间<select name="availability" required><option value="alpha-window">Join the next Alpha window / 下一场 Alpha</option><option value="now">Ready now / 现在可玩</option></select></label><fieldset class="party-code-panel"><legend>Premade team (optional) / 预组队（可选）</legend><label>One-time party code / 一次性组队码<input name="party_code" type="text" inputmode="text" autocomplete="off" spellcheck="false" minlength="40" maxlength="40" pattern="PR1-[0-9a-f]{{8}}-[0-9a-f]{{4}}-4[0-9a-f]{{3}}-[89ab][0-9a-f]{{3}}-[0-9a-f]{{12}}" placeholder="PR1-xxxxxxxx-xxxx-4xxx-8xxx-xxxxxxxxxxxx"></label><button class="generate-party-code" type="button">Generate private code / 生成私密组队码</button><p class="muted">Share the raw code with exactly two teammates out of band. Only its SHA-256 digest leaves this browser. A party code grants no account or game authority. / 请仅线下分享给另外两名队友；浏览器外只发送摘要，组队码不授予身份或游戏权限。</p></fieldset><p class="muted">{}</p><button type="submit" {}>Start my first Raid / 开始首局</button><output></output></form></article>"#,
+                        r#"<article class="card challenge" data-challenge-status="{}"><span class="pill">{}</span><h2>{}</h2>{}<code>{}</code><form class="queue-form" data-challenge-id="{}" data-challenge-status="{}" data-queue-eligible="{}" data-authorized-roles="{}" data-agent-ready="{}"><p class="challenge-availability" data-challenge-availability="{}">{}</p><fieldset class="role-kit"><legend>Role preferences / 角色偏好</legend><p class="muted">Checked roles are acceptable; the first listed role is your preferred assignment / 勾选可接受角色，首项为首选</p>{}</fieldset><label>Play window / 开局时间<select name="availability" required><option value="alpha-window">Join the next Alpha window / 下一场 Alpha</option><option value="now">Ready now / 现在可玩</option></select></label><fieldset class="party-code-panel"><legend>Premade team (optional) / 预组队（可选）</legend><label>One-time party code / 一次性组队码<input name="party_code" type="text" inputmode="text" autocomplete="off" spellcheck="false" minlength="40" maxlength="40" pattern="PR1-[0-9a-f]{{8}}-[0-9a-f]{{4}}-4[0-9a-f]{{3}}-[89ab][0-9a-f]{{3}}-[0-9a-f]{{12}}" placeholder="PR1-xxxxxxxx-xxxx-4xxx-8xxx-xxxxxxxxxxxx"></label><button class="generate-party-code" type="button">Generate private code / 生成私密组队码</button><p class="muted">Share the raw code with exactly two teammates out of band. Only its SHA-256 digest leaves this browser. A party code grants no account or game authority. / 请仅线下分享给另外两名队友；浏览器外只发送摘要，组队码不授予身份或游戏权限。</p></fieldset><p class="muted">{}</p><button class="queue-submit" data-queue-action="join" type="submit" {}>{}</button><output></output></form></article>"#,
+                        escape(availability.state),
                         escape(&status),
                         escape(&title),
                         gameplay,
                         escape(&challenge_id),
                         escape(&challenge_id),
+                        escape(availability.state),
+                        queue_eligible,
                         escape(&authorized_roles),
                         queue_agent_ready,
+                        escape(availability.state),
+                        escape(availability.explanation),
                         role_choices,
                         if queue_agent_ready {
                             "Agent ready: exactly one active binding / Agent 已就绪"
                         } else {
                             "Pair exactly one active Agent before joining / 请先配对且仅保留一个活跃 Agent"
                         },
-                        if authorized_roles.is_empty() || !queue_agent_ready {
-                            "disabled"
-                        } else {
+                        if queue_eligible {
                             ""
+                        } else {
+                            "disabled"
                         },
+                        escape(availability.button_label),
                     )
                 })
                 .collect::<String>()
@@ -6870,6 +6917,203 @@ fn review_queue_cards(identity: &AlphaIdentity, queue: ReadState<'_>) -> String 
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct ReviewArtifactLink {
+    logical_path: String,
+    role: String,
+    digest: String,
+    media_type: String,
+    object_key: String,
+    size_bytes: u64,
+}
+
+fn canonical_review_uuid(value: &str) -> Option<String> {
+    let parsed = Uuid::parse_str(value).ok()?;
+    let canonical = parsed.to_string();
+    (canonical == value).then_some(canonical)
+}
+
+fn review_object_key_is_safe(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    value.len() <= 128
+        && bytes
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && bytes
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+}
+
+fn review_logical_path_is_safe(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 192
+        && !value.starts_with('/')
+        && !value.contains('\\')
+        && !value.contains('\0')
+        && !value.bytes().any(|byte| byte.is_ascii_control())
+        && value
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+}
+
+fn review_artifact_links(
+    bundle: &Value,
+) -> Option<(String, String, String, Vec<ReviewArtifactLink>)> {
+    // The route resolves and verifies this descriptor before rendering. Keep the renderer
+    // independently fail-closed so malformed or mismatched JSON can never become a capability URL.
+    let paper_id = canonical_review_uuid(bundle.get("paper_project_id")?.as_str()?)?;
+    let descriptor = bundle.get("resolved_frozen_review_bundle")?.as_object()?;
+    if descriptor.get("schema")?.as_str()? != RESOLVED_FROZEN_REVIEW_BUNDLE_V1
+        || descriptor.get("paper_project_id")?.as_str()? != paper_id
+    {
+        return None;
+    }
+    let assignment_id = canonical_review_uuid(descriptor.get("assignment_id")?.as_str()?)?;
+    let bundle_hash = descriptor.get("bundle_hash")?.as_str()?.to_string();
+    crate::cas::raw_sha256(&bundle_hash).ok()?;
+
+    let assignments = bundle.get("my_assignments")?.as_array()?;
+    if assignments.len() != 1
+        || assignments[0].get("assignment_id")?.as_str()? != assignment_id
+        || assignments[0].get("paper_project_id")?.as_str()? != paper_id
+        || !matches!(
+            assignments[0].get("status")?.as_str()?,
+            "claimed" | "pinned"
+        )
+    {
+        return None;
+    }
+
+    let objects = descriptor.get("objects")?.as_array()?;
+    if !(3..=64).contains(&objects.len()) {
+        return None;
+    }
+    let mut links = Vec::with_capacity(objects.len());
+    let mut keys = HashSet::new();
+    let mut paths = HashSet::new();
+    let mut previous: Option<(String, String)> = None;
+    for object in objects {
+        let object_key = object.get("object_key")?.as_str()?;
+        let logical_path = object.get("logical_path")?.as_str()?;
+        let role = object.get("role")?.as_str()?;
+        let digest = object.get("digest")?.as_str()?;
+        let media_type = object.get("media_type")?.as_str()?;
+        let size_bytes = object.get("size_bytes")?.as_u64()?;
+        let ordering = (object_key.to_string(), logical_path.to_string());
+        if object.get("download_path")?.as_str()? != REVIEW_OBJECT_DOWNLOAD_PATH_V1
+            || !review_object_key_is_safe(object_key)
+            || !review_logical_path_is_safe(logical_path)
+            || !matches!(
+                role,
+                "candidate" | "dataset" | "evaluator_support" | "frozen_evaluator" | "input"
+            )
+            || crate::cas::raw_sha256(digest).is_err()
+            || crate::cas::validate_media_type(media_type).is_err()
+            || size_bytes == 0
+            || size_bytes > 16 * 1024 * 1024
+            || previous.as_ref().is_some_and(|prior| prior >= &ordering)
+            || !keys.insert(object_key.to_string())
+            || !paths.insert(logical_path.to_string())
+        {
+            return None;
+        }
+        previous = Some(ordering);
+        links.push(ReviewArtifactLink {
+            logical_path: logical_path.to_string(),
+            role: role.to_string(),
+            digest: digest.to_string(),
+            media_type: media_type.to_string(),
+            object_key: object_key.to_string(),
+            size_bytes,
+        });
+    }
+    Some((paper_id, assignment_id, bundle_hash, links))
+}
+
+fn review_artifact_role_label(role: &str) -> &'static str {
+    match role {
+        "frozen_evaluator" => "Frozen evaluator / 冻结评估器",
+        "evaluator_support" => "Evaluator support / 评估器依赖",
+        "dataset" => "Challenge dataset / 挑战数据集",
+        "candidate" => "Candidate result / 候选结果",
+        "input" => "Frozen input / 冻结输入",
+        _ => "Frozen review file / 冻结评审文件",
+    }
+}
+
+fn review_artifact_url(
+    paper_id: &str,
+    assignment_id: &str,
+    bundle_hash: &str,
+    artifact: &ReviewArtifactLink,
+    presentation: &str,
+) -> String {
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    serializer.append_pair("assignment_id", assignment_id);
+    serializer.append_pair("bundle_hash", bundle_hash);
+    serializer.append_pair("object_key", &artifact.object_key);
+    serializer.append_pair("presentation", presentation);
+    let query = serializer.finish();
+    format!(
+        "/api/review/papers/{paper_id}/artifacts/{}?{query}",
+        artifact.digest
+    )
+}
+
+fn review_download_filename(logical_path: &str) -> String {
+    let filename = logical_path.rsplit('/').next().unwrap_or_default();
+    let sanitized = filename
+        .chars()
+        .take(128)
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if sanitized.is_empty() || matches!(sanitized.as_str(), "." | "..") {
+        "paper-raid-frozen-review-object".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn review_artifact_library(bundle: &Value) -> String {
+    let Some((paper_id, assignment_id, bundle_hash, artifacts)) = review_artifact_links(bundle)
+    else {
+        return r#"<section class="panel review-artifact-library unavailable" data-review-artifacts-state="unavailable"><span class="pill">FAIL CLOSED</span><h2>Frozen review files unavailable / 冻结评审文件不可用</h2><p>The assignment-scoped frozen artifact descriptor could not be verified. No file capability is exposed.</p></section>"#.to_string();
+    };
+    let mut items = String::new();
+    for (index, artifact) in artifacts.iter().enumerate() {
+        let open_url =
+            review_artifact_url(&paper_id, &assignment_id, &bundle_hash, artifact, "inline");
+        let download_url = review_artifact_url(
+            &paper_id,
+            &assignment_id,
+            &bundle_hash,
+            artifact,
+            "attachment",
+        );
+        items.push_str(&format!(
+            r#"<li class="review-artifact-item" data-review-artifact-index="{}" data-review-artifact-role="{}"><div><strong class="review-artifact-filename">{}</strong><span>{}</span><small class="review-artifact-media-type">{} · {} bytes</small></div><div class="review-artifact-actions"><a class="button review-artifact-open" data-review-artifact-action="open" href="{}" target="_blank" rel="noopener noreferrer">Open / 打开</a><a class="button review-artifact-download" data-review-artifact-action="download" href="{}" download="{}">Download / 下载</a></div></li>"#,
+            index,
+            escape(&artifact.role),
+            escape(&artifact.logical_path),
+            escape(review_artifact_role_label(&artifact.role)),
+            escape(&artifact.media_type),
+            artifact.size_bytes,
+            escape(&open_url),
+            escape(&download_url),
+            escape(&review_download_filename(&artifact.logical_path)),
+        ));
+    }
+    format!(
+        r#"<section class="panel review-artifact-library" data-review-artifacts-state="available" data-review-artifact-count="{}"><span class="pill">ASSIGNMENT-SCOPED FILES / 任务限定文件</span><h2>Frozen review artifacts / 冻结评审工件</h2><p>Each link is derived from this active assignment and exact frozen bundle. Opening or downloading revalidates the assignment, bundle, object and CAS media type; these links never grant Author Room access.</p><ul class="review-artifact-list">{items}</ul></section>"#,
+        artifacts.len(),
+    )
+}
+
 pub fn review_bundle(
     identity: &AlphaIdentity,
     queue_item: &Value,
@@ -6937,6 +7181,7 @@ pub fn review_bundle(
         .unwrap_or_default();
     let raid_controls =
         review_raid_controls(identity, submission, review_state, receipt_projection);
+    let artifact_library = review_artifact_library(submission);
     let authority_revision =
         review_authority_revision(queue_item, submission, review_state, receipt_projection);
     let body = format!(
@@ -6944,7 +7189,7 @@ pub fn review_bundle(
         <section class="panel review-authority-watch" data-paper-id="{}" data-authority-revision="{}"><span class="pill">LIVE REVIEW AUTHORITY / 实时评审权威</span><h2>Current frozen assignment / 当前冻结任务</h2><p>This page checks the authoritative Review state in the background. If another participant advances the Raid, old controls are disabled and the current action is reloaded automatically.</p><div class="live-status"><span class="review-authority-connection" data-state="connecting">Connecting / 正在连接</span></div><button class="review-authority-refresh" type="button">Sync now / 立即同步</button><output class="review-authority-detail"></output></section>
         <section class="grid"><article class="panel"><h2>Your immutable assignment / 你的不可变任务</h2><ul class="review-assignments">{}</ul></article><article class="panel"><h2>Authority facts / 权威事实</h2><dl class="review-facts"><div><dt>Status</dt><dd>{}</dd></div><div><dt>Submission</dt><dd>Frozen and verified / 已冻结验证</dd></div><div><dt>Paper scope</dt><dd>Assignment-scoped / 仅限当前任务</dd></div></dl></article></section>
         <section class="panel"><span class="pill">FROZEN PAPERBUNDLE</span><h2>Review target / 评审对象</h2><dl class="review-facts"><div><dt>Target format</dt><dd>{}</dd></div><div><dt>License</dt><dd>{}</dd></div><div><dt>Release freeze</dt><dd>Verified / 已验证</dd></div><div><dt>PaperBundle seal</dt><dd>Verified / 已验证</dd></div><div><dt>Source record</dt><dd>Verified / 已验证</dd></div><div><dt>Artifact set</dt><dd>Verified / 已验证</dd></div><div><dt>Bibliography</dt><dd>Verified / 已验证</dd></div><div><dt>Claim/evidence graph</dt><dd>Verified / 已验证</dd></div></dl><h3>Frozen author roster / 冻结作者阵容</h3><ul class="review-assignments">{}</ul></section>
-        {}"#,
+        {}{}"#,
         escape(&scalar(candidate.get("title"))),
         escape(&scalar(candidate.get("abstract_text"))),
         escape(&paper_id),
@@ -6954,6 +7199,7 @@ pub fn review_bundle(
         escape(&scalar(candidate.get("target_format"))),
         escape(&scalar(candidate.get("license"))),
         authors,
+        artifact_library,
         raid_controls,
     );
     page(
@@ -8039,7 +8285,7 @@ header{align-items:center;border-bottom:1px solid var(--line);display:flex;justi
 main{margin:auto;max-width:1180px;padding:clamp(24px,5vw,64px) clamp(16px,4vw,44px)}.hero{border-left:4px solid var(--cyan);padding:8px 0 12px 22px;margin-bottom:28px}.eyebrow{color:var(--amber);font-size:12px;font-weight:800;letter-spacing:.16em}.hero h1{font-size:clamp(32px,7vw,72px);line-height:1;margin:10px 0}.hero p{color:var(--muted);max-width:760px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:14px 0}.card,.panel{background:linear-gradient(145deg,#142036,#0d1421);border:1px solid var(--line);border-radius:14px;padding:18px;min-height:120px}.card h2,.panel h2{font-size:14px;letter-spacing:.05em;margin:0 0 12px}.card p{color:var(--text)}.unavailable{border-style:dashed;color:var(--muted)}.muted,.action p{color:var(--muted)}.dot{background:var(--pink);border-radius:50%;display:inline-block;height:8px;margin-right:8px;width:8px}.pill,.status{border:1px solid var(--amber);border-radius:999px;color:var(--amber);display:inline-block;font-size:12px;font-weight:800;padding:4px 9px}.status{padding:6px 12px}.status.missing{border-color:var(--pink);color:var(--pink)}.source-state{color:var(--muted);font-size:12px}.roster,.record-list{display:grid;gap:10px;list-style:none;margin:0;padding:0}.roster li{align-items:center;border-bottom:1px solid var(--line);display:grid;gap:8px;grid-template-columns:90px 1fr 1fr 1fr;padding:10px 0}.roster span{color:var(--muted);overflow-wrap:anywhere}.record-list li,.record-list a{align-items:center;display:flex;gap:8px;justify-content:space-between}.record-list a{color:var(--text);text-decoration:none;width:100%}.action-grid{display:grid;gap:14px;grid-template-columns:repeat(2,minmax(0,1fr))}.action{border:1px solid var(--line);border-radius:12px;padding:16px}.action h3{margin-top:0}form{display:grid;gap:12px}label{color:var(--muted);display:grid;font-size:12px;gap:6px}input,textarea,select,button{background:#07101d;border:1px solid var(--line);border-radius:8px;color:var(--text);font:inherit;padding:10px 12px}textarea{font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;resize:vertical}button{background:#12334a;border-color:var(--cyan);color:var(--cyan);cursor:pointer;font-weight:800}button:hover{filter:brightness(1.2)}button.danger{border-color:var(--pink);color:var(--pink)}button:disabled{cursor:wait;opacity:.55}output{color:var(--amber);font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere;white-space:pre-wrap}output.result-error{color:var(--pink)}output.result-ok{color:var(--amber)}.narrow{margin:auto;max-width:540px}#toast{background:#101826;border:1px solid var(--line);border-radius:10px;bottom:18px;display:block;max-width:min(520px,90vw);padding:12px 16px;position:fixed;right:18px;z-index:10}#toast[hidden]{display:none}code{color:var(--cyan);overflow-wrap:anywhere}footer{padding:28px;text-align:center}
 .key-vault{margin-bottom:18px;min-height:auto}.key-vault summary{color:var(--cyan);cursor:pointer;font-weight:800}.key-vault form{margin:14px 0}.human-key-status{display:block;margin-top:10px}.challenge-rules{display:grid;gap:7px;margin:12px 0}.challenge-rules div{border-bottom:1px solid var(--line);display:grid;gap:4px;padding:5px 0}.challenge-rules dt{color:var(--muted);font-size:11px}.challenge-rules dd{margin:0}
   .mission-board{display:grid;gap:18px;grid-template-columns:minmax(220px,.8fr) minmax(0,2fr);margin-bottom:20px}.mission-board h2{font-size:24px;letter-spacing:0;margin:6px 0}.raid-steps{display:grid;gap:8px;grid-template-columns:repeat(5,minmax(0,1fr));list-style:none;margin:0;padding:0}.raid-steps li{border:1px solid var(--line);border-radius:10px;display:grid;gap:8px;padding:12px}.raid-steps li>span{color:var(--muted);font-size:11px;font-weight:900}.raid-steps strong{display:block}.raid-steps p{color:var(--muted);font-size:11px;line-height:1.35;margin:4px 0 0}.raid-steps [data-step-state=current]{background:#12334a;border-color:var(--cyan)}.raid-steps [data-step-state=current]>span{color:var(--cyan)}.raid-steps [data-step-state=complete]{border-color:#3b8f78}.raid-steps [data-step-state=complete]>span{color:#67e8b5}.role-kit{border:1px solid var(--line);border-radius:10px;display:grid;gap:7px;margin:0;padding:12px}.role-kit legend{color:var(--amber);font-size:12px;font-weight:800;padding:0 6px}.role-kit span{color:var(--muted);font-size:12px}.role-kit strong{color:var(--text)}.role-choice{align-items:start;border:1px solid var(--line);border-radius:8px;display:grid;gap:9px;grid-template-columns:auto 1fr;margin:0;padding:9px}.role-choice input{margin-top:3px}.role-choice small{display:block;line-height:1.35;margin-top:3px}.role-choice[data-preference-rank="1"]{border-color:var(--cyan)}.advanced-action summary{color:var(--muted);cursor:pointer;font-weight:800}.advanced-action[open] summary{color:var(--cyan);margin-bottom:12px}.continue-raid{border-color:var(--cyan);margin-bottom:18px}.button{border:1px solid var(--cyan);border-radius:8px;color:var(--cyan);display:inline-block;font-weight:800;padding:10px 12px;text-decoration:none}.guided-action{border:1px solid var(--cyan);border-radius:12px;padding:16px}.guided-action.blocked{border-color:var(--amber)}.live-status{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.live-status span{border:1px solid var(--line);border-radius:999px;padding:6px 10px}.live-connection[data-state=live]{border-color:#3b8f78;color:#67e8b5}.live-connection[data-state=catching-up],.live-connection[data-state=reconnecting]{border-color:var(--amber);color:var(--amber)}.live-participants,.live-events{display:grid;gap:8px;list-style:none;padding:0}.live-participants li,.live-events li{border:1px solid var(--line);border-radius:8px;padding:10px}.live-participants [data-connected=true]{color:#67e8b5}.live-participants [data-connected=false]{color:var(--muted)}
-.raid-command-center{border-color:var(--cyan);display:grid;gap:20px;grid-template-columns:minmax(0,1.3fr) minmax(260px,.7fr);margin-bottom:18px}.phase-objective h2{font-size:clamp(22px,4vw,36px);letter-spacing:0;margin:7px 0}.phase-readiness ul{display:grid;gap:7px;margin:0 0 8px;padding-left:20px}.phase-readiness .ready{color:#67e8b5}.projected-actions{margin-top:14px}.projected-actions ul{display:flex;flex-wrap:wrap;gap:6px;list-style:none;margin:7px 0 0;padding:0}.projected-actions li{border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:11px;padding:4px 8px}.primary-action{background:#0b2637;border:1px solid var(--cyan);border-radius:12px;padding:16px}.work-item-panel,.research-session-panel,.revision-panel,.material-panel{margin:14px 0}.work-board{display:grid;gap:10px}.work-card,.session-card,.release-approval{border:1px solid var(--line);border-radius:10px;padding:14px}.work-card h3,.session-card h3{margin:8px 0}.accepted-artifact-field[hidden]{display:none}.session-control-stack{display:grid;gap:9px}.materialization-summary{border:1px solid #3b8f78;border-radius:10px;margin:12px 0;padding:14px}.materialization-summary.missing{border-color:var(--pink)}.materialization-summary.pending{border-color:var(--line)}.materialized-sections{display:grid;gap:7px;list-style:none;margin:10px 0 0;padding:0}.materialized-sections li{border-top:1px solid var(--line);display:grid;gap:4px;padding-top:8px}.materialized-sections span,.materialized-sections small{color:var(--muted)}.release-author{border:1px solid var(--line);border-radius:8px;display:grid;gap:8px;margin:9px 0;padding:10px}.release-author legend,fieldset>legend{color:var(--amber);font-size:12px;font-weight:800}.developer-tools{margin-top:22px}.developer-tools>summary{color:var(--muted);cursor:pointer;font-size:15px;font-weight:800}.developer-tools[open]>summary{color:var(--cyan);margin-bottom:12px}.eligibility-grid{display:grid;gap:5px;grid-template-columns:repeat(2,minmax(0,1fr));list-style:none;margin:10px 0 0;padding:0}.eligibility-grid li{border:1px solid var(--line);border-radius:7px;display:flex;font-size:11px;gap:6px;justify-content:space-between;padding:6px}.eligibility-grid [data-eligible=true]{border-color:#3b8f78;color:#67e8b5}.eligibility-grid [data-eligible=false]{color:var(--muted)}.status.verified{border-color:#3b8f78;color:#67e8b5}.ticket-list .ticket-card{align-items:stretch;display:grid;gap:8px}.ticket-card>div{display:flex;gap:8px;justify-content:space-between}.ticket-card form{display:block}.review-queue-empty{text-align:center}.review-queue-empty .button{margin-top:12px}.review-boundary{border-color:var(--cyan);display:grid;gap:18px;grid-template-columns:2fr 1fr;margin-bottom:18px}.review-boundary dl,.review-facts{display:grid;gap:7px;margin:0}.review-boundary dl div,.review-facts div{border-bottom:1px solid var(--line);display:grid;gap:4px;padding:7px 0}.review-boundary dt,.review-facts dt{color:var(--muted);font-size:11px}.review-boundary dd,.review-facts dd{margin:0;overflow-wrap:anywhere}.review-queue-grid{display:grid;gap:16px}.review-queue-card>header{align-items:start;background:none;border:0;display:flex;gap:12px;justify-content:space-between;padding:0;position:static}.review-queue-card>header h2{font-size:24px;letter-spacing:0;margin:6px 0 12px}.review-facts{grid-template-columns:repeat(2,minmax(0,1fr));margin:16px 0}.review-columns{display:grid;gap:14px;grid-template-columns:repeat(2,minmax(0,1fr))}.review-columns>section{border:1px solid var(--line);border-radius:10px;padding:13px}.review-columns h3{font-size:12px;margin:0 0 10px}.review-assignments{display:grid;gap:9px;list-style:none;margin:0;padding:0}.review-assignments li{align-items:center;display:flex;gap:10px;justify-content:space-between}.review-assignments span,.review-open-slots small{color:var(--muted);display:block;font-size:11px}.review-open-slots{display:grid;gap:8px}.review-claim-form{align-items:center;border-bottom:1px solid var(--line);display:grid;gap:8px;grid-template-columns:1fr auto;padding:8px 0}.review-claim-form output{grid-column:1/-1}.review-protocol-gap{border-color:var(--amber);margin-top:18px}.review-protocol-gap li{margin:6px 0}
+.raid-command-center{border-color:var(--cyan);display:grid;gap:20px;grid-template-columns:minmax(0,1.3fr) minmax(260px,.7fr);margin-bottom:18px}.phase-objective h2{font-size:clamp(22px,4vw,36px);letter-spacing:0;margin:7px 0}.phase-readiness ul{display:grid;gap:7px;margin:0 0 8px;padding-left:20px}.phase-readiness .ready{color:#67e8b5}.projected-actions{margin-top:14px}.projected-actions ul{display:flex;flex-wrap:wrap;gap:6px;list-style:none;margin:7px 0 0;padding:0}.projected-actions li{border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:11px;padding:4px 8px}.primary-action{background:#0b2637;border:1px solid var(--cyan);border-radius:12px;padding:16px}.work-item-panel,.research-session-panel,.revision-panel,.material-panel{margin:14px 0}.work-board{display:grid;gap:10px}.work-card,.session-card,.release-approval{border:1px solid var(--line);border-radius:10px;padding:14px}.work-card h3,.session-card h3{margin:8px 0}.accepted-artifact-field[hidden]{display:none}.session-control-stack{display:grid;gap:9px}.materialization-summary{border:1px solid #3b8f78;border-radius:10px;margin:12px 0;padding:14px}.materialization-summary.missing{border-color:var(--pink)}.materialization-summary.pending{border-color:var(--line)}.materialized-sections{display:grid;gap:7px;list-style:none;margin:10px 0 0;padding:0}.materialized-sections li{border-top:1px solid var(--line);display:grid;gap:4px;padding-top:8px}.materialized-sections span,.materialized-sections small{color:var(--muted)}.release-author{border:1px solid var(--line);border-radius:8px;display:grid;gap:8px;margin:9px 0;padding:10px}.release-author legend,fieldset>legend{color:var(--amber);font-size:12px;font-weight:800}.developer-tools{margin-top:22px}.developer-tools>summary{color:var(--muted);cursor:pointer;font-size:15px;font-weight:800}.developer-tools[open]>summary{color:var(--cyan);margin-bottom:12px}.eligibility-grid{display:grid;gap:5px;grid-template-columns:repeat(2,minmax(0,1fr));list-style:none;margin:10px 0 0;padding:0}.eligibility-grid li{border:1px solid var(--line);border-radius:7px;display:flex;font-size:11px;gap:6px;justify-content:space-between;padding:6px}.eligibility-grid [data-eligible=true]{border-color:#3b8f78;color:#67e8b5}.eligibility-grid [data-eligible=false]{color:var(--muted)}.status.verified{border-color:#3b8f78;color:#67e8b5}.ticket-list .ticket-card{align-items:stretch;display:grid;gap:8px}.ticket-card>div{display:flex;gap:8px;justify-content:space-between}.ticket-card form{display:block}.review-queue-empty{text-align:center}.review-queue-empty .button{margin-top:12px}.review-boundary{border-color:var(--cyan);display:grid;gap:18px;grid-template-columns:2fr 1fr;margin-bottom:18px}.review-boundary dl,.review-facts{display:grid;gap:7px;margin:0}.review-boundary dl div,.review-facts div{border-bottom:1px solid var(--line);display:grid;gap:4px;padding:7px 0}.review-boundary dt,.review-facts dt{color:var(--muted);font-size:11px}.review-boundary dd,.review-facts dd{margin:0;overflow-wrap:anywhere}.review-queue-grid{display:grid;gap:16px}.review-queue-card>header{align-items:start;background:none;border:0;display:flex;gap:12px;justify-content:space-between;padding:0;position:static}.review-queue-card>header h2{font-size:24px;letter-spacing:0;margin:6px 0 12px}.review-facts{grid-template-columns:repeat(2,minmax(0,1fr));margin:16px 0}.review-columns{display:grid;gap:14px;grid-template-columns:repeat(2,minmax(0,1fr))}.review-columns>section{border:1px solid var(--line);border-radius:10px;padding:13px}.review-columns h3{font-size:12px;margin:0 0 10px}.review-assignments{display:grid;gap:9px;list-style:none;margin:0;padding:0}.review-assignments li{align-items:center;display:flex;gap:10px;justify-content:space-between}.review-assignments span,.review-open-slots small{color:var(--muted);display:block;font-size:11px}.review-open-slots{display:grid;gap:8px}.review-claim-form{align-items:center;border-bottom:1px solid var(--line);display:grid;gap:8px;grid-template-columns:1fr auto;padding:8px 0}.review-claim-form output{grid-column:1/-1}.review-protocol-gap{border-color:var(--amber);margin-top:18px}.review-protocol-gap li{margin:6px 0}.challenge-availability{border-left:3px solid var(--cyan);padding-left:10px}.challenge[data-challenge-status=closed] .challenge-availability,.challenge[data-challenge-status=draft] .challenge-availability,.challenge[data-challenge-status=unavailable] .challenge-availability{border-color:var(--amber);color:var(--muted)}.review-artifact-list{display:grid;gap:10px;list-style:none;margin:14px 0 0;padding:0}.review-artifact-item{align-items:center;border:1px solid var(--line);border-radius:10px;display:flex;gap:14px;justify-content:space-between;padding:13px}.review-artifact-item>div:first-child{display:grid;gap:4px;min-width:0}.review-artifact-filename{overflow-wrap:anywhere}.review-artifact-item span,.review-artifact-item small{color:var(--muted)}.review-artifact-actions{display:flex;flex-wrap:wrap;gap:8px}.review-artifact-actions .button{margin:0}
 .role-resource-panel{border-color:#3b8f78;margin:14px 0}.role-resource-panel .facts{display:grid;gap:8px;grid-template-columns:repeat(3,minmax(0,1fr));margin:12px 0}.role-resource-panel .facts article{border:1px solid var(--line);border-radius:9px;display:grid;gap:2px;min-height:auto;padding:10px}.role-resource-panel .facts strong{color:#67e8b5;font-size:20px}.role-resource-panel .facts span{color:var(--muted);font-size:11px}
 .challenge-ruleset-panel{border-color:var(--amber);display:grid;gap:16px;margin-bottom:18px}.challenge-ruleset-header{display:grid;gap:16px;grid-template-columns:minmax(220px,1fr) minmax(300px,1.2fr)}.challenge-ruleset-header h2{font-size:24px;margin:8px 0}.challenge-ruleset-facts{display:grid;gap:6px;grid-template-columns:repeat(2,minmax(0,1fr));margin:0}.challenge-ruleset-facts div{border-bottom:1px solid var(--line);display:grid;gap:3px;padding:6px}.challenge-ruleset-facts dt{color:var(--muted);font-size:11px}.challenge-ruleset-facts dd{margin:0}.challenge-clock,.challenge-outcome,.challenge-victory{border:1px solid var(--line);border-radius:10px;padding:13px}.challenge-clock strong,.challenge-outcome strong{display:block;font-size:18px;margin-top:5px}.challenge-clock p,.challenge-outcome p{color:var(--muted);margin-bottom:0}.challenge-victory ul,.challenge-phase-gates ol,.challenge-phase-gates ul{display:grid;gap:6px;margin:8px 0;padding-left:22px}.challenge-phase-gates summary,.challenge-terminal-controls summary{color:var(--cyan);cursor:pointer;font-weight:800}.challenge-terminal-grid{display:grid;gap:12px;grid-template-columns:repeat(2,minmax(0,1fr));margin-top:12px}.challenge-terminal-grid form{border:1px solid var(--line);border-radius:10px;padding:12px}.challenge-countdown[data-state=active]{color:#67e8b5}.challenge-countdown[data-state=overtime]{color:var(--amber)}.challenge-countdown[data-state=expired]{color:var(--pink)}
 @media(max-width:820px){.grid,.action-grid,.mission-board,.raid-steps,.raid-command-center,.review-boundary,.review-facts,.review-columns,.challenge-ruleset-header,.challenge-ruleset-facts,.challenge-terminal-grid,.role-resource-panel .facts{grid-template-columns:1fr}.roster li{align-items:start;grid-template-columns:1fr}.hero h1{font-size:38px}header{position:static}.card{min-height:auto}}
@@ -10049,7 +10295,9 @@ mod tests {
         assert!(!body.contains("party_code_hash"));
         assert!(body.contains("data-agent-ready=\"false\""));
         assert!(body.contains("请先配对且仅保留一个活跃 Agent"));
-        assert!(body.contains("<button type=\"submit\" disabled>Start my first Raid"));
+        assert!(body.contains(
+            "<button class=\"queue-submit\" data-queue-action=\"join\" type=\"submit\" disabled>Start my first Raid"
+        ));
         assert!(body.contains("class=\"cancel-ticket-form\""));
         assert!(body.contains(&format!("data-ticket-id=\"{ticket_id}\"")));
         assert!(body.contains("Leave queue / 取消排队"));
@@ -10057,6 +10305,67 @@ mod tests {
         assert!(body.contains("Missing roles / 缺少角色: evidence, experiment"));
         assert!(body.contains("暂无法估算"));
         assert!(!body.contains("Roles / 职业<input"));
+    }
+
+    #[tokio::test]
+    async fn lobby_only_enables_authoritative_open_challenges() {
+        let mut identity =
+            AlphaIdentity::test_identity("subject-a", Uuid::new_v4(), Uuid::new_v4());
+        identity.author_roles = vec![AlphaAuthorRole::Captain].into();
+        let challenges = serde_json::json!([
+            {
+                "challenge_id":"open-challenge",
+                "title":"Open challenge",
+                "description":"Open",
+                "status":"open"
+            },
+            {
+                "challenge_id":"closed-challenge",
+                "title":"Closed challenge",
+                "description":"Closed",
+                "status":"closed"
+            },
+            {
+                "challenge_id":"unknown-challenge",
+                "title":"Unknown challenge",
+                "description":"Unknown",
+                "status":"retired"
+            }
+        ]);
+        let bindings = serde_json::json!([{
+            "player_id": identity.player_id,
+            "status": "active"
+        }]);
+        let empty = serde_json::json!([]);
+        let response = lobby(
+            &identity,
+            ReadState::Available(&challenges),
+            ReadState::Available(&empty),
+            ReadState::Available(&empty),
+            ReadState::Available(&bindings),
+            ReadState::Unavailable,
+        );
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect status-bound lobby")
+            .to_bytes();
+        let body = std::str::from_utf8(&body).expect("UTF-8 lobby");
+
+        assert!(body.contains(
+            "data-challenge-id=\"open-challenge\" data-challenge-status=\"open\" data-queue-eligible=\"true\""
+        ));
+        assert!(body.contains(
+            "data-challenge-id=\"closed-challenge\" data-challenge-status=\"closed\" data-queue-eligible=\"false\""
+        ));
+        assert!(body.contains(
+            "data-challenge-id=\"unknown-challenge\" data-challenge-status=\"unavailable\" data-queue-eligible=\"false\""
+        ));
+        assert!(body.contains("Hepta 已关闭该挑战，当前无法排队"));
+        assert!(body.contains("type=\"submit\" disabled>Challenge closed / 挑战已关闭</button>"));
+        assert!(body.contains("type=\"submit\" >Start my first Raid / 开始首局</button>"));
+        assert!(body.contains("挑战开放状态不可验证，匹配保持禁用"));
     }
 
     #[test]
@@ -11397,6 +11706,142 @@ mod tests {
         assert!(body.contains(&identity.display_name));
         assert!(body.contains("PLAYER-SIGNED QUORUM"));
         assert!(body.contains("Evaluation → two independent attestations → reproduction"));
+    }
+
+    fn resolved_review_artifact_fixture() -> Value {
+        let paper_id = Uuid::from_u128(0x11111111_1111_4111_8111_111111111111);
+        let assignment_id = Uuid::from_u128(0x22222222_2222_4222_8222_222222222222);
+        serde_json::json!({
+            "paper_project_id": paper_id,
+            "my_assignments": [{
+                "assignment_id": assignment_id,
+                "paper_project_id": paper_id,
+                "status": "claimed"
+            }],
+            "resolved_frozen_review_bundle": {
+                "schema": RESOLVED_FROZEN_REVIEW_BUNDLE_V1,
+                "assignment_id": assignment_id,
+                "paper_project_id": paper_id,
+                "bundle_hash": format!("sha256:{}", "d".repeat(64)),
+                "objects": [
+                    {
+                        "object_key": "review-object-a",
+                        "logical_path": "evaluator/main.py",
+                        "role": "frozen_evaluator",
+                        "digest": format!("sha256:{}", "a".repeat(64)),
+                        "size_bytes": 321,
+                        "media_type": "text/x-python; charset=utf-8",
+                        "download_path": REVIEW_OBJECT_DOWNLOAD_PATH_V1
+                    },
+                    {
+                        "object_key": "review-object-b",
+                        "logical_path": "inputs/candidate.json",
+                        "role": "candidate",
+                        "digest": format!("sha256:{}", "b".repeat(64)),
+                        "size_bytes": 654,
+                        "media_type": "application/json",
+                        "download_path": REVIEW_OBJECT_DOWNLOAD_PATH_V1
+                    },
+                    {
+                        "object_key": "review-object-c",
+                        "logical_path": "inputs/dataset.json",
+                        "role": "dataset",
+                        "digest": format!("sha256:{}", "c".repeat(64)),
+                        "size_bytes": 987,
+                        "media_type": "application/json",
+                        "download_path": REVIEW_OBJECT_DOWNLOAD_PATH_V1
+                    }
+                ]
+            }
+        })
+    }
+
+    #[test]
+    fn review_artifact_library_exposes_stable_assignment_scoped_file_actions() {
+        let fixture = resolved_review_artifact_fixture();
+        let body = review_artifact_library(&fixture);
+
+        assert!(body.contains("data-review-artifacts-state=\"available\""));
+        assert!(body.contains("data-review-artifact-count=\"3\""));
+        for (index, role, filename, media_type) in [
+            (
+                0,
+                "frozen_evaluator",
+                "evaluator/main.py",
+                "text/x-python; charset=utf-8",
+            ),
+            (1, "candidate", "inputs/candidate.json", "application/json"),
+            (2, "dataset", "inputs/dataset.json", "application/json"),
+        ] {
+            assert!(body.contains(&format!(
+                "data-review-artifact-index=\"{index}\" data-review-artifact-role=\"{role}\""
+            )));
+            assert!(body.contains(&format!(
+                "class=\"review-artifact-filename\">{filename}</strong>"
+            )));
+            assert!(body.contains(media_type));
+        }
+        assert_eq!(
+            body.matches("data-review-artifact-action=\"open\"").count(),
+            3
+        );
+        assert_eq!(
+            body.matches("data-review-artifact-action=\"download\"")
+                .count(),
+            3
+        );
+        assert!(body.contains("presentation=inline"));
+        assert!(body.contains("presentation=attachment"));
+        assert!(body.contains("download=\"candidate.json\""));
+        assert!(!body.contains("review-artifact-digest"));
+        assert!(!body.contains("<code>sha256:"));
+    }
+
+    #[test]
+    fn review_artifact_library_rejects_assignment_descriptor_and_object_tamper() {
+        let assert_closed = |value: &Value| {
+            let body = review_artifact_library(value);
+            assert!(body.contains("data-review-artifacts-state=\"unavailable\""));
+            assert!(!body.contains("data-review-artifact-action="));
+        };
+        let fixture = resolved_review_artifact_fixture();
+
+        let mut foreign_descriptor = fixture.clone();
+        foreign_descriptor["resolved_frozen_review_bundle"]["paper_project_id"] =
+            serde_json::json!(Uuid::new_v4());
+        assert_closed(&foreign_descriptor);
+
+        let mut expired_assignment = fixture.clone();
+        expired_assignment["my_assignments"][0]["status"] = serde_json::json!("expired");
+        assert_closed(&expired_assignment);
+
+        let mut ambiguous_assignment = fixture.clone();
+        let duplicate = ambiguous_assignment["my_assignments"][0].clone();
+        ambiguous_assignment["my_assignments"]
+            .as_array_mut()
+            .expect("assignment array")
+            .push(duplicate);
+        assert_closed(&ambiguous_assignment);
+
+        let mut foreign_transport = fixture.clone();
+        foreign_transport["resolved_frozen_review_bundle"]["objects"][0]["download_path"] =
+            serde_json::json!("https://attacker.invalid/object");
+        assert_closed(&foreign_transport);
+
+        let mut unsafe_path = fixture.clone();
+        unsafe_path["resolved_frozen_review_bundle"]["objects"][0]["logical_path"] =
+            serde_json::json!("../secret.py");
+        assert_closed(&unsafe_path);
+
+        let mut unsafe_media = fixture.clone();
+        unsafe_media["resolved_frozen_review_bundle"]["objects"][0]["media_type"] =
+            serde_json::json!("text/html");
+        assert_closed(&unsafe_media);
+
+        let mut malformed_digest = fixture;
+        malformed_digest["resolved_frozen_review_bundle"]["objects"][0]["digest"] =
+            serde_json::json!("sha256:not-a-digest");
+        assert_closed(&malformed_digest);
     }
 
     #[tokio::test]
