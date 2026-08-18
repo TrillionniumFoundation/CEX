@@ -827,3 +827,27 @@ empty local/session/IndexedDB storage, original-key recovery after a
 committed-but-lost registration response, external Agent binding, Lobby entry,
 and optional P5 Paper Room rendering. The only stdout result is a secret-free,
 machine-verifiable `hepta.paper_raid.browser_e2e.result.v1` JSON object.
+
+`scripts/check-browser-mobile-a11y.sh` is a separate source-candidate gate for
+the ordinary login and `practice_unranked` browser path at exact 390px and
+430px widths. It builds an exact reduced Cargo workspace offline with host
+`rustc`/Cargo versions required to equal the pinned Docker builder, then runs
+that current binary inside the immutable Rust container with an isolated tmpfs
+PostgreSQL database and a typed read-only Hepta boundary double. Candidate and
+runner inputs come from one read-only source snapshot whose SHA-256 is sealed
+in the result; clean evidence uses an exact `git archive` of the reported
+revision. The double verifies the complete Ed25519 Consumer assertion,
+request-bound claims, lifetime, and replay boundary before answering. Pinned Chromium
+is driven through keyboard input plus the CDP accessibility tree. The fixture
+prequalifies one exact active owner binding in
+both authorities so this gate can inspect the pre-Agent Practice stages; its
+result therefore always records `production_bridge_pairing_proved=false`,
+`production_bridge_execution_proved=false`,
+`post_agent_focus_transition_real_e2e_proved=false`,
+`developer_json_fallback_used=false`, and
+`runtime_kind=pinned_host_toolchain_container_test_only`.
+It is not production-image/SBOM evidence, a normal installed-Bridge pairing
+proof, a deployment check, a post-Agent Practice completion proof, or a manual
+screen-reader certification. Clean source is mandatory for releasable evidence;
+`PAPER_RAID_BFF_BROWSER_ALLOW_DIRTY=1` exists only for explicitly labelled
+development runs.
