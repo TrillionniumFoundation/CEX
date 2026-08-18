@@ -5,14 +5,16 @@ import { readSafeJson, writePrivateJsonReplacing } from "./files.mjs";
 import {
   bridgeHealth,
   executeAndSubmitReviewTask,
+  executeAndSubmitAuthorDelivery,
+  executeAndSubmitAuthorWorkStart,
   getInbox,
   recoverPendingReviewReceipt,
-  submitAgentProposal,
 } from "./operations.mjs";
 import {
   actionableDeliveryCandidates,
+  authorWorkStartKey,
+  authorWorkStarts,
   deliveryCandidateKey,
-  proposalInput,
 } from "./work.mjs";
 import { actionableReviewTasks, reviewTaskKey } from "./review.mjs";
 
@@ -55,11 +57,18 @@ export async function loadServiceConfig(root) {
   return Object.freeze({ schema: value.schema, mode: value.mode });
 }
 
-function actionableItems(inbox, acknowledgedDeliveries, acknowledgedReviews) {
+function actionableItems(
+  inbox,
+  acknowledgedDeliveries,
+  acknowledgedReviews,
+  acknowledgedAuthorStarts,
+) {
+  const starts = authorWorkStarts(inbox, acknowledgedAuthorStarts);
   const deliveries = actionableDeliveryCandidates(inbox, acknowledgedDeliveries)
     .filter(value => !acknowledgedDeliveries.has(deliveryCandidateKey(value)));
   const reviews = actionableReviewTasks(inbox, acknowledgedReviews);
   return [
+    ...starts.map(value => Object.freeze({ kind: "author_start", value })),
     ...deliveries.map(value => Object.freeze({ kind: "delivery", value })),
     ...reviews.map(value => Object.freeze({ kind: "review", value })),
   ];
@@ -69,13 +78,18 @@ async function submitOne(config, identity, item) {
   if (item.kind === "review") {
     return executeAndSubmitReviewTask(config, identity, item.value);
   }
-  return submitAgentProposal(config, identity, proposalInput(item.value));
+  if (item.kind === "author_start") {
+    return executeAndSubmitAuthorWorkStart(config, identity, item.value);
+  }
+  return executeAndSubmitAuthorDelivery(config, identity, item.value);
 }
 
 function itemKey(item) {
   return item.kind === "review"
     ? reviewTaskKey(item.value)
-    : deliveryCandidateKey(item.value);
+    : item.kind === "author_start"
+      ? authorWorkStartKey(item.value)
+      : deliveryCandidateKey(item.value);
 }
 
 function safeStatus({ mode, state, candidateCount = 0, action = "none" }) {
@@ -113,7 +127,7 @@ async function saveStatus(root, status) {
 
 async function daemonCycleUnlocked(
   root,
-  { acknowledgedDeliveries, acknowledgedReviews },
+  { acknowledgedDeliveries, acknowledgedReviews, acknowledgedAuthorStarts },
 ) {
   const service = await loadServiceConfig(root);
   const config = await loadConfig(installedBridgeConfigPath(root));
@@ -135,7 +149,12 @@ async function daemonCycleUnlocked(
   }
   await bridgeHealth(config, identity, { status: "healthy" });
   const inbox = await getInbox(config, identity);
-  const items = actionableItems(inbox, acknowledgedDeliveries, acknowledgedReviews);
+  const items = actionableItems(
+    inbox,
+    acknowledgedDeliveries,
+    acknowledgedReviews,
+    acknowledgedAuthorStarts,
+  );
   if (service.mode === "confirm") {
     return saveStatus(
       root,
@@ -157,17 +176,20 @@ async function daemonCycleUnlocked(
     );
   }
   const item = items[0];
-  await submitOne(config, identity, item);
+  const result = await submitOne(config, identity, item);
   const key = itemKey(item);
   if (item.kind === "review") acknowledgedReviews.add(key);
-  else acknowledgedDeliveries.add(key);
+  else if (item.kind === "author_start") {
+    acknowledgedAuthorStarts.add(key);
+    acknowledgedDeliveries.add(deliveryCandidateKey(result.candidate));
+  } else acknowledgedDeliveries.add(key);
   return saveStatus(
     root,
     safeStatus({
       mode: service.mode,
       state: "submitted",
       candidateCount: 1,
-      action: item.kind,
+      action: item.kind === "author_start" ? "delivery" : item.kind,
     }),
   );
 }
@@ -180,6 +202,7 @@ function runtimeCycle(root) {
       tail: Promise.resolve(),
       acknowledgedDeliveries: new Set(),
       acknowledgedReviews: new Set(),
+      acknowledgedAuthorStarts: new Set(),
     };
     RUNTIME_CYCLES.set(key, runtime);
   }
@@ -192,12 +215,17 @@ export function daemonCycle(root, options = {}) {
     ?? runtime.acknowledgedDeliveries;
   const acknowledgedReviews = options.acknowledgedReviews
     ?? runtime.acknowledgedReviews;
-  if (!(acknowledgedDeliveries instanceof Set) || !(acknowledgedReviews instanceof Set)) {
+  const acknowledgedAuthorStarts = options.acknowledgedAuthorStarts
+    ?? runtime.acknowledgedAuthorStarts;
+  if (!(acknowledgedDeliveries instanceof Set) ||
+      !(acknowledgedReviews instanceof Set) ||
+      !(acknowledgedAuthorStarts instanceof Set)) {
     return Promise.reject(new Error("daemon acknowledgement state must use Sets"));
   }
   const cycle = runtime.tail.then(() => daemonCycleUnlocked(root, {
     acknowledgedDeliveries,
     acknowledgedReviews,
+    acknowledgedAuthorStarts,
   }));
   runtime.tail = cycle.catch(() => {});
   return cycle;
@@ -206,6 +234,7 @@ export function daemonCycle(root, options = {}) {
 export async function runDaemon(root, { signal = undefined } = {}) {
   const acknowledgedDeliveries = new Set();
   const acknowledgedReviews = new Set();
+  const acknowledgedAuthorStarts = new Set();
   process.stdout.write("paper-raid-agent-bridge service started\n");
   for (;;) {
     if (signal?.aborted) return;
@@ -214,6 +243,7 @@ export async function runDaemon(root, { signal = undefined } = {}) {
       const status = await daemonCycle(root, {
         acknowledgedDeliveries,
         acknowledgedReviews,
+        acknowledgedAuthorStarts,
       });
       const config = await loadConfig(installedBridgeConfigPath(root));
       delay = config.poll_interval_ms;

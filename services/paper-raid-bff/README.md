@@ -385,8 +385,9 @@ the same subject/player/Agent/binding after Hepta's dual-signed key rotation;
 different owners or Agent IDs remain conflicts. The old key fails signed calls
 until that re-pair, and only Hepta's currently active key can restore service.
 
-After pairing, the Agent has only five dedicated endpoints: `GET
-/api/agent-bridge/binding` and `POST` health, inbox, delivery-drafts and proposals. Every request
+After pairing, the Agent has eight dedicated endpoints: `GET` binding,
+review-objects and challenge-objects, plus `POST` health, inbox,
+delivery-drafts, proposals and review-receipts. Every request
 uses the nine frozen `x-paper-raid-agent-*` headers and an Ed25519
 `hepta.paper_raid.agent_bridge_request_proof.v1` over the exact method, path,
 canonical query, raw HTTP body SHA-256, binding/key identity, nonce and at-most
@@ -413,8 +414,30 @@ and prior proposals, plus a versioned `delivery_candidates` projection. The
 client consumes only exact candidate items projected by the BFF; it never joins
 tasks, leases, section heads, or manifests locally.
 
-The Bridge declares one short-lived delivery intent through the signed
-`delivery-drafts` endpoint after its local Agent produces an output manifest.
+For `planned` or `in_progress` Author work, the same inbox projects one immutable four-object
+Challenge bundle—playable brief, dataset, baseline and frozen evaluator—from
+the Paper's activation-derived snapshot. Accepted, rejected and cancelled
+history cannot suppress or replace a current task. Before Agent work starts,
+the Bridge performs four separately proof-signed GETs and verifies exact role,
+path, media type, byte length and digest. It publishes an owner-only material
+directory only after every object passes, using fsync plus an atomic no-clobber
+rename; partial downloads and ambiguous bundles never become consumable. This
+removes manual selection of authoritative Challenge files without allowing the
+Agent or player to choose scientific truth.
+
+Any projected `pending`, `submitting` or `consumed` delivery recovery suppresses
+all new Author starts until it is handled. Otherwise, after atomic material
+publication, the Bridge runs its prevalidated local Author executor with the
+unique material directory as its working directory. The executor must echo the
+exact Paper/player/binding/work/version/bundle/authority start binding and may
+return only section, registered artifact-manifest ID and payload digest as new
+draft input. The Bridge then declares one short-lived delivery intent through
+the signed `delivery-drafts` endpoint, reads a fresh inbox, requires exactly one
+field-for-field matching candidate, and only then signs a proposal. A recovery
+candidate is resubmitted without rerunning materials or the executor; there is
+no endpoint or public CLI that accepts a caller-selected draft, lease, manifest
+hash or proposal authority.
+
 The request names only Paper, assigned work item, section, manifest and payload
 digest; the BFF derives the current work version, parent, active holder lease
 and positive fencing token, and authoritative manifest digest from Hepta. It
@@ -672,10 +695,20 @@ The browser alpha is a same-origin, external-script flow:
    telemetry.
 8. `/league/review` is the assignment-scoped independent Review Raid surface.
    It renders typed evaluator draft, two-reviewer attestation, quorum/finalize
-   and reproduction actions from a frozen review bundle. Every signature frame
-   is rebuilt after a fresh scoped read; players never enter actor IDs,
-   submission hashes, signatures or protocol JSON. Author-scoped identities
-   are denied this surface even if they also declare a review scope.
+   and reproduction actions from a frozen review bundle. The ordinary Review
+   page also exposes the exact assignment-scoped paper source, bibliography,
+   claim/evidence graph, dataset, evaluator and candidate result as a verified
+   file library with explicit open/download actions. Browser reviewers may read
+   the complete six-or-seven-object authority; Agent Bridge receives only the
+   exact three-or-four executable-object projection. Route Paper, submission,
+   assignment, player, round, slot, version, release/PaperBundle seals,
+   ArtifactManifest seal, bundle hash, object key, digest, media type and byte
+   length are re-bound before any CAS read. Every signature frame is rebuilt
+   after a fresh scoped read; players never enter actor IDs, submission hashes,
+   signatures or protocol JSON. Author scope alone grants no Review access. A
+   mixed Author/Review identity may use this surface only for a separately
+   assigned Paper where Hepta proves that player is not an Author; Author Room
+   membership never grants Review authority.
 9. `/api/papers/<paper-id>/timeline` combines query-bound Hepta room events
    with Nakama archives selected only from Hepta's player-scoped
    `member_research_sessions`. The response also repeats the current

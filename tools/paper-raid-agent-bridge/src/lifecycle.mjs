@@ -5,6 +5,7 @@ import {
   lstat,
   mkdir,
   open,
+  realpath,
   readdir,
   readlink,
   rename,
@@ -16,7 +17,11 @@ import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
-import { loadConfig, CONFIG_SCHEMA } from "./config.mjs";
+import {
+  AUTHOR_EXECUTOR_SCHEMA,
+  loadConfig,
+  CONFIG_SCHEMA,
+} from "./config.mjs";
 import { loadIdentity, generateIdentity } from "./identity.mjs";
 import { loadBridgeState } from "./state.mjs";
 import {
@@ -109,6 +114,63 @@ function assertSafeAbsolutePath(path, field) {
     throw new Error(`${field} is unsafe`);
   }
   return value;
+}
+
+async function validatedAuthorExecutorPath(path) {
+  if (typeof path !== "string" || path.length === 0 || path.includes("\0")) {
+    throw new Error("one explicit Author executor path is required");
+  }
+  if (typeof process.getuid !== "function") {
+    throw new Error("Author executor ownership cannot be verified on this platform");
+  }
+  const requested = resolve(path);
+  let before;
+  let canonical;
+  let final;
+  let handle;
+  try {
+    before = await lstat(requested);
+    canonical = await realpath(requested);
+    final = await lstat(canonical);
+    handle = await open(
+      requested,
+      fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0),
+    );
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      throw new Error("Author executor does not exist");
+    }
+    throw new Error("Author executor cannot be safely opened", { cause: error });
+  }
+  try {
+    const opened = await handle.stat();
+    if (
+      !before.isFile() ||
+      before.isSymbolicLink() ||
+      before.nlink !== 1 ||
+      before.uid !== process.getuid() ||
+      (before.mode & 0o022) !== 0 ||
+      (before.mode & 0o100) === 0 ||
+      !final.isFile() ||
+      final.isSymbolicLink() ||
+      final.nlink !== 1 ||
+      final.uid !== process.getuid() ||
+      (final.mode & 0o022) !== 0 ||
+      (final.mode & 0o100) === 0 ||
+      before.dev !== final.dev ||
+      before.ino !== final.ino ||
+      opened.dev !== before.dev ||
+      opened.ino !== before.ino ||
+      opened.mode !== before.mode ||
+      opened.uid !== before.uid ||
+      opened.nlink !== before.nlink
+    ) {
+      throw new Error("Author executor is not one safe current-user executable");
+    }
+  } finally {
+    await handle.close();
+  }
+  return canonical;
 }
 
 export function defaultInstallRoot() {
@@ -437,18 +499,49 @@ async function readPointer(layoutValue, name, { optional = false } = {}) {
   return Object.freeze({ identity, path: releasePath });
 }
 
-function bridgeConfig({ bffUrl, capabilities, resourceClasses, maxParallelTasks = 1 }) {
+function bridgeConfig({
+  bffUrl,
+  authorExecutor,
+  capabilities,
+  resourceClasses,
+  maxParallelTasks = 1,
+}) {
   return {
     schema: CONFIG_SCHEMA,
     bff_url: bffUrl,
     identity_file: "identity.json",
     state_file: "state.json",
+    author_executor: {
+      schema: AUTHOR_EXECUTOR_SCHEMA,
+      executable: authorExecutor,
+      timeout_ms: 900_000,
+    },
     capabilities,
     resource_classes: resourceClasses,
     max_parallel_tasks: maxParallelTasks,
     paper_ids: [],
     poll_interval_ms: 5_000,
     request_timeout_ms: 5_000,
+  };
+}
+
+function migratedBridgeConfig(config, authorExecutor) {
+  return {
+    schema: CONFIG_SCHEMA,
+    bff_url: config.bff_url,
+    identity_file: config.identity_file,
+    state_file: config.state_file,
+    author_executor: {
+      schema: AUTHOR_EXECUTOR_SCHEMA,
+      executable: resolve(authorExecutor),
+      timeout_ms: 900_000,
+    },
+    capabilities: [...config.capability_disclosure.capabilities],
+    resource_classes: [...config.capability_disclosure.resource_classes],
+    max_parallel_tasks: config.capability_disclosure.max_parallel_tasks,
+    paper_ids: [...config.paper_ids],
+    poll_interval_ms: config.poll_interval_ms,
+    request_timeout_ms: config.request_timeout_ms,
   };
 }
 
@@ -919,6 +1012,7 @@ export async function installProduct(options) {
   const layoutValue = layout(resolveInstallRoot(options.root), { testHarness });
   const timeoutMs = systemctlTimeout(options, testHarness);
   const mode = options.mode ?? "confirm";
+  const authorExecutor = await validatedAuthorExecutorPath(options.authorExecutor);
   if (mode === "auto" && options.autoAcknowledged !== true) {
     throw new Error("Auto mode requires the explicit --acknowledge-auto flag");
   }
@@ -960,6 +1054,7 @@ export async function installProduct(options) {
       installedBridgeConfigPath(layoutValue.root),
       bridgeConfig({
         bffUrl: options.bffUrl,
+        authorExecutor,
         capabilities,
         resourceClasses,
       }),
@@ -1065,6 +1160,7 @@ async function lifecyclePhase(options, installation, phase) {
 }
 
 export async function updateProduct(options) {
+  const authorExecutor = await validatedAuthorExecutorPath(options.authorExecutor);
   const installation = await loadInstallation(resolveInstallRoot(options.root));
   const timeoutMs = systemctlTimeout(options, installation.layout.testHarness);
   const current = await verifyCurrent(installation);
@@ -1092,10 +1188,21 @@ export async function updateProduct(options) {
     throw new Error("update rejects same-sequence and every known-history downgrade release");
   }
   const published = await stageAndPublish(installation.layout, verified);
+  const dataTransactions = [];
   let previousAttempted = false;
   let currentAttempted = false;
   try {
     await lifecyclePhase(options, installation, "update_after_publish");
+    const currentConfig = await loadConfig(
+      installedBridgeConfigPath(installation.layout.root),
+    );
+    await transactionalPrivateJsonReplace(
+      installedBridgeConfigPath(installation.layout.root),
+      migratedBridgeConfig(currentConfig, authorExecutor),
+      dataTransactions,
+    );
+    await loadConfig(installedBridgeConfigPath(installation.layout.root));
+    await lifecyclePhase(options, installation, "update_after_config");
     previousAttempted = true;
     await atomicPointer(installation.layout.root, "previous", current.pointer.identity);
     await lifecyclePhase(options, installation, "update_after_previous");
@@ -1116,8 +1223,14 @@ export async function updateProduct(options) {
       "--quiet",
       UNIT_NAME,
     ], { timeoutMs });
+    await commitPrivateJsonReplacements(dataTransactions);
   } catch (error) {
     const recoveryFailures = [];
+    try {
+      await rollbackPrivateJsonReplacements(dataTransactions);
+    } catch (recoveryError) {
+      recoveryFailures.push(recoveryError);
+    }
     if (currentAttempted) {
       try {
         await atomicPointer(installation.layout.root, "current", current.pointer.identity);

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { dirname, join } from "node:path";
 import {
   AGENT_BINDING_PROOF_SCHEMA,
   AGENT_PROPOSAL_SCHEMA,
@@ -29,8 +30,13 @@ import {
   saveReviewOutbox,
 } from "./review_outbox.mjs";
 import {
+  authorWorkStartKey,
   challengeMaterialObjectQuery,
+  deliveryCandidateForAuthorOutput,
   downloadAssignedChallengeMaterials,
+  executeAuthorWorkStart,
+  materializeAssignedChallengeMaterials,
+  proposalInput,
 } from "./work.mjs";
 
 export const PAIRING_CONTEXT_SCHEMA =
@@ -470,9 +476,83 @@ export async function downloadChallengeMaterialBundle(
       {
         expectedBytes: object.size_bytes,
         maxBytes: object.size_bytes,
+        expectedMediaType: object.media_type,
       },
     ),
   );
+}
+
+export async function prepareChallengeMaterialsForStart(
+  config,
+  identity,
+  start,
+  {
+    nowUnix = Math.floor(Date.now() / 1000),
+    fetchImplementation,
+    materialRoot = join(dirname(config.state_file), "challenge-materials"),
+  } = {},
+) {
+  authorWorkStartKey(start);
+  const downloaded = await downloadChallengeMaterialBundle(
+    config,
+    identity,
+    start.bundle,
+    { nowUnix, fetchImplementation },
+  );
+  return materializeAssignedChallengeMaterials(start.bundle, downloaded, materialRoot);
+}
+
+export async function executeAndSubmitAuthorWorkStart(
+  config,
+  identity,
+  start,
+  options = {},
+) {
+  const materialization = await prepareChallengeMaterialsForStart(
+    config,
+    identity,
+    start,
+    options,
+  );
+  const output = await executeAuthorWorkStart(
+    config,
+    materialization,
+    start,
+    options,
+  );
+  const prepared = await prepareDeliveryDraft(
+    config,
+    identity,
+    output,
+    options,
+  );
+  const freshInbox = await getInbox(config, identity, options);
+  const candidate = deliveryCandidateForAuthorOutput(
+    freshInbox,
+    start,
+    output,
+    prepared,
+  );
+  const result = await submitAgentProposal(
+    config,
+    identity,
+    proposalInput(candidate),
+    options,
+  );
+  return Object.freeze({
+    schema: "hepta.paper_raid.agent_bridge.author_work_submission.v1",
+    candidate,
+    result,
+  });
+}
+
+export async function executeAndSubmitAuthorDelivery(
+  config,
+  identity,
+  candidate,
+  options = {},
+) {
+  return submitAgentProposal(config, identity, proposalInput(candidate), options);
 }
 
 export function createDeliveryDraftRequest(state, input, { draftId } = {}) {

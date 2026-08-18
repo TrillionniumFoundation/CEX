@@ -3445,15 +3445,9 @@ fn make_frozen_review_authority(
                 "every frozen review object must have one reviewer-readable immutable CAS location",
             ));
         }
-        if !matches!(
-            object.role.as_str(),
-            "frozen_evaluator" | "evaluator_support" | "candidate" | "dataset" | "input"
-        ) {
-            // The release ArtifactManifest also contains human-readable paper, bibliography,
-            // evidence, and audit objects.  Those remain committed by artifact_manifest_hash but
-            // are not executable challenge-manifest members and must not enter the Bridge bundle.
-            continue;
-        }
+        // Freeze the complete reviewer-readable release manifest. The Consumer BFF derives a
+        // smaller executable projection for Agent Bridge, while the human Review UI remains able
+        // to inspect the paper, bibliography, and claim/evidence graph under this same assignment.
         objects.push(FrozenReviewObjectV1 {
             object_key: paper_scoped_review_object_key(
                 submission.paper_project_id,
@@ -3471,22 +3465,30 @@ fn make_frozen_review_authority(
     objects.sort_by(|left, right| {
         (&left.object_key, &left.logical_path).cmp(&(&right.object_key, &right.logical_path))
     });
-    let trusted_evaluators = objects
-        .iter()
-        .filter(|object| object.role == "frozen_evaluator")
-        .count();
-    let trusted_datasets = objects
-        .iter()
-        .filter(|object| object.role == "dataset")
-        .count();
-    let candidates = objects
-        .iter()
-        .filter(|object| object.role == "candidate")
-        .count();
-    if trusted_evaluators == 0 || trusted_datasets == 0 || candidates != 1 {
+    let role_count = |role: &str| objects.iter().filter(|object| object.role == role).count();
+    if role_count("paper_source") != 1
+        || role_count("bibliography") != 1
+        || role_count("claim_evidence_graph") != 1
+        || role_count("frozen_evaluator") != 1
+        || role_count("dataset") != 1
+        || role_count("candidate") != 1
+        || role_count("evaluator_support") > 1
+        || objects.iter().any(|object| {
+            !matches!(
+                object.role.as_str(),
+                "paper_source"
+                    | "bibliography"
+                    | "claim_evidence_graph"
+                    | "frozen_evaluator"
+                    | "evaluator_support"
+                    | "dataset"
+                    | "candidate"
+            )
+        })
+    {
         return Err(ApiError::conflict(
             "frozen_review_objects_unavailable",
-            "review resolution requires evaluator, dataset, and exactly one candidate members in the release ArtifactManifest",
+            "review resolution requires exact human-readable paper and executable artifact coverage",
         ));
     }
     let kind = match assignment.slot {

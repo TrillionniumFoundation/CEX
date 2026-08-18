@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { chmod, lstat, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import {
@@ -18,13 +18,16 @@ import {
   createDeliveryDraftRequest,
   createProposalRequest,
   downloadChallengeMaterialBundle,
+  executeAndSubmitAuthorWorkStart,
   getBinding,
   getInbox,
   pairAgent,
+  prepareChallengeMaterialsForStart,
   prepareDeliveryDraft,
   stableDeliveryDraftId,
   submitAgentProposal,
 } from "../src/operations.mjs";
+import { authorWorkStarts } from "../src/work.mjs";
 import { loadBridgeState, saveBridgeState } from "../src/state.mjs";
 import { generateIdentity, loadIdentity } from "../src/identity.mjs";
 import {
@@ -102,6 +105,61 @@ function challengeMaterialFixture() {
     objects,
   }, "bundle_hash");
   return { bundle, bytes };
+}
+
+function challengeDeliveryInbox(bundle) {
+  const candidate = {
+    schema: "hepta.paper_raid.agent_bridge.delivery_candidate.v1",
+    delivery_draft_id: "99999999-9999-4999-8999-999999999999",
+    binding_id: BINDING_ID,
+    paper_id: PAPER_ID,
+    work_item_id: WORK_ID,
+    section_key: "methods",
+    lease_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    lease_fencing_token: 1,
+    expected_work_version: 3,
+    parent_revision_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    proposal_kind: "delivery",
+    payload_hash: `sha256:${"c".repeat(64)}`,
+    artifact_manifest_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    artifact_manifest_hash: `sha256:${"d".repeat(64)}`,
+    delivery_state: "pending",
+    declared_at_unix: NOW,
+    expires_at_unix: NOW + 300,
+  };
+  return {
+    candidate,
+    inbox: {
+      schema: "hepta.paper_raid.agent_bridge.inbox.v2",
+      binding_id: BINDING_ID,
+      assurance: "self_declared_unverified",
+      papers: [{
+        paper_id: PAPER_ID,
+        phase: "drafting",
+        tasks: [{
+          work_item_id: WORK_ID,
+          paper_project_id: PAPER_ID,
+          kind: "assigned_research",
+          assigned_binding_id: BINDING_ID,
+          assigned_player_id: PLAYER_ID,
+          status: "in_progress",
+          version: 3,
+        }],
+        challenge_materials: {
+          schema: "hepta.paper_raid.agent_bridge.assigned_challenge_materials.v1",
+          status: "available",
+          reason_code: null,
+          items: [bundle],
+        },
+        delivery_candidates: {
+          schema: "hepta.paper_raid.agent_bridge.delivery_candidates.v1",
+          status: "available",
+          reason_code: null,
+          items: [candidate],
+        },
+      }],
+    },
+  };
 }
 
 function context() {
@@ -440,6 +498,215 @@ test("Bridge downloads all four challenge objects through exact signed assignmen
     assert.equal("cookie" in call.headers, false);
     assert.equal("authorization" in call.headers, false);
   }
+
+  await assert.rejects(
+    () => downloadChallengeMaterialBundle(
+      item.config,
+      item.identity,
+      bundle,
+      {
+        nowUnix: NOW + 4,
+        fetchImplementation: async (url) => {
+          const key = new URL(url).searchParams.get("object_key");
+          return new Response(bytes[key], {
+            status: 200,
+            headers: {
+              "content-type": key === "baseline"
+                ? "application/octet-stream"
+                : bundle.objects.find(object => object.object_key === key).media_type,
+              "content-length": String(bytes[key].length),
+            },
+          });
+        },
+      },
+    ),
+    error => error?.code === "agent_bridge_object_media_type_mismatch",
+  );
+});
+
+test("diagnostic Author-start material preparation publishes only after all four signed reads", async t => {
+  const item = await fixture(t, "challenge-material-prepare");
+  await saveBridgeState(item.statePath, item.identity, item.binding, NOW);
+  const { bundle, bytes } = challengeMaterialFixture();
+  const initial = challengeDeliveryInbox(bundle).inbox;
+  initial.papers[0].proposals = [];
+  initial.papers[0].delivery_candidates = {
+    schema: "hepta.paper_raid.agent_bridge.delivery_candidates.v1",
+    status: "unavailable",
+    reason_code: "no_recoverable_author_delivery",
+    items: [],
+  };
+  const [start] = authorWorkStarts(initial);
+  let reads = 0;
+  const result = await prepareChallengeMaterialsForStart(
+    item.config,
+    item.identity,
+    start,
+    {
+      nowUnix: NOW + 5,
+      fetchImplementation: async url => {
+        const key = new URL(url).searchParams.get("object_key");
+        reads += 1;
+        return new Response(bytes[key], {
+          status: 200,
+          headers: {
+            "content-type": bundle.objects.find(object => object.object_key === key).media_type,
+            "content-length": String(bytes[key].length),
+          },
+        });
+      },
+    },
+  );
+  assert.equal(reads, 4);
+  assert.equal(result.status, "created");
+  assert.equal((await lstat(result.directory)).mode & 0o777, 0o700);
+
+  const failed = await fixture(t, "challenge-material-partial-network");
+  await saveBridgeState(failed.statePath, failed.identity, failed.binding, NOW);
+  let attempts = 0;
+  await assert.rejects(
+    () => prepareChallengeMaterialsForStart(
+      failed.config,
+      failed.identity,
+      start,
+      {
+        nowUnix: NOW + 6,
+        fetchImplementation: async url => {
+          const key = new URL(url).searchParams.get("object_key");
+          attempts += 1;
+          if (key === "baseline") {
+            throw new Error("simulated interrupted material download");
+          }
+          return new Response(bytes[key], {
+            status: 200,
+            headers: {
+              "content-type": bundle.objects.find(object => object.object_key === key).media_type,
+              "content-length": String(bytes[key].length),
+            },
+          });
+        },
+      },
+    ),
+    error => error?.code === "agent_bridge_transport_failed",
+  );
+  await assert.rejects(
+    lstat(join(failed.directory, "challenge-materials")),
+    error => error?.code === "ENOENT",
+  );
+});
+
+test("Author start materializes four objects before executor, draft, fresh inbox, and proposal", async t => {
+  const item = await fixture(t, "author-start-operation");
+  await saveBridgeState(item.statePath, item.identity, item.binding, NOW);
+  const { bundle, bytes } = challengeMaterialFixture();
+  const initial = challengeDeliveryInbox(bundle).inbox;
+  initial.papers[0].proposals = [];
+  initial.papers[0].delivery_candidates = {
+    schema: "hepta.paper_raid.agent_bridge.delivery_candidates.v1",
+    status: "unavailable",
+    reason_code: "no_recoverable_author_delivery",
+    items: [],
+  };
+  const [start] = authorWorkStarts(initial);
+  const executorLog = join(item.directory, "author-executor.log");
+  const executorPath = join(item.directory, "author-executor.mjs");
+  await writeFile(executorPath, `#!${process.execPath}
+import { appendFile, readFile } from "node:fs/promises";
+let input = "";
+for await (const chunk of process.stdin) input += chunk;
+const request = JSON.parse(input);
+for (const object of request.objects) await readFile(object.logical_path);
+await appendFile(${JSON.stringify(executorLog)}, request.start_key + "\\n", { mode: 0o600 });
+process.stdout.write(JSON.stringify({
+  schema: "hepta.paper_raid.agent_bridge.author_executor_result.v1",
+  status: "completed",
+  start_key: request.start_key,
+  material_directory: request.material_directory,
+  binding_id: request.binding_id,
+  player_id: request.player_id,
+  paper_id: request.paper_id,
+  work_item_id: request.work_item_id,
+  work_item_version: request.work_item_version,
+  task_kind: request.task_kind,
+  bundle_hash: request.bundle_hash,
+  authority_hash: request.authority_hash,
+  section_key: "methods",
+  artifact_manifest_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+  payload_hash: "sha256:${"c".repeat(64)}"
+}) + "\\n");
+`, { mode: 0o700 });
+  await chmod(executorPath, 0o700);
+  const config = Object.freeze({
+    ...item.config,
+    author_executor: Object.freeze({
+      schema: "hepta.paper_raid.agent_bridge.author_executor.v1",
+      executable: executorPath,
+      timeout_ms: 5_000,
+    }),
+  });
+  const calls = [];
+  let exactCandidate;
+  const fetchImplementation = async (url, init) => {
+    const parsed = new URL(url);
+    calls.push(`${init.method}:${parsed.pathname}`);
+    if (parsed.pathname === "/api/agent-bridge/challenge-objects") {
+      const key = parsed.searchParams.get("object_key");
+      const object = bundle.objects.find(value => value.object_key === key);
+      return new Response(bytes[key], {
+        status: 200,
+        headers: {
+          "content-type": object.media_type,
+          "content-length": String(bytes[key].length),
+        },
+      });
+    }
+    if (parsed.pathname === "/api/agent-bridge/delivery-drafts") {
+      const request = JSON.parse(init.body);
+      exactCandidate = {
+        ...challengeDeliveryInbox(bundle).candidate,
+        delivery_draft_id: request.delivery_draft_id,
+        declared_at_unix: NOW + 5,
+        expires_at_unix: NOW + 305,
+      };
+      return jsonResponse({
+        schema: "hepta.paper_raid.agent_bridge.delivery_draft_result.v1",
+        candidate: exactCandidate,
+      });
+    }
+    if (parsed.pathname === "/api/agent-bridge/inbox") {
+      const fresh = challengeDeliveryInbox(bundle).inbox;
+      fresh.papers[0].proposals = [];
+      fresh.papers[0].delivery_candidates.items = [exactCandidate];
+      return jsonResponse(fresh);
+    }
+    assert.equal(parsed.pathname, "/api/agent-bridge/proposals");
+    const proposal = JSON.parse(init.body);
+    assert.equal(proposal.delivery_draft_id, exactCandidate.delivery_draft_id);
+    assert.equal(proposal.payload.expected_work_version, 3);
+    return jsonResponse({
+      schema: "hepta.paper_raid.agent_bridge.proposal_result.v2",
+      status: "accepted",
+    });
+  };
+
+  const result = await executeAndSubmitAuthorWorkStart(
+    config,
+    item.identity,
+    start,
+    { nowUnix: NOW + 5, fetchImplementation },
+  );
+  assert.equal(result.schema, "hepta.paper_raid.agent_bridge.author_work_submission.v1");
+  assert.equal(result.candidate.delivery_draft_id, exactCandidate.delivery_draft_id);
+  assert.deepEqual(calls, [
+    "GET:/api/agent-bridge/challenge-objects",
+    "GET:/api/agent-bridge/challenge-objects",
+    "GET:/api/agent-bridge/challenge-objects",
+    "GET:/api/agent-bridge/challenge-objects",
+    "POST:/api/agent-bridge/delivery-drafts",
+    "POST:/api/agent-bridge/inbox",
+    "POST:/api/agent-bridge/proposals",
+  ]);
+  assert.equal((await readFile(executorLog, "utf8")).trim().length > 0, true);
 });
 
 test("legacy non-delivery Agent Proposal V1 is not a Bridge mutation bypass", async t => {

@@ -46,7 +46,7 @@ async function jsonResponse(response) {
   }
 }
 
-async function byteResponse(response, { expectedBytes, maxBytes }) {
+async function byteResponse(response, { expectedBytes, maxBytes, expectedMediaType }) {
   if (
     !Number.isSafeInteger(expectedBytes) ||
     expectedBytes < 1 ||
@@ -55,6 +55,19 @@ async function byteResponse(response, { expectedBytes, maxBytes }) {
     maxBytes > MAX_REVIEW_OBJECT_BYTES
   ) {
     throw new Error("review object byte bounds are invalid");
+  }
+  if (
+    expectedMediaType !== undefined &&
+    (typeof expectedMediaType !== "string" || expectedMediaType.length < 1 ||
+      expectedMediaType.length > 128 || /[\0\r\n]/.test(expectedMediaType))
+  ) {
+    throw new Error("frozen object media type is invalid");
+  }
+  if (
+    expectedMediaType !== undefined &&
+    response.headers.get("content-type") !== expectedMediaType
+  ) {
+    throw new BridgeHttpError("agent_bridge_object_media_type_mismatch", response.status);
   }
   const contentLength = response.headers.get("content-length");
   if (
@@ -246,6 +259,7 @@ export class AgentBridgeClient {
     {
       expectedBytes,
       maxBytes = MAX_REVIEW_OBJECT_BYTES,
+      expectedMediaType,
       retryLostResponse = true,
     } = {},
   ) {
@@ -260,7 +274,11 @@ export class AgentBridgeClient {
     return this.#sendExact(
       exact,
       retryLostResponse ? 2 : 1,
-      response => byteResponse(response, { expectedBytes, maxBytes }),
+      response => byteResponse(response, {
+        expectedBytes,
+        maxBytes,
+        expectedMediaType,
+      }),
     );
   }
 }

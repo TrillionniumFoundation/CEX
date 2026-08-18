@@ -10,6 +10,11 @@ const VALID = {
   bff_url: "http://127.0.0.1:8088",
   identity_file: "agent.identity.json",
   state_file: "agent.state.json",
+  author_executor: {
+    schema: "hepta.paper_raid.agent_bridge.author_executor.v1",
+    executable: "author-executor",
+    timeout_ms: 900_000,
+  },
   capabilities: ["artifact_analysis", "section_drafting"],
   resource_classes: ["cpu", "sandbox"],
   max_parallel_tasks: 2,
@@ -68,6 +73,7 @@ test("valid v2 config creates one bounded self-declared disclosure", async t => 
   const config = await loadConfig(path);
   assert.equal(config.bff_url, VALID.bff_url);
   assert.deepEqual(config.paper_ids, []);
+  assert.equal(config.author_executor.executable, join(directory, "author-executor"));
   assert.deepEqual(config.capability_disclosure, {
     schema: "hepta.paper_raid.agent_capability_disclosure.v1",
     assurance: "self_declared_unverified",
@@ -83,4 +89,9 @@ test("valid v2 config creates one bounded self-declared disclosure", async t => 
   await assert.rejects(() => loadConfig(path), /sorted and unique/);
   await writeConfig(path, { ...VALID, max_parallel_tasks: 33 });
   await assert.rejects(() => loadConfig(path), /between 1 and 32/);
+  await writeConfig(path, {
+    ...VALID,
+    author_executor: { ...VALID.author_executor, timeout_ms: 999 },
+  });
+  await assert.rejects(() => loadConfig(path), /one exact bounded v1 executor/);
 });

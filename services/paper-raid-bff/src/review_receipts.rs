@@ -795,7 +795,9 @@ async fn current_authority(
         .await?;
     let assignment_status = current_assignment_status(&hepta_bundle, identity, stored)
         .ok_or_else(|| AppError::Conflict("review assignment expired or changed version".into()))?;
-    let resolved = agent_bridge::resolve_frozen_review_bundle(state, &hepta_bundle).await?;
+    let resolved =
+        agent_bridge::resolve_frozen_review_bundle(state, &hepta_bundle, identity.player_id)
+            .await?;
     let descriptor: FrozenReviewBundleV1 = serde_json::from_value(
         resolved
             .get("resolved_frozen_review_bundle")
@@ -868,25 +870,11 @@ fn authoritative_hard_gates(
         && consents.len() == paper_bundle.author_consents.len()
         && authors == consents;
     // This gate is derived only from the verified PaperBundle and Hepta's exact frozen
-    // ArtifactManifest authority.  Challenge-pack defaults or browser booleans cannot satisfy it.
-    let artifact_lineage_complete = !descriptor.objects.is_empty()
-        && descriptor.objects.len() == descriptor.authority.artifact_objects.len()
-        && descriptor
-            .objects
-            .iter()
-            .zip(&descriptor.authority.artifact_objects)
-            .all(|(resolved, authority)| {
-                resolved.object_key == authority.object_key
-                    && resolved.role == authority.role
-                    && resolved.digest == authority.digest
-                    && resolved.size_bytes == authority.size_bytes
-                    && resolved.media_type == authority.media_type
-                    && resolved.download_path == authority.download_path
-            })
-        && descriptor
-            .objects
-            .iter()
-            .all(|object| is_digest(&object.digest) && object.size_bytes > 0);
+    // ArtifactManifest authority.  The authority deliberately also contains human-review
+    // material which must never enter the Agent executable descriptor, so exactness is a
+    // bijection between the executable subset on each side rather than whole-vector equality.
+    // Challenge-pack defaults or browser booleans cannot satisfy it.
+    let artifact_lineage_complete = executable_artifact_lineage_complete(descriptor);
     Ok(json!({
         "citations_and_data_authentic": human.citations_and_data_authentic,
         "failed_runs_disclosed": human.failed_runs_disclosed,
@@ -895,6 +883,53 @@ fn authoritative_hard_gates(
         "artifact_lineage_complete": artifact_lineage_complete,
         "license_ethics_coi_complete": human.license_ethics_coi_complete,
     }))
+}
+
+fn executable_artifact_lineage_complete(descriptor: &FrozenReviewBundleV1) -> bool {
+    let executable_role = |role: &str| {
+        matches!(
+            role,
+            "candidate" | "dataset" | "evaluator_support" | "frozen_evaluator"
+        )
+    };
+    let exact_transport_binding =
+        |resolved: &hepta_paper_raid_contracts::FrozenReviewObjectV1,
+         authority: &hepta_paper_raid_contracts::FrozenReviewObjectV1| {
+            resolved.object_key == authority.object_key
+                && resolved.role == authority.role
+                && resolved.digest == authority.digest
+                && resolved.size_bytes == authority.size_bytes
+                && resolved.media_type == authority.media_type
+                && resolved.download_path == authority.download_path
+        };
+    !descriptor.objects.is_empty()
+        && descriptor.objects.iter().all(|resolved| {
+            executable_role(&resolved.role)
+                && is_digest(&resolved.digest)
+                && resolved.size_bytes > 0
+                && descriptor
+                    .authority
+                    .artifact_objects
+                    .iter()
+                    .filter(|authority| exact_transport_binding(resolved, authority))
+                    .count()
+                    == 1
+        })
+        && descriptor
+            .authority
+            .artifact_objects
+            .iter()
+            .filter(|authority| executable_role(&authority.role))
+            .all(|authority| {
+                is_digest(&authority.digest)
+                    && authority.size_bytes > 0
+                    && descriptor
+                        .objects
+                        .iter()
+                        .filter(|resolved| exact_transport_binding(resolved, authority))
+                        .count()
+                        == 1
+            })
 }
 
 fn stable_uuid(domain: &str, fields: &[&str]) -> Uuid {
@@ -1928,31 +1963,37 @@ mod tests {
     };
 
     use axum::{
-        body::{to_bytes, Bytes},
+        body::{to_bytes, Body, Bytes},
         extract::OriginalUri,
-        http::{Method, StatusCode},
+        http::{Method, Request, StatusCode},
         routing::{get, post},
         Router,
     };
     use chrono::SecondsFormat;
     use ed25519_dalek::{Signer, SigningKey};
     use hepta_paper_raid_contracts::{
-        agent_bridge_request_proof_signing_bytes, frozen_review_authority_hash,
-        frozen_review_input_root, review_execution_receipt_id,
-        review_execution_receipt_signing_bytes, sha256_digest, AgentBridgeRequestProofV1,
-        ChallengeDatasetManifestV1, ChallengeEvaluatorManifestV1, ChallengeManifestObjectV1,
+        agent_bridge_request_proof_signing_bytes, frozen_challenge_material_authority_hash,
+        frozen_review_authority_hash, frozen_review_input_root, paper_release_candidate_hash,
+        review_execution_receipt_id, review_execution_receipt_signing_bytes, sha256_digest,
+        sign_authorship_consent, AgentBridgeRequestProofV1, AssignedChallengeMaterialBundleV1,
+        AuthorshipConsentSigningV2, ChallengeDatasetManifestV1, ChallengeEvaluatorManifestV1,
+        ChallengeManifestObjectV1, ChallengePackContentContractV1, ChallengePackDeploymentV1,
+        ChallengePackManifestV1, ChallengePackObjectV1, FrozenChallengeMaterialAuthorityV1,
         FrozenReviewAuthorityV1, FrozenReviewExecutionPolicyV1, FrozenReviewInputObjectV1,
-        FrozenReviewObjectV1, SignedConsumerUserAssertionV2, AGENT_BRIDGE_REQUEST_PROOF_V1,
-        FROZEN_REVIEW_AUTHORITY_V1, REVIEW_EXECUTION_RECEIPT_V1,
+        FrozenReviewObjectV1, PaperBundleAuthorConsentV2, PaperReleaseAuthorV2,
+        PaperReleaseCandidateV2, SignedConsumerUserAssertionV2, AGENT_BRIDGE_REQUEST_PROOF_V1,
+        AUTHORSHIP_CONSENT_V2, FROZEN_CHALLENGE_MATERIAL_AUTHORITY_V1, FROZEN_REVIEW_AUTHORITY_V1,
+        PAPER_BUNDLE_V2, PAPER_RELEASE_CANDIDATE_V2, REVIEW_EXECUTION_RECEIPT_V1,
     };
     use sqlx::PgPool;
+    use tower::ServiceExt;
 
     use crate::{
         app::AppState,
         auth::{CSRF_HEADER, SESSION_COOKIE},
         config::{
-            AgentBridgeQuotaConfig, AlphaIdentityScope, CasConfig, Config, ConsumerAssertionConfig,
-            EdgeScope, IdentityMode,
+            AgentBridgeQuotaConfig, AlphaAuthorRole, AlphaIdentityScope, CasConfig, Config,
+            ConsumerAssertionConfig, EdgeScope, IdentityMode,
         },
     };
 
@@ -1965,7 +2006,10 @@ mod tests {
         binding: Value,
         human_player: Value,
         bundles: Arc<HashMap<Uuid, Value>>,
+        rooms: Arc<HashMap<Uuid, Value>>,
         cas: Arc<HashMap<String, (String, Vec<u8>)>>,
+        cas_reads: Arc<Mutex<HashMap<String, usize>>>,
+        review_queue_override: Arc<Mutex<Option<Value>>>,
         command_replies: Arc<Mutex<VecDeque<ReviewCommandReply>>>,
         command_calls: Arc<Mutex<Vec<ReviewCommandCall>>>,
     }
@@ -1996,11 +2040,23 @@ mod tests {
         state: AppState,
         identity: AlphaIdentity,
         agent_key: SigningKey,
+        binding_id: Uuid,
+        agent_id: String,
         human_key: SigningKey,
         bundles: Vec<FrozenReviewBundleV1>,
         reproducer_bundles: Vec<ReviewPgReproducerFixture>,
+        challenge: ChallengeRouteFixture,
+        paper_source_bytes: Vec<u8>,
+        candidate_bytes: Vec<u8>,
+        cas_reads: Arc<Mutex<HashMap<String, usize>>>,
+        review_queue_override: Arc<Mutex<Option<Value>>>,
         command_replies: Arc<Mutex<VecDeque<ReviewCommandReply>>>,
         command_calls: Arc<Mutex<Vec<ReviewCommandCall>>>,
+    }
+
+    struct ChallengeRouteFixture {
+        bundle: AssignedChallengeMaterialBundleV1,
+        object_bytes: Vec<u8>,
     }
 
     async fn mock_agent_bindings(State(mock): State<ReviewPgMock>) -> Json<Value> {
@@ -2009,6 +2065,13 @@ mod tests {
 
     async fn mock_current_human_player(State(mock): State<ReviewPgMock>) -> Json<Value> {
         Json(mock.human_player)
+    }
+
+    async fn mock_raid_state() -> Json<Value> {
+        // This fixture identity deliberately has Author and Review scopes, but the review Papers
+        // are not Author raids.  The mixed inbox must therefore retain the independently assigned
+        // Review tasks without attempting to read an Author room.
+        Json(json!({"raids": []}))
     }
 
     async fn mock_review_bundle(
@@ -2025,12 +2088,45 @@ mod tests {
     }
 
     async fn mock_review_queue(State(mock): State<ReviewPgMock>) -> Json<Value> {
-        let mut papers = mock.bundles.keys().copied().collect::<Vec<_>>();
-        papers.sort();
+        if let Some(queue) = mock
+            .review_queue_override
+            .lock()
+            .expect("review queue override lock")
+            .clone()
+        {
+            return Json(queue);
+        }
+        let mut papers = mock.bundles.values().collect::<Vec<_>>();
+        papers.sort_by_key(|bundle| {
+            bundle
+                .get("paper_project_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        });
         Json(json!(papers
             .into_iter()
-            .map(|paper_id| json!({"paper_project_id": paper_id}))
+            .map(|bundle| json!({
+                "paper_project_id": bundle["paper_project_id"],
+                "submission_id": bundle["submission_id"],
+                "release_candidate_hash": bundle["release_candidate_hash"],
+                "paper_bundle_hash": bundle["paper_bundle_hash"],
+                "my_assignments": bundle["my_assignments"],
+            }))
             .collect::<Vec<_>>()))
+    }
+
+    async fn mock_paper_room(
+        State(mock): State<ReviewPgMock>,
+        Path(paper_id): Path<Uuid>,
+    ) -> Response {
+        mock.rooms
+            .get(&paper_id)
+            .cloned()
+            .map(|room| Json(room).into_response())
+            .unwrap_or_else(|| {
+                (StatusCode::NOT_FOUND, Json(json!({"error": "not_found"}))).into_response()
+            })
     }
 
     async fn mock_cas_object(
@@ -2038,6 +2134,12 @@ mod tests {
         Path((_bucket, digest)): Path<(String, String)>,
     ) -> Response {
         let digest = format!("sha256:{digest}");
+        *mock
+            .cas_reads
+            .lock()
+            .expect("CAS read counter lock")
+            .entry(digest.clone())
+            .or_default() += 1;
         let Some((media_type, bytes)) = mock.cas.get(&digest) else {
             return (StatusCode::NOT_FOUND, "missing").into_response();
         };
@@ -2144,11 +2246,13 @@ mod tests {
         let router = Router::new()
             .route("/v2/hepta/players/me", get(mock_current_human_player))
             .route("/v2/hepta/agent-bindings", get(mock_agent_bindings))
+            .route("/v2/hepta/raid-state", get(mock_raid_state))
             .route("/v2/hepta/review-queue", get(mock_review_queue))
             .route(
                 "/v2/hepta/papers/:paper_id/review-bundle",
                 get(mock_review_bundle),
             )
+            .route("/v2/hepta/papers/:paper_id/room", get(mock_paper_room))
             .route(
                 "/v2/hepta/papers/:paper_id/evaluation-drafts",
                 post(mock_evaluation_draft),
@@ -2218,6 +2322,267 @@ mod tests {
         }
     }
 
+    fn challenge_pack_object(
+        path: &str,
+        role: &str,
+        bytes: &[u8],
+        media_type: &str,
+    ) -> ChallengePackObjectV1 {
+        let digest = sha256_digest(bytes);
+        ChallengePackObjectV1 {
+            cas_uri: format!("cas://sha256/{}", &digest[7..]),
+            media_type: media_type.to_string(),
+            path: path.to_string(),
+            role: role.to_string(),
+            sha256: digest,
+            size: u64::try_from(bytes.len()).expect("challenge fixture object size"),
+        }
+    }
+
+    struct ChallengeFixtureInput {
+        room: Value,
+        paper_id: Uuid,
+        work_item_id: Uuid,
+        object_bytes: Vec<u8>,
+        cas: HashMap<String, (String, Vec<u8>)>,
+    }
+
+    fn challenge_fixture(binding_id: Uuid, player_id: Uuid) -> ChallengeFixtureInput {
+        // Keep at least one hexadecimal letter in this authority ID so the uppercase-UUID
+        // route mutant below is deterministic rather than depending on random UUID text.
+        let paper_id =
+            Uuid::parse_str("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").expect("fixture paper UUID");
+        let challenge_id = Uuid::new_v4();
+        let work_item_id = Uuid::new_v4();
+        let pack_id = "pg-router-challenge-fixture-v1";
+        let ruleset_version = "paper-raid-evidence-audit-v1";
+
+        let brief_bytes = b"# Evidence audit\n\nResolve every frozen claim.\n".to_vec();
+        let dataset_bytes = br#"{"claims":[{"id":"claim-1","value":true}]}"#.to_vec();
+        let baseline_bytes = b"print('baseline fixture')\n".to_vec();
+        let evaluator_bytes = b"print('evaluator fixture')\n".to_vec();
+        let license_bytes = b"CC0-1.0\n".to_vec();
+        let explanation_bytes = b"# Result explanation\n".to_vec();
+
+        let evaluator_manifest = ChallengeEvaluatorManifestV1 {
+            entrypoint: "evaluator.py".to_string(),
+            frozen: true,
+            objects: vec![
+                manifest_member(
+                    "baseline.py",
+                    &baseline_bytes,
+                    "text/x-python; charset=utf-8",
+                ),
+                manifest_member(
+                    "evaluator.py",
+                    &evaluator_bytes,
+                    "text/x-python; charset=utf-8",
+                ),
+            ],
+            pack_id: pack_id.to_string(),
+            runtime: "python3-stdlib".to_string(),
+            schema: "hepta.challenge_pack.evaluator_manifest.v1".to_string(),
+        };
+        let dataset_manifest = ChallengeDatasetManifestV1 {
+            objects: vec![manifest_member(
+                "dataset/claims.json",
+                &dataset_bytes,
+                "application/json",
+            )],
+            pack_id: pack_id.to_string(),
+            schema: "hepta.challenge_pack.dataset_manifest.v1".to_string(),
+        };
+        let evaluator_manifest_bytes =
+            canonical_json_bytes(&evaluator_manifest).expect("challenge evaluator manifest bytes");
+        let dataset_manifest_bytes =
+            canonical_json_bytes(&dataset_manifest).expect("challenge dataset manifest bytes");
+        let evaluator_manifest_hash = sha256_digest(&evaluator_manifest_bytes);
+        let dataset_manifest_hash = sha256_digest(&dataset_manifest_bytes);
+
+        let pack = ChallengePackManifestV1 {
+            content_contract: ChallengePackContentContractV1 {
+                difficulty: "introductory".to_string(),
+                duration_seconds: 900,
+                modifiers: vec!["frozen-evaluator".to_string()],
+                objective: "Audit the frozen claims.".to_string(),
+                risks: vec!["citation-mismatch".to_string()],
+                victory: "Every claim is resolved.".to_string(),
+            },
+            dataset_manifest_sha256: dataset_manifest_hash.clone(),
+            deployment: ChallengePackDeploymentV1 {
+                blocker: "fixture-ready".to_string(),
+                cas_seeded: true,
+                open_status_allowed: true,
+            },
+            evaluator_manifest_sha256: evaluator_manifest_hash.clone(),
+            objects: vec![
+                challenge_pack_object(
+                    "LICENSE.txt",
+                    "license",
+                    &license_bytes,
+                    "text/plain; charset=utf-8",
+                ),
+                challenge_pack_object(
+                    "baseline.py",
+                    "baseline_code",
+                    &baseline_bytes,
+                    "text/x-python; charset=utf-8",
+                ),
+                challenge_pack_object(
+                    "brief.md",
+                    "playable_brief",
+                    &brief_bytes,
+                    "text/markdown; charset=utf-8",
+                ),
+                challenge_pack_object(
+                    "dataset.manifest.json",
+                    "dataset_manifest",
+                    &dataset_manifest_bytes,
+                    "application/json",
+                ),
+                challenge_pack_object(
+                    "dataset/claims.json",
+                    "dataset",
+                    &dataset_bytes,
+                    "application/json",
+                ),
+                challenge_pack_object(
+                    "evaluator.manifest.json",
+                    "evaluator_manifest",
+                    &evaluator_manifest_bytes,
+                    "application/json",
+                ),
+                challenge_pack_object(
+                    "evaluator.py",
+                    "frozen_evaluator",
+                    &evaluator_bytes,
+                    "text/x-python; charset=utf-8",
+                ),
+                challenge_pack_object(
+                    "result-explanation.md",
+                    "result_explanation",
+                    &explanation_bytes,
+                    "text/markdown; charset=utf-8",
+                ),
+            ],
+            pack_id: pack_id.to_string(),
+            ruleset_version: ruleset_version.to_string(),
+            schema: "hepta.challenge_pack.v1".to_string(),
+            seed: 1_701,
+            template: "evidence-audit".to_string(),
+        };
+        let pack_bytes = canonical_json_bytes(&pack).expect("challenge pack bytes");
+        let pack_hash = sha256_digest(&pack_bytes);
+        let challenge_snapshot_hash = sha256_digest(b"pg-router-challenge-catalog-snapshot-v1");
+        let ruleset_hash = sha256_digest(b"pg-router-challenge-ruleset-v1");
+        let mut authority = FrozenChallengeMaterialAuthorityV1 {
+            schema: FROZEN_CHALLENGE_MATERIAL_AUTHORITY_V1.to_string(),
+            authority_hash: String::new(),
+            activation_id: Uuid::new_v4(),
+            activation_request_sha256: sha256_digest(b"pg-router-challenge-activation-v1"),
+            challenge_id,
+            challenge_snapshot_hash: challenge_snapshot_hash.clone(),
+            template: pack.template.clone(),
+            pack_id: pack.pack_id.clone(),
+            pack_manifest_hash: pack_hash.clone(),
+            ruleset_version: ruleset_version.to_string(),
+            ruleset_hash: ruleset_hash.clone(),
+            dataset_manifest_hash: dataset_manifest_hash.clone(),
+            evaluator_manifest_hash: evaluator_manifest_hash.clone(),
+        };
+        authority.authority_hash =
+            frozen_challenge_material_authority_hash(&authority).expect("challenge authority hash");
+        let snapshot = json!({
+            "schema": "hepta.paper_raid.challenge_ruleset_snapshot.v1",
+            "challenge_snapshot_hash": challenge_snapshot_hash,
+            "ruleset_version": ruleset_version,
+            "ruleset_hash": ruleset_hash,
+            "enforcement": "authoritative_v1",
+            "ruleset": {},
+            "material_authority": authority,
+        });
+        let snapshot_hash =
+            canonical_json_sha256(&snapshot).expect("challenge ruleset snapshot hash");
+        let room = json!({
+            "paper": {
+                "paper_project_id": paper_id,
+                "challenge_id": challenge_id,
+                "phase": "researching",
+                "outcome": "in_progress",
+                "challenge_ruleset_snapshot_hash": snapshot_hash,
+                "challenge_ruleset_snapshot": snapshot,
+            },
+            "team": {},
+            "author_raid_progress": {},
+            "team_member_acceptances": [],
+            "work_items": [{
+                "work_item_id": work_item_id,
+                "paper_project_id": paper_id,
+                "assigned_binding_id": binding_id,
+                "assigned_player_id": player_id,
+                "status": "in_progress",
+                "version": 3,
+            }],
+            "paper_revisions": [],
+            "authorship_consents": [],
+            "joint_submission": null,
+            "member_research_sessions": [],
+            "artifact_manifests": [],
+            "revision_artifact_bindings": [],
+            "evidence_cards": [],
+            "citations": [],
+            "experiment_plans": [],
+            "runs": [],
+            "figures": [],
+            "claims": [],
+            "section_heads": [],
+            "leases": [],
+            "proposals": [],
+            "decisions": [],
+            "section_revisions": [],
+            "section_reviews": [],
+            "section_merges": [],
+            "last_event_cursor": 0,
+        });
+        let cas = HashMap::from([
+            (pack_hash, ("application/json".to_string(), pack_bytes)),
+            (
+                evaluator_manifest_hash,
+                ("application/json".to_string(), evaluator_manifest_bytes),
+            ),
+            (
+                dataset_manifest_hash,
+                ("application/json".to_string(), dataset_manifest_bytes),
+            ),
+            (
+                sha256_digest(&brief_bytes),
+                (
+                    "text/markdown; charset=utf-8".to_string(),
+                    brief_bytes.clone(),
+                ),
+            ),
+            (
+                sha256_digest(&dataset_bytes),
+                ("application/json".to_string(), dataset_bytes),
+            ),
+            (
+                sha256_digest(&baseline_bytes),
+                ("text/x-python; charset=utf-8".to_string(), baseline_bytes),
+            ),
+            (
+                sha256_digest(&evaluator_bytes),
+                ("text/x-python; charset=utf-8".to_string(), evaluator_bytes),
+            ),
+        ]);
+        ChallengeFixtureInput {
+            room,
+            paper_id,
+            work_item_id,
+            object_bytes: brief_bytes,
+            cas,
+        }
+    }
+
     fn authority_object(
         object_key: &str,
         path: &str,
@@ -2247,14 +2612,147 @@ mod tests {
         evaluator_bytes: &'a [u8],
         dataset_bytes: &'a [u8],
         candidate_bytes: &'a [u8],
+        paper_source_bytes: &'a [u8],
+        bibliography_bytes: &'a [u8],
+        claim_evidence_graph_bytes: &'a [u8],
     }
 
-    fn frozen_authority(fixture: FrozenAuthorityFixture<'_>) -> FrozenReviewAuthorityV1 {
+    fn review_paper_bundle(
+        paper_id: Uuid,
+        artifact_manifest_hash: &str,
+        paper_source_bytes: &[u8],
+        bibliography_bytes: &[u8],
+        claim_evidence_graph_bytes: &[u8],
+    ) -> PaperBundleV2 {
+        let authors = (0..3)
+            .map(|index| PaperReleaseAuthorV2 {
+                author_order: u32::try_from(index + 1).expect("fixture author order"),
+                participant_slot: u32::try_from(index + 1).expect("fixture author slot"),
+                player_id: deterministic_uuid(
+                    "hepta.paper_raid.pg_fixture.author.v1",
+                    &[paper_id.to_string(), index.to_string()],
+                ),
+                display_name: format!("PostgreSQL Author {}", index + 1),
+                credit_roles: vec![
+                    ["conceptualization", "data_curation", "software"][index].to_string()
+                ],
+            })
+            .collect::<Vec<_>>();
+        let candidate = PaperReleaseCandidateV2 {
+            schema: PAPER_RELEASE_CANDIDATE_V2.to_string(),
+            paper_project_id: paper_id,
+            revision_id: deterministic_uuid(
+                "hepta.paper_raid.pg_fixture.revision.v1",
+                &[paper_id.to_string()],
+            ),
+            team_id: deterministic_uuid(
+                "hepta.paper_raid.pg_fixture.team.v1",
+                &[paper_id.to_string()],
+            ),
+            challenge_id: deterministic_uuid(
+                "hepta.paper_raid.pg_fixture.challenge.v1",
+                &[paper_id.to_string()],
+            ),
+            ruleset_hash: sha256_digest(b"pg-review-ruleset-v1"),
+            challenge_snapshot_hash: sha256_digest(b"pg-review-challenge-snapshot-v1"),
+            roster_version: 1,
+            title: "Frozen PostgreSQL Review Fixture".to_string(),
+            abstract_text: "A signed nested PaperBundle for the real PostgreSQL gate.".to_string(),
+            target_format: "paper-raid-v2".to_string(),
+            source_manifest_hash: sha256_digest(paper_source_bytes),
+            artifact_manifest_hash: artifact_manifest_hash.to_string(),
+            bibliography_hash: sha256_digest(bibliography_bytes),
+            claim_evidence_graph_hash: sha256_digest(claim_evidence_graph_bytes),
+            section_materialization_root: None,
+            collaboration_compact_hash: sha256_digest(b"pg-review-collaboration-v1"),
+            research_protocol_snapshot_hash: sha256_digest(b"pg-review-protocol-v1"),
+            ethics_disclosure_hash: sha256_digest(b"pg-review-ethics-v1"),
+            coi_disclosure_hash: sha256_digest(b"pg-review-coi-v1"),
+            contribution_ledger_hash: sha256_digest(b"pg-review-contributions-v1"),
+            ai_disclosure_hash: sha256_digest(b"pg-review-ai-disclosure-v1"),
+            license: "CC-BY-4.0".to_string(),
+            authors,
+        };
+        let release_candidate_hash =
+            paper_release_candidate_hash(&candidate).expect("fixture release candidate hash");
+        let author_consents = candidate
+            .authors
+            .iter()
+            .enumerate()
+            .map(|(index, author)| {
+                let signing_key = SigningKey::from_bytes(
+                    &[u8::try_from(index + 41).expect("fixture author key seed"); 32],
+                );
+                let signing_public_key = BASE64.encode(signing_key.verifying_key().as_bytes());
+                let signing_public_key_hash = sha256_digest(signing_key.verifying_key().as_bytes());
+                let consent = AuthorshipConsentSigningV2 {
+                    schema: AUTHORSHIP_CONSENT_V2.to_string(),
+                    consent_id: deterministic_uuid(
+                        "hepta.paper_raid.pg_fixture.consent.v1",
+                        &[paper_id.to_string(), index.to_string()],
+                    ),
+                    paper_project_id: paper_id,
+                    revision_id: candidate.revision_id,
+                    player_id: author.player_id,
+                    signing_key_id: format!("pg-author-{}-key", index + 1),
+                    signing_public_key: signing_public_key.clone(),
+                    signing_public_key_hash: signing_public_key_hash.clone(),
+                    release_candidate_hash: release_candidate_hash.clone(),
+                    signed_at_unix: 1_700_000_000
+                        + i64::try_from(index).expect("fixture consent time"),
+                };
+                PaperBundleAuthorConsentV2 {
+                    author_order: author.author_order,
+                    participant_slot: author.participant_slot,
+                    player_id: author.player_id,
+                    consent_id: consent.consent_id,
+                    signing_key_id: consent.signing_key_id.clone(),
+                    signing_public_key,
+                    signing_public_key_hash,
+                    signed_at_unix: consent.signed_at_unix,
+                    signature: sign_authorship_consent(&consent, &signing_key)
+                        .expect("fixture authorship consent signature"),
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut bundle = PaperBundleV2 {
+            schema: PAPER_BUNDLE_V2.to_string(),
+            release_candidate: candidate,
+            release_candidate_hash,
+            author_consents,
+            paper_bundle_hash: String::new(),
+        };
+        bundle.paper_bundle_hash = paper_bundle_hash(&bundle).expect("fixture PaperBundle hash");
+        bundle
+    }
+
+    fn frozen_authority(
+        fixture: FrozenAuthorityFixture<'_>,
+    ) -> (FrozenReviewAuthorityV1, PaperBundleV2) {
         let kind = match fixture.slot {
             "evaluator" => "evaluate",
             "reproducer" => "reproduce",
             _ => panic!("unsupported executable review fixture slot"),
         };
+        let artifact_manifest_hash = canonical_json_sha256(&[
+            ("paper_source", sha256_digest(fixture.paper_source_bytes)),
+            ("bibliography", sha256_digest(fixture.bibliography_bytes)),
+            (
+                "claim_evidence_graph",
+                sha256_digest(fixture.claim_evidence_graph_bytes),
+            ),
+            ("frozen_evaluator", sha256_digest(fixture.evaluator_bytes)),
+            ("dataset", sha256_digest(fixture.dataset_bytes)),
+            ("candidate", sha256_digest(fixture.candidate_bytes)),
+        ])
+        .expect("fixture ArtifactManifest hash");
+        let paper_bundle = review_paper_bundle(
+            fixture.paper_id,
+            &artifact_manifest_hash,
+            fixture.paper_source_bytes,
+            fixture.bibliography_bytes,
+            fixture.claim_evidence_graph_bytes,
+        );
         let mut authority = FrozenReviewAuthorityV1 {
             schema: FROZEN_REVIEW_AUTHORITY_V1.to_string(),
             authority_hash: String::new(),
@@ -2265,28 +2763,49 @@ mod tests {
             slot: fixture.slot.to_string(),
             assignment_version: 1,
             expires_at: fixture.expires_at.to_string(),
-            release_candidate_hash: format!("sha256:{}", "1".repeat(64)),
-            paper_bundle_hash: format!("sha256:{}", "2".repeat(64)),
-            artifact_manifest_hash: format!("sha256:{}", "3".repeat(64)),
+            release_candidate_hash: paper_bundle.release_candidate_hash.clone(),
+            paper_bundle_hash: paper_bundle.paper_bundle_hash.clone(),
+            artifact_manifest_hash,
             evaluator_manifest_hash: fixture.evaluator_manifest_hash.to_string(),
             dataset_manifest_hash: fixture.dataset_manifest_hash.to_string(),
             artifact_objects: vec![
                 authority_object(
                     "object-0000",
+                    "paper/paper.md",
+                    "paper_source",
+                    fixture.paper_source_bytes,
+                    "text/markdown; charset=utf-8",
+                ),
+                authority_object(
+                    "object-0001",
+                    "paper/references.bib",
+                    "bibliography",
+                    fixture.bibliography_bytes,
+                    "application/x-bibtex",
+                ),
+                authority_object(
+                    "object-0002",
+                    "paper/claim-evidence.json",
+                    "claim_evidence_graph",
+                    fixture.claim_evidence_graph_bytes,
+                    "application/json",
+                ),
+                authority_object(
+                    "object-0003",
                     "evaluator.py",
                     "frozen_evaluator",
                     fixture.evaluator_bytes,
                     "text/x-python; charset=utf-8",
                 ),
                 authority_object(
-                    "object-0001",
+                    "object-0004",
                     "dataset/claims.json",
                     "dataset",
                     fixture.dataset_bytes,
                     "application/json",
                 ),
                 authority_object(
-                    "object-0002",
+                    "object-0005",
                     "candidate.json",
                     "candidate",
                     fixture.candidate_bytes,
@@ -2303,11 +2822,12 @@ mod tests {
         };
         authority.authority_hash =
             frozen_review_authority_hash(&authority).expect("frozen authority hash");
-        authority
+        (authority, paper_bundle)
     }
 
     fn hepta_review_bundle(
         authority: &FrozenReviewAuthorityV1,
+        paper_bundle: &PaperBundleV2,
         identity: &AlphaIdentity,
         evaluation_id: Option<Uuid>,
     ) -> Value {
@@ -2317,6 +2837,7 @@ mod tests {
             "status": "submission_ready",
             "release_candidate_hash": authority.release_candidate_hash,
             "paper_bundle_hash": authority.paper_bundle_hash,
+            "paper_bundle": paper_bundle,
             "my_assignments": [{
                 "assignment_id": authority.assignment_id,
                 "paper_project_id": authority.paper_project_id,
@@ -2416,7 +2937,10 @@ mod tests {
         .expect("seed active Bridge binding");
     }
 
-    async fn review_pg_harness(database_url: String) -> ReviewPgHarness {
+    async fn review_pg_harness(
+        database_url: String,
+        include_author_scope: bool,
+    ) -> ReviewPgHarness {
         let agent_key = SigningKey::from_bytes(&[73_u8; 32]);
         let human_key = SigningKey::from_bytes(&[91_u8; 32]);
         let public_key = BASE64.encode(agent_key.verifying_key().as_bytes());
@@ -2432,16 +2956,23 @@ mod tests {
         let binding_id = Uuid::new_v4();
         let agent_id = format!("agent.pg-review-{}", Uuid::new_v4().simple());
         let subject_id = format!("review-pg-{}", Uuid::new_v4());
+        let mut scopes = vec![
+            AlphaIdentityScope::Evaluator,
+            AlphaIdentityScope::Reproducer,
+        ];
+        let author_roles = if include_author_scope {
+            scopes.insert(0, AlphaIdentityScope::Author);
+            vec![AlphaAuthorRole::Captain]
+        } else {
+            vec![]
+        };
         let identity = AlphaIdentity::from_access_directory(
             subject_id,
             "PostgreSQL Review Actor".to_string(),
             Uuid::new_v4(),
             Uuid::new_v4(),
-            vec![
-                AlphaIdentityScope::Evaluator,
-                AlphaIdentityScope::Reproducer,
-            ],
-            vec![],
+            scopes,
+            author_roles,
         )
         .expect("review PG identity");
         let capability = json!({
@@ -2456,6 +2987,10 @@ mod tests {
         let evaluator_bytes = b"print('review fixture')\n".to_vec();
         let dataset_bytes = br#"{"claims":[1]}"#.to_vec();
         let candidate_bytes = br#"{"candidate":true}"#.to_vec();
+        let paper_source_bytes = b"# Frozen Paper\n\nHuman-readable review source.\n".to_vec();
+        let bibliography_bytes = b"@misc{fixture,title={Frozen Fixture}}\n".to_vec();
+        let claim_evidence_graph_bytes =
+            br#"{"claims":[{"claim_id":"claim-1","evidence_ids":["evidence-1"]}]}"#.to_vec();
         let evaluator_manifest = ChallengeEvaluatorManifestV1 {
             entrypoint: "evaluator.py".to_string(),
             frozen: true,
@@ -2491,7 +3026,7 @@ mod tests {
             let paper_id = Uuid::new_v4();
             let assignment_id = Uuid::new_v4();
             let submission_id = Uuid::new_v4();
-            let authority = frozen_authority(FrozenAuthorityFixture {
+            let (authority, paper_bundle) = frozen_authority(FrozenAuthorityFixture {
                 paper_id,
                 assignment_id,
                 submission_id,
@@ -2502,27 +3037,38 @@ mod tests {
                 evaluator_bytes: &evaluator_bytes,
                 dataset_bytes: &dataset_bytes,
                 candidate_bytes: &candidate_bytes,
+                paper_source_bytes: &paper_source_bytes,
+                bibliography_bytes: &bibliography_bytes,
+                claim_evidence_graph_bytes: &claim_evidence_graph_bytes,
             });
-            hepta_bundles.insert(paper_id, hepta_review_bundle(&authority, &identity, None));
+            hepta_bundles.insert(
+                paper_id,
+                hepta_review_bundle(&authority, &paper_bundle, &identity, None),
+            );
         }
         let reproducer_paper_id = Uuid::new_v4();
-        let reproducer_authority = frozen_authority(FrozenAuthorityFixture {
-            paper_id: reproducer_paper_id,
-            assignment_id: Uuid::new_v4(),
-            submission_id: Uuid::new_v4(),
-            slot: "reproducer",
-            expires_at: &expires_at,
-            evaluator_manifest_hash: &evaluator_manifest_hash,
-            dataset_manifest_hash: &dataset_manifest_hash,
-            evaluator_bytes: &evaluator_bytes,
-            dataset_bytes: &dataset_bytes,
-            candidate_bytes: &candidate_bytes,
-        });
+        let (reproducer_authority, reproducer_paper_bundle) =
+            frozen_authority(FrozenAuthorityFixture {
+                paper_id: reproducer_paper_id,
+                assignment_id: Uuid::new_v4(),
+                submission_id: Uuid::new_v4(),
+                slot: "reproducer",
+                expires_at: &expires_at,
+                evaluator_manifest_hash: &evaluator_manifest_hash,
+                dataset_manifest_hash: &dataset_manifest_hash,
+                evaluator_bytes: &evaluator_bytes,
+                dataset_bytes: &dataset_bytes,
+                candidate_bytes: &candidate_bytes,
+                paper_source_bytes: &paper_source_bytes,
+                bibliography_bytes: &bibliography_bytes,
+                claim_evidence_graph_bytes: &claim_evidence_graph_bytes,
+            });
         let reproducer_evaluation_id = Uuid::new_v4();
         hepta_bundles.insert(
             reproducer_paper_id,
             hepta_review_bundle(
                 &reproducer_authority,
+                &reproducer_paper_bundle,
                 &identity,
                 Some(reproducer_evaluation_id),
             ),
@@ -2537,7 +3083,8 @@ mod tests {
             "capability_disclosure": capability,
             "status": "active",
         });
-        let cas = HashMap::from([
+        let challenge_input = challenge_fixture(binding_id, identity.player_id);
+        let mut cas = HashMap::from([
             (
                 evaluator_manifest_hash.clone(),
                 ("application/json".to_string(), evaluator_manifest_bytes),
@@ -2547,6 +3094,23 @@ mod tests {
                 ("application/json".to_string(), dataset_manifest_bytes),
             ),
         ]);
+        for (bytes, media_type) in [
+            (&evaluator_bytes, "text/x-python; charset=utf-8"),
+            (&dataset_bytes, "application/json"),
+            (&candidate_bytes, "application/json"),
+            (&paper_source_bytes, "text/markdown; charset=utf-8"),
+            (&bibliography_bytes, "application/x-bibtex"),
+            (&claim_evidence_graph_bytes, "application/json"),
+        ] {
+            cas.insert(
+                sha256_digest(bytes),
+                (media_type.to_string(), bytes.to_vec()),
+            );
+        }
+        cas.extend(challenge_input.cas.clone());
+        let rooms = HashMap::from([(challenge_input.paper_id, challenge_input.room.clone())]);
+        let cas_reads = Arc::new(Mutex::new(HashMap::new()));
+        let review_queue_override = Arc::new(Mutex::new(None));
         let command_replies = Arc::new(Mutex::new(VecDeque::new()));
         let command_calls = Arc::new(Mutex::new(Vec::new()));
         let human_player = json!({
@@ -2560,7 +3124,10 @@ mod tests {
             binding,
             human_player,
             bundles: Arc::new(hepta_bundles.clone()),
+            rooms: Arc::new(rooms),
             cas: Arc::new(cas),
+            cas_reads: cas_reads.clone(),
+            review_queue_override: review_queue_override.clone(),
             command_replies: command_replies.clone(),
             command_calls: command_calls.clone(),
         })
@@ -2620,12 +3187,26 @@ mod tests {
             },
         )
         .await;
+        let challenge_bundle =
+            crate::challenge_materials::resolve_assigned_challenge_material_bundle(
+                &state,
+                &challenge_input.room,
+                binding_id,
+                identity.player_id,
+                challenge_input.work_item_id,
+            )
+            .await
+            .expect("resolve challenge route fixture bundle");
         let mut bundles = Vec::new();
         let mut reproducer_bundles = Vec::new();
         for hepta_bundle in hepta_bundles.values() {
-            let resolved = agent_bridge::resolve_frozen_review_bundle(&state, hepta_bundle)
-                .await
-                .expect("resolve review fixture bundle");
+            let resolved = agent_bridge::resolve_frozen_review_bundle(
+                &state,
+                hepta_bundle,
+                identity.player_id,
+            )
+            .await
+            .expect("resolve review fixture bundle");
             let descriptor: FrozenReviewBundleV1 = serde_json::from_value(
                 resolved
                     .get("resolved_frozen_review_bundle")
@@ -2655,9 +3236,19 @@ mod tests {
             state,
             identity,
             agent_key,
+            binding_id,
+            agent_id,
             human_key,
             bundles,
             reproducer_bundles,
+            challenge: ChallengeRouteFixture {
+                bundle: challenge_bundle,
+                object_bytes: challenge_input.object_bytes,
+            },
+            paper_source_bytes,
+            candidate_bytes,
+            cas_reads,
+            review_queue_override,
             command_replies,
             command_calls,
         }
@@ -2888,17 +3479,42 @@ mod tests {
         path: &str,
         body: &[u8],
     ) -> HeaderMap {
+        signed_agent_headers_for(
+            agent_key,
+            binding_id,
+            agent_id,
+            agent_key_id,
+            &Method::POST,
+            path,
+            "",
+            Uuid::new_v4(),
+            body,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn signed_agent_headers_for(
+        agent_key: &SigningKey,
+        binding_id: Uuid,
+        agent_id: &str,
+        agent_key_id: &str,
+        method: &Method,
+        path: &str,
+        canonical_query: &str,
+        nonce: Uuid,
+        body: &[u8],
+    ) -> HeaderMap {
         let now = Utc::now().timestamp();
         let claim = AgentBridgeRequestProofV1 {
             schema: AGENT_BRIDGE_REQUEST_PROOF_V1.to_string(),
             binding_id,
             agent_id: agent_id.to_string(),
             agent_key_id: agent_key_id.to_string(),
-            http_method: Method::POST.as_str().to_string(),
+            http_method: method.as_str().to_string(),
             canonical_path: path.to_string(),
-            canonical_query: String::new(),
+            canonical_query: canonical_query.to_string(),
             body_hash: sha256_digest(body),
-            nonce: Uuid::new_v4(),
+            nonce,
             issued_at_unix: now,
             expires_at_unix: now + 30,
         };
@@ -2937,6 +3553,104 @@ mod tests {
             );
         }
         headers
+    }
+
+    fn encoded_digest(value: &str) -> String {
+        format!(
+            "sha256%3A{}",
+            value
+                .strip_prefix("sha256:")
+                .expect("canonical digest query value")
+        )
+    }
+
+    fn challenge_object_query(
+        bundle: &AssignedChallengeMaterialBundleV1,
+        object_key: &str,
+        digest: &str,
+        paper_id: &str,
+        work_item_id: &str,
+    ) -> String {
+        format!(
+            "bundle_hash={}&digest={}&object_key={object_key}&paper_id={paper_id}&work_item_id={work_item_id}",
+            encoded_digest(&bundle.bundle_hash),
+            encoded_digest(digest),
+        )
+    }
+
+    fn review_object_query(
+        bundle: &FrozenReviewBundleV1,
+        object_key: &str,
+        digest: &str,
+        task_id: Uuid,
+    ) -> String {
+        format!(
+            "assignment_id={}&bundle_hash={}&digest={}&object_key={object_key}&task_id={task_id}",
+            bundle.assignment_id,
+            encoded_digest(&bundle.bundle_hash),
+            encoded_digest(digest),
+        )
+    }
+
+    fn exact_review_queue_item(bundle: &FrozenReviewBundleV1, player_id: Uuid) -> Value {
+        json!({
+            "paper_project_id": bundle.paper_project_id,
+            "submission_id": bundle.submission_id,
+            "release_candidate_hash": bundle.release_candidate_hash,
+            "paper_bundle_hash": bundle.paper_bundle_hash,
+            "my_assignments": [{
+                "assignment_id": bundle.assignment_id,
+                "paper_project_id": bundle.paper_project_id,
+                "submission_id": bundle.submission_id,
+                "player_id": player_id,
+                "slot": bundle.slot,
+                "review_round": bundle.review_round,
+                "version": bundle.assignment_version,
+                "expires_at": bundle.expires_at,
+                "status": "claimed",
+            }],
+        })
+    }
+
+    async fn router_request(
+        router: Router,
+        method: Method,
+        uri: String,
+        headers: HeaderMap,
+        body: Vec<u8>,
+    ) -> (StatusCode, HeaderMap, Vec<u8>) {
+        let request_body = if body.is_empty() {
+            Body::empty()
+        } else {
+            Body::from(body)
+        };
+        let mut request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(request_body)
+            .expect("build Router request");
+        *request.headers_mut() = headers;
+        let response = router
+            .oneshot(request)
+            .await
+            .expect("Router request response");
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = to_bytes(response.into_body(), 2 * 1024 * 1024)
+            .await
+            .expect("Router response body")
+            .to_vec();
+        (status, headers, body)
+    }
+
+    fn cas_read_count(harness: &ReviewPgHarness, digest: &str) -> usize {
+        harness
+            .cas_reads
+            .lock()
+            .expect("CAS read counter lock")
+            .get(digest)
+            .copied()
+            .unwrap_or_default()
     }
 
     async fn response_bytes(response: Response) -> (StatusCode, Vec<u8>) {
@@ -3188,7 +3902,12 @@ mod tests {
                 .await
                 .unwrap_or_else(IntoResponse::into_response);
         let (status, body) = response_bytes(response).await;
-        assert_eq!(status, StatusCode::OK, "review inbox projection failed");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "review inbox projection failed: {}",
+            String::from_utf8_lossy(&body),
+        );
         serde_json::from_slice(&body).expect("review inbox JSON")
     }
 
@@ -3310,12 +4029,611 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn real_postgres_router_object_surfaces_signed_get_replay_and_audience_separation() {
+        let Ok(database_url) = std::env::var("PAPER_RAID_BFF_TEST_DATABASE_URL") else {
+            eprintln!("PAPER_RAID_BFF_TEST_DATABASE_URL is unset; object Router PG gate skipped");
+            return;
+        };
+        let harness = review_pg_harness(database_url, true).await;
+        let agent_key_id = sha256_digest(harness.agent_key.verifying_key().as_bytes());
+
+        // The Browser authority is intentionally a strict superset of the Agent executable
+        // descriptor.  Prove both directions of the executable-subset bijection and reject
+        // substitution, omission, duplicate authority and human-object injection mutants.
+        let lineage = &harness.bundles[0];
+        assert_eq!(lineage.authority.artifact_objects.len(), 6);
+        assert_eq!(lineage.objects.len(), 3);
+        assert!(executable_artifact_lineage_complete(lineage));
+        let mut substituted_lineage = lineage.clone();
+        substituted_lineage.objects[0].digest = format!("sha256:{}", "f".repeat(64));
+        assert!(!executable_artifact_lineage_complete(&substituted_lineage));
+        let mut omitted_lineage = lineage.clone();
+        omitted_lineage.objects.pop();
+        assert!(!executable_artifact_lineage_complete(&omitted_lineage));
+        let mut duplicate_authority = lineage.clone();
+        let authority_candidate = duplicate_authority
+            .authority
+            .artifact_objects
+            .iter()
+            .find(|object| object.role == "candidate")
+            .expect("authority candidate")
+            .clone();
+        duplicate_authority
+            .authority
+            .artifact_objects
+            .push(authority_candidate);
+        assert!(!executable_artifact_lineage_complete(&duplicate_authority));
+        let mut human_injection = lineage.clone();
+        let human_object = human_injection
+            .authority
+            .artifact_objects
+            .iter()
+            .find(|object| object.role == "paper_source")
+            .expect("authority paper source")
+            .clone();
+        human_injection.objects.push(human_object);
+        assert!(!executable_artifact_lineage_complete(&human_injection));
+
+        let challenge_path = "/api/agent-bridge/challenge-objects";
+        let challenge_object = harness
+            .challenge
+            .bundle
+            .objects
+            .iter()
+            .find(|object| object.object_key == "brief")
+            .expect("challenge brief object");
+        let challenge_query = challenge_object_query(
+            &harness.challenge.bundle,
+            &challenge_object.object_key,
+            &challenge_object.digest,
+            &harness.challenge.bundle.paper_project_id.to_string(),
+            &harness.challenge.bundle.work_item_id.to_string(),
+        );
+        assert_eq!(
+            challenge_query,
+            format!(
+                "bundle_hash={}&digest={}&object_key=brief&paper_id={}&work_item_id={}",
+                encoded_digest(&harness.challenge.bundle.bundle_hash),
+                encoded_digest(&challenge_object.digest),
+                harness.challenge.bundle.paper_project_id,
+                harness.challenge.bundle.work_item_id,
+            ),
+            "challenge query is not canonical key-order/lowercase-dashed UUID text",
+        );
+        let challenge_nonce = Uuid::new_v4();
+        let challenge_headers = signed_agent_headers_for(
+            &harness.agent_key,
+            harness.binding_id,
+            &harness.agent_id,
+            &agent_key_id,
+            &Method::GET,
+            challenge_path,
+            &challenge_query,
+            challenge_nonce,
+            &[],
+        );
+        assert_eq!(
+            challenge_headers["x-paper-raid-agent-body-sha256"]
+                .to_str()
+                .expect("signed GET body digest header"),
+            sha256_digest(&[]),
+            "signed GET did not bind SHA-256(empty)",
+        );
+        let challenge_uri = format!("{challenge_path}?{challenge_query}");
+        let (first_status, first_headers, first_body) = router_request(
+            crate::app::router(harness.state.clone()),
+            Method::GET,
+            challenge_uri.clone(),
+            challenge_headers.clone(),
+            vec![],
+        )
+        .await;
+        assert_eq!(first_status, StatusCode::OK, "mounted Challenge GET failed");
+        assert_eq!(first_body, harness.challenge.object_bytes);
+        assert_eq!(
+            first_headers[header::CONTENT_TYPE]
+                .to_str()
+                .expect("Challenge Content-Type"),
+            challenge_object.media_type
+        );
+        assert_eq!(
+            first_headers[header::CACHE_CONTROL]
+                .to_str()
+                .expect("Challenge Cache-Control"),
+            "private, no-store"
+        );
+
+        let restarted = AppState::connect(harness.config.clone())
+            .await
+            .expect("restart object Router BFF state");
+        let (replay_status, replay_headers, replay_body) = router_request(
+            crate::app::router(restarted.clone()),
+            Method::GET,
+            challenge_uri.clone(),
+            challenge_headers.clone(),
+            vec![],
+        )
+        .await;
+        assert_eq!(replay_status, first_status);
+        assert_eq!(replay_body, first_body, "restarted replay body drifted");
+        assert_eq!(
+            replay_headers[header::CONTENT_TYPE],
+            first_headers[header::CONTENT_TYPE]
+        );
+        let request_uses = sqlx::query(
+            "SELECT response_status,response_body FROM paper_raid_bff_agent_request_uses \
+             WHERE binding_id=$1 AND nonce=$2",
+        )
+        .bind(harness.binding_id)
+        .bind(challenge_nonce)
+        .fetch_all(&restarted.pool)
+        .await
+        .expect("read Challenge request-use replay row");
+        assert_eq!(
+            request_uses.len(),
+            1,
+            "Challenge replay created another row"
+        );
+        assert_eq!(request_uses[0].get::<i32, _>("response_status"), 200);
+        assert_eq!(
+            request_uses[0].get::<Vec<u8>, _>("response_body"),
+            first_body
+        );
+
+        // Keep the hostile row inside the catalog's 2-byte lower bound so the
+        // request-use table accepts it, then prove the route independently
+        // rejects drift from the Challenge authority's frozen byte length.
+        let wrong_size_replay = if first_body.len() == 2 {
+            vec![0_u8; 3]
+        } else {
+            vec![0_u8; 2]
+        };
+        sqlx::query(
+            "UPDATE paper_raid_bff_agent_request_uses SET response_body=$3 \
+             WHERE binding_id=$1 AND nonce=$2",
+        )
+        .bind(harness.binding_id)
+        .bind(challenge_nonce)
+        .bind(&wrong_size_replay)
+        .execute(&restarted.pool)
+        .await
+        .expect("mutate Challenge replay body length");
+        let (wrong_size_status, _, _) = router_request(
+            crate::app::router(restarted.clone()),
+            Method::GET,
+            challenge_uri.clone(),
+            challenge_headers.clone(),
+            vec![],
+        )
+        .await;
+        assert_eq!(
+            wrong_size_status,
+            StatusCode::CONFLICT,
+            "Challenge replay accepted a body with a different frozen byte length",
+        );
+        sqlx::query(
+            "UPDATE paper_raid_bff_agent_request_uses SET response_body=$3 \
+             WHERE binding_id=$1 AND nonce=$2",
+        )
+        .bind(harness.binding_id)
+        .bind(challenge_nonce)
+        .bind(&first_body)
+        .execute(&restarted.pool)
+        .await
+        .expect("restore Challenge replay body");
+
+        let rebound_query = challenge_object_query(
+            &harness.challenge.bundle,
+            &challenge_object.object_key,
+            &challenge_object.digest,
+            &harness.challenge.bundle.paper_project_id.to_string(),
+            &Uuid::new_v4().to_string(),
+        );
+        let rebound_headers = signed_agent_headers_for(
+            &harness.agent_key,
+            harness.binding_id,
+            &harness.agent_id,
+            &agent_key_id,
+            &Method::GET,
+            challenge_path,
+            &rebound_query,
+            challenge_nonce,
+            &[],
+        );
+        let (rebound_status, _, _) = router_request(
+            crate::app::router(restarted.clone()),
+            Method::GET,
+            format!("{challenge_path}?{rebound_query}"),
+            rebound_headers,
+            vec![],
+        )
+        .await;
+        assert_eq!(
+            rebound_status,
+            StatusCode::CONFLICT,
+            "one nonce was rebound to another canonical query",
+        );
+
+        let extra_query = format!("attacker=1&{challenge_query}");
+        let extra_headers = signed_agent_headers_for(
+            &harness.agent_key,
+            harness.binding_id,
+            &harness.agent_id,
+            &agent_key_id,
+            &Method::GET,
+            challenge_path,
+            &extra_query,
+            Uuid::new_v4(),
+            &[],
+        );
+        let (extra_status, _, _) = router_request(
+            crate::app::router(restarted.clone()),
+            Method::GET,
+            format!("{challenge_path}?{extra_query}"),
+            extra_headers,
+            vec![],
+        )
+        .await;
+        assert_eq!(extra_status, StatusCode::BAD_REQUEST);
+
+        let duplicate_query =
+            challenge_query.replacen("&paper_id=", "&object_key=brief&paper_id=", 1);
+        let (duplicate_status, _, _) = router_request(
+            crate::app::router(restarted.clone()),
+            Method::GET,
+            format!("{challenge_path}?{duplicate_query}"),
+            challenge_headers.clone(),
+            vec![],
+        )
+        .await;
+        assert_eq!(duplicate_status, StatusCode::BAD_REQUEST);
+
+        let simple_paper_id = harness
+            .challenge
+            .bundle
+            .paper_project_id
+            .simple()
+            .to_string();
+        let simple_uuid_query = challenge_object_query(
+            &harness.challenge.bundle,
+            &challenge_object.object_key,
+            &challenge_object.digest,
+            &simple_paper_id,
+            &harness.challenge.bundle.work_item_id.to_string(),
+        );
+        let simple_uuid_headers = signed_agent_headers_for(
+            &harness.agent_key,
+            harness.binding_id,
+            &harness.agent_id,
+            &agent_key_id,
+            &Method::GET,
+            challenge_path,
+            &simple_uuid_query,
+            Uuid::new_v4(),
+            &[],
+        );
+        let (simple_uuid_status, _, _) = router_request(
+            crate::app::router(restarted.clone()),
+            Method::GET,
+            format!("{challenge_path}?{simple_uuid_query}"),
+            simple_uuid_headers,
+            vec![],
+        )
+        .await;
+        assert_eq!(simple_uuid_status, StatusCode::BAD_REQUEST);
+
+        let uppercase_uuid = harness
+            .challenge
+            .bundle
+            .paper_project_id
+            .to_string()
+            .to_ascii_uppercase();
+        let uppercase_uuid_query = challenge_object_query(
+            &harness.challenge.bundle,
+            &challenge_object.object_key,
+            &challenge_object.digest,
+            &uppercase_uuid,
+            &harness.challenge.bundle.work_item_id.to_string(),
+        );
+        let uppercase_uuid_headers = signed_agent_headers_for(
+            &harness.agent_key,
+            harness.binding_id,
+            &harness.agent_id,
+            &agent_key_id,
+            &Method::GET,
+            challenge_path,
+            &uppercase_uuid_query,
+            Uuid::new_v4(),
+            &[],
+        );
+        let (uppercase_uuid_status, _, _) = router_request(
+            crate::app::router(restarted.clone()),
+            Method::GET,
+            format!("{challenge_path}?{uppercase_uuid_query}"),
+            uppercase_uuid_headers,
+            vec![],
+        )
+        .await;
+        assert_eq!(uppercase_uuid_status, StatusCode::BAD_REQUEST);
+
+        let ordered_parts = challenge_query.split('&').collect::<Vec<_>>();
+        let out_of_order_query = format!(
+            "{}&{}&{}&{}&{}",
+            ordered_parts[1],
+            ordered_parts[0],
+            ordered_parts[2],
+            ordered_parts[3],
+            ordered_parts[4],
+        );
+        let (out_of_order_status, _, _) = router_request(
+            crate::app::router(restarted.clone()),
+            Method::GET,
+            format!("{challenge_path}?{out_of_order_query}"),
+            challenge_headers.clone(),
+            vec![],
+        )
+        .await;
+        assert_eq!(out_of_order_status, StatusCode::FORBIDDEN);
+
+        let lowercase_percent_query = challenge_query.replace("%3A", "%3a");
+        let (lowercase_percent_status, _, _) = router_request(
+            crate::app::router(restarted.clone()),
+            Method::GET,
+            format!("{challenge_path}?{lowercase_percent_query}"),
+            challenge_headers.clone(),
+            vec![],
+        )
+        .await;
+        assert_eq!(lowercase_percent_status, StatusCode::FORBIDDEN);
+
+        let (nonempty_body_status, _, _) = router_request(
+            crate::app::router(restarted.clone()),
+            Method::GET,
+            challenge_uri,
+            challenge_headers,
+            b"not-empty".to_vec(),
+        )
+        .await;
+        assert_eq!(nonempty_body_status, StatusCode::FORBIDDEN);
+
+        let review_bundle = &harness.bundles[0];
+        let paper_source = review_bundle
+            .authority
+            .artifact_objects
+            .iter()
+            .find(|object| object.role == "paper_source")
+            .expect("review paper source");
+        let human_reads_before = cas_read_count(&harness, &paper_source.digest);
+        let browser_query = format!(
+            "assignment_id={}&bundle_hash={}&object_key={}&presentation=inline",
+            review_bundle.assignment_id,
+            encoded_digest(&review_bundle.bundle_hash),
+            paper_source.object_key,
+        );
+        let browser_uri = format!(
+            "/api/review/papers/{}/artifacts/{}?{}",
+            review_bundle.paper_project_id, paper_source.digest, browser_query,
+        );
+        let browser_request_headers = browser_headers(&restarted, &harness.identity).await;
+        let (browser_status, browser_response_headers, browser_body) = router_request(
+            crate::app::router(restarted.clone()),
+            Method::GET,
+            browser_uri,
+            browser_request_headers,
+            vec![],
+        )
+        .await;
+        assert_eq!(browser_status, StatusCode::OK);
+        assert_eq!(browser_body, harness.paper_source_bytes);
+        assert_eq!(
+            browser_response_headers[header::CONTENT_TYPE]
+                .to_str()
+                .expect("Browser review Content-Type"),
+            paper_source.media_type
+        );
+        assert!(browser_response_headers[header::CONTENT_DISPOSITION]
+            .to_str()
+            .expect("browser disposition")
+            .starts_with("inline;"));
+        let human_reads_after_browser = cas_read_count(&harness, &paper_source.digest);
+        assert_eq!(human_reads_after_browser, human_reads_before + 1);
+
+        let (review_task_id, _) = review_ids(review_bundle, None);
+        let executable = review_bundle
+            .objects
+            .iter()
+            .find(|object| object.role == "candidate")
+            .expect("review candidate object");
+        let executable_query = review_object_query(
+            review_bundle,
+            &executable.object_key,
+            &executable.digest,
+            review_task_id,
+        );
+        let review_path = "/api/agent-bridge/review-objects";
+        let executable_headers = signed_agent_headers_for(
+            &harness.agent_key,
+            harness.binding_id,
+            &harness.agent_id,
+            &agent_key_id,
+            &Method::GET,
+            review_path,
+            &executable_query,
+            Uuid::new_v4(),
+            &[],
+        );
+        let (executable_status, _, executable_body) = router_request(
+            crate::app::router(restarted.clone()),
+            Method::GET,
+            format!("{review_path}?{executable_query}"),
+            executable_headers,
+            vec![],
+        )
+        .await;
+        assert_eq!(executable_status, StatusCode::OK);
+        assert_eq!(executable_body, harness.candidate_bytes);
+        let executable_reads_after_success = cas_read_count(&harness, &executable.digest);
+
+        let mut cross_release_queue =
+            exact_review_queue_item(review_bundle, harness.identity.player_id);
+        cross_release_queue["release_candidate_hash"] = json!(format!("sha256:{}", "e".repeat(64)));
+        *harness
+            .review_queue_override
+            .lock()
+            .expect("cross-release queue override lock") = Some(json!([cross_release_queue]));
+        let cross_release_headers = signed_agent_headers_for(
+            &harness.agent_key,
+            harness.binding_id,
+            &harness.agent_id,
+            &agent_key_id,
+            &Method::GET,
+            review_path,
+            &executable_query,
+            Uuid::new_v4(),
+            &[],
+        );
+        let (cross_release_status, _, _) = router_request(
+            crate::app::router(restarted.clone()),
+            Method::GET,
+            format!("{review_path}?{executable_query}"),
+            cross_release_headers,
+            vec![],
+        )
+        .await;
+        assert_eq!(cross_release_status, StatusCode::FORBIDDEN);
+
+        let mut wrong_assignment_queue =
+            exact_review_queue_item(review_bundle, harness.identity.player_id);
+        wrong_assignment_queue["my_assignments"][0]["version"] =
+            json!(review_bundle.assignment_version + 1);
+        *harness
+            .review_queue_override
+            .lock()
+            .expect("wrong-assignment queue override lock") = Some(json!([wrong_assignment_queue]));
+        let wrong_assignment_headers = signed_agent_headers_for(
+            &harness.agent_key,
+            harness.binding_id,
+            &harness.agent_id,
+            &agent_key_id,
+            &Method::GET,
+            review_path,
+            &executable_query,
+            Uuid::new_v4(),
+            &[],
+        );
+        let (wrong_assignment_status, _, _) = router_request(
+            crate::app::router(restarted.clone()),
+            Method::GET,
+            format!("{review_path}?{executable_query}"),
+            wrong_assignment_headers,
+            vec![],
+        )
+        .await;
+        assert_eq!(wrong_assignment_status, StatusCode::FORBIDDEN);
+
+        let exact_queue = exact_review_queue_item(review_bundle, harness.identity.player_id);
+        *harness
+            .review_queue_override
+            .lock()
+            .expect("duplicate queue override lock") =
+            Some(json!([exact_queue.clone(), exact_queue]));
+        let duplicate_assignment_headers = signed_agent_headers_for(
+            &harness.agent_key,
+            harness.binding_id,
+            &harness.agent_id,
+            &agent_key_id,
+            &Method::GET,
+            review_path,
+            &executable_query,
+            Uuid::new_v4(),
+            &[],
+        );
+        let (duplicate_assignment_status, _, _) = router_request(
+            crate::app::router(restarted.clone()),
+            Method::GET,
+            format!("{review_path}?{executable_query}"),
+            duplicate_assignment_headers,
+            vec![],
+        )
+        .await;
+        assert_eq!(duplicate_assignment_status, StatusCode::FORBIDDEN);
+        *harness
+            .review_queue_override
+            .lock()
+            .expect("clear queue override lock") = None;
+
+        let wrong_task_query = review_object_query(
+            review_bundle,
+            &executable.object_key,
+            &executable.digest,
+            Uuid::new_v4(),
+        );
+        let wrong_task_headers = signed_agent_headers_for(
+            &harness.agent_key,
+            harness.binding_id,
+            &harness.agent_id,
+            &agent_key_id,
+            &Method::GET,
+            review_path,
+            &wrong_task_query,
+            Uuid::new_v4(),
+            &[],
+        );
+        let (wrong_task_status, _, _) = router_request(
+            crate::app::router(restarted.clone()),
+            Method::GET,
+            format!("{review_path}?{wrong_task_query}"),
+            wrong_task_headers,
+            vec![],
+        )
+        .await;
+        assert_eq!(wrong_task_status, StatusCode::FORBIDDEN);
+        assert_eq!(
+            cas_read_count(&harness, &executable.digest),
+            executable_reads_after_success,
+            "queue/assignment/task mismatch reached executable CAS bytes",
+        );
+
+        let human_agent_query = review_object_query(
+            review_bundle,
+            &paper_source.object_key,
+            &paper_source.digest,
+            review_task_id,
+        );
+        let human_agent_headers = signed_agent_headers_for(
+            &harness.agent_key,
+            harness.binding_id,
+            &harness.agent_id,
+            &agent_key_id,
+            &Method::GET,
+            review_path,
+            &human_agent_query,
+            Uuid::new_v4(),
+            &[],
+        );
+        let (human_agent_status, _, _) = router_request(
+            crate::app::router(restarted),
+            Method::GET,
+            format!("{review_path}?{human_agent_query}"),
+            human_agent_headers,
+            vec![],
+        )
+        .await;
+        assert_eq!(human_agent_status, StatusCode::NOT_FOUND);
+        assert_eq!(
+            cas_read_count(&harness, &paper_source.digest),
+            human_reads_after_browser,
+            "Agent audience read human paper bytes from CAS",
+        );
+    }
+
+    #[tokio::test]
     async fn real_postgres_review_receipt_attempt_concurrency_replay_restart_and_integrity() {
         let Ok(database_url) = std::env::var("PAPER_RAID_BFF_TEST_DATABASE_URL") else {
             eprintln!("PAPER_RAID_BFF_TEST_DATABASE_URL is unset; review receipt PG gate skipped");
             return;
         };
-        let harness = review_pg_harness(database_url).await;
+        let harness = review_pg_harness(database_url, false).await;
         let initial_status = crate::db::agent_bridge_schema_status(&harness.state.pool).await;
         assert!(
             initial_status.schema_ready,
@@ -3647,7 +4965,12 @@ mod tests {
                 &classification_confirmation,
             )
             .await;
-            assert_eq!(response.0, expected_status);
+            assert_eq!(
+                response.0,
+                expected_status,
+                "confirmation classification failed: expected={expected_status} body={}",
+                String::from_utf8_lossy(&response.2),
+            );
             assert_eq!(
                 receipt_lifecycle(&restarted.pool, classification_receipt).await,
                 expected_lifecycle,

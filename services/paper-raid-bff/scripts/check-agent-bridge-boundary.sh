@@ -61,7 +61,25 @@ grep -Fq '"text/markdown; charset=utf-8"' "$bridge"
 grep -Fq '"application/json"' "$bridge"
 grep -Fq 'resolve_manifest_members(&authority, &evaluator, &dataset)' "$bridge"
 grep -Fq 'resolved_transport_path' "$bridge"
-grep -Fq '"frozen_evaluator" | "evaluator_support" | "dataset" | "input" | "candidate"' "$bridge"
+grep -Fq '"frozen_evaluator" | "evaluator_support" | "dataset" | "candidate"' "$bridge"
+python3 - "$bridge" <<'PY'
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1]).read_text(encoding="utf-8")
+start = source.index("fn resolve_manifest_members(")
+end = source.index("\n#[derive", start)
+resolver = source[start:end]
+
+for role in ("frozen_evaluator", "evaluator_support", "dataset", "candidate"):
+    if f'"{role}"' not in resolver:
+        raise SystemExit(f"resolved Review bundle is missing executable role {role}")
+for role in ("paper_source", "bibliography", "claim_evidence_graph"):
+    if f'"{role}"' in resolver:
+        raise SystemExit(f"human Review authority role leaked into Agent resolver: {role}")
+if "verify_frozen_review_authority(authority)" not in resolver:
+    raise SystemExit("Agent resolver does not verify the complete frozen Review authority")
+PY
 grep -Fq '"resolved_frozen_review_bundle".to_string()' "$bridge"
 if grep -Eq '"(execution_contract_status|result_consumable)"' "$bridge"; then
   echo "Agent review inbox still publishes source-only/non-consumable task fields" >&2

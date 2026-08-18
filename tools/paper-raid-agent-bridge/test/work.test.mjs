@@ -1,14 +1,32 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {
+  chmod,
+  copyFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+  symlink,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
 
 import {
+  AUTHOR_WORK_START_SCHEMA,
   actionableDeliveryCandidates,
+  authorWorkStartKey,
+  authorWorkStarts,
   challengeMaterialBundles,
   challengeMaterialObjectQuery,
   deliveryCandidateKey,
+  deliveryCandidateForAuthorOutput,
   deliveryCandidates,
   downloadAssignedChallengeMaterials,
+  materializeAssignedChallengeMaterials,
   proposalInput,
+  validateMaterialPublisherExecutable,
   workResult,
 } from "../src/work.mjs";
 import { canonicalJsonBytes, sha256Digest } from "../src/canonical.mjs";
@@ -104,8 +122,11 @@ function challengeInbox(bundle = materialBundle(), taskOverrides = {}) {
     assurance: "self_declared_unverified",
     papers: [{
       paper_id: PAPER_ID,
+      phase: "drafting",
       tasks: [{
         work_item_id: WORK_ID,
+        paper_project_id: PAPER_ID,
+        kind: "evidence_analysis",
         assigned_binding_id: BINDING_ID,
         assigned_player_id: PLAYER_ID,
         status: "in_progress",
@@ -118,8 +139,26 @@ function challengeInbox(bundle = materialBundle(), taskOverrides = {}) {
         reason_code: null,
         items: [bundle],
       },
+      delivery_candidates: {
+        schema: "hepta.paper_raid.agent_bridge.delivery_candidates.v1",
+        status: "available",
+        reason_code: null,
+        items: [candidate()],
+      },
     }],
   };
+}
+
+function authorStartInbox(taskOverrides = {}) {
+  const value = challengeInbox(materialBundle(), taskOverrides);
+  value.papers[0].proposals = [];
+  value.papers[0].delivery_candidates = {
+    schema: "hepta.paper_raid.agent_bridge.delivery_candidates.v1",
+    status: "unavailable",
+    reason_code: "no_recoverable_author_delivery",
+    items: [],
+  };
+  return value;
 }
 
 function candidate(overrides = {}) {
@@ -194,6 +233,43 @@ test("work stays idle when the authority cannot prove a delivery binding", () =>
     status: "unavailable",
     items: [],
   })), []);
+});
+
+test("review-only papers safely have no Author projection but malformed Author fields fail", () => {
+  const reviewOnly = {
+    schema: "hepta.paper_raid.agent_bridge.inbox.v2",
+    binding_id: BINDING_ID,
+    assurance: "self_declared_unverified",
+    papers: [{
+      paper_id: PAPER_ID,
+      review_tasks: {
+        schema: "hepta.paper_raid.agent_bridge.review_tasks.v1",
+        status: "unavailable",
+        reason_code: "no_executable_review_assignment",
+        items: [],
+      },
+    }],
+  };
+  assert.deepEqual(deliveryCandidates(reviewOnly), []);
+  assert.deepEqual(authorWorkStarts(reviewOnly), []);
+
+  const missingAuthorProjection = structuredClone(reviewOnly);
+  missingAuthorProjection.papers[0].tasks = [];
+  assert.throws(
+    () => deliveryCandidates(missingAuthorProjection),
+    /delivery candidate projection is unsupported/,
+  );
+  const malformedAuthorProjection = structuredClone(reviewOnly);
+  malformedAuthorProjection.papers[0].delivery_candidates = {
+    schema: "hepta.paper_raid.agent_bridge.delivery_candidates.v1",
+    status: "available",
+    reason_code: null,
+    items: [],
+  };
+  assert.throws(
+    () => deliveryCandidates(malformedAuthorProjection),
+    /available delivery projection is invalid/,
+  );
 });
 
 test("persisted submitting and consumed candidates remain restart-recoverable", () => {
@@ -323,6 +399,89 @@ test("one-shot and watch can share the exact work result wrapper", () => {
   });
 });
 
+test("Author work starts only from one exact planned or in-progress task and bundle", () => {
+  for (const status of ["planned", "in_progress"]) {
+    const [start] = authorWorkStarts(authorStartInbox({ status }));
+    assert.equal(start.schema, AUTHOR_WORK_START_SCHEMA);
+    assert.equal(start.binding_id, BINDING_ID);
+    assert.equal(start.player_id, PLAYER_ID);
+    assert.equal(start.paper_id, PAPER_ID);
+    assert.equal(start.work_item_id, WORK_ID);
+    assert.equal(start.work_item_version, 3);
+    assert.equal(start.task_kind, "evidence_analysis");
+    assert.equal(
+      authorWorkStartKey(start),
+      `${PAPER_ID}:${WORK_ID}:3:${start.bundle.bundle_hash}`,
+    );
+    assert.deepEqual(
+      authorWorkStarts(authorStartInbox({ status }), new Set([authorWorkStartKey(start)])),
+      [],
+    );
+  }
+  for (const status of ["review", "accepted", "rejected", "cancelled"]) {
+    assert.deepEqual(authorWorkStarts(authorStartInbox({ status })), []);
+  }
+  const missingKind = authorStartInbox();
+  delete missingKind.papers[0].tasks[0].kind;
+  assert.throws(
+    () => authorWorkStarts(missingKind),
+    /requires one exact task kind/,
+  );
+});
+
+test("delivery recovery globally wins and a same-version proposal hides a new Author start", () => {
+  const mixed = authorStartInbox();
+  mixed.papers.unshift({
+    paper_id: REVISION_ID,
+    phase: "drafting",
+    tasks: [],
+    proposals: [],
+    delivery_candidates: {
+      schema: "hepta.paper_raid.agent_bridge.delivery_candidates.v1",
+      status: "available",
+      reason_code: null,
+      items: [candidate({ paper_id: REVISION_ID, work_item_id: CHALLENGE_ID })],
+    },
+  });
+  assert.deepEqual(authorWorkStarts(mixed), []);
+
+  const submitted = authorStartInbox();
+  submitted.papers[0].proposals.push({
+    work_item_id: WORK_ID,
+    expected_work_version: 3,
+  });
+  assert.deepEqual(authorWorkStarts(submitted), []);
+  submitted.papers[0].proposals[0].expected_work_version = 2;
+  assert.equal(authorWorkStarts(submitted).length, 1);
+});
+
+test("fresh inbox must project the one exact candidate produced from an Author work start", () => {
+  const [start] = authorWorkStarts(authorStartInbox());
+  const output = {
+    paper_id: PAPER_ID,
+    work_item_id: WORK_ID,
+    section_key: "methods",
+    artifact_manifest_id: MANIFEST_ID,
+    payload_hash: PAYLOAD_HASH,
+  };
+  const prepared = {
+    schema: "hepta.paper_raid.agent_bridge.delivery_draft_result.v1",
+    candidate: candidate(),
+  };
+  assert.deepEqual(
+    deliveryCandidateForAuthorOutput(challengeInbox(), start, output, prepared),
+    candidate(),
+  );
+  const crossed = challengeInbox();
+  crossed.papers[0].delivery_candidates.items[0] = candidate({
+    payload_hash: `sha256:${"f".repeat(64)}`,
+  });
+  assert.throws(
+    () => deliveryCandidateForAuthorOutput(crossed, start, output, prepared),
+    /fresh inbox delivery candidate differs/,
+  );
+});
+
 test("frozen challenge materials are projected only for the exact Author work item", () => {
   const [bundle] = challengeMaterialBundles(challengeInbox());
   assert.equal(bundle.paper_project_id, PAPER_ID);
@@ -340,7 +499,7 @@ test("frozen challenge materials are projected only for the exact Author work it
   );
 });
 
-test("challenge material projection rejects cross-assignment and terminal work", () => {
+test("challenge material projection rejects cross-assignment and ignores terminal history", () => {
   assert.throws(
     () => challengeMaterialBundles(challengeInbox(
       materialBundle({ binding_id: MANIFEST_ID }),
@@ -365,10 +524,17 @@ test("challenge material projection rejects cross-assignment and terminal work",
     )),
     /crosses its Author assignment/,
   );
+  assert.throws(
+    () => challengeMaterialBundles(challengeInbox(
+      materialBundle(),
+      { paper_project_id: MANIFEST_ID },
+    )),
+    /crosses its Author assignment/,
+  );
   for (const status of ["accepted", "rejected", "cancelled"]) {
-    assert.throws(
-      () => challengeMaterialBundles(challengeInbox(materialBundle(), { status })),
-      /crosses its Author assignment/,
+    assert.deepEqual(
+      challengeMaterialBundles(challengeInbox(materialBundle(), { status })),
+      [],
     );
   }
   assert.throws(
@@ -376,6 +542,44 @@ test("challenge material projection rejects cross-assignment and terminal work",
       materialBundle({ binding_id: CHALLENGE_ID.toUpperCase() }),
     )),
     /bundle is invalid/,
+  );
+});
+
+test("one exact active bundle is selected while terminal history cannot be reused", () => {
+  const active = materialBundle();
+  const terminal = materialBundle({
+    work_item_id: MANIFEST_ID,
+    work_item_version: 4,
+  });
+  const value = challengeInbox(active);
+  value.papers[0].tasks.push({
+    work_item_id: MANIFEST_ID,
+    assigned_binding_id: BINDING_ID,
+    assigned_player_id: PLAYER_ID,
+    status: "accepted",
+    version: 4,
+  });
+  value.papers[0].challenge_materials.items.push(terminal);
+  assert.deepEqual(challengeMaterialBundles(value).map(item => item.work_item_id), [WORK_ID]);
+  assert.equal(
+    challengeMaterialBundles(value)[0].bundle_hash,
+    active.bundle_hash,
+  );
+
+  const noBundle = challengeInbox();
+  noBundle.papers[0].challenge_materials = {
+    schema: "hepta.paper_raid.agent_bridge.assigned_challenge_materials.v1",
+    status: "unavailable",
+    reason_code: "frozen_challenge_material_authority_unavailable",
+    items: [],
+  };
+  assert.deepEqual(challengeMaterialBundles(noBundle), []);
+
+  const duplicate = challengeInbox();
+  duplicate.papers[0].challenge_materials.items.push(materialBundle());
+  assert.throws(
+    () => challengeMaterialBundles(duplicate),
+    /duplicates a work-item assignment/,
   );
 });
 
@@ -418,4 +622,115 @@ test("challenge material downloader verifies every frozen byte sequence", async 
     ),
     /differs from frozen authority/,
   );
+});
+
+test("challenge materials publish owner-only and never clobber an existing final", async t => {
+  const parent = await mkdtemp(join(tmpdir(), "paper-raid-materials-"));
+  await chmod(parent, 0o700);
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  const [bundle] = challengeMaterialBundles(challengeInbox());
+  const downloaded = bundle.objects.map(descriptor => Object.freeze({
+    descriptor,
+    bytes: materialBytes[descriptor.object_key],
+  }));
+  const root = join(parent, "materials");
+  const created = await materializeAssignedChallengeMaterials(bundle, downloaded, root);
+  assert.equal(created.status, "created");
+  assert.equal((await lstat(created.directory)).mode & 0o777, 0o700);
+  assert.deepEqual(await readdir(created.directory), ["challenge"]);
+  for (const object of bundle.objects) {
+    const stats = await lstat(join(created.directory, object.logical_path));
+    assert.equal(stats.mode & 0o777, 0o400);
+    assert.equal(stats.nlink, 1);
+  }
+  const reused = await materializeAssignedChallengeMaterials(bundle, downloaded, root);
+  assert.equal(reused.status, "reused");
+  assert.equal(reused.directory, created.directory);
+
+  const concurrentRoot = join(parent, "concurrent-materials");
+  const concurrent = await Promise.all([
+    materializeAssignedChallengeMaterials(bundle, downloaded, concurrentRoot),
+    materializeAssignedChallengeMaterials(bundle, downloaded, concurrentRoot),
+  ]);
+  assert.deepEqual(
+    concurrent.map(value => value.status).sort(),
+    ["created", "reused"],
+  );
+  assert.deepEqual(
+    (await readdir(concurrentRoot)).filter(name => name.startsWith(".")),
+    [],
+  );
+
+  const hostileRoot = join(parent, "hostile-materials");
+  await mkdir(hostileRoot, { mode: 0o700 });
+  const hostileFinal = join(hostileRoot, basename(created.directory));
+  await mkdir(hostileFinal, { mode: 0o700 });
+  await assert.rejects(
+    () => materializeAssignedChallengeMaterials(bundle, downloaded, hostileRoot),
+    /unexpected material entry/,
+  );
+  assert.deepEqual(await readdir(hostileFinal), []);
+
+  const symlinkRoot = join(parent, "symlink-materials");
+  await mkdir(symlinkRoot, { mode: 0o700 });
+  await symlink(created.directory, join(symlinkRoot, basename(created.directory)));
+  await assert.rejects(
+    () => materializeAssignedChallengeMaterials(bundle, downloaded, symlinkRoot),
+    /non-symlink directory/,
+  );
+
+  const realAncestor = join(parent, "real-ancestor");
+  await mkdir(realAncestor, { mode: 0o700 });
+  await mkdir(join(realAncestor, "nested"), { mode: 0o700 });
+  const linkedAncestor = join(parent, "linked-ancestor");
+  await symlink(realAncestor, linkedAncestor);
+  await assert.rejects(
+    () => materializeAssignedChallengeMaterials(
+      bundle,
+      downloaded,
+      join(linkedAncestor, "nested", "materials"),
+    ),
+    /non-symlink directory|must not traverse a symbolic link/,
+  );
+});
+
+test("material publication pins a safe root-owned /usr/bin/mv", async t => {
+  assert.equal(await validateMaterialPublisherExecutable(), "/usr/bin/mv");
+  const parent = await mkdtemp(join(tmpdir(), "paper-raid-material-mv-"));
+  await chmod(parent, 0o700);
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  await assert.rejects(
+    validateMaterialPublisherExecutable(join(parent, "missing-mv")),
+    /publisher is unavailable/,
+  );
+  const linked = join(parent, "linked-mv");
+  await symlink("/usr/bin/mv", linked);
+  await assert.rejects(
+    validateMaterialPublisherExecutable(linked),
+    /publisher is unsafe/,
+  );
+  const replacement = join(parent, "replacement-mv");
+  await copyFile("/usr/bin/mv", replacement);
+  await chmod(replacement, 0o775);
+  await assert.rejects(
+    validateMaterialPublisherExecutable(replacement),
+    /publisher is unsafe/,
+  );
+});
+
+test("an incomplete download never creates a consumable material directory", async t => {
+  const parent = await mkdtemp(join(tmpdir(), "paper-raid-material-partial-"));
+  await chmod(parent, 0o700);
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  const [bundle] = challengeMaterialBundles(challengeInbox());
+  const partial = bundle.objects.slice(0, 2).map(descriptor => ({
+    descriptor,
+    bytes: materialBytes[descriptor.object_key],
+  }));
+  const root = join(parent, "materials");
+  await assert.rejects(
+    () => materializeAssignedChallengeMaterials(bundle, partial, root),
+    /download set is incomplete/,
+  );
+  await assert.rejects(lstat(root), error => error?.code === "ENOENT");
 });

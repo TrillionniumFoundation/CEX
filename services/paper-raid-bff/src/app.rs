@@ -7,13 +7,14 @@ use std::{
 use axum::{
     body::Body,
     extract::{ConnectInfo, DefaultBodyLimit, Path, Query, Request, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Redirect, Response},
     routing::{get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
+use hepta_paper_raid_contracts::{verify_frozen_review_bundle, FrozenReviewBundleV1};
 use http_body_util::BodyExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -247,6 +248,7 @@ pub fn router(state: AppState) -> Router {
         .route("/league/review/:paper_id", get(review_bundle_page))
         .route("/league/formation/:team_id", get(formation))
         .route("/league/papers/:paper_id", get(paper_room))
+        .merge(crate::challenge_materials::router())
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .with_state(state)
         .layer(middleware::from_fn_with_state(
@@ -1363,7 +1365,19 @@ async fn review_bundle_page(
             .get_paper_review_state(&session.identity, paper_id),
     );
     let bundle = bundle?;
-    let bundle = crate::agent_bridge::resolve_frozen_review_bundle(&state, &bundle).await?;
+    let bundle = crate::agent_bridge::resolve_frozen_review_bundle(
+        &state,
+        &bundle,
+        session.identity.player_id,
+    )
+    .await?;
+    if !crate::agent_bridge::review_queue_item_matches_resolved_bundle(
+        &assignment,
+        &bundle,
+        session.identity.player_id,
+    ) {
+        return Err(AppError::Forbidden);
+    }
     let receipt_projection =
         crate::review_receipts::pending_projection(&state, &session.identity, paper_id)
             .await
@@ -1630,6 +1644,23 @@ enum ReviewArtifactPresentation {
 struct AuthorizedReviewArtifact {
     logical_path: String,
     media_type: String,
+    size_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReviewArtifactAudience {
+    BrowserReviewer,
+    AgentExecutor,
+}
+
+struct ReviewArtifactAuthorization<'a> {
+    expected_paper_id: Uuid,
+    expected_player_id: Uuid,
+    assignment_id: Uuid,
+    bundle_hash: &'a str,
+    object_key: &'a str,
+    digest: &'a str,
+    audience: ReviewArtifactAudience,
 }
 
 async fn download_artifact(
@@ -1673,7 +1704,14 @@ async fn download_artifact(
     );
     response.headers_mut().insert(
         header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static("sandbox; default-src 'none'"),
+        HeaderValue::from_static("sandbox; default-src 'none'; frame-ancestors 'none'"),
+    );
+    response
+        .headers_mut()
+        .insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    response.headers_mut().insert(
+        HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("no-referrer"),
     );
     Ok(response)
 }
@@ -1692,16 +1730,29 @@ async fn download_review_artifact(
         .hepta
         .get_paper_review_bundle(&session.identity, paper_id)
         .await?;
-    let bundle = crate::agent_bridge::resolve_frozen_review_bundle(&state, &hepta_bundle).await?;
+    let bundle = crate::agent_bridge::resolve_frozen_review_bundle(
+        &state,
+        &hepta_bundle,
+        session.identity.player_id,
+    )
+    .await?;
     let artifact = authorized_review_artifact(
         &bundle,
-        query.assignment_id,
-        &query.bundle_hash,
-        &query.object_key,
-        &digest,
+        ReviewArtifactAuthorization {
+            expected_paper_id: paper_id,
+            expected_player_id: session.identity.player_id,
+            assignment_id: query.assignment_id,
+            bundle_hash: &query.bundle_hash,
+            object_key: &query.object_key,
+            digest: &digest,
+            audience: ReviewArtifactAudience::BrowserReviewer,
+        },
     )?;
     state.cas.validate_media_type(&artifact.media_type)?;
     let bytes = state.cas.get(&digest, &artifact.media_type).await?;
+    if bytes.len() as u64 != artifact.size_bytes {
+        return Err(AppError::Upstream);
+    }
     review_artifact_browser_response(
         bytes,
         &artifact.media_type,
@@ -1714,31 +1765,113 @@ async fn download_review_artifact(
 
 fn authorized_review_artifact(
     review_bundle: &Value,
-    assignment_id: Uuid,
-    bundle_hash: &str,
-    object_key: &str,
-    digest: &str,
+    authorization: ReviewArtifactAuthorization<'_>,
 ) -> Result<AuthorizedReviewArtifact, AppError> {
-    crate::cas::raw_sha256(digest)?;
-    crate::cas::raw_sha256(bundle_hash)?;
-    let assignment_id_text = assignment_id.to_string();
-    let paper_id = review_bundle
-        .get("paper_project_id")
-        .and_then(Value::as_str)
-        .and_then(|value| Uuid::parse_str(value).ok().map(|parsed| (value, parsed)))
-        .filter(|(value, parsed)| parsed.to_string() == *value)
-        .map(|(value, _)| value)
-        .ok_or(AppError::Upstream)?;
-    let descriptor = review_bundle
-        .get("resolved_frozen_review_bundle")
-        .and_then(Value::as_object)
-        .ok_or(AppError::Upstream)?;
-    if descriptor.get("schema").and_then(Value::as_str)
-        != Some(hepta_paper_raid_contracts::RESOLVED_FROZEN_REVIEW_BUNDLE_V1)
-        || descriptor.get("assignment_id").and_then(Value::as_str)
-            != Some(assignment_id_text.as_str())
-        || descriptor.get("bundle_hash").and_then(Value::as_str) != Some(bundle_hash)
-        || descriptor.get("paper_project_id").and_then(Value::as_str) != Some(paper_id)
+    crate::cas::raw_sha256(authorization.digest)?;
+    crate::cas::raw_sha256(authorization.bundle_hash)?;
+    let descriptor = verified_review_descriptor_scope(
+        review_bundle,
+        authorization.expected_paper_id,
+        authorization.expected_player_id,
+    )?;
+    if descriptor.assignment_id != authorization.assignment_id
+        || descriptor.bundle_hash != authorization.bundle_hash
+    {
+        return Err(AppError::Forbidden);
+    }
+    let objects = match authorization.audience {
+        ReviewArtifactAudience::BrowserReviewer => &descriptor.authority.artifact_objects,
+        ReviewArtifactAudience::AgentExecutor => &descriptor.objects,
+    };
+    let matches = objects
+        .iter()
+        .filter(|object| {
+            object.object_key == authorization.object_key
+                && object.digest == authorization.digest
+                && object.download_path
+                    == hepta_paper_raid_contracts::REVIEW_OBJECT_DOWNLOAD_PATH_V1
+        })
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        return Err(AppError::NotFound);
+    }
+    let object = matches[0];
+    if !review_artifact_logical_path_is_safe(&object.logical_path)
+        || !review_artifact_object_key_is_safe(&object.object_key)
+        || !(1..=16 * 1024 * 1024).contains(&object.size_bytes)
+        || (authorization.audience == ReviewArtifactAudience::AgentExecutor
+            && !matches!(
+                object.role.as_str(),
+                "candidate" | "dataset" | "evaluator_support" | "frozen_evaluator"
+            ))
+    {
+        return Err(AppError::Upstream);
+    }
+    crate::cas::validate_media_type(&object.media_type).map_err(|_| AppError::Upstream)?;
+    Ok(AuthorizedReviewArtifact {
+        logical_path: object.logical_path.clone(),
+        media_type: object.media_type.clone(),
+        size_bytes: object.size_bytes,
+    })
+}
+
+fn review_assignment_matches_descriptor(
+    assignment: &Value,
+    descriptor: &FrozenReviewBundleV1,
+    expected_player_id: Uuid,
+) -> bool {
+    let assignment_id = descriptor.assignment_id.to_string();
+    let paper_id = descriptor.paper_project_id.to_string();
+    let submission_id = descriptor.submission_id.to_string();
+    let player_id = expected_player_id.to_string();
+    assignment.get("assignment_id").and_then(Value::as_str) == Some(assignment_id.as_str())
+        && assignment.get("paper_project_id").and_then(Value::as_str) == Some(paper_id.as_str())
+        && assignment.get("submission_id").and_then(Value::as_str) == Some(submission_id.as_str())
+        && assignment.get("player_id").and_then(Value::as_str) == Some(player_id.as_str())
+        && assignment.get("review_round").and_then(Value::as_u64) == Some(descriptor.review_round)
+        && assignment.get("slot").and_then(Value::as_str) == Some(descriptor.slot.as_str())
+        && assignment.get("version").and_then(Value::as_u64) == Some(descriptor.assignment_version)
+        && assignment.get("expires_at").and_then(Value::as_str)
+            == Some(descriptor.expires_at.as_str())
+        && matches!(
+            assignment.get("status").and_then(Value::as_str),
+            Some("claimed" | "pinned")
+        )
+}
+
+fn verified_review_descriptor_scope(
+    review_bundle: &Value,
+    expected_paper_id: Uuid,
+    expected_player_id: Uuid,
+) -> Result<FrozenReviewBundleV1, AppError> {
+    let descriptor: FrozenReviewBundleV1 = serde_json::from_value(
+        review_bundle
+            .get("resolved_frozen_review_bundle")
+            .cloned()
+            .ok_or(AppError::Upstream)?,
+    )
+    .map_err(|_| AppError::Upstream)?;
+    verify_frozen_review_bundle(&descriptor).map_err(|_| AppError::Upstream)?;
+    let paper_id_text = expected_paper_id.to_string();
+    let submission_id_text = descriptor.submission_id.to_string();
+    if !crate::agent_bridge::review_outer_bundle_matches_authority(
+        review_bundle,
+        &descriptor.authority,
+    ) || descriptor.paper_project_id != expected_paper_id
+        || review_bundle
+            .get("paper_project_id")
+            .and_then(Value::as_str)
+            != Some(paper_id_text.as_str())
+        || review_bundle.get("submission_id").and_then(Value::as_str)
+            != Some(submission_id_text.as_str())
+        || review_bundle
+            .get("release_candidate_hash")
+            .and_then(Value::as_str)
+            != Some(descriptor.release_candidate_hash.as_str())
+        || review_bundle
+            .get("paper_bundle_hash")
+            .and_then(Value::as_str)
+            != Some(descriptor.paper_bundle_hash.as_str())
     {
         return Err(AppError::Forbidden);
     }
@@ -1746,71 +1879,13 @@ fn authorized_review_artifact(
         .get("my_assignments")
         .and_then(Value::as_array)
         .ok_or(AppError::Upstream)?;
+    let assignment = assignments.first().ok_or(AppError::Forbidden)?;
     if assignments.len() != 1
-        || assignments[0].get("assignment_id").and_then(Value::as_str)
-            != Some(assignment_id_text.as_str())
-        || assignments[0]
-            .get("paper_project_id")
-            .and_then(Value::as_str)
-            != Some(paper_id)
-        || !matches!(
-            assignments[0].get("status").and_then(Value::as_str),
-            Some("claimed" | "pinned")
-        )
+        || !review_assignment_matches_descriptor(assignment, &descriptor, expected_player_id)
     {
         return Err(AppError::Forbidden);
     }
-    let objects = descriptor
-        .get("objects")
-        .and_then(Value::as_array)
-        .ok_or(AppError::Upstream)?;
-    let matches = objects
-        .iter()
-        .filter(|object| {
-            object.get("object_key").and_then(Value::as_str) == Some(object_key)
-                && object.get("digest").and_then(Value::as_str) == Some(digest)
-                && object.get("download_path").and_then(Value::as_str)
-                    == Some(hepta_paper_raid_contracts::REVIEW_OBJECT_DOWNLOAD_PATH_V1)
-        })
-        .collect::<Vec<_>>();
-    if matches.len() != 1 {
-        return Err(AppError::NotFound);
-    }
-    let media_type = matches[0]
-        .get("media_type")
-        .and_then(Value::as_str)
-        .ok_or(AppError::Upstream)?;
-    let logical_path = matches[0]
-        .get("logical_path")
-        .and_then(Value::as_str)
-        .filter(|value| review_artifact_logical_path_is_safe(value))
-        .ok_or(AppError::Upstream)?;
-    matches[0]
-        .get("object_key")
-        .and_then(Value::as_str)
-        .filter(|value| review_artifact_object_key_is_safe(value))
-        .ok_or(AppError::Upstream)?;
-    let role = matches[0]
-        .get("role")
-        .and_then(Value::as_str)
-        .filter(|role| {
-            matches!(
-                *role,
-                "candidate" | "dataset" | "evaluator_support" | "frozen_evaluator" | "input"
-            )
-        })
-        .ok_or(AppError::Upstream)?;
-    let size_bytes = matches[0]
-        .get("size_bytes")
-        .and_then(Value::as_u64)
-        .filter(|size| (1..=16 * 1024 * 1024).contains(size))
-        .ok_or(AppError::Upstream)?;
-    let _ = (role, size_bytes);
-    crate::cas::validate_media_type(media_type).map_err(|_| AppError::Upstream)?;
-    Ok(AuthorizedReviewArtifact {
-        logical_path: logical_path.to_string(),
-        media_type: media_type.to_string(),
-    })
+    Ok(descriptor)
 }
 
 fn review_artifact_logical_path_is_safe(value: &str) -> bool {
@@ -1837,19 +1912,26 @@ fn review_artifact_object_key_is_safe(value: &str) -> bool {
 
 pub(crate) fn authorized_review_artifact_media(
     review_bundle: &Value,
+    expected_paper_id: Uuid,
+    expected_player_id: Uuid,
     assignment_id: Uuid,
     bundle_hash: &str,
     object_key: &str,
     digest: &str,
-) -> Result<String, AppError> {
+) -> Result<(String, u64), AppError> {
     authorized_review_artifact(
         review_bundle,
-        assignment_id,
-        bundle_hash,
-        object_key,
-        digest,
+        ReviewArtifactAuthorization {
+            expected_paper_id,
+            expected_player_id,
+            assignment_id,
+            bundle_hash,
+            object_key,
+            digest,
+            audience: ReviewArtifactAudience::AgentExecutor,
+        },
     )
-    .map(|artifact| artifact.media_type)
+    .map(|artifact| (artifact.media_type, artifact.size_bytes))
 }
 
 fn review_artifact_download_filename(logical_path: &str) -> String {
@@ -1925,7 +2007,14 @@ fn review_artifact_response_with_disposition(
         .insert(header::CONTENT_DISPOSITION, disposition);
     response.headers_mut().insert(
         header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static("sandbox; default-src 'none'"),
+        HeaderValue::from_static("sandbox; default-src 'none'; frame-ancestors 'none'"),
+    );
+    response
+        .headers_mut()
+        .insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    response.headers_mut().insert(
+        HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("no-referrer"),
     );
     Ok(response)
 }
@@ -2810,114 +2899,278 @@ mod tests {
         ));
     }
 
-    fn resolved_review_authorization_fixture() -> (Value, Uuid, String, String, String) {
+    fn resolved_review_authorization_fixture() -> (Value, Uuid, Uuid, Uuid, String, String, String)
+    {
+        use hepta_paper_raid_contracts::{
+            frozen_review_authority_hash, frozen_review_bundle_hash, FrozenReviewAuthorityV1,
+            FrozenReviewExecutionPlanV1, FrozenReviewExecutionPolicyV1, FrozenReviewObjectV1,
+            FROZEN_REVIEW_AUTHORITY_V1, RESOLVED_FROZEN_REVIEW_BUNDLE_V1,
+            REVIEW_OBJECT_DOWNLOAD_PATH_V1,
+        };
         let paper_id = Uuid::from_u128(0x11111111_1111_4111_8111_111111111111);
+        let player_id = Uuid::from_u128(0x12121212_1212_4212_8212_121212121212);
         let assignment_id = Uuid::from_u128(0x22222222_2222_4222_8222_222222222222);
-        let bundle_hash = format!("sha256:{}", "d".repeat(64));
-        let object_key = "review-object-a".to_string();
+        let submission_id = Uuid::from_u128(0x33333333_3333_4333_8333_333333333333);
+        let object_key = "review-0004-evaluator".to_string();
         let digest = format!("sha256:{}", "a".repeat(64));
+        let object = |key: &str, path: &str, role: &str, byte: char, media: &str, size| {
+            FrozenReviewObjectV1 {
+                object_key: key.to_string(),
+                logical_path: path.to_string(),
+                role: role.to_string(),
+                digest: format!("sha256:{}", byte.to_string().repeat(64)),
+                size_bytes: size,
+                media_type: media.to_string(),
+                download_path: REVIEW_OBJECT_DOWNLOAD_PATH_V1.to_string(),
+            }
+        };
+        let authority_objects = vec![
+            object(
+                "review-0000-bibliography",
+                "paper/references.bib",
+                "bibliography",
+                'd',
+                "application/x-bibtex",
+                111,
+            ),
+            object(
+                "review-0001-candidate",
+                "release/candidate.json",
+                "candidate",
+                'b',
+                "application/json",
+                654,
+            ),
+            object(
+                "review-0002-claim-graph",
+                "paper/claim-evidence.json",
+                "claim_evidence_graph",
+                'e',
+                "application/json",
+                222,
+            ),
+            object(
+                "review-0003-dataset",
+                "dataset/claims.json",
+                "dataset",
+                'c',
+                "application/json",
+                987,
+            ),
+            object(
+                &object_key,
+                "evaluator.py",
+                "frozen_evaluator",
+                'a',
+                "text/x-python; charset=utf-8",
+                321,
+            ),
+            object(
+                "review-0005-paper",
+                "paper/paper.md",
+                "paper_source",
+                'f',
+                "text/markdown; charset=utf-8",
+                333,
+            ),
+        ];
+        let expires_at = "2099-01-01T00:00:00Z".to_string();
+        let mut authority = FrozenReviewAuthorityV1 {
+            schema: FROZEN_REVIEW_AUTHORITY_V1.to_string(),
+            authority_hash: String::new(),
+            assignment_id,
+            paper_project_id: paper_id,
+            submission_id,
+            review_round: 1,
+            slot: "evaluator".to_string(),
+            assignment_version: 7,
+            expires_at: expires_at.clone(),
+            release_candidate_hash: format!("sha256:{}", "1".repeat(64)),
+            paper_bundle_hash: format!("sha256:{}", "2".repeat(64)),
+            artifact_manifest_hash: format!("sha256:{}", "3".repeat(64)),
+            evaluator_manifest_hash: format!("sha256:{}", "4".repeat(64)),
+            dataset_manifest_hash: format!("sha256:{}", "5".repeat(64)),
+            artifact_objects: authority_objects.clone(),
+            execution_policy: FrozenReviewExecutionPolicyV1 {
+                schema: "hepta.paper_raid.review_execution_policy.v1".to_string(),
+                kind: "evaluate".to_string(),
+                adapter: "python3-stdlib-v1".to_string(),
+                timeout_ms: 30_000,
+                seed: 7,
+            },
+        };
+        authority.authority_hash = frozen_review_authority_hash(&authority).unwrap();
+        let mut bundle = FrozenReviewBundleV1 {
+            schema: RESOLVED_FROZEN_REVIEW_BUNDLE_V1.to_string(),
+            bundle_hash: String::new(),
+            authority: authority.clone(),
+            authority_hash: authority.authority_hash.clone(),
+            assignment_id,
+            paper_project_id: paper_id,
+            submission_id,
+            review_round: 1,
+            slot: "evaluator".to_string(),
+            assignment_version: 7,
+            expires_at: expires_at.clone(),
+            release_candidate_hash: authority.release_candidate_hash.clone(),
+            paper_bundle_hash: authority.paper_bundle_hash.clone(),
+            artifact_manifest_hash: authority.artifact_manifest_hash.clone(),
+            evaluator_manifest_hash: authority.evaluator_manifest_hash.clone(),
+            dataset_manifest_hash: authority.dataset_manifest_hash.clone(),
+            objects: vec![
+                FrozenReviewObjectV1 {
+                    logical_path: "inputs/candidate.json".to_string(),
+                    ..authority_objects[1].clone()
+                },
+                FrozenReviewObjectV1 {
+                    logical_path: "inputs/dataset.json".to_string(),
+                    ..authority_objects[3].clone()
+                },
+                FrozenReviewObjectV1 {
+                    logical_path: "evaluator/main.py".to_string(),
+                    ..authority_objects[4].clone()
+                },
+            ],
+            execution: FrozenReviewExecutionPlanV1 {
+                schema: "hepta.paper_raid.review_execution_plan.v1".to_string(),
+                kind: "evaluate".to_string(),
+                adapter: "python3-stdlib-v1".to_string(),
+                evaluator_version: digest.clone(),
+                entrypoint: "evaluator/main.py".to_string(),
+                timeout_ms: 30_000,
+                seed: 7,
+            },
+        };
+        bundle.bundle_hash = frozen_review_bundle_hash(&bundle).unwrap();
+        let bundle_hash = bundle.bundle_hash.clone();
         let fixture = json!({
             "paper_project_id": paper_id,
+            "submission_id": submission_id,
+            "status": "submission_ready",
+            "release_candidate_hash": authority.release_candidate_hash,
+            "paper_bundle_hash": authority.paper_bundle_hash,
+            "paper_bundle": {
+                "schema": "hepta.paper_raid.paper_bundle.v2",
+                "release_candidate_hash": authority.release_candidate_hash,
+                "paper_bundle_hash": authority.paper_bundle_hash,
+                "release_candidate": {
+                    "schema": "hepta.paper_raid.release_candidate.v2",
+                    "paper_project_id": paper_id,
+                    "artifact_manifest_hash": authority.artifact_manifest_hash,
+                }
+            },
             "my_assignments": [{
                 "assignment_id": assignment_id,
                 "paper_project_id": paper_id,
+                "submission_id": submission_id,
+                "player_id": player_id,
+                "review_round": 1,
+                "slot": "evaluator",
+                "version": 7,
+                "expires_at": expires_at,
                 "status": "claimed"
             }],
-            "resolved_frozen_review_bundle": {
-                "schema": hepta_paper_raid_contracts::RESOLVED_FROZEN_REVIEW_BUNDLE_V1,
-                "assignment_id": assignment_id,
-                "paper_project_id": paper_id,
-                "bundle_hash": bundle_hash,
-                "objects": [
-                    {
-                        "object_key": object_key,
-                        "logical_path": "evaluator/main.py",
-                        "role": "frozen_evaluator",
-                        "digest": digest,
-                        "size_bytes": 321,
-                        "media_type": "text/x-python; charset=utf-8",
-                        "download_path": hepta_paper_raid_contracts::REVIEW_OBJECT_DOWNLOAD_PATH_V1
-                    },
-                    {
-                        "object_key": "review-object-b",
-                        "logical_path": "inputs/candidate.json",
-                        "role": "candidate",
-                        "digest": format!("sha256:{}", "b".repeat(64)),
-                        "size_bytes": 654,
-                        "media_type": "application/json",
-                        "download_path": hepta_paper_raid_contracts::REVIEW_OBJECT_DOWNLOAD_PATH_V1
-                    },
-                    {
-                        "object_key": "review-object-c",
-                        "logical_path": "inputs/dataset.json",
-                        "role": "dataset",
-                        "digest": format!("sha256:{}", "c".repeat(64)),
-                        "size_bytes": 987,
-                        "media_type": "application/json",
-                        "download_path": hepta_paper_raid_contracts::REVIEW_OBJECT_DOWNLOAD_PATH_V1
-                    }
-                ]
-            }
+            "resolved_frozen_review_bundle": bundle
         });
-        (fixture, assignment_id, bundle_hash, object_key, digest)
+        (
+            fixture,
+            paper_id,
+            player_id,
+            assignment_id,
+            bundle_hash,
+            object_key,
+            digest,
+        )
     }
 
     #[test]
     fn review_artifact_authorization_is_exact_and_fail_closed() {
-        let (fixture, assignment_id, bundle_hash, object_key, digest) =
+        let (fixture, paper_id, player_id, assignment_id, bundle_hash, object_key, digest) =
             resolved_review_authorization_fixture();
-        assert_eq!(
+        let authorize = |value: &Value,
+                         requested_bundle_hash: &str,
+                         requested_key: &str,
+                         requested_digest: &str| {
             authorized_review_artifact(
-                &fixture,
-                assignment_id,
-                &bundle_hash,
-                &object_key,
-                &digest,
+                value,
+                ReviewArtifactAuthorization {
+                    expected_paper_id: paper_id,
+                    expected_player_id: player_id,
+                    assignment_id,
+                    bundle_hash: requested_bundle_hash,
+                    object_key: requested_key,
+                    digest: requested_digest,
+                    audience: ReviewArtifactAudience::AgentExecutor,
+                },
             )
-            .expect("exact assignment-scoped object"),
+        };
+        assert_eq!(
+            authorize(&fixture, &bundle_hash, &object_key, &digest)
+                .expect("exact assignment-scoped object"),
             AuthorizedReviewArtifact {
                 logical_path: "evaluator/main.py".to_string(),
                 media_type: "text/x-python; charset=utf-8".to_string(),
+                size_bytes: 321,
             }
         );
+        let paper_object = &fixture["resolved_frozen_review_bundle"]["authority"]
+            ["artifact_objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|object| object["role"] == "paper_source")
+            .unwrap();
+        let paper_key = paper_object["object_key"].as_str().unwrap();
+        let paper_digest = paper_object["digest"].as_str().unwrap();
+        assert_eq!(
+            authorized_review_artifact(
+                &fixture,
+                ReviewArtifactAuthorization {
+                    expected_paper_id: paper_id,
+                    expected_player_id: player_id,
+                    assignment_id,
+                    bundle_hash: &bundle_hash,
+                    object_key: paper_key,
+                    digest: paper_digest,
+                    audience: ReviewArtifactAudience::BrowserReviewer,
+                },
+            )
+            .unwrap()
+            .logical_path,
+            "paper/paper.md"
+        );
+        assert!(matches!(
+            authorize(&fixture, &bundle_hash, paper_key, paper_digest),
+            Err(AppError::NotFound)
+        ));
 
         let mut foreign_descriptor = fixture.clone();
         foreign_descriptor["resolved_frozen_review_bundle"]["schema"] =
             json!("hepta.paper_raid.resolved_frozen_review_bundle.v0");
         assert!(matches!(
-            authorized_review_artifact(
-                &foreign_descriptor,
-                assignment_id,
-                &bundle_hash,
-                &object_key,
-                &digest,
-            ),
-            Err(AppError::Forbidden)
+            authorize(&foreign_descriptor, &bundle_hash, &object_key, &digest),
+            Err(AppError::Upstream)
         ));
 
         let mut foreign_assignment = fixture.clone();
         foreign_assignment["my_assignments"][0]["paper_project_id"] = json!(Uuid::new_v4());
         assert!(matches!(
-            authorized_review_artifact(
-                &foreign_assignment,
-                assignment_id,
-                &bundle_hash,
-                &object_key,
-                &digest,
-            ),
+            authorize(&foreign_assignment, &bundle_hash, &object_key, &digest),
+            Err(AppError::Forbidden)
+        ));
+
+        let mut foreign_manifest = fixture.clone();
+        foreign_manifest["paper_bundle"]["release_candidate"]["artifact_manifest_hash"] =
+            json!(format!("sha256:{}", "9".repeat(64)));
+        assert!(matches!(
+            authorize(&foreign_manifest, &bundle_hash, &object_key, &digest),
             Err(AppError::Forbidden)
         ));
 
         let mut expired_assignment = fixture.clone();
         expired_assignment["my_assignments"][0]["status"] = json!("expired");
         assert!(matches!(
-            authorized_review_artifact(
-                &expired_assignment,
-                assignment_id,
-                &bundle_hash,
-                &object_key,
-                &digest,
-            ),
+            authorize(&expired_assignment, &bundle_hash, &object_key, &digest),
             Err(AppError::Forbidden)
         ));
 
@@ -2928,13 +3181,7 @@ mod tests {
             .expect("assignment array")
             .push(duplicate);
         assert!(matches!(
-            authorized_review_artifact(
-                &ambiguous_assignment,
-                assignment_id,
-                &bundle_hash,
-                &object_key,
-                &digest,
-            ),
+            authorize(&ambiguous_assignment, &bundle_hash, &object_key, &digest),
             Err(AppError::Forbidden)
         ));
 
@@ -2942,14 +3189,8 @@ mod tests {
         foreign_transport["resolved_frozen_review_bundle"]["objects"][0]["download_path"] =
             json!("https://attacker.invalid/object");
         assert!(matches!(
-            authorized_review_artifact(
-                &foreign_transport,
-                assignment_id,
-                &bundle_hash,
-                &object_key,
-                &digest,
-            ),
-            Err(AppError::NotFound)
+            authorize(&foreign_transport, &bundle_hash, &object_key, &digest),
+            Err(AppError::Upstream)
         ));
 
         for (field, value) in [
@@ -2967,35 +3208,17 @@ mod tests {
                 .as_str()
                 .expect("object key");
             assert!(matches!(
-                authorized_review_artifact(
-                    &unsafe_object,
-                    assignment_id,
-                    &bundle_hash,
-                    requested_key,
-                    &digest,
-                ),
+                authorize(&unsafe_object, &bundle_hash, requested_key, &digest),
                 Err(AppError::Upstream)
             ));
         }
 
         assert!(matches!(
-            authorized_review_artifact(
-                &fixture,
-                assignment_id,
-                &bundle_hash,
-                "review-object-missing",
-                &digest,
-            ),
+            authorize(&fixture, &bundle_hash, "review-object-missing", &digest,),
             Err(AppError::NotFound)
         ));
         assert!(matches!(
-            authorized_review_artifact(
-                &fixture,
-                assignment_id,
-                "sha256:not-a-digest",
-                &object_key,
-                &digest,
-            ),
+            authorize(&fixture, "sha256:not-a-digest", &object_key, &digest,),
             Err(AppError::Invalid(_))
         ));
     }
@@ -3056,7 +3279,7 @@ mod tests {
         );
         assert_eq!(
             response.headers()[header::CONTENT_SECURITY_POLICY],
-            "sandbox; default-src 'none'"
+            "sandbox; default-src 'none'; frame-ancestors 'none'"
         );
         assert_eq!(
             response.headers()[header::CACHE_CONTROL],
@@ -3065,6 +3288,11 @@ mod tests {
         assert_eq!(
             response.headers()[header::X_CONTENT_TYPE_OPTIONS],
             "nosniff"
+        );
+        assert_eq!(response.headers()[header::X_FRAME_OPTIONS], "DENY");
+        assert_eq!(
+            response.headers()[HeaderName::from_static("referrer-policy")],
+            "no-referrer"
         );
 
         let response = review_artifact_browser_response(

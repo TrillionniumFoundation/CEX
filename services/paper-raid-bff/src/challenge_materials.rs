@@ -81,6 +81,12 @@ fn frozen_authority_from_room(
         .get("challenge_ruleset_snapshot")
         .filter(|value| value.is_object())
         .ok_or(AppError::Upstream)?;
+    crate::cas::raw_sha256(&challenge_ruleset_snapshot_hash)?;
+    if canonical_json_sha256(snapshot).map_err(|_| AppError::Upstream)?
+        != challenge_ruleset_snapshot_hash
+    {
+        return Err(AppError::Upstream);
+    }
     let authority: FrozenChallengeMaterialAuthorityV1 =
         serde_json::from_value(snapshot.get("material_authority").cloned().ok_or_else(|| {
             AppError::Conflict(
@@ -140,7 +146,7 @@ fn author_work_item_scope(
         || parse_uuid(item, "assigned_player_id")? != player_id
         || !matches!(
             item.get("status").and_then(Value::as_str),
-            Some("planned" | "in_progress" | "review")
+            Some("planned" | "in_progress")
         )
     {
         return Err(AppError::Forbidden);
@@ -420,21 +426,24 @@ mod tests {
             evaluator_manifest_hash: format!("sha256:{}", "6".repeat(64)),
         };
         authority.authority_hash = frozen_challenge_material_authority_hash(&authority).unwrap();
+        let challenge_ruleset_snapshot = json!({
+            "schema": "hepta.paper_raid.challenge_ruleset_snapshot.v1",
+            "challenge_snapshot_hash": challenge_snapshot_hash,
+            "ruleset_version": authority.ruleset_version,
+            "ruleset_hash": ruleset_hash,
+            "enforcement": "authoritative_v1",
+            "ruleset": {},
+            "material_authority": authority,
+        });
+        let challenge_ruleset_snapshot_hash =
+            canonical_json_sha256(&challenge_ruleset_snapshot).unwrap();
         let room = json!({
             "paper": {
                 "paper_project_id": paper_id,
                 "challenge_id": challenge_id,
                 "outcome": "in_progress",
-                "challenge_ruleset_snapshot_hash": format!("sha256:{}", "7".repeat(64)),
-                "challenge_ruleset_snapshot": {
-                    "schema": "hepta.paper_raid.challenge_ruleset_snapshot.v1",
-                    "challenge_snapshot_hash": challenge_snapshot_hash,
-                    "ruleset_version": authority.ruleset_version,
-                    "ruleset_hash": ruleset_hash,
-                    "enforcement": "authoritative_v1",
-                    "ruleset": {},
-                    "material_authority": authority,
-                }
+                "challenge_ruleset_snapshot_hash": challenge_ruleset_snapshot_hash,
+                "challenge_ruleset_snapshot": challenge_ruleset_snapshot
             },
             "work_items": [{
                 "work_item_id": work_item_id,
@@ -473,7 +482,7 @@ mod tests {
         )
         .is_err());
 
-        for terminal_status in ["accepted", "rejected", "cancelled"] {
+        for terminal_status in ["review", "accepted", "rejected", "cancelled"] {
             let (mut terminal, _, _, _) = room_fixture();
             terminal["work_items"][0]["status"] = json!(terminal_status);
             assert!(author_work_item_scope(
@@ -506,6 +515,8 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("material_authority");
+        room["paper"]["challenge_ruleset_snapshot_hash"] =
+            json!(canonical_json_sha256(&room["paper"]["challenge_ruleset_snapshot"]).unwrap());
         assert!(matches!(
             frozen_authority_from_room(&room),
             Err(AppError::Conflict(_))

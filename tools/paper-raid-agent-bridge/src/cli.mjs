@@ -7,10 +7,12 @@ import { loadConfig } from "./config.mjs";
 import { inboxFingerprint } from "./inbox.mjs";
 import {
   actionableDeliveryCandidates,
+  authorWorkStartKey,
+  authorWorkStarts,
   deliveryCandidateKey,
   deliveryCandidates,
+  formatAuthorWorkStart,
   formatDeliveryCandidate,
-  proposalInput,
   workResult,
 } from "./work.mjs";
 import {
@@ -23,25 +25,29 @@ import {
   getBinding,
   getInbox,
   pairAgent,
-  prepareDeliveryDraft,
+  prepareChallengeMaterialsForStart,
+  executeAndSubmitAuthorDelivery,
+  executeAndSubmitAuthorWorkStart,
   executeAndSubmitReviewTask,
   recoverPendingReviewReceipt,
   signResearchSessionAction,
-  submitAgentProposal,
 } from "./operations.mjs";
+import * as lifecycleApi from "./lifecycle.mjs";
 
 const HELP = `Paper Raid Agent Bridge v2
 
 Usage:
   paper-raid-agent-bridge install --package FILE --manifest FILE --signature FILE \\
     --trusted-key FILE --fingerprint sha256:HEX --bff-url ORIGIN --agent-id ID \\
-    --capabilities LIST --resource-classes LIST [--mode confirm|auto] [--acknowledge-auto]
+    --author-executor FILE --capabilities LIST --resource-classes LIST \\
+    [--mode confirm|auto] [--acknowledge-auto]
   paper-raid-agent-bridge pair [--root TEST_ROOT]
   paper-raid-agent-bridge confirm [--root TEST_ROOT]
   paper-raid-agent-bridge mode --mode confirm|auto [--acknowledge-auto] [--root TEST_ROOT]
   paper-raid-agent-bridge diagnose [--json] [--root TEST_ROOT]
   paper-raid-agent-bridge update --package FILE --manifest FILE --signature FILE \\
-    --trusted-key FILE --fingerprint sha256:HEX [--root TEST_ROOT]
+    --trusted-key FILE --fingerprint sha256:HEX --author-executor FILE \\
+    [--root TEST_ROOT]
   paper-raid-agent-bridge rollback --signature FILE --trusted-key FILE \\
     --fingerprint sha256:HEX [--root TEST_ROOT]
   paper-raid-agent-bridge uninstall [--purge-data] [--root TEST_ROOT]
@@ -52,7 +58,7 @@ Usage:
   paper-raid-agent-bridge binding --config FILE
   paper-raid-agent-bridge health --config FILE [--status healthy|degraded|offline]
   paper-raid-agent-bridge inbox --config FILE [--watch]
-  paper-raid-agent-bridge prepare-delivery --config FILE --input FILE
+  paper-raid-agent-bridge prepare-materials --config FILE --work-item UUID
   paper-raid-agent-bridge work --config FILE [--watch] [--auto]
   paper-raid-agent-bridge sign-action --config FILE --input FILE
 
@@ -130,7 +136,7 @@ async function configured(flags) {
 }
 
 async function lifecycleModule() {
-  return import("./lifecycle.mjs");
+  return lifecycleApi;
 }
 
 function optionalString(flags, name) {
@@ -259,7 +265,9 @@ export async function chooseWorkCandidate(
   for (const [index, candidate] of candidates.entries()) {
     const line = candidate.work_kind === "review"
       ? formatReviewTask(candidate.value, index)
-      : formatDeliveryCandidate(candidate.value, index);
+      : candidate.work_kind === "author_start"
+        ? formatAuthorWorkStart(candidate.value, index)
+        : formatDeliveryCandidate(candidate.value, index);
     errorOutput.write(`${line}\n`);
   }
   const reader = createInterface({
@@ -282,7 +290,13 @@ export async function chooseWorkCandidate(
   return selected === 0 ? null : candidates[selected - 1];
 }
 
-function combinedWorkItems(inbox, acknowledgedDeliveries, acknowledgedReviews) {
+function combinedWorkItems(
+  inbox,
+  acknowledgedDeliveries,
+  acknowledgedReviews,
+  acknowledgedAuthorStarts,
+) {
+  const starts = authorWorkStarts(inbox, acknowledgedAuthorStarts ?? new Set());
   const deliveries = acknowledgedDeliveries === undefined
     ? deliveryCandidates(inbox)
     : actionableDeliveryCandidates(inbox, acknowledgedDeliveries);
@@ -290,6 +304,7 @@ function combinedWorkItems(inbox, acknowledgedDeliveries, acknowledgedReviews) {
     ? actionableReviewTasks(inbox)
     : actionableReviewTasks(inbox, acknowledgedReviews);
   return [
+    ...starts.map(value => Object.freeze({ work_kind: "author_start", value })),
     ...deliveries.map(value => Object.freeze({ work_kind: "delivery", value })),
     ...reviews.map(value => Object.freeze({ work_kind: "review", value })),
   ];
@@ -299,7 +314,14 @@ async function submitWorkItem(config, identity, candidate) {
   if (candidate.work_kind === "review") {
     return executeAndSubmitReviewTask(config, identity, candidate.value);
   }
-  return submitAgentProposal(config, identity, proposalInput(candidate.value));
+  if (candidate.work_kind === "author_start") {
+    return executeAndSubmitAuthorWorkStart(config, identity, candidate.value);
+  }
+  return executeAndSubmitAuthorDelivery(
+    config,
+    identity,
+    candidate.value,
+  );
 }
 
 async function workOnce(config, identity, flags) {
@@ -359,6 +381,7 @@ export async function main(argv) {
       "--fingerprint",
       "--bff-url",
       "--agent-id",
+      "--author-executor",
       "--capabilities",
       "--resource-classes",
       "--mode",
@@ -376,6 +399,7 @@ export async function main(argv) {
       fingerprint: required(flags, "--fingerprint"),
       bffUrl: required(flags, "--bff-url"),
       agentId: required(flags, "--agent-id"),
+      authorExecutor: required(flags, "--author-executor"),
       capabilities: required(flags, "--capabilities"),
       resourceClasses: required(flags, "--resource-classes"),
       mode: optionalString(flags, "--mode") ?? "confirm",
@@ -390,6 +414,7 @@ export async function main(argv) {
       "--signature",
       "--trusted-key",
       "--fingerprint",
+      "--author-executor",
       "--root",
       "--systemctl",
     ]);
@@ -401,6 +426,7 @@ export async function main(argv) {
       signaturePath: required(flags, "--signature"),
       trustedKeyPath: required(flags, "--trusted-key"),
       fingerprint: required(flags, "--fingerprint"),
+      authorExecutor: required(flags, "--author-executor"),
     }));
     return;
   }
@@ -550,15 +576,22 @@ export async function main(argv) {
       );
     }
   }
-  if (command === "prepare-delivery") {
-    allowed(flags, ["--config", "--input"]);
+  if (command === "prepare-materials") {
+    allowed(flags, ["--config", "--work-item"]);
     const { config, identity } = await configured(flags);
-    const input = await readSafeJson(resolve(required(flags, "--input")), {
-      privateFile: false,
-      ownerOnly: false,
-      maxBytes: 64 * 1024,
-    });
-    output(await prepareDeliveryDraft(config, identity, input));
+    const workItemId = required(flags, "--work-item");
+    const inbox = await getInbox(config, identity);
+    const starts = authorWorkStarts(inbox).filter(start =>
+      start.work_item_id === workItemId
+    );
+    if (starts.length !== 1) {
+      throw new Error("prepare-materials requires one exact Author work start");
+    }
+    output(await prepareChallengeMaterialsForStart(
+      config,
+      identity,
+      starts[0],
+    ));
     return;
   }
   if (command === "work") {
@@ -578,6 +611,7 @@ export async function main(argv) {
     let previous = null;
     const acknowledgedDeliveries = new Set();
     const acknowledgedReviews = new Set();
+    const acknowledgedAuthorStarts = new Set();
     for (;;) {
       const inbox = await getInbox(config, identity);
       const fingerprint = inboxFingerprint(inbox);
@@ -586,6 +620,7 @@ export async function main(argv) {
           inbox,
           acknowledgedDeliveries,
           acknowledgedReviews,
+          acknowledgedAuthorStarts,
         );
         if (candidates.length === 0) {
           output(workResult("idle"));
@@ -609,8 +644,10 @@ export async function main(argv) {
           if (candidate) {
             const candidateKey = candidate.work_kind === "review"
               ? reviewTaskKey(candidate.value)
-              : deliveryCandidateKey(candidate.value);
-            const result = await submitWorkItem(config, identity, candidate);
+              : candidate.work_kind === "author_start"
+                ? authorWorkStartKey(candidate.value)
+                : deliveryCandidateKey(candidate.value);
+            const result = await submitWorkItem(config, identity, inbox, candidate);
             output(workResult("submitted", {
               candidateCount: candidates.length,
               candidate: candidate.value,
@@ -618,6 +655,9 @@ export async function main(argv) {
             }));
             if (candidate.work_kind === "review") {
               acknowledgedReviews.add(candidateKey);
+            } else if (candidate.work_kind === "author_start") {
+              acknowledgedAuthorStarts.add(candidateKey);
+              acknowledgedDeliveries.add(deliveryCandidateKey(result.candidate));
             } else {
               acknowledgedDeliveries.add(candidateKey);
             }

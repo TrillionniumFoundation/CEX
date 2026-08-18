@@ -4,7 +4,7 @@
 //! Nakama research-session runtime. They deliberately do not widen or alter
 //! any legacy `trnm.match.*.v1` contract.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
@@ -753,6 +753,7 @@ fn agent_bridge_path_method_allowed(method: &str, path: &str) -> bool {
             | ("POST", "/api/agent-bridge/delivery-drafts")
             | ("POST", "/api/agent-bridge/proposals")
             | ("GET", REVIEW_OBJECT_DOWNLOAD_PATH_V1)
+            | ("GET", CHALLENGE_MATERIAL_OBJECT_DOWNLOAD_PATH_V1)
             | ("POST", "/api/agent-bridge/review-receipts")
     )
 }
@@ -3774,8 +3775,8 @@ fn validate_frozen_review_bundle(
     {
         return Err("frozen review bundle expiry must be canonical UTC RFC3339".to_string());
     }
-    if !(3..=64).contains(&bundle.objects.len()) {
-        return Err("frozen review bundle must contain 3-64 objects".to_string());
+    if !(3..=4).contains(&bundle.objects.len()) {
+        return Err("frozen review executable bundle must contain 3-4 objects".to_string());
     }
     let mut previous: Option<(&str, &str)> = None;
     let mut keys = HashSet::new();
@@ -3799,7 +3800,7 @@ fn validate_frozen_review_bundle(
             || object.download_path != REVIEW_OBJECT_DOWNLOAD_PATH_V1
             || !matches!(
                 object.role.as_str(),
-                "candidate" | "dataset" | "evaluator_support" | "frozen_evaluator" | "input"
+                "candidate" | "dataset" | "evaluator_support" | "frozen_evaluator"
             )
             || object.size_bytes == 0
             || object.size_bytes > 16 * 1024 * 1024
@@ -3872,20 +3873,35 @@ fn validate_resolved_review_object_mapping(
     authority_objects: &[FrozenReviewObjectV1],
     resolved_objects: &[FrozenReviewObjectV1],
 ) -> Result<(), String> {
-    if authority_objects.len() != resolved_objects.len() {
+    let executable_authority = authority_objects
+        .iter()
+        .filter(|object| review_object_role_is_executable(&object.role))
+        .collect::<Vec<_>>();
+    if executable_authority.len() != resolved_objects.len() {
         return Err(
-            "resolved review object count differs from Hepta ArtifactManifest authority"
+            "resolved review executable count differs from Hepta ArtifactManifest authority"
                 .to_string(),
         );
     }
-    for (authority, resolved) in authority_objects.iter().zip(resolved_objects) {
-        if resolved.object_key != authority.object_key
-            || resolved.role != authority.role
-            || resolved.digest != authority.digest
-            || resolved.size_bytes != authority.size_bytes
-            || resolved.media_type != authority.media_type
-            || resolved.download_path != authority.download_path
-        {
+    let mut projected_keys = HashSet::new();
+    for resolved in resolved_objects {
+        if !review_object_role_is_executable(&resolved.role) {
+            return Err(
+                "human-readable review authority escaped into the executable bundle".to_string(),
+            );
+        }
+        let matches = executable_authority
+            .iter()
+            .filter(|authority| {
+                resolved.object_key == authority.object_key
+                    && resolved.role == authority.role
+                    && resolved.digest == authority.digest
+                    && resolved.size_bytes == authority.size_bytes
+                    && resolved.media_type == authority.media_type
+                    && resolved.download_path == authority.download_path
+            })
+            .count();
+        if matches != 1 || !projected_keys.insert(resolved.object_key.as_str()) {
             return Err(
                 "resolved review object differs from Hepta ArtifactManifest authority".to_string(),
             );
@@ -3906,7 +3922,20 @@ fn validate_resolved_review_object_mapping(
             return Err("resolved review object transport path is not deterministic".to_string());
         }
     }
+    if executable_authority
+        .iter()
+        .any(|authority| !projected_keys.contains(authority.object_key.as_str()))
+    {
+        return Err("one executable authority object was not projected".to_string());
+    }
     Ok(())
+}
+
+fn review_object_role_is_executable(role: &str) -> bool {
+    matches!(
+        role,
+        "candidate" | "dataset" | "evaluator_support" | "frozen_evaluator"
+    )
 }
 
 fn safe_review_path(value: &str) -> bool {
@@ -3949,7 +3978,7 @@ fn validate_frozen_review_authority(
     if !authority.expires_at.ends_with('Z')
         || authority.expires_at.len() < 20
         || authority.expires_at.len() > 40
-        || !(3..=64).contains(&authority.artifact_objects.len())
+        || !(6..=7).contains(&authority.artifact_objects.len())
     {
         return Err("frozen review authority expiry or object set is invalid".to_string());
     }
@@ -3981,6 +4010,8 @@ fn validate_frozen_review_objects(objects: &[FrozenReviewObjectV1]) -> Result<()
     let mut previous: Option<(&str, &str)> = None;
     let mut keys = HashSet::new();
     let mut paths = HashSet::new();
+    let mut digests = HashSet::new();
+    let mut roles = HashMap::<&str, usize>::new();
     let mut total_size = 0_u64;
     for object in objects {
         validate_logical_id("object_key", &object.object_key)?;
@@ -3994,8 +4025,20 @@ fn validate_frozen_review_objects(objects: &[FrozenReviewObjectV1]) -> Result<()
                 .any(|byte| byte.is_ascii_control())
             || object.download_path != REVIEW_OBJECT_DOWNLOAD_PATH_V1
             || !matches!(
-                object.role.as_str(),
-                "candidate" | "dataset" | "evaluator_support" | "frozen_evaluator" | "input"
+                (object.role.as_str(), object.media_type.as_str()),
+                (
+                    "paper_source",
+                    "text/markdown; charset=utf-8" | "application/pdf"
+                ) | (
+                    "bibliography",
+                    "application/x-bibtex" | "text/plain; charset=utf-8"
+                ) | ("claim_evidence_graph", "application/json")
+                    | ("candidate", "application/json")
+                    | ("dataset", "application/json" | "text/csv; charset=utf-8")
+                    | (
+                        "frozen_evaluator" | "evaluator_support",
+                        "text/x-python; charset=utf-8"
+                    )
             )
             || object.size_bytes == 0
             || object.size_bytes > 16 * 1024 * 1024
@@ -4007,12 +4050,14 @@ fn validate_frozen_review_objects(objects: &[FrozenReviewObjectV1]) -> Result<()
         if previous.is_some_and(|prior| prior >= ordering)
             || !keys.insert(&object.object_key)
             || !paths.insert(&object.logical_path)
+            || !digests.insert(&object.digest)
         {
             return Err(
                 "frozen review objects must be strictly sorted by unique object_key/path"
                     .to_string(),
             );
         }
+        *roles.entry(object.role.as_str()).or_default() += 1;
         total_size = total_size
             .checked_add(object.size_bytes)
             .ok_or_else(|| "frozen review object size overflow".to_string())?;
@@ -4020,6 +4065,21 @@ fn validate_frozen_review_objects(objects: &[FrozenReviewObjectV1]) -> Result<()
     }
     if total_size > 64 * 1024 * 1024 {
         return Err("frozen review bundle exceeds 64 MiB".to_string());
+    }
+    let exactly_one = |role: &str| roles.get(role).copied().unwrap_or_default() == 1;
+    if !exactly_one("paper_source")
+        || !exactly_one("bibliography")
+        || !exactly_one("claim_evidence_graph")
+        || !exactly_one("frozen_evaluator")
+        || !exactly_one("dataset")
+        || !exactly_one("candidate")
+        || roles.get("evaluator_support").copied().unwrap_or_default() > 1
+        || roles.len() != 6 + usize::from(roles.contains_key("evaluator_support"))
+    {
+        return Err(
+            "frozen review authority lacks exact human-readable and executable role coverage"
+                .to_string(),
+        );
     }
     Ok(())
 }
@@ -5795,7 +5855,7 @@ mod frozen_review_manifest_tests {
     #[test]
     fn authority_and_resolved_bundle_hashes_bind_every_manifest_pin_and_member() {
         let object = FrozenReviewObjectV1 {
-            object_key: "object-0000".to_string(),
+            object_key: "object-0004".to_string(),
             logical_path: "evaluator.py".to_string(),
             role: "frozen_evaluator".to_string(),
             digest: format!("sha256:{}", "a".repeat(64)),
@@ -5819,21 +5879,45 @@ mod frozen_review_manifest_tests {
             evaluator_manifest_hash: format!("sha256:{}", "4".repeat(64)),
             dataset_manifest_hash: format!("sha256:{}", "5".repeat(64)),
             artifact_objects: vec![
-                object.clone(),
+                FrozenReviewObjectV1 {
+                    object_key: "object-0000".to_string(),
+                    logical_path: "paper/references.bib".to_string(),
+                    role: "bibliography".to_string(),
+                    digest: format!("sha256:{}", "d".repeat(64)),
+                    media_type: "application/x-bibtex".to_string(),
+                    ..object.clone()
+                },
                 FrozenReviewObjectV1 {
                     object_key: "object-0001".to_string(),
+                    logical_path: "candidate.json".to_string(),
+                    role: "candidate".to_string(),
+                    digest: format!("sha256:{}", "c".repeat(64)),
+                    media_type: "application/json".to_string(),
+                    ..object.clone()
+                },
+                FrozenReviewObjectV1 {
+                    object_key: "object-0002".to_string(),
+                    logical_path: "paper/claim-evidence.json".to_string(),
+                    role: "claim_evidence_graph".to_string(),
+                    digest: format!("sha256:{}", "e".repeat(64)),
+                    media_type: "application/json".to_string(),
+                    ..object.clone()
+                },
+                FrozenReviewObjectV1 {
+                    object_key: "object-0003".to_string(),
                     logical_path: "dataset.json".to_string(),
                     role: "dataset".to_string(),
                     digest: format!("sha256:{}", "b".repeat(64)),
                     media_type: "application/json".to_string(),
                     ..object.clone()
                 },
+                object.clone(),
                 FrozenReviewObjectV1 {
-                    object_key: "object-0002".to_string(),
-                    logical_path: "candidate.json".to_string(),
-                    role: "candidate".to_string(),
-                    digest: format!("sha256:{}", "c".repeat(64)),
-                    media_type: "application/json".to_string(),
+                    object_key: "object-0005".to_string(),
+                    logical_path: "paper/paper.md".to_string(),
+                    role: "paper_source".to_string(),
+                    digest: format!("sha256:{}", "f".repeat(64)),
+                    media_type: "text/markdown; charset=utf-8".to_string(),
                     ..object.clone()
                 },
             ],
@@ -5847,10 +5931,24 @@ mod frozen_review_manifest_tests {
         };
         authority.authority_hash = frozen_review_authority_hash(&authority).unwrap();
         verify_frozen_review_authority(&authority).unwrap();
-        let mut transport_objects = authority.artifact_objects.clone();
-        transport_objects[0].logical_path = "evaluator/main.py".to_string();
-        transport_objects[1].logical_path = "inputs/dataset.json".to_string();
-        transport_objects[2].logical_path = "inputs/candidate.json".to_string();
+        let mut transport_objects = authority
+            .artifact_objects
+            .iter()
+            .filter(|candidate| review_object_role_is_executable(&candidate.role))
+            .cloned()
+            .collect::<Vec<_>>();
+        for transport in &mut transport_objects {
+            transport.logical_path = match transport.role.as_str() {
+                "frozen_evaluator" => "evaluator/main.py",
+                "dataset" => "inputs/dataset.json",
+                "candidate" => "inputs/candidate.json",
+                _ => unreachable!(),
+            }
+            .to_string();
+        }
+        transport_objects.sort_by(|left, right| {
+            (&left.object_key, &left.logical_path).cmp(&(&right.object_key, &right.logical_path))
+        });
         let mut bundle = FrozenReviewBundleV1 {
             schema: RESOLVED_FROZEN_REVIEW_BUNDLE_V1.to_string(),
             bundle_hash: String::new(),
@@ -6048,6 +6146,70 @@ mod agent_proposal_v2_frozen_tests {
                 &signing_key.verifying_key()
             )
             .is_err());
+        }
+    }
+}
+
+#[cfg(test)]
+mod agent_bridge_challenge_request_tests {
+    use super::*;
+
+    fn challenge_get_claim() -> AgentBridgeRequestProofV1 {
+        AgentBridgeRequestProofV1 {
+            schema: AGENT_BRIDGE_REQUEST_PROOF_V1.to_string(),
+            binding_id: Uuid::from_u128(1),
+            agent_id: "did:trnm:challenge-material-agent".to_string(),
+            agent_key_id: format!("sha256:{}", "a".repeat(64)),
+            http_method: "GET".to_string(),
+            canonical_path: CHALLENGE_MATERIAL_OBJECT_DOWNLOAD_PATH_V1.to_string(),
+            canonical_query: format!(
+                "bundle_hash=sha256%3A{}&digest=sha256%3A{}&object_key=brief&paper_id={}&work_item_id={}",
+                "b".repeat(64),
+                "c".repeat(64),
+                Uuid::from_u128(2),
+                Uuid::from_u128(3),
+            ),
+            body_hash: sha256_digest(&[]),
+            nonce: Uuid::from_u128(4),
+            issued_at_unix: 1_000,
+            expires_at_unix: 1_060,
+        }
+    }
+
+    #[test]
+    fn challenge_get_route_and_empty_body_are_frozen_into_request_proof() {
+        let claim = challenge_get_claim();
+        assert!(agent_bridge_request_proof_signing_bytes(&claim).is_ok());
+
+        let mut nonempty = claim.clone();
+        nonempty.body_hash = sha256_digest(b"not empty");
+        assert!(agent_bridge_request_proof_signing_bytes(&nonempty).is_err());
+
+        let mut wrong_method = claim.clone();
+        wrong_method.http_method = "POST".to_string();
+        assert!(agent_bridge_request_proof_signing_bytes(&wrong_method).is_err());
+
+        let mut arbitrary_path = claim;
+        arbitrary_path.canonical_path = "/api/agent-bridge/arbitrary".to_string();
+        assert!(agent_bridge_request_proof_signing_bytes(&arbitrary_path).is_err());
+    }
+
+    #[test]
+    fn challenge_query_encoding_rejects_order_duplicate_and_percent_aliases() {
+        let valid = challenge_get_claim().canonical_query;
+        assert!(validate_agent_bridge_canonical_query(&valid).is_ok());
+        for hostile in [
+            "digest=sha256%3Acc&bundle_hash=sha256%3Abb",
+            "bundle_hash=sha256%3Abb&bundle_hash=sha256%3Acc",
+            "bundle_hash=sha256%3abb",
+            "%62undle_hash=sha256%3Abb",
+            "bundle_hash=sha256%3Aab+cd",
+            "?bundle_hash=sha256%3Abb",
+        ] {
+            assert!(
+                validate_agent_bridge_canonical_query(hostile).is_err(),
+                "hostile canonical query unexpectedly accepted: {hostile}"
+            );
         }
     }
 }

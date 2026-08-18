@@ -9,6 +9,8 @@ import {
 } from "./canonical.mjs";
 
 export const CONFIG_SCHEMA = "hepta.paper_raid.agent_bridge.config.v2";
+export const AUTHOR_EXECUTOR_SCHEMA =
+  "hepta.paper_raid.agent_bridge.author_executor.v1";
 const LEGACY_CONFIG_SCHEMA = "hepta.paper_raid.agent_bridge.config.v1";
 
 const EXPECTED_KEYS = new Set([
@@ -16,12 +18,19 @@ const EXPECTED_KEYS = new Set([
   "bff_url",
   "identity_file",
   "state_file",
+  "author_executor",
   "capabilities",
   "resource_classes",
   "max_parallel_tasks",
   "paper_ids",
   "poll_interval_ms",
   "request_timeout_ms",
+]);
+
+const AUTHOR_EXECUTOR_KEYS = new Set([
+  "schema",
+  "executable",
+  "timeout_ms",
 ]);
 
 const SECRET_CONFIG_KEYS = new Set([
@@ -129,6 +138,23 @@ export async function loadConfig(path) {
     }
     return resolve(base, value);
   };
+  let authorExecutor = null;
+  if (document.author_executor !== undefined && document.author_executor !== null) {
+    const executor = document.author_executor;
+    if (!executor || Array.isArray(executor) || typeof executor !== "object" ||
+        Object.keys(executor).length !== AUTHOR_EXECUTOR_KEYS.size ||
+        Object.keys(executor).some(key => !AUTHOR_EXECUTOR_KEYS.has(key)) ||
+        executor.schema !== AUTHOR_EXECUTOR_SCHEMA ||
+        !Number.isSafeInteger(executor.timeout_ms) ||
+        executor.timeout_ms < 1_000 || executor.timeout_ms > 3_600_000) {
+      throw new Error("author_executor must be one exact bounded v1 executor");
+    }
+    authorExecutor = Object.freeze({
+      schema: AUTHOR_EXECUTOR_SCHEMA,
+      executable: localPath(executor.executable, "author_executor.executable"),
+      timeout_ms: executor.timeout_ms,
+    });
+  }
   if (
     !Array.isArray(document.paper_ids) ||
     document.paper_ids.length > 64
@@ -187,6 +213,7 @@ export async function loadConfig(path) {
     bff_url: validatedOrigin(document.bff_url),
     identity_file: localPath(document.identity_file, "identity_file"),
     state_file: localPath(document.state_file, "state_file"),
+    author_executor: authorExecutor,
     capability_disclosure: capabilityDisclosure,
     paper_ids: Object.freeze([...paperIds]),
     poll_interval_ms: document.poll_interval_ms,

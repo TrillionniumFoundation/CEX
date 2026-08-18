@@ -38,12 +38,17 @@ const REVIEW_ROLE_KIND = new Map([
   ["evaluator", "evaluate"],
   ["reproducer", "reproduce"],
 ]);
-const OBJECT_ROLES = new Set([
+const EXECUTABLE_OBJECT_ROLES = new Set([
   "candidate",
   "dataset",
   "evaluator_support",
   "frozen_evaluator",
-  "input",
+]);
+const AUTHORITY_OBJECT_ROLES = new Set([
+  ...EXECUTABLE_OBJECT_ROLES,
+  "paper_source",
+  "bibliography",
+  "claim_evidence_graph",
 ]);
 const MAX_OBJECTS = 64;
 const MAX_OBJECT_BYTES = 16 * 1024 * 1024;
@@ -141,7 +146,7 @@ function validateLogicalPath(value, field) {
   return value;
 }
 
-function validateObjectShape(value, index, field) {
+function validateObjectShape(value, index, field, allowedRoles) {
   exactKeys(value, [
     "object_key",
     "logical_path",
@@ -153,7 +158,7 @@ function validateObjectShape(value, index, field) {
   ], `${field}[${index}]`);
   assertLogicalId(value.object_key, `${field}[${index}].object_key`);
   validateLogicalPath(value.logical_path, `${field}[${index}].logical_path`);
-  if (!OBJECT_ROLES.has(value.role)) {
+  if (!allowedRoles.has(value.role)) {
     throw new Error(`${field}[${index}].role is unsupported`);
   }
   assertDigest(value.digest, `${field}[${index}].digest`);
@@ -167,7 +172,12 @@ function validateObjectShape(value, index, field) {
       value.media_type !== "text/x-python; charset=utf-8") ||
     (value.role === "candidate" && value.media_type !== "application/json") ||
     (value.role === "dataset" &&
-      !["application/json", "text/csv; charset=utf-8"].includes(value.media_type))
+      !["application/json", "text/csv; charset=utf-8"].includes(value.media_type)) ||
+    (value.role === "paper_source" &&
+      !["text/markdown; charset=utf-8", "application/pdf"].includes(value.media_type)) ||
+    (value.role === "bibliography" &&
+      !["application/x-bibtex", "text/plain; charset=utf-8"].includes(value.media_type)) ||
+    (value.role === "claim_evidence_graph" && value.media_type !== "application/json")
   ) {
     throw new Error(`${field}[${index}].media_type is invalid for its role`);
   }
@@ -197,11 +207,21 @@ function transportPath(role, mediaType) {
 }
 
 function validateAuthorityObject(value, index) {
-  return validateObjectShape(value, index, "authority.artifact_objects");
+  return validateObjectShape(
+    value,
+    index,
+    "authority.artifact_objects",
+    AUTHORITY_OBJECT_ROLES,
+  );
 }
 
 function validateObject(value, index) {
-  const object = validateObjectShape(value, index, "bundle.objects");
+  const object = validateObjectShape(
+    value,
+    index,
+    "bundle.objects",
+    EXECUTABLE_OBJECT_ROLES,
+  );
   if (object.logical_path !== transportPath(object.role, object.media_type)) {
     throw new Error(`bundle.objects[${index}].logical_path is not deterministic`);
   }
@@ -367,13 +387,27 @@ function validateAuthority(value, task) {
   }
   if (
     !Array.isArray(value.artifact_objects) ||
-    value.artifact_objects.length < 3 ||
-    value.artifact_objects.length > MAX_OBJECTS
+    value.artifact_objects.length < 6 ||
+    value.artifact_objects.length > 7
   ) {
-    throw new Error("frozen review authority must contain 3 to 64 artifact objects");
+    throw new Error("frozen review authority must contain 6 or 7 artifact objects");
   }
   const artifactObjects = value.artifact_objects.map(validateAuthorityObject);
   validateSortedObjects(artifactObjects, "frozen review authority");
+  const roleCount = role => artifactObjects.filter(object => object.role === role).length;
+  if (
+    [
+      "paper_source",
+      "bibliography",
+      "claim_evidence_graph",
+      "frozen_evaluator",
+      "dataset",
+      "candidate",
+    ].some(role => roleCount(role) !== 1) ||
+    roleCount("evaluator_support") > 1
+  ) {
+    throw new Error("frozen review authority lacks exact reviewer and executable roles");
+  }
   const executionPolicy = validateExecutionPolicy(value.execution_policy, task.kind);
   const authority = Object.freeze({
     ...value,
@@ -390,14 +424,19 @@ function validateSortedObjects(objects, field) {
   let totalBytes = 0;
   const objectKeys = new Set();
   const logicalPaths = new Set();
+  const digests = new Set();
   let previous = null;
   for (const object of objects) {
     totalBytes += object.size_bytes;
     if (totalBytes > MAX_TOTAL_BYTES) {
       throw new Error(`${field} exceeds the total byte limit`);
     }
-    if (objectKeys.has(object.object_key) || logicalPaths.has(object.logical_path)) {
-      throw new Error(`${field} object keys and paths must be unique`);
+    if (
+      objectKeys.has(object.object_key) ||
+      logicalPaths.has(object.logical_path) ||
+      digests.has(object.digest)
+    ) {
+      throw new Error(`${field} object keys, paths, and digests must be unique`);
     }
     const ordering = `${object.object_key}\0${object.logical_path}`;
     if (previous !== null && previous >= ordering) {
@@ -405,6 +444,7 @@ function validateSortedObjects(objects, field) {
     }
     objectKeys.add(object.object_key);
     logicalPaths.add(object.logical_path);
+    digests.add(object.digest);
     previous = ordering;
   }
 }
@@ -458,8 +498,8 @@ function validateBundle(value, task) {
   ) {
     throw new Error("bundle.expires_at must be canonical UTC RFC3339");
   }
-  if (!Array.isArray(value.objects) || value.objects.length < 3 || value.objects.length > MAX_OBJECTS) {
-    throw new Error("frozen review bundle must contain 3 to 64 objects");
+  if (!Array.isArray(value.objects) || value.objects.length < 3 || value.objects.length > 4) {
+    throw new Error("frozen review bundle must contain 3 or 4 executable objects");
   }
   const objects = value.objects.map(validateObject);
   validateSortedObjects(objects, "frozen review bundle");
@@ -494,21 +534,36 @@ function validateBundle(value, task) {
       throw new Error(`resolved review bundle ${field} disagrees with its authority`);
     }
   }
-  if (objects.length !== authority.artifact_objects.length) {
-    throw new Error("resolved review object count differs from Hepta authority objects");
+  const executableAuthority = authority.artifact_objects.filter(object =>
+    EXECUTABLE_OBJECT_ROLES.has(object.role)
+  );
+  if (objects.length !== executableAuthority.length) {
+    throw new Error("resolved review object count differs from executable Hepta authority");
   }
-  for (let index = 0; index < objects.length; index += 1) {
-    const resolved = objects[index];
-    const source = authority.artifact_objects[index];
-    if (
-      resolved.object_key !== source.object_key ||
-      resolved.role !== source.role ||
-      resolved.digest !== source.digest ||
-      resolved.size_bytes !== source.size_bytes ||
-      resolved.media_type !== source.media_type ||
-      resolved.download_path !== source.download_path
-    ) {
-      throw new Error("resolved review object differs from Hepta authority object");
+  for (const resolved of objects) {
+    const matches = executableAuthority.filter(source =>
+      resolved.object_key === source.object_key &&
+      resolved.role === source.role &&
+      resolved.digest === source.digest &&
+      resolved.size_bytes === source.size_bytes &&
+      resolved.media_type === source.media_type &&
+      resolved.download_path === source.download_path
+    );
+    if (matches.length !== 1) {
+      throw new Error("resolved review object differs from Hepta authority executable object");
+    }
+  }
+  for (const source of executableAuthority) {
+    const matches = objects.filter(resolved =>
+      resolved.object_key === source.object_key &&
+      resolved.role === source.role &&
+      resolved.digest === source.digest &&
+      resolved.size_bytes === source.size_bytes &&
+      resolved.media_type === source.media_type &&
+      resolved.download_path === source.download_path
+    );
+    if (matches.length !== 1) {
+      throw new Error("one executable Hepta authority object was not projected exactly once");
     }
   }
   if (
@@ -1445,7 +1500,7 @@ export function validateReviewReceiptRequest(state, identity, request) {
       object.logical_path,
       `run_manifest.input_objects[${index}].logical_path`,
     );
-    if (!OBJECT_ROLES.has(object.role)) {
+    if (!EXECUTABLE_OBJECT_ROLES.has(object.role)) {
       throw new Error("review run input object role is unsupported");
     }
     assertDigest(object.digest, `run_manifest.input_objects[${index}].digest`);

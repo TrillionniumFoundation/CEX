@@ -24,8 +24,8 @@ use hepta_paper_raid_contracts::{
     ChallengeManifestObjectV1, FrozenReviewAuthorityV1, FrozenReviewBundleV1,
     FrozenReviewExecutionPlanV1, FrozenReviewInputObjectV1, FrozenReviewObjectV1,
     ReviewEvaluationExecutionResultV1, ReviewExecutionReceiptV1,
-    ReviewReproductionExecutionResultV1, AGENT_BINDING_PROOF_V3, RESOLVED_FROZEN_REVIEW_BUNDLE_V1,
-    REVIEW_EXECUTION_RECEIPT_V1,
+    ReviewReproductionExecutionResultV1, AGENT_BINDING_PROOF_V3, PAPER_BUNDLE_V2,
+    PAPER_RELEASE_CANDIDATE_V2, RESOLVED_FROZEN_REVIEW_BUNDLE_V1, REVIEW_EXECUTION_RECEIPT_V1,
 };
 use rand::{rngs::OsRng, RngCore};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -99,6 +99,139 @@ const AGENT_HEADER_NAMES: [&str; 9] = [
     HEADER_SIGNATURE,
 ];
 
+pub(crate) fn review_outer_bundle_matches_authority(
+    review_bundle: &Value,
+    authority: &FrozenReviewAuthorityV1,
+) -> bool {
+    let paper_id = authority.paper_project_id.to_string();
+    let submission_id = authority.submission_id.to_string();
+    let Some(paper_bundle) = review_bundle.get("paper_bundle") else {
+        return false;
+    };
+    let Some(release_candidate) = paper_bundle.get("release_candidate") else {
+        return false;
+    };
+    review_bundle
+        .get("paper_project_id")
+        .and_then(Value::as_str)
+        == Some(paper_id.as_str())
+        && review_bundle.get("submission_id").and_then(Value::as_str)
+            == Some(submission_id.as_str())
+        && review_bundle.get("status").and_then(Value::as_str) == Some("submission_ready")
+        && review_bundle
+            .get("release_candidate_hash")
+            .and_then(Value::as_str)
+            == Some(authority.release_candidate_hash.as_str())
+        && review_bundle
+            .get("paper_bundle_hash")
+            .and_then(Value::as_str)
+            == Some(authority.paper_bundle_hash.as_str())
+        && paper_bundle.get("schema").and_then(Value::as_str) == Some(PAPER_BUNDLE_V2)
+        && paper_bundle
+            .get("release_candidate_hash")
+            .and_then(Value::as_str)
+            == Some(authority.release_candidate_hash.as_str())
+        && paper_bundle
+            .get("paper_bundle_hash")
+            .and_then(Value::as_str)
+            == Some(authority.paper_bundle_hash.as_str())
+        && release_candidate.get("schema").and_then(Value::as_str)
+            == Some(PAPER_RELEASE_CANDIDATE_V2)
+        && release_candidate
+            .get("paper_project_id")
+            .and_then(Value::as_str)
+            == Some(paper_id.as_str())
+        && release_candidate
+            .get("artifact_manifest_hash")
+            .and_then(Value::as_str)
+            == Some(authority.artifact_manifest_hash.as_str())
+}
+
+fn review_assignment_matches_descriptor(
+    assignment: &Value,
+    descriptor: &FrozenReviewBundleV1,
+    expected_player_id: Uuid,
+) -> bool {
+    let assignment_id = descriptor.assignment_id.to_string();
+    let paper_id = descriptor.paper_project_id.to_string();
+    let submission_id = descriptor.submission_id.to_string();
+    let player_id = expected_player_id.to_string();
+    assignment.get("assignment_id").and_then(Value::as_str) == Some(assignment_id.as_str())
+        && assignment.get("paper_project_id").and_then(Value::as_str) == Some(paper_id.as_str())
+        && assignment.get("submission_id").and_then(Value::as_str) == Some(submission_id.as_str())
+        && assignment.get("player_id").and_then(Value::as_str) == Some(player_id.as_str())
+        && assignment.get("review_round").and_then(Value::as_u64) == Some(descriptor.review_round)
+        && assignment.get("slot").and_then(Value::as_str) == Some(descriptor.slot.as_str())
+        && assignment.get("version").and_then(Value::as_u64) == Some(descriptor.assignment_version)
+        && assignment.get("expires_at").and_then(Value::as_str)
+            == Some(descriptor.expires_at.as_str())
+        && matches!(
+            assignment.get("status").and_then(Value::as_str),
+            Some("claimed" | "pinned")
+        )
+}
+
+/// Bind one queue discovery record to the exact independently verified review authority.
+///
+/// The queue supplies discoverability only.  It may not redirect an assignment to another Paper
+/// or substitute any submission/release/bundle/player/round/slot/version/status field.  The
+/// caller still derives and checks the deterministic executable task ID after this binding.
+pub(crate) fn review_queue_item_matches_resolved_bundle(
+    queue_item: &Value,
+    resolved_bundle: &Value,
+    expected_player_id: Uuid,
+) -> bool {
+    let descriptor: FrozenReviewBundleV1 = match resolved_bundle
+        .get("resolved_frozen_review_bundle")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+    {
+        Some(descriptor) => descriptor,
+        None => return false,
+    };
+    if verify_frozen_review_bundle(&descriptor).is_err()
+        || !review_outer_bundle_matches_authority(resolved_bundle, &descriptor.authority)
+    {
+        return false;
+    }
+    let Some(queue_assignments) = queue_item.get("my_assignments").and_then(Value::as_array) else {
+        return false;
+    };
+    let Some(bundle_assignments) = resolved_bundle
+        .get("my_assignments")
+        .and_then(Value::as_array)
+    else {
+        return false;
+    };
+    if queue_assignments.len() != 1
+        || bundle_assignments.len() != 1
+        || !review_assignment_matches_descriptor(
+            &queue_assignments[0],
+            &descriptor,
+            expected_player_id,
+        )
+        || !review_assignment_matches_descriptor(
+            &bundle_assignments[0],
+            &descriptor,
+            expected_player_id,
+        )
+        || queue_assignments[0].get("status").and_then(Value::as_str)
+            != bundle_assignments[0].get("status").and_then(Value::as_str)
+    {
+        return false;
+    }
+    let paper_id = descriptor.paper_project_id.to_string();
+    let submission_id = descriptor.submission_id.to_string();
+    queue_item.get("paper_project_id").and_then(Value::as_str) == Some(paper_id.as_str())
+        && queue_item.get("submission_id").and_then(Value::as_str) == Some(submission_id.as_str())
+        && queue_item
+            .get("release_candidate_hash")
+            .and_then(Value::as_str)
+            == Some(descriptor.release_candidate_hash.as_str())
+        && queue_item.get("paper_bundle_hash").and_then(Value::as_str)
+            == Some(descriptor.paper_bundle_hash.as_str())
+}
+
 fn identity_supports_agent_bridge(identity: &AlphaIdentity) -> bool {
     [
         AlphaIdentityScope::Author,
@@ -164,10 +297,12 @@ struct InboxRequest {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReviewObjectQuery {
+    #[serde(deserialize_with = "deserialize_canonical_uuid")]
     assignment_id: Uuid,
     bundle_hash: String,
     digest: String,
     object_key: String,
+    #[serde(deserialize_with = "deserialize_canonical_uuid")]
     task_id: Uuid,
 }
 
@@ -177,8 +312,24 @@ pub struct ChallengeObjectQuery {
     bundle_hash: String,
     digest: String,
     object_key: String,
+    #[serde(deserialize_with = "deserialize_canonical_uuid")]
     paper_id: Uuid,
+    #[serde(deserialize_with = "deserialize_canonical_uuid")]
     work_item_id: Uuid,
+}
+
+fn deserialize_canonical_uuid<'de, D>(deserializer: D) -> Result<Uuid, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let text = String::deserialize(deserializer)?;
+    let value = Uuid::parse_str(&text).map_err(serde::de::Error::custom)?;
+    if value.is_nil() || value.to_string() != text {
+        return Err(serde::de::Error::custom(
+            "UUID must use canonical lowercase dashed text",
+        ));
+    }
+    Ok(value)
 }
 
 #[derive(Debug, Deserialize)]
@@ -831,7 +982,7 @@ fn resolve_delivery_context(
             && record_uuid(item, "assigned_player_id") == Some(mapping.player_id)
             && matches!(
                 item.get("status").and_then(Value::as_str),
-                Some("planned" | "in_progress" | "review")
+                Some("planned" | "in_progress")
             )
     });
     let Some(work) = work else {
@@ -1061,15 +1212,17 @@ async fn assigned_challenge_material_projection(
     mapping: &BridgeMapping,
     tasks: &[Value],
 ) -> Value {
-    let work_item_ids = tasks
-        .iter()
-        .filter(|task| task.get("status").and_then(Value::as_str) != Some("cancelled"))
-        .filter_map(|task| {
-            task.get("work_item_id")
-                .and_then(Value::as_str)
-                .and_then(|value| Uuid::parse_str(value).ok())
-        })
-        .collect::<Vec<_>>();
+    let work_item_ids = match active_challenge_material_work_item_ids(tasks) {
+        Ok(work_item_ids) => work_item_ids,
+        Err(_) => {
+            return json!({
+                "schema": "hepta.paper_raid.agent_bridge.assigned_challenge_materials.v1",
+                "status": "unavailable",
+                "reason_code": "invalid_assigned_author_work_item",
+                "items": [],
+            });
+        }
+    };
     if work_item_ids.is_empty() {
         return json!({
             "schema": "hepta.paper_raid.agent_bridge.assigned_challenge_materials.v1",
@@ -1129,6 +1282,29 @@ async fn assigned_challenge_material_projection(
         "reason_code": Value::Null,
         "items": items,
     })
+}
+
+fn active_challenge_material_work_item_ids(tasks: &[Value]) -> Result<Vec<Uuid>, AppError> {
+    let mut work_item_ids = Vec::new();
+    let mut seen = HashSet::new();
+    for task in tasks.iter().filter(|task| {
+        matches!(
+            task.get("status").and_then(Value::as_str),
+            Some("planned" | "in_progress")
+        )
+    }) {
+        let text = task
+            .get("work_item_id")
+            .and_then(Value::as_str)
+            .ok_or(AppError::Upstream)?;
+        let work_item_id = Uuid::parse_str(text).map_err(|_| AppError::Upstream)?;
+        if work_item_id.is_nil() || work_item_id.to_string() != text || !seen.insert(work_item_id) {
+            return Err(AppError::Upstream);
+        }
+        work_item_ids.push(work_item_id);
+    }
+    work_item_ids.sort_unstable();
+    Ok(work_item_ids)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1223,6 +1399,7 @@ fn resolve_manifest_members(
     evaluator: &ChallengeEvaluatorManifestV1,
     dataset: &ChallengeDatasetManifestV1,
 ) -> Result<Vec<FrozenReviewObjectV1>, AppError> {
+    verify_frozen_review_authority(authority).map_err(|_| AppError::Upstream)?;
     if evaluator.pack_id != dataset.pack_id
         || dataset.objects.len() != 1
         || evaluator
@@ -1303,7 +1480,7 @@ fn resolve_manifest_members(
     if authority.artifact_objects.iter().any(|object| {
         matches!(
             object.role.as_str(),
-            "frozen_evaluator" | "evaluator_support" | "dataset" | "input" | "candidate"
+            "frozen_evaluator" | "evaluator_support" | "dataset" | "candidate"
         ) && !resolved_paths.contains(object.logical_path.as_str())
     }) {
         return Err(AppError::Upstream);
@@ -1432,6 +1609,7 @@ fn legacy_golden_challenge_manifests(
 pub(crate) async fn resolve_frozen_review_bundle(
     state: &AppState,
     hepta_bundle: &Value,
+    expected_player_id: Uuid,
 ) -> Result<Value, AppError> {
     let authority_value = hepta_bundle
         .get("frozen_review_authority")
@@ -1443,17 +1621,7 @@ pub(crate) async fn resolve_frozen_review_bundle(
 
     let paper_id = authority.paper_project_id.to_string();
     let submission_id = authority.submission_id.to_string();
-    if hepta_bundle.get("paper_project_id").and_then(Value::as_str) != Some(paper_id.as_str())
-        || hepta_bundle.get("submission_id").and_then(Value::as_str) != Some(submission_id.as_str())
-        || hepta_bundle
-            .get("release_candidate_hash")
-            .and_then(Value::as_str)
-            != Some(authority.release_candidate_hash.as_str())
-        || hepta_bundle
-            .get("paper_bundle_hash")
-            .and_then(Value::as_str)
-            != Some(authority.paper_bundle_hash.as_str())
-    {
+    if !review_outer_bundle_matches_authority(hepta_bundle, &authority) {
         return Err(AppError::Upstream);
     }
     let assignments = hepta_bundle
@@ -1461,6 +1629,7 @@ pub(crate) async fn resolve_frozen_review_bundle(
         .and_then(Value::as_array)
         .ok_or(AppError::Upstream)?;
     let assignment_id = authority.assignment_id.to_string();
+    let player_id = expected_player_id.to_string();
     if assignments.len() != 1
         || assignments[0].get("assignment_id").and_then(Value::as_str)
             != Some(assignment_id.as_str())
@@ -1470,6 +1639,10 @@ pub(crate) async fn resolve_frozen_review_bundle(
             != Some(paper_id.as_str())
         || assignments[0].get("submission_id").and_then(Value::as_str)
             != Some(submission_id.as_str())
+        || assignments[0].get("player_id").and_then(Value::as_str) != Some(player_id.as_str())
+        || assignments[0].get("review_round").and_then(Value::as_u64)
+            != Some(authority.review_round)
+        || assignments[0].get("slot").and_then(Value::as_str) != Some(authority.slot.as_str())
         || assignments[0].get("version").and_then(Value::as_u64)
             != Some(authority.assignment_version)
         || assignments[0].get("expires_at").and_then(Value::as_str)
@@ -1641,21 +1814,36 @@ async fn agent_review_inbox_value(
                 continue;
             }
         };
-        let bundle = match resolve_frozen_review_bundle(state, &hepta_bundle).await {
-            Ok(bundle) => bundle,
-            Err(_) => {
-                papers.push(json!({
-                    "paper_id": paper_id,
-                    "review_tasks": {
-                        "schema": "hepta.paper_raid.agent_bridge.review_tasks.v1",
-                        "status": "unavailable",
-                        "reason_code": "frozen_review_manifest_resolution_failed",
-                        "items": [],
-                    }
-                }));
-                continue;
-            }
-        };
+        let bundle =
+            match resolve_frozen_review_bundle(state, &hepta_bundle, verified.mapping.player_id)
+                .await
+            {
+                Ok(bundle) => bundle,
+                Err(_) => {
+                    papers.push(json!({
+                        "paper_id": paper_id,
+                        "review_tasks": {
+                            "schema": "hepta.paper_raid.agent_bridge.review_tasks.v1",
+                            "status": "unavailable",
+                            "reason_code": "frozen_review_manifest_resolution_failed",
+                            "items": [],
+                        }
+                    }));
+                    continue;
+                }
+            };
+        if !review_queue_item_matches_resolved_bundle(item, &bundle, verified.mapping.player_id) {
+            papers.push(json!({
+                "paper_id": paper_id,
+                "review_tasks": {
+                    "schema": "hepta.paper_raid.agent_bridge.review_tasks.v1",
+                    "status": "unavailable",
+                    "reason_code": "review_queue_authority_mismatch",
+                    "items": [],
+                }
+            }));
+            continue;
+        }
         let descriptor = bundle
             .get("resolved_frozen_review_bundle")
             .ok_or(AppError::Upstream)?;
@@ -1869,6 +2057,7 @@ pub async fn agent_inbox(
                         "section_key",
                         "parent_revision_id",
                         "artifact_manifest_id",
+                        "expected_work_version",
                         "status",
                         "version",
                     ],
@@ -1991,8 +2180,14 @@ pub async fn agent_challenge_object(
         &query.digest,
     )?;
     state.cas.validate_media_type(&media_type)?;
+    let expected_size = bundle
+        .objects
+        .iter()
+        .find(|object| object.object_key == query.object_key && object.digest == query.digest)
+        .map(|object| object.size_bytes)
+        .ok_or(AppError::Forbidden)?;
     if let Some((status, bytes)) = verified.replay.as_ref() {
-        if *status != StatusCode::OK.as_u16() {
+        if *status != StatusCode::OK.as_u16() || bytes.len() as u64 != expected_size {
             return Err(AppError::Conflict(
                 "challenge_object_replay_status_changed".into(),
             ));
@@ -2000,12 +2195,6 @@ pub async fn agent_challenge_object(
         return crate::app::review_artifact_response(bytes.clone(), &media_type);
     }
     let bytes = state.cas.get(&query.digest, &media_type).await?;
-    let expected_size = bundle
-        .objects
-        .iter()
-        .find(|object| object.object_key == query.object_key && object.digest == query.digest)
-        .map(|object| object.size_bytes)
-        .ok_or(AppError::Forbidden)?;
     if bytes.len() as u64 != expected_size {
         return Err(AppError::Upstream);
     }
@@ -2027,68 +2216,106 @@ pub async fn agent_review_object(
     ) {
         return Err(AppError::Invalid("review object digest is invalid".into()));
     }
-    let paper_id = {
-        let queue = state.hepta.list_review_queue(&verified.identity).await?;
-        let assignment_id_text = query.assignment_id.to_string();
-        queue
-            .as_array()
-            .and_then(|items| {
-                items.iter().find_map(|item| {
-                    item.get("my_assignments")
-                        .and_then(Value::as_array)
-                        .is_some_and(|assignments| {
-                            assignments.iter().any(|assignment| {
-                                assignment.get("assignment_id").and_then(Value::as_str)
-                                    == Some(assignment_id_text.as_str())
-                            })
-                        })
-                        .then(|| {
-                            item.get("paper_project_id")
-                                .and_then(Value::as_str)
-                                .and_then(|value| Uuid::parse_str(value).ok())
-                        })
-                        .flatten()
+    let queue = state.hepta.list_review_queue(&verified.identity).await?;
+    let queue_items = queue.as_array().ok_or(AppError::Upstream)?;
+    let assignment_id_text = query.assignment_id.to_string();
+    let queue_matches = queue_items
+        .iter()
+        .filter(|item| {
+            item.get("my_assignments")
+                .and_then(Value::as_array)
+                .is_some_and(|assignments| {
+                    assignments.iter().any(|assignment| {
+                        assignment.get("assignment_id").and_then(Value::as_str)
+                            == Some(assignment_id_text.as_str())
+                    })
                 })
-            })
-            .ok_or(AppError::Forbidden)?
-    };
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if queue_matches.len() != 1 {
+        return Err(AppError::Forbidden);
+    }
+    let queue_item = queue_matches
+        .into_iter()
+        .next()
+        .ok_or(AppError::Forbidden)?;
+    let paper_id_text = queue_item
+        .get("paper_project_id")
+        .and_then(Value::as_str)
+        .ok_or(AppError::Forbidden)?;
+    let paper_id = Uuid::parse_str(paper_id_text).map_err(|_| AppError::Forbidden)?;
+    if paper_id.is_nil() || paper_id.to_string() != paper_id_text {
+        return Err(AppError::Forbidden);
+    }
     let hepta_bundle = state
         .hepta
         .get_paper_review_bundle(&verified.identity, paper_id)
         .await?;
-    let bundle = resolve_frozen_review_bundle(&state, &hepta_bundle).await?;
-    let descriptor = bundle
-        .get("resolved_frozen_review_bundle")
-        .ok_or(AppError::Upstream)?;
-    let kind = descriptor
-        .get("execution")
-        .and_then(|value| value.get("kind"))
-        .and_then(Value::as_str)
-        .ok_or(AppError::Upstream)?;
-    let evaluation_id = if kind == "reproduce" {
-        bundle
-            .get("evaluation")
-            .and_then(|value| value.get("evaluation_id"))
-            .and_then(Value::as_str)
-            .and_then(|value| Uuid::parse_str(value).ok())
-            .ok_or(AppError::Upstream)?
-    } else if kind == "evaluate" {
-        review_evaluation_id(query.assignment_id, &query.bundle_hash)
-    } else {
-        return Err(AppError::Upstream);
-    };
-    if query.task_id
-        != review_task_id(
-            query.assignment_id,
-            &query.bundle_hash,
-            kind,
-            Some(evaluation_id),
-        )
+    let bundle =
+        resolve_frozen_review_bundle(&state, &hepta_bundle, verified.mapping.player_id).await?;
+    if !review_queue_item_matches_resolved_bundle(&queue_item, &bundle, verified.mapping.player_id)
     {
         return Err(AppError::Forbidden);
     }
-    let media_type = crate::app::authorized_review_artifact_media(
+    let descriptor: FrozenReviewBundleV1 = serde_json::from_value(
+        bundle
+            .get("resolved_frozen_review_bundle")
+            .cloned()
+            .ok_or(AppError::Upstream)?,
+    )
+    .map_err(|_| AppError::Upstream)?;
+    let kind = descriptor.execution.kind.as_str();
+    let evaluation_id = if kind == "reproduce" {
+        let evaluation = bundle
+            .get("evaluation")
+            .filter(|value| value.is_object())
+            .ok_or(AppError::Upstream)?;
+        let evaluation_id_text = evaluation
+            .get("evaluation_id")
+            .and_then(Value::as_str)
+            .ok_or(AppError::Upstream)?;
+        let evaluation_id = Uuid::parse_str(evaluation_id_text).map_err(|_| AppError::Upstream)?;
+        let descriptor_paper_id = descriptor.paper_project_id.to_string();
+        let descriptor_submission_id = descriptor.submission_id.to_string();
+        if evaluation_id.is_nil()
+            || evaluation_id.to_string() != evaluation_id_text
+            || evaluation.get("paper_project_id").and_then(Value::as_str)
+                != Some(descriptor_paper_id.as_str())
+            || evaluation.get("submission_id").and_then(Value::as_str)
+                != Some(descriptor_submission_id.as_str())
+            || evaluation
+                .get("release_candidate_hash")
+                .and_then(Value::as_str)
+                != Some(descriptor.release_candidate_hash.as_str())
+            || evaluation.get("paper_bundle_hash").and_then(Value::as_str)
+                != Some(descriptor.paper_bundle_hash.as_str())
+            || evaluation.get("version").and_then(Value::as_u64) != Some(descriptor.review_round)
+        {
+            return Err(AppError::Upstream);
+        }
+        evaluation_id
+    } else if kind == "evaluate" {
+        review_evaluation_id(descriptor.assignment_id, &descriptor.bundle_hash)
+    } else {
+        return Err(AppError::Upstream);
+    };
+    if query.assignment_id != descriptor.assignment_id
+        || query.bundle_hash != descriptor.bundle_hash
+        || query.task_id
+            != review_task_id(
+                descriptor.assignment_id,
+                &descriptor.bundle_hash,
+                kind,
+                Some(evaluation_id),
+            )
+    {
+        return Err(AppError::Forbidden);
+    }
+    let (media_type, expected_size) = crate::app::authorized_review_artifact_media(
         &bundle,
+        paper_id,
+        verified.mapping.player_id,
         query.assignment_id,
         &query.bundle_hash,
         &query.object_key,
@@ -2096,7 +2323,7 @@ pub async fn agent_review_object(
     )?;
     state.cas.validate_media_type(&media_type)?;
     if let Some((status, bytes)) = verified.replay.as_ref() {
-        if *status != StatusCode::OK.as_u16() {
+        if *status != StatusCode::OK.as_u16() || bytes.len() as u64 != expected_size {
             return Err(AppError::Conflict(
                 "review_object_replay_status_changed".into(),
             ));
@@ -2104,6 +2331,9 @@ pub async fn agent_review_object(
         return crate::app::review_artifact_response(bytes.clone(), &media_type);
     }
     let bytes = state.cas.get(&query.digest, &media_type).await?;
+    if bytes.len() as u64 != expected_size {
+        return Err(AppError::Upstream);
+    }
     complete_agent_raw_request(&state, &verified, StatusCode::OK, &bytes).await?;
     crate::app::review_artifact_response(bytes, &media_type)
 }
@@ -2156,7 +2386,8 @@ pub async fn agent_review_receipt(
         .hepta
         .get_paper_review_bundle(&verified.identity, receipt.paper_project_id)
         .await?;
-    let bundle = resolve_frozen_review_bundle(&state, &hepta_bundle).await?;
+    let bundle =
+        resolve_frozen_review_bundle(&state, &hepta_bundle, verified.mapping.player_id).await?;
     let descriptor_value = bundle
         .get("resolved_frozen_review_bundle")
         .cloned()
@@ -3641,7 +3872,11 @@ async fn verify_agent_request(
     reject_unknown_agent_headers(headers)?;
     let canonical_query = uri.query().unwrap_or("");
     validate_agent_bridge_canonical_query(canonical_query).map_err(|_| AppError::Forbidden)?;
-    if uri.path() != "/api/agent-bridge/review-objects" && !canonical_query.is_empty() {
+    if !matches!(
+        uri.path(),
+        "/api/agent-bridge/review-objects" | "/api/agent-bridge/challenge-objects"
+    ) && !canonical_query.is_empty()
+    {
         return Err(AppError::Forbidden);
     }
     let body_hash = sha256_digest(body);
@@ -4314,6 +4549,42 @@ mod tests {
         assert!(truncated);
     }
 
+    #[test]
+    fn challenge_material_projection_ignores_terminal_history_and_rejects_ambiguous_active_work() {
+        let active_id = Uuid::from_u128(7);
+        let tasks = vec![
+            json!({"work_item_id": Uuid::from_u128(1), "status": "accepted"}),
+            json!({"work_item_id": Uuid::from_u128(2), "status": "rejected"}),
+            json!({"work_item_id": Uuid::from_u128(3), "status": "cancelled"}),
+            json!({"work_item_id": active_id, "status": "in_progress"}),
+        ];
+        assert_eq!(
+            active_challenge_material_work_item_ids(&tasks).unwrap(),
+            [active_id]
+        );
+
+        let duplicate = vec![
+            json!({"work_item_id": active_id, "status": "planned"}),
+            json!({"work_item_id": active_id, "status": "in_progress"}),
+        ];
+        assert!(active_challenge_material_work_item_ids(&duplicate).is_err());
+        assert!(active_challenge_material_work_item_ids(&[json!({
+            "work_item_id": active_id,
+            "status": "review"
+        })])
+        .unwrap()
+        .is_empty());
+
+        for hostile in [
+            json!({"work_item_id": active_id.simple().to_string(), "status": "planned"}),
+            json!({"work_item_id": Uuid::nil(), "status": "in_progress"}),
+            json!({"work_item_id": "not-a-uuid", "status": "in_progress"}),
+            json!({"status": "planned"}),
+        ] {
+            assert!(active_challenge_material_work_item_ids(&[hostile]).is_err());
+        }
+    }
+
     fn review_object(
         key: &str,
         path: &str,
@@ -4347,6 +4618,32 @@ mod tests {
         }
     }
 
+    fn human_review_objects() -> Vec<FrozenReviewObjectV1> {
+        vec![
+            review_object(
+                "human-0000",
+                "paper/references.bib",
+                "bibliography",
+                'd',
+                "application/x-bibtex",
+            ),
+            review_object(
+                "human-0001",
+                "paper/claim-evidence.json",
+                "claim_evidence_graph",
+                'e',
+                "application/json",
+            ),
+            review_object(
+                "human-0002",
+                "paper/paper.md",
+                "paper_source",
+                'f',
+                "text/markdown; charset=utf-8",
+            ),
+        ]
+    }
+
     fn review_authority() -> FrozenReviewAuthorityV1 {
         let mut authority = FrozenReviewAuthorityV1 {
             schema: hepta_paper_raid_contracts::FROZEN_REVIEW_AUTHORITY_V1.to_string(),
@@ -4363,29 +4660,32 @@ mod tests {
             artifact_manifest_hash: format!("sha256:{}", "3".repeat(64)),
             evaluator_manifest_hash: format!("sha256:{}", "4".repeat(64)),
             dataset_manifest_hash: format!("sha256:{}", "5".repeat(64)),
-            artifact_objects: vec![
-                review_object(
-                    "object-0000",
-                    "evaluator.py",
-                    "frozen_evaluator",
-                    'a',
-                    "text/x-python; charset=utf-8",
-                ),
-                review_object(
-                    "object-0001",
-                    "dataset/claims.json",
-                    "dataset",
-                    'b',
-                    "application/json",
-                ),
-                review_object(
-                    "object-0002",
-                    "inputs/candidate.json",
-                    "candidate",
-                    'c',
-                    "application/json",
-                ),
-            ],
+            artifact_objects: human_review_objects()
+                .into_iter()
+                .chain([
+                    review_object(
+                        "object-0000",
+                        "evaluator.py",
+                        "frozen_evaluator",
+                        'a',
+                        "text/x-python; charset=utf-8",
+                    ),
+                    review_object(
+                        "object-0001",
+                        "dataset/claims.json",
+                        "dataset",
+                        'b',
+                        "application/json",
+                    ),
+                    review_object(
+                        "object-0002",
+                        "inputs/candidate.json",
+                        "candidate",
+                        'c',
+                        "application/json",
+                    ),
+                ])
+                .collect(),
             execution_policy: hepta_paper_raid_contracts::FrozenReviewExecutionPolicyV1 {
                 schema: "hepta.paper_raid.review_execution_policy.v1".to_string(),
                 kind: "evaluate".to_string(),
@@ -4400,6 +4700,54 @@ mod tests {
     }
 
     #[test]
+    fn review_authority_is_exactly_bound_to_the_nested_paper_bundle() {
+        let authority = review_authority();
+        let fixture = json!({
+            "paper_project_id": authority.paper_project_id,
+            "submission_id": authority.submission_id,
+            "status": "submission_ready",
+            "release_candidate_hash": authority.release_candidate_hash,
+            "paper_bundle_hash": authority.paper_bundle_hash,
+            "paper_bundle": {
+                "schema": PAPER_BUNDLE_V2,
+                "release_candidate_hash": authority.release_candidate_hash,
+                "paper_bundle_hash": authority.paper_bundle_hash,
+                "release_candidate": {
+                    "schema": PAPER_RELEASE_CANDIDATE_V2,
+                    "paper_project_id": authority.paper_project_id,
+                    "artifact_manifest_hash": authority.artifact_manifest_hash,
+                }
+            }
+        });
+        assert!(review_outer_bundle_matches_authority(&fixture, &authority));
+
+        let mut wrong_manifest = fixture.clone();
+        wrong_manifest["paper_bundle"]["release_candidate"]["artifact_manifest_hash"] =
+            json!(format!("sha256:{}", "9".repeat(64)));
+        assert!(!review_outer_bundle_matches_authority(
+            &wrong_manifest,
+            &authority
+        ));
+
+        let mut wrong_status = fixture.clone();
+        wrong_status["status"] = json!("integrity_hold");
+        assert!(!review_outer_bundle_matches_authority(
+            &wrong_status,
+            &authority
+        ));
+
+        let mut missing_paper_bundle = fixture;
+        missing_paper_bundle
+            .as_object_mut()
+            .unwrap()
+            .remove("paper_bundle");
+        assert!(!review_outer_bundle_matches_authority(
+            &missing_paper_bundle,
+            &authority
+        ));
+    }
+
+    #[test]
     fn legacy_golden_adapter_is_exact_pin_role_media_path_and_digest_bound() {
         const PLAN: &[u8] = b"{\"dataset_sha256\":\"b002e6297f6fd781742866533b89bf781c7f21d5cfa7b42b5c97a9ecd5821314\",\"expected_failure_run_ids\":[\"baseline-invalid-threshold\"],\"metric\":\"accuracy_bps\",\"required_run_ids\":[\"baseline-seed-17\",\"ablation-seed-17\",\"baseline-invalid-threshold\"],\"schema\":\"paper-raid.experiment-plan.v1\",\"stopping_rule\":\"execute_every_required_run_exactly_once\"}\n";
         assert_eq!(sha256_digest(PLAN), LEGACY_GOLDEN_EVALUATOR_MANIFEST_HASH);
@@ -4410,36 +4758,39 @@ mod tests {
         let mut authority = review_authority();
         authority.evaluator_manifest_hash = LEGACY_GOLDEN_EVALUATOR_MANIFEST_HASH.to_string();
         authority.dataset_manifest_hash = LEGACY_GOLDEN_DATASET_MANIFEST_HASH.to_string();
-        authority.artifact_objects = vec![
-            review_object(
-                "legacy-candidate",
-                "inputs/metrics.json",
-                "candidate",
-                'c',
-                "application/json",
-            ),
-            FrozenReviewObjectV1 {
-                object_key: "legacy-dataset".to_string(),
-                logical_path: LEGACY_GOLDEN_DATASET_PATH.to_string(),
-                role: "dataset".to_string(),
-                digest: format!(
-                    "sha256:{}",
-                    "b002e6297f6fd781742866533b89bf781c7f21d5cfa7b42b5c97a9ecd5821314"
+        authority.artifact_objects = human_review_objects()
+            .into_iter()
+            .chain([
+                review_object(
+                    "legacy-candidate",
+                    "inputs/metrics.json",
+                    "candidate",
+                    'c',
+                    "application/json",
                 ),
-                size_bytes: LEGACY_GOLDEN_DATASET_SIZE,
-                media_type: "text/csv; charset=utf-8".to_string(),
-                download_path: "/api/agent-bridge/review-objects".to_string(),
-            },
-            FrozenReviewObjectV1 {
-                object_key: "legacy-evaluator".to_string(),
-                logical_path: LEGACY_GOLDEN_FROZEN_EVALUATOR_PATH.to_string(),
-                role: "frozen_evaluator".to_string(),
-                digest: LEGACY_GOLDEN_FROZEN_EVALUATOR_HASH.to_string(),
-                size_bytes: LEGACY_GOLDEN_FROZEN_EVALUATOR_SIZE,
-                media_type: "text/x-python; charset=utf-8".to_string(),
-                download_path: "/api/agent-bridge/review-objects".to_string(),
-            },
-        ];
+                FrozenReviewObjectV1 {
+                    object_key: "legacy-dataset".to_string(),
+                    logical_path: LEGACY_GOLDEN_DATASET_PATH.to_string(),
+                    role: "dataset".to_string(),
+                    digest: format!(
+                        "sha256:{}",
+                        "b002e6297f6fd781742866533b89bf781c7f21d5cfa7b42b5c97a9ecd5821314"
+                    ),
+                    size_bytes: LEGACY_GOLDEN_DATASET_SIZE,
+                    media_type: "text/csv; charset=utf-8".to_string(),
+                    download_path: "/api/agent-bridge/review-objects".to_string(),
+                },
+                FrozenReviewObjectV1 {
+                    object_key: "legacy-evaluator".to_string(),
+                    logical_path: LEGACY_GOLDEN_FROZEN_EVALUATOR_PATH.to_string(),
+                    role: "frozen_evaluator".to_string(),
+                    digest: LEGACY_GOLDEN_FROZEN_EVALUATOR_HASH.to_string(),
+                    size_bytes: LEGACY_GOLDEN_FROZEN_EVALUATOR_SIZE,
+                    media_type: "text/x-python; charset=utf-8".to_string(),
+                    download_path: "/api/agent-bridge/review-objects".to_string(),
+                },
+            ])
+            .collect();
         authority.authority_hash =
             hepta_paper_raid_contracts::frozen_review_authority_hash(&authority).unwrap();
 
@@ -4462,7 +4813,12 @@ mod tests {
         )
         .is_err());
         let mut wrong_evaluator = authority.clone();
-        wrong_evaluator.artifact_objects[2].digest = format!("sha256:{}", "d".repeat(64));
+        wrong_evaluator
+            .artifact_objects
+            .iter_mut()
+            .find(|object| object.role == "frozen_evaluator")
+            .expect("frozen evaluator")
+            .digest = format!("sha256:{}", "d".repeat(64));
         assert!(legacy_golden_challenge_manifests(
             &wrong_evaluator,
             PLAN,
@@ -4470,7 +4826,12 @@ mod tests {
         )
         .is_err());
         let mut wrong_role = authority;
-        wrong_role.artifact_objects[1].role = "input".to_string();
+        wrong_role
+            .artifact_objects
+            .iter_mut()
+            .find(|object| object.role == "frozen_evaluator")
+            .expect("frozen evaluator")
+            .role = "input".to_string();
         assert!(
             legacy_golden_challenge_manifests(&wrong_role, PLAN, LEGACY_GOLDEN_DATASET_CARD,)
                 .is_err()
@@ -4506,9 +4867,22 @@ mod tests {
         assert_eq!(resolved[0].logical_path, "evaluator/main.py");
         assert_eq!(resolved[1].logical_path, "inputs/dataset.json");
         assert_eq!(resolved[2].logical_path, "inputs/candidate.json");
-        assert_eq!(authority.artifact_objects[0].logical_path, "evaluator.py");
         assert_eq!(
-            authority.artifact_objects[1].logical_path,
+            authority
+                .artifact_objects
+                .iter()
+                .find(|object| object.role == "frozen_evaluator")
+                .expect("frozen evaluator")
+                .logical_path,
+            "evaluator.py"
+        );
+        assert_eq!(
+            authority
+                .artifact_objects
+                .iter()
+                .find(|object| object.role == "dataset")
+                .expect("dataset")
+                .logical_path,
             "dataset/claims.json"
         );
 
@@ -4517,13 +4891,15 @@ mod tests {
             "object-0003",
             "baseline.py",
             "evaluator_support",
-            'd',
+            '7',
             "text/x-python; charset=utf-8",
         ));
+        with_support.authority_hash =
+            hepta_paper_raid_contracts::frozen_review_authority_hash(&with_support).unwrap();
         let mut evaluator_with_support = evaluator.clone();
         evaluator_with_support.objects.push(manifest_member(
             "baseline.py",
-            'd',
+            '7',
             "text/x-python; charset=utf-8",
         ));
         let support_resolved =

@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import {
+  chown,
   chmod,
   link,
   lstat,
   mkdir,
   mkdtemp,
+  realpath,
   readFile,
   readdir,
   readlink,
@@ -24,7 +26,11 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { agentCapabilityDisclosureHash } from "../src/canonical.mjs";
+import {
+  agentCapabilityDisclosureHash,
+  canonicalJsonBytes,
+  sha256Digest,
+} from "../src/canonical.mjs";
 import { main as cliMain } from "../src/cli.mjs";
 import { loadConfig } from "../src/config.mjs";
 import {
@@ -181,6 +187,7 @@ function installOptions(root, systemctlPath, artifact, overrides = {}) {
     fingerprint: artifact.fingerprint,
     bffUrl: "http://127.0.0.1:7020",
     agentId: "agent.lifecycle.hostile",
+    authorExecutor: systemctlPath,
     capabilities: "artifact_analysis,evidence_search,section_drafting",
     resourceClasses: "artifact_io,cpu,sandbox",
     mode: "confirm",
@@ -197,6 +204,7 @@ function updateOptions(root, systemctlPath, artifact, overrides = {}) {
     signaturePath: artifact.signaturePath,
     trustedKeyPath: artifact.trustedKeyPath,
     fingerprint: artifact.fingerprint,
+    authorExecutor: systemctlPath,
     ...overrides,
   };
 }
@@ -512,6 +520,100 @@ test("failed install restores old config/service inodes and cleans a fresh root"
   await absent(freshRoot);
 });
 
+test("install and update validate and canonicalize the Author executor before mutation", async t => {
+  const directory = await temporary(t, "author-executor-lifecycle");
+  const trust = signer();
+  const first = await releaseFixture(directory, trust, "3.2.1", 12);
+  const second = await releaseFixture(directory, trust, "3.2.2", 13);
+  const mock = await writeMockSystemctl(directory);
+  const validDirectory = join(directory, "canonical-executor");
+  await mkdir(validDirectory, { mode: 0o700 });
+  const validExecutor = await writeSecure(
+    join(validDirectory, "author-executor"),
+    "#!/bin/sh\nexit 0\n",
+    0o700,
+  );
+  const aliasDirectory = join(directory, "executor-alias");
+  await symlink(validDirectory, aliasDirectory, "dir");
+  const aliasedExecutor = join(aliasDirectory, "author-executor");
+
+  const symlinkExecutor = join(directory, "author-executor.symlink");
+  await symlink(validExecutor, symlinkExecutor);
+  const hardlinkSource = await writeSecure(
+    join(directory, "author-executor.hard-source"),
+    "#!/bin/sh\nexit 0\n",
+    0o700,
+  );
+  const hardlinkExecutor = join(directory, "author-executor.hardlink");
+  await link(hardlinkSource, hardlinkExecutor);
+  const writableExecutor = await writeSecure(
+    join(directory, "author-executor.group-writable"),
+    "#!/bin/sh\nexit 0\n",
+    0o720,
+  );
+  const nonExecutable = await writeSecure(
+    join(directory, "author-executor.not-executable"),
+    "exit 0\n",
+    0o600,
+  );
+  const invalidExecutors = [
+    ["missing", join(directory, "author-executor.missing")],
+    ["symlink", symlinkExecutor],
+    ["hardlink", hardlinkExecutor],
+    ["group-writable", writableExecutor],
+    ["not-executable", nonExecutable],
+  ];
+  let wrongOwnerExecutor = "/usr/bin/true";
+  if (typeof process.getuid === "function" && process.getuid() === 0) {
+    wrongOwnerExecutor = await writeSecure(
+      join(directory, "author-executor.wrong-owner"),
+      "#!/bin/sh\nexit 0\n",
+      0o700,
+    );
+    await chown(wrongOwnerExecutor, 65534, 65534);
+  }
+  invalidExecutors.push(["wrong-owner", wrongOwnerExecutor]);
+
+  for (const [name, executor] of invalidExecutors) {
+    const root = join(directory, `install-${name}`);
+    await assert.rejects(
+      installProduct(installOptions(root, mock, first, { authorExecutor: executor })),
+      /Author executor/,
+    );
+    await absent(root);
+  }
+
+  const root = join(directory, "installed");
+  await installProduct(installOptions(root, mock, first, {
+    authorExecutor: aliasedExecutor,
+  }));
+  const configPath = join(root, "data", "bridge.config.json");
+  const installedConfig = await loadConfig(configPath);
+  assert.equal(installedConfig.author_executor.executable, await realpath(validExecutor));
+  const beforeConfig = await readFile(configPath);
+  const beforeConfigStat = await lstat(configPath);
+
+  for (const [, executor] of invalidExecutors) {
+    await assert.rejects(
+      updateProduct(updateOptions(root, mock, second, { authorExecutor: executor })),
+      /Author executor/,
+    );
+    assert.equal(await pointerIdentity(root, "current"), first.releaseId);
+    assert.deepEqual(await readdir(join(root, "releases")), [first.releaseId]);
+    assert.deepEqual(await readFile(configPath), beforeConfig);
+    assert.equal((await lstat(configPath)).ino, beforeConfigStat.ino);
+  }
+
+  await updateProduct(updateOptions(root, mock, second, {
+    authorExecutor: aliasedExecutor,
+  }));
+  assert.equal(await pointerIdentity(root, "current"), second.releaseId);
+  assert.equal(
+    (await loadConfig(configPath)).author_executor.executable,
+    await realpath(validExecutor),
+  );
+});
+
 test("install, paired diagnose, preserve uninstall, and isolated purge form one player runbook", async t => {
   const directory = await temporary(t, "runbook");
   const trust = signer();
@@ -605,6 +707,7 @@ test("every update pointer phase restores current, previous, service, and new re
   const second = await releaseFixture(directory, trust, "3.5.0", 21);
   const phases = [
     "update_after_publish",
+    "update_after_config",
     "update_after_previous",
     "update_after_current",
     "update_after_verify",
@@ -614,7 +717,11 @@ test("every update pointer phase restores current, previous, service, and new re
     const root = join(directory, phase);
     const mock = await writeMockSystemctl(directory);
     await installProduct(installOptions(root, mock, first));
+    const oldConfig = await readFile(join(root, "data", "bridge.config.json"));
+    const oldConfigIdentity = await lstat(join(root, "data", "bridge.config.json"));
+    const alternateExecutor = await writeMockSystemctl(directory);
     await assert.rejects(updateProduct(updateOptions(root, mock, second, {
+      authorExecutor: alternateExecutor,
       testHooks: {
         phase(current) {
           if (current === phase) throw new Error(`injected ${phase}`);
@@ -624,6 +731,11 @@ test("every update pointer phase restores current, previous, service, and new re
     assert.equal(await pointerIdentity(root, "current"), first.releaseId);
     await absent(join(root, "previous"));
     assert.deepEqual(await readdir(join(root, "releases")), [first.releaseId]);
+    assert.deepEqual(await readFile(join(root, "data", "bridge.config.json")), oldConfig);
+    assert.equal(
+      (await lstat(join(root, "data", "bridge.config.json"))).ino,
+      oldConfigIdentity.ino,
+    );
   }
 });
 
@@ -753,7 +865,66 @@ function deliveryCandidate(index = 0) {
   };
 }
 
-function inbox(items) {
+const daemonMaterialBytes = Object.freeze({
+  brief: Buffer.from("# daemon brief\n"),
+  dataset: Buffer.from('{"rows":[1]}'),
+  baseline: Buffer.from("print('daemon baseline')\n"),
+  evaluator: Buffer.from("print('daemon evaluator')\n"),
+});
+
+function canonicalHash(value, field) {
+  const frame = { ...value };
+  delete frame[field];
+  return { ...value, [field]: sha256Digest(canonicalJsonBytes(frame)) };
+}
+
+function daemonMaterialBundle(candidate) {
+  const authority = canonicalHash({
+    schema: "hepta.paper_raid.frozen_challenge_material_authority.v1",
+    authority_hash: DIGEST_A,
+    activation_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    activation_request_sha256: `sha256:${"1".repeat(64)}`,
+    challenge_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    challenge_snapshot_hash: `sha256:${"2".repeat(64)}`,
+    template: "evidence-audit",
+    pack_id: "paper-raid-evidence-audit-seeded-v1",
+    pack_manifest_hash: `sha256:${"3".repeat(64)}`,
+    ruleset_version: "paper-raid-evidence-audit-v1",
+    ruleset_hash: `sha256:${"4".repeat(64)}`,
+    dataset_manifest_hash: `sha256:${"5".repeat(64)}`,
+    evaluator_manifest_hash: `sha256:${"6".repeat(64)}`,
+  }, "authority_hash");
+  const objects = [
+    ["brief", "playable_brief", "challenge/brief.md", "text/markdown; charset=utf-8"],
+    ["dataset", "dataset", "challenge/dataset.json", "application/json"],
+    ["baseline", "baseline_code", "challenge/baseline.py", "text/x-python; charset=utf-8"],
+    ["evaluator", "frozen_evaluator", "challenge/evaluator.py", "text/x-python; charset=utf-8"],
+  ].map(([key, role, logicalPath, mediaType]) => ({
+    object_key: key,
+    source_path: `source/${key}`,
+    logical_path: logicalPath,
+    role,
+    digest: sha256Digest(daemonMaterialBytes[key]),
+    size_bytes: daemonMaterialBytes[key].length,
+    media_type: mediaType,
+    download_path: "/api/agent-bridge/challenge-objects",
+  }));
+  return canonicalHash({
+    schema: "hepta.paper_raid.assigned_challenge_material_bundle.v1",
+    bundle_hash: DIGEST_B,
+    authority,
+    authority_hash: authority.authority_hash,
+    paper_project_id: PAPER_ID,
+    challenge_ruleset_snapshot_hash: `sha256:${"7".repeat(64)}`,
+    binding_id: BINDING_ID,
+    player_id: PLAYER_ID,
+    work_item_id: candidate.work_item_id,
+    work_item_version: candidate.expected_work_version,
+    objects,
+  }, "bundle_hash");
+}
+
+function inbox(items, { drafts = true } = {}) {
   return {
     schema: "hepta.paper_raid.agent_bridge.inbox.v2",
     binding_id: BINDING_ID,
@@ -761,13 +932,44 @@ function inbox(items) {
     papers: [{
       paper_id: PAPER_ID,
       phase: "drafting",
-      tasks: [],
+      tasks: items.map(candidate => ({
+        work_item_id: candidate.work_item_id,
+        paper_project_id: PAPER_ID,
+        kind: "assigned_research",
+        assigned_binding_id: BINDING_ID,
+        assigned_player_id: PLAYER_ID,
+        status: "in_progress",
+        version: candidate.expected_work_version,
+      })),
       proposals: [],
       delivery_candidates: {
         schema: "hepta.paper_raid.agent_bridge.delivery_candidates.v1",
+        status: drafts ? "available" : "unavailable",
+        reason_code: drafts ? null : "no_agent_declared_delivery_draft",
+        items: drafts ? items : [],
+      },
+      challenge_materials: {
+        schema: "hepta.paper_raid.agent_bridge.assigned_challenge_materials.v1",
         status: "available",
         reason_code: null,
-        items,
+        items: items.map(daemonMaterialBundle),
+      },
+    }],
+  };
+}
+
+function reviewOnlyInbox() {
+  return {
+    schema: "hepta.paper_raid.agent_bridge.inbox.v2",
+    binding_id: BINDING_ID,
+    assurance: "self_declared_unverified",
+    papers: [{
+      paper_id: PAPER_ID,
+      review_tasks: {
+        schema: "hepta.paper_raid.agent_bridge.review_tasks.v1",
+        status: "unavailable",
+        reason_code: "no_executable_review_assignment",
+        items: [],
       },
     }],
   };
@@ -781,6 +983,42 @@ async function daemonRoot(directory, name, mode) {
   const { generateIdentity } = await import("../src/identity.mjs");
   await generateIdentity(`agent.daemon.${name}`, identityPath);
   const identity = await loadIdentity(identityPath);
+  const executorLog = join(data, "author-executor.log");
+  const executorPath = await writeSecure(
+    join(data, "author-executor.mjs"),
+    `#!${process.execPath}
+import { appendFile, readdir } from "node:fs/promises";
+let raw = "";
+for await (const chunk of process.stdin) raw += chunk;
+const request = JSON.parse(raw);
+if (process.argv[2] !== "author-work-v1" ||
+    process.env.HEPTA_PAPER_RAID_MATERIAL_DIRECTORY !== request.material_directory ||
+    process.cwd() !== request.material_directory) process.exit(41);
+const files = (await readdir(new URL("challenge/", \`file://\${request.material_directory}/\`))).sort();
+if (files.join(",") !== "baseline.py,brief.md,dataset.json,evaluator.py") process.exit(42);
+await appendFile(${JSON.stringify(executorLog)}, \`\${request.work_item_id}\n\`, { mode: 0o600 });
+const digit = String(request.work_item_version);
+const uuid = prefix => \`\${prefix}\${digit.repeat(7)}-\${digit.repeat(4)}-4\${digit.repeat(3)}-8\${digit.repeat(3)}-\${digit.repeat(12)}\`;
+process.stdout.write(JSON.stringify({
+  schema: "hepta.paper_raid.agent_bridge.author_executor_result.v1",
+  status: "completed",
+  material_directory: request.material_directory,
+  paper_id: request.paper_id,
+  binding_id: request.binding_id,
+  player_id: request.player_id,
+  work_item_id: request.work_item_id,
+  work_item_version: request.work_item_version,
+  task_kind: request.task_kind,
+  start_key: request.start_key,
+  bundle_hash: request.bundle_hash,
+  authority_hash: request.authority_hash,
+  section_key: \`methods-\${digit}\`,
+  artifact_manifest_id: uuid("e"),
+  payload_hash: ${JSON.stringify(DIGEST_A)},
+}));
+`,
+    0o700,
+  );
   const disclosure = {
     schema: "hepta.paper_raid.agent_capability_disclosure.v1",
     assurance: "self_declared_unverified",
@@ -793,6 +1031,11 @@ async function daemonRoot(directory, name, mode) {
     bff_url: "http://127.0.0.1:7020",
     identity_file: "identity.json",
     state_file: "state.json",
+    author_executor: {
+      schema: "hepta.paper_raid.agent_bridge.author_executor.v1",
+      executable: executorPath,
+      timeout_ms: 2_000,
+    },
     capabilities: disclosure.capabilities,
     resource_classes: disclosure.resource_classes,
     max_parallel_tasks: disclosure.max_parallel_tasks,
@@ -821,16 +1064,32 @@ async function daemonRoot(directory, name, mode) {
   return root;
 }
 
+async function authorExecutorCalls(root) {
+  try {
+    return (await readFile(join(root, "data", "author-executor.log"), "utf8"))
+      .trim()
+      .split("\n")
+      .filter(Boolean);
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
+}
+
 test("daemon keeps Confirm inert, Auto exact-one, and concurrent Auto single-submit", async t => {
   const directory = await temporary(t, "daemon");
   const originalFetch = globalThis.fetch;
   t.after(() => {
     globalThis.fetch = originalFetch;
   });
-  let activeInbox = inbox([deliveryCandidate(0)]);
+  let activeInbox = inbox([deliveryCandidate(0)], { drafts: false });
   let proposals = 0;
+  let deliveryDrafts = 0;
+  let materialReads = 0;
+  let failedMaterialKey = null;
   globalThis.fetch = async (url, init = {}) => {
-    const path = new URL(url).pathname;
+    const parsed = new URL(url);
+    const path = parsed.pathname;
     if (path === "/api/agent-bridge/health") {
       return new Response(JSON.stringify({ accepted: true }), {
         status: 200,
@@ -843,12 +1102,58 @@ test("daemon keeps Confirm inert, Auto exact-one, and concurrent Auto single-sub
         headers: { "content-type": "application/json" },
       });
     }
+    if (path === "/api/agent-bridge/delivery-drafts") {
+      const body = JSON.parse(init.body);
+      const task = activeInbox.papers[0].tasks.find(item =>
+        item.work_item_id === body.work_item_id
+      );
+      assert.ok(task);
+      const candidate = {
+        ...deliveryCandidate(task.version - 1),
+        delivery_draft_id: body.delivery_draft_id,
+        paper_id: body.paper_id,
+        work_item_id: body.work_item_id,
+        section_key: body.section_key,
+        artifact_manifest_id: body.artifact_manifest_id,
+        payload_hash: body.payload_hash,
+      };
+      activeInbox = inbox([candidate]);
+      deliveryDrafts += 1;
+      return new Response(JSON.stringify({
+        schema: "hepta.paper_raid.agent_bridge.delivery_draft_result.v1",
+        candidate,
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
     if (path === "/api/agent-bridge/proposals") {
       proposals += 1;
       assert.equal(JSON.parse(init.body).schema, "hepta.paper_raid.agent_bridge.proposal_request.v1");
+      const candidate = activeInbox.papers[0].delivery_candidates.items[0];
+      if (candidate) candidate.delivery_state = "consumed";
       return new Response(JSON.stringify({ accepted: true }), {
         status: 200,
         headers: { "content-type": "application/json" },
+      });
+    }
+    if (path === "/api/agent-bridge/challenge-objects") {
+      const key = parsed.searchParams.get("object_key");
+      if (key === failedMaterialKey) {
+        throw new Error("simulated Challenge material transport failure");
+      }
+      const bundle = activeInbox.papers[0].challenge_materials.items.find(item =>
+        item.work_item_id === parsed.searchParams.get("work_item_id")
+      );
+      const object = bundle?.objects.find(item => item.object_key === key);
+      assert.ok(object);
+      materialReads += 1;
+      return new Response(daemonMaterialBytes[key], {
+        status: 200,
+        headers: {
+          "content-type": object.media_type,
+          "content-length": String(daemonMaterialBytes[key].length),
+        },
       });
     }
     throw new Error(`unexpected daemon route ${path}`);
@@ -858,16 +1163,194 @@ test("daemon keeps Confirm inert, Auto exact-one, and concurrent Auto single-sub
   const confirm = await daemonCycle(confirmRoot);
   assert.equal(confirm.state, "awaiting_confirmation");
   assert.equal(proposals, 0);
+  assert.equal(deliveryDrafts, 0);
+  assert.equal(materialReads, 0);
+  assert.deepEqual(await authorExecutorCalls(confirmRoot), []);
 
   const autoRoot = await daemonRoot(directory, "auto", "auto");
+  activeInbox = inbox([deliveryCandidate(0)], { drafts: false });
   const concurrent = await Promise.all([daemonCycle(autoRoot), daemonCycle(autoRoot)]);
   assert.deepEqual(concurrent.map(value => value.state), ["submitted", "ready"]);
   assert.equal(proposals, 1);
+  assert.equal(deliveryDrafts, 1);
+  assert.equal(materialReads, 4);
+  assert.deepEqual(await authorExecutorCalls(autoRoot), [deliveryCandidate(0).work_item_id]);
 
   const multipleRoot = await daemonRoot(directory, "multiple", "auto");
-  activeInbox = inbox([deliveryCandidate(0), deliveryCandidate(1)]);
+  activeInbox = inbox(
+    [deliveryCandidate(0), deliveryCandidate(1)],
+    { drafts: false },
+  );
   const multiple = await daemonCycle(multipleRoot);
   assert.equal(multiple.state, "multiple_items");
   assert.equal(multiple.candidate_count, 2);
   assert.equal(proposals, 1);
+  assert.equal(materialReads, 4);
+  assert.deepEqual(await authorExecutorCalls(multipleRoot), []);
+
+  activeInbox = inbox([deliveryCandidate(0)], { drafts: false });
+  const cliWorkRoot = await daemonRoot(directory, "cli-work", "confirm");
+  const originalCliWrite = process.stdout.write;
+  let cliWorkOutput = "";
+  process.stdout.write = chunk => {
+    cliWorkOutput += String(chunk);
+    return true;
+  };
+  try {
+    await cliMain([
+      "work",
+      "--config",
+      join(cliWorkRoot, "data", "bridge.config.json"),
+      "--auto",
+    ]);
+  } finally {
+    process.stdout.write = originalCliWrite;
+  }
+  assert.equal(JSON.parse(cliWorkOutput).status, "submitted");
+  assert.equal(proposals, 2);
+  assert.equal(deliveryDrafts, 2);
+  assert.equal(materialReads, 8);
+  assert.deepEqual(
+    await authorExecutorCalls(cliWorkRoot),
+    [deliveryCandidate(0).work_item_id],
+  );
+
+  activeInbox = inbox([deliveryCandidate(0)], { drafts: false });
+  const cliRoot = await daemonRoot(directory, "cli-materials", "confirm");
+  const originalWrite = process.stdout.write;
+  let cliOutput = "";
+  process.stdout.write = chunk => {
+    cliOutput += String(chunk);
+    return true;
+  };
+  try {
+    await cliMain([
+      "prepare-materials",
+      "--config",
+      join(cliRoot, "data", "bridge.config.json"),
+      "--work-item",
+      deliveryCandidate(0).work_item_id,
+    ]);
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+  const prepared = JSON.parse(cliOutput);
+  assert.equal(prepared.schema,
+    "hepta.paper_raid.agent_bridge.challenge_materialization.v1");
+  assert.equal(prepared.work_item_id, deliveryCandidate(0).work_item_id);
+  assert.equal(materialReads, 12);
+  assert.deepEqual(await authorExecutorCalls(cliRoot), []);
+
+  const partialRoot = await daemonRoot(directory, "partial-materials", "auto");
+  activeInbox = inbox([deliveryCandidate(0)], { drafts: false });
+  failedMaterialKey = "baseline";
+  await assert.rejects(
+    daemonCycle(partialRoot),
+    /simulated Challenge material transport failure|agent_bridge_transport_failed/,
+  );
+  failedMaterialKey = null;
+  assert.equal(proposals, 2);
+  assert.deepEqual(await authorExecutorCalls(partialRoot), []);
+
+  const mismatchedRoot = await daemonRoot(directory, "mismatched-executor", "auto");
+  await writeSecure(
+    join(mismatchedRoot, "data", "author-executor.mjs"),
+    `#!${process.execPath}\nprocess.stdin.resume();\nprocess.stdin.on("end", () => process.stdout.write("{}"));\n`,
+    0o700,
+  );
+  activeInbox = inbox([deliveryCandidate(0)], { drafts: false });
+  await assert.rejects(
+    daemonCycle(mismatchedRoot),
+    /Author executor result differs/,
+  );
+  assert.equal(proposals, 2);
+
+  const zeroRoot = await daemonRoot(directory, "zero-materials", "auto");
+  activeInbox = inbox([deliveryCandidate(0)], { drafts: false });
+  activeInbox.papers[0].challenge_materials = {
+    schema: "hepta.paper_raid.agent_bridge.assigned_challenge_materials.v1",
+    status: "unavailable",
+    reason_code: "frozen_challenge_material_authority_unavailable",
+    items: [],
+  };
+  const zero = await daemonCycle(zeroRoot);
+  assert.equal(zero.state, "ready");
+  assert.equal(proposals, 2);
+  assert.deepEqual(await authorExecutorCalls(zeroRoot), []);
+
+  const duplicateRoot = await daemonRoot(directory, "duplicate-materials", "auto");
+  activeInbox = inbox([deliveryCandidate(0)], { drafts: false });
+  activeInbox.papers[0].challenge_materials.items.push(
+    daemonMaterialBundle(deliveryCandidate(0)),
+  );
+  await assert.rejects(
+    daemonCycle(duplicateRoot),
+    /duplicates a work-item assignment/,
+  );
+  assert.equal(proposals, 2);
+  assert.deepEqual(await authorExecutorCalls(duplicateRoot), []);
+
+  activeInbox = reviewOnlyInbox();
+  const reviewCliRoot = await daemonRoot(directory, "review-only-cli", "confirm");
+  let reviewCliOutput = "";
+  process.stdout.write = chunk => {
+    reviewCliOutput += String(chunk);
+    return true;
+  };
+  try {
+    await cliMain([
+      "work",
+      "--config",
+      join(reviewCliRoot, "data", "bridge.config.json"),
+      "--auto",
+    ]);
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+  assert.equal(JSON.parse(reviewCliOutput).status, "idle");
+  assert.deepEqual(await authorExecutorCalls(reviewCliRoot), []);
+
+  const reviewDaemonRoot = await daemonRoot(directory, "review-only-daemon", "auto");
+  const reviewDaemon = await daemonCycle(reviewDaemonRoot);
+  assert.equal(reviewDaemon.state, "ready");
+  assert.equal(reviewDaemon.candidate_count, 0);
+  assert.deepEqual(await authorExecutorCalls(reviewDaemonRoot), []);
+
+  activeInbox = reviewOnlyInbox();
+  activeInbox.papers[0].delivery_candidates = {
+    schema: "hepta.paper_raid.agent_bridge.delivery_candidates.v1",
+    status: "available",
+    reason_code: null,
+    items: [],
+  };
+  await assert.rejects(
+    cliMain([
+      "work",
+      "--config",
+      join(reviewCliRoot, "data", "bridge.config.json"),
+      "--auto",
+    ]),
+    /available delivery projection is invalid/,
+  );
+  await assert.rejects(
+    daemonCycle(reviewDaemonRoot),
+    /available delivery projection is invalid/,
+  );
+
+  const recoveryRoot = await daemonRoot(directory, "consumed-recovery", "auto");
+  const consumed = deliveryCandidate(0);
+  consumed.delivery_state = "consumed";
+  activeInbox = inbox([consumed]);
+  activeInbox.papers[0].tasks[0].status = "accepted";
+  activeInbox.papers[0].challenge_materials = {
+    schema: "hepta.paper_raid.agent_bridge.assigned_challenge_materials.v1",
+    status: "unavailable",
+    reason_code: "terminal_work_has_no_active_material_input",
+    items: [],
+  };
+  const recovered = await daemonCycle(recoveryRoot);
+  assert.equal(recovered.state, "submitted");
+  assert.equal(proposals, 3);
+  assert.equal(materialReads, 18);
+  assert.deepEqual(await authorExecutorCalls(recoveryRoot), []);
 });

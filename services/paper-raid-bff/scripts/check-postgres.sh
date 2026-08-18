@@ -134,6 +134,9 @@ run_fixture_success \
 
 PAPER_RAID_BFF_TEST_DATABASE_URL="$test_database_url" \
   flock -n "$cargo_gate" \
+  cargo test --locked -p paper-raid-bff review_receipts::tests::real_postgres_router_object_surfaces_signed_get_replay_and_audience_separation -- --exact
+PAPER_RAID_BFF_TEST_DATABASE_URL="$test_database_url" \
+  flock -n "$cargo_gate" \
   cargo test --locked -p paper-raid-bff review_receipts::tests::real_postgres_review_receipt_attempt_concurrency_replay_restart_and_integrity -- --exact
 PAPER_RAID_BFF_TEST_DATABASE_URL="$test_database_url" \
   flock -n "$cargo_gate" \
@@ -177,6 +180,9 @@ revoked_after=$(sudo -n docker exec "$container_name" \
   --command 'SELECT count(*) FROM paper_raid_bff_sessions WHERE revoked_at IS NOT NULL')
 [[ "$revoked_after" == "$revoked_before" ]]
 
+PAPER_RAID_BFF_TEST_DATABASE_URL="$test_database_url" \
+  flock -n "$cargo_gate" \
+  cargo test --locked -p paper-raid-bff review_receipts::tests::real_postgres_router_object_surfaces_signed_get_replay_and_audience_separation -- --exact
 PAPER_RAID_BFF_TEST_DATABASE_URL="$test_database_url" \
   flock -n "$cargo_gate" \
   cargo test --locked -p paper-raid-bff review_receipts::tests::real_postgres_review_receipt_attempt_concurrency_replay_restart_and_integrity -- --exact

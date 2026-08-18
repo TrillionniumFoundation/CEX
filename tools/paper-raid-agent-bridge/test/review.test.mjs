@@ -140,7 +140,7 @@ function descriptor(objectKey, logicalPath, role, bytes, overrides = {}) {
 }
 
 function sourceAuthorityObjects(objects) {
-  return structuredClone(objects).map(object => ({
+  const executable = structuredClone(objects).map(object => ({
     ...object,
     logical_path: {
       candidate: "release/candidate.json",
@@ -151,6 +151,33 @@ function sourceAuthorityObjects(objects) {
       evaluator_support: "baseline.py",
     }[object.role],
   }));
+  const human = [
+    descriptor(
+      "bibliography",
+      "paper/references.bib",
+      "bibliography",
+      Buffer.from("@article{paper, title={Frozen}}\n"),
+      { media_type: "application/x-bibtex" },
+    ),
+    descriptor(
+      "claim-evidence-graph",
+      "paper/claim-evidence.json",
+      "claim_evidence_graph",
+      canonicalJsonBytes({ claims: [], schema: "hepta.claim_evidence_graph.v1" }),
+    ),
+    descriptor(
+      "paper-source",
+      "paper/paper.md",
+      "paper_source",
+      Buffer.from("# Frozen paper\n"),
+      { media_type: "text/markdown; charset=utf-8" },
+    ),
+  ];
+  return [...human, ...executable].sort((left, right) =>
+    `${left.object_key}\0${left.logical_path}`.localeCompare(
+      `${right.object_key}\0${right.logical_path}`,
+    )
+  );
 }
 
 async function taskValue({
@@ -709,8 +736,9 @@ test("bundle, role, download, evaluator, expiry, and byte tampering fail closed"
 
   const evaluatorAllowlistMutant = structuredClone(valid);
   evaluatorAllowlistMutant.bundle.objects[2].digest = `sha256:${"d".repeat(64)}`;
-  evaluatorAllowlistMutant.bundle.authority.artifact_objects[2].digest =
-    evaluatorAllowlistMutant.bundle.objects[2].digest;
+  evaluatorAllowlistMutant.bundle.authority.artifact_objects.find(
+    object => object.object_key === evaluatorAllowlistMutant.bundle.objects[2].object_key,
+  ).digest = evaluatorAllowlistMutant.bundle.objects[2].digest;
   evaluatorAllowlistMutant.bundle.authority.authority_hash = frozenReviewAuthorityHash(
     evaluatorAllowlistMutant.bundle.authority,
   );
@@ -726,7 +754,9 @@ test("bundle, role, download, evaluator, expiry, and byte tampering fail closed"
 
   const bundleByteMutant = structuredClone(valid);
   bundleByteMutant.bundle.objects[0].size_bytes += 1;
-  bundleByteMutant.bundle.authority.artifact_objects[0].size_bytes += 1;
+  bundleByteMutant.bundle.authority.artifact_objects.find(
+    object => object.object_key === bundleByteMutant.bundle.objects[0].object_key,
+  ).size_bytes += 1;
   bundleByteMutant.bundle.authority.authority_hash = frozenReviewAuthorityHash(
     bundleByteMutant.bundle.authority,
   );

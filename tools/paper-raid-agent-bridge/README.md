@@ -60,6 +60,7 @@ paper-raid-agent-bridge install \
   --fingerprint sha256:REPLACE_WITH_64_LOWERCASE_HEX \
   --bff-url https://paper-raid.example \
   --agent-id agent.example \
+  --author-executor /opt/paper-raid/bin/author-executor \
   --capabilities artifact_analysis,evidence_search,section_drafting \
   --resource-classes artifact_io,cpu,sandbox
 ```
@@ -99,7 +100,8 @@ Updates must use the same pinned release key and a sequence greater than both
 paper-raid-agent-bridge update \
   --package NEW.bundle.json --manifest NEW.manifest.json \
   --signature NEW.manifest.sig --trusted-key bridge-release-ed25519-public.pem \
-  --fingerprint sha256:REPLACE_WITH_64_LOWERCASE_HEX
+  --fingerprint sha256:REPLACE_WITH_64_LOWERCASE_HEX \
+  --author-executor /opt/paper-raid/bin/author-executor
 paper-raid-agent-bridge rollback \
   --signature PREVIOUS.manifest.sig \
   --trusted-key bridge-release-ed25519-public.pem \
@@ -113,6 +115,12 @@ phase, verification, restart, or active check restores both pointers and the
 running release; a failed mode restart restores the exact prior service-config
 inode. A failed first install restores preserved identity/configuration data,
 deletes only inodes created by that attempt, and removes a newly empty root.
+Install and update validate the explicit Author executor before any release or
+configuration transaction: the final file must be a current-user-owned,
+single-link, non-symlink regular executable that is not group/other writable.
+The canonical real path is stored. Update replaces that path transactionally;
+any later pointer, verification, restart or active-check failure restores the
+exact prior configuration inode along with the prior release pointers.
 
 Uninstall stops and removes only byte-exact managed unit, launcher, release,
 pointer, trust, and installation files. Player identity, pairing state, and
@@ -159,6 +167,11 @@ facts, scoring, ranking, rewards, settlement, or finality.
 Evaluator execution requires the declared `artifact_analysis` capability;
 reproducer execution requires `reproduction`. These declarations remain an
 additional local fail-closed check, never a source of assignment authority.
+`author_executor` is the one locally installed program allowed to turn a
+verified Author material directory into a five-field draft descriptor. Its
+schema and timeout are bounded; every execution repeats the ownership, link,
+mode, canonical-path and held-file identity checks before spawning without a
+shell.
 
 ```sh
 node src/cli.mjs identity-generate \
@@ -219,7 +232,7 @@ node src/cli.mjs binding --config paper-raid-agent-bridge.local.json
 node src/cli.mjs health --config paper-raid-agent-bridge.local.json
 node src/cli.mjs inbox --config paper-raid-agent-bridge.local.json
 node src/cli.mjs inbox --config paper-raid-agent-bridge.local.json --watch
-node src/cli.mjs prepare-delivery --config paper-raid-agent-bridge.local.json --input agent-output.json
+node src/cli.mjs prepare-materials --config paper-raid-agent-bridge.local.json --work-item UUID
 node src/cli.mjs work --config paper-raid-agent-bridge.local.json
 node src/cli.mjs work --config paper-raid-agent-bridge.local.json --watch --auto
 ```
@@ -236,6 +249,7 @@ These commands call only:
 - `POST /api/agent-bridge/inbox`;
 - `POST /api/agent-bridge/delivery-drafts`;
 - `POST /api/agent-bridge/proposals`;
+- `GET /api/agent-bridge/challenge-objects`;
 - `GET /api/agent-bridge/review-objects`;
 - `POST /api/agent-bridge/review-receipts`.
 
@@ -252,29 +266,49 @@ Authorization, bearer, or CSRF header is sent.
 
 ## Proposal submission
 
-`work` consumes only versioned, explicitly bound delivery candidates returned
-by the proof-authenticated BFF. It never combines an assigned task, lease,
-section head, and registered manifest locally. Interactive mode can resolve
-multiple explicit candidates; `--auto` submits only one exact item, and none or
-multiple items never trigger an automatic proposal. One-shot and watch modes
-emit the same `hepta.paper_raid.agent_bridge.work_result.v1` wrapper.
+For new Author work the inbox must contain exactly one `planned` or
+`in_progress` assigned task and exactly one frozen four-object Challenge bundle
+with the same Paper, binding, player, work item and positive work version. A
+terminal task, duplicate/ambiguous bundle, or same-version proposal cannot
+create a start. If any server-projected `pending`, `submitting` or `consumed`
+delivery candidate exists anywhere in the inbox, all new Author starts are
+hidden until recovery completes. The immutable start key binds Paper, work,
+version and bundle hash.
 
-`prepare-delivery` consumes an Agent-generated local output descriptor with
-exactly `paper_id`, `work_item_id`, `section_key`, `artifact_manifest_id`, and
-`payload_hash`. It never consumes a browser command or pasted signature. The
-signed BFF route derives and freezes the current parent revision, active
-same-binding lease/fencing token, and authoritative manifest digest, stores the
-control intent for at most 15 minutes, and revalidates it on every inbox and
-proposal call. If assignment, phase, head, lease, manifest, or proposal state
-changes, the candidate disappears. The Bridge still never infers a delivery
-from a lone historical manifest or independent room collections.
+The Bridge then performs four separately proof-signed GETs for the brief,
+dataset, baseline and evaluator and verifies each response's declared role,
+path, media type, byte length and SHA-256 digest. It writes `0400` files under a
+fresh owner-only pending directory, fsyncs them, and publishes exactly one
+task/version/bundle-specific `0700` directory with an atomic no-clobber rename.
+Partial downloads never become consumer-visible. Reuse requires an exact
+tree/ownership/mode/link-count/size/digest revalidation; a missing object,
+foreign file, symlink or ambiguous material set fails closed.
 
-The Bridge exposes no low-level proposal mutation. Every Bridge proposal is an
-Agent Proposal V2 delivery bound to a server-created delivery draft and must
-use `prepare-delivery` followed by `work`. Agent Proposal V1 frame support is
-retained only to verify historical signed bytes; it is not a mutation path.
+Only after publication does the Bridge spawn the configured Author executor,
+without a shell, with that unique directory as both working directory and a
+dedicated environment value. Its canonical stdin request binds the start key,
+binding/player/Paper/work/version, bundle and authority hashes, and the exact
+four object descriptors. The bounded result must echo every binding exactly
+and may add only `section_key`, `artifact_manifest_id`, and `payload_hash` as
+the five-field delivery-draft input. It cannot choose a draft ID, parent,
+lease, fencing token, manifest hash, proposal ID, idempotency key or timestamp.
 
-Once an explicit delivery item exists, `work` creates the exact Hepta
+The Bridge posts that five-field input to `delivery-drafts`, fetches a fresh
+inbox, and accepts exactly one server-projected candidate only when every start
+and executor-output field still matches. It then signs and submits the Agent
+Proposal V2. Existing delivery candidates are recovery items: they are
+resubmitted directly and never rerun material downloads or the executor. There
+is no public command that accepts an externally prepared output descriptor.
+
+`prepare-materials` is a diagnostic-only verification command. It may publish
+and print the exact local material directory, but never invokes the executor,
+creates a draft or submits a proposal. Normal `work`, installed Confirm and
+Auto use the complete materialize → execute → draft → fresh-candidate →
+proposal sequence. Interactive mode can resolve multiple explicit items;
+`--auto` acts only on one exact item. One-shot and watch modes emit the same
+`hepta.paper_raid.agent_bridge.work_result.v1` wrapper.
+
+For the accepted candidate, `work` creates the exact Hepta
 `submit_agent_proposal` request signed by the Agent. Agent Proposal V2 binds the
 exact Paper/work/section/head, active lease ID and positive fencing token,
 positive expected work version, payload digest, and both artifact manifest ID
@@ -293,6 +327,9 @@ reconstructs the same
 body; caller-supplied replacement proposal or idempotency UUIDs are rejected.
 The draft is consumed only after the BFF correlates every returned proposal
 field to the persisted pins.
+
+Agent Proposal V1 frame support is retained only to verify historical signed
+bytes; it is not a mutation path.
 
 ## Frozen Review execution
 
