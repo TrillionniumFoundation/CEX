@@ -483,6 +483,118 @@ fn paper_creation_snapshot_freezes_typed_rules_and_deadlines() {
     );
     assert!(legacy_snapshot.ruleset.is_none());
     assert!(legacy_deadline.is_none() && legacy_grace.is_none());
+    assert!(legacy_snapshot.material_authority.is_none());
+}
+
+#[test]
+fn exact_legacy_golden_snapshot_gets_qualification_authority_and_mutants_do_not() {
+    let now = Utc::now();
+    let exact = ResearchChallenge {
+        challenge_id: Uuid::new_v4(),
+        title: LEGACY_GOLDEN_CHALLENGE_TITLE.to_string(),
+        description: LEGACY_GOLDEN_CHALLENGE_DESCRIPTION.to_string(),
+        ruleset_version: LEGACY_GOLDEN_CHALLENGE_RULESET_VERSION.to_string(),
+        ruleset_hash: LEGACY_GOLDEN_CHALLENGE_RULESET_HASH.to_string(),
+        dataset_manifest_hash: LEGACY_GOLDEN_DATASET_MANIFEST_HASH.to_string(),
+        evaluator_manifest_hash: LEGACY_GOLDEN_EVALUATOR_MANIFEST_HASH.to_string(),
+        ruleset: None,
+        status: crate::ChallengeStatus::Open,
+        created_at: now - chrono::Duration::minutes(5),
+    };
+    let (snapshot, _, _, _) =
+        snapshot_challenge_ruleset(&exact, None, now).expect("legacy golden qualification");
+    let FrozenChallengeMaterialAuthorityBindingV1::LegacyGoldenQualification(authority) = snapshot
+        .material_authority
+        .as_ref()
+        .expect("exact golden authority")
+    else {
+        panic!("exact golden Challenge cannot claim pack activation")
+    };
+    assert_eq!(authority.challenge_id, exact.challenge_id);
+    assert_eq!(
+        authority.objects,
+        legacy_golden_qualification_material_objects()
+    );
+    assert!(serde_json::to_value(authority)
+        .expect("serialize authority")
+        .get("activation_id")
+        .is_none());
+
+    let mut mutants = Vec::new();
+    let mut challenge = exact.clone();
+    challenge.title.push('!');
+    mutants.push(challenge);
+    let mut challenge = exact.clone();
+    challenge.description.push('!');
+    mutants.push(challenge);
+    let mut challenge = exact.clone();
+    challenge.ruleset_version.push_str("-tampered");
+    mutants.push(challenge);
+    let mut challenge = exact.clone();
+    challenge.ruleset_hash = digest("tampered-ruleset");
+    mutants.push(challenge);
+    let mut challenge = exact.clone();
+    challenge.dataset_manifest_hash = digest("tampered-dataset");
+    mutants.push(challenge);
+    let mut challenge = exact.clone();
+    challenge.evaluator_manifest_hash = digest("tampered-evaluator");
+    mutants.push(challenge);
+    let mut challenge = exact.clone();
+    challenge.status = crate::ChallengeStatus::Closed;
+    mutants.push(challenge);
+    let mut challenge = exact;
+    let typed_ruleset: ChallengeRulesetV1 =
+        serde_json::from_value(authoritative_benchmark_ruleset_json()).expect("typed ruleset");
+    challenge.ruleset_hash = typed_ruleset.canonical_hash().expect("typed ruleset hash");
+    challenge.ruleset = Some(typed_ruleset);
+    mutants.push(challenge);
+
+    for mutant in mutants {
+        let (snapshot, _, _, _) = snapshot_challenge_ruleset(&mutant, None, now)
+            .expect("non-qualifying snapshots remain readable but unprivileged");
+        assert!(snapshot.material_authority.is_none());
+    }
+}
+
+#[test]
+fn activation_record_path_never_falls_back_to_legacy_qualification() {
+    let now = Utc::now();
+    let challenge = ResearchChallenge {
+        challenge_id: Uuid::new_v4(),
+        title: LEGACY_GOLDEN_CHALLENGE_TITLE.to_string(),
+        description: LEGACY_GOLDEN_CHALLENGE_DESCRIPTION.to_string(),
+        ruleset_version: LEGACY_GOLDEN_CHALLENGE_RULESET_VERSION.to_string(),
+        ruleset_hash: LEGACY_GOLDEN_CHALLENGE_RULESET_HASH.to_string(),
+        dataset_manifest_hash: LEGACY_GOLDEN_DATASET_MANIFEST_HASH.to_string(),
+        evaluator_manifest_hash: LEGACY_GOLDEN_EVALUATOR_MANIFEST_HASH.to_string(),
+        ruleset: None,
+        status: crate::ChallengeStatus::Open,
+        created_at: now - chrono::Duration::minutes(5),
+    };
+    let request =
+        crate::challenge_pack_activation::fixture_activation_request(challenge.challenge_id);
+    let request_sha256 = canonical_json_sha256(&json!({
+        "challenge_id": challenge.challenge_id,
+        "request": request,
+    }))
+    .expect("activation request hash");
+    let activation = crate::challenge_pack_activation::ChallengePackActivationRecordV1 {
+        schema: crate::challenge_pack_activation::ACTIVATION_RECORD_V1.to_string(),
+        activation_id: Uuid::new_v4(),
+        challenge_id: challenge.challenge_id,
+        request_sha256,
+        request,
+        previous_status: crate::ChallengeStatus::Draft,
+        activated_status: crate::ChallengeStatus::Open,
+        activated_at: now,
+    };
+    assert!(snapshot_challenge_ruleset(&challenge, Some(&activation), now).is_err());
+    let (snapshot, _, _, _) = snapshot_challenge_ruleset(&challenge, None, now)
+        .expect("qualification without activation");
+    assert!(matches!(
+        snapshot.material_authority,
+        Some(FrozenChallengeMaterialAuthorityBindingV1::LegacyGoldenQualification(_))
+    ));
 }
 
 #[test]

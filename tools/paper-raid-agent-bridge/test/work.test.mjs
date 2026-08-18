@@ -97,6 +97,81 @@ function materialObjects() {
   }));
 }
 
+function legacyGoldenAuthority(overrides = {}) {
+  const objects = [
+    [
+      "brief",
+      "qualification/legacy-golden/brief.md",
+      "challenge/brief.md",
+      "playable_brief",
+      "sha256:b926b4c868af652b2fed4671efc07f9bbc021c65ac188c971c2a2b67c365a9a3",
+      913,
+      "text/markdown; charset=utf-8",
+    ],
+    [
+      "dataset",
+      "data/synthetic-observations.csv",
+      "challenge/dataset.csv",
+      "dataset",
+      "sha256:b002e6297f6fd781742866533b89bf781c7f21d5cfa7b42b5c97a9ecd5821314",
+      230,
+      "text/csv; charset=utf-8",
+    ],
+    [
+      "baseline",
+      "code/baseline.py",
+      "challenge/baseline.py",
+      "baseline_code",
+      "sha256:059717cc82d10cee0504ed6af3fa81121d7a7645c53d8e8a788a35f63ae644ba",
+      1071,
+      "text/x-python; charset=utf-8",
+    ],
+    [
+      "evaluator",
+      "evaluator/legacy-golden-evaluator.py",
+      "challenge/evaluator.py",
+      "frozen_evaluator",
+      "sha256:63971194ab97e1d14752795ff1ff8c39a44d1a7782ffbb9459ec2210fe8a8e3d",
+      3483,
+      "text/x-python; charset=utf-8",
+    ],
+  ].map(([objectKey, sourcePath, logicalPath, role, digest, sizeBytes, mediaType]) => ({
+    object_key: objectKey,
+    source_path: sourcePath,
+    logical_path: logicalPath,
+    role,
+    digest,
+    size_bytes: sizeBytes,
+    media_type: mediaType,
+    download_path: "/api/agent-bridge/challenge-objects",
+  }));
+  return withCanonicalHash({
+    schema: "hepta.paper_raid.legacy_golden_qualification_material_authority.v1",
+    authority_hash: `sha256:${"0".repeat(64)}`,
+    qualification_id: "paper-raid-golden-v2-strict-review-v1",
+    challenge_id: CHALLENGE_ID,
+    challenge_snapshot_hash: `sha256:${"2".repeat(64)}`,
+    challenge_title: "Paper Raid: Reproducible Synthetic Ablation",
+    challenge_description: "Reproduce a public deterministic baseline, retain the failed run, and deliver one evidence-bound ablation as a short paper. paper-raid-alpha-evaluator-sha256:805ee4ad69fa1e56cebc0721711419d211cf0fe2090e294db25bf712f10c74f8",
+    challenge_status: "open",
+    ruleset_version: "paper-raid-golden-v2",
+    ruleset_hash: "sha256:39cfc6a5c883e49b78bf315b53079336539c932ca48ff5a040415d7e5dd9b2c0",
+    ruleset_absent: true,
+    dataset_manifest_hash: "sha256:6c0494ec10383018b4a938528d179d16fcb6dd8961b8294ff6f4093dda42aeb4",
+    evaluator_manifest_hash: "sha256:805ee4ad69fa1e56cebc0721711419d211cf0fe2090e294db25bf712f10c74f8",
+    objects,
+    ...overrides,
+  }, "authority_hash");
+}
+
+function legacyGoldenBundle(authority = legacyGoldenAuthority()) {
+  return materialBundle({
+    authority,
+    authority_hash: authority.authority_hash,
+    objects: authority.objects.map(object => ({ ...object })),
+  });
+}
+
 function materialBundle(overrides = {}) {
   const authority = overrides.authority || materialAuthority();
   return withCanonicalHash({
@@ -596,6 +671,74 @@ test("challenge material authority and bundle hashes reject tampering", () => {
   assert.throws(
     () => challengeMaterialBundles(challengeInbox(bundleTamper)),
     /bundle hash mismatch/,
+  );
+});
+
+test("legacy golden qualification accepts only its exact non-activation authority", () => {
+  const exact = legacyGoldenBundle();
+  const [bundle] = challengeMaterialBundles(challengeInbox(exact));
+  assert.equal(
+    bundle.authority.schema,
+    "hepta.paper_raid.legacy_golden_qualification_material_authority.v1",
+  );
+  assert.equal(Object.hasOwn(bundle.authority, "activation_id"), false);
+
+  for (const extra of [
+    { activation_id: ACTIVATION_ID },
+    { unknown_authority: true },
+  ]) {
+    const mixed = legacyGoldenAuthority(extra);
+    assert.throws(
+      () => challengeMaterialBundles(challengeInbox(legacyGoldenBundle(mixed))),
+      /legacy golden qualification material authority is invalid/,
+    );
+  }
+  for (const extra of [
+    { qualification_id: "cross-variant" },
+    { unknown_authority: true },
+  ]) {
+    const mixed = materialAuthority(extra);
+    assert.throws(
+      () => challengeMaterialBundles(challengeInbox(materialBundle({ authority: mixed }))),
+      /frozen challenge material authority is invalid/,
+    );
+  }
+
+  for (const [field, value] of [
+    ["qualification_id", "other-qualification"],
+    ["challenge_title", "Substituted title"],
+    ["challenge_description", "Substituted description"],
+    ["challenge_status", "closed"],
+    ["ruleset_version", "paper-raid-other-v1"],
+    ["ruleset_hash", `sha256:${"a".repeat(64)}`],
+    ["ruleset_absent", false],
+    ["dataset_manifest_hash", `sha256:${"b".repeat(64)}`],
+    ["evaluator_manifest_hash", `sha256:${"c".repeat(64)}`],
+  ]) {
+    const mutantAuthority = legacyGoldenAuthority({ [field]: value });
+    assert.throws(
+      () => challengeMaterialBundles(challengeInbox(legacyGoldenBundle(mutantAuthority))),
+      /legacy golden qualification material authority is invalid/,
+    );
+  }
+
+  const objectReplacement = legacyGoldenAuthority();
+  objectReplacement.objects[0].digest = `sha256:${"d".repeat(64)}`;
+  objectReplacement.authority_hash = withCanonicalHash(
+    objectReplacement,
+    "authority_hash",
+  ).authority_hash;
+  assert.throws(
+    () => challengeMaterialBundles(challengeInbox(legacyGoldenBundle(objectReplacement))),
+    /material objects are not exact/,
+  );
+
+  const crossedBundle = legacyGoldenBundle();
+  crossedBundle.objects[0].digest = `sha256:${"e".repeat(64)}`;
+  crossedBundle.bundle_hash = withCanonicalHash(crossedBundle, "bundle_hash").bundle_hash;
+  assert.throws(
+    () => challengeMaterialBundles(challengeInbox(crossedBundle)),
+    /bundle differs from frozen authority/,
   );
 });
 

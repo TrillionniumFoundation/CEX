@@ -17,7 +17,9 @@ use uuid::Uuid;
 use crate::{
     paper_raid_contracts::{
         agent_capability_disclosure_hash, authorship_consent_signing_bytes, canonical_json_bytes,
-        canonical_json_sha256, consumer_user_assertion_signing_bytes, paper_bundle_hash,
+        canonical_json_sha256, consumer_user_assertion_signing_bytes,
+        legacy_golden_qualification_material_authority_hash,
+        legacy_golden_qualification_material_objects, paper_bundle_hash,
         paper_release_candidate_hash, research_session_roster_root, section_materialization_root,
         sha256_digest, sign_authorization_set_consumption_receipt, sign_nakama_completion_receipt,
         sign_research_session_authorization, verify_agent_binding_key_rotation_signatures,
@@ -26,17 +28,22 @@ use crate::{
         verify_human_key_rotation_signatures, verify_team_member_acceptance_signature,
         AgentBindingKeyRotationClaimV2, AgentBindingProofClaimV2, AgentBindingProofClaimV3,
         AgentCapabilityDisclosureV1, AuthorshipConsentSigningV2, ConsumerUserAssertionClaimV2,
-        HumanKeyRegistrationClaimV2, HumanKeyRevocationClaimV2, HumanKeyRotationClaimV2,
-        PaperBundleAuthorConsentV2, PaperBundleV2, PaperReleaseAuthorV2, PaperReleaseCandidateV2,
-        ResearchSessionAuthorizationClaimV1, ResearchSessionCompletionV1, ResearchSessionEventV1,
-        ResearchSessionRosterMemberV1, SectionMaterializationDescriptorV1,
-        SignedAuthorizationSetConsumptionReceiptV1, SignedConsumerUserAssertionV2,
-        SignedNakamaCompletionReceiptV1, SignedResearchSessionAuthorizationV1,
-        TeamMemberAcceptanceSigningV2, AGENT_BINDING_KEY_ROTATION_V2, AGENT_BINDING_PROOF_V2,
-        AGENT_BINDING_PROOF_V3, AUTHORSHIP_CONSENT_V2, HUMAN_KEY_REGISTRATION_V2,
-        HUMAN_KEY_REVOCATION_V2, HUMAN_KEY_ROTATION_V2, JSON_SAFE_U64_MAX, PAPER_BUNDLE_V2,
-        PAPER_RAID_PROTOCOL_V2, PAPER_RELEASE_CANDIDATE_V2, PAPER_REWORK_V1,
-        TEAM_MEMBER_ACCEPTANCE_V2,
+        FrozenChallengeMaterialAuthorityBindingV1, HumanKeyRegistrationClaimV2,
+        HumanKeyRevocationClaimV2, HumanKeyRotationClaimV2,
+        LegacyGoldenQualificationMaterialAuthorityV1, PaperBundleAuthorConsentV2, PaperBundleV2,
+        PaperReleaseAuthorV2, PaperReleaseCandidateV2, ResearchSessionAuthorizationClaimV1,
+        ResearchSessionCompletionV1, ResearchSessionEventV1, ResearchSessionRosterMemberV1,
+        SectionMaterializationDescriptorV1, SignedAuthorizationSetConsumptionReceiptV1,
+        SignedConsumerUserAssertionV2, SignedNakamaCompletionReceiptV1,
+        SignedResearchSessionAuthorizationV1, TeamMemberAcceptanceSigningV2,
+        AGENT_BINDING_KEY_ROTATION_V2, AGENT_BINDING_PROOF_V2, AGENT_BINDING_PROOF_V3,
+        AUTHORSHIP_CONSENT_V2, HUMAN_KEY_REGISTRATION_V2, HUMAN_KEY_REVOCATION_V2,
+        HUMAN_KEY_ROTATION_V2, JSON_SAFE_U64_MAX, LEGACY_GOLDEN_CHALLENGE_DESCRIPTION,
+        LEGACY_GOLDEN_CHALLENGE_RULESET_HASH, LEGACY_GOLDEN_CHALLENGE_RULESET_VERSION,
+        LEGACY_GOLDEN_CHALLENGE_TITLE, LEGACY_GOLDEN_DATASET_MANIFEST_HASH,
+        LEGACY_GOLDEN_EVALUATOR_MANIFEST_HASH, LEGACY_GOLDEN_QUALIFICATION_ID,
+        LEGACY_GOLDEN_QUALIFICATION_MATERIAL_AUTHORITY_V1, PAPER_BUNDLE_V2, PAPER_RAID_PROTOCOL_V2,
+        PAPER_RELEASE_CANDIDATE_V2, PAPER_REWORK_V1, TEAM_MEMBER_ACCEPTANCE_V2,
     },
     require_service_token, validate_contract_text_api, validate_non_empty, ApiError, AppState,
     ChallengeForwardTransitionV1, ChallengeMinimumV1, ChallengeRequirementKindV1,
@@ -4439,21 +4446,66 @@ type ChallengeRulesetSnapshotOutcome = (
     Option<DateTime<Utc>>,
 );
 
+fn freeze_legacy_golden_qualification_material_authority(
+    challenge: &ResearchChallenge,
+    challenge_snapshot_hash: &str,
+) -> Result<Option<LegacyGoldenQualificationMaterialAuthorityV1>, ApiError> {
+    if challenge.status != crate::ChallengeStatus::Open
+        || challenge.title != LEGACY_GOLDEN_CHALLENGE_TITLE
+        || challenge.description != LEGACY_GOLDEN_CHALLENGE_DESCRIPTION
+        || challenge.ruleset_version != LEGACY_GOLDEN_CHALLENGE_RULESET_VERSION
+        || challenge.ruleset_hash != LEGACY_GOLDEN_CHALLENGE_RULESET_HASH
+        || challenge.dataset_manifest_hash != LEGACY_GOLDEN_DATASET_MANIFEST_HASH
+        || challenge.evaluator_manifest_hash != LEGACY_GOLDEN_EVALUATOR_MANIFEST_HASH
+        || challenge.ruleset.is_some()
+    {
+        return Ok(None);
+    }
+    let mut authority = LegacyGoldenQualificationMaterialAuthorityV1 {
+        schema: LEGACY_GOLDEN_QUALIFICATION_MATERIAL_AUTHORITY_V1.to_string(),
+        authority_hash: String::new(),
+        qualification_id: LEGACY_GOLDEN_QUALIFICATION_ID.to_string(),
+        challenge_id: challenge.challenge_id,
+        challenge_snapshot_hash: challenge_snapshot_hash.to_string(),
+        challenge_title: challenge.title.clone(),
+        challenge_description: challenge.description.clone(),
+        challenge_status: "open".to_string(),
+        ruleset_version: challenge.ruleset_version.clone(),
+        ruleset_hash: challenge.ruleset_hash.clone(),
+        ruleset_absent: true,
+        dataset_manifest_hash: challenge.dataset_manifest_hash.clone(),
+        evaluator_manifest_hash: challenge.evaluator_manifest_hash.clone(),
+        objects: legacy_golden_qualification_material_objects(),
+    };
+    authority.authority_hash = legacy_golden_qualification_material_authority_hash(&authority)
+        .map_err(|message| {
+            ApiError::internal(format!(
+                "freeze legacy golden qualification authority: {message}"
+            ))
+        })?;
+    Ok(Some(authority))
+}
+
 fn snapshot_challenge_ruleset(
     challenge: &ResearchChallenge,
     activation: Option<&crate::challenge_pack_activation::ChallengePackActivationRecordV1>,
     started_at: DateTime<Utc>,
 ) -> Result<ChallengeRulesetSnapshotOutcome, ApiError> {
     let challenge_snapshot_hash = crate::challenge_snapshot_hash(challenge)?;
-    let material_authority = activation
-        .map(|activation| {
+    let material_authority = match activation {
+        Some(activation) => Some(FrozenChallengeMaterialAuthorityBindingV1::PackActivation(
             crate::challenge_pack_activation::freeze_challenge_material_authority(
                 challenge,
                 activation,
                 &challenge_snapshot_hash,
-            )
-        })
-        .transpose()?;
+            )?,
+        )),
+        None => freeze_legacy_golden_qualification_material_authority(
+            challenge,
+            &challenge_snapshot_hash,
+        )?
+        .map(FrozenChallengeMaterialAuthorityBindingV1::LegacyGoldenQualification),
+    };
     let (enforcement, ruleset, deadline_at, grace_expires_at) =
         if let Some(ruleset) = &challenge.ruleset {
             ruleset.validate().map_err(|message| {

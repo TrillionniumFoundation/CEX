@@ -31,6 +31,20 @@ const ASSIGNED_CHALLENGE_MATERIAL_BUNDLE_SCHEMA =
   "hepta.paper_raid.assigned_challenge_material_bundle.v1";
 const FROZEN_CHALLENGE_MATERIAL_AUTHORITY_SCHEMA =
   "hepta.paper_raid.frozen_challenge_material_authority.v1";
+const LEGACY_GOLDEN_QUALIFICATION_MATERIAL_AUTHORITY_SCHEMA =
+  "hepta.paper_raid.legacy_golden_qualification_material_authority.v1";
+const LEGACY_GOLDEN_QUALIFICATION_ID =
+  "paper-raid-golden-v2-strict-review-v1";
+const LEGACY_GOLDEN_TITLE = "Paper Raid: Reproducible Synthetic Ablation";
+const LEGACY_GOLDEN_DESCRIPTION =
+  "Reproduce a public deterministic baseline, retain the failed run, and deliver one evidence-bound ablation as a short paper. paper-raid-alpha-evaluator-sha256:805ee4ad69fa1e56cebc0721711419d211cf0fe2090e294db25bf712f10c74f8";
+const LEGACY_GOLDEN_RULESET_VERSION = "paper-raid-golden-v2";
+const LEGACY_GOLDEN_RULESET_HASH =
+  "sha256:39cfc6a5c883e49b78bf315b53079336539c932ca48ff5a040415d7e5dd9b2c0";
+const LEGACY_GOLDEN_DATASET_MANIFEST_HASH =
+  "sha256:6c0494ec10383018b4a938528d179d16fcb6dd8961b8294ff6f4093dda42aeb4";
+const LEGACY_GOLDEN_EVALUATOR_MANIFEST_HASH =
+  "sha256:805ee4ad69fa1e56cebc0721711419d211cf0fe2090e294db25bf712f10c74f8";
 const CHALLENGE_OBJECT_PATH = "/api/agent-bridge/challenge-objects";
 const MATERIALIZATION_SCHEMA =
   "hepta.paper_raid.agent_bridge.challenge_materialization.v1";
@@ -195,6 +209,102 @@ function canonicalUuid(value) {
 }
 
 function validateFrozenChallengeMaterialAuthority(authority) {
+  if (authority?.schema ===
+      LEGACY_GOLDEN_QUALIFICATION_MATERIAL_AUTHORITY_SCHEMA) {
+    const fields = [
+      "schema",
+      "authority_hash",
+      "qualification_id",
+      "challenge_id",
+      "challenge_snapshot_hash",
+      "challenge_title",
+      "challenge_description",
+      "challenge_status",
+      "ruleset_version",
+      "ruleset_hash",
+      "ruleset_absent",
+      "dataset_manifest_hash",
+      "evaluator_manifest_hash",
+      "objects",
+    ];
+    if (!exactKeys(authority, fields) ||
+        authority.qualification_id !== LEGACY_GOLDEN_QUALIFICATION_ID ||
+        !canonicalUuid(authority.challenge_id) ||
+        authority.challenge_title !== LEGACY_GOLDEN_TITLE ||
+        authority.challenge_description !== LEGACY_GOLDEN_DESCRIPTION ||
+        authority.challenge_status !== "open" ||
+        authority.ruleset_version !== LEGACY_GOLDEN_RULESET_VERSION ||
+        authority.ruleset_hash !== LEGACY_GOLDEN_RULESET_HASH ||
+        authority.ruleset_absent !== true ||
+        authority.dataset_manifest_hash !== LEGACY_GOLDEN_DATASET_MANIFEST_HASH ||
+        authority.evaluator_manifest_hash !== LEGACY_GOLDEN_EVALUATOR_MANIFEST_HASH ||
+        !DIGEST_PATTERN.test(String(authority.authority_hash || "")) ||
+        !DIGEST_PATTERN.test(String(authority.challenge_snapshot_hash || "")) ||
+        !Array.isArray(authority.objects) || authority.objects.length !== 4) {
+      throw new Error("legacy golden qualification material authority is invalid");
+    }
+    const exact = [
+      {
+        object_key: "brief",
+        source_path: "qualification/legacy-golden/brief.md",
+        logical_path: "challenge/brief.md",
+        role: "playable_brief",
+        digest: "sha256:b926b4c868af652b2fed4671efc07f9bbc021c65ac188c971c2a2b67c365a9a3",
+        size_bytes: 913,
+        media_type: "text/markdown; charset=utf-8",
+        download_path: CHALLENGE_OBJECT_PATH,
+      },
+      {
+        object_key: "dataset",
+        source_path: "data/synthetic-observations.csv",
+        logical_path: "challenge/dataset.csv",
+        role: "dataset",
+        digest: "sha256:b002e6297f6fd781742866533b89bf781c7f21d5cfa7b42b5c97a9ecd5821314",
+        size_bytes: 230,
+        media_type: "text/csv; charset=utf-8",
+        download_path: CHALLENGE_OBJECT_PATH,
+      },
+      {
+        object_key: "baseline",
+        source_path: "code/baseline.py",
+        logical_path: "challenge/baseline.py",
+        role: "baseline_code",
+        digest: "sha256:059717cc82d10cee0504ed6af3fa81121d7a7645c53d8e8a788a35f63ae644ba",
+        size_bytes: 1071,
+        media_type: "text/x-python; charset=utf-8",
+        download_path: CHALLENGE_OBJECT_PATH,
+      },
+      {
+        object_key: "evaluator",
+        source_path: "evaluator/legacy-golden-evaluator.py",
+        logical_path: "challenge/evaluator.py",
+        role: "frozen_evaluator",
+        digest: "sha256:63971194ab97e1d14752795ff1ff8c39a44d1a7782ffbb9459ec2210fe8a8e3d",
+        size_bytes: 3483,
+        media_type: "text/x-python; charset=utf-8",
+        download_path: CHALLENGE_OBJECT_PATH,
+      },
+    ];
+    const objects = authority.objects.map((object, index) =>
+      validateChallengeMaterialObject(object, {
+        objectKey: exact[index].object_key,
+        role: exact[index].role,
+        logicalPath: exact[index].logical_path,
+        mediaType: exact[index].media_type,
+      })
+    );
+    if (canonicalJsonBytes(objects).compare(canonicalJsonBytes(exact)) !== 0) {
+      throw new Error("legacy golden qualification material objects are not exact");
+    }
+    const frame = Object.fromEntries(
+      fields.filter(field => field !== "authority_hash")
+        .map(field => [field, field === "objects" ? objects : authority[field]]),
+    );
+    if (sha256Digest(canonicalJsonBytes(frame)) !== authority.authority_hash) {
+      throw new Error("legacy golden qualification material authority hash mismatch");
+    }
+    return Object.freeze({ ...authority, objects: Object.freeze(objects) });
+  }
   const fields = [
     "schema",
     "authority_hash",
@@ -349,6 +459,11 @@ function validateChallengeMaterialBundle(bundle, {
   if (new Set(objects.map(object => object.source_path)).size !== objects.length ||
       new Set(objects.map(object => object.digest)).size !== objects.length) {
     throw new Error("assigned challenge material bundle contains duplicate objects");
+  }
+  if (authority.schema ===
+      LEGACY_GOLDEN_QUALIFICATION_MATERIAL_AUTHORITY_SCHEMA &&
+      canonicalJsonBytes(objects).compare(canonicalJsonBytes(authority.objects)) !== 0) {
+    throw new Error("legacy golden qualification bundle differs from frozen authority");
   }
   const frame = Object.fromEntries(
     fields.filter(field => field !== "bundle_hash")

@@ -10,8 +10,9 @@ use hepta_paper_raid_contracts::{
     parse_challenge_dataset_manifest, parse_challenge_evaluator_manifest,
     parse_challenge_pack_manifest, resolve_challenge_material_objects,
     verify_assigned_challenge_material_bundle, verify_frozen_challenge_material_authority,
-    AssignedChallengeMaterialBundleV1, AssignedChallengeMaterialObjectV1,
-    FrozenChallengeMaterialAuthorityV1, ASSIGNED_CHALLENGE_MATERIAL_BUNDLE_V1, JSON_SAFE_U64_MAX,
+    verify_frozen_challenge_material_authority_binding, AssignedChallengeMaterialBundleV1,
+    AssignedChallengeMaterialObjectV1, FrozenChallengeMaterialAuthorityBindingV1,
+    ASSIGNED_CHALLENGE_MATERIAL_BUNDLE_V1, JSON_SAFE_U64_MAX,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -65,7 +66,7 @@ fn parse_uuid(record: &Value, field: &str) -> Result<Uuid, AppError> {
 
 fn frozen_authority_from_room(
     room: &Value,
-) -> Result<(Uuid, String, FrozenChallengeMaterialAuthorityV1), AppError> {
+) -> Result<(Uuid, String, FrozenChallengeMaterialAuthorityBindingV1), AppError> {
     let paper = room
         .get("paper")
         .filter(|value| value.is_object())
@@ -87,23 +88,36 @@ fn frozen_authority_from_room(
     {
         return Err(AppError::Upstream);
     }
-    let authority: FrozenChallengeMaterialAuthorityV1 =
+    let authority: FrozenChallengeMaterialAuthorityBindingV1 =
         serde_json::from_value(snapshot.get("material_authority").cloned().ok_or_else(|| {
             AppError::Conflict(
-                "challenge materials are unavailable without a frozen activation snapshot".into(),
+                "challenge materials are unavailable without a frozen material authority".into(),
             )
         })?)
         .map_err(|_| AppError::Upstream)?;
-    verify_frozen_challenge_material_authority(&authority).map_err(|_| AppError::Upstream)?;
-    if authority.challenge_id != challenge_id
+    verify_frozen_challenge_material_authority_binding(&authority)
+        .map_err(|_| AppError::Upstream)?;
+    let provenance_matches_snapshot = match &authority {
+        FrozenChallengeMaterialAuthorityBindingV1::PackActivation(_) => {
+            snapshot.get("enforcement").and_then(Value::as_str) == Some("authoritative_v1")
+                && snapshot.get("ruleset").is_some_and(Value::is_object)
+        }
+        FrozenChallengeMaterialAuthorityBindingV1::LegacyGoldenQualification(_) => {
+            snapshot.get("enforcement").and_then(Value::as_str) == Some("legacy_unranked")
+                && snapshot.get("ruleset").is_some_and(Value::is_null)
+        }
+    };
+    if snapshot.get("schema").and_then(Value::as_str)
+        != Some("hepta.paper_raid.challenge_ruleset_snapshot.v1")
+        || !provenance_matches_snapshot
+        || authority.challenge_id() != challenge_id
         || snapshot
             .get("challenge_snapshot_hash")
             .and_then(Value::as_str)
-            != Some(authority.challenge_snapshot_hash.as_str())
+            != Some(authority.challenge_snapshot_hash())
         || snapshot.get("ruleset_version").and_then(Value::as_str)
-            != Some(authority.ruleset_version.as_str())
-        || snapshot.get("ruleset_hash").and_then(Value::as_str)
-            != Some(authority.ruleset_hash.as_str())
+            != Some(authority.ruleset_version())
+        || snapshot.get("ruleset_hash").and_then(Value::as_str) != Some(authority.ruleset_hash())
     {
         return Err(AppError::Upstream);
     }
@@ -158,11 +172,11 @@ fn author_work_item_scope(
     })
 }
 
-/// Resolve the four player-facing bytes from the Paper's immutable activation-derived authority.
+/// Resolve the four player-facing bytes from the Paper's immutable material authority.
 ///
 /// This function is shared by Browser rendering and Agent Bridge projection.  It never accepts a
-/// digest, manifest or path supplied by a player: all three manifests originate in the Paper
-/// snapshot, and every selected object must be closed by the pack plus dataset/evaluator manifests.
+/// digest, manifest or path supplied by a player. Activated packs are closed by their three
+/// manifests; the one historical qualification is closed by its separate exact four-object schema.
 pub(crate) async fn resolve_frozen_challenge_materials(
     state: &AppState,
     room: &Value,
@@ -170,8 +184,8 @@ pub(crate) async fn resolve_frozen_challenge_materials(
     (
         Uuid,
         String,
-        FrozenChallengeMaterialAuthorityV1,
-        Vec<AssignedChallengeMaterialObjectV1>,
+        FrozenChallengeMaterialAuthorityBindingV1,
+        Vec<(AssignedChallengeMaterialObjectV1, Vec<u8>)>,
     ),
     AppError,
 > {
@@ -182,46 +196,61 @@ pub(crate) async fn resolve_frozen_challenge_materials(
 
 async fn resolve_materials_from_authority(
     state: &AppState,
-    authority: &FrozenChallengeMaterialAuthorityV1,
-) -> Result<Vec<AssignedChallengeMaterialObjectV1>, AppError> {
-    let pack_bytes = state
-        .cas
-        .get(&authority.pack_manifest_hash, "application/json")
-        .await?;
-    let pack = parse_challenge_pack_manifest(&pack_bytes, &authority.pack_manifest_hash)
+    authority: &FrozenChallengeMaterialAuthorityBindingV1,
+) -> Result<Vec<(AssignedChallengeMaterialObjectV1, Vec<u8>)>, AppError> {
+    verify_frozen_challenge_material_authority_binding(authority)
         .map_err(|_| AppError::Upstream)?;
-    if pack.pack_id != authority.pack_id
-        || pack.template != authority.template
-        || pack.ruleset_version != authority.ruleset_version
-        || pack.dataset_manifest_sha256 != authority.dataset_manifest_hash
-        || pack.evaluator_manifest_sha256 != authority.evaluator_manifest_hash
-    {
-        return Err(AppError::Upstream);
-    }
-    let evaluator_bytes = state
-        .cas
-        .get(&authority.evaluator_manifest_hash, "application/json")
-        .await?;
-    let dataset_bytes = state
-        .cas
-        .get(&authority.dataset_manifest_hash, "application/json")
-        .await?;
-    let evaluator =
-        parse_challenge_evaluator_manifest(&evaluator_bytes, &authority.evaluator_manifest_hash)
+    let objects = match authority {
+        FrozenChallengeMaterialAuthorityBindingV1::PackActivation(authority) => {
+            verify_frozen_challenge_material_authority(authority)
+                .map_err(|_| AppError::Upstream)?;
+            let pack_bytes = state
+                .cas
+                .get(&authority.pack_manifest_hash, "application/json")
+                .await?;
+            let pack = parse_challenge_pack_manifest(&pack_bytes, &authority.pack_manifest_hash)
+                .map_err(|_| AppError::Upstream)?;
+            if pack.pack_id != authority.pack_id
+                || pack.template != authority.template
+                || pack.ruleset_version != authority.ruleset_version
+                || pack.dataset_manifest_sha256 != authority.dataset_manifest_hash
+                || pack.evaluator_manifest_sha256 != authority.evaluator_manifest_hash
+            {
+                return Err(AppError::Upstream);
+            }
+            let evaluator_bytes = state
+                .cas
+                .get(&authority.evaluator_manifest_hash, "application/json")
+                .await?;
+            let dataset_bytes = state
+                .cas
+                .get(&authority.dataset_manifest_hash, "application/json")
+                .await?;
+            let evaluator = parse_challenge_evaluator_manifest(
+                &evaluator_bytes,
+                &authority.evaluator_manifest_hash,
+            )
             .map_err(|_| AppError::Upstream)?;
-    let dataset =
-        parse_challenge_dataset_manifest(&dataset_bytes, &authority.dataset_manifest_hash)
-            .map_err(|_| AppError::Upstream)?;
-    let objects = resolve_challenge_material_objects(&pack, &evaluator, &dataset)
-        .map_err(|_| AppError::Upstream)?;
+            let dataset =
+                parse_challenge_dataset_manifest(&dataset_bytes, &authority.dataset_manifest_hash)
+                    .map_err(|_| AppError::Upstream)?;
+            resolve_challenge_material_objects(&pack, &evaluator, &dataset)
+                .map_err(|_| AppError::Upstream)?
+        }
+        FrozenChallengeMaterialAuthorityBindingV1::LegacyGoldenQualification(authority) => {
+            authority.objects.clone()
+        }
+    };
+    let mut resolved = Vec::with_capacity(objects.len());
     for object in &objects {
         state.cas.validate_media_type(&object.media_type)?;
         let bytes = state.cas.get(&object.digest, &object.media_type).await?;
         if bytes.len() as u64 != object.size_bytes {
             return Err(AppError::Upstream);
         }
+        resolved.push((object.clone(), bytes));
     }
-    Ok(objects)
+    Ok(resolved)
 }
 
 pub(crate) async fn resolve_assigned_challenge_material_bundle(
@@ -236,11 +265,15 @@ pub(crate) async fn resolve_assigned_challenge_material_bundle(
     let (paper_project_id, snapshot_hash, authority) = frozen_authority_from_room(room)?;
     let scope =
         author_work_item_scope(room, paper_project_id, binding_id, player_id, work_item_id)?;
-    let objects = resolve_materials_from_authority(state, &authority).await?;
+    let objects = resolve_materials_from_authority(state, &authority)
+        .await?
+        .into_iter()
+        .map(|(object, _)| object)
+        .collect();
     let mut bundle = AssignedChallengeMaterialBundleV1 {
         schema: ASSIGNED_CHALLENGE_MATERIAL_BUNDLE_V1.to_string(),
         bundle_hash: String::new(),
-        authority_hash: authority.authority_hash.clone(),
+        authority_hash: authority.authority_hash().to_string(),
         authority,
         paper_project_id: scope.paper_project_id,
         challenge_ruleset_snapshot_hash: snapshot_hash,
@@ -287,10 +320,11 @@ pub(crate) fn authorized_challenge_material_media(
 fn browser_material_projection(
     paper_project_id: Uuid,
     challenge_ruleset_snapshot_hash: &str,
-    authority: &FrozenChallengeMaterialAuthorityV1,
+    authority: &FrozenChallengeMaterialAuthorityBindingV1,
     objects: &[AssignedChallengeMaterialObjectV1],
 ) -> Result<Value, AppError> {
-    verify_frozen_challenge_material_authority(authority).map_err(|_| AppError::Upstream)?;
+    verify_frozen_challenge_material_authority_binding(authority)
+        .map_err(|_| AppError::Upstream)?;
     if objects.len() != 4 {
         return Err(AppError::Upstream);
     }
@@ -340,11 +374,15 @@ async fn browser_challenge_materials(
         .hepta
         .get_paper_room(&session.identity, paper_id)
         .await?;
-    let (resolved_paper_id, snapshot_hash, authority, objects) =
+    let (resolved_paper_id, snapshot_hash, authority, resolved) =
         resolve_frozen_challenge_materials(&state, room.value()).await?;
     if resolved_paper_id != paper_id {
         return Err(AppError::Upstream);
     }
+    let objects = resolved
+        .iter()
+        .map(|(object, _)| object.clone())
+        .collect::<Vec<_>>();
     let projection = browser_material_projection(paper_id, &snapshot_hash, &authority, &objects)?;
     Ok(crate::app::private_no_store(
         Json(projection).into_response(),
@@ -367,38 +405,48 @@ async fn browser_challenge_material_object(
         .hepta
         .get_paper_room(&session.identity, paper_id)
         .await?;
-    let (resolved_paper_id, snapshot_hash, authority, objects) =
+    let (resolved_paper_id, snapshot_hash, authority, resolved) =
         resolve_frozen_challenge_materials(&state, room.value()).await?;
     if resolved_paper_id != paper_id {
         return Err(AppError::Upstream);
     }
+    let objects = resolved
+        .iter()
+        .map(|(object, _)| object.clone())
+        .collect::<Vec<_>>();
     let projection = browser_material_projection(paper_id, &snapshot_hash, &authority, &objects)?;
     if projection.get("projection_hash").and_then(Value::as_str)
         != Some(query.projection_hash.as_str())
     {
         return Err(AppError::Forbidden);
     }
-    let matches = objects
+    let matches = resolved
         .iter()
-        .filter(|object| object.object_key == object_key && object.digest == query.digest)
+        .filter(|(object, _)| object.object_key == object_key && object.digest == query.digest)
         .collect::<Vec<_>>();
     if matches.len() != 1 {
         return Err(AppError::NotFound);
     }
-    let object = matches[0];
+    let (object, bytes) = matches[0];
     state.cas.validate_media_type(&object.media_type)?;
-    let bytes = state.cas.get(&object.digest, &object.media_type).await?;
     if bytes.len() as u64 != object.size_bytes {
         return Err(AppError::Upstream);
     }
-    crate::app::review_artifact_response(bytes, &object.media_type)
+    crate::app::review_artifact_response(bytes.clone(), &object.media_type)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use hepta_paper_raid_contracts::{
-        frozen_challenge_material_authority_hash, FROZEN_CHALLENGE_MATERIAL_AUTHORITY_V1,
+        frozen_challenge_material_authority_hash,
+        legacy_golden_qualification_material_authority_hash,
+        legacy_golden_qualification_material_objects, FrozenChallengeMaterialAuthorityV1,
+        LegacyGoldenQualificationMaterialAuthorityV1, FROZEN_CHALLENGE_MATERIAL_AUTHORITY_V1,
+        LEGACY_GOLDEN_CHALLENGE_DESCRIPTION, LEGACY_GOLDEN_CHALLENGE_RULESET_HASH,
+        LEGACY_GOLDEN_CHALLENGE_RULESET_VERSION, LEGACY_GOLDEN_CHALLENGE_TITLE,
+        LEGACY_GOLDEN_DATASET_MANIFEST_HASH, LEGACY_GOLDEN_EVALUATOR_MANIFEST_HASH,
+        LEGACY_GOLDEN_QUALIFICATION_ID, LEGACY_GOLDEN_QUALIFICATION_MATERIAL_AUTHORITY_V1,
     };
     use serde_json::json;
 
@@ -525,6 +573,81 @@ mod tests {
         let (mut room, _, _, _) = room_fixture();
         room["paper"]["challenge_id"] = json!(Uuid::from_u128(99));
         assert!(frozen_authority_from_room(&room).is_err());
+
+        let (mut relabelled, _, _, _) = room_fixture();
+        relabelled["paper"]["challenge_ruleset_snapshot"]["enforcement"] = json!("legacy_unranked");
+        relabelled["paper"]["challenge_ruleset_snapshot"]["ruleset"] = Value::Null;
+        relabelled["paper"]["challenge_ruleset_snapshot_hash"] = json!(canonical_json_sha256(
+            &relabelled["paper"]["challenge_ruleset_snapshot"]
+        )
+        .unwrap());
+        assert!(frozen_authority_from_room(&relabelled).is_err());
+    }
+
+    #[test]
+    fn exact_legacy_golden_qualification_is_explicit_and_substitution_fails() {
+        let (mut room, _, _, _) = room_fixture();
+        let challenge_id = Uuid::from_u128(2);
+        let challenge_snapshot_hash = format!("sha256:{}", "a".repeat(64));
+        let mut authority = LegacyGoldenQualificationMaterialAuthorityV1 {
+            schema: LEGACY_GOLDEN_QUALIFICATION_MATERIAL_AUTHORITY_V1.to_string(),
+            authority_hash: String::new(),
+            qualification_id: LEGACY_GOLDEN_QUALIFICATION_ID.to_string(),
+            challenge_id,
+            challenge_snapshot_hash: challenge_snapshot_hash.clone(),
+            challenge_title: LEGACY_GOLDEN_CHALLENGE_TITLE.to_string(),
+            challenge_description: LEGACY_GOLDEN_CHALLENGE_DESCRIPTION.to_string(),
+            challenge_status: "open".to_string(),
+            ruleset_version: LEGACY_GOLDEN_CHALLENGE_RULESET_VERSION.to_string(),
+            ruleset_hash: LEGACY_GOLDEN_CHALLENGE_RULESET_HASH.to_string(),
+            ruleset_absent: true,
+            dataset_manifest_hash: LEGACY_GOLDEN_DATASET_MANIFEST_HASH.to_string(),
+            evaluator_manifest_hash: LEGACY_GOLDEN_EVALUATOR_MANIFEST_HASH.to_string(),
+            objects: legacy_golden_qualification_material_objects(),
+        };
+        authority.authority_hash =
+            legacy_golden_qualification_material_authority_hash(&authority).unwrap();
+        room["paper"]["challenge_ruleset_snapshot"] = json!({
+            "schema": "hepta.paper_raid.challenge_ruleset_snapshot.v1",
+            "challenge_snapshot_hash": challenge_snapshot_hash,
+            "ruleset_version": LEGACY_GOLDEN_CHALLENGE_RULESET_VERSION,
+            "ruleset_hash": LEGACY_GOLDEN_CHALLENGE_RULESET_HASH,
+            "enforcement": "legacy_unranked",
+            "ruleset": null,
+            "material_authority": authority,
+        });
+        room["paper"]["challenge_ruleset_snapshot_hash"] =
+            json!(canonical_json_sha256(&room["paper"]["challenge_ruleset_snapshot"]).unwrap());
+
+        let (_, _, authority) = frozen_authority_from_room(&room).unwrap();
+        assert!(matches!(
+            authority,
+            FrozenChallengeMaterialAuthorityBindingV1::LegacyGoldenQualification(_)
+        ));
+        assert!(
+            room["paper"]["challenge_ruleset_snapshot"]["material_authority"]
+                .get("activation_id")
+                .is_none()
+        );
+
+        let mut relabelled = room.clone();
+        relabelled["paper"]["challenge_ruleset_snapshot"]["enforcement"] =
+            json!("authoritative_v1");
+        relabelled["paper"]["challenge_ruleset_snapshot"]["ruleset"] = json!({});
+        relabelled["paper"]["challenge_ruleset_snapshot_hash"] = json!(canonical_json_sha256(
+            &relabelled["paper"]["challenge_ruleset_snapshot"]
+        )
+        .unwrap());
+        assert!(frozen_authority_from_room(&relabelled).is_err());
+
+        let mut replacement = room;
+        replacement["paper"]["challenge_ruleset_snapshot"]["material_authority"]["objects"][0]
+            ["digest"] = json!(format!("sha256:{}", "f".repeat(64)));
+        replacement["paper"]["challenge_ruleset_snapshot_hash"] = json!(canonical_json_sha256(
+            &replacement["paper"]["challenge_ruleset_snapshot"]
+        )
+        .unwrap());
+        assert!(frozen_authority_from_room(&replacement).is_err());
     }
 
     #[test]

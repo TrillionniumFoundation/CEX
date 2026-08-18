@@ -56,9 +56,35 @@ pub const REVIEW_EXECUTION_RECEIPT_ID_DOMAIN_V1: &str =
 pub const REVIEW_OBJECT_DOWNLOAD_PATH_V1: &str = "/api/agent-bridge/review-objects";
 pub const FROZEN_CHALLENGE_MATERIAL_AUTHORITY_V1: &str =
     "hepta.paper_raid.frozen_challenge_material_authority.v1";
+pub const LEGACY_GOLDEN_QUALIFICATION_MATERIAL_AUTHORITY_V1: &str =
+    "hepta.paper_raid.legacy_golden_qualification_material_authority.v1";
 pub const ASSIGNED_CHALLENGE_MATERIAL_BUNDLE_V1: &str =
     "hepta.paper_raid.assigned_challenge_material_bundle.v1";
 pub const CHALLENGE_MATERIAL_OBJECT_DOWNLOAD_PATH_V1: &str = "/api/agent-bridge/challenge-objects";
+pub const LEGACY_GOLDEN_QUALIFICATION_ID: &str = "paper-raid-golden-v2-strict-review-v1";
+pub const LEGACY_GOLDEN_CHALLENGE_TITLE: &str = "Paper Raid: Reproducible Synthetic Ablation";
+pub const LEGACY_GOLDEN_CHALLENGE_DESCRIPTION: &str = "Reproduce a public deterministic baseline, retain the failed run, and deliver one evidence-bound ablation as a short paper. paper-raid-alpha-evaluator-sha256:805ee4ad69fa1e56cebc0721711419d211cf0fe2090e294db25bf712f10c74f8";
+pub const LEGACY_GOLDEN_CHALLENGE_RULESET_VERSION: &str = "paper-raid-golden-v2";
+pub const LEGACY_GOLDEN_CHALLENGE_RULESET_HASH: &str =
+    "sha256:39cfc6a5c883e49b78bf315b53079336539c932ca48ff5a040415d7e5dd9b2c0";
+pub const LEGACY_GOLDEN_DATASET_MANIFEST_HASH: &str =
+    "sha256:6c0494ec10383018b4a938528d179d16fcb6dd8961b8294ff6f4093dda42aeb4";
+pub const LEGACY_GOLDEN_EVALUATOR_MANIFEST_HASH: &str =
+    "sha256:805ee4ad69fa1e56cebc0721711419d211cf0fe2090e294db25bf712f10c74f8";
+pub const LEGACY_GOLDEN_QUALIFICATION_BRIEF_BYTES: &[u8] =
+    include_bytes!("../assets/legacy-golden-qualification-brief.md");
+pub const LEGACY_GOLDEN_QUALIFICATION_BRIEF_DIGEST: &str =
+    "sha256:b926b4c868af652b2fed4671efc07f9bbc021c65ac188c971c2a2b67c365a9a3";
+pub const LEGACY_GOLDEN_QUALIFICATION_BRIEF_SIZE: u64 = 913;
+pub const LEGACY_GOLDEN_DATASET_DIGEST: &str =
+    "sha256:b002e6297f6fd781742866533b89bf781c7f21d5cfa7b42b5c97a9ecd5821314";
+pub const LEGACY_GOLDEN_DATASET_SIZE: u64 = 230;
+pub const LEGACY_GOLDEN_BASELINE_DIGEST: &str =
+    "sha256:059717cc82d10cee0504ed6af3fa81121d7a7645c53d8e8a788a35f63ae644ba";
+pub const LEGACY_GOLDEN_BASELINE_SIZE: u64 = 1_071;
+pub const LEGACY_GOLDEN_EVALUATOR_DIGEST: &str =
+    "sha256:63971194ab97e1d14752795ff1ff8c39a44d1a7782ffbb9459ec2210fe8a8e3d";
+pub const LEGACY_GOLDEN_EVALUATOR_SIZE: u64 = 3_483;
 
 pub const RESEARCH_SESSION_AUTHORIZATION_V1: &str = "trnm.research-session.authorization.v1";
 pub const RESEARCH_SESSION_ACTION_V1: &str = "trnm.research-session.action.v1";
@@ -3017,6 +3043,77 @@ pub struct FrozenChallengeMaterialAuthorityV1 {
     pub evaluator_manifest_hash: String,
 }
 
+/// Explicit, non-activation authority for the one historical golden qualification Challenge.
+///
+/// The historical Challenge predates Challenge Pack activation.  This contract therefore binds
+/// the exact qualifying Challenge fields and the four exact player-facing objects directly; it
+/// never invents an activation id or claims that a pack activation occurred.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LegacyGoldenQualificationMaterialAuthorityV1 {
+    pub schema: String,
+    pub authority_hash: String,
+    pub qualification_id: String,
+    pub challenge_id: Uuid,
+    pub challenge_snapshot_hash: String,
+    pub challenge_title: String,
+    pub challenge_description: String,
+    pub challenge_status: String,
+    pub ruleset_version: String,
+    pub ruleset_hash: String,
+    pub ruleset_absent: bool,
+    pub dataset_manifest_hash: String,
+    pub evaluator_manifest_hash: String,
+    pub objects: Vec<AssignedChallengeMaterialObjectV1>,
+}
+
+/// The Paper snapshot carries exactly one explicit provenance kind.  The untagged representation
+/// preserves the established activation JSON byte shape while the two strict schemas and
+/// `deny_unknown_fields` keep the variants disjoint and fail closed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum FrozenChallengeMaterialAuthorityBindingV1 {
+    PackActivation(FrozenChallengeMaterialAuthorityV1),
+    LegacyGoldenQualification(LegacyGoldenQualificationMaterialAuthorityV1),
+}
+
+impl FrozenChallengeMaterialAuthorityBindingV1 {
+    pub fn authority_hash(&self) -> &str {
+        match self {
+            Self::PackActivation(authority) => &authority.authority_hash,
+            Self::LegacyGoldenQualification(authority) => &authority.authority_hash,
+        }
+    }
+
+    pub fn challenge_id(&self) -> Uuid {
+        match self {
+            Self::PackActivation(authority) => authority.challenge_id,
+            Self::LegacyGoldenQualification(authority) => authority.challenge_id,
+        }
+    }
+
+    pub fn challenge_snapshot_hash(&self) -> &str {
+        match self {
+            Self::PackActivation(authority) => &authority.challenge_snapshot_hash,
+            Self::LegacyGoldenQualification(authority) => &authority.challenge_snapshot_hash,
+        }
+    }
+
+    pub fn ruleset_version(&self) -> &str {
+        match self {
+            Self::PackActivation(authority) => &authority.ruleset_version,
+            Self::LegacyGoldenQualification(authority) => &authority.ruleset_version,
+        }
+    }
+
+    pub fn ruleset_hash(&self) -> &str {
+        match self {
+            Self::PackActivation(authority) => &authority.ruleset_hash,
+            Self::LegacyGoldenQualification(authority) => &authority.ruleset_hash,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct AssignedChallengeMaterialObjectV1 {
@@ -3038,7 +3135,7 @@ pub struct AssignedChallengeMaterialObjectV1 {
 pub struct AssignedChallengeMaterialBundleV1 {
     pub schema: String,
     pub bundle_hash: String,
-    pub authority: FrozenChallengeMaterialAuthorityV1,
+    pub authority: FrozenChallengeMaterialAuthorityBindingV1,
     pub authority_hash: String,
     pub paper_project_id: Uuid,
     pub challenge_ruleset_snapshot_hash: String,
@@ -3455,10 +3552,170 @@ fn validate_frozen_challenge_material_authority(
     Ok(())
 }
 
+pub fn legacy_golden_qualification_material_objects() -> Vec<AssignedChallengeMaterialObjectV1> {
+    let object = |object_key: &str,
+                  source_path: &str,
+                  logical_path: &str,
+                  role: &str,
+                  digest: &str,
+                  size_bytes: u64,
+                  media_type: &str| AssignedChallengeMaterialObjectV1 {
+        object_key: object_key.to_string(),
+        source_path: source_path.to_string(),
+        logical_path: logical_path.to_string(),
+        role: role.to_string(),
+        digest: digest.to_string(),
+        size_bytes,
+        media_type: media_type.to_string(),
+        download_path: CHALLENGE_MATERIAL_OBJECT_DOWNLOAD_PATH_V1.to_string(),
+    };
+    vec![
+        object(
+            "brief",
+            "qualification/legacy-golden/brief.md",
+            "challenge/brief.md",
+            "playable_brief",
+            LEGACY_GOLDEN_QUALIFICATION_BRIEF_DIGEST,
+            LEGACY_GOLDEN_QUALIFICATION_BRIEF_SIZE,
+            "text/markdown; charset=utf-8",
+        ),
+        object(
+            "dataset",
+            "data/synthetic-observations.csv",
+            "challenge/dataset.csv",
+            "dataset",
+            LEGACY_GOLDEN_DATASET_DIGEST,
+            LEGACY_GOLDEN_DATASET_SIZE,
+            "text/csv; charset=utf-8",
+        ),
+        object(
+            "baseline",
+            "code/baseline.py",
+            "challenge/baseline.py",
+            "baseline_code",
+            LEGACY_GOLDEN_BASELINE_DIGEST,
+            LEGACY_GOLDEN_BASELINE_SIZE,
+            "text/x-python; charset=utf-8",
+        ),
+        object(
+            "evaluator",
+            "evaluator/legacy-golden-evaluator.py",
+            "challenge/evaluator.py",
+            "frozen_evaluator",
+            LEGACY_GOLDEN_EVALUATOR_DIGEST,
+            LEGACY_GOLDEN_EVALUATOR_SIZE,
+            "text/x-python; charset=utf-8",
+        ),
+    ]
+}
+
+#[derive(Serialize)]
+struct LegacyGoldenQualificationMaterialAuthorityHashFrameV1<'a> {
+    schema: &'a str,
+    qualification_id: &'a str,
+    challenge_id: Uuid,
+    challenge_snapshot_hash: &'a str,
+    challenge_title: &'a str,
+    challenge_description: &'a str,
+    challenge_status: &'a str,
+    ruleset_version: &'a str,
+    ruleset_hash: &'a str,
+    ruleset_absent: bool,
+    dataset_manifest_hash: &'a str,
+    evaluator_manifest_hash: &'a str,
+    objects: &'a [AssignedChallengeMaterialObjectV1],
+}
+
+pub fn legacy_golden_qualification_material_authority_hash(
+    authority: &LegacyGoldenQualificationMaterialAuthorityV1,
+) -> Result<String, String> {
+    validate_legacy_golden_qualification_material_authority(authority, false)?;
+    canonical_json_sha256(&LegacyGoldenQualificationMaterialAuthorityHashFrameV1 {
+        schema: &authority.schema,
+        qualification_id: &authority.qualification_id,
+        challenge_id: authority.challenge_id,
+        challenge_snapshot_hash: &authority.challenge_snapshot_hash,
+        challenge_title: &authority.challenge_title,
+        challenge_description: &authority.challenge_description,
+        challenge_status: &authority.challenge_status,
+        ruleset_version: &authority.ruleset_version,
+        ruleset_hash: &authority.ruleset_hash,
+        ruleset_absent: authority.ruleset_absent,
+        dataset_manifest_hash: &authority.dataset_manifest_hash,
+        evaluator_manifest_hash: &authority.evaluator_manifest_hash,
+        objects: &authority.objects,
+    })
+}
+
+pub fn verify_legacy_golden_qualification_material_authority(
+    authority: &LegacyGoldenQualificationMaterialAuthorityV1,
+) -> Result<(), String> {
+    validate_legacy_golden_qualification_material_authority(authority, true)
+}
+
+fn validate_legacy_golden_qualification_material_authority(
+    authority: &LegacyGoldenQualificationMaterialAuthorityV1,
+    verify_hash: bool,
+) -> Result<(), String> {
+    if authority.schema != LEGACY_GOLDEN_QUALIFICATION_MATERIAL_AUTHORITY_V1
+        || authority.qualification_id != LEGACY_GOLDEN_QUALIFICATION_ID
+        || authority.challenge_id.is_nil()
+        || authority.challenge_title != LEGACY_GOLDEN_CHALLENGE_TITLE
+        || authority.challenge_description != LEGACY_GOLDEN_CHALLENGE_DESCRIPTION
+        || authority.challenge_status != "open"
+        || authority.ruleset_version != LEGACY_GOLDEN_CHALLENGE_RULESET_VERSION
+        || authority.ruleset_hash != LEGACY_GOLDEN_CHALLENGE_RULESET_HASH
+        || !authority.ruleset_absent
+        || authority.dataset_manifest_hash != LEGACY_GOLDEN_DATASET_MANIFEST_HASH
+        || authority.evaluator_manifest_hash != LEGACY_GOLDEN_EVALUATOR_MANIFEST_HASH
+        || authority.objects != legacy_golden_qualification_material_objects()
+    {
+        return Err("legacy golden qualification material authority is not exact".to_string());
+    }
+    for digest in [
+        &authority.challenge_snapshot_hash,
+        &authority.ruleset_hash,
+        &authority.dataset_manifest_hash,
+        &authority.evaluator_manifest_hash,
+    ] {
+        decode_digest(digest)?;
+    }
+    if sha256_digest(LEGACY_GOLDEN_QUALIFICATION_BRIEF_BYTES)
+        != LEGACY_GOLDEN_QUALIFICATION_BRIEF_DIGEST
+        || u64::try_from(LEGACY_GOLDEN_QUALIFICATION_BRIEF_BYTES.len())
+            .map_err(|_| "legacy golden qualification brief size overflow".to_string())?
+            != LEGACY_GOLDEN_QUALIFICATION_BRIEF_SIZE
+    {
+        return Err("legacy golden qualification brief bytes drifted".to_string());
+    }
+    if verify_hash {
+        decode_digest(&authority.authority_hash)?;
+        if legacy_golden_qualification_material_authority_hash(authority)?
+            != authority.authority_hash
+        {
+            return Err("legacy golden qualification material authority hash mismatch".to_string());
+        }
+    }
+    Ok(())
+}
+
+pub fn verify_frozen_challenge_material_authority_binding(
+    authority: &FrozenChallengeMaterialAuthorityBindingV1,
+) -> Result<(), String> {
+    match authority {
+        FrozenChallengeMaterialAuthorityBindingV1::PackActivation(authority) => {
+            verify_frozen_challenge_material_authority(authority)
+        }
+        FrozenChallengeMaterialAuthorityBindingV1::LegacyGoldenQualification(authority) => {
+            verify_legacy_golden_qualification_material_authority(authority)
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct AssignedChallengeMaterialBundleHashFrameV1<'a> {
     schema: &'a str,
-    authority: &'a FrozenChallengeMaterialAuthorityV1,
+    authority: &'a FrozenChallengeMaterialAuthorityBindingV1,
     authority_hash: &'a str,
     paper_project_id: Uuid,
     challenge_ruleset_snapshot_hash: &'a str,
@@ -3507,8 +3764,8 @@ fn validate_assigned_challenge_material_bundle(
     {
         return Err("assigned challenge material work-item binding is invalid".to_string());
     }
-    verify_frozen_challenge_material_authority(&bundle.authority)?;
-    if bundle.authority_hash != bundle.authority.authority_hash {
+    verify_frozen_challenge_material_authority_binding(&bundle.authority)?;
+    if bundle.authority_hash != bundle.authority.authority_hash() {
         return Err("assigned challenge material authority hash mismatch".to_string());
     }
     decode_digest(&bundle.challenge_ruleset_snapshot_hash)?;
@@ -3566,6 +3823,15 @@ fn validate_assigned_challenge_material_bundle(
             return Err("assigned challenge material object mapping is invalid".to_string());
         }
         decode_digest(&object.digest)?;
+    }
+    if let FrozenChallengeMaterialAuthorityBindingV1::LegacyGoldenQualification(authority) =
+        &bundle.authority
+    {
+        if bundle.objects != authority.objects {
+            return Err(
+                "legacy golden qualification bundle differs from frozen authority".to_string(),
+            );
+        }
     }
     if verify_hash {
         decode_digest(&bundle.bundle_hash)?;
@@ -5824,10 +6090,23 @@ mod frozen_review_manifest_tests {
         };
         authority.authority_hash = frozen_challenge_material_authority_hash(&authority).unwrap();
         verify_frozen_challenge_material_authority(&authority).unwrap();
+        for (field, value) in [
+            (
+                "qualification_id",
+                serde_json::json!(LEGACY_GOLDEN_QUALIFICATION_ID),
+            ),
+            ("unknown_authority", serde_json::json!(true)),
+        ] {
+            let mut mixed = serde_json::to_value(&authority).unwrap();
+            mixed[field] = value;
+            assert!(
+                serde_json::from_value::<FrozenChallengeMaterialAuthorityBindingV1>(mixed).is_err()
+            );
+        }
         let mut bundle = AssignedChallengeMaterialBundleV1 {
             schema: ASSIGNED_CHALLENGE_MATERIAL_BUNDLE_V1.to_string(),
             bundle_hash: String::new(),
-            authority: authority.clone(),
+            authority: FrozenChallengeMaterialAuthorityBindingV1::PackActivation(authority.clone()),
             authority_hash: authority.authority_hash.clone(),
             paper_project_id: Uuid::from_u128(3),
             challenge_ruleset_snapshot_hash: format!("sha256:{}", "5".repeat(64)),
@@ -5848,8 +6127,78 @@ mod frozen_review_manifest_tests {
         );
         assert!(verify_assigned_challenge_material_bundle(&foreign_assignment).is_err());
         let mut unfrozen = bundle;
-        unfrozen.authority.authority_hash = format!("sha256:{}", "8".repeat(64));
+        let FrozenChallengeMaterialAuthorityBindingV1::PackActivation(authority) =
+            &mut unfrozen.authority
+        else {
+            panic!("activation fixture changed provenance")
+        };
+        authority.authority_hash = format!("sha256:{}", "8".repeat(64));
         assert!(assigned_challenge_material_bundle_hash(&unfrozen).is_err());
+    }
+
+    #[test]
+    fn legacy_golden_qualification_binds_exact_contract_without_activation_claim() {
+        let mut authority = LegacyGoldenQualificationMaterialAuthorityV1 {
+            schema: LEGACY_GOLDEN_QUALIFICATION_MATERIAL_AUTHORITY_V1.to_string(),
+            authority_hash: String::new(),
+            qualification_id: LEGACY_GOLDEN_QUALIFICATION_ID.to_string(),
+            challenge_id: Uuid::from_u128(20),
+            challenge_snapshot_hash: format!("sha256:{}", "a".repeat(64)),
+            challenge_title: LEGACY_GOLDEN_CHALLENGE_TITLE.to_string(),
+            challenge_description: LEGACY_GOLDEN_CHALLENGE_DESCRIPTION.to_string(),
+            challenge_status: "open".to_string(),
+            ruleset_version: LEGACY_GOLDEN_CHALLENGE_RULESET_VERSION.to_string(),
+            ruleset_hash: LEGACY_GOLDEN_CHALLENGE_RULESET_HASH.to_string(),
+            ruleset_absent: true,
+            dataset_manifest_hash: LEGACY_GOLDEN_DATASET_MANIFEST_HASH.to_string(),
+            evaluator_manifest_hash: LEGACY_GOLDEN_EVALUATOR_MANIFEST_HASH.to_string(),
+            objects: legacy_golden_qualification_material_objects(),
+        };
+        authority.authority_hash =
+            legacy_golden_qualification_material_authority_hash(&authority).unwrap();
+        verify_legacy_golden_qualification_material_authority(&authority).unwrap();
+
+        let serialized = serde_json::to_value(
+            FrozenChallengeMaterialAuthorityBindingV1::LegacyGoldenQualification(authority.clone()),
+        )
+        .unwrap();
+        assert!(serialized.get("activation_id").is_none());
+        assert_eq!(
+            serialized
+                .get("qualification_id")
+                .and_then(serde_json::Value::as_str),
+            Some(LEGACY_GOLDEN_QUALIFICATION_ID)
+        );
+        for (field, value) in [
+            ("activation_id", serde_json::json!(Uuid::from_u128(21))),
+            ("unknown_authority", serde_json::json!(true)),
+        ] {
+            let mut mixed = serialized.clone();
+            mixed[field] = value;
+            assert!(
+                serde_json::from_value::<FrozenChallengeMaterialAuthorityBindingV1>(mixed).is_err()
+            );
+        }
+
+        for field in [
+            "challenge_title",
+            "challenge_description",
+            "ruleset_version",
+            "ruleset_hash",
+            "dataset_manifest_hash",
+            "evaluator_manifest_hash",
+        ] {
+            let mut mutant = serde_json::to_value(&authority).unwrap();
+            mutant[field] = serde_json::json!("tampered");
+            let mutant: LegacyGoldenQualificationMaterialAuthorityV1 =
+                serde_json::from_value(mutant).unwrap();
+            assert!(verify_legacy_golden_qualification_material_authority(&mutant).is_err());
+        }
+        for index in 0..4 {
+            let mut mutant = authority.clone();
+            mutant.objects[index].digest = format!("sha256:{}", index.to_string().repeat(64));
+            assert!(verify_legacy_golden_qualification_material_authority(&mutant).is_err());
+        }
     }
 
     #[test]

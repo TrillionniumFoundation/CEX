@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 
 use crate::paper_raid_contracts::{
-    canonical_json_sha256, decode_digest, verify_frozen_challenge_material_authority,
-    FrozenChallengeMaterialAuthorityV1,
+    canonical_json_sha256, decode_digest, verify_frozen_challenge_material_authority_binding,
+    FrozenChallengeMaterialAuthorityBindingV1,
 };
 
 pub const CHALLENGE_RULESET_V1: &str = "hepta.challenge.ruleset.v1";
@@ -617,7 +617,7 @@ pub struct PaperChallengeRulesetSnapshotV1 {
     pub enforcement: ChallengeRulesetEnforcementV1,
     pub ruleset: Option<ChallengeRulesetV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub material_authority: Option<FrozenChallengeMaterialAuthorityV1>,
+    pub material_authority: Option<FrozenChallengeMaterialAuthorityBindingV1>,
 }
 
 impl PaperChallengeRulesetSnapshotV1 {
@@ -635,15 +635,34 @@ impl PaperChallengeRulesetSnapshotV1 {
         decode_digest(&self.ruleset_hash.to_ascii_lowercase())
             .map_err(|message| format!("invalid ruleset_hash: {message}"))?;
         if let Some(authority) = &self.material_authority {
-            verify_frozen_challenge_material_authority(authority)?;
-            if authority.challenge_snapshot_hash != self.challenge_snapshot_hash
-                || authority.ruleset_version != self.ruleset_version
-                || authority.ruleset_hash != self.ruleset_hash
+            verify_frozen_challenge_material_authority_binding(authority)?;
+            if authority.challenge_snapshot_hash() != self.challenge_snapshot_hash
+                || authority.ruleset_version() != self.ruleset_version
+                || authority.ruleset_hash() != self.ruleset_hash
             {
                 return Err(
                     "challenge material authority disagrees with the frozen ruleset snapshot"
                         .to_string(),
                 );
+            }
+            match authority {
+                FrozenChallengeMaterialAuthorityBindingV1::PackActivation(_)
+                    if self.enforcement != ChallengeRulesetEnforcementV1::AuthoritativeV1 =>
+                {
+                    return Err(
+                        "pack activation authority requires authoritative-v1 enforcement"
+                            .to_string(),
+                    );
+                }
+                FrozenChallengeMaterialAuthorityBindingV1::LegacyGoldenQualification(_)
+                    if self.enforcement != ChallengeRulesetEnforcementV1::LegacyUnranked =>
+                {
+                    return Err(
+                        "legacy golden qualification authority requires legacy-unranked enforcement"
+                            .to_string(),
+                    );
+                }
+                _ => {}
             }
         }
         match self.enforcement {
@@ -680,6 +699,11 @@ impl PaperChallengeRulesetSnapshotV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::paper_raid_contracts::{
+        frozen_challenge_material_authority_hash, FrozenChallengeMaterialAuthorityV1,
+        FROZEN_CHALLENGE_MATERIAL_AUTHORITY_V1,
+    };
+    use uuid::Uuid;
 
     fn requirement(kind: ChallengeRequirementKindV1) -> ChallengeMinimumV1 {
         minimum(kind, 1)
@@ -1045,6 +1069,48 @@ mod tests {
         snapshot.schema = CHALLENGE_RULESET_SNAPSHOT_V1.into();
         snapshot.ruleset_hash = format!("sha256:{}", "22".repeat(32));
         assert!(snapshot.validate().unwrap_err().contains("does not match"));
+    }
+
+    #[test]
+    fn pack_activation_authority_cannot_be_relabelled_legacy_unranked() {
+        let ruleset = valid_ruleset(ChallengeTemplateV1::Replication);
+        let ruleset_hash = ruleset.canonical_hash().expect("ruleset hash");
+        let challenge_snapshot_hash = format!("sha256:{}", "1".repeat(64));
+        let mut authority = FrozenChallengeMaterialAuthorityV1 {
+            schema: FROZEN_CHALLENGE_MATERIAL_AUTHORITY_V1.to_string(),
+            authority_hash: String::new(),
+            activation_id: Uuid::from_u128(1),
+            activation_request_sha256: format!("sha256:{}", "2".repeat(64)),
+            challenge_id: Uuid::from_u128(2),
+            challenge_snapshot_hash: challenge_snapshot_hash.clone(),
+            template: "replication".to_string(),
+            pack_id: "replication-pack-v1".to_string(),
+            pack_manifest_hash: format!("sha256:{}", "3".repeat(64)),
+            ruleset_version: "replication-v1".to_string(),
+            ruleset_hash: ruleset_hash.clone(),
+            dataset_manifest_hash: format!("sha256:{}", "4".repeat(64)),
+            evaluator_manifest_hash: format!("sha256:{}", "5".repeat(64)),
+        };
+        authority.authority_hash =
+            frozen_challenge_material_authority_hash(&authority).expect("authority hash");
+        let mut snapshot = PaperChallengeRulesetSnapshotV1 {
+            schema: CHALLENGE_RULESET_SNAPSHOT_V1.to_string(),
+            challenge_snapshot_hash,
+            ruleset_version: authority.ruleset_version.clone(),
+            ruleset_hash,
+            enforcement: ChallengeRulesetEnforcementV1::AuthoritativeV1,
+            ruleset: Some(ruleset),
+            material_authority: Some(FrozenChallengeMaterialAuthorityBindingV1::PackActivation(
+                authority,
+            )),
+        };
+        snapshot.validate().expect("exact activation snapshot");
+        snapshot.enforcement = ChallengeRulesetEnforcementV1::LegacyUnranked;
+        snapshot.ruleset = None;
+        assert!(snapshot
+            .validate()
+            .unwrap_err()
+            .contains("requires authoritative-v1 enforcement"));
     }
 
     #[test]

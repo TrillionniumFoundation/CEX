@@ -1331,7 +1331,7 @@ pub(crate) struct PostgresActivationFixture {
 }
 
 #[cfg(test)]
-fn fixture_activation_request(challenge_id: Uuid) -> ActivateChallengePackRequestV1 {
+pub(crate) fn fixture_activation_request(challenge_id: Uuid) -> ActivateChallengePackRequestV1 {
     ActivateChallengePackRequestV1 {
         schema: ACTIVATION_REQUEST_V1.to_string(),
         template: EVIDENCE_AUDIT_TEMPLATE.to_string(),
