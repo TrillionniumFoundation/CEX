@@ -444,6 +444,7 @@ node "$service_root/scripts/check-practice-player-ui.mjs"
 node "$service_root/scripts/check-practice-agent-bridge.mjs"
 node "$service_root/scripts/check-browser-crypto.mjs"
 node "$service_root/scripts/check-player-language-focus.mjs"
+node "$service_root/scripts/check-p1-accessibility.mjs"
 bash "$service_root/scripts/check-observability-boundary.sh"
 
 echo "paper-raid-bff boundary scan: ok"
