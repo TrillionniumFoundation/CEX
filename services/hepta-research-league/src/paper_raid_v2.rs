@@ -4441,9 +4441,19 @@ type ChallengeRulesetSnapshotOutcome = (
 
 fn snapshot_challenge_ruleset(
     challenge: &ResearchChallenge,
+    activation: Option<&crate::challenge_pack_activation::ChallengePackActivationRecordV1>,
     started_at: DateTime<Utc>,
 ) -> Result<ChallengeRulesetSnapshotOutcome, ApiError> {
     let challenge_snapshot_hash = crate::challenge_snapshot_hash(challenge)?;
+    let material_authority = activation
+        .map(|activation| {
+            crate::challenge_pack_activation::freeze_challenge_material_authority(
+                challenge,
+                activation,
+                &challenge_snapshot_hash,
+            )
+        })
+        .transpose()?;
     let (enforcement, ruleset, deadline_at, grace_expires_at) =
         if let Some(ruleset) = &challenge.ruleset {
             ruleset.validate().map_err(|message| {
@@ -4484,6 +4494,7 @@ fn snapshot_challenge_ruleset(
         ruleset_hash: challenge.ruleset_hash.clone(),
         enforcement,
         ruleset,
+        material_authority,
     };
     let snapshot_hash = snapshot.canonical_hash().map_err(|message| {
         ApiError::internal(format!("hash paper challenge ruleset snapshot: {message}"))
@@ -4541,9 +4552,9 @@ async fn snapshot_open_challenge_ruleset(
     challenge_id: Uuid,
     started_at: DateTime<Utc>,
 ) -> Result<ChallengeRulesetSnapshotOutcome, ApiError> {
-    let challenge = state
+    let (challenge, activation) = state
         .inspect(|league| {
-            league
+            let challenge = league
                 .challenges
                 .get(&challenge_id)
                 .cloned()
@@ -4552,7 +4563,12 @@ async fn snapshot_open_challenge_ruleset(
                         "challenge_not_found",
                         "paper project challenge does not exist",
                     )
-                })
+                })?;
+            let activation = league
+                .challenge_pack_activations
+                .get(&challenge_id)
+                .cloned();
+            Ok((challenge, activation))
         })
         .await?;
     if challenge.status != crate::ChallengeStatus::Open {
@@ -4561,7 +4577,7 @@ async fn snapshot_open_challenge_ruleset(
             "paper projects can only snapshot an open challenge",
         ));
     }
-    snapshot_challenge_ruleset(&challenge, started_at)
+    snapshot_challenge_ruleset(&challenge, activation.as_ref(), started_at)
 }
 
 async fn create_paper(

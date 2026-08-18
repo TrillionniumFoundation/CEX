@@ -407,6 +407,7 @@ export function agentBridgeRequestProofFrame(claim) {
     "POST /api/agent-bridge/inbox",
     "POST /api/agent-bridge/delivery-drafts",
     "POST /api/agent-bridge/proposals",
+    "GET /api/agent-bridge/challenge-objects",
     "GET /api/agent-bridge/review-objects",
     "POST /api/agent-bridge/review-receipts",
   ]);

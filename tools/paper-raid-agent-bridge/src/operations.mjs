@@ -28,6 +28,10 @@ import {
   loadReviewOutbox,
   saveReviewOutbox,
 } from "./review_outbox.mjs";
+import {
+  challengeMaterialObjectQuery,
+  downloadAssignedChallengeMaterials,
+} from "./work.mjs";
 
 export const PAIRING_CONTEXT_SCHEMA =
   "hepta.paper_raid.agent_bridge.pairing_context.v1";
@@ -436,6 +440,39 @@ export async function getInbox(
       paper_ids: config.paper_ids,
     },
   });
+}
+
+export async function downloadChallengeMaterialBundle(
+  config,
+  identity,
+  bundle,
+  {
+    nowUnix = Math.floor(Date.now() / 1000),
+    fetchImplementation,
+  } = {},
+) {
+  const { state, client } = await signedClientState(
+    config,
+    identity,
+    fetchImplementation,
+  );
+  return downloadAssignedChallengeMaterials(
+    bundle,
+    (exactBundle, object) => client.signedBytes(
+      identity,
+      state,
+      {
+        method: "GET",
+        path: object.download_path,
+        query: challengeMaterialObjectQuery(exactBundle, object),
+        nowUnix,
+      },
+      {
+        expectedBytes: object.size_bytes,
+        maxBytes: object.size_bytes,
+      },
+    ),
+  );
 }
 
 export function createDeliveryDraftRequest(state, input, { draftId } = {}) {

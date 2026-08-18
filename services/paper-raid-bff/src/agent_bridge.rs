@@ -173,6 +173,16 @@ pub struct ReviewObjectQuery {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ChallengeObjectQuery {
+    bundle_hash: String,
+    digest: String,
+    object_key: String,
+    paper_id: Uuid,
+    work_item_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ReviewReceiptRequest {
     schema: String,
     idempotency_key: Uuid,
@@ -1045,6 +1055,82 @@ fn merge_review_tasks_into_author_papers(
     Ok(())
 }
 
+async fn assigned_challenge_material_projection(
+    state: &AppState,
+    room: &Value,
+    mapping: &BridgeMapping,
+    tasks: &[Value],
+) -> Value {
+    let work_item_ids = tasks
+        .iter()
+        .filter(|task| task.get("status").and_then(Value::as_str) != Some("cancelled"))
+        .filter_map(|task| {
+            task.get("work_item_id")
+                .and_then(Value::as_str)
+                .and_then(|value| Uuid::parse_str(value).ok())
+        })
+        .collect::<Vec<_>>();
+    if work_item_ids.is_empty() {
+        return json!({
+            "schema": "hepta.paper_raid.agent_bridge.assigned_challenge_materials.v1",
+            "status": "unavailable",
+            "reason_code": "no_assigned_author_work_item",
+            "items": [],
+        });
+    }
+    let mut items = Vec::with_capacity(work_item_ids.len());
+    for work_item_id in work_item_ids {
+        match crate::challenge_materials::resolve_assigned_challenge_material_bundle(
+            state,
+            room,
+            mapping.binding_id,
+            mapping.player_id,
+            work_item_id,
+        )
+        .await
+        {
+            Ok(bundle) => match serde_json::to_value(bundle) {
+                Ok(value) => items.push(value),
+                Err(_) => {
+                    return json!({
+                        "schema": "hepta.paper_raid.agent_bridge.assigned_challenge_materials.v1",
+                        "status": "unavailable",
+                        "reason_code": "frozen_challenge_material_projection_failed",
+                        "items": [],
+                    });
+                }
+            },
+            Err(AppError::Conflict(_)) => {
+                return json!({
+                    "schema": "hepta.paper_raid.agent_bridge.assigned_challenge_materials.v1",
+                    "status": "unavailable",
+                    "reason_code": "frozen_challenge_material_authority_unavailable",
+                    "items": [],
+                });
+            }
+            Err(_) => {
+                return json!({
+                    "schema": "hepta.paper_raid.agent_bridge.assigned_challenge_materials.v1",
+                    "status": "unavailable",
+                    "reason_code": "frozen_challenge_material_resolution_failed",
+                    "items": [],
+                });
+            }
+        }
+    }
+    items.sort_by(|left, right| {
+        left.get("work_item_id")
+            .and_then(Value::as_str)
+            .cmp(&right.get("work_item_id").and_then(Value::as_str))
+    });
+    json!({
+        "schema": "hepta.paper_raid.agent_bridge.assigned_challenge_materials.v1",
+        "status": "available",
+        "reason_code": Value::Null,
+        "items": items,
+    })
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct StoredReviewTaskState {
     state: String,
@@ -1838,11 +1924,14 @@ pub async fn agent_inbox(
                 "items": candidate_items,
             })
         };
+        let assigned_challenge_materials =
+            assigned_challenge_material_projection(&state, &room, &verified.mapping, &tasks).await;
         papers.push(json!({
             "paper_id": paper_id,
             "phase": paper.get("phase").cloned().unwrap_or(Value::Null),
             "tasks": tasks,
             "proposals": proposals,
+            "challenge_materials": assigned_challenge_materials,
             "delivery_candidates": delivery_candidates,
         }));
     }
@@ -1861,6 +1950,67 @@ pub async fn agent_inbox(
         "papers": papers
     });
     complete_agent_request(&state, &verified, StatusCode::OK, &value).await
+}
+
+pub async fn agent_challenge_object(
+    State(state): State<AppState>,
+    OriginalUri(uri): OriginalUri,
+    Query(query): Query<ChallengeObjectQuery>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AppError> {
+    let verified = verify_agent_request(&state, Method::GET, &uri, &headers, &body).await?;
+    if !verified.identity.has_scope(AlphaIdentityScope::Author)
+        || !matches!(
+            query.digest.strip_prefix("sha256:"),
+            Some(raw) if raw.len() == 64
+                && raw.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        )
+    {
+        return Err(AppError::Forbidden);
+    }
+    let room = state
+        .hepta
+        .get_paper_room(&verified.identity, query.paper_id)
+        .await?;
+    let bundle = crate::challenge_materials::resolve_assigned_challenge_material_bundle(
+        &state,
+        &room,
+        verified.mapping.binding_id,
+        verified.mapping.player_id,
+        query.work_item_id,
+    )
+    .await?;
+    let media_type = crate::challenge_materials::authorized_challenge_material_media(
+        &bundle,
+        verified.mapping.binding_id,
+        verified.mapping.player_id,
+        query.work_item_id,
+        &query.bundle_hash,
+        &query.object_key,
+        &query.digest,
+    )?;
+    state.cas.validate_media_type(&media_type)?;
+    if let Some((status, bytes)) = verified.replay.as_ref() {
+        if *status != StatusCode::OK.as_u16() {
+            return Err(AppError::Conflict(
+                "challenge_object_replay_status_changed".into(),
+            ));
+        }
+        return crate::app::review_artifact_response(bytes.clone(), &media_type);
+    }
+    let bytes = state.cas.get(&query.digest, &media_type).await?;
+    let expected_size = bundle
+        .objects
+        .iter()
+        .find(|object| object.object_key == query.object_key && object.digest == query.digest)
+        .map(|object| object.size_bytes)
+        .ok_or(AppError::Forbidden)?;
+    if bytes.len() as u64 != expected_size {
+        return Err(AppError::Upstream);
+    }
+    complete_agent_raw_request(&state, &verified, StatusCode::OK, &bytes).await?;
+    crate::app::review_artifact_response(bytes, &media_type)
 }
 
 pub async fn agent_review_object(

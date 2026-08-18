@@ -2,7 +2,10 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::paper_raid_contracts::{canonical_json_sha256, decode_digest};
+use crate::paper_raid_contracts::{
+    canonical_json_sha256, decode_digest, verify_frozen_challenge_material_authority,
+    FrozenChallengeMaterialAuthorityV1,
+};
 
 pub const CHALLENGE_RULESET_V1: &str = "hepta.challenge.ruleset.v1";
 pub const CHALLENGE_RULESET_SNAPSHOT_V1: &str = "hepta.paper_raid.challenge_ruleset_snapshot.v1";
@@ -613,6 +616,8 @@ pub struct PaperChallengeRulesetSnapshotV1 {
     pub ruleset_hash: String,
     pub enforcement: ChallengeRulesetEnforcementV1,
     pub ruleset: Option<ChallengeRulesetV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material_authority: Option<FrozenChallengeMaterialAuthorityV1>,
 }
 
 impl PaperChallengeRulesetSnapshotV1 {
@@ -629,6 +634,18 @@ impl PaperChallengeRulesetSnapshotV1 {
         // compared byte-for-byte to the canonical lowercase computed value.
         decode_digest(&self.ruleset_hash.to_ascii_lowercase())
             .map_err(|message| format!("invalid ruleset_hash: {message}"))?;
+        if let Some(authority) = &self.material_authority {
+            verify_frozen_challenge_material_authority(authority)?;
+            if authority.challenge_snapshot_hash != self.challenge_snapshot_hash
+                || authority.ruleset_version != self.ruleset_version
+                || authority.ruleset_hash != self.ruleset_hash
+            {
+                return Err(
+                    "challenge material authority disagrees with the frozen ruleset snapshot"
+                        .to_string(),
+                );
+            }
+        }
         match self.enforcement {
             ChallengeRulesetEnforcementV1::LegacyUnranked => {
                 if self.ruleset.is_some() {
@@ -1019,6 +1036,7 @@ mod tests {
             ruleset_hash,
             enforcement: ChallengeRulesetEnforcementV1::AuthoritativeV1,
             ruleset: Some(ruleset),
+            material_authority: None,
         };
         snapshot.validate().expect("valid snapshot");
 
@@ -1038,6 +1056,7 @@ mod tests {
             ruleset_hash: format!("sha256:{}", "AB".repeat(32)),
             enforcement: ChallengeRulesetEnforcementV1::LegacyUnranked,
             ruleset: None,
+            material_authority: None,
         };
         snapshot.validate().expect("legacy uppercase digest");
         snapshot.canonical_hash().expect("legacy snapshot hash");

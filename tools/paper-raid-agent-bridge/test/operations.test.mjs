@@ -8,6 +8,8 @@ import {
   agentBindingProofFrame,
   agentCapabilityDisclosureHash,
   agentProposalFrame,
+  canonicalJsonBytes,
+  sha256Digest,
 } from "../src/canonical.mjs";
 import {
   HEALTH_REPORT_SCHEMA,
@@ -15,6 +17,7 @@ import {
   bridgeHealth,
   createDeliveryDraftRequest,
   createProposalRequest,
+  downloadChallengeMaterialBundle,
   getBinding,
   getInbox,
   pairAgent,
@@ -40,6 +43,66 @@ import {
 
 const SECRET_PAIR_CODE = "PAIR-ULTRA-SECRET-846219";
 const NOW = 1_800_000_000;
+const WORK_ID = "88888888-8888-4888-8888-888888888888";
+
+function hashField(value, field) {
+  const frame = { ...value };
+  delete frame[field];
+  return { ...value, [field]: sha256Digest(canonicalJsonBytes(frame)) };
+}
+
+function challengeMaterialFixture() {
+  const bytes = Object.freeze({
+    brief: Buffer.from("# brief\n"),
+    dataset: Buffer.from('{"rows":[1]}'),
+    baseline: Buffer.from("print('baseline')\n"),
+    evaluator: Buffer.from("print('evaluate')\n"),
+  });
+  const authority = hashField({
+    schema: "hepta.paper_raid.frozen_challenge_material_authority.v1",
+    authority_hash: `sha256:${"0".repeat(64)}`,
+    activation_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    activation_request_sha256: `sha256:${"1".repeat(64)}`,
+    challenge_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    challenge_snapshot_hash: `sha256:${"2".repeat(64)}`,
+    template: "evidence-audit",
+    pack_id: "paper-raid-evidence-audit-seeded-v1",
+    pack_manifest_hash: `sha256:${"3".repeat(64)}`,
+    ruleset_version: "paper-raid-evidence-audit-v1",
+    ruleset_hash: `sha256:${"4".repeat(64)}`,
+    dataset_manifest_hash: `sha256:${"5".repeat(64)}`,
+    evaluator_manifest_hash: `sha256:${"6".repeat(64)}`,
+  }, "authority_hash");
+  const objects = [
+    ["brief", "playable_brief", "challenge/brief.md", "text/markdown; charset=utf-8"],
+    ["dataset", "dataset", "challenge/dataset.json", "application/json"],
+    ["baseline", "baseline_code", "challenge/baseline.py", "text/x-python; charset=utf-8"],
+    ["evaluator", "frozen_evaluator", "challenge/evaluator.py", "text/x-python; charset=utf-8"],
+  ].map(([key, role, logicalPath, mediaType]) => ({
+    object_key: key,
+    source_path: `source/${key}`,
+    logical_path: logicalPath,
+    role,
+    digest: sha256Digest(bytes[key]),
+    size_bytes: bytes[key].length,
+    media_type: mediaType,
+    download_path: "/api/agent-bridge/challenge-objects",
+  }));
+  const bundle = hashField({
+    schema: "hepta.paper_raid.assigned_challenge_material_bundle.v1",
+    bundle_hash: `sha256:${"7".repeat(64)}`,
+    authority,
+    authority_hash: authority.authority_hash,
+    paper_project_id: PAPER_ID,
+    challenge_ruleset_snapshot_hash: `sha256:${"8".repeat(64)}`,
+    binding_id: BINDING_ID,
+    player_id: PLAYER_ID,
+    work_item_id: WORK_ID,
+    work_item_version: 3,
+    objects,
+  }, "bundle_hash");
+  return { bundle, bytes };
+}
 
 function context() {
   return {
@@ -323,6 +386,59 @@ test("binding, health, and inbox use only dedicated proof-authenticated endpoint
     assert.equal("cookie" in call.headers, false);
     assert.equal("authorization" in call.headers, false);
     assert.equal("x-paper-raid-csrf" in call.headers, false);
+  }
+});
+
+test("Bridge downloads all four challenge objects through exact signed assignment queries", async t => {
+  const item = await fixture(t, "challenge-material-download");
+  await saveBridgeState(item.statePath, item.identity, item.binding, NOW);
+  const { bundle, bytes } = challengeMaterialFixture();
+  const calls = [];
+  const downloaded = await downloadChallengeMaterialBundle(
+    item.config,
+    item.identity,
+    bundle,
+    {
+      nowUnix: NOW + 3,
+      fetchImplementation: async (url, init) => {
+        const parsed = new URL(url);
+        const key = parsed.searchParams.get("object_key");
+        calls.push({
+          path: parsed.pathname,
+          query: Object.fromEntries(parsed.searchParams.entries()),
+          headers: headersObject(init.headers),
+        });
+        return new Response(bytes[key], {
+          status: 200,
+          headers: {
+            "content-type": bundle.objects.find(object => object.object_key === key).media_type,
+            "content-length": String(bytes[key].length),
+          },
+        });
+      },
+    },
+  );
+  assert.deepEqual(downloaded.map(value => value.descriptor.object_key), [
+    "brief",
+    "dataset",
+    "baseline",
+    "evaluator",
+  ]);
+  assert.equal(calls.length, 4);
+  for (const [index, call] of calls.entries()) {
+    const object = bundle.objects[index];
+    assert.equal(call.path, "/api/agent-bridge/challenge-objects");
+    assert.deepEqual(call.query, {
+      bundle_hash: bundle.bundle_hash,
+      digest: object.digest,
+      object_key: object.object_key,
+      paper_id: PAPER_ID,
+      work_item_id: WORK_ID,
+    });
+    assert.equal(typeof call.headers["x-paper-raid-agent-signature"], "string");
+    assert.equal(call.headers["x-paper-raid-agent-binding-id"], BINDING_ID);
+    assert.equal("cookie" in call.headers, false);
+    assert.equal("authorization" in call.headers, false);
   }
 });
 

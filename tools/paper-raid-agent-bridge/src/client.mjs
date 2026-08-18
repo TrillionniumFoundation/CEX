@@ -19,6 +19,7 @@ export const AGENT_BRIDGE_ENDPOINTS = Object.freeze({
   inbox: "/api/agent-bridge/inbox",
   delivery_drafts: "/api/agent-bridge/delivery-drafts",
   proposals: "/api/agent-bridge/proposals",
+  challenge_objects: "/api/agent-bridge/challenge-objects",
   review_objects: "/api/agent-bridge/review-objects",
   review_receipts: "/api/agent-bridge/review-receipts",
 });
@@ -251,8 +252,9 @@ export class AgentBridgeClient {
     if (request.method?.toUpperCase() !== "GET" || request.body != null) {
       throw new Error("review object download must be a bodyless signed GET");
     }
-    if (request.path !== AGENT_BRIDGE_ENDPOINTS.review_objects) {
-      throw new Error("binary Agent Bridge reads are restricted to review objects");
+    if (![AGENT_BRIDGE_ENDPOINTS.challenge_objects, AGENT_BRIDGE_ENDPOINTS.review_objects]
+      .includes(request.path)) {
+      throw new Error("binary Agent Bridge reads are restricted to frozen authority objects");
     }
     const exact = createSignedRequest(identity, state, request);
     return this.#sendExact(

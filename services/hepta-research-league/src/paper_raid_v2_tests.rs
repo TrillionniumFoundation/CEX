@@ -456,7 +456,7 @@ fn paper_creation_snapshot_freezes_typed_rules_and_deadlines() {
         created_at: now - chrono::Duration::minutes(5),
     };
     let (snapshot, snapshot_hash, deadline_at, grace_expires_at) =
-        snapshot_challenge_ruleset(&challenge, now).expect("typed challenge snapshot");
+        snapshot_challenge_ruleset(&challenge, None, now).expect("typed challenge snapshot");
     assert_eq!(
         snapshot.enforcement,
         ChallengeRulesetEnforcementV1::AuthoritativeV1
@@ -476,7 +476,7 @@ fn paper_creation_snapshot_freezes_typed_rules_and_deadlines() {
     legacy.ruleset = None;
     legacy.ruleset_hash = digest("legacy-snapshot-rules");
     let (legacy_snapshot, _, legacy_deadline, legacy_grace) =
-        snapshot_challenge_ruleset(&legacy, now).expect("legacy challenge snapshot");
+        snapshot_challenge_ruleset(&legacy, None, now).expect("legacy challenge snapshot");
     assert_eq!(
         legacy_snapshot.enforcement,
         ChallengeRulesetEnforcementV1::LegacyUnranked
@@ -497,6 +497,7 @@ fn typed_challenge_snapshot_overrides_legacy_phase_gate_and_deadline_is_fail_clo
         ruleset_hash,
         enforcement: ChallengeRulesetEnforcementV1::AuthoritativeV1,
         ruleset: Some(ruleset),
+        material_authority: None,
     };
     let now = Utc::now();
     let mut paper = PaperProject {

@@ -584,6 +584,7 @@ fn authoritative_author_approval_projects_victory_gates_not_a_phase_transition()
         ruleset_hash,
         enforcement: crate::ChallengeRulesetEnforcementV1::AuthoritativeV1,
         ruleset: Some(ruleset),
+        material_authority: None,
     };
     let paper_id = Uuid::new_v4();
     let team_id = Uuid::new_v4();

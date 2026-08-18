@@ -54,6 +54,11 @@ pub const REVIEW_EXECUTION_RECEIPT_V1: &str = "hepta.paper_raid.review_execution
 pub const REVIEW_EXECUTION_RECEIPT_ID_DOMAIN_V1: &str =
     "hepta.paper_raid.review_execution_receipt_id.v1";
 pub const REVIEW_OBJECT_DOWNLOAD_PATH_V1: &str = "/api/agent-bridge/review-objects";
+pub const FROZEN_CHALLENGE_MATERIAL_AUTHORITY_V1: &str =
+    "hepta.paper_raid.frozen_challenge_material_authority.v1";
+pub const ASSIGNED_CHALLENGE_MATERIAL_BUNDLE_V1: &str =
+    "hepta.paper_raid.assigned_challenge_material_bundle.v1";
+pub const CHALLENGE_MATERIAL_OBJECT_DOWNLOAD_PATH_V1: &str = "/api/agent-bridge/challenge-objects";
 
 pub const RESEARCH_SESSION_AUTHORIZATION_V1: &str = "trnm.research-session.authorization.v1";
 pub const RESEARCH_SESSION_ACTION_V1: &str = "trnm.research-session.action.v1";
@@ -2945,6 +2950,104 @@ pub struct ChallengeDatasetManifestV1 {
     pub schema: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ChallengePackContentContractV1 {
+    pub difficulty: String,
+    pub duration_seconds: u64,
+    pub modifiers: Vec<String>,
+    pub objective: String,
+    pub risks: Vec<String>,
+    pub victory: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ChallengePackDeploymentV1 {
+    pub blocker: String,
+    pub cas_seeded: bool,
+    pub open_status_allowed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ChallengePackObjectV1 {
+    pub cas_uri: String,
+    pub media_type: String,
+    pub path: String,
+    pub role: String,
+    pub sha256: String,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ChallengePackManifestV1 {
+    pub content_contract: ChallengePackContentContractV1,
+    pub dataset_manifest_sha256: String,
+    pub deployment: ChallengePackDeploymentV1,
+    pub evaluator_manifest_sha256: String,
+    pub objects: Vec<ChallengePackObjectV1>,
+    pub pack_id: String,
+    pub ruleset_version: String,
+    pub schema: String,
+    pub seed: u64,
+    pub template: String,
+}
+
+/// Immutable material authority copied from the append-only Challenge Pack activation record
+/// when a Paper starts.  It carries only digest pins; the Consumer BFF must independently resolve
+/// the exact CAS bytes and may not infer a pack from a mutable catalog or from player input.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenChallengeMaterialAuthorityV1 {
+    pub schema: String,
+    pub authority_hash: String,
+    pub activation_id: Uuid,
+    pub activation_request_sha256: String,
+    pub challenge_id: Uuid,
+    pub challenge_snapshot_hash: String,
+    pub template: String,
+    pub pack_id: String,
+    pub pack_manifest_hash: String,
+    pub ruleset_version: String,
+    pub ruleset_hash: String,
+    pub dataset_manifest_hash: String,
+    pub evaluator_manifest_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AssignedChallengeMaterialObjectV1 {
+    pub object_key: String,
+    pub source_path: String,
+    pub logical_path: String,
+    pub role: String,
+    pub digest: String,
+    pub size_bytes: u64,
+    pub media_type: String,
+    pub download_path: String,
+}
+
+/// A transport-only projection for one current Author work-item assignment.  Possession of this
+/// descriptor is not authorization: every object read must re-fetch the Paper Room and reproduce
+/// this bundle from the current binding/player/work-item tuple before CAS bytes are returned.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AssignedChallengeMaterialBundleV1 {
+    pub schema: String,
+    pub bundle_hash: String,
+    pub authority: FrozenChallengeMaterialAuthorityV1,
+    pub authority_hash: String,
+    pub paper_project_id: Uuid,
+    pub challenge_ruleset_snapshot_hash: String,
+    pub binding_id: Uuid,
+    pub player_id: Uuid,
+    pub work_item_id: Uuid,
+    pub work_item_version: u64,
+    pub objects: Vec<AssignedChallengeMaterialObjectV1>,
+}
+
 pub fn parse_challenge_evaluator_manifest(
     bytes: &[u8],
     expected_digest: &str,
@@ -2992,6 +3095,252 @@ pub fn parse_challenge_dataset_manifest(
     Ok(manifest)
 }
 
+pub fn parse_challenge_pack_manifest(
+    bytes: &[u8],
+    expected_digest: &str,
+) -> Result<ChallengePackManifestV1, String> {
+    if sha256_digest(bytes) != expected_digest {
+        return Err("pack manifest bytes do not match the Hepta activation digest pin".to_string());
+    }
+    let manifest: ChallengePackManifestV1 = serde_json::from_slice(bytes)
+        .map_err(|_| "pack manifest is not strict JSON v1".to_string())?;
+    if manifest.schema != "hepta.challenge_pack.v1"
+        || manifest.seed > JSON_SAFE_U64_MAX
+        || manifest.content_contract.duration_seconds == 0
+        || manifest.content_contract.duration_seconds > 7 * 24 * 60 * 60
+    {
+        return Err("pack manifest authority fields are invalid".to_string());
+    }
+    for (field, value) in [
+        ("pack_id", manifest.pack_id.as_str()),
+        ("ruleset_version", manifest.ruleset_version.as_str()),
+        ("template", manifest.template.as_str()),
+        ("difficulty", manifest.content_contract.difficulty.as_str()),
+        ("deployment.blocker", manifest.deployment.blocker.as_str()),
+    ] {
+        validate_logical_id(field, value)?;
+    }
+    for (field, value) in [
+        ("objective", manifest.content_contract.objective.as_str()),
+        ("victory", manifest.content_contract.victory.as_str()),
+    ] {
+        validate_text(field, value)?;
+    }
+    validate_pack_labels("modifier", &manifest.content_contract.modifiers)?;
+    validate_pack_labels("risk", &manifest.content_contract.risks)?;
+    decode_digest(&manifest.dataset_manifest_sha256)?;
+    decode_digest(&manifest.evaluator_manifest_sha256)?;
+    validate_challenge_pack_objects(
+        &manifest.objects,
+        &manifest.dataset_manifest_sha256,
+        &manifest.evaluator_manifest_sha256,
+    )?;
+    Ok(manifest)
+}
+
+fn validate_pack_labels(field: &str, values: &[String]) -> Result<(), String> {
+    if values.is_empty() || values.len() > 8 {
+        return Err(format!("pack {field} count is invalid"));
+    }
+    let mut unique = HashSet::new();
+    for value in values {
+        validate_logical_id(field, value)?;
+        if !unique.insert(value) {
+            return Err(format!("pack contains a duplicate {field}"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_challenge_pack_objects(
+    objects: &[ChallengePackObjectV1],
+    dataset_manifest_hash: &str,
+    evaluator_manifest_hash: &str,
+) -> Result<(), String> {
+    const ROLES: [&str; 8] = [
+        "license",
+        "baseline_code",
+        "playable_brief",
+        "dataset_manifest",
+        "dataset",
+        "evaluator_manifest",
+        "frozen_evaluator",
+        "result_explanation",
+    ];
+    if objects.len() < ROLES.len() || objects.len() > 32 {
+        return Err("pack manifest member count is invalid".to_string());
+    }
+    let mut paths = HashSet::new();
+    let mut digests = HashSet::new();
+    for object in objects {
+        if !safe_review_path(&object.path)
+            || object.size == 0
+            || object.size > 16 * 1024 * 1024
+            || object.media_type.is_empty()
+            || object.media_type.len() > 128
+            || object
+                .media_type
+                .bytes()
+                .any(|byte| byte.is_ascii_control())
+            || !ROLES.contains(&object.role.as_str())
+            || !paths.insert(&object.path)
+            || !digests.insert(&object.sha256)
+        {
+            return Err(
+                "pack manifest contains an unsafe, unknown, or duplicate member".to_string(),
+            );
+        }
+        decode_digest(&object.sha256)?;
+        let raw = object
+            .sha256
+            .strip_prefix("sha256:")
+            .ok_or_else(|| "pack manifest member digest is invalid".to_string())?;
+        if object.cas_uri != format!("cas://sha256/{raw}") {
+            return Err("pack manifest CAS URI does not match its member digest".to_string());
+        }
+    }
+    for role in ROLES {
+        if objects.iter().filter(|object| object.role == role).count() != 1 {
+            return Err(format!(
+                "pack manifest must contain exactly one {role} member"
+            ));
+        }
+    }
+    for (role, digest) in [
+        ("dataset_manifest", dataset_manifest_hash),
+        ("evaluator_manifest", evaluator_manifest_hash),
+    ] {
+        let object = objects
+            .iter()
+            .find(|object| object.role == role)
+            .expect("role count checked above");
+        if object.sha256 != digest || object.media_type != "application/json" {
+            return Err(format!(
+                "pack {role} member disagrees with its top-level pin"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn pack_object_matches_manifest_member(
+    object: &ChallengePackObjectV1,
+    member: &ChallengeManifestObjectV1,
+    role: &str,
+) -> bool {
+    object.path == member.path
+        && object.role == role
+        && object.sha256 == member.sha256
+        && object.size == member.size
+        && object.media_type == member.media_type
+        && object.cas_uri == member.cas_uri
+}
+
+/// Resolve exactly the four player-facing inputs from the frozen pack/manifests.
+///
+/// Current P0 packs deliberately contain one dataset, one baseline, one brief and one evaluator.
+/// Rejecting wider shapes prevents an apparently harmless manifest expansion from silently
+/// changing what the Browser or Bridge receives.
+pub fn resolve_challenge_material_objects(
+    pack: &ChallengePackManifestV1,
+    evaluator: &ChallengeEvaluatorManifestV1,
+    dataset: &ChallengeDatasetManifestV1,
+) -> Result<Vec<AssignedChallengeMaterialObjectV1>, String> {
+    if pack.pack_id != evaluator.pack_id
+        || pack.pack_id != dataset.pack_id
+        || dataset.objects.len() != 1
+        || evaluator.objects.len() > 2
+    {
+        return Err("pack, evaluator, and dataset manifests do not form one supported pack".into());
+    }
+    let brief = pack
+        .objects
+        .iter()
+        .filter(|object| object.role == "playable_brief")
+        .collect::<Vec<_>>();
+    let baseline = pack
+        .objects
+        .iter()
+        .filter(|object| object.role == "baseline_code")
+        .collect::<Vec<_>>();
+    let frozen_evaluator = pack
+        .objects
+        .iter()
+        .filter(|object| object.role == "frozen_evaluator")
+        .collect::<Vec<_>>();
+    let dataset_objects = pack
+        .objects
+        .iter()
+        .filter(|object| object.role == "dataset")
+        .collect::<Vec<_>>();
+    if brief.len() != 1
+        || baseline.len() != 1
+        || frozen_evaluator.len() != 1
+        || dataset_objects.len() != 1
+        || brief[0].media_type != "text/markdown; charset=utf-8"
+        || baseline[0].media_type != "text/x-python; charset=utf-8"
+        || frozen_evaluator[0].media_type != "text/x-python; charset=utf-8"
+        || !matches!(
+            dataset_objects[0].media_type.as_str(),
+            "application/json" | "text/csv; charset=utf-8"
+        )
+    {
+        return Err("pack player-facing material roles or media types are invalid".into());
+    }
+    if !pack_object_matches_manifest_member(dataset_objects[0], &dataset.objects[0], "dataset") {
+        return Err("pack dataset object disagrees with the dataset manifest".into());
+    }
+    let entrypoint = evaluator
+        .objects
+        .iter()
+        .find(|member| member.path == evaluator.entrypoint)
+        .ok_or_else(|| "evaluator entrypoint is absent".to_string())?;
+    if !pack_object_matches_manifest_member(frozen_evaluator[0], entrypoint, "frozen_evaluator") {
+        return Err("pack evaluator object disagrees with the evaluator manifest".into());
+    }
+    let support = evaluator
+        .objects
+        .iter()
+        .filter(|member| member.path != evaluator.entrypoint)
+        .collect::<Vec<_>>();
+    if support.len() > 1
+        || support.first().is_some_and(|member| {
+            !pack_object_matches_manifest_member(baseline[0], member, "baseline_code")
+        })
+    {
+        return Err("pack baseline object disagrees with evaluator support authority".into());
+    }
+    let material = |object: &ChallengePackObjectV1,
+                    object_key: &str,
+                    logical_path: &str|
+     -> AssignedChallengeMaterialObjectV1 {
+        AssignedChallengeMaterialObjectV1 {
+            object_key: object_key.to_string(),
+            source_path: object.path.clone(),
+            logical_path: logical_path.to_string(),
+            role: object.role.clone(),
+            digest: object.sha256.clone(),
+            size_bytes: object.size,
+            media_type: object.media_type.clone(),
+            download_path: CHALLENGE_MATERIAL_OBJECT_DOWNLOAD_PATH_V1.to_string(),
+        }
+    };
+    Ok(vec![
+        material(brief[0], "brief", "challenge/brief.md"),
+        material(
+            dataset_objects[0],
+            "dataset",
+            if dataset_objects[0].media_type == "application/json" {
+                "challenge/dataset.json"
+            } else {
+                "challenge/dataset.csv"
+            },
+        ),
+        material(baseline[0], "baseline", "challenge/baseline.py"),
+        material(frozen_evaluator[0], "evaluator", "challenge/evaluator.py"),
+    ])
+}
+
 fn validate_challenge_manifest_objects(
     objects: &[ChallengeManifestObjectV1],
 ) -> Result<(), String> {
@@ -3022,6 +3371,205 @@ fn validate_challenge_manifest_objects(
             .ok_or_else(|| "challenge manifest member digest is invalid".to_string())?;
         if object.cas_uri != format!("cas://sha256/{raw}") {
             return Err("challenge manifest CAS URI does not match its member digest".to_string());
+        }
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct FrozenChallengeMaterialAuthorityHashFrameV1<'a> {
+    schema: &'a str,
+    activation_id: Uuid,
+    activation_request_sha256: &'a str,
+    challenge_id: Uuid,
+    challenge_snapshot_hash: &'a str,
+    template: &'a str,
+    pack_id: &'a str,
+    pack_manifest_hash: &'a str,
+    ruleset_version: &'a str,
+    ruleset_hash: &'a str,
+    dataset_manifest_hash: &'a str,
+    evaluator_manifest_hash: &'a str,
+}
+
+pub fn frozen_challenge_material_authority_hash(
+    authority: &FrozenChallengeMaterialAuthorityV1,
+) -> Result<String, String> {
+    validate_frozen_challenge_material_authority(authority, false)?;
+    canonical_json_sha256(&FrozenChallengeMaterialAuthorityHashFrameV1 {
+        schema: &authority.schema,
+        activation_id: authority.activation_id,
+        activation_request_sha256: &authority.activation_request_sha256,
+        challenge_id: authority.challenge_id,
+        challenge_snapshot_hash: &authority.challenge_snapshot_hash,
+        template: &authority.template,
+        pack_id: &authority.pack_id,
+        pack_manifest_hash: &authority.pack_manifest_hash,
+        ruleset_version: &authority.ruleset_version,
+        ruleset_hash: &authority.ruleset_hash,
+        dataset_manifest_hash: &authority.dataset_manifest_hash,
+        evaluator_manifest_hash: &authority.evaluator_manifest_hash,
+    })
+}
+
+pub fn verify_frozen_challenge_material_authority(
+    authority: &FrozenChallengeMaterialAuthorityV1,
+) -> Result<(), String> {
+    validate_frozen_challenge_material_authority(authority, true)
+}
+
+fn validate_frozen_challenge_material_authority(
+    authority: &FrozenChallengeMaterialAuthorityV1,
+    verify_hash: bool,
+) -> Result<(), String> {
+    if authority.schema != FROZEN_CHALLENGE_MATERIAL_AUTHORITY_V1
+        || authority.activation_id.is_nil()
+        || authority.challenge_id.is_nil()
+    {
+        return Err("frozen challenge material activation binding is invalid".to_string());
+    }
+    for (field, value) in [
+        ("template", authority.template.as_str()),
+        ("pack_id", authority.pack_id.as_str()),
+        ("ruleset_version", authority.ruleset_version.as_str()),
+    ] {
+        validate_logical_id(field, value)?;
+    }
+    for digest in [
+        &authority.activation_request_sha256,
+        &authority.challenge_snapshot_hash,
+        &authority.pack_manifest_hash,
+        &authority.ruleset_hash,
+        &authority.dataset_manifest_hash,
+        &authority.evaluator_manifest_hash,
+    ] {
+        decode_digest(digest)?;
+    }
+    if verify_hash {
+        decode_digest(&authority.authority_hash)?;
+        if frozen_challenge_material_authority_hash(authority)? != authority.authority_hash {
+            return Err("frozen challenge material authority hash mismatch".to_string());
+        }
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct AssignedChallengeMaterialBundleHashFrameV1<'a> {
+    schema: &'a str,
+    authority: &'a FrozenChallengeMaterialAuthorityV1,
+    authority_hash: &'a str,
+    paper_project_id: Uuid,
+    challenge_ruleset_snapshot_hash: &'a str,
+    binding_id: Uuid,
+    player_id: Uuid,
+    work_item_id: Uuid,
+    work_item_version: u64,
+    objects: &'a [AssignedChallengeMaterialObjectV1],
+}
+
+pub fn assigned_challenge_material_bundle_hash(
+    bundle: &AssignedChallengeMaterialBundleV1,
+) -> Result<String, String> {
+    validate_assigned_challenge_material_bundle(bundle, false)?;
+    canonical_json_sha256(&AssignedChallengeMaterialBundleHashFrameV1 {
+        schema: &bundle.schema,
+        authority: &bundle.authority,
+        authority_hash: &bundle.authority_hash,
+        paper_project_id: bundle.paper_project_id,
+        challenge_ruleset_snapshot_hash: &bundle.challenge_ruleset_snapshot_hash,
+        binding_id: bundle.binding_id,
+        player_id: bundle.player_id,
+        work_item_id: bundle.work_item_id,
+        work_item_version: bundle.work_item_version,
+        objects: &bundle.objects,
+    })
+}
+
+pub fn verify_assigned_challenge_material_bundle(
+    bundle: &AssignedChallengeMaterialBundleV1,
+) -> Result<(), String> {
+    validate_assigned_challenge_material_bundle(bundle, true)
+}
+
+fn validate_assigned_challenge_material_bundle(
+    bundle: &AssignedChallengeMaterialBundleV1,
+    verify_hash: bool,
+) -> Result<(), String> {
+    if bundle.schema != ASSIGNED_CHALLENGE_MATERIAL_BUNDLE_V1
+        || bundle.paper_project_id.is_nil()
+        || bundle.binding_id.is_nil()
+        || bundle.player_id.is_nil()
+        || bundle.work_item_id.is_nil()
+        || bundle.work_item_version == 0
+        || bundle.work_item_version > JSON_SAFE_U64_MAX
+    {
+        return Err("assigned challenge material work-item binding is invalid".to_string());
+    }
+    verify_frozen_challenge_material_authority(&bundle.authority)?;
+    if bundle.authority_hash != bundle.authority.authority_hash {
+        return Err("assigned challenge material authority hash mismatch".to_string());
+    }
+    decode_digest(&bundle.challenge_ruleset_snapshot_hash)?;
+    if bundle.objects.len() != 4 {
+        return Err("assigned challenge material bundle must contain exactly four objects".into());
+    }
+    let expected = [
+        (
+            "brief",
+            "playable_brief",
+            "challenge/brief.md",
+            "text/markdown; charset=utf-8",
+        ),
+        (
+            "dataset",
+            "dataset",
+            "",
+            bundle.objects[1].media_type.as_str(),
+        ),
+        (
+            "baseline",
+            "baseline_code",
+            "challenge/baseline.py",
+            "text/x-python; charset=utf-8",
+        ),
+        (
+            "evaluator",
+            "frozen_evaluator",
+            "challenge/evaluator.py",
+            "text/x-python; charset=utf-8",
+        ),
+    ];
+    let mut source_paths = HashSet::new();
+    let mut digests = HashSet::new();
+    for (index, object) in bundle.objects.iter().enumerate() {
+        let (object_key, role, logical_path, media_type) = expected[index];
+        let dataset_path_valid = index != 1
+            || matches!(
+                (object.logical_path.as_str(), object.media_type.as_str()),
+                ("challenge/dataset.json", "application/json")
+                    | ("challenge/dataset.csv", "text/csv; charset=utf-8")
+            );
+        if object.object_key != object_key
+            || object.role != role
+            || (index != 1 && object.logical_path != logical_path)
+            || object.media_type != media_type
+            || !dataset_path_valid
+            || !safe_review_path(&object.source_path)
+            || object.size_bytes == 0
+            || object.size_bytes > 16 * 1024 * 1024
+            || object.download_path != CHALLENGE_MATERIAL_OBJECT_DOWNLOAD_PATH_V1
+            || !source_paths.insert(&object.source_path)
+            || !digests.insert(&object.digest)
+        {
+            return Err("assigned challenge material object mapping is invalid".to_string());
+        }
+        decode_digest(&object.digest)?;
+    }
+    if verify_hash {
+        decode_digest(&bundle.bundle_hash)?;
+        if assigned_challenge_material_bundle_hash(bundle)? != bundle.bundle_hash {
+            return Err("assigned challenge material bundle hash mismatch".to_string());
         }
     }
     Ok(())
@@ -5040,6 +5588,208 @@ mod frozen_review_manifest_tests {
         .unwrap();
         let extra_digest = sha256_digest(&extra);
         assert!(parse_challenge_evaluator_manifest(&extra, &extra_digest).is_err());
+    }
+
+    fn challenge_material_fixture() -> (
+        ChallengePackManifestV1,
+        ChallengeEvaluatorManifestV1,
+        ChallengeDatasetManifestV1,
+    ) {
+        let digest = |byte: char| format!("sha256:{}", byte.to_string().repeat(64));
+        let member =
+            |path: &str, media_type: &str, byte: char, size: u64| ChallengeManifestObjectV1 {
+                cas_uri: format!("cas://sha256/{}", byte.to_string().repeat(64)),
+                media_type: media_type.to_string(),
+                path: path.to_string(),
+                sha256: digest(byte),
+                size,
+            };
+        let evaluator = ChallengeEvaluatorManifestV1 {
+            entrypoint: "evaluator.py".to_string(),
+            frozen: true,
+            objects: vec![
+                member("baseline.py", "text/x-python; charset=utf-8", 'b', 11),
+                member("evaluator.py", "text/x-python; charset=utf-8", 'e', 13),
+            ],
+            pack_id: "pack-fixture-v1".to_string(),
+            runtime: "python3-stdlib".to_string(),
+            schema: "hepta.challenge_pack.evaluator_manifest.v1".to_string(),
+        };
+        let dataset = ChallengeDatasetManifestV1 {
+            objects: vec![member("dataset/claims.json", "application/json", 'd', 17)],
+            pack_id: evaluator.pack_id.clone(),
+            schema: "hepta.challenge_pack.dataset_manifest.v1".to_string(),
+        };
+        let evaluator_manifest_hash = sha256_digest(&serde_json::to_vec(&evaluator).unwrap());
+        let dataset_manifest_hash = sha256_digest(&serde_json::to_vec(&dataset).unwrap());
+        let pack_member = |path: &str, role: &str, media_type: &str, sha256: String, size: u64| {
+            ChallengePackObjectV1 {
+                cas_uri: format!("cas://sha256/{}", sha256.strip_prefix("sha256:").unwrap()),
+                media_type: media_type.to_string(),
+                path: path.to_string(),
+                role: role.to_string(),
+                sha256,
+                size,
+            }
+        };
+        let pack = ChallengePackManifestV1 {
+            content_contract: ChallengePackContentContractV1 {
+                difficulty: "introductory".to_string(),
+                duration_seconds: 2_700,
+                modifiers: vec!["frozen-evaluator".to_string()],
+                objective: "Audit the frozen claims.".to_string(),
+                risks: vec!["citation-mismatch".to_string()],
+                victory: "Every claim is resolved.".to_string(),
+            },
+            dataset_manifest_sha256: dataset_manifest_hash.clone(),
+            deployment: ChallengePackDeploymentV1 {
+                blocker: "challenge_pack_cas_objects_not_seeded".to_string(),
+                cas_seeded: false,
+                open_status_allowed: false,
+            },
+            evaluator_manifest_sha256: evaluator_manifest_hash.clone(),
+            objects: vec![
+                pack_member(
+                    "LICENSE.txt",
+                    "license",
+                    "text/plain; charset=utf-8",
+                    digest('1'),
+                    5,
+                ),
+                pack_member(
+                    "baseline.py",
+                    "baseline_code",
+                    "text/x-python; charset=utf-8",
+                    digest('b'),
+                    11,
+                ),
+                pack_member(
+                    "brief.md",
+                    "playable_brief",
+                    "text/markdown; charset=utf-8",
+                    digest('2'),
+                    7,
+                ),
+                pack_member(
+                    "dataset.manifest.json",
+                    "dataset_manifest",
+                    "application/json",
+                    dataset_manifest_hash,
+                    19,
+                ),
+                pack_member(
+                    "dataset/claims.json",
+                    "dataset",
+                    "application/json",
+                    digest('d'),
+                    17,
+                ),
+                pack_member(
+                    "evaluator.manifest.json",
+                    "evaluator_manifest",
+                    "application/json",
+                    evaluator_manifest_hash,
+                    23,
+                ),
+                pack_member(
+                    "evaluator.py",
+                    "frozen_evaluator",
+                    "text/x-python; charset=utf-8",
+                    digest('e'),
+                    13,
+                ),
+                pack_member(
+                    "result-explanation.md",
+                    "result_explanation",
+                    "text/markdown; charset=utf-8",
+                    digest('3'),
+                    29,
+                ),
+            ],
+            pack_id: evaluator.pack_id.clone(),
+            ruleset_version: "paper-raid-evidence-audit-v1".to_string(),
+            schema: "hepta.challenge_pack.v1".to_string(),
+            seed: 1_701,
+            template: "evidence-audit".to_string(),
+        };
+        (pack, evaluator, dataset)
+    }
+
+    #[test]
+    fn frozen_pack_parser_and_material_projection_reject_substitution() {
+        let (pack, evaluator, dataset) = challenge_material_fixture();
+        let bytes = serde_json::to_vec(&pack).unwrap();
+        let digest = sha256_digest(&bytes);
+        let parsed = parse_challenge_pack_manifest(&bytes, &digest).unwrap();
+        let objects = resolve_challenge_material_objects(&parsed, &evaluator, &dataset).unwrap();
+        assert_eq!(objects.len(), 4);
+        assert_eq!(objects[0].role, "playable_brief");
+        assert_eq!(objects[1].logical_path, "challenge/dataset.json");
+        assert_eq!(objects[2].role, "baseline_code");
+        assert_eq!(objects[3].role, "frozen_evaluator");
+
+        let mut substituted = parsed.clone();
+        substituted
+            .objects
+            .iter_mut()
+            .find(|object| object.role == "dataset")
+            .unwrap()
+            .sha256 = format!("sha256:{}", "9".repeat(64));
+        assert!(resolve_challenge_material_objects(&substituted, &evaluator, &dataset).is_err());
+
+        let mut extra = serde_json::to_value(pack).unwrap();
+        extra["unfrozen_catalog_hint"] = serde_json::json!(true);
+        let extra_bytes = serde_json::to_vec(&extra).unwrap();
+        let extra_digest = sha256_digest(&extra_bytes);
+        assert!(parse_challenge_pack_manifest(&extra_bytes, &extra_digest).is_err());
+    }
+
+    #[test]
+    fn assigned_material_bundle_hash_binds_activation_and_work_item_assignment() {
+        let (pack, evaluator, dataset) = challenge_material_fixture();
+        let mut authority = FrozenChallengeMaterialAuthorityV1 {
+            schema: FROZEN_CHALLENGE_MATERIAL_AUTHORITY_V1.to_string(),
+            authority_hash: String::new(),
+            activation_id: Uuid::from_u128(1),
+            activation_request_sha256: format!("sha256:{}", "1".repeat(64)),
+            challenge_id: Uuid::from_u128(2),
+            challenge_snapshot_hash: format!("sha256:{}", "2".repeat(64)),
+            template: pack.template.clone(),
+            pack_id: pack.pack_id.clone(),
+            pack_manifest_hash: format!("sha256:{}", "3".repeat(64)),
+            ruleset_version: pack.ruleset_version.clone(),
+            ruleset_hash: format!("sha256:{}", "4".repeat(64)),
+            dataset_manifest_hash: pack.dataset_manifest_sha256.clone(),
+            evaluator_manifest_hash: pack.evaluator_manifest_sha256.clone(),
+        };
+        authority.authority_hash = frozen_challenge_material_authority_hash(&authority).unwrap();
+        verify_frozen_challenge_material_authority(&authority).unwrap();
+        let mut bundle = AssignedChallengeMaterialBundleV1 {
+            schema: ASSIGNED_CHALLENGE_MATERIAL_BUNDLE_V1.to_string(),
+            bundle_hash: String::new(),
+            authority: authority.clone(),
+            authority_hash: authority.authority_hash.clone(),
+            paper_project_id: Uuid::from_u128(3),
+            challenge_ruleset_snapshot_hash: format!("sha256:{}", "5".repeat(64)),
+            binding_id: Uuid::from_u128(4),
+            player_id: Uuid::from_u128(5),
+            work_item_id: Uuid::from_u128(6),
+            work_item_version: 1,
+            objects: resolve_challenge_material_objects(&pack, &evaluator, &dataset).unwrap(),
+        };
+        bundle.bundle_hash = assigned_challenge_material_bundle_hash(&bundle).unwrap();
+        verify_assigned_challenge_material_bundle(&bundle).unwrap();
+
+        let mut foreign_assignment = bundle.clone();
+        foreign_assignment.work_item_id = Uuid::from_u128(7);
+        assert_ne!(
+            assigned_challenge_material_bundle_hash(&foreign_assignment).unwrap(),
+            bundle.bundle_hash
+        );
+        assert!(verify_assigned_challenge_material_bundle(&foreign_assignment).is_err());
+        let mut unfrozen = bundle;
+        unfrozen.authority.authority_hash = format!("sha256:{}", "8".repeat(64));
+        assert!(assigned_challenge_material_bundle_hash(&unfrozen).is_err());
     }
 
     #[test]

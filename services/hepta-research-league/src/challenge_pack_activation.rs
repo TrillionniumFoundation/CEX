@@ -11,9 +11,13 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::{
-    decode_digest, paper_raid_contracts::canonical_json_sha256, push_event, require_service_token,
-    ApiError, AppState, ChallengeStatus, ChallengeTemplateV1, LeagueState, ResearchChallenge,
-    OPERATOR_TOKEN_HEADER,
+    decode_digest,
+    paper_raid_contracts::{
+        canonical_json_sha256, frozen_challenge_material_authority_hash,
+        FrozenChallengeMaterialAuthorityV1, FROZEN_CHALLENGE_MATERIAL_AUTHORITY_V1,
+    },
+    push_event, require_service_token, ApiError, AppState, ChallengeStatus, ChallengeTemplateV1,
+    LeagueState, ResearchChallenge, OPERATOR_TOKEN_HEADER,
 };
 
 pub const ACTIVATION_REQUEST_V1: &str = "hepta.challenge_pack.activation_request.v1";
@@ -574,6 +578,77 @@ fn validate_activation_request(request: &ActivateChallengePackRequestV1) -> Resu
         ));
     }
     Ok(())
+}
+
+/// Project the append-only activation into the Paper's immutable challenge snapshot.
+///
+/// This deliberately does not read a current catalog: the activation request already binds the
+/// exact source pack manifest and the exact dataset/evaluator manifest digests.  Any state drift
+/// fails Paper creation instead of silently falling back to player-selected material.
+pub(crate) fn freeze_challenge_material_authority(
+    challenge: &ResearchChallenge,
+    activation: &ChallengePackActivationRecordV1,
+    challenge_snapshot_hash: &str,
+) -> Result<FrozenChallengeMaterialAuthorityV1, ApiError> {
+    decode_digest(challenge_snapshot_hash).map_err(|message| {
+        ApiError::internal(format!(
+            "invalid challenge snapshot hash before material freeze: {message}"
+        ))
+    })?;
+    if activation.schema != ACTIVATION_RECORD_V1
+        || activation.challenge_id != challenge.challenge_id
+        || activation.previous_status != ChallengeStatus::Draft
+        || activation.activated_status != ChallengeStatus::Open
+        || challenge.status != ChallengeStatus::Open
+    {
+        return Err(ApiError::internal(
+            "Challenge Pack activation record cannot authorize this open Challenge snapshot",
+        ));
+    }
+    validate_activation_request(&activation.request).map_err(|error| {
+        ApiError::internal(format!(
+            "stored Challenge Pack activation request is invalid: {}",
+            error.message
+        ))
+    })?;
+    verify_challenge_binding(challenge, &activation.request).map_err(|error| {
+        ApiError::internal(format!(
+            "stored Challenge Pack activation binding is invalid: {}",
+            error.message
+        ))
+    })?;
+    let request_sha256 = canonical_json_sha256(&json!({
+        "challenge_id": challenge.challenge_id,
+        "request": activation.request,
+    }))
+    .map_err(|message| {
+        ApiError::internal(format!("rehash Challenge Pack activation: {message}"))
+    })?;
+    if request_sha256 != activation.request_sha256 {
+        return Err(ApiError::internal(
+            "stored Challenge Pack activation request hash mismatch",
+        ));
+    }
+    let mut authority = FrozenChallengeMaterialAuthorityV1 {
+        schema: FROZEN_CHALLENGE_MATERIAL_AUTHORITY_V1.to_string(),
+        authority_hash: String::new(),
+        activation_id: activation.activation_id,
+        activation_request_sha256: activation.request_sha256.clone(),
+        challenge_id: challenge.challenge_id,
+        challenge_snapshot_hash: challenge_snapshot_hash.to_string(),
+        template: activation.request.template.clone(),
+        pack_id: activation.request.pack_id.clone(),
+        pack_manifest_hash: activation.request.evidence.pack_manifest_sha256.clone(),
+        ruleset_version: activation.request.ruleset_version.clone(),
+        ruleset_hash: activation.request.ruleset_hash.clone(),
+        dataset_manifest_hash: activation.request.dataset_manifest_hash.clone(),
+        evaluator_manifest_hash: activation.request.evaluator_manifest_hash.clone(),
+    };
+    authority.authority_hash =
+        frozen_challenge_material_authority_hash(&authority).map_err(|message| {
+            ApiError::internal(format!("freeze Challenge Pack authority: {message}"))
+        })?;
+    Ok(authority)
 }
 
 fn verify_challenge_binding(

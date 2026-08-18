@@ -1117,6 +1117,7 @@ mod tests {
             ruleset_hash,
             enforcement: ChallengeRulesetEnforcementV1::AuthoritativeV1,
             ruleset: Some(ruleset),
+            material_authority: None,
         };
         let snapshot_hash = snapshot.canonical_hash().expect("canonical snapshot");
         PaperProject {

@@ -3,11 +3,15 @@ import test from "node:test";
 
 import {
   actionableDeliveryCandidates,
+  challengeMaterialBundles,
+  challengeMaterialObjectQuery,
   deliveryCandidateKey,
   deliveryCandidates,
+  downloadAssignedChallengeMaterials,
   proposalInput,
   workResult,
 } from "../src/work.mjs";
+import { canonicalJsonBytes, sha256Digest } from "../src/canonical.mjs";
 
 const PAPER_ID = "11111111-1111-4111-8111-111111111111";
 const WORK_ID = "22222222-2222-4222-8222-222222222222";
@@ -18,6 +22,105 @@ const DRAFT_ID = "77777777-7777-4777-8777-777777777777";
 const LEASE_ID = "88888888-8888-4888-8888-888888888888";
 const MANIFEST_HASH = `sha256:${"a".repeat(64)}`;
 const PAYLOAD_HASH = `sha256:${"b".repeat(64)}`;
+const PLAYER_ID = "99999999-9999-4999-8999-999999999999";
+const CHALLENGE_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const ACTIVATION_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+const materialBytes = Object.freeze({
+  brief: Buffer.from("# Frozen brief\n", "utf8"),
+  dataset: Buffer.from('{"rows":[1]}', "utf8"),
+  baseline: Buffer.from("print('baseline')\n", "utf8"),
+  evaluator: Buffer.from("print('evaluate')\n", "utf8"),
+});
+
+function withCanonicalHash(value, hashField) {
+  const frame = { ...value };
+  delete frame[hashField];
+  return {
+    ...value,
+    [hashField]: sha256Digest(canonicalJsonBytes(frame)),
+  };
+}
+
+function materialAuthority(overrides = {}) {
+  return withCanonicalHash({
+    schema: "hepta.paper_raid.frozen_challenge_material_authority.v1",
+    authority_hash: `sha256:${"0".repeat(64)}`,
+    activation_id: ACTIVATION_ID,
+    activation_request_sha256: `sha256:${"1".repeat(64)}`,
+    challenge_id: CHALLENGE_ID,
+    challenge_snapshot_hash: `sha256:${"2".repeat(64)}`,
+    template: "evidence-audit",
+    pack_id: "paper-raid-evidence-audit-seeded-v1",
+    pack_manifest_hash: `sha256:${"3".repeat(64)}`,
+    ruleset_version: "paper-raid-evidence-audit-v1",
+    ruleset_hash: `sha256:${"4".repeat(64)}`,
+    dataset_manifest_hash: `sha256:${"5".repeat(64)}`,
+    evaluator_manifest_hash: `sha256:${"6".repeat(64)}`,
+    ...overrides,
+  }, "authority_hash");
+}
+
+function materialObjects() {
+  return [
+    ["brief", "playable_brief", "challenge/brief.md", "text/markdown; charset=utf-8"],
+    ["dataset", "dataset", "challenge/dataset.json", "application/json"],
+    ["baseline", "baseline_code", "challenge/baseline.py", "text/x-python; charset=utf-8"],
+    ["evaluator", "frozen_evaluator", "challenge/evaluator.py", "text/x-python; charset=utf-8"],
+  ].map(([objectKey, role, logicalPath, mediaType]) => ({
+    object_key: objectKey,
+    source_path: `source/${objectKey}`,
+    logical_path: logicalPath,
+    role,
+    digest: sha256Digest(materialBytes[objectKey]),
+    size_bytes: materialBytes[objectKey].length,
+    media_type: mediaType,
+    download_path: "/api/agent-bridge/challenge-objects",
+  }));
+}
+
+function materialBundle(overrides = {}) {
+  const authority = overrides.authority || materialAuthority();
+  return withCanonicalHash({
+    schema: "hepta.paper_raid.assigned_challenge_material_bundle.v1",
+    bundle_hash: `sha256:${"7".repeat(64)}`,
+    authority,
+    authority_hash: authority.authority_hash,
+    paper_project_id: PAPER_ID,
+    challenge_ruleset_snapshot_hash: `sha256:${"8".repeat(64)}`,
+    binding_id: BINDING_ID,
+    player_id: PLAYER_ID,
+    work_item_id: WORK_ID,
+    work_item_version: 3,
+    objects: materialObjects(),
+    ...overrides,
+  }, "bundle_hash");
+}
+
+function challengeInbox(bundle = materialBundle(), taskOverrides = {}) {
+  return {
+    schema: "hepta.paper_raid.agent_bridge.inbox.v2",
+    binding_id: BINDING_ID,
+    assurance: "self_declared_unverified",
+    papers: [{
+      paper_id: PAPER_ID,
+      tasks: [{
+        work_item_id: WORK_ID,
+        assigned_binding_id: BINDING_ID,
+        assigned_player_id: PLAYER_ID,
+        status: "in_progress",
+        version: 3,
+        ...taskOverrides,
+      }],
+      challenge_materials: {
+        schema: "hepta.paper_raid.agent_bridge.assigned_challenge_materials.v1",
+        status: "available",
+        reason_code: null,
+        items: [bundle],
+      },
+    }],
+  };
+}
 
 function candidate(overrides = {}) {
   return {
@@ -218,4 +321,101 @@ test("one-shot and watch can share the exact work result wrapper", () => {
     candidate_key: `${DRAFT_ID}:${PAPER_ID}:${WORK_ID}:methods:${REVISION_ID}:${MANIFEST_ID}`,
     result: { schema: "hepta.paper_raid.agent_bridge.proposal_result.v2" },
   });
+});
+
+test("frozen challenge materials are projected only for the exact Author work item", () => {
+  const [bundle] = challengeMaterialBundles(challengeInbox());
+  assert.equal(bundle.paper_project_id, PAPER_ID);
+  assert.equal(bundle.binding_id, BINDING_ID);
+  assert.equal(bundle.player_id, PLAYER_ID);
+  assert.equal(bundle.work_item_id, WORK_ID);
+  assert.equal(bundle.work_item_version, 3);
+  assert.equal(
+    challengeMaterialObjectQuery(bundle, bundle.objects[0]),
+    `bundle_hash=${encodeURIComponent(bundle.bundle_hash)}` +
+      `&digest=${encodeURIComponent(bundle.objects[0].digest)}` +
+      "&object_key=brief" +
+      `&paper_id=${PAPER_ID}` +
+      `&work_item_id=${WORK_ID}`,
+  );
+});
+
+test("challenge material projection rejects cross-assignment and terminal work", () => {
+  assert.throws(
+    () => challengeMaterialBundles(challengeInbox(
+      materialBundle({ binding_id: MANIFEST_ID }),
+    )),
+    /crosses its Author assignment/,
+  );
+  assert.throws(
+    () => challengeMaterialBundles(challengeInbox(
+      materialBundle({ player_id: MANIFEST_ID }),
+    )),
+    /crosses its Author assignment/,
+  );
+  assert.throws(
+    () => challengeMaterialBundles(challengeInbox(
+      materialBundle({ work_item_id: MANIFEST_ID }),
+    )),
+    /no matching inbox work item/,
+  );
+  assert.throws(
+    () => challengeMaterialBundles(challengeInbox(
+      materialBundle({ work_item_version: 4 }),
+    )),
+    /crosses its Author assignment/,
+  );
+  for (const status of ["accepted", "rejected", "cancelled"]) {
+    assert.throws(
+      () => challengeMaterialBundles(challengeInbox(materialBundle(), { status })),
+      /crosses its Author assignment/,
+    );
+  }
+  assert.throws(
+    () => challengeMaterialBundles(challengeInbox(
+      materialBundle({ binding_id: CHALLENGE_ID.toUpperCase() }),
+    )),
+    /bundle is invalid/,
+  );
+});
+
+test("challenge material authority and bundle hashes reject tampering", () => {
+  const authorityTamper = materialBundle();
+  authorityTamper.authority.pack_id = "substituted-pack";
+  assert.throws(
+    () => challengeMaterialBundles(challengeInbox(authorityTamper)),
+    /authority hash mismatch/,
+  );
+
+  const bundleTamper = materialBundle();
+  bundleTamper.objects[0].digest = `sha256:${"f".repeat(64)}`;
+  assert.throws(
+    () => challengeMaterialBundles(challengeInbox(bundleTamper)),
+    /bundle hash mismatch/,
+  );
+});
+
+test("challenge material downloader verifies every frozen byte sequence", async () => {
+  const [bundle] = challengeMaterialBundles(challengeInbox());
+  const downloaded = await downloadAssignedChallengeMaterials(
+    bundle,
+    async (_exactBundle, object) => materialBytes[object.object_key],
+  );
+  assert.equal(downloaded.length, 4);
+  assert.deepEqual(downloaded.map(value => value.descriptor.object_key), [
+    "brief",
+    "dataset",
+    "baseline",
+    "evaluator",
+  ]);
+
+  await assert.rejects(
+    () => downloadAssignedChallengeMaterials(
+      bundle,
+      async (_exactBundle, object) => object.object_key === "brief"
+        ? Buffer.from("wrong", "utf8")
+        : materialBytes[object.object_key],
+    ),
+    /differs from frozen authority/,
+  );
 });

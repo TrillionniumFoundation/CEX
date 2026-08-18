@@ -1,4 +1,5 @@
 import { reviewTaskKey } from "./review.mjs";
+import { canonicalJsonBytes, sha256Digest } from "./canonical.mjs";
 
 const AUTHOR_DELIVERY_PHASES = new Set(["drafting", "reproducing"]);
 const DELIVERY_CANDIDATES_SCHEMA =
@@ -10,6 +11,13 @@ const DELIVERY_STATES = new Set(["pending", "submitting", "consumed"]);
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
+const ASSIGNED_CHALLENGE_MATERIALS_SCHEMA =
+  "hepta.paper_raid.agent_bridge.assigned_challenge_materials.v1";
+const ASSIGNED_CHALLENGE_MATERIAL_BUNDLE_SCHEMA =
+  "hepta.paper_raid.assigned_challenge_material_bundle.v1";
+const FROZEN_CHALLENGE_MATERIAL_AUTHORITY_SCHEMA =
+  "hepta.paper_raid.frozen_challenge_material_authority.v1";
+const CHALLENGE_OBJECT_PATH = "/api/agent-bridge/challenge-objects";
 
 function records(value) {
   return Array.isArray(value) ? value : [];
@@ -132,6 +140,271 @@ export function actionableDeliveryCandidates(inbox, acknowledgedKeys = new Set()
     candidate.delivery_state !== "consumed" ||
     !acknowledgedKeys.has(deliveryCandidateKey(candidate))
   );
+}
+
+function exactKeys(value, keys) {
+  return value && typeof value === "object" && !Array.isArray(value) &&
+    Object.keys(value).sort().join("\0") === [...keys].sort().join("\0");
+}
+
+function canonicalUuid(value) {
+  return typeof value === "string" && value === value.toLowerCase() &&
+    UUID_PATTERN.test(value);
+}
+
+function validateFrozenChallengeMaterialAuthority(authority) {
+  const fields = [
+    "schema",
+    "authority_hash",
+    "activation_id",
+    "activation_request_sha256",
+    "challenge_id",
+    "challenge_snapshot_hash",
+    "template",
+    "pack_id",
+    "pack_manifest_hash",
+    "ruleset_version",
+    "ruleset_hash",
+    "dataset_manifest_hash",
+    "evaluator_manifest_hash",
+  ];
+  if (!exactKeys(authority, fields) ||
+      authority.schema !== FROZEN_CHALLENGE_MATERIAL_AUTHORITY_SCHEMA ||
+      !canonicalUuid(authority.activation_id) ||
+      !canonicalUuid(authority.challenge_id) ||
+      !contractText(authority.template) ||
+      !contractText(authority.pack_id) ||
+      !contractText(authority.ruleset_version)) {
+    throw new Error("frozen challenge material authority is invalid");
+  }
+  for (const field of [
+    "authority_hash",
+    "activation_request_sha256",
+    "challenge_snapshot_hash",
+    "pack_manifest_hash",
+    "ruleset_hash",
+    "dataset_manifest_hash",
+    "evaluator_manifest_hash",
+  ]) {
+    if (!DIGEST_PATTERN.test(String(authority[field] || ""))) {
+      throw new Error("frozen challenge material authority digest is invalid");
+    }
+  }
+  const frame = Object.fromEntries(
+    fields.filter(field => field !== "authority_hash")
+      .map(field => [field, authority[field]]),
+  );
+  if (sha256Digest(canonicalJsonBytes(frame)) !== authority.authority_hash) {
+    throw new Error("frozen challenge material authority hash mismatch");
+  }
+  return Object.freeze({ ...authority });
+}
+
+function validateChallengeMaterialObject(object, expected) {
+  const fields = [
+    "object_key",
+    "source_path",
+    "logical_path",
+    "role",
+    "digest",
+    "size_bytes",
+    "media_type",
+    "download_path",
+  ];
+  const dataset = expected.objectKey === "dataset";
+  const datasetMapping =
+    (object.logical_path === "challenge/dataset.json" &&
+      object.media_type === "application/json") ||
+    (object.logical_path === "challenge/dataset.csv" &&
+      object.media_type === "text/csv; charset=utf-8");
+  if (!exactKeys(object, fields) || object.object_key !== expected.objectKey ||
+      object.role !== expected.role ||
+      (!dataset && object.logical_path !== expected.logicalPath) ||
+      (!dataset && object.media_type !== expected.mediaType) ||
+      (dataset && !datasetMapping) ||
+      !contractText(object.source_path) || object.source_path.startsWith("/") ||
+      object.source_path.includes("\\") ||
+      object.source_path.split("/").some(part => !part || part === "." || part === "..") ||
+      !DIGEST_PATTERN.test(String(object.digest || "")) ||
+      !Number.isSafeInteger(object.size_bytes) || object.size_bytes <= 0 ||
+      object.size_bytes > 16 * 1024 * 1024 ||
+      object.download_path !== CHALLENGE_OBJECT_PATH) {
+    throw new Error("assigned challenge material object is invalid");
+  }
+  return Object.freeze({ ...object });
+}
+
+function validateChallengeMaterialBundle(bundle, {
+  paperId,
+  bindingId,
+  task,
+} = {}) {
+  const fields = [
+    "schema",
+    "bundle_hash",
+    "authority",
+    "authority_hash",
+    "paper_project_id",
+    "challenge_ruleset_snapshot_hash",
+    "binding_id",
+    "player_id",
+    "work_item_id",
+    "work_item_version",
+    "objects",
+  ];
+  if (!exactKeys(bundle, fields) ||
+      bundle.schema !== ASSIGNED_CHALLENGE_MATERIAL_BUNDLE_SCHEMA ||
+      !DIGEST_PATTERN.test(String(bundle.bundle_hash || "")) ||
+      !DIGEST_PATTERN.test(String(bundle.authority_hash || "")) ||
+      !DIGEST_PATTERN.test(String(bundle.challenge_ruleset_snapshot_hash || "")) ||
+      !canonicalUuid(bundle.paper_project_id) ||
+      !canonicalUuid(bundle.binding_id) ||
+      !canonicalUuid(bundle.player_id) ||
+      !canonicalUuid(bundle.work_item_id) ||
+      !Number.isSafeInteger(bundle.work_item_version) ||
+      bundle.work_item_version <= 0 ||
+      !Array.isArray(bundle.objects) || bundle.objects.length !== 4) {
+    throw new Error("assigned challenge material bundle is invalid");
+  }
+  const authority = validateFrozenChallengeMaterialAuthority(bundle.authority);
+  if (bundle.authority_hash !== authority.authority_hash ||
+      (paperId !== undefined && bundle.paper_project_id !== paperId) ||
+      (bindingId !== undefined && bundle.binding_id !== bindingId) ||
+      (task !== undefined && (
+        bundle.work_item_id !== task.work_item_id ||
+        bundle.work_item_version !== task.version ||
+        bundle.binding_id !== task.assigned_binding_id ||
+        bundle.player_id !== task.assigned_player_id ||
+        !["planned", "in_progress", "review"].includes(task.status)
+      ))) {
+    throw new Error("assigned challenge material bundle crosses its Author assignment");
+  }
+  const expected = [
+    {
+      objectKey: "brief",
+      role: "playable_brief",
+      logicalPath: "challenge/brief.md",
+      mediaType: "text/markdown; charset=utf-8",
+    },
+    { objectKey: "dataset", role: "dataset" },
+    {
+      objectKey: "baseline",
+      role: "baseline_code",
+      logicalPath: "challenge/baseline.py",
+      mediaType: "text/x-python; charset=utf-8",
+    },
+    {
+      objectKey: "evaluator",
+      role: "frozen_evaluator",
+      logicalPath: "challenge/evaluator.py",
+      mediaType: "text/x-python; charset=utf-8",
+    },
+  ];
+  const objects = bundle.objects.map((object, index) =>
+    validateChallengeMaterialObject(object, expected[index])
+  );
+  if (new Set(objects.map(object => object.source_path)).size !== objects.length ||
+      new Set(objects.map(object => object.digest)).size !== objects.length) {
+    throw new Error("assigned challenge material bundle contains duplicate objects");
+  }
+  const frame = Object.fromEntries(
+    fields.filter(field => field !== "bundle_hash")
+      .map(field => [field, field === "authority" ? authority :
+        field === "objects" ? objects : bundle[field]]),
+  );
+  if (sha256Digest(canonicalJsonBytes(frame)) !== bundle.bundle_hash) {
+    throw new Error("assigned challenge material bundle hash mismatch");
+  }
+  return Object.freeze({ ...bundle, authority, objects: Object.freeze(objects) });
+}
+
+export function challengeMaterialBundles(inbox) {
+  if (!inbox || inbox.schema !== "hepta.paper_raid.agent_bridge.inbox.v2" ||
+      !canonicalUuid(inbox.binding_id) || !Array.isArray(inbox.papers)) {
+    throw new Error("Agent Bridge inbox schema is unsupported");
+  }
+  const bundles = [];
+  const seen = new Set();
+  for (const paper of records(inbox.papers)) {
+    if (!paper || !canonicalUuid(paper.paper_id)) {
+      throw new Error("Agent Bridge inbox paper projection is invalid");
+    }
+    if (paper.challenge_materials === undefined) continue;
+    const projection = paper.challenge_materials;
+    if (!exactKeys(projection, ["schema", "status", "reason_code", "items"]) ||
+        projection.schema !== ASSIGNED_CHALLENGE_MATERIALS_SCHEMA ||
+        !Array.isArray(projection.items)) {
+      throw new Error("assigned challenge material projection is unsupported");
+    }
+    if (projection.status === "unavailable") {
+      if (projection.items.length !== 0 || !contractText(projection.reason_code)) {
+        throw new Error("unavailable challenge material projection must contain no bundle");
+      }
+      continue;
+    }
+    if (projection.status !== "available" || projection.reason_code !== null ||
+        projection.items.length === 0 || !Array.isArray(paper.tasks)) {
+      throw new Error("available challenge material projection is invalid");
+    }
+    for (const item of projection.items) {
+      const task = paper.tasks.find(candidate =>
+        candidate && candidate.work_item_id === item.work_item_id
+      );
+      if (!task) {
+        throw new Error("challenge material bundle has no matching inbox work item");
+      }
+      const bundle = validateChallengeMaterialBundle(item, {
+        paperId: paper.paper_id,
+        bindingId: inbox.binding_id,
+        task,
+      });
+      if (seen.has(bundle.work_item_id)) {
+        throw new Error("challenge material projection duplicates a work-item assignment");
+      }
+      seen.add(bundle.work_item_id);
+      bundles.push(bundle);
+    }
+  }
+  return Object.freeze(bundles.sort((left, right) =>
+    left.work_item_id.localeCompare(right.work_item_id)
+  ));
+}
+
+export function challengeMaterialObjectQuery(bundle, object) {
+  const exactBundle = validateChallengeMaterialBundle(bundle);
+  const exactObject = exactBundle.objects.find(candidate =>
+    candidate.object_key === object.object_key && candidate.digest === object.digest
+  );
+  if (!exactObject) {
+    throw new Error("challenge material object is not in the assigned bundle");
+  }
+  const pairs = [
+    ["bundle_hash", exactBundle.bundle_hash],
+    ["digest", exactObject.digest],
+    ["object_key", exactObject.object_key],
+    ["paper_id", exactBundle.paper_project_id],
+    ["work_item_id", exactBundle.work_item_id],
+  ];
+  return pairs
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)))
+    .join("&");
+}
+
+export async function downloadAssignedChallengeMaterials(bundle, downloadObject) {
+  if (typeof downloadObject !== "function") {
+    throw new Error("challenge material downloader is unavailable");
+  }
+  const exactBundle = validateChallengeMaterialBundle(bundle);
+  const downloaded = [];
+  for (const object of exactBundle.objects) {
+    const bytes = Buffer.from(await downloadObject(exactBundle, object));
+    if (bytes.length !== object.size_bytes || sha256Digest(bytes) !== object.digest) {
+      throw new Error("downloaded challenge material differs from frozen authority");
+    }
+    downloaded.push(Object.freeze({ descriptor: object, bytes }));
+  }
+  return Object.freeze(downloaded);
 }
 
 export function proposalInput(candidate) {
