@@ -1285,7 +1285,7 @@ fn render_paper_room_with_finality(
         unavailable("developer protocol actions")
     };
     let advanced_body = format!(
-        r#"<section class="paper-room-authority" tabindex="-1" aria-labelledby="paper-room-authority-heading"><span class="eyebrow">AUTHORITY DETAILS / 权威详情</span><h2 id="paper-room-authority-heading">Identifiers, hashes, and finality / 标识、摘要与终局</h2><dl class="paper-room-authority-facts"><div><dt>Paper ID</dt><dd><code>{}</code></dd></div><div><dt>Hepta source / Hepta 来源</dt><dd>{}</dd></div><div><dt>Author phase / 作者阶段</dt><dd><code>{}</code></dd></div><div><dt>Finality / 终局</dt><dd>{}</dd></div></dl>{}</section>{}
+        r#"<section class="paper-room-authority" tabindex="-1" aria-labelledby="paper-room-authority-heading"><span class="eyebrow">AUTHORITY DETAILS / <span lang="zh-Hans">权威详情</span></span><h2 id="paper-room-authority-heading">Identifiers, hashes, and finality / <span lang="zh-Hans">标识、摘要与终局</span></h2><dl class="paper-room-authority-facts"><div><dt>Paper ID</dt><dd><code>{}</code></dd></div><div><dt>Hepta source / <span lang="zh-Hans">Hepta 来源</span></dt><dd>{}</dd></div><div><dt>Author phase / <span lang="zh-Hans">作者阶段</span></dt><dd><code>{}</code></dd></div><div><dt>Finality / <span lang="zh-Hans">终局</span></dt><dd>{}</dd></div></dl>{}</section>{}
         <section class="grid">
           {}
           {}
@@ -1336,7 +1336,7 @@ fn render_paper_room_with_finality(
     let advanced_body = format!("{advanced_body}{after_action}");
     let artifacts = artifact_links(room, paper_id);
     let body = format!(
-        r#"<section class="hero paper-room-hero"><span class="eyebrow">PAPER ROOM · 论文作战室</span><h1>{}</h1><p>Follow the current objective; technical authority remains available below when you need to audit it. / 先完成当前目标；需要审计时再查看下方技术权威。</p></section>{}<details class="panel paper-room-advanced" id="paper-room-advanced"><summary class="paper-room-advanced-summary"><span>Advanced / 高级详情</span><small>UUIDs, hashes, authority, all controls, and complete records / UUID、摘要、权威、全部操作与完整记录</small></summary><div class="paper-room-advanced-content">{}{artifacts}<details class="panel developer-tools"><summary>Developer Tools / 开发者工具</summary><p class="muted">Exact protocol JSON remains an Alpha fallback for commands that do not yet have a safely derived form or external connector. Needing this section is a known playability gap, never a completed normal path.</p><div class="action-grid">{developer_actions}</div></details></div></details>"#,
+        r#"<section class="hero paper-room-hero"><span class="eyebrow">PAPER ROOM · <span lang="zh-Hans">论文作战室</span></span><h1>{}</h1><p>Follow the current objective; technical authority remains available below when you need to audit it. / <span lang="zh-Hans">先完成当前目标；需要审计时再查看下方技术权威。</span></p></section>{}<details class="panel paper-room-advanced" id="paper-room-advanced"><summary class="paper-room-advanced-summary"><span>Advanced / <span lang="zh-Hans">高级详情</span></span><small>UUIDs, hashes, authority, all controls, and complete records / <span lang="zh-Hans">UUID、摘要、权威、全部操作与完整记录</span></small></summary><div class="paper-room-advanced-content">{}{artifacts}<details class="panel developer-tools"><summary>Developer Tools / <span lang="zh-Hans">开发者工具</span></summary><p class="muted">Exact protocol JSON remains an Alpha fallback for commands that do not yet have a safely derived form or external connector. Needing this section is a known playability gap, never a completed normal path.</p><div class="action-grid">{developer_actions}</div></details></div></details>"#,
         escape(&title),
         basic_actions,
         advanced_body,
@@ -4097,7 +4097,7 @@ fn basic_paper_room(room: &Value, review: Option<&Value>) -> String {
         String::new()
     } else {
         format!(
-            r#"<p class="paper-room-more-blockers">{} more blocking reason(s) are listed in Advanced / 高级详情中还有 {} 项阻塞原因。</p>"#,
+            r#"<p class="paper-room-more-blockers">{} more blocking reason(s) are listed in Advanced / <span lang="zh-Hans">高级详情中还有 {} 项阻塞原因。</span></p>"#,
             additional_blockers, additional_blockers,
         )
     };
@@ -4119,13 +4119,13 @@ fn basic_paper_room(room: &Value, review: Option<&Value>) -> String {
         )
     };
     format!(
-        r#"<section class="panel paper-room-basic" aria-labelledby="paper-room-current-objective"><span class="eyebrow">BASIC / 基础模式</span><h2 id="paper-room-current-objective">{}</h2><p class="paper-room-personal-objective">{}</p><div class="paper-room-basic-grid"><section class="paper-room-blocker" aria-labelledby="paper-room-blocker-heading"><h3 id="paper-room-blocker-heading">Blocking reason / 阻塞原因</h3><p class="paper-room-blocker-reason" data-blocker-state="{}" role="status">{}</p>{}</section><section class="paper-room-next-step" aria-labelledby="paper-room-primary-action-heading"><h3 id="paper-room-primary-action-heading">Primary action / 主要操作</h3><p id="paper-room-primary-action-label">{}</p><button class="paper-room-primary-button" type="button" data-paper-room-reveal data-paper-room-primary-target="{}" aria-controls="paper-room-advanced" aria-expanded="false" aria-describedby="paper-room-primary-action-label">Open this action / 打开此操作</button></section></div></section>"#,
-        escape(objective),
-        escape(detail),
+        r#"<section class="panel paper-room-basic" aria-labelledby="paper-room-current-objective"><span class="eyebrow">BASIC / <span lang="zh-Hans">基础模式</span></span><h2 id="paper-room-current-objective">{}</h2><p class="paper-room-personal-objective">{}</p><div class="paper-room-basic-grid"><section class="paper-room-blocker" aria-labelledby="paper-room-blocker-heading"><h3 id="paper-room-blocker-heading">Blocking reason / <span lang="zh-Hans">阻塞原因</span></h3><p class="paper-room-blocker-reason" data-blocker-state="{}" role="status">{}</p>{}</section><section class="paper-room-next-step" aria-labelledby="paper-room-primary-action-heading"><h3 id="paper-room-primary-action-heading">Primary action / <span lang="zh-Hans">主要操作</span></h3><p id="paper-room-primary-action-label">{}</p><button class="paper-room-primary-button" type="button" data-paper-room-reveal data-paper-room-primary-target="{}" aria-controls="paper-room-advanced" aria-expanded="false" aria-describedby="paper-room-primary-action-label">Open this action / <span lang="zh-Hans">打开此操作</span></button></section></div></section>"#,
+        player_language_html(objective),
+        player_language_html(detail),
         blocker_state,
-        escape(blocker),
+        player_language_html(blocker),
         additional,
-        escape(&primary_action),
+        player_language_html(&primary_action),
         escape(primary_target),
     )
 }
@@ -8091,25 +8091,37 @@ pub(crate) fn practice(
             } else {
                 "upcoming"
             };
+            let aria_current = if status == "current" {
+                r#" aria-current="step""#
+            } else {
+                ""
+            };
+            let status_label = match status {
+                "done" => "Completed / 已完成",
+                "current" => "Current / 当前",
+                _ => "Upcoming / 即将开始",
+            };
             format!(
-                r#"<li data-practice-step-state="{}"><span>{} · {}</span><strong>{}</strong></li>"#,
+                r#"<li data-practice-step-state="{}"{}><span class="practice-step-meta">{} · {}</span><strong>{}</strong><span class="practice-step-status">{}</span></li>"#,
                 status,
+                aria_current,
                 step,
                 escape(role),
-                escape(objective),
+                player_language_html(objective),
+                player_language_html(status_label),
             )
         })
         .collect::<String>();
 
     let bridge_prerequisite = || {
-        r#"<section class="primary-action practice-prerequisite"><span class="pill">PAIRING REQUIRED · 需要配对</span><h2>Pair exactly one active Agent Bridge first</h2><p>Practice uses the same owner-bound Bridge safety boundary as a real Raid. Pair through the ordinary Research Lobby flow; the browser cannot invent or choose a binding.</p><a class="button practice-primary-action" href="/league">Open Agent pairing / 前往 Agent 配对</a></section>"#.to_string()
+        r#"<section class="primary-action practice-prerequisite"><span class="pill">PAIRING REQUIRED · <span lang="zh-Hans">需要配对</span></span><h2>Pair exactly one active Agent Bridge first</h2><p>Practice uses the same owner-bound Bridge safety boundary as a real Raid. Pair through the ordinary Research Lobby flow; the browser cannot invent or choose a binding.</p><a class="button practice-primary-action" href="/league">Open Agent pairing / <span lang="zh-Hans">前往 Agent 配对</span></a></section>"#.to_string()
     };
     let primary = match state {
         None if !binding_ready => bridge_prerequisite(),
         None => practice_start_form("Start the 15–20 minute practice / 开始 15–20 分钟练习"),
         Some(view) if view.expired && !binding_ready => bridge_prerequisite(),
         Some(view) if view.expired => format!(
-            r#"<section class="primary-action practice-expired"><span class="pill">EXPIRED · 已过期</span><h2>This practice window ended</h2><p>Your partial choices stay local and non-portable. Start a fresh practice when ready.</p>{}</section>"#,
+            r#"<section class="primary-action practice-expired"><span class="pill">EXPIRED · <span lang="zh-Hans">已过期</span></span><h2>This practice window ended</h2><p>Your partial choices stay local and non-portable. Start a fresh practice when ready.</p>{}</section>"#,
             practice_start_form("Start a fresh practice / 开始新的练习"),
         ),
         Some(view) if !binding_ready && !view.stage.is_terminal() => bridge_prerequisite(),
@@ -8137,7 +8149,7 @@ pub(crate) fn practice(
                 ],
                 "Record the Evidence assessment / 记录证据判断",
             ),
-            PracticeStageV1::ExperimentWaitingBridge => r#"<section class="primary-action practice-agent-wait" data-practice-agent-state="waiting"><span class="pill">EXPERIMENT · AGENT HANDOFF</span><h2>Run the bounded practice check / 执行受限练习检查</h2><p>The browser cannot impersonate an Agent or fabricate a result. This slice pauses here until the separately signed Agent Bridge claims and completes the local practice task.</p><a class="button practice-primary-action" href="/league/practice">Check Agent status / 检查 Agent 状态</a></section>"#.to_string(),
+            PracticeStageV1::ExperimentWaitingBridge => r#"<section class="primary-action practice-agent-wait" data-practice-agent-state="waiting"><span class="pill">EXPERIMENT · AGENT HANDOFF</span><h2>Run the bounded practice check / <span lang="zh-Hans">执行受限练习检查</span></h2><p>The browser cannot impersonate an Agent or fabricate a result. This slice pauses here until the separately signed Agent Bridge claims and completes the local practice task.</p><a class="button practice-primary-action" href="/league/practice">Check Agent status / <span lang="zh-Hans">检查 Agent 状态</span></a></section>"#.to_string(),
             PracticeStageV1::ExperimentInterpretation => practice_choice_form(
                 view,
                 "Experiment · Interpret the result / 实验员：解读结果",
@@ -8162,14 +8174,14 @@ pub(crate) fn practice(
                 ],
                 "Finish this practice / 完成本次练习",
             ),
-            PracticeStageV1::Completed if !binding_ready => r#"<section class="primary-action practice-complete"><span class="pill">PRACTICE COMPLETE · 练习完成</span><h2>You previewed all three Author roles</h2><p>This completion is local and non-portable. Pair one active Agent Bridge before starting another practice.</p><a class="button practice-primary-action" href="/league">Open Agent pairing / 前往 Agent 配对</a></section>"#.to_string(),
+            PracticeStageV1::Completed if !binding_ready => r#"<section class="primary-action practice-complete"><span class="pill">PRACTICE COMPLETE · <span lang="zh-Hans">练习完成</span></span><h2>You previewed all three Author roles</h2><p>This completion is local and non-portable. Pair one active Agent Bridge before starting another practice.</p><a class="button practice-primary-action" href="/league">Open Agent pairing / <span lang="zh-Hans">前往 Agent 配对</span></a></section>"#.to_string(),
             PracticeStageV1::Completed => format!(
-                r#"<section class="primary-action practice-complete"><span class="pill">PRACTICE COMPLETE · 练习完成</span><h2>You previewed all three Author roles</h2><p>This completion is intentionally local and non-portable. It does not qualify an account or alter any score, rank, reward, or scientific record.</p>{}</section>"#,
+                r#"<section class="primary-action practice-complete"><span class="pill">PRACTICE COMPLETE · <span lang="zh-Hans">练习完成</span></span><h2>You previewed all three Author roles</h2><p>This completion is intentionally local and non-portable. It does not qualify an account or alter any score, rank, reward, or scientific record.</p>{}</section>"#,
                 practice_start_form("Practice again / 再练一次"),
             ),
             PracticeStageV1::Abandoned if !binding_ready => bridge_prerequisite(),
             PracticeStageV1::Abandoned => format!(
-                r#"<section class="primary-action practice-abandoned"><span class="pill">LEFT PRACTICE · 已退出练习</span><h2>No authoritative state was created</h2>{}</section>"#,
+                r#"<section class="primary-action practice-abandoned"><span class="pill">LEFT PRACTICE · <span lang="zh-Hans">已退出练习</span></span><h2>No authoritative state was created</h2>{}</section>"#,
                 practice_start_form("Start again / 重新开始"),
             ),
             PracticeStageV1::Expired => unreachable!("clock expiry handled above"),
@@ -8180,21 +8192,21 @@ pub(crate) fn practice(
         .filter(|view| !view.terminal && !view.expired)
         .map(|view| {
             format!(
-                r#"<details class="panel practice-leave"><summary>Leave this practice / 退出本次练习</summary><p>Leaving is final for this local practice session and creates no portable completion.</p><form class="practice-abandon-form" data-practice-version="{}"><button class="danger" type="submit">Leave practice / 退出练习</button><output></output></form></details>"#,
+                r#"<details class="panel practice-leave"><summary>Leave this practice / <span lang="zh-Hans">退出本次练习</span></summary><p>Leaving is final for this local practice session and creates no portable completion.</p><form class="practice-abandon-form" data-practice-version="{}"><button class="danger" type="submit">Leave practice / <span lang="zh-Hans">退出练习</span></button><output></output></form></details>"#,
                 view.version,
             )
         })
         .unwrap_or_default();
 
     let status = state.map_or_else(
-        || "Not started / 尚未开始".to_string(),
+        || player_language_html("Not started / 尚未开始"),
         |view| {
             if view.expired {
-                "Expired / 已过期".to_string()
+                player_language_html("Expired / 已过期")
             } else {
                 format!(
                     "{} · step {}/{} · about {} min left",
-                    practice_stage_label(view.stage),
+                    player_language_html(practice_stage_label(view.stage)),
                     view.step,
                     view.total_steps,
                     (view.remaining_seconds + 59) / 60,
@@ -8203,14 +8215,14 @@ pub(crate) fn practice(
         },
     );
     let body = format!(
-        r#"<section class="hero practice-hero"><span class="eyebrow">PRACTICE_UNRANKED · 单人非排位练习</span><h1>Evidence Audit: first role preview</h1><p>{}，用约 15–20 分钟依次体验 Captain、Evidence、Experiment。页面刷新后会从服务器保存的同一步继续。</p><p class="status verified">{}</p></section>
-        <section class="panel practice-boundary"><h2>Practice boundary / 练习边界</h2><ul><li>No scientific finality or Challenge activation / 不产生科研最终性或挑战激活</li><li>No qualification, ranking, score, reward, or economic authority / 不产生资格、排行、积分、奖励或经济权限</li><li>No automatic submission; every browser step requires your explicit action / 不自动提交，每个浏览器步骤都需你明确操作</li><li>Completion is not portable to a real Raid / 练习完成状态不可迁移到正式远征</li></ul></section>
-        <section class="panel practice-progress"><h2>Five guided steps / 五步引导</h2><ol>{}</ol></section>
+        r#"<section class="hero practice-hero"><span class="eyebrow">PRACTICE_UNRANKED · <span lang="zh-Hans">单人非排位练习</span></span><h1>Evidence Audit: first role preview</h1><p>{}<span lang="zh-Hans">，用约 15–20 分钟依次体验 Captain、Evidence、Experiment。页面刷新后会从服务器保存的同一步继续。</span></p><p class="status verified">{}</p></section>
+        <section class="panel practice-boundary"><h2>Practice boundary / <span lang="zh-Hans">练习边界</span></h2><ul><li>No scientific finality or Challenge activation / <span lang="zh-Hans">不产生科研最终性或挑战激活</span></li><li>No qualification, ranking, score, reward, or economic authority / <span lang="zh-Hans">不产生资格、排行、积分、奖励或经济权限</span></li><li>No automatic submission; every browser step requires your explicit action / <span lang="zh-Hans">不自动提交，每个浏览器步骤都需你明确操作</span></li><li>Completion is not portable to a real Raid / <span lang="zh-Hans">练习完成状态不可迁移到正式远征</span></li></ul></section>
+        <section class="panel practice-progress"><h2>Five guided steps / <span lang="zh-Hans">五步引导</span></h2><ol role="list">{}</ol></section>
         {}
         {}
-        <p><a href="/league">Back to Research Lobby / 返回研究大厅</a></p>"#,
+        <p><a href="/league">Back to Research Lobby / <span lang="zh-Hans">返回研究大厅</span></a></p>"#,
         escape(&identity.display_name),
-        escape(&status),
+        status,
         progress,
         primary,
         leave,
@@ -8239,7 +8251,7 @@ fn practice_stage_label(stage: PracticeStageV1) -> &'static str {
 fn practice_start_form(label: &str) -> String {
     format!(
         r#"<form class="practice-start-form primary-action"><button class="practice-primary-action" type="submit">{}</button><output></output></form>"#,
-        escape(label),
+        player_language_html(label),
     )
 }
 
@@ -8257,18 +8269,18 @@ fn practice_choice_form(
             format!(
                 r#"<label class="practice-choice"><input type="radio" name="choice" value="{}" required><span>{}</span></label>"#,
                 escape(value),
-                escape(label),
+                player_language_html(label),
             )
         })
         .collect::<String>();
     format!(
-        r#"<form class="practice-advance-form primary-action" data-practice-action="{}" data-practice-version="{}"><h2>{}</h2><p>{}</p><fieldset><legend>Choose one / 请选择一项</legend>{}</fieldset><button class="practice-primary-action" type="submit">{}</button><output></output></form>"#,
+        r#"<form class="practice-advance-form primary-action" data-practice-action="{}" data-practice-version="{}"><h2>{}</h2><p>{}</p><fieldset><legend>Choose one / <span lang="zh-Hans">请选择一项</span></legend>{}</fieldset><button class="practice-primary-action" type="submit">{}</button><output></output></form>"#,
         escape(action),
         view.version,
-        escape(title),
+        player_language_html(title),
         escape(prompt),
         options,
-        escape(button),
+        player_language_html(button),
     )
 }
 
@@ -8360,7 +8372,7 @@ fn page(title: &str, player: &str, content: &str, authenticated: bool) -> Respon
         ""
     };
     let document = format!(
-        r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{}</title><link rel="stylesheet" href="/assets/paper-raid.css"><script src="/assets/paper-raid.js" defer></script></head><body data-authenticated="{}"><header><a href="/league/start">HEPTA // PAPER RAID</a><span>{}</span></header><main>{}{}<aside id="toast" aria-live="polite" hidden></aside></main><footer>Hepta is the research record. Nakama is the ordered collaboration timeline.</footer></body></html>"#,
+        r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{}</title><link rel="stylesheet" href="/assets/paper-raid.css"><script src="/assets/paper-raid.js" defer></script></head><body data-authenticated="{}"><header><a href="/league/start">HEPTA // PAPER RAID</a><span>{}</span></header><main>{}{}<aside id="toast" aria-hidden="true" hidden></aside></main><footer>Hepta is the research record. Nakama is the ordered collaboration timeline.</footer></body></html>"#,
         escape(title),
         authenticated,
         escape(player),
@@ -8666,6 +8678,23 @@ fn scalar(value: Option<&Value>) -> String {
     }
 }
 
+fn player_language_html(input: &str) -> String {
+    let Some((english, chinese)) = input.split_once(" / ") else {
+        return escape(input);
+    };
+    if !chinese
+        .chars()
+        .any(|character| ('\u{3400}'..='\u{9fff}').contains(&character))
+    {
+        return escape(input);
+    }
+    format!(
+        r#"{} / <span lang="zh-Hans">{}</span>"#,
+        escape(english),
+        escape(chinese),
+    )
+}
+
 pub fn escape(input: &str) -> String {
     let mut escaped = String::with_capacity(input.len());
     for character in input.chars() {
@@ -8682,19 +8711,20 @@ pub fn escape(input: &str) -> String {
 }
 
 const CSS: &str = r#"
-:root{color-scheme:dark;--bg:#070b12;--panel:#101826;--line:#253653;--text:#e9f2ff;--muted:#8ba0ba;--cyan:#55e6ff;--amber:#ffca68;--pink:#ff6ba8}
+:root{color-scheme:dark;--bg:#070b12;--panel:#101826;--line:#5f7da6;--text:#e9f2ff;--muted:#8ba0ba;--cyan:#55e6ff;--amber:#ffca68;--pink:#ff6ba8}
 *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 20% 0,#11213a 0,#070b12 42%);color:var(--text);font:15px/1.55 Inter,ui-sans-serif,system-ui,sans-serif;min-height:100vh}
 header{align-items:center;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;padding:16px clamp(18px,4vw,56px);position:sticky;top:0;background:#070b12e8;backdrop-filter:blur(12px)}header a{color:var(--cyan);font-weight:900;letter-spacing:.12em;text-decoration:none}header span,footer{color:var(--muted)}
-main{margin:auto;max-width:1180px;padding:clamp(24px,5vw,64px) clamp(16px,4vw,44px)}.hero{border-left:4px solid var(--cyan);padding:8px 0 12px 22px;margin-bottom:28px}.eyebrow{color:var(--amber);font-size:12px;font-weight:800;letter-spacing:.16em}.hero h1{font-size:clamp(32px,7vw,72px);line-height:1;margin:10px 0}.hero p{color:var(--muted);max-width:760px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:14px 0}.card,.panel{background:linear-gradient(145deg,#142036,#0d1421);border:1px solid var(--line);border-radius:14px;padding:18px;min-height:120px}.card h2,.panel h2{font-size:14px;letter-spacing:.05em;margin:0 0 12px}.card p{color:var(--text)}.unavailable{border-style:dashed;color:var(--muted)}.muted,.action p{color:var(--muted)}.dot{background:var(--pink);border-radius:50%;display:inline-block;height:8px;margin-right:8px;width:8px}.pill,.status{border:1px solid var(--amber);border-radius:999px;color:var(--amber);display:inline-block;font-size:12px;font-weight:800;padding:4px 9px}.status{padding:6px 12px}.status.missing{border-color:var(--pink);color:var(--pink)}.source-state{color:var(--muted);font-size:12px}.roster,.record-list{display:grid;gap:10px;list-style:none;margin:0;padding:0}.roster li{align-items:center;border-bottom:1px solid var(--line);display:grid;gap:8px;grid-template-columns:90px 1fr 1fr 1fr;padding:10px 0}.roster span{color:var(--muted);overflow-wrap:anywhere}.record-list li,.record-list a{align-items:center;display:flex;gap:8px;justify-content:space-between}.record-list a{color:var(--text);text-decoration:none;width:100%}.action-grid{display:grid;gap:14px;grid-template-columns:repeat(2,minmax(0,1fr))}.action{border:1px solid var(--line);border-radius:12px;padding:16px}.action h3{margin-top:0}form{display:grid;gap:12px}label{color:var(--muted);display:grid;font-size:12px;gap:6px}input,textarea,select,button{background:#07101d;border:1px solid var(--line);border-radius:8px;color:var(--text);font:inherit;padding:10px 12px}textarea{font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;resize:vertical}button{background:#12334a;border-color:var(--cyan);color:var(--cyan);cursor:pointer;font-weight:800}button:hover{filter:brightness(1.2)}button.danger{border-color:var(--pink);color:var(--pink)}button:disabled{cursor:wait;opacity:.55}:where(a,button,input,textarea,select,summary):focus-visible{outline:3px solid var(--amber);outline-offset:3px}output{color:var(--amber);font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere;white-space:pre-wrap}output.result-error{color:var(--pink)}output.result-ok{color:var(--amber)}output[data-player-message=friendly]{font-family:Inter,ui-sans-serif,system-ui,sans-serif;font-size:13px}.player-error-details{border-left:2px solid var(--line);margin-top:4px;padding-left:10px}.player-error-details>summary{color:var(--muted);cursor:pointer;font-size:12px;font-weight:700}.player-error-details[open]>summary{color:var(--cyan)}.player-error-raw{display:block;font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;margin-top:7px;white-space:pre-wrap}.narrow{margin:auto;max-width:540px}#toast{background:#101826;border:1px solid var(--line);border-radius:10px;bottom:18px;display:block;max-width:min(520px,90vw);padding:12px 16px;position:fixed;right:18px;z-index:10}#toast[hidden]{display:none}code{color:var(--cyan);overflow-wrap:anywhere}footer{padding:28px;text-align:center}
+main{margin:auto;max-width:1180px;padding:clamp(24px,5vw,64px) clamp(16px,4vw,44px)}.hero{border-left:4px solid var(--cyan);padding:8px 0 12px 22px;margin-bottom:28px}.eyebrow{color:var(--amber);font-size:12px;font-weight:800;letter-spacing:.16em}.hero h1{font-size:clamp(32px,7vw,72px);line-height:1;margin:10px 0}.hero p{color:var(--muted);max-width:760px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:14px 0}.card,.panel{background:linear-gradient(145deg,#142036,#0d1421);border:1px solid var(--line);border-radius:14px;padding:18px;min-height:120px}.card h2,.panel h2{font-size:14px;letter-spacing:.05em;margin:0 0 12px}.card p{color:var(--text)}.unavailable{border-style:dashed;color:var(--muted)}.muted,.action p{color:var(--muted)}.dot{background:var(--pink);border-radius:50%;display:inline-block;height:8px;margin-right:8px;width:8px}.pill,.status{border:1px solid var(--amber);border-radius:999px;color:var(--amber);display:inline-block;font-size:12px;font-weight:800;padding:4px 9px}.status{padding:6px 12px}.status.missing{border-color:var(--pink);color:var(--pink)}.source-state{color:var(--muted);font-size:12px}.roster,.record-list{display:grid;gap:10px;list-style:none;margin:0;padding:0}.roster li{align-items:center;border-bottom:1px solid var(--line);display:grid;gap:8px;grid-template-columns:90px 1fr 1fr 1fr;padding:10px 0}.roster span{color:var(--muted);overflow-wrap:anywhere}.record-list li,.record-list a{align-items:center;display:flex;gap:8px;justify-content:space-between}.record-list a{color:var(--text);text-decoration:none;width:100%}.action-grid{display:grid;gap:14px;grid-template-columns:repeat(2,minmax(0,1fr))}.action{border:1px solid var(--line);border-radius:12px;padding:16px}.action h3{margin-top:0}form{display:grid;gap:12px}label{color:var(--muted);display:grid;font-size:12px;gap:6px}input,textarea,select,button{background:#07101d;border:1px solid var(--line);border-radius:8px;color:var(--text);font:inherit;padding:10px 12px}textarea{font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;resize:vertical}button{background:#12334a;border-color:var(--cyan);color:var(--cyan);cursor:pointer;font-weight:800}button:hover{filter:brightness(1.2)}button.danger{border-color:var(--pink);color:var(--pink)}button:disabled{cursor:wait;opacity:.55}:where(a,button,input,textarea,select,summary,[tabindex]):focus-visible{outline:3px solid var(--amber);outline-offset:3px}output{color:var(--amber);font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere;white-space:pre-wrap}output.result-error{color:var(--pink)}output.result-ok{color:var(--amber)}output[data-player-message=friendly]{font-family:Inter,ui-sans-serif,system-ui,sans-serif;font-size:13px}.player-error-details{border-left:2px solid var(--line);margin-top:4px;padding-left:10px}.player-error-details>summary{color:var(--muted);cursor:pointer;font-size:12px;font-weight:700}.player-error-details[open]>summary{color:var(--cyan)}.player-error-raw{display:block;font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;margin-top:7px;white-space:pre-wrap}.narrow{margin:auto;max-width:540px}#toast{background:#101826;border:1px solid var(--line);border-radius:10px;bottom:18px;display:block;max-width:min(520px,90vw);padding:12px 16px;position:fixed;right:18px;z-index:10}#toast[hidden]{display:none}code{color:var(--cyan);overflow-wrap:anywhere}footer{padding:28px;text-align:center}
 .key-vault{margin-bottom:18px;min-height:auto}.key-vault summary{color:var(--cyan);cursor:pointer;font-weight:800}.key-vault form{margin:14px 0}.human-key-status{display:block;margin-top:10px}.challenge-rules{display:grid;gap:7px;margin:12px 0}.challenge-rules div{border-bottom:1px solid var(--line);display:grid;gap:4px;padding:5px 0}.challenge-rules dt{color:var(--muted);font-size:11px}.challenge-rules dd{margin:0}
   .mission-board{display:grid;gap:18px;grid-template-columns:minmax(220px,.8fr) minmax(0,2fr);margin-bottom:20px}.mission-board h2{font-size:24px;letter-spacing:0;margin:6px 0}.raid-steps{display:grid;gap:8px;grid-template-columns:repeat(5,minmax(0,1fr));list-style:none;margin:0;padding:0}.raid-steps li{border:1px solid var(--line);border-radius:10px;display:grid;gap:8px;padding:12px}.raid-steps li>span{color:var(--muted);font-size:11px;font-weight:900}.raid-steps strong{display:block}.raid-steps p{color:var(--muted);font-size:11px;line-height:1.35;margin:4px 0 0}.raid-steps [data-step-state=current]{background:#12334a;border-color:var(--cyan)}.raid-steps [data-step-state=current]>span{color:var(--cyan)}.raid-steps [data-step-state=complete]{border-color:#3b8f78}.raid-steps [data-step-state=complete]>span{color:#67e8b5}.role-kit{border:1px solid var(--line);border-radius:10px;display:grid;gap:7px;margin:0;padding:12px}.role-kit legend{color:var(--amber);font-size:12px;font-weight:800;padding:0 6px}.role-kit span{color:var(--muted);font-size:12px}.role-kit strong{color:var(--text)}.role-choice{align-items:start;border:1px solid var(--line);border-radius:8px;display:grid;gap:9px;grid-template-columns:auto 1fr;margin:0;padding:9px}.role-choice input{margin-top:3px}.role-choice small{display:block;line-height:1.35;margin-top:3px}.role-choice[data-preference-rank="1"]{border-color:var(--cyan)}.advanced-action summary{color:var(--muted);cursor:pointer;font-weight:800}.advanced-action[open] summary{color:var(--cyan);margin-bottom:12px}.continue-raid{border-color:var(--cyan);margin-bottom:18px}.button{border:1px solid var(--cyan);border-radius:8px;color:var(--cyan);display:inline-block;font-weight:800;padding:10px 12px;text-decoration:none}.guided-action{border:1px solid var(--cyan);border-radius:12px;padding:16px}.guided-action.blocked{border-color:var(--amber)}.live-status{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.live-status span{border:1px solid var(--line);border-radius:999px;padding:6px 10px}.live-connection[data-state=live]{border-color:#3b8f78;color:#67e8b5}.live-connection[data-state=catching-up],.live-connection[data-state=reconnecting]{border-color:var(--amber);color:var(--amber)}.live-participants,.live-events{display:grid;gap:8px;list-style:none;padding:0}.live-participants li,.live-events li{border:1px solid var(--line);border-radius:8px;padding:10px}.live-participants [data-connected=true]{color:#67e8b5}.live-participants [data-connected=false]{color:var(--muted)}
 .paper-room-hero{margin-bottom:18px}.paper-room-basic{border-color:var(--cyan);display:grid;gap:16px;margin-bottom:16px;min-height:auto}.paper-room-basic>h2{font-size:clamp(24px,4vw,38px);letter-spacing:0;margin:0}.paper-room-personal-objective{font-size:clamp(15px,2vw,18px);margin:0;max-width:70ch}.paper-room-basic-grid{display:grid;gap:14px;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.paper-room-blocker,.paper-room-next-step{border:1px solid var(--line);border-radius:12px;min-width:0;padding:14px}.paper-room-blocker h3,.paper-room-next-step h3{font-size:13px;margin:0 0 8px}.paper-room-blocker-reason{font-weight:700;margin:0;overflow-wrap:anywhere}.paper-room-blocker-reason[data-blocker-state=blocked]{color:var(--amber)}.paper-room-blocker-reason[data-blocker-state=ready]{color:#67e8b5}.paper-room-more-blockers{color:var(--muted);font-size:12px;margin:8px 0 0}.paper-room-next-step{align-content:start;display:grid;gap:10px}.paper-room-next-step p{margin:0;overflow-wrap:anywhere}.paper-room-primary-button{justify-self:start;min-height:44px;max-width:100%;scroll-margin-block:28px}.paper-room-advanced{margin-top:16px;min-height:auto}.paper-room-advanced-summary{cursor:pointer;font-size:16px;font-weight:800}.paper-room-advanced-summary span,.paper-room-advanced-summary small{display:block}.paper-room-advanced-summary small{color:var(--muted);font-size:12px;font-weight:500;margin-top:4px}.paper-room-advanced[open]>.paper-room-advanced-summary{color:var(--cyan);margin-bottom:18px}.paper-room-advanced-content{display:grid;gap:16px;min-width:0}.paper-room-authority{border:1px solid var(--line);border-radius:12px;padding:14px}.paper-room-authority>h2{font-size:20px;margin:7px 0 14px}.paper-room-authority-facts{display:grid;gap:8px;grid-template-columns:repeat(2,minmax(0,1fr));margin:0 0 14px}.paper-room-authority-facts div{border-bottom:1px solid var(--line);display:grid;gap:3px;min-width:0;padding:7px}.paper-room-authority-facts dt{color:var(--muted);font-size:11px}.paper-room-authority-facts dd{margin:0;overflow-wrap:anywhere}.raid-command-center{border-color:var(--cyan);display:grid;gap:20px;grid-template-columns:minmax(0,1.3fr) minmax(260px,.7fr);margin-bottom:18px}.phase-objective h2{font-size:clamp(22px,4vw,36px);letter-spacing:0;margin:7px 0}.phase-readiness ul{display:grid;gap:7px;margin:0 0 8px;padding-left:20px}.phase-readiness .ready{color:#67e8b5}.projected-actions{margin-top:14px}.projected-actions ul{display:flex;flex-wrap:wrap;gap:6px;list-style:none;margin:7px 0 0;padding:0}.projected-actions li{border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:11px;padding:4px 8px}.primary-action{background:#0b2637;border:1px solid var(--cyan);border-radius:12px;padding:16px;scroll-margin-block:28px}.work-item-panel,.research-session-panel,.revision-panel,.material-panel{margin:14px 0}.work-board{display:grid;gap:10px}.work-card,.session-card,.release-approval{border:1px solid var(--line);border-radius:10px;padding:14px}.work-card h3,.session-card h3{margin:8px 0}.accepted-artifact-field[hidden]{display:none}.session-control-stack{display:grid;gap:9px}.materialization-summary{border:1px solid #3b8f78;border-radius:10px;margin:12px 0;padding:14px}.materialization-summary.missing{border-color:var(--pink)}.materialization-summary.pending{border-color:var(--line)}.materialized-sections{display:grid;gap:7px;list-style:none;margin:10px 0 0;padding:0}.materialized-sections li{border-top:1px solid var(--line);display:grid;gap:4px;padding-top:8px}.materialized-sections span,.materialized-sections small{color:var(--muted)}.release-author{border:1px solid var(--line);border-radius:8px;display:grid;gap:8px;margin:9px 0;padding:10px}.release-author legend,fieldset>legend{color:var(--amber);font-size:12px;font-weight:800}.developer-tools{margin-top:22px}.developer-tools>summary{color:var(--muted);cursor:pointer;font-size:15px;font-weight:800}.developer-tools[open]>summary{color:var(--cyan);margin-bottom:12px}.eligibility-grid{display:grid;gap:5px;grid-template-columns:repeat(2,minmax(0,1fr));list-style:none;margin:10px 0 0;padding:0}.eligibility-grid li{border:1px solid var(--line);border-radius:7px;display:flex;font-size:11px;gap:6px;justify-content:space-between;padding:6px}.eligibility-grid [data-eligible=true]{border-color:#3b8f78;color:#67e8b5}.eligibility-grid [data-eligible=false]{color:var(--muted)}.status.verified{border-color:#3b8f78;color:#67e8b5}.ticket-list .ticket-card{align-items:stretch;display:grid;gap:8px}.ticket-card>div{display:flex;gap:8px;justify-content:space-between}.ticket-card form{display:block}.review-queue-empty{text-align:center}.review-queue-empty .button{margin-top:12px}.review-boundary{border-color:var(--cyan);display:grid;gap:18px;grid-template-columns:2fr 1fr;margin-bottom:18px}.review-boundary dl,.review-facts{display:grid;gap:7px;margin:0}.review-boundary dl div,.review-facts div{border-bottom:1px solid var(--line);display:grid;gap:4px;padding:7px 0}.review-boundary dt,.review-facts dt{color:var(--muted);font-size:11px}.review-boundary dd,.review-facts dd{margin:0;overflow-wrap:anywhere}.review-queue-grid{display:grid;gap:16px}.review-queue-card>header{align-items:start;background:none;border:0;display:flex;gap:12px;justify-content:space-between;padding:0;position:static}.review-queue-card>header h2{font-size:24px;letter-spacing:0;margin:6px 0 12px}.review-facts{grid-template-columns:repeat(2,minmax(0,1fr));margin:16px 0}.review-columns{display:grid;gap:14px;grid-template-columns:repeat(2,minmax(0,1fr))}.review-columns>section{border:1px solid var(--line);border-radius:10px;padding:13px}.review-columns h3{font-size:12px;margin:0 0 10px}.review-assignments{display:grid;gap:9px;list-style:none;margin:0;padding:0}.review-assignments li{align-items:center;display:flex;gap:10px;justify-content:space-between}.review-assignments span,.review-open-slots small{color:var(--muted);display:block;font-size:11px}.review-open-slots{display:grid;gap:8px}.review-claim-form{align-items:center;border-bottom:1px solid var(--line);display:grid;gap:8px;grid-template-columns:1fr auto;padding:8px 0}.review-claim-form output{grid-column:1/-1}.review-protocol-gap{border-color:var(--amber);margin-top:18px}.review-protocol-gap li{margin:6px 0}.challenge-availability{border-left:3px solid var(--cyan);padding-left:10px}.challenge[data-challenge-status=closed] .challenge-availability,.challenge[data-challenge-status=draft] .challenge-availability,.challenge[data-challenge-status=unavailable] .challenge-availability{border-color:var(--amber);color:var(--muted)}.review-artifact-list{display:grid;gap:10px;list-style:none;margin:14px 0 0;padding:0}.review-artifact-item{align-items:center;border:1px solid var(--line);border-radius:10px;display:flex;gap:14px;justify-content:space-between;padding:13px}.review-artifact-item>div:first-child{display:grid;gap:4px;min-width:0}.review-artifact-filename{overflow-wrap:anywhere}.review-artifact-item span,.review-artifact-item small{color:var(--muted)}.review-artifact-actions{display:flex;flex-wrap:wrap;gap:8px}.review-artifact-actions .button{margin:0}
 .role-resource-panel{border-color:#3b8f78;margin:14px 0}.role-resource-panel .facts{display:grid;gap:8px;grid-template-columns:repeat(3,minmax(0,1fr));margin:12px 0}.role-resource-panel .facts article{border:1px solid var(--line);border-radius:9px;display:grid;gap:2px;min-height:auto;padding:10px}.role-resource-panel .facts strong{color:#67e8b5;font-size:20px}.role-resource-panel .facts span{color:var(--muted);font-size:11px}
 .challenge-ruleset-panel{border-color:var(--amber);display:grid;gap:16px;margin-bottom:18px}.challenge-ruleset-header{display:grid;gap:16px;grid-template-columns:minmax(220px,1fr) minmax(300px,1.2fr)}.challenge-ruleset-header h2{font-size:24px;margin:8px 0}.challenge-ruleset-facts{display:grid;gap:6px;grid-template-columns:repeat(2,minmax(0,1fr));margin:0}.challenge-ruleset-facts div{border-bottom:1px solid var(--line);display:grid;gap:3px;padding:6px}.challenge-ruleset-facts dt{color:var(--muted);font-size:11px}.challenge-ruleset-facts dd{margin:0}.challenge-clock,.challenge-outcome,.challenge-victory{border:1px solid var(--line);border-radius:10px;padding:13px}.challenge-clock strong,.challenge-outcome strong{display:block;font-size:18px;margin-top:5px}.challenge-clock p,.challenge-outcome p{color:var(--muted);margin-bottom:0}.challenge-victory ul,.challenge-phase-gates ol,.challenge-phase-gates ul{display:grid;gap:6px;margin:8px 0;padding-left:22px}.challenge-phase-gates summary,.challenge-terminal-controls summary{color:var(--cyan);cursor:pointer;font-weight:800}.challenge-terminal-grid{display:grid;gap:12px;grid-template-columns:repeat(2,minmax(0,1fr));margin-top:12px}.challenge-terminal-grid form{border:1px solid var(--line);border-radius:10px;padding:12px}.challenge-countdown[data-state=active]{color:#67e8b5}.challenge-countdown[data-state=overtime]{color:var(--amber)}.challenge-countdown[data-state=expired]{color:var(--pink)}
-.practice-entry{border-color:#3b8f78;margin-bottom:18px}.practice-entry .button{margin-top:8px}.practice-boundary{border-color:var(--amber);margin-bottom:18px}.practice-boundary ul{display:grid;gap:7px;margin:0;padding-left:22px}.practice-progress{margin-bottom:18px}.practice-progress ol{display:grid;gap:8px;grid-template-columns:repeat(5,minmax(0,1fr));list-style:none;margin:0;padding:0}.practice-progress li{border:1px solid var(--line);border-radius:10px;display:grid;gap:5px;padding:11px}.practice-progress li span{color:var(--muted);font-size:11px}.practice-progress [data-practice-step-state=current]{background:#12334a;border-color:var(--cyan)}.practice-progress [data-practice-step-state=current] span{color:var(--cyan)}.practice-progress [data-practice-step-state=done]{border-color:#3b8f78}.practice-progress [data-practice-step-state=done] span{color:#67e8b5}.practice-choice{align-items:start;border:1px solid var(--line);border-radius:9px;display:grid;gap:10px;grid-template-columns:auto 1fr;padding:10px}.practice-choice input{margin-top:3px}.practice-advance-form,.practice-agent-wait,.practice-complete,.practice-expired,.practice-abandoned{margin-bottom:18px}.practice-advance-form fieldset{border:0;display:grid;gap:8px;margin:0;padding:0}.practice-primary-action{justify-self:start}.practice-leave{min-height:auto}.practice-leave summary{color:var(--muted);cursor:pointer;font-weight:800}.practice-leave[open] summary{color:var(--pink);margin-bottom:12px}
+.practice-entry{border-color:#3b8f78;margin-bottom:18px}.practice-entry .button{margin-top:8px}.practice-boundary{border-color:var(--amber);margin-bottom:18px}.practice-boundary ul{display:grid;gap:7px;margin:0;padding-left:22px}.practice-progress{margin-bottom:18px}.practice-progress ol{display:grid;gap:8px;grid-template-columns:repeat(5,minmax(0,1fr));list-style:none;margin:0;padding:0}.practice-progress li{border:1px solid var(--line);border-radius:10px;display:grid;gap:5px;padding:11px}.practice-progress li span{color:var(--muted);font-size:11px}.practice-progress .practice-step-status{font-weight:800}.practice-progress [data-practice-step-state=current]{background:#12334a;border-color:var(--cyan)}.practice-progress [data-practice-step-state=current] span{color:var(--cyan)}.practice-progress [data-practice-step-state=done]{border-color:#3b8f78}.practice-progress [data-practice-step-state=done] span{color:#67e8b5}.practice-choice{align-items:start;border:1px solid var(--line);border-radius:9px;display:grid;gap:10px;grid-template-columns:auto 1fr;padding:10px}.practice-choice input{margin-top:3px}.practice-advance-form,.practice-agent-wait,.practice-complete,.practice-expired,.practice-abandoned{margin-bottom:18px}.practice-advance-form fieldset{border:0;display:grid;gap:8px;margin:0;padding:0}.practice-primary-action{justify-self:start}.practice-leave{min-height:auto}.practice-leave summary{color:var(--muted);cursor:pointer;font-weight:800}.practice-leave[open] summary{color:var(--pink);margin-bottom:12px}
 @media(max-width:820px){.grid,.action-grid,.mission-board,.raid-steps,.practice-progress ol,.paper-room-basic-grid,.paper-room-authority-facts,.raid-command-center,.review-boundary,.review-facts,.review-columns,.challenge-ruleset-header,.challenge-ruleset-facts,.challenge-terminal-grid,.role-resource-panel .facts{grid-template-columns:1fr}.roster li{align-items:start;grid-template-columns:1fr}.hero h1{font-size:38px}header{position:static}.card{min-height:auto}}
 @media(max-width:430px){main{padding:22px 12px}.paper-room-basic,.paper-room-advanced{border-radius:12px;padding:14px}.paper-room-primary-button{justify-self:stretch;width:100%}.practice-primary-action{justify-self:stretch;width:100%}.paper-room-advanced-content{gap:12px}.paper-room-authority{padding:12px}}
 @media(max-width:390px){.paper-room-basic>h2{font-size:24px}.paper-room-blocker,.paper-room-next-step{padding:12px}.paper-room-advanced-summary small{font-size:11px}}
+.paper-room-advanced-summary [lang]{display:inline}
 "#;
 
 #[cfg(test)]
@@ -8766,6 +8796,13 @@ mod tests {
         let ready = practice_html(None, true).await;
         assert_eq!(ready.matches("practice-start-form").count(), 1);
         assert!(ready.contains("15–20 minute practice"));
+        assert!(ready.contains("<html lang=\"en\">"));
+        assert!(ready.contains("<aside id=\"toast\" aria-hidden=\"true\" hidden>"));
+        assert!(!ready.contains("id=\"toast\" aria-live="));
+        assert!(ready.contains("lang=\"zh-Hans\">单人非排位练习</span>"));
+        assert!(ready.contains(
+            "class=\"status verified\">Not started / <span lang=\"zh-Hans\">尚未开始</span>"
+        ));
     }
 
     #[tokio::test]
@@ -8812,6 +8849,17 @@ mod tests {
             let body = practice_html(Some(&view), true).await;
             assert_eq!(body.matches("practice-advance-form").count(), 1);
             assert_eq!(body.matches("practice-abandon-form").count(), 1);
+            assert_eq!(body.matches("<ol role=\"list\">").count(), 1);
+            assert_eq!(body.matches("aria-current=\"step\"").count(), 1);
+            assert!(body.contains(
+                "class=\"practice-step-status\">Current / <span lang=\"zh-Hans\">当前</span>"
+            ));
+            if step > 1 {
+                assert!(body.contains("class=\"practice-step-status\">Completed / "));
+            }
+            if step < 5 {
+                assert!(body.contains("class=\"practice-step-status\">Upcoming / "));
+            }
             assert!(body.contains(&format!("data-practice-action=\"{action}\"")));
             for choice in choices {
                 assert!(body.contains(&format!("value=\"{choice}\"")));
@@ -8850,8 +8898,27 @@ mod tests {
             5
         );
         assert!(!completed_body.contains("data-practice-step-state=\"current\""));
+        assert!(!completed_body.contains("aria-current=\"step\""));
+        assert_eq!(
+            completed_body
+                .matches("class=\"practice-step-status\">Completed / ")
+                .count(),
+            5
+        );
         assert_eq!(completed_body.matches("practice-start-form").count(), 1);
         assert!(!completed_body.contains("practice-abandon-form"));
+    }
+
+    #[test]
+    fn player_language_html_marks_only_the_chinese_language_part_and_escapes_both() {
+        assert_eq!(
+            player_language_html(r#"Open <action> & "now" / 打开<&"'>"#),
+            "Open &lt;action&gt; &amp; &quot;now&quot; / <span lang=\"zh-Hans\">打开&lt;&amp;&quot;&#x27;&gt;</span>"
+        );
+        assert_eq!(
+            player_language_html("English-only <status>"),
+            "English-only &lt;status&gt;"
+        );
     }
 
     fn test_key_snapshot(seed: u8) -> (String, String, String) {
@@ -11095,10 +11162,14 @@ mod tests {
         assert!(basic_start < advanced_start);
         let basic = &body[basic_start..advanced_start];
         assert!(basic.contains("id=\"paper-room-current-objective\""));
-        assert!(basic.contains("Bind claims to evidence / 建立论断证据链"));
+        assert!(basic
+            .contains("Bind claims to evidence / <span lang=\"zh-Hans\">建立论断证据链</span>"));
         assert!(basic.contains("Evidence: protect claims and source quality"));
-        assert!(basic.contains("Register a verified evidence card / 登记已验证证据卡"));
-        assert!(basic.contains("Register verified evidence / 登记已验证证据"));
+        assert!(basic.contains(
+            "Register a verified evidence card / <span lang=\"zh-Hans\">登记已验证证据卡</span>"
+        ));
+        assert!(basic
+            .contains("Register verified evidence / <span lang=\"zh-Hans\">登记已验证证据</span>"));
         assert!(basic.contains("1 more blocking reason(s) are listed in Advanced"));
         assert_eq!(basic.matches("<button").count(), 1);
         assert!(basic.contains("type=\"button\" data-paper-room-reveal"));
@@ -11116,10 +11187,10 @@ mod tests {
         }
 
         let advanced = &body[advanced_start..];
-        assert!(advanced.contains("Advanced / 高级详情"));
-        assert!(advanced.contains("AUTHORITY DETAILS / 权威详情"));
+        assert!(advanced.contains("Advanced / <span lang=\"zh-Hans\">高级详情</span>"));
+        assert!(advanced.contains("AUTHORITY DETAILS / <span lang=\"zh-Hans\">权威详情</span>"));
         assert!(advanced.contains(&format!("<code>{paper_id}</code>")));
-        assert!(advanced.contains("Hepta source / Hepta 来源"));
+        assert!(advanced.contains("Hepta source / <span lang=\"zh-Hans\">Hepta 来源</span>"));
         assert!(advanced.contains("pending_finality"));
         assert!(advanced.contains("Register the canonical ArtifactManifest"));
         assert!(advanced.contains("CURRENT OBJECTIVE / 当前目标"));
@@ -11143,12 +11214,15 @@ mod tests {
         assert!(script.contains("function bindPaperRoomProgressiveDisclosure()"));
         assert!(script.contains("advanced.open = true;"));
         assert!(script.contains("advanced.querySelector(targetSelector)"));
-        assert!(script.contains("focusTarget(matchingAction)"));
+        assert!(script.contains("paperRoomFocusTarget(matchingAction)"));
+        assert!(script.contains("input:not([type=hidden]):not([disabled])"));
         assert!(script.contains("target.focus({ preventScroll: true });"));
         assert!(script.contains("prefers-reduced-motion: reduce"));
         assert!(script.contains("bindPaperRoomProgressiveDisclosure();"));
 
-        assert!(CSS.contains(":where(a,button,input,textarea,select,summary):focus-visible"));
+        assert!(
+            CSS.contains(":where(a,button,input,textarea,select,summary,[tabindex]):focus-visible")
+        );
         assert!(CSS.contains(".player-error-details>summary"));
         assert!(CSS.contains("output[data-player-message=friendly]"));
         assert!(CSS.contains(".paper-room-primary-button{justify-self:start;min-height:44px"));
@@ -11726,7 +11800,9 @@ mod tests {
         assert!(body.contains(
             "Hepta's Author Raid projection is authoritative when present; local derivation is only a compatibility fallback."
         ));
-        let developer = body.find("Developer Tools / 开发者工具").unwrap();
+        let developer = body
+            .find("Developer Tools / <span lang=\"zh-Hans\">开发者工具</span>")
+            .unwrap();
         let primary_path = &body[..developer];
         assert!(
             primary_path.contains("class=\"guided-action blocked author-progress-unavailable\"")

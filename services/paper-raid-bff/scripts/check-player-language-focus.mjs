@@ -34,7 +34,7 @@ class FakeElement {
     this.classList = new FakeClassList(classes);
     this.children = [];
     this.parentElement = null;
-    this.textContent = "";
+    this._textContent = "";
     this.hidden = false;
     this.disabled = false;
     this.open = false;
@@ -44,6 +44,18 @@ class FakeElement {
 
   get className() {
     return Array.from(this.classList).join(" ");
+  }
+
+  get textContent() {
+    return this.children.length > 0
+      ? this.children.map(child => child.textContent).join("")
+      : this._textContent;
+  }
+
+  set textContent(value) {
+    this._textContent = String(value);
+    for (const child of this.children) child.parentElement = null;
+    this.children = [];
   }
 
   set className(value) {
@@ -61,6 +73,13 @@ class FakeElement {
       child.parentElement = this;
       this.children.push(child);
     }
+  }
+
+  replaceChildren(...children) {
+    for (const child of this.children) child.parentElement = null;
+    this.children = [];
+    this._textContent = "";
+    this.append(...children);
   }
 
   insertAdjacentElement(position, element) {
@@ -228,6 +247,9 @@ assert.equal(errorOutput.getAttribute("aria-live"), "polite");
 assert.match(errorOutput.textContent, /\u6743\u5a01\u72b6\u6001\u5df2\u53d8\u66f4/);
 assert.equal(errorOutput.textContent.includes("conflict"), false);
 assert.equal(errorOutput.textContent.includes("current_version"), false);
+assert.equal(errorOutput.children.length, 3);
+assert.equal(errorOutput.children[1].getAttribute("aria-hidden"), "true");
+assert.equal(errorOutput.children[2].getAttribute("lang"), "zh-Hans");
 const disclosure = errorOutput.nextElementSibling;
 assert.ok(disclosure instanceof FakeDetailsElement);
 assert.equal(disclosure.open, false);
