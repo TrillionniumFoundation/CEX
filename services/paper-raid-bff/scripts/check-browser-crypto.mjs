@@ -557,9 +557,17 @@ assert.ok(registrationFlow.includes("/api/onboarding/human/challenge"));
 assert.ok(registrationFlow.includes("/api/onboarding/human/register"));
 assert.ok(registrationFlow.includes("import the original bundle"));
 assert.ok(pairingFlow.includes("/api/agent-bridge/pairing-grants"));
+assert.ok(pairingFlow.includes("agentPairingHealthReady(grant)"));
+assert.ok(pairingFlow.includes("requestGeneration !== statusRequestGeneration"));
+assert.ok(pairingFlow.includes("status?.grantId === activePairingGrantId"));
+assert.ok(pairingFlow.includes("window.location.assign(returnTarget)"));
+assert.ok(pairingFlow.includes("window.location.reload()"));
+assert.ok(source.includes("grant.signed_health_observed_after_pairing === true"));
 assert.equal(pairingFlow.includes("login_key"), false);
 assert.equal(pairingFlow.includes("localStorage"), false);
 assert.equal(pairingFlow.includes("sessionStorage"), false);
+assert.equal(pairingFlow.includes("paper-raid-agent-bridge:"), false);
+assert.equal(pairingFlow.includes("pairing_code="), false);
 
 let fakeNowMs = 1_000;
 let nextFakeTimerId = 1;
@@ -636,6 +644,251 @@ const context = vm.createContext({
   },
 });
 vm.runInContext(source, context, { filename: browserUrl.pathname });
+
+assert.equal(
+  context.agentPairingReturnTarget(
+    new URL("https://paper-raid.example/league?return_to=%2Fleague%2Fpractice"),
+  ),
+  "/league/practice",
+);
+for (const hostile of [
+  "https://paper-raid.example/league",
+  "https://paper-raid.example/league?return_to=https%3A%2F%2Fevil.example%2F",
+  "https://paper-raid.example/league?return_to=%2F%2Fevil.example%2F",
+  "https://paper-raid.example/league?return_to=%2Fleague%2Fpractice%3Fdebug%3D1",
+  "https://paper-raid.example/league?return_to=%2Fleague",
+  "https://paper-raid.example/league?return_to=%2Fleague%2Fpractice&return_to=%2Fleague%2Fpractice",
+]) assert.equal(context.agentPairingReturnTarget(new URL(hostile)), null);
+
+const consumedGrant = {
+  state: "consumed",
+  signed_health_observed_after_pairing: true,
+};
+assert.equal(context.agentPairingHealthReady(consumedGrant), true);
+assert.equal(context.agentPairingHealthReady({ ...consumedGrant, state: "pinned" }), false);
+assert.equal(context.agentPairingHealthReady({ state: "consumed" }), false);
+assert.equal(
+  context.agentPairingHealthReady({
+    state: "consumed",
+    signed_health_observed_after_pairing: "true",
+  }),
+  false,
+);
+
+const pairingGrantId = "11111111-1111-4111-8111-111111111111";
+const pairingCreatedAt = "2026-08-18T08:00:00Z";
+const pairingExpiresAt = "2026-08-18T08:05:00Z";
+const pairingStatuses = [
+  {
+    state: "issued",
+    signedHealthObservedAfterPairing: false,
+  },
+  {
+    state: "consumed",
+    signedHealthObservedAfterPairing: false,
+  },
+  {
+    state: "consumed",
+    signedHealthObservedAfterPairing: true,
+  },
+].map(status => ({
+  schema: "hepta.paper_raid.agent_bridge.pairing_status.v1",
+  grant: {
+    grant_id: pairingGrantId,
+    state: status.state,
+    created_at: pairingCreatedAt,
+    expires_at: pairingExpiresAt,
+    binding_id: status.state === "consumed"
+      ? "22222222-2222-4222-8222-222222222222"
+      : null,
+    agent_id: status.state === "consumed" ? "agent.browser-return" : null,
+    agent_key_id: status.state === "consumed" ? `sha256:${"a".repeat(64)}` : null,
+    signed_health_observed_after_pairing: status.signedHealthObservedAfterPairing,
+  },
+}));
+const revokeButton = {
+  dataset: {},
+  disabled: false,
+  hidden: true,
+  addEventListener() {},
+};
+const pairingPanel = {
+  querySelector(selector) {
+    if (selector === ".agent-pairing-revoke") return revokeButton;
+    return null;
+  },
+};
+const assignedPairingTargets = [];
+context.document.querySelectorAll = selector =>
+  selector === ".agent-pairing-panel" ? [pairingPanel] : [];
+context.window.location = {
+  href: "https://paper-raid.example/league?return_to=%2Fleague%2Fpractice",
+  assign(target) { assignedPairingTargets.push(target); },
+  reload() { assert.fail("fixed pairing return unexpectedly reloaded the Lobby"); },
+};
+const pairingFetchTargets = [];
+context.fetch = async (target, options) => {
+  pairingFetchTargets.push(target);
+  assert.equal(target, "/api/agent-bridge/pairing-grants");
+  assert.equal(options.method, "GET");
+  assert.equal(options.credentials, "same-origin");
+  const status = pairingStatuses.shift();
+  assert.ok(status, "pairing poll exceeded its bounded fixture");
+  return new Response(JSON.stringify(status), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+};
+context.bindAgentPairing();
+await new Promise(resolve => setImmediate(resolve));
+assert.deepEqual(assignedPairingTargets, []);
+advanceFakeClock(1000);
+await new Promise(resolve => setImmediate(resolve));
+assert.deepEqual(
+  assignedPairingTargets,
+  [],
+  "consumed grant without post-pairing signed health returned to Practice",
+);
+advanceFakeClock(1000);
+await new Promise(resolve => setImmediate(resolve));
+assert.deepEqual(assignedPairingTargets, []);
+advanceFakeClock(300);
+assert.deepEqual(assignedPairingTargets, ["/league/practice"]);
+assert.equal(pairingFetchTargets.length, 3);
+assert.equal(pairingFetchTargets.some(target => target.includes("pairing_code")), false);
+context.document.querySelectorAll = () => [];
+assert.equal(fakeTimers.size, 0, "pairing completion left an unbounded poll timer");
+fakeNowMs = 1_000;
+
+const staleHealthyGrantId = "33333333-3333-4333-8333-333333333333";
+const staleHealthyStatus = {
+  schema: "hepta.paper_raid.agent_bridge.pairing_status.v1",
+  grant: {
+    grant_id: staleHealthyGrantId,
+    state: "consumed",
+    created_at: pairingCreatedAt,
+    expires_at: pairingExpiresAt,
+    binding_id: "44444444-4444-4444-8444-444444444444",
+    agent_id: "agent.stale-browser-return",
+    agent_key_id: `sha256:${"b".repeat(64)}`,
+    signed_health_observed_after_pairing: true,
+  },
+};
+const staleReturnTargets = [];
+context.window.location = {
+  href: "https://paper-raid.example/league?return_to=%2Fleague%2Fpractice",
+  assign(target) { staleReturnTargets.push(target); },
+  reload() { assert.fail("historical healthy pairing unexpectedly reloaded the Lobby"); },
+};
+context.document.querySelectorAll = selector => selector === ".agent-pairing-panel"
+  ? [{
+      querySelector(childSelector) {
+        if (childSelector === ".agent-pairing-revoke") return {
+          dataset: {}, disabled: false, hidden: true, addEventListener() {},
+        };
+        return null;
+      },
+    }]
+  : [];
+context.fetch = async () => new Response(JSON.stringify(staleHealthyStatus), {
+  status: 200,
+  headers: { "content-type": "application/json" },
+});
+context.bindAgentPairing();
+await new Promise(resolve => setImmediate(resolve));
+advanceFakeClock(300);
+assert.deepEqual(
+  staleReturnTargets,
+  [],
+  "historical consumed/healthy grant created a deterministic Practice repair loop",
+);
+assert.equal(fakeTimers.size, 0, "historical healthy grant left a pairing timer");
+fakeNowMs = 1_000;
+
+const supersedingGrantId = "55555555-5555-4555-8555-555555555555";
+const supersedingIssuedStatus = {
+  schema: "hepta.paper_raid.agent_bridge.pairing_status.v1",
+  grant: {
+    grant_id: supersedingGrantId,
+    state: "issued",
+    created_at: pairingCreatedAt,
+    expires_at: pairingExpiresAt,
+    binding_id: null,
+    agent_id: null,
+    agent_key_id: null,
+    signed_health_observed_after_pairing: false,
+  },
+};
+const supersedingHealthyStatus = {
+  schema: "hepta.paper_raid.agent_bridge.pairing_status.v1",
+  grant: {
+    ...supersedingIssuedStatus.grant,
+    state: "consumed",
+    binding_id: "66666666-6666-4666-8666-666666666666",
+    agent_id: "agent.superseding-browser-return",
+    agent_key_id: `sha256:${"c".repeat(64)}`,
+    signed_health_observed_after_pairing: true,
+  },
+};
+let refreshPairingStatus;
+const generationReturnTargets = [];
+const generationPanel = {
+  querySelector(selector) {
+    if (selector === ".agent-pairing-refresh") return {
+      disabled: false,
+      addEventListener(_event, callback) { refreshPairingStatus = callback; },
+    };
+    if (selector === ".agent-pairing-revoke") return {
+      dataset: {}, disabled: false, hidden: true, addEventListener() {},
+    };
+    return null;
+  },
+};
+context.document.querySelectorAll = selector =>
+  selector === ".agent-pairing-panel" ? [generationPanel] : [];
+context.window.location = {
+  href: "https://paper-raid.example/league?return_to=%2Fleague%2Fpractice",
+  assign(target) { generationReturnTargets.push(target); },
+  reload() { assert.fail("generation-bound pairing unexpectedly reloaded the Lobby"); },
+};
+let resolveDelayedOldStatus;
+let generationFetchCount = 0;
+context.fetch = async () => {
+  generationFetchCount += 1;
+  if (generationFetchCount === 1) {
+    return new Promise(resolve => { resolveDelayedOldStatus = resolve; });
+  }
+  const status = generationFetchCount === 2
+    ? supersedingIssuedStatus
+    : supersedingHealthyStatus;
+  return new Response(JSON.stringify(status), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+};
+context.bindAgentPairing();
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(typeof refreshPairingStatus, "function");
+await refreshPairingStatus();
+resolveDelayedOldStatus(new Response(JSON.stringify(staleHealthyStatus), {
+  status: 200,
+  headers: { "content-type": "application/json" },
+}));
+await new Promise(resolve => setImmediate(resolve));
+assert.deepEqual(
+  generationReturnTargets,
+  [],
+  "superseded pairing-status response escaped its request generation",
+);
+advanceFakeClock(1000);
+await new Promise(resolve => setImmediate(resolve));
+assert.deepEqual(generationReturnTargets, []);
+advanceFakeClock(300);
+assert.deepEqual(generationReturnTargets, ["/league/practice"]);
+assert.equal(generationFetchCount, 3);
+assert.equal(fakeTimers.size, 0, "generation-bound pairing completion left a timer");
+context.document.querySelectorAll = () => [];
+fakeNowMs = 1_000;
 
 assert.deepEqual(
   [1, 2, 3, 4, 5, 6].map(context.liveAuthorityRetryDelayMs),

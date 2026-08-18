@@ -26,7 +26,7 @@ import {
   getBinding,
   getInbox,
   getPractice,
-  pairAgent,
+  pairAgentAndCheckHealth,
   prepareChallengeMaterialsForStart,
   executeAndSubmitAuthorDelivery,
   executeAndSubmitAuthorWorkStart,
@@ -71,7 +71,9 @@ operator-pinned trusted public key fingerprint. --root and --systemctl are an
 isolated test harness and never contact the host user manager.
 
 The pair command reads its one-time code only from a silent TTY prompt or stdin.
-It never accepts pairing codes through argv, environment, or config. The
+It never accepts pairing codes through argv, environment, config, or a URL. A
+successful pair immediately attempts one signed self-declared health report; a
+lost response remains pending for the background service to retry. The
 background service defaults to Confirm; Auto requires an explicit acknowledgement.
 `;
 
@@ -528,7 +530,7 @@ export async function main(argv) {
       identity = await loadIdentity(config.identity_file);
     }
     output(
-      await pairAgent(config, identity, {
+      await pairAgentAndCheckHealth(config, identity, {
         readPairingCode: () => readPairingCodeFromInput(),
       }),
     );

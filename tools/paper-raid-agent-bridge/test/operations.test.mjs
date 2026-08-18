@@ -14,6 +14,7 @@ import {
 import {
   HEALTH_REPORT_SCHEMA,
   INBOX_REQUEST_SCHEMA,
+  PAIRING_COMPLETION_SCHEMA,
   bridgeHealth,
   createDeliveryDraftRequest,
   createProposalRequest,
@@ -24,6 +25,7 @@ import {
   getInbox,
   getPractice,
   pairAgent,
+  pairAgentAndCheckHealth,
   prepareChallengeMaterialsForStart,
   prepareDeliveryDraft,
   stableDeliveryDraftId,
@@ -321,6 +323,95 @@ test("pair keeps code/request in memory, retries exact lost response, and persis
     "player_id",
     "schema",
   ]);
+});
+
+test("pair completion observes one signed self-declared health report without reflecting peer bytes", async t => {
+  const item = await fixture(t, "pair-health-confirmed");
+  const paths = [];
+  let healthHeaders;
+  let healthBody;
+  const fetchImplementation = async (url, init) => {
+    const path = new URL(url).pathname;
+    paths.push(path);
+    if (path === "/api/agent-bridge/pairing-context") {
+      return jsonResponse(context());
+    }
+    if (path === "/api/agent-bridge/pair") {
+      const request = JSON.parse(init.body).binding_request;
+      return jsonResponse({
+        binding: {
+          ...item.binding,
+          binding_id: request.binding_id,
+          player_id: request.player_id,
+        },
+      });
+    }
+    assert.equal(path, "/api/agent-bridge/health");
+    assert.equal((await stat(item.statePath)).mode & 0o777, 0o600);
+    healthHeaders = headersObject(init.headers);
+    healthBody = JSON.parse(init.body);
+    return jsonResponse({ reflected_pairing_code: SECRET_PAIR_CODE });
+  };
+  const result = await pairAgentAndCheckHealth(item.config, item.identity, {
+    readPairingCode: async () => SECRET_PAIR_CODE,
+    fetchImplementation,
+    nowUnix: NOW,
+    bindingId: BINDING_ID,
+    nonce: NONCE,
+  });
+  assert.deepEqual(paths, [
+    "/api/agent-bridge/pairing-context",
+    "/api/agent-bridge/pair",
+    "/api/agent-bridge/health",
+  ]);
+  assert.deepEqual(healthBody, {
+    schema: HEALTH_REPORT_SCHEMA,
+    assurance: "self_declared_unverified",
+    status: "healthy",
+    observed_at_unix: NOW,
+  });
+  assert.equal(typeof healthHeaders["x-paper-raid-agent-signature"], "string");
+  assert.equal("authorization" in healthHeaders, false);
+  assert.equal("cookie" in healthHeaders, false);
+  assert.equal(result.schema, PAIRING_COMPLETION_SCHEMA);
+  assert.equal(result.pairing, "paired");
+  assert.equal(result.signed_health, "observed");
+  assert.equal(result.binding.binding_id, BINDING_ID);
+  assert.equal(JSON.stringify(result).includes(SECRET_PAIR_CODE), false);
+  assert.equal(JSON.stringify(result).includes(context().subject_id), false);
+});
+
+test("pair completion remains health-pending after a hostile failed health response", async t => {
+  const item = await fixture(t, "pair-health-pending");
+  const fetchImplementation = async (url, init) => {
+    const path = new URL(url).pathname;
+    if (path === "/api/agent-bridge/pairing-context") {
+      return jsonResponse(context());
+    }
+    if (path === "/api/agent-bridge/pair") {
+      const request = JSON.parse(init.body).binding_request;
+      return jsonResponse({
+        binding: {
+          ...item.binding,
+          binding_id: request.binding_id,
+          player_id: request.player_id,
+        },
+      });
+    }
+    assert.equal(path, "/api/agent-bridge/health");
+    return jsonResponse({ error: `health rejected ${SECRET_PAIR_CODE}` }, 503);
+  };
+  const result = await pairAgentAndCheckHealth(item.config, item.identity, {
+    readPairingCode: async () => SECRET_PAIR_CODE,
+    fetchImplementation,
+    nowUnix: NOW,
+    bindingId: BINDING_ID,
+    nonce: NONCE,
+  });
+  assert.equal(result.pairing, "paired");
+  assert.equal(result.signed_health, "pending");
+  assert.equal(JSON.stringify(result).includes(SECRET_PAIR_CODE), false);
+  assert.equal((await loadBridgeState(item.statePath, item.identity)).binding_id, BINDING_ID);
 });
 
 test("ambiguous pair failure creates no pending code or binding state", async t => {

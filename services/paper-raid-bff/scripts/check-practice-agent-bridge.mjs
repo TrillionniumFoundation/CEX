@@ -19,6 +19,7 @@ const [
   practice,
   daemon,
   release,
+  cli,
 ] = await Promise.all([
   readFile(new URL("src/agent_bridge.rs", root), "utf8"),
   readFile(new URL("src/app.rs", root), "utf8"),
@@ -33,6 +34,7 @@ const [
   readFile(new URL("src/practice.mjs", bridgeRoot), "utf8"),
   readFile(new URL("src/daemon.mjs", bridgeRoot), "utf8"),
   readFile(new URL("src/release.mjs", bridgeRoot), "utf8"),
+  readFile(new URL("src/cli.mjs", bridgeRoot), "utf8"),
 ]);
 
 const verifier = agent.slice(
@@ -218,5 +220,77 @@ assert.ok(
   release.includes('Object.freeze({ path: "src/practice.mjs", mode: 0o400 })'),
   "installed release closure omits practice runtime",
 );
+
+const pairingCompletion = operations.slice(
+  operations.indexOf("export async function pairAgentAndCheckHealth("),
+  operations.indexOf("async function signedClientState("),
+);
+assert.ok(pairingCompletion.length > 500, "installed pair-to-health completion is absent");
+assert.ok(
+  pairingCompletion.indexOf("await pairAgent(config, identity, options)") <
+    pairingCompletion.indexOf("await bridgeHealth(config, identity"),
+  "health may not precede persisted pairing",
+);
+for (const marker of [
+  'let signedHealth = "pending"',
+  'signedHealth = "observed"',
+  "fetchImplementation: options.fetchImplementation",
+  "schema: PAIRING_COMPLETION_SCHEMA",
+]) assert.ok(pairingCompletion.includes(marker), `pair completion lost ${marker}`);
+for (const forbidden of ["pairing_code", "subject_id", "return_to", "location.assign"]) {
+  assert.equal(
+    pairingCompletion.includes(forbidden),
+    false,
+    `pair completion leaked browser or secret field ${forbidden}`,
+  );
+}
+assert.ok(
+  cli.includes("await pairAgentAndCheckHealth(config, identity"),
+  "installed Pair command bypasses its immediate signed health attempt",
+);
+
+const pairingStatus = agent.slice(
+  agent.indexOf("pub async fn pairing_grant_status("),
+  agent.indexOf("pub async fn revoke_pairing_grant("),
+);
+function assertPairingHealthQuery(value) {
+  for (const marker of [
+    "b.binding_id=g.pinned_binding_id",
+    "b.last_pairing_grant_id=g.grant_id",
+    "b.subject_id=g.subject_id",
+    "b.player_id=g.player_id",
+    "LEFT JOIN paper_raid_bff_agent_health h ON h.binding_id=b.binding_id",
+    "g.state='consumed'",
+    "g.consumed_at IS NOT NULL",
+    "h.assurance='self_declared_unverified'",
+    "h.status='healthy'",
+    "h.last_seen_at >= g.consumed_at",
+    ") AS signed_health_observed_after_pairing",
+    'row.get::<bool,_>("signed_health_observed_after_pairing")',
+  ]) assert.ok(value.includes(marker), `pairing health query lost ${marker}`);
+  assert.equal(
+    value.includes("b.grant_id=g.grant_id OR b.last_pairing_grant_id=g.grant_id"),
+    false,
+    "pairing status retained its ambiguous old/current binding join",
+  );
+}
+assertPairingHealthQuery(pairingStatus);
+for (const [name, marker, replacement] of [
+  ["unpinned binding", "b.binding_id=g.pinned_binding_id", "b.binding_id=b.binding_id"],
+  ["old pairing grant", "b.last_pairing_grant_id=g.grant_id", "b.grant_id=g.grant_id"],
+  ["cross subject", "b.subject_id=g.subject_id", "b.subject_id=b.subject_id"],
+  ["cross player", "b.player_id=g.player_id", "b.player_id=b.player_id"],
+  ["foreign health", "h.binding_id=b.binding_id", "h.binding_id=h.binding_id"],
+  ["pre-consumption health", "h.last_seen_at >= g.consumed_at", "h.last_seen_at >= g.created_at"],
+  ["degraded health", "h.status='healthy'", "h.status='degraded'"],
+]) {
+  const mutant = pairingStatus.replace(marker, replacement);
+  assert.notEqual(mutant, pairingStatus, `pairing query mutant was not constructed: ${name}`);
+  assert.throws(
+    () => assertPairingHealthQuery(mutant),
+    undefined,
+    `pairing health query accepted hostile mutant: ${name}`,
+  );
+}
 
 console.log("paper-raid-bff practice Agent Bridge boundary: ok");

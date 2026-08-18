@@ -50,6 +50,8 @@ import {
 
 export const PAIRING_CONTEXT_SCHEMA =
   "hepta.paper_raid.agent_bridge.pairing_context.v1";
+export const PAIRING_COMPLETION_SCHEMA =
+  "hepta.paper_raid.agent_bridge.pairing_completion.v1";
 export const HEALTH_REPORT_SCHEMA =
   "hepta.paper_raid.agent_bridge.health_report.v1";
 export const INBOX_REQUEST_SCHEMA =
@@ -380,6 +382,36 @@ export async function pairAgent(
   });
   // Do not return the code, context (including subject_id), or signed request.
   return binding;
+}
+
+export async function pairAgentAndCheckHealth(
+  config,
+  identity,
+  options = {},
+) {
+  const binding = await pairAgent(config, identity, options);
+  let signedHealth = "pending";
+  try {
+    await bridgeHealth(config, identity, {
+      status: "healthy",
+      nowUnix: Number.isSafeInteger(options.nowUnix)
+        ? options.nowUnix
+        : Math.floor(Date.now() / 1000),
+      fetchImplementation: options.fetchImplementation,
+    });
+    signedHealth = "observed";
+  } catch {
+    // Pairing has already committed and its owner-only public state is safe.
+    // Do not misreport a lost health response as an unpaired Agent, and never
+    // reflect a peer response that may have seen the one-time pairing code.
+    // The installed service retries the same signed health operation.
+  }
+  return Object.freeze({
+    schema: PAIRING_COMPLETION_SCHEMA,
+    pairing: "paired",
+    signed_health: signedHealth,
+    binding,
+  });
 }
 
 async function signedClientState(config, identity, fetchImplementation) {
