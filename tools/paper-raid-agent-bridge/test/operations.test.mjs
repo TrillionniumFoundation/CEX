@@ -19,14 +19,24 @@ import {
   createProposalRequest,
   downloadChallengeMaterialBundle,
   executeAndSubmitAuthorWorkStart,
+  executePracticeAuto,
   getBinding,
   getInbox,
+  getPractice,
   pairAgent,
   prepareChallengeMaterialsForStart,
   prepareDeliveryDraft,
   stableDeliveryDraftId,
   submitAgentProposal,
 } from "../src/operations.mjs";
+import {
+  PRACTICE_CLAIM_REQUEST_SCHEMA,
+  PRACTICE_MATERIALS_SCHEMA,
+  PRACTICE_RESULT_REQUEST_SCHEMA,
+  PRACTICE_TASKS_SCHEMA,
+  PRACTICE_TASK_SCHEMA,
+  PRACTICE_TRANSITION_RESULT_SCHEMA,
+} from "../src/practice.mjs";
 import { authorWorkStarts } from "../src/work.mjs";
 import { loadBridgeState, saveBridgeState } from "../src/state.mjs";
 import { generateIdentity, loadIdentity } from "../src/identity.mjs";
@@ -47,6 +57,42 @@ import {
 const SECRET_PAIR_CODE = "PAIR-ULTRA-SECRET-846219";
 const NOW = 1_800_000_000;
 const WORK_ID = "88888888-8888-4888-8888-888888888888";
+
+function practiceTaskResponse(
+  state = "pending",
+  version = 3,
+  resultCode = null,
+  taskToken = `sha256:${(state === "pending" ? "a" : state === "claimed" ? "b" : "c").repeat(64)}`,
+) {
+  return {
+    schema: PRACTICE_TASKS_SCHEMA,
+    mode: "practice_unranked",
+    status: "ready",
+    task: {
+      schema: PRACTICE_TASK_SCHEMA,
+      kind: "evidence_audit_intro",
+      state,
+      version,
+      task_token: taskToken,
+      expires_at: "2027-01-15T08:00:00Z",
+      materials: {
+        schema: PRACTICE_MATERIALS_SCHEMA,
+        claim: "The candidate result remains supported after the evidence audit.",
+        baseline: "Compare the stated claim with the supplied observation summary.",
+        observations: [
+          "The cited observation and the claimed scope do not fully align.",
+          "Run the bounded practice check and report only one allowed result code.",
+        ],
+      },
+      allowed_result_codes: [
+        "concern_confirmed",
+        "concern_not_detected",
+        "inconclusive",
+      ],
+      result_code: resultCode,
+    },
+  };
+}
 
 function hashField(value, field) {
   const frame = { ...value };
@@ -445,6 +491,276 @@ test("binding, health, and inbox use only dedicated proof-authenticated endpoint
     assert.equal("authorization" in call.headers, false);
     assert.equal("x-paper-raid-csrf" in call.headers, false);
   }
+});
+
+test("practice-auto signs discover-claim-result and retries lost responses byte-exactly", async t => {
+  const item = await fixture(t, "practice-auto-exact-replay");
+  await saveBridgeState(item.statePath, item.identity, item.binding, NOW);
+  let taskState = "pending";
+  let version = 3;
+  let resultCode = null;
+  let claimAttempts = 0;
+  let resultAttempts = 0;
+  const calls = [];
+  const fetchImplementation = async (url, init) => {
+    const path = new URL(url).pathname;
+    const call = {
+      path,
+      headers: headersObject(init.headers),
+      body: init.body,
+    };
+    calls.push(call);
+    for (const forbidden of ["authorization", "cookie", "x-paper-raid-csrf"]) {
+      assert.equal(forbidden in call.headers, false);
+    }
+    assert.equal(typeof call.headers["x-paper-raid-agent-signature"], "string");
+    if (path === "/api/agent-bridge/practice-tasks") {
+      assert.deepEqual(JSON.parse(init.body), {
+        schema: "hepta.paper_raid.agent_bridge.practice_task_query.v1",
+      });
+      return jsonResponse(practiceTaskResponse(taskState, version, resultCode));
+    }
+    if (path === "/api/agent-bridge/practice-claims") {
+      assert.deepEqual(JSON.parse(init.body), {
+        schema: PRACTICE_CLAIM_REQUEST_SCHEMA,
+        expected_version: 3,
+        task_token: `sha256:${"a".repeat(64)}`,
+      });
+      claimAttempts += 1;
+      taskState = "claimed";
+      version = 4;
+      if (claimAttempts === 1) throw new TypeError("claim response lost after commit");
+      return jsonResponse({
+        schema: PRACTICE_TRANSITION_RESULT_SCHEMA,
+        operation: "claim",
+        status: "claimed",
+        from_version: 3,
+        version: 4,
+      });
+    }
+    assert.equal(path, "/api/agent-bridge/practice-results");
+    assert.deepEqual(JSON.parse(init.body), {
+      schema: PRACTICE_RESULT_REQUEST_SCHEMA,
+      expected_version: 4,
+      task_token: `sha256:${"b".repeat(64)}`,
+      result_code: "concern_confirmed",
+    });
+    resultAttempts += 1;
+    taskState = "completed";
+    version = 5;
+    resultCode = "concern_confirmed";
+    if (resultAttempts === 1) throw new TypeError("result response lost after commit");
+    return jsonResponse({
+      schema: PRACTICE_TRANSITION_RESULT_SCHEMA,
+      operation: "result",
+      status: "completed",
+      from_version: 4,
+      version: 5,
+      result_code: resultCode,
+    });
+  };
+
+  const result = await executePracticeAuto(item.config, item.identity, {
+    nowUnix: NOW,
+    fetchImplementation,
+  });
+  assert.deepEqual(result, {
+    schema: "hepta.paper_raid.agent_bridge.practice_auto_result.v1",
+    mode: "practice_unranked",
+    status: "completed",
+    task_state: "completed",
+    version: 5,
+    result_code: "concern_confirmed",
+  });
+  assert.equal(claimAttempts, 2);
+  assert.equal(resultAttempts, 2);
+  const claimCalls = calls.filter(call => call.path.endsWith("practice-claims"));
+  const resultCalls = calls.filter(call => call.path.endsWith("practice-results"));
+  assert.deepEqual(claimCalls[0], claimCalls[1]);
+  assert.deepEqual(resultCalls[0], resultCalls[1]);
+  assert.deepEqual(calls.map(call => call.path), [
+    "/api/agent-bridge/practice-tasks",
+    "/api/agent-bridge/practice-claims",
+    "/api/agent-bridge/practice-claims",
+    "/api/agent-bridge/practice-tasks",
+    "/api/agent-bridge/practice-results",
+    "/api/agent-bridge/practice-results",
+    "/api/agent-bridge/practice-tasks",
+  ]);
+  for (const call of calls.filter(call => !call.path.endsWith("practice-tasks"))) {
+    for (const forbidden of [
+      "practice_session_id",
+      "subject_id",
+      "player_id",
+      "binding_id",
+      "bridge_task_id",
+      "event_id",
+      "request_hash",
+      "result_hash",
+    ]) assert.equal(call.body.includes(forbidden), false, `request leaked ${forbidden}`);
+  }
+});
+
+test("practice-auto recovers completed state before any new execution", async t => {
+  const item = await fixture(t, "practice-auto-process-recovery");
+  await saveBridgeState(item.statePath, item.identity, item.binding, NOW);
+  let taskState = "pending";
+  let version = 3;
+  let resultCode = null;
+  let claimCalls = 0;
+  let resultCalls = 0;
+  const firstFetch = async (url, init) => {
+    const path = new URL(url).pathname;
+    if (path.endsWith("practice-tasks")) {
+      return jsonResponse(practiceTaskResponse(taskState, version, resultCode));
+    }
+    if (path.endsWith("practice-claims")) {
+      claimCalls += 1;
+      taskState = "claimed";
+      version = 4;
+      return jsonResponse({
+        schema: PRACTICE_TRANSITION_RESULT_SCHEMA,
+        operation: "claim",
+        status: "claimed",
+        from_version: 3,
+        version: 4,
+      });
+    }
+    assert.equal(path.endsWith("practice-results"), true);
+    resultCalls += 1;
+    taskState = "completed";
+    version = 5;
+    resultCode = "concern_confirmed";
+    throw new TypeError("result committed but both responses vanished");
+  };
+  await assert.rejects(
+    executePracticeAuto(item.config, item.identity, {
+      nowUnix: NOW + 1,
+      fetchImplementation: firstFetch,
+    }),
+    error => error?.code === "agent_bridge_transport_failed",
+  );
+  assert.equal(claimCalls, 1);
+  assert.equal(resultCalls, 2, "one exact signed result was retried once");
+
+  const secondPaths = [];
+  const recovered = await executePracticeAuto(item.config, item.identity, {
+    nowUnix: NOW + 2,
+    fetchImplementation: async url => {
+      const path = new URL(url).pathname;
+      secondPaths.push(path);
+      assert.equal(path, "/api/agent-bridge/practice-tasks");
+      return jsonResponse(practiceTaskResponse(taskState, version, resultCode));
+    },
+  });
+  assert.deepEqual(recovered, {
+    schema: "hepta.paper_raid.agent_bridge.practice_auto_result.v1",
+    mode: "practice_unranked",
+    status: "already_completed",
+    task_state: "completed",
+    version: 5,
+    result_code: "concern_confirmed",
+  });
+  assert.deepEqual(secondPaths, ["/api/agent-bridge/practice-tasks"]);
+  assert.equal(claimCalls, 1, "recovery issued a second claim");
+  assert.equal(resultCalls, 2, "recovery issued a second result operation");
+
+  const readOnly = await getPractice(item.config, item.identity, {
+    nowUnix: NOW + 3,
+    fetchImplementation: async url => {
+      assert.equal(new URL(url).pathname, "/api/agent-bridge/practice-tasks");
+      return jsonResponse(practiceTaskResponse(taskState, version, resultCode));
+    },
+  });
+  assert.equal(readOnly.task.state, "completed");
+});
+
+test("practice-auto echoes the discovered token and rejects same-version session replacement", async t => {
+  const item = await fixture(t, "practice-auto-aba-rejected");
+  await saveBridgeState(item.statePath, item.identity, item.binding, NOW);
+  const tokenA = `sha256:${"a".repeat(64)}`;
+  const tokenB = `sha256:${"d".repeat(64)}`;
+  const calls = [];
+  await assert.rejects(
+    executePracticeAuto(item.config, item.identity, {
+      nowUnix: NOW + 4,
+      fetchImplementation: async (url, init) => {
+        const path = new URL(url).pathname;
+        calls.push({ path, body: JSON.parse(init.body) });
+        if (path.endsWith("practice-tasks")) {
+          return jsonResponse(practiceTaskResponse("pending", 3, null, tokenA));
+        }
+        assert.equal(path, "/api/agent-bridge/practice-claims");
+        assert.deepEqual(JSON.parse(init.body), {
+          schema: PRACTICE_CLAIM_REQUEST_SCHEMA,
+          expected_version: 3,
+          task_token: tokenA,
+        });
+        return jsonResponse(
+          { error: "practice_agent_task_changed", current_task_token: tokenB },
+          409,
+        );
+      },
+    }),
+    error => error?.code === "agent_bridge_request_failed",
+  );
+  assert.deepEqual(calls.map(call => call.path), [
+    "/api/agent-bridge/practice-tasks",
+    "/api/agent-bridge/practice-claims",
+  ]);
+  assert.equal(
+    calls.some(call => call.path.endsWith("practice-results")),
+    false,
+    "same-version replacement reached result execution",
+  );
+});
+
+test("practice-auto obtains a fresh signing time for every new operation", async t => {
+  const item = await fixture(t, "practice-auto-fresh-clock");
+  await saveBridgeState(item.statePath, item.identity, item.binding, NOW);
+  const clockValues = [NOW, NOW + 70, NOW + 140, NOW + 210, NOW + 280];
+  const observedIssuedAt = [];
+  let taskState = "pending";
+  let version = 3;
+  let resultCode = null;
+  const result = await executePracticeAuto(item.config, item.identity, {
+    clock: () => clockValues.shift(),
+    fetchImplementation: async (url, init) => {
+      const path = new URL(url).pathname;
+      observedIssuedAt.push(
+        Number(headersObject(init.headers)["x-paper-raid-agent-issued-at"]),
+      );
+      if (path.endsWith("practice-tasks")) {
+        return jsonResponse(practiceTaskResponse(taskState, version, resultCode));
+      }
+      if (path.endsWith("practice-claims")) {
+        taskState = "claimed";
+        version = 4;
+        return jsonResponse({
+          schema: PRACTICE_TRANSITION_RESULT_SCHEMA,
+          operation: "claim",
+          status: "claimed",
+          from_version: 3,
+          version: 4,
+        });
+      }
+      assert.equal(path, "/api/agent-bridge/practice-results");
+      taskState = "completed";
+      version = 5;
+      resultCode = "concern_confirmed";
+      return jsonResponse({
+        schema: PRACTICE_TRANSITION_RESULT_SCHEMA,
+        operation: "result",
+        status: "completed",
+        from_version: 4,
+        version: 5,
+        result_code: resultCode,
+      });
+    },
+  });
+  assert.equal(result.status, "completed");
+  assert.deepEqual(observedIssuedAt, [NOW, NOW + 70, NOW + 140, NOW + 210, NOW + 280]);
+  assert.equal(clockValues.length, 0);
 });
 
 test("Bridge downloads all four challenge objects through exact signed assignment queries", async t => {

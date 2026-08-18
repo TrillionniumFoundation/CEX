@@ -22,8 +22,10 @@ import {
 } from "./review.mjs";
 import {
   bridgeHealth,
+  executePracticeAuto,
   getBinding,
   getInbox,
+  getPractice,
   pairAgent,
   prepareChallengeMaterialsForStart,
   executeAndSubmitAuthorDelivery,
@@ -58,6 +60,8 @@ Usage:
   paper-raid-agent-bridge binding --config FILE
   paper-raid-agent-bridge health --config FILE [--status healthy|degraded|offline]
   paper-raid-agent-bridge inbox --config FILE [--watch]
+  paper-raid-agent-bridge practice --config FILE
+  paper-raid-agent-bridge practice-auto --config FILE
   paper-raid-agent-bridge prepare-materials --config FILE --work-item UUID
   paper-raid-agent-bridge work --config FILE [--watch] [--auto]
   paper-raid-agent-bridge sign-action --config FILE --input FILE
@@ -575,6 +579,18 @@ export async function main(argv) {
         setTimeout(resolveTimer, config.poll_interval_ms),
       );
     }
+  }
+  if (command === "practice") {
+    allowed(flags, ["--config"]);
+    const { config, identity } = await configured(flags);
+    output(await getPractice(config, identity));
+    return;
+  }
+  if (command === "practice-auto") {
+    allowed(flags, ["--config"]);
+    const { config, identity } = await configured(flags);
+    output(await executePracticeAuto(config, identity));
+    return;
   }
   if (command === "prepare-materials") {
     allowed(flags, ["--config", "--work-item"]);

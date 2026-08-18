@@ -1972,18 +1972,19 @@ mod tests {
     use chrono::SecondsFormat;
     use ed25519_dalek::{Signer, SigningKey};
     use hepta_paper_raid_contracts::{
-        agent_bridge_request_proof_signing_bytes, frozen_challenge_material_authority_hash,
-        frozen_review_authority_hash, frozen_review_input_root, paper_release_candidate_hash,
-        review_execution_receipt_id, review_execution_receipt_signing_bytes, sha256_digest,
-        sign_authorship_consent, AgentBridgeRequestProofV1, AssignedChallengeMaterialBundleV1,
-        AuthorshipConsentSigningV2, ChallengeDatasetManifestV1, ChallengeEvaluatorManifestV1,
-        ChallengeManifestObjectV1, ChallengePackContentContractV1, ChallengePackDeploymentV1,
-        ChallengePackManifestV1, ChallengePackObjectV1, FrozenChallengeMaterialAuthorityV1,
-        FrozenReviewAuthorityV1, FrozenReviewExecutionPolicyV1, FrozenReviewInputObjectV1,
-        FrozenReviewObjectV1, PaperBundleAuthorConsentV2, PaperReleaseAuthorV2,
-        PaperReleaseCandidateV2, SignedConsumerUserAssertionV2, AGENT_BRIDGE_REQUEST_PROOF_V1,
-        AUTHORSHIP_CONSENT_V2, FROZEN_CHALLENGE_MATERIAL_AUTHORITY_V1, FROZEN_REVIEW_AUTHORITY_V1,
-        PAPER_BUNDLE_V2, PAPER_RELEASE_CANDIDATE_V2, REVIEW_EXECUTION_RECEIPT_V1,
+        agent_bridge_request_proof_signing_bytes, decode_digest,
+        frozen_challenge_material_authority_hash, frozen_review_authority_hash,
+        frozen_review_input_root, paper_release_candidate_hash, review_execution_receipt_id,
+        review_execution_receipt_signing_bytes, sha256_digest, sign_authorship_consent,
+        AgentBridgeRequestProofV1, AssignedChallengeMaterialBundleV1, AuthorshipConsentSigningV2,
+        ChallengeDatasetManifestV1, ChallengeEvaluatorManifestV1, ChallengeManifestObjectV1,
+        ChallengePackContentContractV1, ChallengePackDeploymentV1, ChallengePackManifestV1,
+        ChallengePackObjectV1, FrozenChallengeMaterialAuthorityV1, FrozenReviewAuthorityV1,
+        FrozenReviewExecutionPolicyV1, FrozenReviewInputObjectV1, FrozenReviewObjectV1,
+        PaperBundleAuthorConsentV2, PaperReleaseAuthorV2, PaperReleaseCandidateV2,
+        SignedConsumerUserAssertionV2, AGENT_BRIDGE_REQUEST_PROOF_V1, AUTHORSHIP_CONSENT_V2,
+        FROZEN_CHALLENGE_MATERIAL_AUTHORITY_V1, FROZEN_REVIEW_AUTHORITY_V1, PAPER_BUNDLE_V2,
+        PAPER_RELEASE_CANDIDATE_V2, REVIEW_EXECUTION_RECEIPT_V1,
     };
     use sqlx::PgPool;
     use tower::ServiceExt;
@@ -1995,6 +1996,9 @@ mod tests {
             AgentBridgeQuotaConfig, AlphaAuthorRole, AlphaIdentityScope, CasConfig, Config,
             ConsumerAssertionConfig, EdgeScope, IdentityMode,
         },
+        practice::{
+            CaptainPlanChoiceV1, EvidenceAssessmentChoiceV1, PracticeSessionV1, PracticeStageV1,
+        },
     };
 
     const REVIEW_TASK_ID_DOMAIN: &str = "hepta.paper_raid.agent_bridge.review_task_id.v1";
@@ -2003,7 +2007,7 @@ mod tests {
 
     #[derive(Clone)]
     struct ReviewPgMock {
-        binding: Value,
+        bindings: Arc<Mutex<Vec<Value>>>,
         human_player: Value,
         bundles: Arc<HashMap<Uuid, Value>>,
         rooms: Arc<HashMap<Uuid, Value>>,
@@ -2052,6 +2056,7 @@ mod tests {
         review_queue_override: Arc<Mutex<Option<Value>>>,
         command_replies: Arc<Mutex<VecDeque<ReviewCommandReply>>>,
         command_calls: Arc<Mutex<Vec<ReviewCommandCall>>>,
+        bindings: Arc<Mutex<Vec<Value>>>,
     }
 
     struct ChallengeRouteFixture {
@@ -2060,7 +2065,11 @@ mod tests {
     }
 
     async fn mock_agent_bindings(State(mock): State<ReviewPgMock>) -> Json<Value> {
-        Json(json!([mock.binding]))
+        Json(json!(mock
+            .bindings
+            .lock()
+            .expect("review binding mock lock")
+            .clone()))
     }
 
     async fn mock_current_human_player(State(mock): State<ReviewPgMock>) -> Json<Value> {
@@ -3120,8 +3129,9 @@ mod tests {
             "signing_public_key": human_public_key,
             "signing_public_key_hash": human_public_key_hash,
         });
+        let bindings = Arc::new(Mutex::new(vec![binding]));
         let mock_base = spawn_review_pg_mock(ReviewPgMock {
-            binding,
+            bindings: bindings.clone(),
             human_player,
             bundles: Arc::new(hepta_bundles.clone()),
             rooms: Arc::new(rooms),
@@ -3251,6 +3261,7 @@ mod tests {
             review_queue_override,
             command_replies,
             command_calls,
+            bindings,
         }
     }
 
@@ -4026,6 +4037,532 @@ mod tests {
         let required = ["evaluation_id", "timeout_ms", "exit_code"];
         let source = include_str!("review_receipts.rs");
         assert!(required.iter().all(|marker| source.contains(marker)));
+    }
+
+    #[tokio::test]
+    async fn real_postgres_practice_agent_bridge_owner_replay_restart_and_authority_boundary() {
+        let Ok(database_url) = std::env::var("PAPER_RAID_BFF_TEST_DATABASE_URL") else {
+            eprintln!("PAPER_RAID_BFF_TEST_DATABASE_URL is unset; practice Agent PG gate skipped");
+            return;
+        };
+        let harness = review_pg_harness(database_url, true).await;
+        let agent_key_id = sha256_digest(harness.agent_key.verifying_key().as_bytes());
+        let now = Utc::now();
+        let mut practice = PracticeSessionV1::new(
+            Uuid::new_v4(),
+            harness.identity.subject_id.clone(),
+            harness.identity.player_id,
+            harness.binding_id,
+            Uuid::new_v4(),
+            now,
+            now + chrono::Duration::minutes(20),
+        )
+        .expect("practice Agent PG fixture");
+        practice.stage = PracticeStageV1::ExperimentWaitingBridge;
+        practice.version = 3;
+        practice.captain_plan = Some(CaptainPlanChoiceV1::AuditHighestRiskClaim);
+        practice.evidence_assessment = Some(EvidenceAssessmentChoiceV1::CitationMismatch);
+        practice.validate().expect("waiting practice fixture");
+        crate::practice_http::insert_test_practice_session(&harness.state.pool, &practice)
+            .await
+            .expect("insert practice Agent PG fixture");
+
+        let delivery_count_before = sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM paper_raid_bff_agent_delivery_drafts",
+        )
+        .fetch_one(&harness.state.pool)
+        .await
+        .expect("count delivery authority before practice");
+        let review_count_before = sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM paper_raid_bff_review_execution_receipts",
+        )
+        .fetch_one(&harness.state.pool)
+        .await
+        .expect("count Review authority before practice");
+
+        let task_path = "/api/agent-bridge/practice-tasks";
+        let task_body = canonical_json_bytes(&json!({
+            "schema": "hepta.paper_raid.agent_bridge.practice_task_query.v1",
+        }))
+        .expect("practice task query bytes");
+        let task_headers = signed_agent_headers_for(
+            &harness.agent_key,
+            harness.binding_id,
+            &harness.agent_id,
+            &agent_key_id,
+            &Method::POST,
+            task_path,
+            "",
+            Uuid::new_v4(),
+            &task_body,
+        );
+        let (task_status, _, task_response) = router_request(
+            crate::app::router(harness.state.clone()),
+            Method::POST,
+            task_path.to_string(),
+            task_headers,
+            task_body.clone(),
+        )
+        .await;
+        assert_eq!(task_status, StatusCode::OK);
+        let task: Value = serde_json::from_slice(&task_response).expect("practice task response");
+        assert_eq!(task["mode"], "practice_unranked");
+        assert_eq!(task["task"]["state"], "pending");
+        assert_eq!(task["task"]["version"], 3);
+        let task_token_a = task["task"]["task_token"]
+            .as_str()
+            .expect("pending practice task token")
+            .to_owned();
+        assert!(decode_digest(&task_token_a).is_ok());
+        let task_text = String::from_utf8(task_response).expect("practice task UTF-8");
+        for forbidden in [
+            "practice_session_id",
+            "subject_id",
+            "player_id",
+            "binding_id",
+            "bridge_task_id",
+            "request_hash",
+            "result_hash",
+            "activation_eligible",
+            "qualification_eligible",
+            "scientific_finality_eligible",
+            "ranking_eligible",
+            "reward_eligible",
+            "economic_eligible",
+        ] {
+            assert!(!task_text.contains(forbidden), "task leaked {forbidden}");
+        }
+
+        let result_path = "/api/agent-bridge/practice-results";
+        let hostile_body = canonical_json_bytes(&json!({
+            "schema": "hepta.paper_raid.agent_bridge.practice_result_request.v1",
+            "expected_version": 3,
+            "task_token": &task_token_a,
+            "result_code": "concern_confirmed",
+            "bridge_task_id": Uuid::new_v4(),
+        }))
+        .expect("hostile practice result bytes");
+        let hostile_headers = signed_agent_headers_for(
+            &harness.agent_key,
+            harness.binding_id,
+            &harness.agent_id,
+            &agent_key_id,
+            &Method::POST,
+            result_path,
+            "",
+            Uuid::new_v4(),
+            &hostile_body,
+        );
+        let (hostile_status, _, _) = router_request(
+            crate::app::router(harness.state.clone()),
+            Method::POST,
+            result_path.to_string(),
+            hostile_headers,
+            hostile_body,
+        )
+        .await;
+        assert_eq!(hostile_status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT version FROM paper_raid_bff_practice_sessions \
+                 WHERE practice_session_id=$1"
+            )
+            .bind(practice.practice_session_id)
+            .fetch_one(&harness.state.pool)
+            .await
+            .expect("read practice version after hostile request"),
+            3,
+        );
+
+        let claim_path = "/api/agent-bridge/practice-claims";
+        let claim_body = canonical_json_bytes(&json!({
+            "schema": "hepta.paper_raid.agent_bridge.practice_claim_request.v1",
+            "expected_version": 3,
+            "task_token": &task_token_a,
+        }))
+        .expect("practice claim bytes");
+        let held_claim_headers = signed_agent_headers_for(
+            &harness.agent_key,
+            harness.binding_id,
+            &harness.agent_id,
+            &agent_key_id,
+            &Method::POST,
+            claim_path,
+            "",
+            Uuid::new_v4(),
+            &claim_body,
+        );
+        let claim_nonce = Uuid::new_v4();
+        let claim_headers = signed_agent_headers_for(
+            &harness.agent_key,
+            harness.binding_id,
+            &harness.agent_id,
+            &agent_key_id,
+            &Method::POST,
+            claim_path,
+            "",
+            claim_nonce,
+            &claim_body,
+        );
+        let (claim_status, _, claim_response) = router_request(
+            crate::app::router(harness.state.clone()),
+            Method::POST,
+            claim_path.to_string(),
+            claim_headers.clone(),
+            claim_body.clone(),
+        )
+        .await;
+        assert_eq!(claim_status, StatusCode::OK);
+        let claim: Value =
+            serde_json::from_slice(&claim_response).expect("practice claim response");
+        assert_eq!(claim["from_version"], 3);
+        assert_eq!(claim["version"], 4);
+
+        sqlx::query(
+            "UPDATE paper_raid_bff_agent_request_uses SET \
+                response_status=NULL,response_body=NULL,completed_at=NULL \
+             WHERE binding_id=$1 AND nonce=$2",
+        )
+        .bind(harness.binding_id)
+        .bind(claim_nonce)
+        .execute(&harness.state.pool)
+        .await
+        .expect("simulate lost practice claim response");
+        let restarted = AppState::connect(harness.config.clone())
+            .await
+            .expect("restart BFF after practice claim loss");
+        let (claim_replay_status, _, claim_replay_response) = router_request(
+            crate::app::router(restarted.clone()),
+            Method::POST,
+            claim_path.to_string(),
+            claim_headers,
+            claim_body.clone(),
+        )
+        .await;
+        assert_eq!(claim_replay_status, claim_status);
+        assert_eq!(
+            claim_replay_response, claim_response,
+            "recovered practice claim bytes drifted"
+        );
+
+        let claimed_task_headers = signed_agent_headers_for(
+            &harness.agent_key,
+            harness.binding_id,
+            &harness.agent_id,
+            &agent_key_id,
+            &Method::POST,
+            task_path,
+            "",
+            Uuid::new_v4(),
+            &task_body,
+        );
+        let (claimed_task_status, _, claimed_task_response) = router_request(
+            crate::app::router(restarted.clone()),
+            Method::POST,
+            task_path.to_string(),
+            claimed_task_headers,
+            task_body.clone(),
+        )
+        .await;
+        assert_eq!(claimed_task_status, StatusCode::OK);
+        let claimed_task: Value =
+            serde_json::from_slice(&claimed_task_response).expect("claimed practice task");
+        assert_eq!(claimed_task["task"]["state"], "claimed");
+        assert_eq!(claimed_task["task"]["version"], 4);
+        let claimed_task_token = claimed_task["task"]["task_token"]
+            .as_str()
+            .expect("claimed practice task token")
+            .to_owned();
+        assert_ne!(claimed_task_token, task_token_a);
+
+        let result_body = canonical_json_bytes(&json!({
+            "schema": "hepta.paper_raid.agent_bridge.practice_result_request.v1",
+            "expected_version": 4,
+            "task_token": &claimed_task_token,
+            "result_code": "concern_confirmed",
+        }))
+        .expect("practice result bytes");
+        let result_nonce = Uuid::new_v4();
+        let result_headers = signed_agent_headers_for(
+            &harness.agent_key,
+            harness.binding_id,
+            &harness.agent_id,
+            &agent_key_id,
+            &Method::POST,
+            result_path,
+            "",
+            result_nonce,
+            &result_body,
+        );
+        let (result_status, _, result_response) = router_request(
+            crate::app::router(restarted.clone()),
+            Method::POST,
+            result_path.to_string(),
+            result_headers.clone(),
+            result_body.clone(),
+        )
+        .await;
+        assert_eq!(result_status, StatusCode::OK);
+        let result: Value =
+            serde_json::from_slice(&result_response).expect("practice result response");
+        assert_eq!(result["from_version"], 4);
+        assert_eq!(result["version"], 5);
+        assert_eq!(result["result_code"], "concern_confirmed");
+
+        sqlx::query(
+            "UPDATE paper_raid_bff_agent_request_uses SET \
+                response_status=NULL,response_body=NULL,completed_at=NULL \
+             WHERE binding_id=$1 AND nonce=$2",
+        )
+        .bind(harness.binding_id)
+        .bind(result_nonce)
+        .execute(&restarted.pool)
+        .await
+        .expect("simulate lost practice result response");
+        let restarted_again = AppState::connect(harness.config.clone())
+            .await
+            .expect("restart BFF after practice result loss");
+        let (result_replay_status, _, result_replay_response) = router_request(
+            crate::app::router(restarted_again.clone()),
+            Method::POST,
+            result_path.to_string(),
+            result_headers,
+            result_body,
+        )
+        .await;
+        assert_eq!(result_replay_status, result_status);
+        assert_eq!(
+            result_replay_response, result_response,
+            "recovered practice result bytes drifted"
+        );
+
+        let stored = sqlx::query(
+            "SELECT stage,version,bridge_task_state,bridge_result_code,bridge_result_hash \
+             FROM paper_raid_bff_practice_sessions WHERE practice_session_id=$1",
+        )
+        .bind(practice.practice_session_id)
+        .fetch_one(&restarted_again.pool)
+        .await
+        .expect("read completed practice Agent task");
+        assert_eq!(
+            stored.get::<String, _>("stage"),
+            "experiment_interpretation"
+        );
+        assert_eq!(stored.get::<i64, _>("version"), 5);
+        assert_eq!(stored.get::<String, _>("bridge_task_state"), "completed");
+        assert_eq!(
+            stored.get::<String, _>("bridge_result_code"),
+            "concern_confirmed"
+        );
+        assert!(stored
+            .get::<String, _>("bridge_result_hash")
+            .starts_with("sha256:"));
+        let events = sqlx::query(
+            "SELECT actor_kind,event_kind,from_version,to_version,request_hash \
+             FROM paper_raid_bff_practice_events WHERE practice_session_id=$1 \
+             ORDER BY to_version",
+        )
+        .bind(practice.practice_session_id)
+        .fetch_all(&restarted_again.pool)
+        .await
+        .expect("read practice Agent events");
+        assert_eq!(
+            events.len(),
+            2,
+            "response recovery duplicated practice events"
+        );
+        assert_eq!(events[0].get::<String, _>("actor_kind"), "agent");
+        assert_eq!(
+            events[0].get::<String, _>("event_kind"),
+            "experiment_claimed"
+        );
+        assert_eq!(events[0].get::<i64, _>("from_version"), 3);
+        assert_eq!(events[0].get::<i64, _>("to_version"), 4);
+        assert_eq!(
+            events[1].get::<String, _>("event_kind"),
+            "experiment_completed"
+        );
+        assert_eq!(events[1].get::<i64, _>("from_version"), 4);
+        assert_eq!(events[1].get::<i64, _>("to_version"), 5);
+        assert_ne!(
+            events[0].get::<String, _>("request_hash"),
+            events[1].get::<String, _>("request_hash")
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM paper_raid_bff_agent_delivery_drafts"
+            )
+            .fetch_one(&restarted_again.pool)
+            .await
+            .expect("count delivery authority after practice"),
+            delivery_count_before,
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM paper_raid_bff_review_execution_receipts"
+            )
+            .fetch_one(&restarted_again.pool)
+            .await
+            .expect("count Review authority after practice"),
+            review_count_before,
+        );
+
+        let abandoned = crate::practice_http::abandon_test_practice_session(
+            &restarted_again.pool,
+            &harness.identity,
+            5,
+        )
+        .await
+        .expect("abandon completed practice before replacement");
+        assert_eq!(abandoned.stage, PracticeStageV1::Abandoned);
+        assert_eq!(abandoned.version, 6);
+
+        let terminal_task_headers = signed_agent_headers_for(
+            &harness.agent_key,
+            harness.binding_id,
+            &harness.agent_id,
+            &agent_key_id,
+            &Method::POST,
+            task_path,
+            "",
+            Uuid::new_v4(),
+            &task_body,
+        );
+        let (terminal_task_status, _, terminal_task_response) = router_request(
+            crate::app::router(restarted_again.clone()),
+            Method::POST,
+            task_path.to_string(),
+            terminal_task_headers,
+            task_body.clone(),
+        )
+        .await;
+        assert_eq!(terminal_task_status, StatusCode::OK);
+        let terminal_task: Value = serde_json::from_slice(&terminal_task_response)
+            .expect("terminal completed practice task");
+        assert_eq!(terminal_task["status"], "ready");
+        assert_eq!(terminal_task["task"]["state"], "completed");
+        assert_eq!(terminal_task["task"]["version"], 6);
+        assert_eq!(terminal_task["task"]["result_code"], "concern_confirmed");
+        assert_ne!(
+            terminal_task["task"]["task_token"], claimed_task_token,
+            "terminal completion retained a stale transition token"
+        );
+
+        let replacement_now = Utc::now() + chrono::Duration::seconds(1);
+        let mut replacement = PracticeSessionV1::new(
+            Uuid::new_v4(),
+            harness.identity.subject_id.clone(),
+            harness.identity.player_id,
+            harness.binding_id,
+            Uuid::new_v4(),
+            replacement_now,
+            replacement_now + chrono::Duration::minutes(20),
+        )
+        .expect("replacement practice fixture");
+        replacement.stage = PracticeStageV1::ExperimentWaitingBridge;
+        replacement.version = 3;
+        replacement.captain_plan = Some(CaptainPlanChoiceV1::AuditHighestRiskClaim);
+        replacement.evidence_assessment = Some(EvidenceAssessmentChoiceV1::CitationMismatch);
+        replacement
+            .validate()
+            .expect("replacement waiting practice");
+        crate::practice_http::insert_test_practice_session(&restarted_again.pool, &replacement)
+            .await
+            .expect("insert same-version replacement practice");
+
+        let (held_status, _, _) = router_request(
+            crate::app::router(restarted_again.clone()),
+            Method::POST,
+            claim_path.to_string(),
+            held_claim_headers,
+            claim_body,
+        )
+        .await;
+        assert_eq!(
+            held_status,
+            StatusCode::CONFLICT,
+            "delayed session-A token mutated same-version session B"
+        );
+        let replacement_row = sqlx::query(
+            "SELECT version,bridge_task_state FROM paper_raid_bff_practice_sessions \
+             WHERE practice_session_id=$1",
+        )
+        .bind(replacement.practice_session_id)
+        .fetch_one(&restarted_again.pool)
+        .await
+        .expect("read replacement practice after delayed A request");
+        assert_eq!(replacement_row.get::<i64, _>("version"), 3);
+        assert_eq!(
+            replacement_row.get::<String, _>("bridge_task_state"),
+            "pending"
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM paper_raid_bff_practice_events \
+                 WHERE practice_session_id=$1 AND actor_kind='agent'"
+            )
+            .bind(replacement.practice_session_id)
+            .fetch_one(&restarted_again.pool)
+            .await
+            .expect("count replacement Agent events"),
+            0,
+        );
+
+        let original_binding = harness
+            .bindings
+            .lock()
+            .expect("practice binding mock lock")
+            .first()
+            .cloned()
+            .expect("original binding mock");
+        let mut second_binding = original_binding.clone();
+        second_binding["binding_id"] = json!(Uuid::new_v4());
+        *harness.bindings.lock().expect("second binding mock lock") =
+            vec![original_binding.clone(), second_binding];
+        let second_active_headers = signed_agent_headers_for(
+            &harness.agent_key,
+            harness.binding_id,
+            &harness.agent_id,
+            &agent_key_id,
+            &Method::POST,
+            task_path,
+            "",
+            Uuid::new_v4(),
+            &task_body,
+        );
+        let (second_active_status, _, _) = router_request(
+            crate::app::router(restarted_again.clone()),
+            Method::POST,
+            task_path.to_string(),
+            second_active_headers,
+            task_body.clone(),
+        )
+        .await;
+        assert_eq!(second_active_status, StatusCode::CONFLICT);
+
+        let mut revoked_binding = original_binding;
+        revoked_binding["status"] = json!("revoked");
+        *harness.bindings.lock().expect("revoked binding mock lock") = vec![revoked_binding];
+        let revoked_headers = signed_agent_headers_for(
+            &harness.agent_key,
+            harness.binding_id,
+            &harness.agent_id,
+            &agent_key_id,
+            &Method::POST,
+            task_path,
+            "",
+            Uuid::new_v4(),
+            &task_body,
+        );
+        let (revoked_status, _, _) = router_request(
+            crate::app::router(restarted_again),
+            Method::POST,
+            task_path.to_string(),
+            revoked_headers,
+            task_body,
+        )
+        .await;
+        assert_eq!(revoked_status, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

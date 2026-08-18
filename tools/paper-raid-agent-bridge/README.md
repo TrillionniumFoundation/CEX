@@ -93,6 +93,16 @@ concurrent in-process cycles are serialized and suppress an already accepted
 item. The BFF's deterministic request/receipt identities remain the
 cross-process lost-response boundary.
 
+The installed service also handles one deliberately separate exception in
+both Confirm and Auto: after the player explicitly advances the browser-only
+`practice_unranked` tutorial to its Experiment handoff, the service discovers,
+claims, and resolves that fixed bounded exercise. That browser transition is
+the player's local practice consent. The task is always rediscovered before a
+transition, carries an opaque session/state/version token, and can produce no
+activation, qualification, scientific finality, score, ranking, reward, or
+economic authority. Confirm remains inert for all formal Author and Review
+inbox work; this tutorial exception does not weaken that policy.
+
 Updates must use the same pinned release key and a sequence greater than both
 `current` and `previous`:
 

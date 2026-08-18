@@ -776,6 +776,9 @@ fn agent_bridge_path_method_allowed(method: &str, path: &str) -> bool {
         ("GET", "/api/agent-bridge/binding")
             | ("POST", "/api/agent-bridge/health")
             | ("POST", "/api/agent-bridge/inbox")
+            | ("POST", "/api/agent-bridge/practice-tasks")
+            | ("POST", "/api/agent-bridge/practice-claims")
+            | ("POST", "/api/agent-bridge/practice-results")
             | ("POST", "/api/agent-bridge/delivery-drafts")
             | ("POST", "/api/agent-bridge/proposals")
             | ("GET", REVIEW_OBJECT_DOWNLOAD_PATH_V1)
@@ -6559,6 +6562,34 @@ mod agent_bridge_challenge_request_tests {
                 validate_agent_bridge_canonical_query(hostile).is_err(),
                 "hostile canonical query unexpectedly accepted: {hostile}"
             );
+        }
+    }
+
+    #[test]
+    fn practice_post_routes_are_exactly_allowlisted_in_request_proofs() {
+        let mut claim = challenge_get_claim();
+        claim.http_method = "POST".to_string();
+        claim.canonical_query.clear();
+        claim.body_hash = sha256_digest(br#"{"schema":"bounded-practice-fixture"}"#);
+        for path in [
+            "/api/agent-bridge/practice-tasks",
+            "/api/agent-bridge/practice-claims",
+            "/api/agent-bridge/practice-results",
+        ] {
+            claim.canonical_path = path.to_string();
+            assert!(
+                agent_bridge_request_proof_signing_bytes(&claim).is_ok(),
+                "exact practice POST path was rejected: {path}"
+            );
+
+            let mut wrong_method = claim.clone();
+            wrong_method.http_method = "GET".to_string();
+            wrong_method.body_hash = sha256_digest(&[]);
+            assert!(agent_bridge_request_proof_signing_bytes(&wrong_method).is_err());
+
+            let mut aliased_path = claim.clone();
+            aliased_path.canonical_path = format!("{path}/");
+            assert!(agent_bridge_request_proof_signing_bytes(&aliased_path).is_err());
         }
     }
 }

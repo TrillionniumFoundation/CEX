@@ -10,6 +10,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgRow, PgPool, Postgres, Row, Transaction};
+use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
 use crate::{
@@ -19,15 +20,68 @@ use crate::{
     error::AppError,
     html,
     practice::{
+        PracticeActorKindV1, PracticeBridgeClaimRequestV1, PracticeBridgeResultRequestV1,
         PracticeBrowserActionRequestV1, PracticeBrowserActionV1, PracticeEligibilityV1,
-        PracticeError, PracticeEventV1, PracticeSessionV1, PracticeStageV1,
-        PRACTICE_BROWSER_ACTION_V1, PRACTICE_SESSION_V1,
+        PracticeError, PracticeEventKindV1, PracticeEventV1, PracticeExperimentResultV1,
+        PracticeSessionV1, PracticeStageV1, PRACTICE_BRIDGE_CLAIM_V1, PRACTICE_BRIDGE_RESULT_V1,
+        PRACTICE_BROWSER_ACTION_V1, PRACTICE_EVENT_V1, PRACTICE_SESSION_V1,
     },
 };
 
 const PRACTICE_PLAYER_VIEW_V1: &str = "hepta.paper_raid.practice_player_view.v1";
 const PRACTICE_DURATION_MINUTES: i64 = 20;
 const JSON_SAFE_U64_MAX: u64 = 9_007_199_254_740_991;
+const PRACTICE_AGENT_RESULT_BINDING_V1: &str = "hepta.paper_raid.practice_agent_result_binding.v1";
+const PRACTICE_AGENT_TASK_TOKEN_V1: &str = "hepta.paper_raid.practice_agent_task_token.v1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PracticeAgentTransitionV1 {
+    Claim,
+    Result(PracticeExperimentResultV1),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PracticeAgentTransitionReceiptV1 {
+    pub(crate) from_version: u64,
+    pub(crate) to_version: u64,
+    pub(crate) result_code: Option<PracticeExperimentResultV1>,
+}
+
+pub(crate) fn practice_agent_task_token(practice: &PracticeSessionV1) -> Result<String, AppError> {
+    practice.validate().map_err(|_| AppError::Internal)?;
+    let frame = serde_json::to_vec(&json!({
+        "schema": PRACTICE_AGENT_TASK_TOKEN_V1,
+        "practice_session_id": practice.practice_session_id,
+        "subject_id": practice.subject_id,
+        "player_id": practice.player_id,
+        "binding_id": practice.binding_id,
+        "bridge_task_id": practice.bridge_task_id,
+        "mode": practice.mode,
+        "scenario_id": practice.scenario_id,
+        "task_kind": "evidence_audit_intro",
+        "materials": {
+            "schema": "hepta.paper_raid.agent_bridge.practice_materials.v1",
+            "claim": "The candidate result remains supported after the evidence audit.",
+            "baseline": "Compare the stated claim with the supplied observation summary.",
+            "observations": [
+                "The cited observation and the claimed scope do not fully align.",
+                "Run the bounded practice check and report only one allowed result code."
+            ],
+        },
+        "allowed_result_codes": [
+            "concern_confirmed",
+            "concern_not_detected",
+            "inconclusive"
+        ],
+        "stage": practice.stage,
+        "version": practice.version,
+        "bridge_task_state": practice.bridge_task_state,
+        "bridge_result_code": practice.bridge_result_code,
+        "expires_at": practice.expires_at,
+    }))
+    .map_err(|_| AppError::Internal)?;
+    Ok(digest_label(&frame))
+}
 
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
@@ -409,6 +463,248 @@ async fn apply_stored_browser_action(
     Ok(practice)
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn apply_agent_practice_transition(
+    pool: &PgPool,
+    subject_id: &str,
+    player_id: Uuid,
+    binding_id: Uuid,
+    expected_version: u64,
+    task_token: &str,
+    request_hash: &str,
+    transition: PracticeAgentTransitionV1,
+) -> Result<PracticeAgentTransitionReceiptV1, AppError> {
+    if expected_version == 0
+        || expected_version > JSON_SAFE_U64_MAX
+        || binding_id.is_nil()
+        || !valid_digest_label(task_token)
+        || !valid_digest_label(request_hash)
+    {
+        return Err(AppError::Invalid(
+            "invalid server-bound Agent practice transition".into(),
+        ));
+    }
+    let mut transaction = pool.begin().await?;
+    lock_player(&mut transaction, player_id).await?;
+    if let Some(recovered) = recover_agent_practice_transition(
+        &mut transaction,
+        subject_id,
+        player_id,
+        binding_id,
+        expected_version,
+        request_hash,
+        transition,
+    )
+    .await?
+    {
+        transaction.commit().await?;
+        return Ok(recovered);
+    }
+
+    let mut practice =
+        load_live_agent_session_for_update(&mut transaction, subject_id, player_id, binding_id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+    let expected_task_token = practice_agent_task_token(&practice)?;
+    if !bool::from(task_token.as_bytes().ct_eq(expected_task_token.as_bytes())) {
+        return Err(AppError::Conflict("practice_agent_task_changed".into()));
+    }
+    let now = Utc::now();
+    let event = match transition {
+        PracticeAgentTransitionV1::Claim => {
+            let request = PracticeBridgeClaimRequestV1 {
+                schema: PRACTICE_BRIDGE_CLAIM_V1.to_owned(),
+                event_id: Uuid::new_v4(),
+                practice_session_id: practice.practice_session_id,
+                subject_id: practice.subject_id.clone(),
+                player_id: practice.player_id,
+                binding_id: practice.binding_id,
+                bridge_task_id: practice.bridge_task_id,
+                expected_version,
+                request_hash: request_hash.to_owned(),
+            };
+            practice
+                .claim_bridge_task(&request, now)
+                .map_err(map_practice_error)?
+        }
+        PracticeAgentTransitionV1::Result(result_code) => {
+            let result_hash = digest_label(
+                &serde_json::to_vec(&json!({
+                    "schema": PRACTICE_AGENT_RESULT_BINDING_V1,
+                    "practice_session_id": practice.practice_session_id,
+                    "subject_id": &practice.subject_id,
+                    "player_id": practice.player_id,
+                    "binding_id": practice.binding_id,
+                    "bridge_task_id": practice.bridge_task_id,
+                    "expected_version": expected_version,
+                    "request_hash": request_hash,
+                    "result_code": result_code,
+                }))
+                .map_err(|_| AppError::Internal)?,
+            );
+            let request = PracticeBridgeResultRequestV1 {
+                schema: PRACTICE_BRIDGE_RESULT_V1.to_owned(),
+                event_id: Uuid::new_v4(),
+                practice_session_id: practice.practice_session_id,
+                subject_id: practice.subject_id.clone(),
+                player_id: practice.player_id,
+                binding_id: practice.binding_id,
+                bridge_task_id: practice.bridge_task_id,
+                expected_version,
+                request_hash: request_hash.to_owned(),
+                result_code,
+                result_hash,
+            };
+            practice
+                .apply_bridge_result(&request, now)
+                .map_err(map_practice_error)?
+        }
+    };
+    let receipt = transition_receipt(&event, expected_version, transition)?;
+    persist_transition(&mut transaction, &practice, &event).await?;
+    transaction.commit().await?;
+    Ok(receipt)
+}
+
+pub(crate) async fn load_current_agent_practice(
+    pool: &PgPool,
+    subject_id: &str,
+    player_id: Uuid,
+    binding_id: Uuid,
+) -> Result<Option<PracticeSessionV1>, AppError> {
+    let query = format!(
+        "SELECT {SESSION_COLUMNS} FROM paper_raid_bff_practice_sessions \
+         WHERE subject_id=$1 AND player_id=$2 AND binding_id=$3 \
+         ORDER BY created_at DESC, practice_session_id DESC \
+         LIMIT 1"
+    );
+    let row = sqlx::query(&query)
+        .bind(subject_id)
+        .bind(player_id)
+        .bind(binding_id)
+        .fetch_optional(pool)
+        .await?;
+    row.as_ref().map(session_from_row).transpose()
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn recover_agent_practice_transition(
+    transaction: &mut Transaction<'_, Postgres>,
+    subject_id: &str,
+    player_id: Uuid,
+    binding_id: Uuid,
+    expected_version: u64,
+    request_hash: &str,
+    transition: PracticeAgentTransitionV1,
+) -> Result<Option<PracticeAgentTransitionReceiptV1>, AppError> {
+    let event_kind = match transition {
+        PracticeAgentTransitionV1::Claim => PracticeEventKindV1::ExperimentClaimed,
+        PracticeAgentTransitionV1::Result(_) => PracticeEventKindV1::ExperimentCompleted,
+    };
+    let rows = sqlx::query(
+        "SELECT event.event_id,event.practice_session_id,event.actor_kind,event.event_kind, \
+                event.from_version,event.to_version,event.request_hash,event.choice_code, \
+                event.result_hash,event.occurred_at \
+         FROM paper_raid_bff_practice_events AS event \
+         JOIN paper_raid_bff_practice_sessions AS practice \
+           ON practice.practice_session_id=event.practice_session_id \
+         WHERE practice.subject_id=$1 AND practice.player_id=$2 AND practice.binding_id=$3 \
+           AND event.actor_kind='agent' AND event.event_kind=$4 AND event.request_hash=$5 \
+         ORDER BY event.to_version LIMIT 2",
+    )
+    .bind(subject_id)
+    .bind(player_id)
+    .bind(binding_id)
+    .bind(enum_to_text(event_kind)?)
+    .bind(request_hash)
+    .fetch_all(&mut **transaction)
+    .await?;
+    if rows.len() > 1 {
+        return Err(AppError::Internal);
+    }
+    let Some(row) = rows.first() else {
+        return Ok(None);
+    };
+    let event = PracticeEventV1 {
+        schema: PRACTICE_EVENT_V1.to_owned(),
+        event_id: row.try_get("event_id")?,
+        practice_session_id: row.try_get("practice_session_id")?,
+        actor_kind: enum_from_text(row.try_get("actor_kind")?)?,
+        event_kind: enum_from_text(row.try_get("event_kind")?)?,
+        from_version: i64_to_version(row.try_get("from_version")?)?,
+        to_version: i64_to_version(row.try_get("to_version")?)?,
+        request_hash: row.try_get("request_hash")?,
+        choice_code: row.try_get("choice_code")?,
+        result_hash: row.try_get("result_hash")?,
+        occurred_at: row.try_get("occurred_at")?,
+    };
+    event.validate().map_err(map_practice_error)?;
+    transition_receipt(&event, expected_version, transition).map(Some)
+}
+
+fn transition_receipt(
+    event: &PracticeEventV1,
+    expected_version: u64,
+    transition: PracticeAgentTransitionV1,
+) -> Result<PracticeAgentTransitionReceiptV1, AppError> {
+    if event.actor_kind != PracticeActorKindV1::Agent || event.from_version != expected_version {
+        return Err(AppError::Conflict(
+            "practice_agent_recovery_mismatch".into(),
+        ));
+    }
+    let expected_result_code = match transition {
+        PracticeAgentTransitionV1::Claim => None,
+        PracticeAgentTransitionV1::Result(result_code) => Some(enum_to_text(result_code)?),
+    };
+    let result_code = match transition {
+        PracticeAgentTransitionV1::Claim
+            if event.event_kind == PracticeEventKindV1::ExperimentClaimed
+                && event.choice_code.is_none()
+                && event.result_hash.is_none() =>
+        {
+            None
+        }
+        PracticeAgentTransitionV1::Result(result_code)
+            if event.event_kind == PracticeEventKindV1::ExperimentCompleted
+                && event.choice_code.as_deref() == expected_result_code.as_deref()
+                && event.result_hash.as_deref().is_some_and(valid_digest_label) =>
+        {
+            Some(result_code)
+        }
+        _ => {
+            return Err(AppError::Conflict(
+                "practice_agent_recovery_mismatch".into(),
+            ))
+        }
+    };
+    Ok(PracticeAgentTransitionReceiptV1 {
+        from_version: event.from_version,
+        to_version: event.to_version,
+        result_code,
+    })
+}
+
+async fn load_live_agent_session_for_update(
+    transaction: &mut Transaction<'_, Postgres>,
+    subject_id: &str,
+    player_id: Uuid,
+    binding_id: Uuid,
+) -> Result<Option<PracticeSessionV1>, AppError> {
+    let query = format!(
+        "SELECT {SESSION_COLUMNS} FROM paper_raid_bff_practice_sessions \
+         WHERE subject_id=$1 AND player_id=$2 AND binding_id=$3 \
+           AND stage NOT IN ('completed','abandoned','expired') \
+         FOR UPDATE"
+    );
+    let row = sqlx::query(&query)
+        .bind(subject_id)
+        .bind(player_id)
+        .bind(binding_id)
+        .fetch_optional(&mut **transaction)
+        .await?;
+    row.as_ref().map(session_from_row).transpose()
+}
+
 async fn resolve_exact_active_binding(
     state: &AppState,
     identity: &AlphaIdentity,
@@ -711,6 +1007,14 @@ fn digest_label(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
+fn valid_digest_label(value: &str) -> bool {
+    value.len() == 71
+        && value.starts_with("sha256:")
+        && value[7..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 fn map_practice_error(error: PracticeError) -> AppError {
     match error {
         PracticeError::OwnerMismatch
@@ -726,6 +1030,35 @@ fn map_practice_error(error: PracticeError) -> AppError {
         }
         PracticeError::InvalidContract(_) | PracticeError::VersionExhausted => AppError::Internal,
     }
+}
+
+#[cfg(test)]
+pub(crate) async fn insert_test_practice_session(
+    pool: &PgPool,
+    practice: &PracticeSessionV1,
+) -> Result<(), AppError> {
+    let mut transaction = pool.begin().await?;
+    insert_session(&mut transaction, practice).await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) async fn abandon_test_practice_session(
+    pool: &PgPool,
+    identity: &AlphaIdentity,
+    expected_version: u64,
+) -> Result<PracticeSessionV1, AppError> {
+    apply_stored_browser_action(
+        pool,
+        identity,
+        None,
+        AdvancePracticeRequest {
+            expected_version,
+            action: PracticeBrowserActionV1::Abandon,
+        },
+    )
+    .await
 }
 
 #[cfg(test)]

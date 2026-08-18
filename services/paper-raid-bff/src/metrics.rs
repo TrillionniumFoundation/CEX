@@ -429,6 +429,9 @@ fn bounded_route(route: &str) -> Option<&'static str> {
         "/api/agent-bridge/pair" => "/api/agent-bridge/pair",
         "/api/agent-bridge/binding" => "/api/agent-bridge/binding",
         "/api/agent-bridge/health" => "/api/agent-bridge/health",
+        "/api/agent-bridge/practice-tasks" => "/api/agent-bridge/practice-tasks",
+        "/api/agent-bridge/practice-claims" => "/api/agent-bridge/practice-claims",
+        "/api/agent-bridge/practice-results" => "/api/agent-bridge/practice-results",
         "/api/agent-bridge/inbox" => "/api/agent-bridge/inbox",
         "/api/agent-bridge/delivery-drafts" => "/api/agent-bridge/delivery-drafts",
         "/api/agent-bridge/proposals" => "/api/agent-bridge/proposals",
@@ -480,6 +483,9 @@ mod tests {
             "/api/practice/start",
             "/api/practice/advance",
             "/api/practice/abandon",
+            "/api/agent-bridge/practice-tasks",
+            "/api/agent-bridge/practice-claims",
+            "/api/agent-bridge/practice-results",
         ] {
             assert_eq!(bounded_route(route), Some(route));
         }

@@ -202,6 +202,18 @@ pub fn router(state: AppState) -> Router {
             get(agent_bridge::agent_binding),
         )
         .route("/api/agent-bridge/health", post(agent_bridge::agent_health))
+        .route(
+            "/api/agent-bridge/practice-tasks",
+            post(agent_bridge::agent_practice_tasks),
+        )
+        .route(
+            "/api/agent-bridge/practice-claims",
+            post(agent_bridge::agent_practice_claim),
+        )
+        .route(
+            "/api/agent-bridge/practice-results",
+            post(agent_bridge::agent_practice_result),
+        )
         .route("/api/agent-bridge/inbox", post(agent_bridge::agent_inbox))
         .route(
             "/api/agent-bridge/review-objects",
