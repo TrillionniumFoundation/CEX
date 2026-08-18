@@ -340,7 +340,7 @@ function focusNodeDescriptor(node, target = false) {
     if (value) data[key] = value;
   }
   if (Object.keys(data).length > 0) descriptor.data = data;
-  if (target && ["button", "submit", "reset"].includes(type || descriptor.tag)) {
+  if (target && ["button", "submit", "reset", "radio", "checkbox"].includes(type || descriptor.tag)) {
     const actionValue = safeFocusText(node.getAttribute("value"));
     if (actionValue) descriptor.actionValue = actionValue;
   }
@@ -384,17 +384,17 @@ function reloadNavigationType() {
   return entries.length === 1 ? entries[0].type : null;
 }
 
-function restorePlayerFocusContext(navigationType = reloadNavigationType()) {
-  if (navigationType !== "reload") return false;
+function recentPlayerFocusContext(navigationType = reloadNavigationType()) {
+  if (navigationType !== "reload" && navigationType !== "navigate") return false;
   let payload;
   try {
     const encoded = sessionStorage.getItem(PLAYER_FOCUS_CONTEXT_KEY);
-    if (!encoded || encoded.length > 8192) return false;
+    if (!encoded || encoded.length > 8192) return null;
     payload = JSON.parse(encoded);
   } catch (_) {
-    return false;
+    return null;
   }
-  if (!exactKeys(payload, ["schema", "path", "signature", "saved_at_ms"])) return false;
+  if (!exactKeys(payload, ["schema", "path", "signature", "saved_at_ms"])) return null;
   const ageMs = Date.now() - payload.saved_at_ms;
   if (
       payload.schema !== PLAYER_FOCUS_CONTEXT_SCHEMA ||
@@ -402,8 +402,19 @@ function restorePlayerFocusContext(navigationType = reloadNavigationType()) {
       typeof payload.signature !== "string" || payload.signature.length < 1 ||
       payload.signature.length > 4096 || !Number.isSafeInteger(payload.saved_at_ms) ||
       ageMs < 0 || ageMs > PLAYER_FOCUS_CONTEXT_MAX_AGE_MS) {
-    return false;
+    return null;
   }
+  if (
+      navigationType === "navigate" &&
+      (payload.path !== "/league/practice" || !payload.signature.includes("practice-agent-wait"))) {
+    return null;
+  }
+  return payload;
+}
+
+function restorePlayerFocusContext(navigationType = reloadNavigationType()) {
+  const payload = recentPlayerFocusContext(navigationType);
+  if (!payload) return false;
   const matches = Array.from(document.querySelectorAll(PLAYER_FOCUSABLE_SELECTOR))
     .filter(candidate => playerFocusSignature(candidate) === payload.signature);
   if (matches.length !== 1) return false;
@@ -411,6 +422,36 @@ function restorePlayerFocusContext(navigationType = reloadNavigationType()) {
   if (target.disabled || target.closest("[hidden],[aria-hidden='true']")) return false;
   for (let node = target.parentElement; node && node !== document.body; node = node.parentElement) {
     if (node instanceof HTMLDetailsElement) node.open = true;
+  }
+  target.focus({ preventScroll: true });
+  if (typeof target.scrollIntoView === "function") {
+    const reduceMotion = window.matchMedia
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    target.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "center" });
+  }
+  return true;
+}
+
+function focusProgressedPracticeAction(navigationType = reloadNavigationType()) {
+  const payload = recentPlayerFocusContext(navigationType);
+  if (
+      !payload || window.location.pathname !== "/league/practice" ||
+      (!payload.signature.includes("practice-start-form") &&
+       !payload.signature.includes("practiceAction") &&
+       !payload.signature.includes("practice-agent-wait") &&
+       !payload.signature.includes("practice-abandon-form"))) {
+    return false;
+  }
+  const action = document.querySelector([
+    ".practice-advance-form.primary-action",
+    ".practice-agent-wait.primary-action",
+    ".practice-start-form.primary-action",
+    ".practice-complete.primary-action",
+    ".practice-abandoned.primary-action",
+  ].join(","));
+  const target = paperRoomFocusTarget(action);
+  if (!(target instanceof HTMLElement) || target.closest("[hidden],[aria-hidden='true']")) {
+    return false;
   }
   target.focus({ preventScroll: true });
   if (typeof target.scrollIntoView === "function") {
@@ -4985,7 +5026,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindPaperReworkCountdowns();
   bindTimeline();
   bindProductTelemetry();
-  restorePlayerFocusContext();
+  const focusRestored = restorePlayerFocusContext();
+  if (!focusRestored) focusProgressedPracticeAction();
   // Binding player controls must not depend on a network round trip.  A slow
   // CSRF refresh previously left native forms briefly active without their
   // fail-closed JavaScript handlers, so a real player click could submit and

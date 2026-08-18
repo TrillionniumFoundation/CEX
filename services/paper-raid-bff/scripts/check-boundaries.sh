@@ -369,6 +369,7 @@ fi
 for caller in \
   "$service_root/scripts/check-image.sh" \
   "$service_root/scripts/check-browser-e2e.sh" \
+  "$service_root/scripts/check-browser-mobile-a11y.sh" \
   "$runtime_generator"
 do
   if ! rg -q --fixed-strings 'download-pinned-buildx.sh' "$caller"; then
@@ -378,6 +379,7 @@ do
 done
 for caller in \
   "$service_root/scripts/check-image.sh" \
+  "$service_root/scripts/check-browser-mobile-a11y.sh" \
   "$runtime_generator"
 do
   if ! rg -q --fixed-strings 'PAPER_RAID_BUILDX_BIN' "$caller"; then
@@ -445,6 +447,51 @@ node "$service_root/scripts/check-practice-agent-bridge.mjs"
 node "$service_root/scripts/check-browser-crypto.mjs"
 node "$service_root/scripts/check-player-language-focus.mjs"
 node "$service_root/scripts/check-p1-accessibility.mjs"
+node --check "$service_root/browser-e2e/mock-hepta.mjs"
+node --check "$service_root/browser-e2e/mobile-a11y.mjs"
+bash -n "$service_root/scripts/check-browser-mobile-a11y.sh"
+for required in \
+  'Accessibility.getFullAXTree' \
+  'Object.freeze({ width: 390, height: 844 })' \
+  'Object.freeze({ width: 430, height: 932 })' \
+  'backendDOMNodeId' \
+  'rect.width >= 24 && rect.height >= 24' \
+  'assert.deepEqual(visited, expected' \
+  'metrics.cssLayoutViewport.clientWidth' \
+  'developer_json_fallback_used: false' \
+  'production_bridge_pairing_proved: false' \
+  'production_bridge_execution_proved: false' \
+  'post_agent_focus_transition_real_e2e_proved: false'
+do
+  if ! rg -q --fixed-strings "$required" "$service_root/browser-e2e/mobile-a11y.mjs"; then
+    echo "real browser accessibility gate marker is missing: $required" >&2
+    exit 1
+  fi
+done
+for required in \
+  'verify(null, assertionSigningBytes' \
+  'seenAssertionIds.has(claim.assertion_id)' \
+  'claim.operation !== routeOperations.get(canonicalPath)' \
+  'PAPER_RAID_BFF_A11Y_AGENT_DIGEST' \
+  'PAPER_RAID_BFF_A11Y_CONSUMER_PUBLIC_KEY_B64'
+do
+  if ! rg -q --fixed-strings "$required" "$service_root/browser-e2e/mock-hepta.mjs"; then
+    echo "typed Hepta accessibility boundary marker is missing: $required" >&2
+    exit 1
+  fi
+done
+for required in \
+  'runner_name="$run_id-chromium"' \
+  'docker rm -f "$runner_name"' \
+  'source_snapshot_sha256' \
+  '"$source_snapshot" >&2' \
+  'browser accessibility source identity changed before evidence sealing'
+do
+  if ! rg -q --fixed-strings "$required" "$service_root/scripts/check-browser-mobile-a11y.sh"; then
+    echo "browser accessibility custody marker is missing: $required" >&2
+    exit 1
+  fi
+done
 bash "$service_root/scripts/check-observability-boundary.sh"
 
 echo "paper-raid-bff boundary scan: ok"
