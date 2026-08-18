@@ -183,7 +183,7 @@ pub fn lobby(
         <section class="panel practice-entry"><span class="pill">15–20 MIN · SOLO</span><h2>Learn all three Author roles / 单人熟悉三个作者角色</h2><p>Preview Captain, Evidence, and Experiment decisions in a separate unranked practice. It creates no scientific finality, qualification, ranking, score, reward, or economic authority.</p><a class="button" href="/league/practice">Open solo practice / 打开单人练习</a></section>
         {}{}{}
         <section class="panel"><h2>Challenges / 研究挑战</h2><p class="source-state">Hepta: {}</p><div class="grid">{}</div></section>
-        <section class="grid"><article class="card"><h2>My Queue / 我的队列</h2><p class="source-state">Hepta: {}</p>{}</article><article class="card"><h2>Team Proposals / 组队提案</h2><p class="source-state">Hepta: {}</p>{}</article><article class="card"><h2>Alpha Rules / Alpha 规则</h2><p>Each Author Raid has exactly 3 human authors with independently bound external Agents. Terminal review uses 1 evaluator, 2 reviewers, and 1 reproducer who are independent from those authors—at least 7 identities across the full flow. Login keys never leave this page except in the login request.</p></article></section>
+        <section class="grid"><article class="card"><h2>My Queue / 我的队列</h2><p class="source-state">Hepta: {}</p>{}</article><article class="card"><h2>Team Proposals / 组队提案</h2><p class="source-state">Hepta: {}</p>{}</article><article class="card author-start-boundary"><h2>3-Author start, asynchronous review / <span lang="zh-Hans">三作者同步开局，评审异步接力</span></h2><p>Exactly 3 Author players start the live Author Raid together: Captain, Evidence, and Experiment, each with an independently bound external Agent. Evaluator, Reviewer 1, Reviewer 2, and Reproducer are not part of that start. After the Authors freeze the PaperBundle, eligible independent identities take separate time-bounded assignments from later review pools.</p><p class="muted">The Author queue reports only Author-role coverage. It never waits for all review identities to be online together. Login keys never leave this page except in the login request.</p></article></section>
         <section class="panel"><h2>External Agent key continuity / 外部 Agent 密钥连续性</h2><p class="source-state">Hepta: {}</p><p>Rotation requires independent signatures from both the currently bound key and the replacement key. Only public proof fields enter this browser.</p><div class="action-grid">{}</div></section>"#,
         escape(&identity.display_name),
         mission_board,
@@ -531,7 +531,7 @@ fn first_raid_mission_board(
         ),
         (
             "Match",
-            "Wait for Hepta to assemble three humans and their external Agents.",
+            "Wait for Hepta to assemble exactly three Authors and their external Agents; independent review roles join later.",
         ),
         (
             "Commit",
@@ -1068,6 +1068,7 @@ fn render_paper_room_with_finality(
         .value()
         .map(|value| basic_paper_room(value, review.value()))
         .unwrap_or_else(|| unavailable("current Paper objective"));
+    let participation_handoff = asynchronous_review_handoff(review);
     let guided_actions = room
         .value()
         .map(|value| guided_paper_room(identity, paper_id, value, review.value()))
@@ -1336,12 +1337,34 @@ fn render_paper_room_with_finality(
     let advanced_body = format!("{advanced_body}{after_action}");
     let artifacts = artifact_links(room, paper_id);
     let body = format!(
-        r#"<section class="hero paper-room-hero"><span class="eyebrow">PAPER ROOM · <span lang="zh-Hans">论文作战室</span></span><h1>{}</h1><p>Follow the current objective; technical authority remains available below when you need to audit it. / <span lang="zh-Hans">先完成当前目标；需要审计时再查看下方技术权威。</span></p></section>{}<details class="panel paper-room-advanced" id="paper-room-advanced"><summary class="paper-room-advanced-summary"><span>Advanced / <span lang="zh-Hans">高级详情</span></span><small>UUIDs, hashes, authority, all controls, and complete records / <span lang="zh-Hans">UUID、摘要、权威、全部操作与完整记录</span></small></summary><div class="paper-room-advanced-content">{}{artifacts}<details class="panel developer-tools"><summary>Developer Tools / <span lang="zh-Hans">开发者工具</span></summary><p class="muted">Exact protocol JSON remains an Alpha fallback for commands that do not yet have a safely derived form or external connector. Needing this section is a known playability gap, never a completed normal path.</p><div class="action-grid">{developer_actions}</div></details></div></details>"#,
+        r#"<section class="hero paper-room-hero"><span class="eyebrow">PAPER ROOM · <span lang="zh-Hans">论文作战室</span></span><h1>{}</h1><p>Follow the current objective; technical authority remains available below when you need to audit it. / <span lang="zh-Hans">先完成当前目标；需要审计时再查看下方技术权威。</span></p></section>{}{}<details class="panel paper-room-advanced" id="paper-room-advanced"><summary class="paper-room-advanced-summary"><span>Advanced / <span lang="zh-Hans">高级详情</span></span><small>UUIDs, hashes, authority, all controls, and complete records / <span lang="zh-Hans">UUID、摘要、权威、全部操作与完整记录</span></small></summary><div class="paper-room-advanced-content">{}{artifacts}<details class="panel developer-tools"><summary>Developer Tools / <span lang="zh-Hans">开发者工具</span></summary><p class="muted">Exact protocol JSON remains an Alpha fallback for commands that do not yet have a safely derived form or external connector. Needing this section is a known playability gap, never a completed normal path.</p><div class="action-grid">{developer_actions}</div></details></div></details>"#,
         escape(&title),
         basic_actions,
+        participation_handoff,
         advanced_body,
     );
     page("Paper Raid Room", &identity.display_name, &body, true)
+}
+
+fn asynchronous_review_handoff(review: ReadState<'_>) -> String {
+    format!(
+        r#"<section class="panel asynchronous-review-handoff" aria-labelledby="asynchronous-review-handoff-heading"><span class="eyebrow">3-AUTHOR START · ASYNCHRONOUS REVIEW / <span lang="zh-Hans">三作者开局 · 异步评审</span></span><h2 id="asynchronous-review-handoff-heading">Authors start together; independent roles join after the frozen handoff / <span lang="zh-Hans">作者同步开局，独立角色在冻结交接后异步进入</span></h2><p>Exactly 3 Author players—Captain, Evidence, and Experiment—form the synchronous Author Raid. Evaluator, Reviewer 1, Reviewer 2, and Reproducer never need to be present at that start; they enter independent asynchronous review pools only after the frozen handoff.</p>{}</section>"#,
+        review_snapshot_availability(review),
+    )
+}
+
+fn review_snapshot_availability(review: ReadState<'_>) -> &'static str {
+    match review {
+        ReadState::Available(_) => {
+            r#"<div class="review-snapshot-availability" data-review-snapshot-state="available"><h3>Authenticated review snapshot available / <span lang="zh-Hans">已认证评审快照可用</span></h3><p>This Author view does not derive current role gaps, assignment status, open slots, or arrival times from submission history.</p></div>"#
+        }
+        ReadState::NotFound => {
+            r#"<div class="review-snapshot-availability unavailable" data-review-snapshot-state="unavailable"><h3>Authenticated review snapshot not published / <span lang="zh-Hans">已认证评审快照尚未发布</span></h3><p>No per-role state, open slot, or arrival time is inferred.</p></div>"#
+        }
+        ReadState::Unavailable => {
+            r#"<div class="review-snapshot-availability unavailable" data-review-snapshot-state="unavailable"><h3>Authenticated review snapshot unavailable / <span lang="zh-Hans">已认证评审快照不可用</span></h3><p>No per-role state, open slot, or arrival time is inferred.</p></div>"#
+        }
+    }
 }
 
 fn provisional_contribution_card(review: ReadState<'_>) -> String {
@@ -8328,7 +8351,8 @@ pub fn onboarding(identity: &AlphaIdentity, stage: OnboardingStage) -> Response 
         OnboardingStage::Unavailable => r#"<section class="panel narrow"><p class="status missing">Hepta onboarding is unavailable. Registration is fail-closed; retry after the authority is healthy.</p></section>"#.to_string(),
     };
     let body = format!(
-        r#"<section class="hero"><span class="eyebrow">SECURE ONBOARDING · 安全入驻</span><h1>Human + external Agent</h1><p>{}，人类签名密钥只存在于浏览器内存或加密恢复包；Agent 私钥始终留在外部 Agent。</p></section>{}"#,
+        r#"<section class="hero"><span class="eyebrow">SECURE ONBOARDING · <span lang="zh-Hans">安全入驻</span></span><h1>Human identity first / <span lang="zh-Hans">人类身份优先</span></h1><p>{}. Human signing keys remain only in browser memory or an encrypted recovery bundle; when the configured role needs an external Agent, its private key remains on that Agent. / <span lang="zh-Hans">人类签名密钥只存在于浏览器内存或加密恢复包；如果已配置的角色需要外部 Agent，Agent 私钥始终留在该外部 Agent。</span></p></section>
+        <section class="panel onboarding-participation-boundary"><span class="eyebrow">PARTICIPATION TIMING / <span lang="zh-Hans">参与时序</span></span><h2>Only 3 Authors start together / <span lang="zh-Hans">仅三位作者同步开局</span></h2><p>Captain, Evidence, and Experiment form the synchronous Author Raid. Evaluator, Reviewer 1, Reviewer 2, and Reproducer do not wait in that starting lobby; after the Authors freeze a PaperBundle, eligible identities take separate time-bounded assignments from independent asynchronous review pools.</p><p class="muted">Onboarding an independent-review identity does not add it to an Author team or require every downstream role to be online together.</p></section>{}"#,
         escape(&identity.display_name),
         stage_content,
     );
@@ -8473,7 +8497,10 @@ fn matchmaking_ticket_cards(state: ReadState<'_>) -> String {
             .get("status")
             .and_then(Value::as_str)
             .unwrap_or("unavailable");
-        if !matches!(status, "queued" | "matched") {
+        if !matches!(
+            status,
+            "queued" | "matched" | "consumed" | "cancelled" | "expired"
+        ) {
             continue;
         }
         let version = ticket.get("version").and_then(Value::as_u64).unwrap_or(0);
@@ -8508,56 +8535,7 @@ fn matchmaking_ticket_cards(state: ReadState<'_>) -> String {
         let queue_hint = ticket
             .get("queue_hint")
             .filter(|value| value.is_object())
-            .map(|hint| {
-                let position = hint
-                    .get("queue_position")
-                    .and_then(Value::as_u64)
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "—".into());
-                let pool = hint
-                    .get("compatible_pool_size")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-                let needed = hint
-                    .get("compatible_players_needed")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-                let waited = hint
-                    .get("waited_seconds")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-                let expires = hint
-                    .get("expires_in_seconds")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-                let missing_roles = hint
-                    .get("missing_roles")
-                    .and_then(Value::as_array)
-                    .map(|roles| {
-                        roles
-                            .iter()
-                            .filter_map(Value::as_str)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    })
-                    .filter(|roles| !roles.is_empty())
-                    .unwrap_or_else(|| "none / 无".into());
-                let eta = match hint.get("eta_seconds").and_then(Value::as_u64) {
-                    Some(0) => "ready now / 可立即组队".to_string(),
-                    Some(seconds) => format!("{seconds}s"),
-                    None => "unknown until compatible players arrive / 等待兼容玩家，暂无法估算".into(),
-                };
-                format!(
-                    r#"<p class="queue-hint">Position / 顺位: {} · Compatible / 兼容人数: {} · Needed / 尚缺: {}<br>Missing roles / 缺少角色: {}<br>Waited / 已等待: {}s · Ticket expires / 票据到期: {}s · ETA: {}</p>"#,
-                    escape(&position),
-                    pool,
-                    needed,
-                    escape(&missing_roles),
-                    waited,
-                    expires,
-                    escape(&eta),
-                )
-            })
+            .map(|hint| author_queue_hint(ticket, hint))
             .unwrap_or_default();
         items.push_str(&format!(
             r#"<li class="ticket-card"><div><code>{}</code><span class="pill">{}</span></div>{}{}{}{}</li>"#,
@@ -8574,6 +8552,163 @@ fn matchmaking_ticket_cards(state: ReadState<'_>) -> String {
     } else {
         format!("<ul class=\"record-list ticket-list\">{items}</ul>")
     }
+}
+
+fn author_queue_wait_reason(state: &str, message: &str) -> Option<(&'static str, bool)> {
+    let reason = match (state, message) {
+        ("ready", "compatible_team_ready") => (
+            "Hepta selected the next compatible 3-Author team / \
+             Hepta 已选定下一个兼容的三作者队伍",
+            false,
+        ),
+        ("waiting", "waiting_for_party_members") => (
+            "Waiting for the remaining members of this exact private 3-Author party / \
+             等待该私密三作者队伍的其余成员",
+            false,
+        ),
+        ("waiting", "waiting_for_required_roles") => (
+            "Waiting for compatible Authors who can cover the reported Author-role gaps / \
+             等待能覆盖已报告作者角色缺口的兼容作者",
+            false,
+        ),
+        ("waiting", "waiting_for_role_distribution") => (
+            "Waiting for a valid one-player-per-Author-role distribution / \
+             等待形成每位玩家各占一个作者角色的有效分配",
+            false,
+        ),
+        ("waiting", "waiting_for_compatible_players") => (
+            "Waiting for Hepta's next compatible 3-Author selection / \
+             等待 Hepta 选出下一个兼容的三作者队伍",
+            false,
+        ),
+        ("matched", "team_proposal_created") => (
+            "The 3-Author team proposal is ready / 三作者组队提案已就绪",
+            false,
+        ),
+        ("consumed", "team_materialized") => (
+            "This historical ticket materialized an Author team / 该历史票据已建立作者队伍",
+            true,
+        ),
+        ("cancelled", "ticket_cancelled") => (
+            "This historical Author ticket was cancelled / 该历史作者票据已取消",
+            true,
+        ),
+        ("expired", "ticket_expired") => (
+            "This historical Author ticket expired / 该历史作者票据已过期",
+            true,
+        ),
+        _ => return None,
+    };
+    Some(reason)
+}
+
+fn author_queue_hint(ticket: &Value, hint: &Value) -> String {
+    let unavailable_hint = || {
+        r#"<div class="author-queue-hint unavailable" data-author-queue-hint-state="unavailable"><strong>3-Author queue status unavailable / <span lang="zh-Hans">三作者队列状态不可用</span></strong><p>The authoritative hint is incomplete; no role gap, wait reason, or arrival time is inferred. / <span lang="zh-Hans">权威提示不完整；不推断角色缺口、等待原因或到达时间。</span></p></div>"#.to_string()
+    };
+    if hint.get("schema").and_then(Value::as_str)
+        != Some("hepta.paper_raid.matchmaking_queue_hint.v1")
+    {
+        return unavailable_hint();
+    }
+    let Some(state) = hint.get("state").and_then(Value::as_str) else {
+        return unavailable_hint();
+    };
+    let Some(message) = hint.get("message").and_then(Value::as_str) else {
+        return unavailable_hint();
+    };
+    let Some((wait_reason, terminal)) = author_queue_wait_reason(state, message) else {
+        return unavailable_hint();
+    };
+    let Some(ticket_status) = ticket.get("status").and_then(Value::as_str) else {
+        return unavailable_hint();
+    };
+    if ticket.get("requested_team_size").and_then(Value::as_u64) != Some(3) {
+        return unavailable_hint();
+    }
+    let state_matches_ticket = matches!(
+        (ticket_status, state),
+        ("queued", "ready")
+            | ("queued", "waiting")
+            | ("matched", "matched")
+            | ("consumed", "consumed")
+            | ("cancelled", "cancelled")
+            | ("expired", "expired")
+    );
+    if !state_matches_ticket {
+        return unavailable_hint();
+    }
+    if terminal {
+        return format!(
+            r#"<div class="author-queue-hint terminal" data-author-queue-hint-state="{}"><h3>Historical 3-Author ticket / <span lang="zh-Hans">历史三作者票据</span></h3><p>{}</p><p class="muted">This is a terminal history record. No current Author-role gap, wait reason, open slot, or arrival time is inferred.</p></div>"#,
+            escape(state),
+            player_language_html(wait_reason),
+        );
+    }
+    if state == "matched" {
+        return format!(
+            r#"<div class="author-queue-hint matched" data-author-queue-hint-state="matched"><h3>3-Author team selected / <span lang="zh-Hans">三作者队伍已选定</span></h3><p>{}</p><p class="muted">The selection is complete. Recomputed historical pool fields are not shown as current Author-role gaps or arrival times.</p></div>"#,
+            player_language_html(wait_reason),
+        );
+    }
+    let Some(private_party) = ticket.get("private_party").and_then(Value::as_bool) else {
+        return unavailable_hint();
+    };
+    let Some(pool) = hint.get("compatible_pool_size").and_then(Value::as_u64) else {
+        return unavailable_hint();
+    };
+    let Some(needed) = hint
+        .get("compatible_players_needed")
+        .and_then(Value::as_u64)
+        .filter(|needed| *needed <= 2)
+    else {
+        return unavailable_hint();
+    };
+    let Some(roles) = hint.get("missing_roles").and_then(Value::as_array) else {
+        return unavailable_hint();
+    };
+    let mut seen = HashSet::new();
+    let mut missing_roles = Vec::with_capacity(roles.len());
+    for role in roles {
+        let Some(role) = role.as_str() else {
+            return unavailable_hint();
+        };
+        if !matches!(role, "captain" | "evidence" | "experiment") || !seen.insert(role) {
+            return unavailable_hint();
+        }
+        missing_roles.push(role);
+    }
+    let incomplete_private_party = private_party && pool < 3;
+    let hint_is_consistent = match (state, message) {
+        ("ready", "compatible_team_ready") => pool >= 3 && needed == 0 && missing_roles.is_empty(),
+        ("waiting", "waiting_for_party_members") => incomplete_private_party,
+        ("waiting", "waiting_for_required_roles") => {
+            !incomplete_private_party && !missing_roles.is_empty()
+        }
+        ("waiting", "waiting_for_role_distribution") => {
+            !incomplete_private_party && needed > 0 && missing_roles.is_empty()
+        }
+        ("waiting", "waiting_for_compatible_players") => {
+            !incomplete_private_party && pool >= 2 && needed == 0 && missing_roles.is_empty()
+        }
+        _ => false,
+    };
+    if !hint_is_consistent {
+        return unavailable_hint();
+    }
+    let gap_html = if missing_roles.is_empty() {
+        "None named by Hepta / <span lang=\"zh-Hans\">Hepta 未报告具体角色缺口</span>".to_string()
+    } else {
+        escape(&missing_roles.join(", "))
+    };
+    format!(
+        r#"<div class="author-queue-hint" data-author-queue-hint-state="{}"><h3>3-Author start status / <span lang="zh-Hans">三作者开局状态</span></h3><dl class="review-facts"><div><dt>Compatible Author pool / <span lang="zh-Hans">兼容作者池</span></dt><dd>{}</dd></div><div><dt>Author players still needed / <span lang="zh-Hans">仍需作者玩家</span></dt><dd>{}</dd></div><div><dt>Current Author role gaps / <span lang="zh-Hans">当前作者角色缺口</span></dt><dd>{}</dd></div><div><dt>Next wait reason / <span lang="zh-Hans">下一等待原因</span></dt><dd>{}</dd></div></dl><p class="muted">This authoritative hint covers only the synchronous 3-Author start. Independent review roles join later; no arrival time is inferred.</p></div>"#,
+        escape(state),
+        pool,
+        needed,
+        gap_html,
+        player_language_html(wait_reason),
+    )
 }
 
 fn command_editor(
@@ -10853,10 +10988,12 @@ mod tests {
         let tickets = serde_json::json!([{
             "ticket_id":ticket_id,
             "status":"queued",
+            "requested_team_size":3,
             "private_party":true,
             "version":1,
             "matched_proposal_id":null,
             "queue_hint":{
+                "schema":"hepta.paper_raid.matchmaking_queue_hint.v1",
                 "state":"waiting",
                 "queue_position":1,
                 "compatible_pool_size":1,
@@ -10865,7 +11002,7 @@ mod tests {
                 "waited_seconds":12,
                 "expires_in_seconds":1788,
                 "eta_seconds":null,
-                "message":"waiting_for_required_roles"
+                "message":"waiting_for_party_members"
             }
         }]);
         let proposals = serde_json::json!([]);
@@ -10907,10 +11044,258 @@ mod tests {
         assert!(body.contains("class=\"cancel-ticket-form\""));
         assert!(body.contains(&format!("data-ticket-id=\"{ticket_id}\"")));
         assert!(body.contains("Leave queue / 取消排队"));
-        assert!(body.contains("Compatible / 兼容人数: 1"));
-        assert!(body.contains("Missing roles / 缺少角色: evidence, experiment"));
-        assert!(body.contains("暂无法估算"));
+        assert!(
+            body.contains("3-Author start status / <span lang=\"zh-Hans\">三作者开局状态</span>")
+        );
+        assert!(body.contains("Compatible Author pool / <span lang=\"zh-Hans\">兼容作者池</span>"));
+        assert!(body
+            .contains("Current Author role gaps / <span lang=\"zh-Hans\">当前作者角色缺口</span>"));
+        assert!(body.contains("evidence, experiment"));
+        assert!(body.contains("Next wait reason / <span lang=\"zh-Hans\">下一等待原因</span>"));
+        assert!(
+            body.contains("Waiting for the remaining members of this exact private 3-Author party")
+        );
+        assert!(!body.contains("ETA:"));
+        assert!(body.contains("Exactly 3 Author players start the live Author Raid together"));
+        assert!(body.contains(
+            "Evaluator, Reviewer 1, Reviewer 2, and Reproducer are not part of that start"
+        ));
+        assert!(!body.contains("at least 7 identities"));
         assert!(!body.contains("Roles / 职业<input"));
+    }
+
+    #[test]
+    fn author_queue_hint_uses_only_the_typed_authoritative_reason_and_never_an_eta() {
+        let ticket = serde_json::json!({
+            "status":"queued",
+            "requested_team_size":3,
+            "private_party":false
+        });
+        let hint = serde_json::json!({
+            "schema":"hepta.paper_raid.matchmaking_queue_hint.v1",
+            "state":"waiting",
+            "compatible_pool_size":4,
+            "compatible_players_needed":1,
+            "missing_roles":[],
+            "eta_seconds":42,
+            "message":"waiting_for_role_distribution"
+        });
+        let rendered = author_queue_hint(&ticket, &hint);
+        assert!(rendered.contains("data-author-queue-hint-state=\"waiting\""));
+        assert!(rendered.contains("None named by Hepta"));
+        assert!(rendered.contains("Waiting for a valid one-player-per-Author-role distribution"));
+        assert!(!rendered.contains("42"));
+        assert!(!rendered.contains("ETA"));
+
+        let mut unknown_reason = hint;
+        unknown_reason["message"] = serde_json::json!("unrecognized_wait_reason");
+        let rendered = author_queue_hint(&ticket, &unknown_reason);
+        assert!(rendered.contains("data-author-queue-hint-state=\"unavailable\""));
+        assert!(rendered.contains("no role gap, wait reason, or arrival time is inferred"));
+        assert!(!rendered.contains("unrecognized_wait_reason"));
+    }
+
+    #[test]
+    fn author_queue_hint_rejects_parent_status_and_producer_tuple_mismatches() {
+        let schema = "hepta.paper_raid.matchmaking_queue_hint.v1";
+        let queue_hint = |state: &str, message: &str, pool: u64, needed: u64, roles: &[&str]| {
+            serde_json::json!({
+                "schema":schema,"state":state,"message":message,
+                "compatible_pool_size":pool,"compatible_players_needed":needed,
+                "missing_roles":roles
+            })
+        };
+        let ready = ("ready", "compatible_team_ready");
+        let party = ("waiting", "waiting_for_party_members");
+        let required = ("waiting", "waiting_for_required_roles");
+        let distribution = ("waiting", "waiting_for_role_distribution");
+        let compatible = ("waiting", "waiting_for_compatible_players");
+        let matched = ("matched", "team_proposal_created");
+        let expired = ("expired", "ticket_expired");
+        type ImpossibleHint<'a> = (&'a str, bool, (&'a str, &'a str), u64, u64, &'a [&'a str]);
+        let impossible: &[ImpossibleHint<'_>] = &[
+            ("queued", false, ready, 3, 1, &[]),
+            ("queued", false, ready, 0, 0, &[]),
+            ("queued", false, party, 2, 1, &["captain"]),
+            ("queued", true, party, 3, 1, &["captain"]),
+            ("queued", false, required, 1, 2, &[]),
+            ("queued", false, distribution, 3, 0, &[]),
+            ("queued", false, distribution, 2, 1, &["captain"]),
+            ("queued", false, distribution, 1, 3, &[]),
+            ("queued", false, compatible, 3, 1, &[]),
+            ("queued", false, compatible, 3, 0, &["experiment"]),
+            ("queued", false, compatible, 0, 0, &[]),
+            ("queued", true, required, 2, 1, &["captain"]),
+            ("queued", true, distribution, 2, 1, &[]),
+            ("queued", true, compatible, 2, 0, &[]),
+            ("matched", false, compatible, 3, 0, &[]),
+            ("queued", false, matched, 3, 0, &[]),
+            ("cancelled", false, expired, 3, 0, &[]),
+        ];
+
+        for &(status, private_party, (state, message), pool, needed, roles) in impossible {
+            let ticket = serde_json::json!({
+                "status":status,"requested_team_size":3,"private_party":private_party
+            });
+            let hint = queue_hint(state, message, pool, needed, roles);
+            let rendered = author_queue_hint(&ticket, &hint);
+            assert!(
+                rendered.contains("data-author-queue-hint-state=\"unavailable\""),
+                "accepted impossible ticket/hint tuple: ticket={ticket} hint={hint}"
+            );
+        }
+
+        let valid_ready_hint = queue_hint("ready", "compatible_team_ready", 3, 0, &[]);
+        for ticket in [
+            serde_json::json!({"status":"queued","private_party":false}),
+            serde_json::json!({
+                "status":"queued","requested_team_size":2,"private_party":false
+            }),
+            serde_json::json!({"status":"queued","requested_team_size":3}),
+            serde_json::json!({
+                "status":"queued","requested_team_size":3,"private_party":"true"
+            }),
+        ] {
+            let rendered = author_queue_hint(&ticket, &valid_ready_hint);
+            assert!(rendered.contains("data-author-queue-hint-state=\"unavailable\""));
+        }
+
+        let valid_ticket = serde_json::json!({
+            "status":"queued","requested_team_size":3,"private_party":false
+        });
+        let rendered = author_queue_hint(&valid_ticket, &valid_ready_hint);
+        assert!(rendered.contains("data-author-queue-hint-state=\"ready\""));
+        let valid_compatible_wait =
+            queue_hint("waiting", "waiting_for_compatible_players", 2, 0, &[]);
+        let rendered = author_queue_hint(&valid_ticket, &valid_compatible_wait);
+        assert!(rendered.contains("data-author-queue-hint-state=\"waiting\""));
+        let valid_public_tail = queue_hint(
+            "waiting",
+            "waiting_for_required_roles",
+            0,
+            2,
+            &["captain", "evidence", "experiment"],
+        );
+        let rendered = author_queue_hint(&valid_ticket, &valid_public_tail);
+        assert!(rendered.contains("data-author-queue-hint-state=\"waiting\""));
+        let valid_required_with_zero_needed =
+            queue_hint("waiting", "waiting_for_required_roles", 2, 0, &["captain"]);
+        let rendered = author_queue_hint(&valid_ticket, &valid_required_with_zero_needed);
+        assert!(rendered.contains("data-author-queue-hint-state=\"waiting\""));
+
+        let valid_private_ticket = serde_json::json!({
+            "status":"queued","requested_team_size":3,"private_party":true
+        });
+        for valid_party_wait in [
+            queue_hint(
+                "waiting",
+                "waiting_for_party_members",
+                0,
+                2,
+                &["captain", "evidence", "experiment"],
+            ),
+            queue_hint("waiting", "waiting_for_party_members", 2, 0, &[]),
+        ] {
+            let rendered = author_queue_hint(&valid_private_ticket, &valid_party_wait);
+            assert!(rendered.contains("data-author-queue-hint-state=\"waiting\""));
+        }
+    }
+
+    #[test]
+    fn matched_and_terminal_author_queue_hints_never_project_current_gaps() {
+        let matched_ticket = serde_json::json!({"status":"matched","requested_team_size":3});
+        let matched_hint = serde_json::json!({
+            "schema":"hepta.paper_raid.matchmaking_queue_hint.v1",
+            "state":"matched",
+            "message":"team_proposal_created",
+            "compatible_pool_size":9876,
+            "compatible_players_needed":3,
+            "missing_roles":["captain","evidence","experiment"],
+            "eta_seconds":42
+        });
+        let rendered = author_queue_hint(&matched_ticket, &matched_hint);
+        assert!(rendered.contains("data-author-queue-hint-state=\"matched\""));
+        assert!(rendered.contains("The 3-Author team proposal is ready"));
+        assert!(!rendered.contains("data-author-queue-hint-state=\"unavailable\""));
+        for forbidden in ["9876", "Current Author role gaps", "ETA", ">42<"] {
+            assert!(!rendered.contains(forbidden));
+        }
+
+        for (state, message, expected) in [
+            (
+                "consumed",
+                "team_materialized",
+                "materialized an Author team",
+            ),
+            ("cancelled", "ticket_cancelled", "was cancelled"),
+            ("expired", "ticket_expired", "expired"),
+        ] {
+            let ticket = serde_json::json!({"status":state,"requested_team_size":3});
+            let hint = serde_json::json!({
+                "schema":"hepta.paper_raid.matchmaking_queue_hint.v1",
+                "state":state,
+                "message":message,
+                "compatible_pool_size":9876,
+                "compatible_players_needed":3,
+                "missing_roles":["captain","evidence","experiment"],
+                "eta_seconds":42
+            });
+            let rendered = author_queue_hint(&ticket, &hint);
+            assert!(rendered.contains(&format!("data-author-queue-hint-state=\"{state}\"")));
+            assert!(rendered.contains(expected));
+            assert!(!rendered.contains("data-author-queue-hint-state=\"unavailable\""));
+            for forbidden in ["9876", "Current Author role gaps", "ETA", ">42<"] {
+                assert!(!rendered.contains(forbidden));
+            }
+        }
+    }
+
+    #[test]
+    fn matchmaking_ticket_cards_keeps_terminal_author_history_visible() {
+        let records = serde_json::json!([
+            {
+                "ticket_id":"consumed-ticket",
+                "status":"consumed",
+                "requested_team_size":3,
+                "queue_hint":{
+                    "schema":"hepta.paper_raid.matchmaking_queue_hint.v1",
+                    "state":"consumed",
+                    "message":"team_materialized"
+                }
+            },
+            {
+                "ticket_id":"cancelled-ticket",
+                "status":"cancelled",
+                "requested_team_size":3,
+                "queue_hint":{
+                    "schema":"hepta.paper_raid.matchmaking_queue_hint.v1",
+                    "state":"cancelled",
+                    "message":"ticket_cancelled"
+                }
+            },
+            {
+                "ticket_id":"expired-ticket",
+                "status":"expired",
+                "requested_team_size":3,
+                "queue_hint":{
+                    "schema":"hepta.paper_raid.matchmaking_queue_hint.v1",
+                    "state":"expired",
+                    "message":"ticket_expired"
+                }
+            }
+        ]);
+        let rendered = matchmaking_ticket_cards(ReadState::Available(&records));
+        for expected in [
+            "consumed-ticket",
+            "cancelled-ticket",
+            "expired-ticket",
+            "data-author-queue-hint-state=\"consumed\"",
+            "data-author-queue-hint-state=\"cancelled\"",
+            "data-author-queue-hint-state=\"expired\"",
+        ] {
+            assert!(rendered.contains(expected));
+        }
+        assert!(!rendered.contains("Current Author role gaps"));
     }
 
     #[tokio::test]
@@ -11095,6 +11480,48 @@ mod tests {
         let summary = revision_materialization_summary(Some(&mismatched));
         assert!(summary.contains("MATERIALIZATION MISMATCH"));
         assert!(summary.contains("finalization must remain locked"));
+    }
+
+    #[test]
+    fn paper_room_review_handoff_never_summarizes_stale_submission_history_as_current_gaps() {
+        let review = serde_json::json!({
+            "assignments":[
+                {
+                    "schema":"hepta.paper_raid.review_assignment.v1",
+                    "submission_id":"stale-submission",
+                    "review_round":99,
+                    "slot":"reviewer_2",
+                    "status":"consumed"
+                }
+            ],
+            "reproductions":[{
+                "submission_id":"stale-submission",
+                "reproduction_id":"stale-reproduction",
+                "reproducer_player_id":"stale-reproducer"
+            }]
+        });
+        let rendered = asynchronous_review_handoff(ReadState::Available(&review));
+        assert!(rendered.contains("data-review-snapshot-state=\"available\""));
+        assert!(rendered.contains("does not derive current role gaps"));
+        for stale in [
+            "stale-submission",
+            "stale-reproduction",
+            "stale-reproducer",
+            "round 99",
+            "data-review-slot",
+            "Current role gaps",
+            "Fulfilled /",
+        ] {
+            assert!(
+                !rendered.contains(stale),
+                "rendered stale review fact: {stale}"
+            );
+        }
+
+        let unavailable = asynchronous_review_handoff(ReadState::NotFound);
+        assert!(unavailable.contains("data-review-snapshot-state=\"unavailable\""));
+        assert!(unavailable.contains("Authenticated review snapshot not published"));
+        assert!(unavailable.contains("No per-role state, open slot, or arrival time is inferred"));
     }
 
     #[tokio::test]
@@ -12379,6 +12806,13 @@ mod tests {
         ));
         assert!(body.contains("AES-256-GCM + PBKDF2-SHA-256"));
         assert!(body.contains("import the original bundle and retry with the same key"));
+        assert!(body.contains("PARTICIPATION TIMING / <span lang=\"zh-Hans\">参与时序</span>"));
+        assert!(body.contains(
+            "Only 3 Authors start together / <span lang=\"zh-Hans\">仅三位作者同步开局</span>"
+        ));
+        assert!(body.contains("independent asynchronous review pools"));
+        assert!(body.contains("does not add it to an Author team"));
+        assert!(!body.contains("at least 7 identities"));
         assert!(!body.contains("Generate, encrypt, export, and register"));
         assert!(!body.contains("name=\"private_key\""));
 
@@ -13155,6 +13589,10 @@ mod tests {
         assert!(body.contains("agent_proof_signature"));
         assert!(body.contains("agent_proof_nonce"));
         assert!(body.contains(&identity.player_id.to_string()));
+        assert!(body.contains(
+            "Only 3 Authors start together / <span lang=\"zh-Hans\">仅三位作者同步开局</span>"
+        ));
+        assert!(body.contains("do not wait in that starting lobby"));
         assert!(!body.contains("name=\"agent_private_key\""));
         assert!(!body.contains("name=\"agent_seed\""));
 
