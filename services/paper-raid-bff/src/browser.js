@@ -162,18 +162,247 @@ function uuid() {
   return crypto.randomUUID();
 }
 
+const PLAYER_ERROR_MESSAGES = Object.freeze({
+  authentication_required: "Your session expired. Sign in again. / 会话已过期，请重新登录。",
+  forbidden: "This identity cannot perform that action. / 当前身份无权执行此操作。",
+  csrf_replayed: "This page safety token was already used. Reload, then try again. / 页面安全令牌已使用，请刷新后重试。",
+  conflict: "The authoritative state changed. Reload and review the current task. / 权威状态已变更，请刷新并检查当前任务。",
+  invalid_request: "Some submitted information is invalid. Check the highlighted action. / 提交信息有误，请检查当前操作。",
+  dependency_unavailable: "A required service is temporarily unavailable. Try again shortly. / 所需服务暂时不可用，请稍后重试。",
+  rate_limited: "Too many actions were sent. Wait a moment, then retry once. / 操作过于频繁，请稍候再重试一次。",
+  upstream_rejected: "The research authority rejected this action. Reload before retrying. / 研究权威系统拒绝了此操作，请刷新后再试。",
+  not_found: "This task is no longer available. Return to the current Raid view. / 此任务已不可用，请返回当前远征页面。",
+  internal_error: "The service could not finish the action. Nothing is auto-submitted; try again later. / 服务未能完成操作；系统不会自动重提，请稍后再试。",
+  network_retry_exhausted: "The network did not recover. Check your connection, then try again. / 网络仍未恢复，请检查连接后重试。",
+  mutation_retry_exhausted: "The action could not be confirmed safely. Reload before trying again. / 无法安全确认此操作，请刷新后再试。",
+  csrf_refresh_failed: "This page could not refresh its safety token. Reload, then try again. / 页面安全令牌刷新失败，请刷新后重试。",
+  login_failed: "That Alpha access key was not accepted. Check it or contact the operator. / Alpha 访问密钥未通过，请核对或联系运营者。",
+  webcrypto_unavailable: "This browser cannot create the required signing key. Use a supported current browser. / 此浏览器无法创建签名密钥，请使用受支持的新版浏览器。",
+  passphrases_must_match_and_contain_at_least_16_characters: "Use matching recovery passphrases of at least 16 characters. / 两次恢复口令必须一致，且至少 16 个字符。",
+  generate_a_key_or_import_the_original_encrypted_bundle_first: "Create a key or import your original encrypted recovery bundle first. / 请先创建密钥，或导入原始加密恢复包。",
+  key_bundle_or_passphrase_is_invalid: "The recovery bundle or passphrase is not valid. Check both and retry. / 恢复包或口令无效，请核对后重试。",
+  queue_requires_exactly_one_active_agent_binding: "Pair exactly one active Agent Bridge before joining this queue. / 加入队列前，请仅保留一个有效 Agent Bridge 配对。",
+  paper_authority_refresh_is_pending: "The Raid is loading newer authoritative state. Wait for the reload. / 远征正在加载最新权威状态，请等待页面刷新。",
+});
+
+function rawPlayerResult(value) {
+  if (typeof value === "string") return value;
+  try {
+    const encoded = JSON.stringify(value, null, 2);
+    return typeof encoded === "string" ? encoded : String(value);
+  } catch (_) {
+    return String(value);
+  }
+}
+
+function playerErrorPresentation(value) {
+  const raw = rawPlayerResult(value);
+  const directCode = value && typeof value === "object" && !Array.isArray(value)
+    && typeof value.error === "string"
+    ? value.error
+    : null;
+  const candidates = directCode
+    ? [directCode]
+    : (raw.match(/[a-z][a-z0-9_]{2,}/g) || []);
+  const code = candidates.find(candidate => Object.hasOwn(PLAYER_ERROR_MESSAGES, candidate));
+  return code ? { code, message: PLAYER_ERROR_MESSAGES[code], raw } : null;
+}
+
+function renderPlayerErrorDisclosure(output, presentation) {
+  if (!output || !output.parentElement) return;
+  let details = output.nextElementSibling;
+  if (!details || !details.classList.contains("player-error-details")) details = null;
+  if (!presentation) {
+    if (details) details.remove();
+    delete output.dataset.playerErrorCode;
+    delete output.dataset.playerMessage;
+    return;
+  }
+  if (!details) {
+    details = document.createElement("details");
+    details.className = "player-error-details";
+    const summary = document.createElement("summary");
+    summary.textContent = "Advanced error details / 高级错误详情";
+    const raw = document.createElement("code");
+    raw.className = "player-error-raw";
+    details.append(summary, raw);
+    output.insertAdjacentElement("afterend", details);
+  }
+  details.open = false;
+  details.querySelector(".player-error-raw").textContent = presentation.raw;
+  output.dataset.playerErrorCode = presentation.code;
+  output.dataset.playerMessage = "friendly";
+}
+
 function show(output, value, ok = true) {
+  const presentation = ok ? null : playerErrorPresentation(value);
+  const rendered = presentation ? presentation.message : rawPlayerResult(value);
   if (output) {
-    output.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    output.textContent = rendered;
+    if (typeof output.setAttribute === "function") output.setAttribute("aria-live", "polite");
     output.classList.toggle("result-ok", ok);
     output.classList.toggle("result-error", !ok);
+    renderPlayerErrorDisclosure(output, presentation);
   }
   const toast = document.querySelector("#toast");
   if (toast) {
-    toast.textContent = typeof value === "string" ? value : JSON.stringify(value);
+    toast.textContent = rendered;
     toast.hidden = false;
     window.setTimeout(() => { toast.hidden = true; }, 5000);
   }
+}
+
+const PLAYER_FOCUS_CONTEXT_SCHEMA = "hepta.paper_raid.player_focus_context.v1";
+const PLAYER_FOCUS_CONTEXT_KEY = "hepta.paper-raid.player-focus-context.v1";
+const PLAYER_FOCUS_CONTEXT_MAX_AGE_MS = 30 * 60 * 1000;
+const PLAYER_FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "summary",
+  "[tabindex]:not([tabindex='-1'])",
+].join(",");
+const PLAYER_FOCUS_DATA_KEYS = Object.freeze([
+  "paperId",
+  "teamId",
+  "challengeId",
+  "workItemId",
+  "ticketId",
+  "proposalId",
+  "assignmentId",
+  "evaluationId",
+  "reviewId",
+  "revisionId",
+  "sectionRevisionId",
+  "runRecordId",
+  "resourceId",
+  "manifestId",
+  "receiptId",
+  "bindingId",
+  "sessionId",
+  "sectionKey",
+  "participantSlot",
+  "slot",
+  "role",
+  "kind",
+  "actionKind",
+  "command",
+  "queueAction",
+  "paperRoomReveal",
+]);
+
+function safeFocusText(value) {
+  const text = String(value || "");
+  return text.length <= 128 && /^[A-Za-z0-9_.:\/-]*$/.test(text) ? text : "";
+}
+
+function focusNodeDescriptor(node, target = false) {
+  const descriptor = { tag: node.tagName.toLowerCase() };
+  const id = safeFocusText(node.id);
+  if (id) descriptor.id = id;
+  const name = safeFocusText(node.getAttribute("name"));
+  if (name) descriptor.name = name;
+  const type = safeFocusText(node.getAttribute("type"));
+  if (type) descriptor.type = type;
+  const classes = Array.from(node.classList || [])
+    .map(safeFocusText)
+    .filter(Boolean)
+    .sort()
+    .slice(0, 8);
+  if (classes.length > 0) descriptor.classes = classes;
+  const data = {};
+  for (const key of PLAYER_FOCUS_DATA_KEYS) {
+    const value = safeFocusText(node.dataset && node.dataset[key]);
+    if (value) data[key] = value;
+  }
+  if (Object.keys(data).length > 0) descriptor.data = data;
+  if (target && ["button", "submit", "reset"].includes(type || descriptor.tag)) {
+    const actionValue = safeFocusText(node.getAttribute("value"));
+    if (actionValue) descriptor.actionValue = actionValue;
+  }
+  return descriptor;
+}
+
+function playerFocusSignature(element) {
+  if (!(element instanceof HTMLElement) || !element.matches(PLAYER_FOCUSABLE_SELECTOR)) return null;
+  const scopes = [];
+  for (let node = element.parentElement; node && node !== document.body; node = node.parentElement) {
+    if (!node.matches("form,article,section,details,[data-paper-id]")) continue;
+    const descriptor = focusNodeDescriptor(node);
+    if (Object.keys(descriptor).length > 1) scopes.push(descriptor);
+    if (scopes.length >= 8) break;
+  }
+  return JSON.stringify({ target: focusNodeDescriptor(element, true), scopes });
+}
+
+function savePlayerFocusContext(element) {
+  const signature = playerFocusSignature(element);
+  if (!signature || signature.length > 4096) return false;
+  const payload = {
+    schema: PLAYER_FOCUS_CONTEXT_SCHEMA,
+    path: window.location.pathname,
+    signature,
+    saved_at_ms: Date.now(),
+  };
+  try {
+    sessionStorage.setItem(PLAYER_FOCUS_CONTEXT_KEY, JSON.stringify(payload));
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function reloadNavigationType() {
+  if (typeof performance === "undefined" || typeof performance.getEntriesByType !== "function") {
+    return null;
+  }
+  const entries = performance.getEntriesByType("navigation");
+  return entries.length === 1 ? entries[0].type : null;
+}
+
+function restorePlayerFocusContext(navigationType = reloadNavigationType()) {
+  if (navigationType !== "reload") return false;
+  let payload;
+  try {
+    const encoded = sessionStorage.getItem(PLAYER_FOCUS_CONTEXT_KEY);
+    if (!encoded || encoded.length > 8192) return false;
+    payload = JSON.parse(encoded);
+  } catch (_) {
+    return false;
+  }
+  if (!exactKeys(payload, ["schema", "path", "signature", "saved_at_ms"])) return false;
+  const ageMs = Date.now() - payload.saved_at_ms;
+  if (
+      payload.schema !== PLAYER_FOCUS_CONTEXT_SCHEMA ||
+      payload.path !== window.location.pathname ||
+      typeof payload.signature !== "string" || payload.signature.length < 1 ||
+      payload.signature.length > 4096 || !Number.isSafeInteger(payload.saved_at_ms) ||
+      ageMs < 0 || ageMs > PLAYER_FOCUS_CONTEXT_MAX_AGE_MS) {
+    return false;
+  }
+  const matches = Array.from(document.querySelectorAll(PLAYER_FOCUSABLE_SELECTOR))
+    .filter(candidate => playerFocusSignature(candidate) === payload.signature);
+  if (matches.length !== 1) return false;
+  const target = matches[0];
+  if (target.disabled || target.closest("[hidden],[aria-hidden='true']")) return false;
+  for (let node = target.parentElement; node && node !== document.body; node = node.parentElement) {
+    if (node instanceof HTMLDetailsElement) node.open = true;
+  }
+  target.focus({ preventScroll: true });
+  if (typeof target.scrollIntoView === "function") {
+    const reduceMotion = window.matchMedia
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    target.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "center" });
+  }
+  return true;
+}
+
+function bindPlayerFocusContext() {
+  document.addEventListener("focusin", event => {
+    savePlayerFocusContext(event.target);
+  });
 }
 
 async function responseValue(response) {
@@ -4494,6 +4723,7 @@ function bindPaperRoomProgressiveDisclosure() {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
+  bindPlayerFocusContext();
   bindPaperRoomProgressiveDisclosure();
   bindLogin();
   bindHumanKeyCreate();
@@ -4520,6 +4750,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindPaperReworkCountdowns();
   bindTimeline();
   bindProductTelemetry();
+  restorePlayerFocusContext();
   // Binding player controls must not depend on a network round trip.  A slow
   // CSRF refresh previously left native forms briefly active without their
   // fail-closed JavaScript handlers, so a real player click could submit and

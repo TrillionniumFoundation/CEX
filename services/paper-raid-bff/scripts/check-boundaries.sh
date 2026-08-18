@@ -69,11 +69,13 @@ then
   echo "browser persistence or external Agent secret input detected" >&2
   exit 1
 fi
-if [[ $(rg -o 'sessionStorage' "$browser" | wc -l) -ne 2 ]] || \
+if [[ $(rg -o 'sessionStorage' "$browser" | wc -l) -ne 4 ]] || \
    ! rg -q --fixed-strings 'sessionStorage.getItem(liveCursorKey(paperId))' "$browser" || \
-   ! rg -q --fixed-strings 'sessionStorage.setItem(liveCursorKey(paperId), JSON.stringify({ hepta: cursor.hepta }))' "$browser"
+   ! rg -q --fixed-strings 'sessionStorage.setItem(liveCursorKey(paperId), JSON.stringify({ hepta: cursor.hepta }))' "$browser" || \
+   ! rg -q --fixed-strings 'sessionStorage.getItem(PLAYER_FOCUS_CONTEXT_KEY)' "$browser" || \
+   ! rg -q --fixed-strings 'sessionStorage.setItem(PLAYER_FOCUS_CONTEXT_KEY, JSON.stringify(payload))' "$browser"
 then
-  echo "browser session storage is not limited to non-secret live cursors" >&2
+  echo "browser session storage is not limited to non-secret live cursors and focus context" >&2
   exit 1
 fi
 
@@ -438,6 +440,7 @@ jq -e '
 ' "$accessctl_sbom" >/dev/null
 
 node "$service_root/scripts/check-browser-crypto.mjs"
+node "$service_root/scripts/check-player-language-focus.mjs"
 bash "$service_root/scripts/check-observability-boundary.sh"
 
 echo "paper-raid-bff boundary scan: ok"

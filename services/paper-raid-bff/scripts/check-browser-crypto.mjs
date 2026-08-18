@@ -23,7 +23,7 @@ assert.equal(source.includes("localStorage"), false);
 assert.equal(source.includes("indexedDB"), false);
 assert.equal(source.includes(".style"), false);
 assert.ok(source.includes("hepta.paper-raid.live-cursor.v1:"));
-assert.equal((source.match(/sessionStorage/g) || []).length, 2);
+assert.equal((source.match(/sessionStorage/g) || []).length, 4);
 assert.ok(source.includes("bindGuidedPaperActions()"));
 const bindingEntrypoint = source.indexOf('document.addEventListener("DOMContentLoaded", async () => {');
 assert.ok(bindingEntrypoint >= 0);
