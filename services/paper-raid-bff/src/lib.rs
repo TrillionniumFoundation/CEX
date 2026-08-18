@@ -12,5 +12,6 @@ pub mod html;
 pub mod metrics;
 pub mod nakama;
 pub mod oidc;
+pub mod practice;
 pub mod probe;
 mod review_receipts;
