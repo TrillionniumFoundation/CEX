@@ -584,10 +584,22 @@ pub async fn pairing_grant_status(
     }
     let row = sqlx::query(
         "SELECT g.grant_id, g.state, g.created_at, g.expires_at, \
-                g.pinned_binding_id, b.agent_id, b.agent_key_id, b.last_verified_at \
+                g.pinned_binding_id, b.agent_id, b.agent_key_id, b.last_verified_at, \
+                COALESCE( \
+                    g.state='consumed' \
+                    AND g.consumed_at IS NOT NULL \
+                    AND h.assurance='self_declared_unverified' \
+                    AND h.status='healthy' \
+                    AND h.last_seen_at >= g.consumed_at, \
+                    FALSE \
+                ) AS signed_health_observed_after_pairing \
          FROM paper_raid_bff_agent_pairing_grants g \
          LEFT JOIN paper_raid_bff_agent_bridge_bindings b \
-           ON b.grant_id=g.grant_id OR b.last_pairing_grant_id=g.grant_id \
+           ON b.binding_id=g.pinned_binding_id \
+          AND b.last_pairing_grant_id=g.grant_id \
+          AND b.subject_id=g.subject_id \
+          AND b.player_id=g.player_id \
+         LEFT JOIN paper_raid_bff_agent_health h ON h.binding_id=b.binding_id \
          WHERE g.subject_id=$1 ORDER BY g.created_at DESC, g.grant_id DESC LIMIT 1",
     )
     .bind(&session.identity.subject_id)
@@ -603,6 +615,8 @@ pub async fn pairing_grant_status(
             "agent_id": row.try_get::<String,_>("agent_id").ok(),
             "agent_key_id": row.try_get::<String,_>("agent_key_id").ok(),
             "last_verified_at": row.try_get::<DateTime<Utc>,_>("last_verified_at").ok(),
+            "signed_health_observed_after_pairing":
+                row.get::<bool,_>("signed_health_observed_after_pairing"),
         })
     });
     Ok(private_json(json!({
@@ -4516,7 +4530,605 @@ fn with_rotated_csrf(mut response: Response, csrf: String) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hepta_paper_raid_contracts::AGENT_BRIDGE_REQUEST_PROOF_V1;
+    use std::sync::Arc;
+
+    use axum::{body::to_bytes, http::Request};
+    use ed25519_dalek::SigningKey;
+    use hepta_paper_raid_contracts::{canonical_json_sha256, AGENT_BRIDGE_REQUEST_PROOF_V1};
+    use sqlx::PgPool;
+    use tower::ServiceExt;
+
+    use crate::{
+        auth::SESSION_COOKIE,
+        config::{CasConfig, Config, ConsumerAssertionConfig, EdgeScope, IdentityMode},
+    };
+
+    const PAIRING_STATUS_RESTART_SUBJECT: &str = "pairing-status-restart-persistence-v1";
+
+    fn pairing_status_identity(subject_id: &str, player_id: Uuid) -> AlphaIdentity {
+        AlphaIdentity::test_identity(subject_id, player_id, Uuid::new_v4())
+    }
+
+    fn pairing_status_test_config(database_url: String, identities: Vec<AlphaIdentity>) -> Config {
+        let local = url::Url::parse("http://127.0.0.1:3000").expect("pairing status test URL");
+        Config {
+            bind: "127.0.0.1:0".parse().expect("pairing status test bind"),
+            edge_scope: EdgeScope::LoopbackProcess,
+            public_origin: local.clone(),
+            database_url,
+            session_key: [67_u8; 32],
+            session_ttl: Duration::from_secs(600),
+            identity_mode: IdentityMode::FixedAlpha,
+            invite_alpha: None,
+            agent_bridge_quota: AgentBridgeQuotaConfig {
+                window: Duration::from_secs(60),
+                pair_global_limit: 10_000,
+                pair_bucket_limit: 10_000,
+                request_global_limit: 10_000,
+                request_bucket_limit: 10_000,
+                request_binding_limit: 10_000,
+            },
+            identities: identities.into(),
+            hepta_base: local.clone(),
+            nakama_base: local.clone(),
+            nakama_http_key: "pairing-status-test-key".to_string(),
+            assertions: ConsumerAssertionConfig {
+                issuer: "pairing-status-test-consumer".to_string(),
+                audience: "pairing-status-test-hepta".to_string(),
+                key_id: "pairing-status-test-consumer-key".to_string(),
+                signing_key: Arc::new(SigningKey::from_bytes(&[71_u8; 32])),
+                ttl: Duration::from_secs(30),
+            },
+            cas: CasConfig {
+                endpoint: local,
+                bucket: "pairing-status-test".to_string(),
+                region: "test-1".to_string(),
+                access_key_id: "pairing-status-test-access".to_string(),
+                secret_access_key: "pairing-status-test-secret".to_string(),
+                max_object_bytes: 1024 * 1024,
+                ready_digest: format!("sha256:{}", "0".repeat(64)),
+                ready_media_type: "application/json".to_string(),
+            },
+        }
+    }
+
+    async fn seed_consumed_pairing_grant(
+        pool: &PgPool,
+        grant_id: Uuid,
+        subject_id: &str,
+        player_id: Uuid,
+        binding_id: Uuid,
+        created_at: DateTime<Utc>,
+        consumed_at: DateTime<Utc>,
+    ) {
+        let code_hash =
+            Sha256::digest(format!("pairing-status-code:{grant_id}").as_bytes()).to_vec();
+        let pinned_hash =
+            Sha256::digest(format!("pairing-status-request:{grant_id}").as_bytes()).to_vec();
+        sqlx::query(
+            "INSERT INTO paper_raid_bff_agent_pairing_grants ( \
+                grant_id, subject_id, player_id, code_hash, state, pinned_request_hash, \
+                pinned_binding_id, created_at, expires_at, pinned_at, consumed_at, \
+                pair_response_status, pair_response_body, updated_at \
+             ) VALUES ($1,$2,$3,$4,'consumed',$5,$6,$7,$8,$7,$9,200,$10,$9)",
+        )
+        .bind(grant_id)
+        .bind(subject_id)
+        .bind(player_id)
+        .bind(code_hash)
+        .bind(pinned_hash)
+        .bind(binding_id)
+        .bind(created_at)
+        .bind(created_at + chrono::Duration::minutes(5))
+        .bind(consumed_at)
+        .bind(b"{}".as_slice())
+        .execute(pool)
+        .await
+        .expect("seed consumed pairing grant");
+    }
+
+    async fn seed_pairing_binding(
+        pool: &PgPool,
+        binding_id: Uuid,
+        original_grant_id: Uuid,
+        last_pairing_grant_id: Uuid,
+        subject_id: &str,
+        player_id: Uuid,
+        verified_at: DateTime<Utc>,
+    ) {
+        let agent_id = format!("agent.pairing-status.{}", binding_id.simple());
+        let agent_key_id = sha256_digest(binding_id.as_bytes());
+        let capability = json!({
+            "schema": "hepta.paper_raid.agent_capability_disclosure.v1",
+            "assurance": "self_declared_unverified",
+            "capabilities": ["experiment_execution"],
+            "resource_classes": ["cpu"],
+            "max_parallel_tasks": 1,
+        });
+        let capability_hash =
+            canonical_json_sha256(&capability).expect("pairing status capability hash");
+        let record = json!({
+            "binding_id": binding_id,
+            "player_id": player_id,
+            "agent_id": agent_id,
+            "agent_key_id": agent_key_id,
+            "capability_disclosure_hash": capability_hash,
+            "capability_disclosure": capability,
+            "status": "active",
+        });
+        sqlx::query(
+            "INSERT INTO paper_raid_bff_agent_bridge_bindings ( \
+                binding_id, grant_id, last_pairing_grant_id, subject_id, player_id, agent_id, \
+                agent_key_id, capability_disclosure_hash, capability_disclosure, binding_record, \
+                paired_at, last_verified_at \
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$11)",
+        )
+        .bind(binding_id)
+        .bind(original_grant_id)
+        .bind(last_pairing_grant_id)
+        .bind(subject_id)
+        .bind(player_id)
+        .bind(agent_id)
+        .bind(agent_key_id)
+        .bind(capability_hash)
+        .bind(capability)
+        .bind(record)
+        .bind(verified_at)
+        .execute(pool)
+        .await
+        .expect("seed pairing binding");
+    }
+
+    async fn seed_exact_pairing(
+        pool: &PgPool,
+        identity: &AlphaIdentity,
+        consumed_at: DateTime<Utc>,
+    ) -> (Uuid, Uuid) {
+        let grant_id = Uuid::new_v4();
+        let binding_id = Uuid::new_v4();
+        seed_consumed_pairing_grant(
+            pool,
+            grant_id,
+            &identity.subject_id,
+            identity.player_id,
+            binding_id,
+            consumed_at - chrono::Duration::seconds(30),
+            consumed_at,
+        )
+        .await;
+        seed_pairing_binding(
+            pool,
+            binding_id,
+            grant_id,
+            grant_id,
+            &identity.subject_id,
+            identity.player_id,
+            consumed_at,
+        )
+        .await;
+        (grant_id, binding_id)
+    }
+
+    async fn set_pairing_health(
+        pool: &PgPool,
+        binding_id: Uuid,
+        status: &str,
+        last_seen_at: DateTime<Utc>,
+    ) {
+        sqlx::query(
+            "INSERT INTO paper_raid_bff_agent_health ( \
+                binding_id, assurance, status, observed_at, last_seen_at, updated_at \
+             ) VALUES ($1,'self_declared_unverified',$2,$3,$3,$3) \
+             ON CONFLICT(binding_id) DO UPDATE SET \
+                assurance=EXCLUDED.assurance, status=EXCLUDED.status, \
+                observed_at=EXCLUDED.observed_at, last_seen_at=EXCLUDED.last_seen_at, \
+                updated_at=EXCLUDED.updated_at",
+        )
+        .bind(binding_id)
+        .bind(status)
+        .bind(last_seen_at)
+        .execute(pool)
+        .await
+        .expect("set pairing health");
+    }
+
+    async fn seed_pairing_with_mapping(
+        pool: &PgPool,
+        target: &AlphaIdentity,
+        mapping_subject_id: &str,
+        mapping_player_id: Uuid,
+        exact_pinned_binding: bool,
+        consumed_at: DateTime<Utc>,
+    ) -> Uuid {
+        let mapping = pairing_status_identity(mapping_subject_id, mapping_player_id);
+        let (_, actual_binding_id) =
+            seed_exact_pairing(pool, &mapping, consumed_at - chrono::Duration::minutes(5)).await;
+        let pinned_binding_id = if exact_pinned_binding {
+            actual_binding_id
+        } else {
+            Uuid::new_v4()
+        };
+        let target_grant_id = Uuid::new_v4();
+        seed_consumed_pairing_grant(
+            pool,
+            target_grant_id,
+            &target.subject_id,
+            target.player_id,
+            pinned_binding_id,
+            consumed_at - chrono::Duration::seconds(30),
+            consumed_at,
+        )
+        .await;
+        sqlx::query(
+            "UPDATE paper_raid_bff_agent_bridge_bindings \
+             SET last_pairing_grant_id=$1, last_verified_at=$2 WHERE binding_id=$3",
+        )
+        .bind(target_grant_id)
+        .bind(consumed_at)
+        .bind(actual_binding_id)
+        .execute(pool)
+        .await
+        .expect("point pairing mapping at target grant");
+        set_pairing_health(
+            pool,
+            actual_binding_id,
+            "healthy",
+            consumed_at + chrono::Duration::seconds(1),
+        )
+        .await;
+        target_grant_id
+    }
+
+    async fn pairing_status_through_router(state: &AppState, identity: &AlphaIdentity) -> Value {
+        let issue = state
+            .sessions
+            .issue(identity)
+            .await
+            .expect("issue pairing status browser session");
+        let cookie = issue
+            .cookie
+            .to_str()
+            .expect("pairing status browser cookie")
+            .split(';')
+            .next()
+            .expect("pairing status browser cookie pair");
+        assert!(cookie.starts_with(&format!("{SESSION_COOKIE}=")));
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri("/api/agent-bridge/pairing-grants")
+            .header(header::COOKIE, cookie)
+            .body(Body::empty())
+            .expect("build pairing status Router request");
+        let response = crate::app::router(state.clone())
+            .oneshot(request)
+            .await
+            .expect("pairing status Router response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("no-store, private")),
+        );
+        let body = to_bytes(response.into_body(), 128 * 1024)
+            .await
+            .expect("pairing status response body");
+        let value: Value = serde_json::from_slice(&body).expect("pairing status response JSON");
+        assert_eq!(
+            value["schema"],
+            "hepta.paper_raid.agent_bridge.pairing_status.v1"
+        );
+        value
+    }
+
+    async fn assert_pairing_health_status(
+        state: &AppState,
+        identity: &AlphaIdentity,
+        expected_grant_id: Uuid,
+        expected: bool,
+    ) {
+        let value = pairing_status_through_router(state, identity).await;
+        assert_eq!(value["grant"]["grant_id"], json!(expected_grant_id));
+        assert_eq!(value["grant"]["state"], "consumed");
+        assert_eq!(
+            value["grant"]["signed_health_observed_after_pairing"],
+            expected,
+        );
+    }
+
+    async fn cleanup_transient_pairing_status_rows(pool: &PgPool) {
+        let mut tx = pool
+            .begin()
+            .await
+            .expect("begin pairing status fixture cleanup");
+        sqlx::query(
+            "DELETE FROM paper_raid_bff_agent_health health \
+             USING paper_raid_bff_agent_bridge_bindings binding \
+             WHERE health.binding_id=binding.binding_id \
+               AND binding.subject_id LIKE 'pairing-status-%' \
+               AND binding.subject_id<>$1",
+        )
+        .bind(PAIRING_STATUS_RESTART_SUBJECT)
+        .execute(&mut *tx)
+        .await
+        .expect("clean transient pairing status health");
+        sqlx::query(
+            "DELETE FROM paper_raid_bff_agent_bridge_bindings \
+             WHERE subject_id LIKE 'pairing-status-%' AND subject_id<>$1",
+        )
+        .bind(PAIRING_STATUS_RESTART_SUBJECT)
+        .execute(&mut *tx)
+        .await
+        .expect("clean transient pairing status bindings");
+        sqlx::query(
+            "DELETE FROM paper_raid_bff_agent_pairing_grants \
+             WHERE subject_id LIKE 'pairing-status-%' AND subject_id<>$1",
+        )
+        .bind(PAIRING_STATUS_RESTART_SUBJECT)
+        .execute(&mut *tx)
+        .await
+        .expect("clean transient pairing status grants");
+        tx.commit()
+            .await
+            .expect("commit pairing status fixture cleanup");
+    }
+
+    #[tokio::test]
+    async fn real_postgres_pairing_grant_status_health_binding_and_restart() {
+        let Ok(database_url) = std::env::var("PAPER_RAID_BFF_TEST_DATABASE_URL") else {
+            eprintln!("PAPER_RAID_BFF_TEST_DATABASE_URL is unset; pairing status PG gate skipped");
+            return;
+        };
+        let expect_restart = match std::env::var("PAPER_RAID_BFF_EXPECT_PAIRING_STATUS_RESTART") {
+            Ok(value) if value == "0" => false,
+            Ok(value) if value == "1" => true,
+            Ok(value) => {
+                panic!("PAPER_RAID_BFF_EXPECT_PAIRING_STATUS_RESTART must be 0 or 1, got {value}")
+            }
+            Err(std::env::VarError::NotPresent) => false,
+            Err(error) => panic!("cannot read pairing status restart phase: {error}"),
+        };
+
+        let restart_player = Uuid::parse_str("70000000-0000-4000-8000-000000000001").unwrap();
+        let restart_grant = Uuid::parse_str("70000000-0000-4000-8000-000000000002").unwrap();
+        let restart_binding = Uuid::parse_str("70000000-0000-4000-8000-000000000003").unwrap();
+        let restart_identity =
+            pairing_status_identity(PAIRING_STATUS_RESTART_SUBJECT, restart_player);
+        let actor = pairing_status_identity(
+            &format!("pairing-status-actor-{}", Uuid::new_v4().simple()),
+            Uuid::new_v4(),
+        );
+        let other = pairing_status_identity(
+            &format!("pairing-status-other-{}", Uuid::new_v4().simple()),
+            Uuid::new_v4(),
+        );
+        let state = AppState::connect(pairing_status_test_config(
+            database_url,
+            vec![restart_identity.clone(), actor.clone(), other.clone()],
+        ))
+        .await
+        .expect("connect pairing status PG app state");
+        let pool = &state.pool;
+        let base = Utc::now() - chrono::Duration::hours(2);
+        let at = |minutes| base + chrono::Duration::minutes(minutes);
+
+        // The first gate invocation creates this fixed authority row. The post-restart
+        // invocation must find it before any repair and observe it through a new session/router.
+        let restart_marker_exists = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS ( \
+                SELECT 1 FROM paper_raid_bff_agent_pairing_grants \
+                WHERE grant_id=$1 AND subject_id=$2 \
+            )",
+        )
+        .bind(restart_grant)
+        .bind(PAIRING_STATUS_RESTART_SUBJECT)
+        .fetch_one(pool)
+        .await
+        .expect("read pairing status restart marker");
+        if expect_restart {
+            assert!(
+                restart_marker_exists,
+                "post-restart pairing status invocation lost its pre-restart marker"
+            );
+        }
+        if !restart_marker_exists {
+            let consumed_at = at(1);
+            seed_consumed_pairing_grant(
+                pool,
+                restart_grant,
+                PAIRING_STATUS_RESTART_SUBJECT,
+                restart_player,
+                restart_binding,
+                consumed_at - chrono::Duration::seconds(30),
+                consumed_at,
+            )
+            .await;
+            seed_pairing_binding(
+                pool,
+                restart_binding,
+                restart_grant,
+                restart_grant,
+                PAIRING_STATUS_RESTART_SUBJECT,
+                restart_player,
+                consumed_at,
+            )
+            .await;
+            set_pairing_health(pool, restart_binding, "healthy", consumed_at).await;
+        }
+        assert_pairing_health_status(&state, &restart_identity, restart_grant, true).await;
+
+        // The same exact grant/binding proves no health, pre-consumption health, degraded
+        // post-consumption health, equality, and strictly-after health without changing joins.
+        let temporal_consumed = at(10);
+        let (temporal_grant, temporal_binding) =
+            seed_exact_pairing(pool, &actor, temporal_consumed).await;
+        assert_pairing_health_status(&state, &actor, temporal_grant, false).await;
+        set_pairing_health(
+            pool,
+            temporal_binding,
+            "healthy",
+            temporal_consumed - chrono::Duration::microseconds(1),
+        )
+        .await;
+        assert_pairing_health_status(&state, &actor, temporal_grant, false).await;
+        set_pairing_health(
+            pool,
+            temporal_binding,
+            "degraded",
+            temporal_consumed + chrono::Duration::seconds(1),
+        )
+        .await;
+        assert_pairing_health_status(&state, &actor, temporal_grant, false).await;
+        set_pairing_health(
+            pool,
+            temporal_binding,
+            "offline",
+            temporal_consumed + chrono::Duration::seconds(1),
+        )
+        .await;
+        assert_pairing_health_status(&state, &actor, temporal_grant, false).await;
+        set_pairing_health(pool, temporal_binding, "healthy", temporal_consumed).await;
+        assert_pairing_health_status(&state, &actor, temporal_grant, true).await;
+        set_pairing_health(
+            pool,
+            temporal_binding,
+            "healthy",
+            temporal_consumed + chrono::Duration::microseconds(1),
+        )
+        .await;
+        assert_pairing_health_status(&state, &actor, temporal_grant, true).await;
+
+        // A different binding's healthy row cannot fill the selected binding's absent health.
+        sqlx::query("DELETE FROM paper_raid_bff_agent_health WHERE binding_id=$1")
+            .bind(temporal_binding)
+            .execute(pool)
+            .await
+            .expect("remove selected binding health");
+        let foreign_subject = format!("pairing-status-foreign-{}", Uuid::new_v4().simple());
+        let foreign_player = Uuid::new_v4();
+        let foreign_grant = Uuid::new_v4();
+        let foreign_binding = Uuid::new_v4();
+        seed_consumed_pairing_grant(
+            pool,
+            foreign_grant,
+            &foreign_subject,
+            foreign_player,
+            foreign_binding,
+            at(11) - chrono::Duration::seconds(30),
+            at(11),
+        )
+        .await;
+        seed_pairing_binding(
+            pool,
+            foreign_binding,
+            foreign_grant,
+            foreign_grant,
+            &foreign_subject,
+            foreign_player,
+            at(11),
+        )
+        .await;
+        set_pairing_health(pool, foreign_binding, "healthy", at(12)).await;
+        set_pairing_health(pool, restart_binding, "healthy", at(12)).await;
+        assert_pairing_health_status(&state, &actor, temporal_grant, false).await;
+
+        // A newer grant pinned to the same binding is false while the binding still names the old
+        // last_pairing_grant_id, even when that binding has sufficiently new healthy state.
+        let stale_grant = Uuid::new_v4();
+        let stale_consumed = at(20);
+        seed_consumed_pairing_grant(
+            pool,
+            stale_grant,
+            &actor.subject_id,
+            actor.player_id,
+            temporal_binding,
+            stale_consumed - chrono::Duration::seconds(30),
+            stale_consumed,
+        )
+        .await;
+        set_pairing_health(
+            pool,
+            temporal_binding,
+            "healthy",
+            stale_consumed + chrono::Duration::seconds(1),
+        )
+        .await;
+        assert_pairing_health_status(&state, &actor, stale_grant, false).await;
+
+        // The binding named by last_pairing_grant_id is still foreign if the grant pinned a
+        // different binding ID. Subject and player ownership are then independently required.
+        let unpinned_grant = seed_pairing_with_mapping(
+            pool,
+            &actor,
+            &actor.subject_id,
+            actor.player_id,
+            false,
+            at(25),
+        )
+        .await;
+        assert_pairing_health_status(&state, &actor, unpinned_grant, false).await;
+
+        let wrong_subject = format!("pairing-status-wrong-subject-{}", Uuid::new_v4().simple());
+        let subject_mismatch_grant =
+            seed_pairing_with_mapping(pool, &actor, &wrong_subject, actor.player_id, true, at(30))
+                .await;
+        assert_pairing_health_status(&state, &actor, subject_mismatch_grant, false).await;
+
+        let player_mismatch_grant = seed_pairing_with_mapping(
+            pool,
+            &actor,
+            &actor.subject_id,
+            Uuid::new_v4(),
+            true,
+            at(40),
+        )
+        .await;
+        assert_pairing_health_status(&state, &actor, player_mismatch_grant, false).await;
+
+        // Re-pairing the same binding moves last_pairing_grant_id. Its old healthy report cannot
+        // satisfy the new consumption event until a new report reaches equality or later.
+        let re_pair_old_consumed = at(50);
+        let (re_pair_old_grant, re_pair_binding) =
+            seed_exact_pairing(pool, &actor, re_pair_old_consumed).await;
+        set_pairing_health(pool, re_pair_binding, "healthy", at(51)).await;
+        assert_pairing_health_status(&state, &actor, re_pair_old_grant, true).await;
+        let re_pair_new_grant = Uuid::new_v4();
+        let re_pair_new_consumed = at(60);
+        seed_consumed_pairing_grant(
+            pool,
+            re_pair_new_grant,
+            &actor.subject_id,
+            actor.player_id,
+            re_pair_binding,
+            re_pair_new_consumed - chrono::Duration::seconds(30),
+            re_pair_new_consumed,
+        )
+        .await;
+        sqlx::query(
+            "UPDATE paper_raid_bff_agent_bridge_bindings \
+             SET last_pairing_grant_id=$1, last_verified_at=$2 WHERE binding_id=$3",
+        )
+        .bind(re_pair_new_grant)
+        .bind(re_pair_new_consumed)
+        .bind(re_pair_binding)
+        .execute(pool)
+        .await
+        .expect("advance same-binding pairing grant");
+        assert_pairing_health_status(&state, &actor, re_pair_new_grant, false).await;
+        set_pairing_health(pool, re_pair_binding, "healthy", re_pair_new_consumed).await;
+        assert_pairing_health_status(&state, &actor, re_pair_new_grant, true).await;
+
+        // The authenticated subject sees only its latest grant. Its older true grant and a
+        // still-later true grant owned by another subject cannot change the latest false result.
+        let (latest_grant, _) = seed_exact_pairing(pool, &actor, at(70)).await;
+        assert_pairing_health_status(&state, &actor, latest_grant, false).await;
+        let (other_grant, other_binding) = seed_exact_pairing(pool, &other, at(80)).await;
+        set_pairing_health(pool, other_binding, "healthy", at(80)).await;
+        assert_pairing_health_status(&state, &other, other_grant, true).await;
+        assert_pairing_health_status(&state, &actor, latest_grant, false).await;
+
+        // Keep only the fixed restart marker. Hostile ownership fixtures are intentionally
+        // inconsistent with the global integrity predicate and must not contaminate later gates.
+        cleanup_transient_pairing_status_rows(pool).await;
+    }
 
     #[test]
     fn pairing_codes_are_canonical_random_and_hash_only_ready() {

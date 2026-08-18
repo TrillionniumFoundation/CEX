@@ -1714,6 +1714,27 @@ function bindHumanKeyRegistration() {
   });
 }
 
+const AGENT_PAIRING_RETURN_PATHS = new Set(["/league/practice"]);
+
+function agentPairingReturnTarget(locationValue = window.location) {
+  let page;
+  try {
+    page = new URL(locationValue.href);
+  } catch {
+    return null;
+  }
+  const candidates = page.searchParams.getAll("return_to");
+  if (candidates.length !== 1 || !AGENT_PAIRING_RETURN_PATHS.has(candidates[0])) {
+    return null;
+  }
+  return candidates[0];
+}
+
+function agentPairingHealthReady(grant) {
+  return Boolean(grant) && grant.state === "consumed" &&
+    grant.signed_health_observed_after_pairing === true;
+}
+
 function bindAgentPairing() {
   for (const panel of document.querySelectorAll(".agent-pairing-panel")) {
     const form = panel.querySelector(".agent-pairing-grant-form");
@@ -1724,8 +1745,24 @@ function bindAgentPairing() {
     const refreshButton = panel.querySelector(".agent-pairing-refresh");
     const revokeButton = panel.querySelector(".agent-pairing-revoke");
     const statusOutput = panel.querySelector(".agent-pairing-status output");
+    const returnTarget = agentPairingReturnTarget();
     let visibleGrantId = null;
     let clearTimer = null;
+    let pollTimer = null;
+    let activePairingGrantId = null;
+    let observedState = null;
+    let completionHandled = false;
+    let initialStatusPending = true;
+    let statusRequestGeneration = 0;
+
+    const clearPollTimer = () => {
+      if (pollTimer !== null) window.clearTimeout(pollTimer);
+      pollTimer = null;
+    };
+
+    const invalidateStatusRequests = () => {
+      statusRequestGeneration += 1;
+    };
 
     const clearVisibleCode = () => {
       if (clearTimer !== null) window.clearTimeout(clearTimer);
@@ -1745,43 +1782,120 @@ function bindAgentPairing() {
         revokeButton.hidden = true;
         revokeButton.dataset.grantId = "";
         show(statusOutput, "No pairing grant has been issued yet / 尚未签发配对码", true);
-        return;
+        return null;
       }
       const grantId = canonicalUuid(grant.grant_id, "grant_id");
+      const createdAt = Date.parse(grant.created_at);
       const expiresAt = Date.parse(grant.expires_at);
       if (!["issued", "pinned", "consumed", "revoked"].includes(grant.state) ||
-          Number.isNaN(expiresAt)) {
+          Number.isNaN(createdAt) || Number.isNaN(expiresAt) || expiresAt <= createdAt ||
+          typeof grant.signed_health_observed_after_pairing !== "boolean") {
         throw new Error("agent_pairing_grant_is_invalid");
       }
       const expired = expiresAt <= Date.now();
+      const healthConfirmed = agentPairingHealthReady(grant);
       revokeButton.dataset.grantId = grantId;
       revokeButton.hidden = !(grant.state === "issued" || (grant.state === "pinned" && expired));
       show(statusOutput, {
         state: expired && ["issued", "pinned"].includes(grant.state) ? "expired" : grant.state,
+        signed_health: grant.state === "consumed"
+          ? healthConfirmed ? "observed_after_pairing" : "pending"
+          : null,
         expires_at: grant.expires_at,
         binding_id: grant.binding_id || null,
         agent_id: grant.agent_id || null,
         agent_key_id: grant.agent_key_id || null,
         assurance: grant.binding_id ? "self_declared_unverified" : null
       }, true);
+      return {
+        grantId,
+        lifecycleState: grant.state === "consumed"
+          ? healthConfirmed ? "consumed_healthy" : "consumed_pending_health"
+          : grant.state,
+        healthConfirmed,
+        shouldPoll: (!expired && ["issued", "pinned"].includes(grant.state)) ||
+          (grant.state === "consumed" && !healthConfirmed && Date.now() < expiresAt + 60000),
+        pollDeadline: expiresAt + 60000
+      };
+    };
+
+    const scheduleStatusRefresh = deadline => {
+      clearPollTimer();
+      if (!Number.isFinite(deadline) || deadline <= Date.now()) return;
+      pollTimer = window.setTimeout(async () => {
+        pollTimer = null;
+        try {
+          await refreshStatus();
+        } catch (error) {
+          show(statusOutput, error.message, false);
+          scheduleStatusRefresh(deadline);
+        }
+      }, Math.min(1000, Math.max(1, deadline - Date.now())));
     };
 
     const refreshStatus = async () => {
+      const requestGeneration = ++statusRequestGeneration;
       const response = await fetch("/api/agent-bridge/pairing-grants", {
         method: "GET",
         credentials: "same-origin",
         headers: { "accept": "application/json" }
       });
       const value = await responseValue(response);
+      if (requestGeneration !== statusRequestGeneration) return null;
       if (!response.ok) throw new Error(value && value.error ? value.error : "agent_pairing_status_failed");
-      renderStatus(value);
+      const previousState = observedState;
+      const status = renderStatus(value);
+      if (initialStatusPending) {
+        initialStatusPending = false;
+        if (activePairingGrantId === null && status?.shouldPoll && !status.healthConfirmed) {
+          activePairingGrantId = status.grantId;
+        }
+      }
+      const matchesActiveGrant = activePairingGrantId !== null &&
+        status?.grantId === activePairingGrantId;
+      if (matchesActiveGrant) {
+        observedState = status.lifecycleState;
+      } else if (activePairingGrantId !== null) {
+        activePairingGrantId = null;
+        observedState = null;
+      }
+      if (status?.healthConfirmed && matchesActiveGrant && previousState !== null &&
+          previousState !== "consumed_healthy") {
+        clearPollTimer();
+        clearVisibleCode();
+        if (!completionHandled) {
+          completionHandled = true;
+          show(
+            statusOutput,
+            returnTarget === null
+              ? "Agent paired; its signed self-declared health report was observed. Refreshing… / Agent 已配对；已观察到其签名的自声明健康报告，正在刷新……"
+              : "Agent paired; its signed self-declared health report was observed. Returning to practice… / Agent 已配对；已观察到其签名的自声明健康报告，正在返回练习……",
+            true,
+          );
+          window.setTimeout(() => {
+            if (returnTarget === null) window.location.reload();
+            else window.location.assign(returnTarget);
+          }, 300);
+        }
+      } else if (status?.shouldPoll && matchesActiveGrant) {
+        scheduleStatusRefresh(status.pollDeadline);
+      } else {
+        clearPollTimer();
+      }
+      return status;
     };
 
     if (form) form.addEventListener("submit", async event => {
       event.preventDefault();
       const button = form.querySelector("button");
       button.disabled = true;
+      clearPollTimer();
+      invalidateStatusRequests();
       clearVisibleCode();
+      activePairingGrantId = null;
+      observedState = null;
+      completionHandled = false;
+      initialStatusPending = true;
       try {
         const response = await mutation("/api/agent-bridge/pairing-grants", {
           method: "POST",
@@ -1797,6 +1911,11 @@ function bindAgentPairing() {
           throw new Error("agent_pairing_grant_response_is_invalid");
         }
         visibleGrantId = canonicalUuid(value.grant_id, "grant_id");
+        invalidateStatusRequests();
+        activePairingGrantId = visibleGrantId;
+        observedState = "issued";
+        completionHandled = false;
+        initialStatusPending = false;
         codeValue.textContent = value.pairing_code;
         codeBox.hidden = false;
         const remainingMs = Math.max(0, value.expires_at_unix * 1000 - Date.now());
@@ -1831,6 +1950,8 @@ function bindAgentPairing() {
       revokeButton.disabled = true;
       try {
         canonicalUuid(grantId, "grant_id");
+        clearPollTimer();
+        invalidateStatusRequests();
         const response = await mutation(`/api/agent-bridge/pairing-grants/${grantId}/revoke`, {
           method: "POST",
           headers: { "content-type": "application/json", "accept": "application/json" },
@@ -1838,7 +1959,12 @@ function bindAgentPairing() {
         });
         const value = await responseValue(response);
         if (!response.ok) throw new Error(value && value.error ? value.error : "agent_pairing_revoke_failed");
+        clearPollTimer();
         clearVisibleCode();
+        activePairingGrantId = null;
+        observedState = null;
+        completionHandled = false;
+        initialStatusPending = true;
         await refreshStatus();
       } catch (error) {
         show(statusOutput, error.message, false);

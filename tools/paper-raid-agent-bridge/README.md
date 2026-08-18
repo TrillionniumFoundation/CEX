@@ -85,6 +85,17 @@ paper-raid-agent-bridge confirm
 paper-raid-agent-bridge mode --mode auto --acknowledge-auto
 ```
 
+After `pair` persists the allowlisted public binding state, it immediately
+attempts one proof-authenticated, self-declared healthy report. Its output
+distinguishes `signed_health=observed` from `signed_health=pending`; an
+unavailable health endpoint never undoes or misreports the already committed
+pairing, and the installed service retries. An authenticated browser pairing
+page polls only the public grant status. It returns to the fixed Practice path
+only when PostgreSQL proves that the current grant is `consumed` and the exact
+binding's dedicated health row is `self_declared_unverified`, `healthy`, and
+was last seen at or after that grant's `consumed_at`. This is a signed Bridge
+self-report, not an independent third-party health attestation.
+
 `diagnose` reports `ready` only when the installed release verifies, the
 identity parses, a complete binding state matches that identity, and the user
 service is active. Confirm never runs while the service is in Auto. Auto must
@@ -203,7 +214,13 @@ node src/cli.mjs pair --config paper-raid-agent-bridge.local.json
 Paste the code into the hidden TTY prompt. Non-interactive callers may provide
 one line on stdin or inject a `readPairingCode` callback into `pairAgent`.
 There is deliberately no pairing-code argv flag, environment setting, or
-config field.
+config field. There is also no secret-bearing custom-protocol URL: desktop URL
+handlers expose their argument to process inspection and often to browser or
+desktop history. The browser's optional `return_to` value is not a pairing
+capability and accepts only the fixed `/league/practice` path. A QR flow should
+be added only with a real scanner and an equivalent no-log/no-history secret
+transport; rendering the existing code as a QR image alone would not remove a
+manual or security boundary.
 
 The Bridge first sends `{pairing_code}` to
 `POST /api/agent-bridge/pairing-context`. The returned short-lived public
