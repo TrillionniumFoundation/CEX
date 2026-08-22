@@ -10,6 +10,7 @@ cargo_locked() {
 }
 
 bash scripts/project-preflight.sh --dev
+bash scripts/check-paper-raid-player-path.sh
 bash scripts/check-hepta-research-league-release-structure.sh
 python3 scripts/check-hepta-route-openapi-parity.py
 bash services/paper-raid-bff/scripts/check-boundaries.sh
