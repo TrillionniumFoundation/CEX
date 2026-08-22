@@ -222,4 +222,11 @@ PAPER_RAID_BFF_EXPECT_PAIRING_STATUS_RESTART=1 \
   flock -n "$cargo_gate" \
   cargo test --locked -p paper-raid-bff agent_bridge::tests::real_postgres_pairing_grant_status_health_binding_and_restart -- --exact
 
+PAPER_RAID_DOCKER_USE_SUDO=1 \
+  bash "$root/../../scripts/check-paper-raid-fresh-restore.sh" \
+    --container "$container_name" \
+    --user paper_raid_bff \
+    --database paper_raid_bff \
+    --label bff
+
 echo "paper-raid-bff PostgreSQL restart/revoke gate: ok"
