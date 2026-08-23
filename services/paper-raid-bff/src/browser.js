@@ -4915,6 +4915,157 @@ function bindPaperRoomProgressiveDisclosure() {
   }
 }
 
+const CHALLENGE_MATERIALS_SCHEMA = "hepta.paper_raid.bff.challenge_materials.v1";
+const CHALLENGE_MATERIAL_OBJECTS = Object.freeze({
+  brief: Object.freeze({ role: "playable_brief", label: "Brief / 任务简报" }),
+  dataset: Object.freeze({ role: "dataset", label: "Dataset / 数据集" }),
+  baseline: Object.freeze({ role: "baseline_code", label: "Baseline / 基线" }),
+  evaluator: Object.freeze({ role: "frozen_evaluator", label: "Evaluator / 评估器" }),
+});
+const CHALLENGE_MATERIAL_OBJECT_KEYS = Object.freeze([
+  "object_key", "logical_path", "role", "digest", "size_bytes", "media_type", "download_path",
+]);
+
+function challengeMaterialLogicalPath(value) {
+  if (typeof value !== "string" || value.length < 1 || value.length > 256 ||
+      value.startsWith("/") || value.includes("\\") || value.includes("//") ||
+      value.split("/").some(part => part === "" || part === "." || part === "..") ||
+      !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value)) {
+    throw new Error("challenge_material_logical_path_is_invalid");
+  }
+  return value;
+}
+
+function challengeMaterialMediaType(value) {
+  if (typeof value !== "string" || value.length < 1 || value.length > 128 ||
+      value.trim() !== value || /[\u0000-\u001f\u007f]/u.test(value) || !/^[\x20-\x7e]+$/.test(value)) {
+    throw new Error("challenge_material_media_type_is_invalid");
+  }
+  return value;
+}
+
+async function validateChallengeMaterialProjection(value, paperId) {
+  const expectedPaperId = canonicalUuid(paperId, "paper_id");
+  if (!exactKeys(value, [
+    "schema", "paper_project_id", "challenge_ruleset_snapshot_hash",
+    "material_authority", "objects", "projection_hash",
+  ]) || value.schema !== CHALLENGE_MATERIALS_SCHEMA ||
+      value.paper_project_id !== expectedPaperId ||
+      !value.material_authority || typeof value.material_authority !== "object" ||
+      Array.isArray(value.material_authority) || !Array.isArray(value.objects)) {
+    throw new Error("challenge_material_projection_is_invalid");
+  }
+  const snapshotHash = canonicalDigest(
+    value.challenge_ruleset_snapshot_hash,
+    "challenge_ruleset_snapshot_hash",
+  );
+  if (value.challenge_ruleset_snapshot_hash !== snapshotHash) {
+    throw new Error("challenge_ruleset_snapshot_hash_is_not_canonical");
+  }
+  const projectionHash = canonicalDigest(value.projection_hash, "projection_hash");
+  if (value.projection_hash !== projectionHash || value.objects.length !== 4) {
+    throw new Error("challenge_material_projection_is_not_exactly_four_objects");
+  }
+  const seenKeys = new Set();
+  const seenRoles = new Set();
+  const objects = value.objects.map(object => {
+    if (!exactKeys(object, CHALLENGE_MATERIAL_OBJECT_KEYS) ||
+        typeof object.object_key !== "string" || !Object.hasOwn(CHALLENGE_MATERIAL_OBJECTS, object.object_key) ||
+        seenKeys.has(object.object_key) || seenRoles.has(object.role)) {
+      throw new Error("challenge_material_object_descriptor_is_invalid");
+    }
+    const expected = CHALLENGE_MATERIAL_OBJECTS[object.object_key];
+    if (object.role !== expected.role) throw new Error("challenge_material_object_role_is_invalid");
+    seenKeys.add(object.object_key);
+    seenRoles.add(object.role);
+    const digest = canonicalDigest(object.digest, `${object.object_key}_digest`);
+    if (object.digest !== digest || !Number.isSafeInteger(object.size_bytes) || object.size_bytes < 1 ||
+        object.size_bytes > 32 * 1024 * 1024) {
+      throw new Error("challenge_material_object_size_or_digest_is_invalid");
+    }
+    challengeMaterialLogicalPath(object.logical_path);
+    challengeMaterialMediaType(object.media_type);
+    const expectedDownloadPath = `/api/papers/${expectedPaperId}/challenge-materials/${object.object_key}`;
+    if (object.download_path !== expectedDownloadPath) {
+      throw new Error("challenge_material_download_path_is_not_server_projected");
+    }
+    return object;
+  });
+  if (!Object.keys(CHALLENGE_MATERIAL_OBJECTS).every(key => seenKeys.has(key))) {
+    throw new Error("challenge_material_projection_is_missing_a_required_role");
+  }
+  const frame = { ...value };
+  delete frame.projection_hash;
+  const computedHash = await sha256Label(new TextEncoder().encode(canonicalJson(frame)));
+  if (computedHash !== projectionHash) throw new Error("challenge_material_projection_hash_mismatch");
+  return { paperId: expectedPaperId, projectionHash, objects };
+}
+
+function challengeMaterialUnavailable(panel) {
+  const state = panel.querySelector("[data-challenge-materials-state]");
+  const list = panel.querySelector("[data-challenge-materials-list]");
+  if (list) {
+    list.replaceChildren();
+    list.hidden = true;
+  }
+  if (state) {
+    state.dataset.state = "unavailable";
+    state.textContent = "Frozen challenge materials unavailable. No manual authority file selection is allowed. / 冻结挑战工件不可用；不允许手工选择权威文件。";
+  }
+}
+
+function renderChallengeMaterials(panel, projection) {
+  const state = panel.querySelector("[data-challenge-materials-state]");
+  const list = panel.querySelector("[data-challenge-materials-list]");
+  if (!state || !list) throw new Error("challenge_materials_panel_is_incomplete");
+  list.replaceChildren();
+  for (const object of projection.objects) {
+    const item = document.createElement("li");
+    const details = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = CHALLENGE_MATERIAL_OBJECTS[object.object_key].label;
+    const metadata = document.createElement("small");
+    metadata.textContent = `${object.logical_path} · ${object.media_type} · ${object.size_bytes} bytes`;
+    details.append(title, metadata);
+    const link = document.createElement("a");
+    link.className = "button challenge-materials-download";
+    link.href = `/api/papers/${encodeURIComponent(projection.paperId)}/challenge-materials/${encodeURIComponent(object.object_key)}?digest=${encodeURIComponent(object.digest)}&projection_hash=${encodeURIComponent(projection.projectionHash)}`;
+    link.textContent = "Download / 下载";
+    link.setAttribute("download", "");
+    link.dataset.challengeMaterialObject = object.object_key;
+    item.append(details, link);
+    list.append(item);
+  }
+  state.dataset.state = "available";
+  state.textContent = "Frozen snapshot loaded. Four server-selected materials are ready. / 冻结快照已加载；四项服务器选定工件已就绪。";
+  list.hidden = false;
+}
+
+async function loadChallengeMaterials(panel) {
+  const paperId = canonicalUuid(panel.dataset.paperId, "paper_id");
+  const response = await fetch(`/api/papers/${encodeURIComponent(paperId)}/challenge-materials`, {
+    method: "GET",
+    credentials: "same-origin",
+    headers: { "accept": "application/json" },
+  });
+  const value = await responseValue(response);
+  if (!response.ok) throw new Error("challenge_material_projection_unavailable");
+  const projection = await validateChallengeMaterialProjection(value, paperId);
+  renderChallengeMaterials(panel, projection);
+}
+
+function bindChallengeMaterials() {
+  for (const panel of document.querySelectorAll("[data-challenge-materials]")) {
+    challengeMaterialUnavailable(panel);
+    const state = panel.querySelector("[data-challenge-materials-state]");
+    if (state) {
+      state.dataset.state = "loading";
+      state.textContent = "Loading frozen materials… / 正在加载冻结工件……";
+    }
+    loadChallengeMaterials(panel).catch(() => challengeMaterialUnavailable(panel));
+  }
+}
+
 const PRACTICE_CHOICES = Object.freeze({
   captain_plan: new Set(["audit_highest_risk_claim", "audit_evidence_chain_first"]),
   evidence_assessment: new Set(["unsupported_claim", "citation_mismatch", "evidence_sufficient"]),
@@ -5000,6 +5151,7 @@ function bindPractice() {
 document.addEventListener("DOMContentLoaded", async () => {
   bindPlayerFocusContext();
   bindPaperRoomProgressiveDisclosure();
+  bindChallengeMaterials();
   bindPractice();
   bindLogin();
   bindHumanKeyCreate();

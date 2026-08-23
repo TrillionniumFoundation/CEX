@@ -25,6 +25,12 @@ assert.equal(source.includes(".style"), false);
 assert.ok(source.includes("hepta.paper-raid.live-cursor.v1:"));
 assert.equal((source.match(/sessionStorage/g) || []).length, 4);
 assert.ok(source.includes("bindGuidedPaperActions()"));
+assert.ok(source.includes("function bindChallengeMaterials()"));
+assert.ok(source.includes("const CHALLENGE_MATERIALS_SCHEMA"));
+assert.ok(source.includes("validateChallengeMaterialProjection"));
+assert.ok(source.includes("challenge_material_projection_hash_mismatch"));
+assert.ok(source.includes("No manual authority file selection is allowed"));
+assert.ok(source.includes("data-challenge-materials-list"));
 const bindingEntrypoint = source.indexOf('document.addEventListener("DOMContentLoaded", async () => {');
 assert.ok(bindingEntrypoint >= 0);
 const bindingContract = source.slice(bindingEntrypoint);
@@ -705,6 +711,46 @@ const context = vm.createContext({
   },
 });
 vm.runInContext(source, context, { filename: browserUrl.pathname });
+
+const challengePaperId = "00000000-0000-4000-8000-000000000042";
+const challengeObjects = [
+  ["brief", "playable_brief", "challenge/brief.md", "text/markdown; charset=utf-8"],
+  ["dataset", "dataset", "challenge/dataset.json", "application/json"],
+  ["baseline", "baseline_code", "challenge/baseline.py", "text/x-python; charset=utf-8"],
+  ["evaluator", "frozen_evaluator", "challenge/evaluator.py", "text/x-python; charset=utf-8"],
+].map(([object_key, role, logical_path, media_type], index) => ({
+  object_key,
+  logical_path,
+  role,
+  digest: `sha256:${String(index + 1).repeat(64)}`,
+  size_bytes: index + 1,
+  media_type,
+  download_path: `/api/papers/${challengePaperId}/challenge-materials/${object_key}`,
+}));
+const challengeFrame = {
+  schema: "hepta.paper_raid.bff.challenge_materials.v1",
+  paper_project_id: challengePaperId,
+  challenge_ruleset_snapshot_hash: `sha256:${"a".repeat(64)}`,
+  material_authority: { schema: "hepta.paper_raid.frozen_challenge_material_authority.v1" },
+  objects: challengeObjects,
+};
+const challengeProjection = {
+  ...challengeFrame,
+  projection_hash: await context.sha256Label(
+    new TextEncoder().encode(context.canonicalJson(challengeFrame)),
+  ),
+};
+const validatedChallengeProjection = await context.validateChallengeMaterialProjection(
+  challengeProjection,
+  challengePaperId,
+);
+assert.equal(validatedChallengeProjection.objects.length, 4);
+const tamperedChallengeProjection = JSON.parse(JSON.stringify(challengeProjection));
+tamperedChallengeProjection.objects[0].digest = `sha256:${"f".repeat(64)}`;
+await assert.rejects(
+  context.validateChallengeMaterialProjection(tamperedChallengeProjection, challengePaperId),
+  /challenge_material_projection_hash_mismatch/,
+);
 
 assert.equal(
   context.agentPairingReturnTarget(

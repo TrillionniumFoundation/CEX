@@ -156,6 +156,7 @@ row_count_manifest() {
 schema_dump() {
   local database="$1"
   local output="$2"
+  local raw_output="${output}.raw"
   # PostgreSQL 17+ emits a random \\restrict token in plain dumps. Those two
   # guard lines carry no schema meaning and are removed before parity compare.
   docker_exec pg_dump \
@@ -165,7 +166,158 @@ schema_dump() {
     --no-owner \
     --no-privileges \
     --no-comments |
-    sed -E '/^\\(un)?restrict[[:space:]]/d' >"$output"
+    sed -E '/^\\(un)?restrict[[:space:]]/d' >"$raw_output"
+
+  # A dump/restore round trip reparses CHECK expressions. PostgreSQL may
+  # flatten associative AND/OR groups introduced by BETWEEN, even though the
+  # catalog expression is semantically identical. Canonicalize only boolean
+  # grouping inside CHECK clauses; every other schema byte remains exact.
+  python3 - "$raw_output" "$output" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+
+def quoted_step(text: str, index: int) -> int | None:
+    quote = text[index]
+    if quote not in "'\"":
+        return None
+    cursor = index + 1
+    while cursor < len(text):
+        if text[cursor] == quote:
+            if cursor + 1 < len(text) and text[cursor + 1] == quote:
+                cursor += 2
+                continue
+            return cursor + 1
+        cursor += 1
+    raise ValueError("unterminated SQL quote in schema dump")
+
+
+def dollar_step(text: str, index: int) -> int | None:
+    if text[index] != "$":
+        return None
+    match = re.match(r"\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$", text[index:])
+    if match is None:
+        return None
+    delimiter = match.group(0)
+    end = text.find(delimiter, index + len(delimiter))
+    if end < 0:
+        raise ValueError("unterminated SQL dollar quote in schema dump")
+    return end + len(delimiter)
+
+
+def matching_paren(text: str, start: int) -> int:
+    depth = 0
+    cursor = start
+    while cursor < len(text):
+        quoted = quoted_step(text, cursor)
+        if quoted is not None:
+            cursor = quoted
+            continue
+        dollar = dollar_step(text, cursor)
+        if dollar is not None:
+            cursor = dollar
+            continue
+        if text[cursor] == "(":
+            depth += 1
+        elif text[cursor] == ")":
+            depth -= 1
+            if depth == 0:
+                return cursor
+            if depth < 0:
+                break
+        cursor += 1
+    raise ValueError("unbalanced CHECK expression in schema dump")
+
+
+def strip_outer(text: str) -> str:
+    text = text.strip()
+    while text.startswith("(") and matching_paren(text, 0) == len(text) - 1:
+        text = text[1:-1].strip()
+    return text
+
+
+def split_boolean(text: str, operator: str) -> list[str]:
+    parts: list[str] = []
+    depth = 0
+    cursor = 0
+    start = 0
+    while cursor < len(text):
+        quoted = quoted_step(text, cursor)
+        if quoted is not None:
+            cursor = quoted
+            continue
+        dollar = dollar_step(text, cursor)
+        if dollar is not None:
+            cursor = dollar
+            continue
+        if text[cursor] == "(":
+            depth += 1
+            cursor += 1
+            continue
+        if text[cursor] == ")":
+            depth -= 1
+            cursor += 1
+            continue
+        end = cursor + len(operator)
+        if (
+            depth == 0
+            and text[cursor:end].upper() == operator
+            and (cursor == 0 or not (text[cursor - 1].isalnum() or text[cursor - 1] == "_"))
+            and (end == len(text) or not (text[end].isalnum() or text[end] == "_"))
+        ):
+            parts.append(text[start:cursor].strip())
+            cursor = end
+            start = cursor
+            continue
+        cursor += 1
+    if not parts:
+        return [text]
+    parts.append(text[start:].strip())
+    if any(not part for part in parts):
+        raise ValueError("invalid boolean expression in schema dump")
+    return parts
+
+
+def normalize_boolean(text: str) -> str:
+    text = strip_outer(text)
+    for operator in ("OR", "AND"):
+        parts = split_boolean(text, operator)
+        if len(parts) > 1:
+            normalized_parts: list[str] = []
+            for part in parts:
+                normalized = normalize_boolean(part)
+                nested = split_boolean(strip_outer(normalized), operator)
+                if len(nested) > 1:
+                    normalized_parts.extend(normalize_boolean(item) for item in nested)
+                else:
+                    normalized_parts.append(normalized)
+            return "(" + f" {operator} ".join(normalized_parts) + ")"
+    return re.sub(r"[ \t\r\n]+", " ", text).strip()
+
+
+def normalize_checks(source: str) -> str:
+    output: list[str] = []
+    cursor = 0
+    matcher = re.compile(r"\bCHECK\s*\(", re.IGNORECASE)
+    while True:
+        match = matcher.search(source, cursor)
+        if match is None:
+            output.append(source[cursor:])
+            break
+        open_paren = source.find("(", match.start(), match.end())
+        close_paren = matching_paren(source, open_paren)
+        output.append(source[cursor : open_paren + 1])
+        output.append(normalize_boolean(source[open_paren + 1 : close_paren]))
+        cursor = close_paren
+    return "".join(output)
+
+
+raw_path, output_path = map(Path, sys.argv[1:])
+normalized = normalize_checks(raw_path.read_text(encoding="utf-8"))
+Path(output_path).write_text(normalized, encoding="utf-8")
+raw_path.unlink()
+PY
 }
 
 umask 077
@@ -201,7 +353,7 @@ docker_exec pg_dump \
   --no-privileges >"$dump_file"
 [[ -s "$dump_file" ]] || { echo "pg_dump produced an empty archive" >&2; exit 1; }
 
-docker_exec pg_restore --list <"$dump_file" >/dev/null
+"${docker_command[@]}" exec -i "$container" pg_restore --list <"$dump_file" >/dev/null
 row_count_manifest "$source_database" "$source_counts"
 schema_dump "$source_database" "$source_schema"
 

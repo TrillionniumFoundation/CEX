@@ -1336,12 +1336,20 @@ fn render_paper_room_with_finality(
         .unwrap_or_default();
     let advanced_body = format!("{advanced_body}{after_action}");
     let artifacts = artifact_links(room, paper_id);
+    // The challenge snapshot is rendered as a read-only shell.  Its bytes and
+    // Paper/Author-scoped download URLs are projected by the authenticated BFF
+    // after the page loads; the browser never asks the player to pick an
+    // evaluator, dataset, baseline, or digest by hand.
+    let challenge_materials = challenge_materials_panel(paper_id);
     let body = format!(
-        r#"<section class="hero paper-room-hero"><span class="eyebrow">PAPER ROOM · <span lang="zh-Hans">论文作战室</span></span><h1>{}</h1><p>Follow the current objective; technical authority remains available below when you need to audit it. / <span lang="zh-Hans">先完成当前目标；需要审计时再查看下方技术权威。</span></p></section>{}{}<details class="panel paper-room-advanced" id="paper-room-advanced"><summary class="paper-room-advanced-summary"><span>Advanced / <span lang="zh-Hans">高级详情</span></span><small>UUIDs, hashes, authority, all controls, and complete records / <span lang="zh-Hans">UUID、摘要、权威、全部操作与完整记录</span></small></summary><div class="paper-room-advanced-content">{}{artifacts}<details class="panel developer-tools"><summary>Developer Tools / <span lang="zh-Hans">开发者工具</span></summary><p class="muted">Exact protocol JSON remains an Alpha fallback for commands that do not yet have a safely derived form or external connector. Needing this section is a known playability gap, never a completed normal path.</p><div class="action-grid">{developer_actions}</div></details></div></details>"#,
+        r#"<section class="hero paper-room-hero"><span class="eyebrow">PAPER ROOM · <span lang="zh-Hans">论文作战室</span></span><h1>{}</h1><p>Follow the current objective; technical authority remains available below when you need to audit it. / <span lang="zh-Hans">先完成当前目标；需要审计时再查看下方技术权威。</span></p></section>{}{}<details class="panel paper-room-advanced" id="paper-room-advanced"><summary class="paper-room-advanced-summary"><span>Advanced / <span lang="zh-Hans">高级详情</span></span><small>UUIDs, hashes, authority, all controls, and complete records / <span lang="zh-Hans">UUID、摘要、权威、全部操作与完整记录</span></small></summary><div class="paper-room-advanced-content">{advanced_body}{challenge_materials}{artifacts}<details class="panel developer-tools"><summary>Developer Tools / <span lang="zh-Hans">开发者工具</span></summary><p class="muted">Exact protocol JSON remains an Alpha fallback for commands that do not yet have a safely derived form or external connector. Needing this section is a known playability gap, never a completed normal path.</p><div class="action-grid">{developer_actions}</div></details></div></details>"#,
         escape(&title),
         basic_actions,
         participation_handoff,
-        advanced_body,
+        advanced_body = advanced_body,
+        challenge_materials = challenge_materials,
+        artifacts = artifacts,
+        developer_actions = developer_actions,
     );
     page("Paper Raid Room", &identity.display_name, &body, true)
 }
@@ -4315,6 +4323,20 @@ fn guided_paper_room(
         rework_controls,
         appeal_controls,
         artifact_upload(paper_id),
+    )
+}
+
+/// Render the read-only shell for the frozen challenge snapshot.
+///
+/// The authoritative four-object projection is intentionally loaded by the
+/// browser from the authenticated BFF endpoint.  Keeping this shell free of
+/// file inputs, digest fields, or player-selected manifests makes the normal
+/// path unambiguous: the snapshot chooses the brief, dataset, baseline, and
+/// evaluator, while the server decides whether each download is authorized.
+fn challenge_materials_panel(paper_id: &str) -> String {
+    format!(
+        r#"<section class="panel challenge-materials-panel" data-challenge-materials data-paper-id="{}" aria-labelledby="challenge-materials-heading"><span class="eyebrow">FROZEN CHALLENGE SNAPSHOT / <span lang="zh-Hans">冻结挑战快照</span></span><h2 id="challenge-materials-heading">Challenge materials / 挑战工件</h2><p class="muted">The current snapshot supplies the brief, dataset, baseline, and evaluator automatically. Download links are server-projected for this Paper and current Author scope; no authoritative file or digest is selected by hand. / 当前快照自动提供任务简报、数据集、基线与评估器。下载入口由服务器按本论文与当前作者权限投影；无需手工选择权威文件或摘要。</p><div class="challenge-materials-state" data-challenge-materials-state="loading" role="status" aria-live="polite">Loading frozen materials… / 正在加载冻结工件……</div><ul class="challenge-materials-list" data-challenge-materials-list hidden></ul></section>"#,
+        escape(paper_id),
     )
 }
 
@@ -8867,6 +8889,8 @@ main>p>a:only-child{align-items:center;display:inline-flex;min-block-size:24px}s
 @media(max-width:430px){main{padding:22px 12px}.paper-room-basic,.paper-room-advanced{border-radius:12px;padding:14px}.paper-room-primary-button{justify-self:stretch;width:100%}.practice-primary-action{justify-self:stretch;width:100%}.paper-room-advanced-content{gap:12px}.paper-room-authority{padding:12px}}
 @media(max-width:390px){.paper-room-basic>h2{font-size:24px}.paper-room-blocker,.paper-room-next-step{padding:12px}.paper-room-advanced-summary small{font-size:11px}}
 .paper-room-advanced-summary [lang]{display:inline}
+.challenge-materials-panel{border-color:var(--cyan);display:grid;gap:10px;margin:0;min-height:auto}.challenge-materials-panel h2{font-size:20px;margin:4px 0}.challenge-materials-panel p{margin:0;max-width:88ch}.challenge-materials-state{border:1px dashed var(--line);border-radius:9px;color:var(--muted);padding:10px}.challenge-materials-state[data-state=available]{border-color:#3b8f78;color:#67e8b5}.challenge-materials-state[data-state=unavailable]{border-color:var(--amber);color:var(--amber)}.challenge-materials-list{display:grid;gap:9px;list-style:none;margin:0;padding:0}.challenge-materials-list li{align-items:center;border:1px solid var(--line);border-radius:10px;display:flex;gap:12px;justify-content:space-between;padding:11px;min-width:0}.challenge-materials-list li>div:first-child{display:grid;gap:3px;min-width:0}.challenge-materials-list strong,.challenge-materials-list small{overflow-wrap:anywhere}.challenge-materials-list small{color:var(--muted)}.challenge-materials-download{flex:0 0 auto;min-height:42px}
+@media(max-width:430px){.challenge-materials-list li{align-items:stretch;flex-direction:column}.challenge-materials-download{width:100%}}
 "#;
 
 #[cfg(test)]
@@ -11628,6 +11652,18 @@ mod tests {
         assert!(advanced.contains("CURRENT OBJECTIVE / 当前目标"));
         assert!(advanced.contains("class=\"create-evidence-card-form\""));
         assert!(advanced.contains("data-paper-id="));
+        let materials_start = advanced
+            .find("data-challenge-materials")
+            .expect("frozen challenge materials panel");
+        let materials_end = advanced[materials_start..]
+            .find("</section>")
+            .map(|offset| materials_start + offset)
+            .expect("frozen challenge materials panel closes");
+        let materials = &advanced[materials_start..materials_end];
+        assert!(materials.contains("brief, dataset, baseline, and evaluator automatically"));
+        assert!(materials.contains("data-challenge-materials-list"));
+        assert!(!materials.contains("<input"));
+        assert!(!materials.contains("type=\"file\""));
         assert!(!body.contains(
             "<details class=\"panel paper-room-advanced\" id=\"paper-room-advanced\" open"
         ));
@@ -11644,6 +11680,11 @@ mod tests {
         assert!(script.contains("bindPlayerFocusContext();"));
         assert!(script.contains("restorePlayerFocusContext();"));
         assert!(script.contains("function bindPaperRoomProgressiveDisclosure()"));
+        assert!(script.contains("function bindChallengeMaterials()"));
+        assert!(script.contains("validateChallengeMaterialProjection"));
+        assert!(script.contains("challenge_material_projection_hash_mismatch"));
+        assert!(script.contains("/challenge-materials`"));
+        assert!(script.contains("No manual authority file selection is allowed"));
         assert!(script.contains("advanced.open = true;"));
         assert!(script.contains("advanced.querySelector(targetSelector)"));
         assert!(script.contains("paperRoomFocusTarget(matchingAction)"));
@@ -11661,6 +11702,20 @@ mod tests {
         assert!(CSS.contains("@media(max-width:430px)"));
         assert!(CSS.contains("@media(max-width:390px)"));
         assert!(CSS.contains(".paper-room-primary-button{justify-self:stretch;width:100%}"));
+        assert!(CSS.contains(".challenge-materials-panel"));
+        assert!(CSS.contains(".challenge-materials-download"));
+    }
+
+    #[test]
+    fn challenge_materials_panel_is_read_only_and_paper_scoped() {
+        let paper_id = "11111111-1111-4111-8111-111111111111";
+        let panel = challenge_materials_panel(paper_id);
+        assert!(panel.contains("data-challenge-materials"));
+        assert!(panel.contains("data-paper-id=\"11111111-1111-4111-8111-111111111111\""));
+        assert!(panel.contains("data-challenge-materials-list"));
+        assert!(!panel.contains("<input"));
+        assert!(!panel.contains("type=\"file\""));
+        assert!(!panel.contains("name=\"digest\""));
     }
 
     #[tokio::test]
