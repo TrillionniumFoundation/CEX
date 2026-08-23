@@ -10,6 +10,7 @@ COPY services/hepta-research-league/docker/workspace.Cargo.toml Cargo.toml
 COPY services/hepta-research-league/docker/rust-toolchain.manifest /toolchain/rust-toolchain.manifest
 COPY crates/hepta-paper-raid-contracts/Cargo.toml crates/hepta-paper-raid-contracts/Cargo.toml
 COPY crates/hepta-paper-raid-contracts/src crates/hepta-paper-raid-contracts/src
+COPY crates/hepta-paper-raid-contracts/assets crates/hepta-paper-raid-contracts/assets
 COPY services/hepta-research-league/Cargo.toml services/hepta-research-league/Cargo.toml
 COPY services/hepta-research-league/src services/hepta-research-league/src
 COPY vendor/trnm-finality-types/Cargo.toml vendor/trnm-finality-types/Cargo.toml
