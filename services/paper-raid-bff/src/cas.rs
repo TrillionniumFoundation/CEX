@@ -168,7 +168,7 @@ impl CasClient {
             .get(header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .ok_or(AppError::Upstream)?;
-        if content_type != expected_media_type {
+        if !stored_media_type_matches(expected_media_type, content_type) {
             return Err(AppError::Upstream);
         }
         if response
@@ -310,6 +310,23 @@ pub(crate) fn validate_media_type(value: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+/// S3-compatible stores may elide the UTF-8 parameter when returning a text
+/// object's `Content-Type`.  The artifact contract stays canonical (and
+/// callers are still validated by [`validate_media_type`]); only this finite
+/// set of exact storage aliases is accepted on a read.  Do not generalize
+/// this to a MIME essence comparison: an unexpected parameter or media type
+/// must remain fail-closed.
+fn stored_media_type_matches(expected: &str, actual: &str) -> bool {
+    actual == expected
+        || matches!(
+            (expected, actual),
+            ("text/csv; charset=utf-8", "text/csv")
+                | ("text/markdown; charset=utf-8", "text/markdown")
+                | ("text/x-python; charset=utf-8", "text/x-python")
+                | ("text/plain; charset=utf-8", "text/plain")
+        )
+}
+
 fn canonical_host(url: &Url) -> Result<String, AppError> {
     let host = url.host_str().ok_or(AppError::Internal)?;
     Ok(match url.port() {
@@ -407,6 +424,29 @@ mod tests {
                 "unexpectedly accepted {rejected}"
             );
         }
+    }
+
+    #[test]
+    fn storage_media_type_aliases_are_finite_and_directional() {
+        for (canonical, bare) in [
+            ("text/csv; charset=utf-8", "text/csv"),
+            ("text/markdown; charset=utf-8", "text/markdown"),
+            ("text/x-python; charset=utf-8", "text/x-python"),
+            ("text/plain; charset=utf-8", "text/plain"),
+        ] {
+            assert!(stored_media_type_matches(canonical, canonical));
+            assert!(stored_media_type_matches(canonical, bare));
+            assert!(!stored_media_type_matches(bare, canonical));
+            assert!(!stored_media_type_matches(
+                canonical,
+                &format!("{bare}; charset=us-ascii")
+            ));
+        }
+        assert!(stored_media_type_matches(
+            "application/json",
+            "application/json"
+        ));
+        assert!(!stored_media_type_matches("application/json", "text/plain"));
     }
 
     #[test]
@@ -564,6 +604,56 @@ mod tests {
         assert!(matches!(
             client.get(&digest, "application/json").await,
             Err(AppError::Conflict(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn accepts_explicit_storage_charset_elision_on_replay_only() {
+        const MEDIA_TYPE: &str = "text/x-python; charset=utf-8";
+        let bytes = b"print('cas alias')";
+        let digest = digest_label(bytes);
+        let store = Arc::new(Mutex::new(MockObjectStore::default()));
+        let endpoint = spawn_store(store.clone()).await;
+        let client = CasClient::new(mock_config(endpoint, digest.clone())).expect("CAS client");
+
+        let created = client
+            .put_if_absent(&digest, MEDIA_TYPE, bytes)
+            .await
+            .expect("first append");
+        assert!(created.created);
+
+        // Model the S3-compatible GET behavior observed in the strict run:
+        // the object bytes remain unchanged while the charset parameter is
+        // elided from the stored response metadata.
+        store
+            .lock()
+            .await
+            .objects
+            .get_mut(digest.trim_start_matches("sha256:"))
+            .expect("stored object")
+            .1 = "text/x-python".into();
+
+        let replay = client
+            .put_if_absent(&digest, MEDIA_TYPE, bytes)
+            .await
+            .expect("same bytes with explicit storage alias are idempotent");
+        assert!(!replay.created);
+        assert_eq!(
+            client.get(&digest, MEDIA_TYPE).await.expect("aliased read"),
+            bytes
+        );
+        assert_eq!(store.lock().await.put_calls, 1);
+
+        store
+            .lock()
+            .await
+            .objects
+            .get_mut(digest.trim_start_matches("sha256:"))
+            .expect("stored object")
+            .1 = "text/x-python; charset=us-ascii".into();
+        assert!(matches!(
+            client.get(&digest, MEDIA_TYPE).await,
+            Err(AppError::Upstream)
         ));
     }
 
