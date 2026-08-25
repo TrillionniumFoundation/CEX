@@ -33,6 +33,12 @@ reward, scientific finality, or economic authority.
 `scripts/check-quick-raid-boundary.sh` is the source gate for the Rust/SQL
 false-only locks, route wiring, and browser shell.
 
+The authenticated player JSON is a bounded presentation projection as well:
+EvidenceCard source digests, run/session UUIDs, authority material, and bundle
+integrity hashes stay in the server-side record and are not serialized into the
+player view. The rendered page still shows the human-readable result and the
+explicit `finality=none` / `portable=false` boundary.
+
 ## Provider-neutral OIDC foundation
 
 `src/oidc.rs` freezes the provider-neutral OIDC security contract before any

@@ -6,7 +6,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize, Serializer};
 use serde_json::{json, Value};
 use sqlx::{postgres::PgRow, PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -21,13 +21,18 @@ use crate::{
         QuickRaidActionRequestV1, QuickRaidAuthorityV1, QuickRaidBrowserActionV1,
         QuickRaidConclusionV1, QuickRaidEligibilityV1, QuickRaidError, QuickRaidEventV1,
         QuickRaidEvidenceCardV1, QuickRaidEvidenceChoiceV1, QuickRaidExperimentChoiceV1,
-        QuickRaidExperimentRunV1, QuickRaidSessionV1, QuickRaidStageV1, QUICK_RAID_ACTION_V1,
-        QUICK_RAID_BRIEF_V1, QUICK_RAID_CHALLENGE_KEY, QUICK_RAID_FIXED_SEED, QUICK_RAID_MODE,
-        QUICK_RAID_SCENARIO_V1, QUICK_RAID_SESSION_V1,
+        QuickRaidExperimentRunV1, QuickRaidMetricV1, QuickRaidPaperBundleV1, QuickRaidSessionV1,
+        QuickRaidStageV1, QUICK_RAID_ACTION_V1, QUICK_RAID_BRIEF_V1, QUICK_RAID_CHALLENGE_KEY,
+        QUICK_RAID_FIXED_SEED, QUICK_RAID_MODE, QUICK_RAID_SCENARIO_V1, QUICK_RAID_SESSION_V1,
     },
 };
 
 const JSON_SAFE_U64_MAX: u64 = 9_007_199_254_740_991;
+const QUICK_RAID_EVIDENCE_CARD_PLAYER_VIEW_V1: &str =
+    "hepta.paper_raid.quick_raid_evidence_card_player_view.v1";
+const QUICK_RAID_RUN_PLAYER_VIEW_V1: &str = "hepta.paper_raid.quick_raid_run_player_view.v1";
+const QUICK_RAID_PAPER_BUNDLE_PLAYER_VIEW_V1: &str =
+    "hepta.paper_raid.quick_raid_paper_bundle_player_view.v1";
 
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
@@ -71,12 +76,23 @@ pub(crate) struct QuickRaidPlayerViewV1 {
     pub(crate) remaining_seconds: i64,
     pub(crate) expired: bool,
     pub(crate) terminal: bool,
+    /// The domain card is retained here for the server-rendered page, but its
+    /// serializer is a bounded player projection (the source digest is not a
+    /// gameplay datum and must not cross the player API).
+    #[serde(serialize_with = "serialize_evidence_card_player_view")]
     pub(crate) evidence_card: QuickRaidEvidenceCardV1,
     pub(crate) evidence_choice: Option<QuickRaidEvidenceChoiceV1>,
     pub(crate) experiment_choice: Option<QuickRaidExperimentChoiceV1>,
+    /// Keep the fully validated run for server-side rendering and persistence;
+    /// only its human-readable result and metrics are serialized to players.
+    #[serde(serialize_with = "serialize_optional_experiment_run_player_view")]
     pub(crate) experiment_run: Option<QuickRaidExperimentRunV1>,
     pub(crate) conclusion: Option<QuickRaidConclusionV1>,
-    pub(crate) paper_bundle: Option<crate::quick_raid::QuickRaidPaperBundleV1>,
+    /// The internal bundle contains authority, owner/session identifiers and
+    /// content hashes.  The player API receives only the visible, non-portable
+    /// result preview; the complete bundle remains server/API-authority data.
+    #[serde(serialize_with = "serialize_optional_paper_bundle_player_view")]
+    pub(crate) paper_bundle: Option<QuickRaidPaperBundleV1>,
     pub(crate) eligibility: QuickRaidEligibilityV1,
 }
 
@@ -119,6 +135,122 @@ impl QuickRaidPlayerViewV1 {
             eligibility: session.eligibility.clone(),
         }
     }
+}
+
+/// Public Quick Raid card projection.  `QuickRaidEvidenceCardV1` is the
+/// validated domain record and includes a source digest used for authority
+/// checks; that digest is intentionally not a player-facing field.
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+struct QuickRaidEvidenceCardPlayerViewV1 {
+    schema: String,
+    evidence_card_id: String,
+    seed: u64,
+    claim: String,
+    observation: String,
+    citation: String,
+}
+
+impl From<&QuickRaidEvidenceCardV1> for QuickRaidEvidenceCardPlayerViewV1 {
+    fn from(card: &QuickRaidEvidenceCardV1) -> Self {
+        Self {
+            schema: QUICK_RAID_EVIDENCE_CARD_PLAYER_VIEW_V1.to_owned(),
+            evidence_card_id: card.evidence_card_id.clone(),
+            seed: card.seed,
+            claim: card.claim.clone(),
+            observation: card.observation.clone(),
+            citation: card.citation.clone(),
+        }
+    }
+}
+
+/// Public run projection.  Run UUIDs and integrity hashes are retained in the
+/// internal record and event stream, but are not needed by the browser shell.
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+struct QuickRaidExperimentRunPlayerViewV1 {
+    schema: String,
+    seed: u64,
+    choice: QuickRaidExperimentChoiceV1,
+    result: String,
+    metrics: Vec<QuickRaidMetricV1>,
+}
+
+impl From<&QuickRaidExperimentRunV1> for QuickRaidExperimentRunPlayerViewV1 {
+    fn from(run: &QuickRaidExperimentRunV1) -> Self {
+        Self {
+            schema: QUICK_RAID_RUN_PLAYER_VIEW_V1.to_owned(),
+            seed: run.seed,
+            choice: run.choice,
+            result: run.result.clone(),
+            metrics: run.metrics.clone(),
+        }
+    }
+}
+
+/// Public Paper Bundle preview.  This is deliberately not the authoritative
+/// `QuickRaidPaperBundleV1`: no challenge/session UUID, authority material or
+/// digest is exposed through the player JSON response.
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+struct QuickRaidPaperBundlePlayerViewV1 {
+    schema: String,
+    seed: u64,
+    evidence_card: QuickRaidEvidenceCardPlayerViewV1,
+    experiment_run: QuickRaidExperimentRunPlayerViewV1,
+    conclusion: QuickRaidConclusionV1,
+    finality: String,
+    portable: bool,
+}
+
+impl From<&QuickRaidPaperBundleV1> for QuickRaidPaperBundlePlayerViewV1 {
+    fn from(bundle: &QuickRaidPaperBundleV1) -> Self {
+        Self {
+            schema: QUICK_RAID_PAPER_BUNDLE_PLAYER_VIEW_V1.to_owned(),
+            seed: bundle.seed,
+            evidence_card: (&bundle.evidence_card).into(),
+            experiment_run: (&bundle.experiment_run).into(),
+            conclusion: bundle.conclusion,
+            finality: bundle.finality.clone(),
+            portable: bundle.portable,
+        }
+    }
+}
+
+fn serialize_evidence_card_player_view<S>(
+    value: &QuickRaidEvidenceCardV1,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    QuickRaidEvidenceCardPlayerViewV1::from(value).serialize(serializer)
+}
+
+fn serialize_optional_experiment_run_player_view<S>(
+    value: &Option<QuickRaidExperimentRunV1>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    value
+        .as_ref()
+        .map(QuickRaidExperimentRunPlayerViewV1::from)
+        .serialize(serializer)
+}
+
+fn serialize_optional_paper_bundle_player_view<S>(
+    value: &Option<QuickRaidPaperBundleV1>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    value
+        .as_ref()
+        .map(QuickRaidPaperBundlePlayerViewV1::from)
+        .serialize(serializer)
 }
 
 async fn quick_raid_page(
@@ -664,6 +796,161 @@ fn map_quick_error(error: QuickRaidError) -> AppError {
         QuickRaidError::AuthorityEscape
         | QuickRaidError::InvalidContract(_)
         | QuickRaidError::VersionExhausted => AppError::Internal,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration;
+    use serde_json::json;
+
+    fn authority() -> QuickRaidAuthorityV1 {
+        let value = json!({
+            "challenge_id":"11111111-1111-4111-8111-111111111111",
+            "activation_id":"22222222-2222-4222-8222-222222222222",
+            "activation_request_sha256":format!("sha256:{}", "a".repeat(64)),
+            "ruleset_hash":format!("sha256:{}", "b".repeat(64)),
+            "ruleset_enforcement":"authoritative_v1",
+            "status":"open",
+            "ruleset":{
+                "template":"evidence-audit",
+                "duration_seconds":900,
+                "gameplay":{"modifiers":["quick-raid-fixed-seed"]}
+            },
+            "description":format!("pack_id={}", crate::quick_raid::QUICK_RAID_PACK_ID),
+            "ruleset_version":crate::quick_raid::QUICK_RAID_RULESET_VERSION
+        });
+        QuickRaidAuthorityV1::from_catalog(&value).expect("quick raid authority fixture")
+    }
+
+    fn completed_session() -> QuickRaidSessionV1 {
+        let now = Utc::now();
+        let session_id = Uuid::new_v4();
+        let mut session = QuickRaidSessionV1::new(
+            session_id,
+            "quick-player".into(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            authority(),
+            now,
+        )
+        .expect("quick raid session fixture");
+        let owner = (
+            session.subject_id.clone(),
+            session.player_id,
+            session.binding_id,
+        );
+        let action = |version, action| QuickRaidActionRequestV1 {
+            schema: QUICK_RAID_ACTION_V1.into(),
+            event_id: Uuid::new_v4(),
+            session_id,
+            subject_id: owner.0.clone(),
+            player_id: owner.1,
+            binding_id: owner.2,
+            expected_version: version,
+            request_hash: format!("sha256:{}", "c".repeat(64)),
+            action,
+        };
+        session
+            .apply_action(
+                &action(
+                    1,
+                    QuickRaidBrowserActionV1::ReviewEvidence {
+                        choice: QuickRaidEvidenceChoiceV1::FlagCitationGap,
+                    },
+                ),
+                now,
+            )
+            .expect("evidence action");
+        session
+            .apply_action(
+                &action(
+                    2,
+                    QuickRaidBrowserActionV1::RunExperiment {
+                        choice: QuickRaidExperimentChoiceV1::RunCandidate,
+                    },
+                ),
+                now + Duration::seconds(1),
+            )
+            .expect("experiment action");
+        session
+            .apply_action(
+                &action(
+                    3,
+                    QuickRaidBrowserActionV1::PublishPaper {
+                        conclusion: QuickRaidConclusionV1::RetainWithCaveat,
+                    },
+                ),
+                now + Duration::seconds(2),
+            )
+            .expect("paper action");
+        session
+    }
+
+    #[test]
+    fn player_view_serializes_only_bounded_public_projection() {
+        let now = Utc::now();
+        let session = QuickRaidSessionV1::new(
+            Uuid::new_v4(),
+            "quick-player".into(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            authority(),
+            now,
+        )
+        .expect("quick raid session fixture");
+        let encoded = serde_json::to_value(QuickRaidPlayerViewV1::from_session(&session, now))
+            .expect("serialize player view");
+        let object = encoded.as_object().expect("view object");
+        for forbidden in [
+            "session_id",
+            "subject_id",
+            "player_id",
+            "binding_id",
+            "authority",
+            "challenge_id",
+            "challenge_snapshot_hash",
+            "ruleset_hash",
+            "authority_hash",
+        ] {
+            assert!(!object.contains_key(forbidden), "leaked {forbidden}");
+        }
+        for forbidden in ["source_digest"] {
+            assert!(encoded["evidence_card"].get(forbidden).is_none());
+        }
+        assert!(encoded["experiment_run"].is_null());
+        assert!(encoded["paper_bundle"].is_null());
+    }
+
+    #[test]
+    fn completed_player_view_hides_bundle_owner_and_integrity_material() {
+        let session = completed_session();
+        let encoded = serde_json::to_value(QuickRaidPlayerViewV1::from_session(
+            &session,
+            session.updated_at,
+        ))
+        .expect("serialize completed player view");
+        let bundle = encoded["paper_bundle"].as_object().expect("bundle preview");
+        for forbidden in [
+            "authority",
+            "session_id",
+            "paper_bundle_hash",
+            "challenge_id",
+            "challenge_snapshot_hash",
+            "ruleset_hash",
+            "authority_hash",
+        ] {
+            assert!(
+                !bundle.contains_key(forbidden),
+                "leaked bundle field {forbidden}"
+            );
+        }
+        assert!(bundle["evidence_card"].get("source_digest").is_none());
+        assert!(bundle["experiment_run"].get("run_id").is_none());
+        assert!(bundle["experiment_run"].get("run_hash").is_none());
+        assert_eq!(bundle["finality"], "none");
+        assert_eq!(bundle["portable"], false);
     }
 }
 
