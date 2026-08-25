@@ -100,6 +100,12 @@ assert.ok(source.includes("function bindReviewAuthority()"));
 assert.ok(source.includes("review_authority_marker_missing"));
 assert.ok(source.includes("review_authority_marker_invalid"));
 assert.ok(source.includes("bindReviewAuthority();"));
+assert.ok(source.includes("function timelineEventRecords("));
+assert.ok(source.includes("function createTimelineReplayController("));
+assert.ok(source.includes("TIMELINE_REPLAY_MAX_EVENTS = 64"));
+assert.ok(source.includes("read-only replay / ${records.length} 个事件可只读回放"));
+assert.ok(source.includes('searchParams.get("rematch_challenge")'));
+assert.equal(source.includes("queue-submit.click("), false);
 assert.ok(source.includes('connection.dataset.state = "stale-authority"'));
 assert.ok(source.includes("newHeptaEvents > 0 || currentPhase !== synchronizedPhase"));
 assert.ok(source.includes("const paperWorkflowStates = new Map();"));
@@ -1430,6 +1436,28 @@ assert.equal(
   }),
   "Agent proposal received / Agent 建议已收到 · methods",
 );
+const replayRecords = context.timelineEventRecords({
+  hepta_events: [
+    { event_id: "event-1", event_type: "hepta.paper_raid.paper_project.created.v2" },
+    { event_id: "event-1", event_type: "hepta.paper_raid.paper_project.created.v2" },
+  ],
+  nakama_archives: [{
+    logical_session_id: "paper.raid:one",
+    archive: { events: [{ sequence: 1, action_type: "agent_analysis_ready" }] },
+  }],
+});
+assert.equal(replayRecords.length, 2);
+assert.equal(replayRecords[0].source, "hepta");
+assert.equal(replayRecords[1].source, "nakama:paper.raid:one");
+const boundedReplay = context.timelineEventRecords({
+  hepta_events: Array.from({ length: 80 }, (_, index) => ({
+    event_id: `event-${index}`,
+    event_type: "hepta.paper_raid.work_item.created.v2",
+  })),
+  nakama_archives: [],
+});
+assert.equal(boundedReplay.length, 64);
+assert.equal(boundedReplay[0].event.event_id, "event-16");
 
 assert.equal(context.nextHeptaCursor([{ cursor: 2 }, { cursor: 7 }, { cursor: 5 }], 3), 7);
 assert.equal(context.nextHeptaCursor([{ cursor: -1 }, { cursor: "8" }], 4), 4);

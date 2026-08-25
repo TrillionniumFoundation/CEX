@@ -4663,6 +4663,124 @@ function semanticEventLabel(event) {
   return base;
 }
 
+const TIMELINE_REPLAY_MAX_EVENTS = 64;
+const TIMELINE_REPLAY_STEP_MS = 650;
+
+function timelineEventRecords(value) {
+  const records = [
+    ...(Array.isArray(value && value.hepta_events) ? value.hepta_events : []).map(event => ({
+      source: "hepta",
+      event,
+    })),
+    ...(Array.isArray(value && value.nakama_archives) ? value.nakama_archives : []).flatMap(entry => (
+      Array.isArray(entry.archive && entry.archive.events)
+        ? entry.archive.events.map(event => ({
+          source: `nakama:${entry.logical_session_id || "unknown"}`,
+          event,
+        }))
+        : []
+    )),
+  ];
+  const seen = new Set();
+  return records.filter(record => {
+    const event = record.event || {};
+    const identity = event.event_id || event.cursor || `${event.event_type || "event"}:${event.sequence || "0"}`;
+    const key = `${record.source}:${identity}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(-TIMELINE_REPLAY_MAX_EVENTS);
+}
+
+function appendTimelineReplayEvent(list, record, index) {
+  const item = document.createElement("li");
+  const event = record && record.event ? record.event : {};
+  const identity = event.event_id || event.cursor || `${event.event_type || "event"}:${event.sequence || "0"}`;
+  item.dataset.replayEventKey = `${record && record.source ? record.source : "unknown"}:${identity}`;
+  item.dataset.replayIndex = String(index + 1);
+  item.textContent = `${index + 1}. ${semanticEventLabel(event)}`;
+  list.append(item);
+}
+
+function createTimelineReplayController(card) {
+  const start = card.querySelector(".timeline-replay-start");
+  const pause = card.querySelector(".timeline-replay-pause");
+  const panel = card.querySelector(".timeline-replay");
+  const list = card.querySelector(".timeline-replay-events");
+  const status = card.querySelector(".timeline-replay-status");
+  let records = [];
+  let timer = null;
+  let running = false;
+  let index = 0;
+  const clearTimer = () => {
+    if (timer !== null) window.clearTimeout(timer);
+    timer = null;
+  };
+  const setStatus = text => {
+    if (status) status.textContent = text;
+  };
+  const finish = () => {
+    clearTimer();
+    running = false;
+    if (pause) pause.hidden = true;
+    if (start) start.disabled = records.length === 0;
+    if (records.length > 0) {
+      setStatus(`Replay complete · ${records.length} event(s) / 回放完成 · ${records.length} 个事件`);
+    }
+  };
+  const step = () => {
+    if (!running) return;
+    if (index >= records.length) {
+      finish();
+      return;
+    }
+    if (!list) {
+      finish();
+      setStatus("Replay surface unavailable / 回放界面不可用");
+      return;
+    }
+    appendTimelineReplayEvent(list, records[index], index);
+    index += 1;
+    setStatus(`Replaying ${index}/${records.length} / 正在回放 ${index}/${records.length}`);
+    timer = window.setTimeout(step, TIMELINE_REPLAY_STEP_MS);
+  };
+  const begin = () => {
+    clearTimer();
+    if (records.length === 0) {
+      if (panel) panel.hidden = false;
+      setStatus("No authenticated events are available yet / 当前尚无可回放的认证事件");
+      return;
+    }
+    running = true;
+    index = 0;
+    if (panel) panel.hidden = false;
+    if (list) list.replaceChildren();
+    if (pause) pause.hidden = false;
+    if (start) start.disabled = true;
+    setStatus(`Replay started · ${records.length} event(s) / 回放开始 · ${records.length} 个事件`);
+    step();
+  };
+  const stop = () => {
+    clearTimer();
+    running = false;
+    if (pause) pause.hidden = true;
+    if (start) start.disabled = records.length === 0;
+    setStatus(`Replay paused at ${index}/${records.length} / 回放已暂停于 ${index}/${records.length}`);
+  };
+  if (start) start.addEventListener("click", begin);
+  if (pause) pause.addEventListener("click", stop);
+  return {
+    setRecords(next) {
+      if (running) return;
+      records = Array.isArray(next) ? next.slice(-TIMELINE_REPLAY_MAX_EVENTS) : [];
+      if (start) start.disabled = records.length === 0;
+      if (records.length === 0) setStatus("Waiting for authenticated events / 等待认证事件");
+      else setStatus(`${records.length} event(s) ready for read-only replay / ${records.length} 个事件可只读回放`);
+    },
+    stop,
+  };
+}
+
 function renderLiveRaid(card, value) {
   card.querySelector(".live-phase").textContent = `Phase / 阶段: ${semanticPhaseLabel(paperRoomPhase(value))}`;
   const participantList = card.querySelector(".live-participants");
@@ -4683,16 +4801,7 @@ function renderLiveRaid(card, value) {
     participantList.replaceChildren(item);
   }
   const eventList = card.querySelector(".live-events");
-  const events = [
-    ...(Array.isArray(value && value.hepta_events) ? value.hepta_events : []).map(event => ({
-      source: "hepta",
-      event,
-    })),
-    ...archives.flatMap(entry => (Array.isArray(entry.archive && entry.archive.events) ? entry.archive.events : []).map(event => ({
-      source: `nakama:${entry.logical_session_id || "unknown"}`,
-      event,
-    })))
-  ];
+  const events = timelineEventRecords({ ...value, nakama_archives: archives });
   for (const record of events.slice(-12)) {
     const event = record.event;
     const identity = event.event_id || event.cursor || `${event.event_type || "event"}:${event.sequence || "0"}`;
@@ -4739,6 +4848,7 @@ function createLiveRaidSync(card) {
   const button = card.querySelector(".timeline-refresh");
   const connection = card.querySelector(".live-connection");
   const output = card.querySelector(".live-detail");
+  const replay = createTimelineReplayController(card);
   const cursor = readLiveCursor(paperId);
   let nakamaSessions = new Map();
   let timer = null;
@@ -4798,6 +4908,7 @@ function createLiveRaidSync(card) {
         }
         value.nakama_archives = archives;
         renderLiveRaid(card, value);
+        replay.setRecords(timelineEventRecords(value));
         authoritySynchronized = true;
         synchronizedPhase = currentPhase;
         cursor.hepta = nextHepta;
@@ -4865,6 +4976,22 @@ function bindProductTelemetry() {
   const paperMatch = window.location.pathname.match(
     /^\/league\/(?:papers|review)\/([0-9a-f-]{36})$/i
   );
+  if (window.location.pathname === "/league") {
+    const challengeId = new URL(window.location.href).searchParams.get("rematch_challenge");
+    if (challengeId && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(challengeId)) {
+      const form = document.querySelector(`form.queue-form[data-challenge-id="${CSS.escape(challengeId)}"]`);
+      if (form) {
+        form.classList.add("rematch-target");
+        const output = form.querySelector("output");
+        renderPlayerMessage(output, "Challenge selected from your last Raid. Review the role and join when ready. / 已从上一局选中挑战；确认角色后再加入。");
+        window.requestAnimationFrame(() => {
+          form.scrollIntoView({ behavior: "smooth", block: "center" });
+          const first = form.querySelector("button.queue-submit:not([disabled])") || form.querySelector("input,select,button");
+          if (first instanceof HTMLElement) first.focus({ preventScroll: true });
+        });
+      }
+    }
+  }
   const navigation = performance.getEntriesByType("navigation")[0];
   if (paperMatch && navigation && navigation.type === "reload") {
     recordProductEvent("reconnected", { paperId: paperMatch[1] }).catch(() => {});
