@@ -782,6 +782,7 @@ export async function prepareDeliveryDraft(
     nowUnix = Math.floor(Date.now() / 1000),
     fetchImplementation,
     draftId,
+    retryLostResponse = true,
   } = {},
 ) {
   const { state, client } = await signedClientState(
@@ -794,7 +795,7 @@ export async function prepareDeliveryDraft(
     path: AGENT_BRIDGE_ENDPOINTS.delivery_drafts,
     nowUnix,
     body: createDeliveryDraftRequest(state, input, { draftId }),
-  });
+  }, { retryLostResponse });
 }
 
 export function createProposalRequest(
