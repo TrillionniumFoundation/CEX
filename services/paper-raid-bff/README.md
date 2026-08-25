@@ -17,6 +17,22 @@ Authority stays outside this process:
   bytes whose replay validity is bounded to at most 60 seconds; expired rows
   are deleted on the next signed admission and by retention maintenance.
 
+## Fixed-seed Quick Raid
+
+`/league/quick-raid` is the bounded first-session slice. Before a session is
+created the BFF must observe an open Hepta `authoritative_v1` Challenge Pack
+whose description pins `paper-raid-evidence-audit-quick-seeded-v1`, whose
+ruleset is exactly 900 seconds, and whose gameplay modifiers include
+`quick-raid-fixed-seed`. The server freezes the exact public challenge
+snapshot hash in `quick_raid_sessions`; players cannot supply a challenge id,
+seed, digest, or pack object. The flow records one fixed-seed EvidenceCard, one
+deterministic Experiment Run, and one visible Paper Bundle preview through an
+append-only event stream. The preview is explicitly `finality=none` and
+`portable=false`: it never qualifies an account or creates ranking, score,
+reward, scientific finality, or economic authority.
+`scripts/check-quick-raid-boundary.sh` is the source gate for the Rust/SQL
+false-only locks, route wiring, and browser shell.
+
 ## Provider-neutral OIDC foundation
 
 `src/oidc.rs` freezes the provider-neutral OIDC security contract before any

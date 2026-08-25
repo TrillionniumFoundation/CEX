@@ -1755,7 +1755,7 @@ function bindHumanKeyRegistration() {
   });
 }
 
-const AGENT_PAIRING_RETURN_PATHS = new Set(["/league/practice"]);
+const AGENT_PAIRING_RETURN_PATHS = new Set(["/league/practice", "/league/quick-raid"]);
 
 function agentPairingReturnTarget(locationValue = window.location) {
   let page;
@@ -5275,11 +5275,72 @@ function bindPractice() {
   }
 }
 
+const QUICK_RAID_CHOICES = Object.freeze({
+  review_evidence: new Set(["flag_citation_gap", "accept_as_sufficient"]),
+  run_experiment: new Set(["recheck_baseline", "run_candidate"]),
+  publish_paper: new Set(["revise_claim", "retain_with_caveat"]),
+});
+
+function quickRaidVersion(form) {
+  return positiveInteger(form.dataset.quickRaidVersion, "quick_raid_version");
+}
+
+function quickRaidActionPayload(form) {
+  const action = String(form.dataset.quickRaidAction || "");
+  const choices = QUICK_RAID_CHOICES[action];
+  const selected = form.elements.choice && String(form.elements.choice.value || "");
+  if (!choices || !choices.has(selected)) throw new Error("invalid_request");
+  const actionName = action === "review_evidence"
+    ? "review_evidence"
+    : action === "run_experiment"
+      ? "run_experiment"
+      : "publish_paper";
+  return {
+    expected_version: quickRaidVersion(form),
+    action: actionName === "review_evidence"
+      ? { action: "review_evidence", choice: selected }
+      : actionName === "run_experiment"
+        ? { action: "run_experiment", choice: selected }
+        : { action: "publish_paper", conclusion: selected },
+  };
+}
+
+function bindQuickRaid() {
+  if (window.location.pathname !== "/league/quick-raid") return;
+  for (const form of document.querySelectorAll(".quick-raid-start-form")) {
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      submitPracticeMutation(
+        form,
+        "/api/quick-raid/start",
+        {},
+        "Quick Raid ready. Loading the first card… / 快速远征已就绪，正在加载第一张卡……",
+      );
+    });
+  }
+  for (const form of document.querySelectorAll(".quick-raid-action-form")) {
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      try {
+        submitPracticeMutation(
+          form,
+          "/api/quick-raid/action",
+          quickRaidActionPayload(form),
+          "Saved. Loading the next Quick Raid step… / 已保存，正在加载下一步……",
+        );
+      } catch (error) {
+        show(form.querySelector("output"), error.message, false);
+      }
+    });
+  }
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   bindPlayerFocusContext();
   bindPaperRoomProgressiveDisclosure();
   bindChallengeMaterials();
   bindPractice();
+  bindQuickRaid();
   bindLogin();
   bindHumanKeyCreate();
   bindHumanKeyRegistration();

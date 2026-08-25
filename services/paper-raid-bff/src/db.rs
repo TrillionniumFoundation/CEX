@@ -50,6 +50,9 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::raw_sql(include_str!("../migrations/0010_metrics_persistence.sql"))
         .execute(pool)
         .await?;
+    sqlx::raw_sql(include_str!("../migrations/0011_quick_raid.sql"))
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -703,6 +706,24 @@ fn expected_practice_unranked_sources() -> Option<(&'static str, &'static str)> 
         source("CREATE OR REPLACE FUNCTION paper_raid_bff_practice_session_monotonic_v1()")?,
         source("CREATE OR REPLACE FUNCTION paper_raid_bff_reject_practice_event_mutation_v1()")?,
     ))
+}
+
+/// Quick Raid admission is fail-closed when either append-only table or the
+/// capability marker is absent. Invite-alpha deployments run migrations out of
+/// process, so the route must check this on every start rather than assuming
+/// the fixed-alpha startup path ran.
+pub async fn quick_raid_schema_ready(pool: &PgPool) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT to_regclass('paper_raid_bff_quick_raid_sessions') IS NOT NULL
+             AND to_regclass('paper_raid_bff_quick_raid_events') IS NOT NULL
+             AND EXISTS (
+                 SELECT 1 FROM paper_raid_bff_schema_capabilities
+                 WHERE capability = 'quick_raid_fixed_seed_v1'
+             )",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false)
 }
 
 pub async fn invite_activation_schema_ready(pool: &PgPool) -> bool {

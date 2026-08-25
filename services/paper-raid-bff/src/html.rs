@@ -25,6 +25,8 @@ use crate::{
     },
     practice::PracticeStageV1,
     practice_http::PracticePlayerViewV1,
+    quick_raid::{QuickRaidStageV1, QUICK_RAID_FIXED_SEED},
+    quick_raid_http::QuickRaidPlayerViewV1,
 };
 
 pub enum ReadState<'a, T: ?Sized = Value> {
@@ -182,6 +184,7 @@ pub fn lobby(
         r#"<section class="hero"><span class="eyebrow">PAPER RAID · 论文远征</span><h1>Research Lobby</h1><p>Welcome, {}. Hepta is the only matchmaking and research authority.</p></section>
         <section class="panel player-path-steps" data-player-path="three_steps" aria-labelledby="player-path-heading"><span class="eyebrow">PLAY PATH / <span lang="zh-Hans">开局路径</span></span><h2 id="player-path-heading">Start in three steps / <span lang="zh-Hans">三步开始</span></h2><ol><li><strong>1 · Sign in / 登录</strong><span>Use your invited identity; no public or economic account is created here.</span></li><li><strong>2 · Pair / 配对</strong><span>Pair one external Agent Bridge when your Author role requires it.</span></li><li><strong>3 · Choose a role / 选择角色</strong><span>Pick a preferred Author role, then join the next compatible three-Author start.</span></li></ol><p class="muted">The page only displays Hepta-derived queue and review timing. Unknown means unknown; the browser never predicts arrival.</p></section>
         <section class="panel practice-entry"><span class="pill">15–20 MIN · SOLO</span><h2>Learn all three Author roles / 单人熟悉三个作者角色</h2><p>Preview Captain, Evidence, and Experiment decisions in a separate unranked practice. It creates no scientific finality, qualification, ranking, score, reward, or economic authority.</p><a class="button" href="/league/practice">Open solo practice / 打开单人练习</a></section>
+        <section class="panel quick-raid-entry"><span class="pill">15 MIN · FIXED SEED</span><h2>Quick Raid · make one real Paper Bundle / 快速远征：完成一份真实论文包</h2><p>After pairing one Agent, run the authoritative fixed-seed Evidence Audit slice: one EvidenceCard, one Experiment Run, and one visible Paper Bundle preview. It is paper-scoped and non-economic; no rank, score, reward, or portable scientific finality is created.</p><a class="button" href="/league/quick-raid">Start Quick Raid / 开始快速远征</a></section>
         {}{}{}
         <section class="panel"><h2>Challenges / 研究挑战</h2><p class="source-state">Hepta: {}</p><div class="grid">{}</div></section>
         <section class="grid"><article class="card"><h2>My Queue / 我的队列</h2><p class="source-state">Hepta: {}</p>{}</article><article class="card"><h2>Team Proposals / 组队提案</h2><p class="source-state">Hepta: {}</p>{}</article><article class="card author-start-boundary"><h2>3-Author start, asynchronous review / <span lang="zh-Hans">三作者同步开局，评审异步接力</span></h2><p>Exactly 3 Author players start the live Author Raid together: Captain, Evidence, and Experiment, each with an independently bound external Agent. Evaluator, Reviewer 1, Reviewer 2, and Reproducer are not part of that start. After the Authors freeze the PaperBundle, eligible independent identities take separate time-bounded assignments from later review pools.</p><p class="muted">The Author queue reports only Author-role coverage. It never waits for all review identities to be online together. Login keys never leave this page except in the login request.</p></article></section>
@@ -8413,6 +8416,205 @@ fn practice_choice_form(
         options,
         player_language_html(button),
     )
+}
+
+/// Player-facing Quick Raid shell.  The page intentionally exposes only the
+/// fixed seed, EvidenceCard, experiment result, and non-portable bundle
+/// preview; UUIDs, authority hashes, and command JSON remain server/API data.
+pub(crate) fn quick_raid(
+    identity: &AlphaIdentity,
+    state: Option<&QuickRaidPlayerViewV1>,
+    binding_ready: bool,
+) -> Response {
+    let current_step = state.map_or(0, |view| view.step);
+    let completed = state.is_some_and(|view| view.stage == QuickRaidStageV1::Completed);
+    let steps = [
+        (
+            "Evidence",
+            "Review one fixed EvidenceCard / 审阅一张固定证据卡",
+        ),
+        (
+            "Experiment",
+            "Run one deterministic experiment / 执行一次确定性实验",
+        ),
+        ("Captain", "Write the bounded conclusion / 写下受限结论"),
+        (
+            "Bundle",
+            "Inspect the Paper Bundle preview / 查看论文包预览",
+        ),
+    ];
+    let progress = steps
+        .iter()
+        .enumerate()
+        .map(|(index, (role, objective))| {
+            let step = (index + 1) as u8;
+            let status = if completed || (current_step > 0 && step < current_step) {
+                "done"
+            } else if current_step == step {
+                "current"
+            } else {
+                "upcoming"
+            };
+            let aria = if status == "current" { r#" aria-current="step""# } else { "" };
+            format!(
+                r#"<li data-quick-raid-step-state="{}"{}><strong>{} · {}</strong><span>{}</span></li>"#,
+                status,
+                aria,
+                step,
+                escape(role),
+                player_language_html(objective),
+            )
+        })
+        .collect::<String>();
+
+    let prerequisite = || {
+        r#"<section class="panel primary-action quick-raid-prerequisite"><span class="pill">PAIRING REQUIRED · <span lang="zh-Hans">需要配对</span></span><h2>Pair exactly one active Agent Bridge first</h2><p>Quick Raid uses the same owner-bound Bridge boundary as a real Author Raid. Pair in the Research Lobby; this page never asks for a command, UUID, or secret.</p><a class="button" href="/league?return_to=%2Fleague%2Fquick-raid">Open Agent pairing / <span lang="zh-Hans">前往 Agent 配对</span></a></section>"#.to_owned()
+    };
+    let start_form = || {
+        r#"<form class="quick-raid-start-form primary-action"><button class="quick-raid-primary-action" type="submit">Start the 15-minute Quick Raid / 开始 15 分钟快速远征</button><output></output></form>"#.to_owned()
+    };
+    let action = match state {
+        None if !binding_ready => prerequisite(),
+        None => start_form(),
+        Some(view) if view.expired => start_form(),
+        Some(view) if !binding_ready && !view.terminal => prerequisite(),
+        Some(view) => match view.stage {
+            QuickRaidStageV1::EvidenceReview => quick_raid_choice_form(
+                view,
+                "Evidence · Flag the gap / 证据：标出缺口",
+                "The fixed citation covers the baseline, not the claimed improvement.",
+                "review_evidence",
+                &[
+                    ("flag_citation_gap", "Flag the citation gap / 标记引文缺口"),
+                    (
+                        "accept_as_sufficient",
+                        "Accept as sufficient / 认为证据充分",
+                    ),
+                ],
+                "Continue to the experiment / 进入实验",
+            ),
+            QuickRaidStageV1::ExperimentRun => quick_raid_choice_form(
+                view,
+                "Experiment · Pick one run / 实验：选择一次运行",
+                "The seed and metric are frozen; only the declared run path changes.",
+                "run_experiment",
+                &[
+                    ("recheck_baseline", "Recheck the baseline / 复核基线"),
+                    ("run_candidate", "Run the candidate / 运行候选方案"),
+                ],
+                "Run the fixed experiment / 执行固定实验",
+            ),
+            QuickRaidStageV1::PaperBundleReady => quick_raid_choice_form(
+                view,
+                "Captain · Publish one caveat / 队长：发布一条限制",
+                "Choose how the result should be stated in the visible bundle.",
+                "publish_paper",
+                &[
+                    ("revise_claim", "Revise the claim / 修订主张"),
+                    (
+                        "retain_with_caveat",
+                        "Retain with a caveat / 保留并注明限制",
+                    ),
+                ],
+                "Create the Paper Bundle preview / 生成论文包预览",
+            ),
+            QuickRaidStageV1::Completed => {
+                let bundle = view.paper_bundle.as_ref().map(|bundle| format!(
+                    r#"<section class="panel quick-raid-bundle"><span class="pill">PAPER BUNDLE PREVIEW · <span lang="zh-Hans">论文包预览</span></span><h2>One visible result, no portable finality</h2><p>{}</p><dl><div><dt>Seed / 种子</dt><dd><code>{}</code></dd></div><div><dt>Experiment / 实验</dt><dd>{}</dd></div><div><dt>Conclusion / 结论</dt><dd>{:?}</dd></div></dl><p class="muted">This bundle is authoritative only inside this Quick Raid projection. It is not a score, rank, reward, scientific finality, or economic record.</p></section>"#,
+                    escape(&bundle.experiment_run.result),
+                    bundle.seed,
+                    escape(&bundle.experiment_run.choice.code()),
+                    bundle.conclusion,
+                )).unwrap_or_else(|| "<section class=\"panel status missing\"><p>Bundle unavailable; no result is inferred.</p></section>".to_owned());
+                format!("{}{}", bundle, start_form())
+            }
+            QuickRaidStageV1::Abandoned | QuickRaidStageV1::Expired => start_form(),
+        },
+    };
+    let evidence = state.map_or_else(
+        || "<p class=\"muted\">Start to reveal the fixed EvidenceCard.</p>".to_owned(),
+        |view| format!(
+            r#"<article class="card quick-raid-evidence"><h2>Fixed EvidenceCard / 固定证据卡</h2><p><strong>Claim / 主张:</strong> {}</p><p><strong>Observation / 观察:</strong> {}</p><p><strong>Citation / 引文:</strong> {}</p></article>"#,
+            escape(&view.evidence_card.claim), escape(&view.evidence_card.observation), escape(&view.evidence_card.citation)
+        ),
+    );
+    let body = format!(
+        r#"<section class="hero quick-raid-hero"><span class="eyebrow">QUICK RAID · <span lang="zh-Hans">快速远征</span></span><h1>Evidence Audit: 15-minute first run</h1><p>Welcome, {}. One fixed seed, one EvidenceCard, one Experiment Run, and one visible Paper Bundle preview.</p><p class="status verified">Seed {} · 15 minutes · authoritative pack projection · non-economic</p></section><section class="panel quick-raid-boundary"><h2>Small, real, and bounded / 小而真实、边界清晰</h2><ul><li>Fixed seed <code>{}</code>; the challenge pack and ruleset are frozen by Hepta before start.</li><li>Completion is recorded in the append-only Quick Raid projection.</li><li>No ranking, score, reward, economic settlement, or portable scientific finality.</li></ul></section><section class="panel quick-raid-progress"><h2>Four steps / 四步</h2><ol role="list">{}</ol></section>{}{}<p><a href="/league">Back to Research Lobby / <span lang="zh-Hans">返回研究大厅</span></a></p>"#,
+        escape(&identity.display_name),
+        QUICK_RAID_FIXED_SEED,
+        QUICK_RAID_FIXED_SEED,
+        progress,
+        evidence,
+        action,
+    );
+    page("Quick Raid", &identity.display_name, &body, true)
+}
+
+fn quick_raid_choice_form(
+    view: &QuickRaidPlayerViewV1,
+    title: &str,
+    prompt: &str,
+    action: &str,
+    choices: &[(&str, &str)],
+    button: &str,
+) -> String {
+    let options = choices
+        .iter()
+        .map(|(value, label)| format!(r#"<label class="quick-raid-choice"><input type="radio" name="choice" value="{}" required><span>{}</span></label>"#, escape(value), player_language_html(label)))
+        .collect::<String>();
+    format!(
+        r#"<form class="quick-raid-action-form primary-action" data-quick-raid-action="{}" data-quick-raid-version="{}"><h2>{}</h2><p>{}</p><fieldset><legend>Choose one / <span lang="zh-Hans">请选择一项</span></legend>{}</fieldset><button class="quick-raid-primary-action" type="submit">{}</button><output></output></form>"#,
+        escape(action),
+        view.version,
+        player_language_html(title),
+        escape(prompt),
+        options,
+        player_language_html(button)
+    )
+}
+
+#[cfg(test)]
+mod quick_raid_tests {
+    use super::*;
+
+    #[test]
+    fn quick_raid_choice_shell_is_typed_and_non_economic() {
+        let identity = AlphaIdentity::test_identity("quick", Uuid::new_v4(), Uuid::new_v4());
+        let _response = quick_raid(&identity, None, true);
+        let form = quick_raid_choice_form(
+            &QuickRaidPlayerViewV1 {
+                schema: "hepta.paper_raid.quick_raid_player_view.v1",
+                mode: crate::quick_raid::QUICK_RAID_MODE,
+                scenario_id: crate::quick_raid::QUICK_RAID_SCENARIO_V1,
+                challenge_key: crate::quick_raid::QUICK_RAID_CHALLENGE_KEY,
+                seed: crate::quick_raid::QUICK_RAID_FIXED_SEED,
+                stage: QuickRaidStageV1::EvidenceReview,
+                version: 1,
+                step: 1,
+                total_steps: 4,
+                started_at: Utc::now(),
+                expires_at: Utc::now() + chrono::Duration::minutes(15),
+                remaining_seconds: 900,
+                expired: false,
+                terminal: false,
+                evidence_card: crate::quick_raid::QuickRaidEvidenceCardV1::fixed(),
+                evidence_choice: None,
+                experiment_choice: None,
+                experiment_run: None,
+                conclusion: None,
+                paper_bundle: None,
+                eligibility: crate::quick_raid::QuickRaidEligibilityV1::locked(),
+            },
+            "Evidence",
+            "Prompt",
+            "review_evidence",
+            &[("flag_citation_gap", "Flag")],
+            "Continue",
+        );
+        assert!(form.contains("quick-raid-action-form"));
+        assert!(form.contains("data-quick-raid-version=\"1\""));
+        assert!(!form.contains("reward"));
+    }
 }
 
 pub fn onboarding(identity: &AlphaIdentity, stage: OnboardingStage) -> Response {

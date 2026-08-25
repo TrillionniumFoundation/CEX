@@ -15,4 +15,6 @@ pub mod oidc;
 pub mod practice;
 pub mod practice_http;
 pub mod probe;
+pub mod quick_raid;
+pub mod quick_raid_http;
 mod review_receipts;
