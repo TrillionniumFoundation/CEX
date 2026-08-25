@@ -597,6 +597,11 @@ The browser alpha is a same-origin, external-script flow:
    `private_party: true|false`; the
    party digest is absent from player read models, Room/outbox events, logs and
    metrics. It is affinity only and grants no identity or gameplay authority.
+   The Lobby marks each queue projection with its authoritative fetch time and
+   a 15-second next-refresh check. Refresh is an explicit read-only page action
+   (never an automatic navigation), so an in-memory human signing key is not
+   discarded while a player waits. The countdown is a freshness hint only; it
+   never turns an unknown arrival estimate into a prediction.
 6. `/league/formation/<proposal-or-team-id>` renders either the proposal or
    formal Team and exposes typed materialization, human-signed readiness,
    locking and Paper creation controls. Protocol JSON is confined to the

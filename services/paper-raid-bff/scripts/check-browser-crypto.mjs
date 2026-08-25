@@ -326,7 +326,14 @@ assert.equal((authorQueueHint.match(/!incomplete_private_party/g) || []).length,
 const matchedShortCircuit = authorQueueHint.indexOf('if state == "matched"');
 const compatiblePoolRead = authorQueueHint.indexOf('.get("compatible_pool_size")');
 assert.ok(matchedShortCircuit >= 0 && compatiblePoolRead > matchedShortCircuit);
-assert.equal(authorQueueRendering.includes("eta_seconds"), false);
+assert.ok(authorQueueHint.includes("authoritative_queue_timing"));
+assert.ok(authorQueueRendering.includes("data-queue-eta-state"));
+assert.ok(authorQueueRendering.includes("Unknown until compatible players arrive"));
+assert.ok(htmlSource.includes("data-lobby-queue-panel"));
+assert.ok(htmlSource.includes("data-queue-refresh-countdown"));
+assert.ok(source.includes("bindLobbyQueueFreshness"));
+assert.ok(source.includes("bindLobbyQueueFreshness();"));
+assert.ok(source.includes("savePlayerFocusContext(button)"));
 assert.ok(htmlSource.includes("Provisional contribution telemetry / 暂定贡献遥测"));
 assert.ok(htmlSource.includes('data-after-action-report="v1"'));
 assert.ok(htmlSource.includes("Role mastery, challenge unlocks, immutable replay and automatic rematch are not authoritative yet"));

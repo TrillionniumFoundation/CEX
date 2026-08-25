@@ -29,6 +29,12 @@ use crate::{
     quick_raid_http::QuickRaidPlayerViewV1,
 };
 
+/// Lobby reads are intentionally short-lived.  The browser keeps the
+/// authenticated page (and any in-memory human signing key) intact while it
+/// waits, then offers a read-only refresh instead of navigating on its own.
+/// This is a UI freshness hint, not a matchmaking prediction or lease.
+const LOBBY_QUEUE_REFRESH_SECONDS: u64 = 15;
+
 pub enum ReadState<'a, T: ?Sized = Value> {
     Available(&'a T),
     NotFound,
@@ -55,6 +61,22 @@ struct ChallengeQueueAvailability {
     explanation: &'static str,
     button_label: &'static str,
     is_open: bool,
+}
+
+struct LobbyQueueSnapshot {
+    fetched_at: String,
+    notice: String,
+}
+
+fn lobby_queue_snapshot_notice() -> LobbyQueueSnapshot {
+    let fetched_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let notice = format!(
+        r#"<div class="queue-freshness" data-queue-freshness data-next-refresh-seconds="{}" aria-live="polite"><p><strong>Authoritative queue snapshot / <span lang="zh-Hans">权威队列快照</span></strong> · <time datetime="{}">loaded now / 刚刚载入</time></p><p class="muted"><span data-queue-freshness-state>Next refresh check in / 距下一次刷新检查</span> <strong data-queue-refresh-countdown>{}s</strong>. This is a read-only freshness hint; it never predicts player arrival. / 这是只读新鲜度提示，不预测玩家到达时间。</p><button class="queue-refresh-button" data-queue-refresh type="button">Refresh queue status / 刷新队列状态</button><output data-queue-refresh-output></output></div>"#,
+        LOBBY_QUEUE_REFRESH_SECONDS,
+        escape(&fetched_at),
+        LOBBY_QUEUE_REFRESH_SECONDS,
+    );
+    LobbyQueueSnapshot { fetched_at, notice }
 }
 
 fn challenge_queue_availability(status: &str) -> ChallengeQueueAvailability {
@@ -180,6 +202,7 @@ pub fn lobby(
     let mission_board = first_raid_mission_board(tickets, proposals, raid_state);
     let continue_raid = active_raid_card(raid_state);
     let agent_pairing = agent_bridge_pairing_panel();
+    let queue_snapshot = lobby_queue_snapshot_notice();
     let body = format!(
         r#"<section class="hero"><span class="eyebrow">PAPER RAID · 论文远征</span><h1>Research Lobby</h1><p>Welcome, {}. Hepta is the only matchmaking and research authority.</p></section>
         <section class="panel player-path-steps" data-player-path="three_steps" aria-labelledby="player-path-heading"><span class="eyebrow">PLAY PATH / <span lang="zh-Hans">开局路径</span></span><h2 id="player-path-heading">Start in three steps / <span lang="zh-Hans">三步开始</span></h2><ol><li><strong>1 · Sign in / 登录</strong><span>Use your invited identity; no public or economic account is created here.</span></li><li><strong>2 · Pair / 配对</strong><span>Pair one external Agent Bridge when your Author role requires it.</span></li><li><strong>3 · Choose a role / 选择角色</strong><span>Pick a preferred Author role, then join the next compatible three-Author start.</span></li></ol><p class="muted">The page only displays Hepta-derived queue and review timing. Unknown means unknown; the browser never predicts arrival.</p></section>
@@ -187,7 +210,7 @@ pub fn lobby(
         <section class="panel quick-raid-entry"><span class="pill">15 MIN · FIXED SEED</span><h2>Quick Raid · make one real Paper Bundle / 快速远征：完成一份真实论文包</h2><p>After pairing one Agent, run the authoritative fixed-seed Evidence Audit slice: one EvidenceCard, one Experiment Run, and one visible Paper Bundle preview. It is paper-scoped and non-economic; no rank, score, reward, or portable scientific finality is created.</p><a class="button" href="/league/quick-raid">Start Quick Raid / 开始快速远征</a></section>
         {}{}{}
         <section class="panel"><h2>Challenges / 研究挑战</h2><p class="source-state">Hepta: {}</p><div class="grid">{}</div></section>
-        <section class="grid"><article class="card"><h2>My Queue / 我的队列</h2><p class="source-state">Hepta: {}</p>{}</article><article class="card"><h2>Team Proposals / 组队提案</h2><p class="source-state">Hepta: {}</p>{}</article><article class="card author-start-boundary"><h2>3-Author start, asynchronous review / <span lang="zh-Hans">三作者同步开局，评审异步接力</span></h2><p>Exactly 3 Author players start the live Author Raid together: Captain, Evidence, and Experiment, each with an independently bound external Agent. Evaluator, Reviewer 1, Reviewer 2, and Reproducer are not part of that start. After the Authors freeze the PaperBundle, eligible independent identities take separate time-bounded assignments from later review pools.</p><p class="muted">The Author queue reports only Author-role coverage. It never waits for all review identities to be online together. Login keys never leave this page except in the login request.</p></article></section>
+        <section class="grid"><article class="card lobby-queue-panel" data-lobby-queue-panel data-queue-refresh-seconds="{}" data-queue-fetched-at="{}"><h2>My Queue / 我的队列</h2><p class="source-state">Hepta: {}</p>{}<div class="lobby-queue-fragment" data-lobby-queue-fragment>{}</div></article><article class="card"><h2>Team Proposals / 组队提案</h2><p class="source-state">Hepta: {}</p>{}</article><article class="card author-start-boundary"><h2>3-Author start, asynchronous review / <span lang="zh-Hans">三作者同步开局，评审异步接力</span></h2><p>Exactly 3 Author players start the live Author Raid together: Captain, Evidence, and Experiment, each with an independently bound external Agent. Evaluator, Reviewer 1, Reviewer 2, and Reproducer are not part of that start. After the Authors freeze the PaperBundle, eligible independent identities take separate time-bounded assignments from later review pools.</p><p class="muted">The Author queue reports only Author-role coverage. It never waits for all review identities to be online together. Login keys never leave this page except in the login request.</p></article></section>
         <section class="panel"><h2>External Agent key continuity / 外部 Agent 密钥连续性</h2><p class="source-state">Hepta: {}</p><p>Rotation requires independent signatures from both the currently bound key and the replacement key. Only public proof fields enter this browser.</p><div class="action-grid">{}</div></section>"#,
         escape(&identity.display_name),
         mission_board,
@@ -195,7 +218,10 @@ pub fn lobby(
         agent_pairing,
         escape(challenges.label()),
         challenge_cards,
+        LOBBY_QUEUE_REFRESH_SECONDS,
+        escape(&queue_snapshot.fetched_at),
         escape(tickets.label()),
+        queue_snapshot.notice,
         ticket_cards,
         escape(proposals.label()),
         proposal_cards,
@@ -8913,6 +8939,61 @@ fn author_queue_wait_reason(state: &str, message: &str) -> Option<(&'static str,
     Some(reason)
 }
 
+struct AuthorQueueTiming {
+    position: Option<u64>,
+    waited_seconds: u64,
+    expires_in_seconds: u64,
+    eta_seconds: Option<u64>,
+}
+
+/// Accept only the queue timing shape emitted by Hepta.  A non-zero ETA is
+/// deliberately rejected: the current matcher can prove "ready now" (zero)
+/// but does not publish an arrival prediction for a waiting ticket.
+fn authoritative_queue_timing(
+    state: &str,
+    hint: &Value,
+    compatible_pool_size: u64,
+) -> Option<AuthorQueueTiming> {
+    let position = match hint.get("queue_position")? {
+        Value::Null => None,
+        value => Some(value.as_u64().filter(|position| *position > 0)?),
+    };
+    if position.is_some_and(|position| position > compatible_pool_size) {
+        return None;
+    }
+    let waited_seconds = hint.get("waited_seconds")?.as_u64()?;
+    let expires_in_seconds = hint.get("expires_in_seconds")?.as_u64()?;
+    // Author tickets have a 30-minute authoritative TTL.  Keep this bound in
+    // the player projection so an upstream drift cannot become an unbounded
+    // countdown in the browser.
+    if waited_seconds > 1_800 || expires_in_seconds > 1_800 {
+        return None;
+    }
+    let eta_seconds = match hint.get("eta_seconds")? {
+        Value::Null => None,
+        value => Some(value.as_u64()?),
+    };
+    match state {
+        "ready" if eta_seconds == Some(0) && position.is_some() => {}
+        "waiting" if eta_seconds.is_none() => {}
+        _ => return None,
+    }
+    Some(AuthorQueueTiming {
+        position,
+        waited_seconds,
+        expires_in_seconds,
+        eta_seconds,
+    })
+}
+
+fn queue_duration_label(seconds: u64) -> String {
+    if seconds >= 60 {
+        format!("{}m {:02}s", seconds / 60, seconds % 60)
+    } else {
+        format!("{seconds}s")
+    }
+}
+
 fn author_queue_hint(ticket: &Value, hint: &Value) -> String {
     let unavailable_hint = || {
         r#"<div class="author-queue-hint unavailable" data-author-queue-hint-state="unavailable"><strong>3-Author queue status unavailable / <span lang="zh-Hans">三作者队列状态不可用</span></strong><p>The authoritative hint is incomplete; no role gap, wait reason, or arrival time is inferred. / <span lang="zh-Hans">权威提示不完整；不推断角色缺口、等待原因或到达时间。</span></p></div>"#.to_string()
@@ -8968,6 +9049,9 @@ fn author_queue_hint(ticket: &Value, hint: &Value) -> String {
     let Some(pool) = hint.get("compatible_pool_size").and_then(Value::as_u64) else {
         return unavailable_hint();
     };
+    let Some(timing) = authoritative_queue_timing(state, hint, pool) else {
+        return unavailable_hint();
+    };
     let Some(needed) = hint
         .get("compatible_players_needed")
         .and_then(Value::as_u64)
@@ -9012,12 +9096,30 @@ fn author_queue_hint(ticket: &Value, hint: &Value) -> String {
     } else {
         escape(&missing_roles.join(", "))
     };
+    let position_html = timing
+        .position
+        .map(|position| position.to_string())
+        .unwrap_or_else(|| "Outside current bounded scan / 当前不在有界扫描窗口".to_string());
+    let eta_html = if timing.eta_seconds == Some(0) {
+        "Ready now / 可立即开局".to_string()
+    } else {
+        "Unknown until compatible players arrive / 等待兼容玩家，暂无法估算".to_string()
+    };
     format!(
-        r#"<div class="author-queue-hint" data-author-queue-hint-state="{}"><h3>3-Author start status / <span lang="zh-Hans">三作者开局状态</span></h3><dl class="review-facts"><div><dt>Compatible Author pool / <span lang="zh-Hans">兼容作者池</span></dt><dd>{}</dd></div><div><dt>Author players still needed / <span lang="zh-Hans">仍需作者玩家</span></dt><dd>{}</dd></div><div><dt>Current Author role gaps / <span lang="zh-Hans">当前作者角色缺口</span></dt><dd>{}</dd></div><div><dt>Next wait reason / <span lang="zh-Hans">下一等待原因</span></dt><dd>{}</dd></div></dl><p class="muted">This authoritative hint covers only the synchronous 3-Author start. Independent review roles join later; no arrival time is inferred.</p></div>"#,
+        r#"<div class="author-queue-hint" data-author-queue-hint-state="{}" data-queue-eta-state="{}"><h3>3-Author start status / <span lang="zh-Hans">三作者开局状态</span></h3><dl class="review-facts"><div><dt>Queue position / <span lang="zh-Hans">队列位置</span></dt><dd>{}</dd></div><div><dt>Compatible Author pool / <span lang="zh-Hans">兼容作者池</span></dt><dd>{}</dd></div><div><dt>Author players still needed / <span lang="zh-Hans">仍需作者玩家</span></dt><dd>{}</dd></div><div><dt>Current Author role gaps / <span lang="zh-Hans">当前作者角色缺口</span></dt><dd>{}</dd></div><div><dt>Waited / <span lang="zh-Hans">已等待</span></dt><dd>{}</dd></div><div><dt>Ticket expires / <span lang="zh-Hans">票据到期</span></dt><dd>{}</dd></div><div><dt>Start ETA / <span lang="zh-Hans">开局 ETA</span></dt><dd>{}</dd></div><div><dt>Next wait reason / <span lang="zh-Hans">下一等待原因</span></dt><dd>{}</dd></div></dl><p class="muted">This authoritative hint covers only the synchronous 3-Author start. Independent review roles join later; a non-zero arrival time is never inferred.</p></div>"#,
         escape(state),
+        if timing.eta_seconds == Some(0) {
+            "ready"
+        } else {
+            "unknown"
+        },
+        escape(&position_html),
         pool,
         needed,
         gap_html,
+        queue_duration_label(timing.waited_seconds),
+        queue_duration_label(timing.expires_in_seconds),
+        escape(&eta_html),
         player_language_html(wait_reason),
     )
 }
@@ -9174,6 +9276,7 @@ main>p>a:only-child{align-items:center;display:inline-flex;min-block-size:24px}s
 .paper-room-advanced-summary [lang]{display:inline}
 .challenge-materials-panel{border-color:var(--cyan);display:grid;gap:10px;margin:0;min-height:auto}.challenge-materials-panel h2{font-size:20px;margin:4px 0}.challenge-materials-panel p{margin:0;max-width:88ch}.challenge-materials-state{border:1px dashed var(--line);border-radius:9px;color:var(--muted);padding:10px}.challenge-materials-state[data-state=available]{border-color:#3b8f78;color:#67e8b5}.challenge-materials-state[data-state=unavailable]{border-color:var(--amber);color:var(--amber)}.challenge-materials-list{display:grid;gap:9px;list-style:none;margin:0;padding:0}.challenge-materials-list li{align-items:center;border:1px solid var(--line);border-radius:10px;display:flex;gap:12px;justify-content:space-between;padding:11px;min-width:0}.challenge-materials-list li>div:first-child{display:grid;gap:3px;min-width:0}.challenge-materials-list strong,.challenge-materials-list small{overflow-wrap:anywhere}.challenge-materials-list small{color:var(--muted)}.challenge-materials-download{flex:0 0 auto;min-height:42px}
 @media(max-width:430px){.challenge-materials-list li{align-items:stretch;flex-direction:column}.challenge-materials-download{width:100%}}
+.queue-freshness{border:1px solid var(--line);border-radius:10px;display:grid;gap:6px;margin:10px 0;padding:10px}.queue-freshness p{margin:0}.queue-freshness time{color:var(--muted);font-size:11px}.queue-refresh-button{justify-self:start}.queue-refresh-button.ready{border-color:#3b8f78;color:#67e8b5}.queue-freshness output{min-height:1.2em}.author-queue-hint[data-queue-eta-state=ready]{border-color:#3b8f78}.author-queue-hint[data-queue-eta-state=unknown]{border-color:var(--amber)}
 "#;
 
 #[cfg(test)]
@@ -11360,6 +11463,10 @@ mod tests {
         assert!(body.contains("class=\"generate-party-code\""));
         assert!(body.contains("Only its SHA-256 digest leaves this browser"));
         assert!(body.contains("Private three-person party queue"));
+        assert!(body.contains("data-lobby-queue-panel"));
+        assert!(body.contains("data-queue-refresh-countdown"));
+        assert!(body.contains("Authoritative queue snapshot"));
+        assert!(body.contains("Refresh queue status / 刷新队列状态"));
         assert!(!body.contains("party_code_hash"));
         assert!(body.contains("data-agent-ready=\"false\""));
         assert!(body.contains("请先配对且仅保留一个活跃 Agent"));
@@ -11390,7 +11497,7 @@ mod tests {
     }
 
     #[test]
-    fn author_queue_hint_uses_only_the_typed_authoritative_reason_and_never_an_eta() {
+    fn author_queue_hint_uses_only_typed_timing_and_never_infers_an_eta() {
         let ticket = serde_json::json!({
             "status":"queued",
             "requested_team_size":3,
@@ -11402,15 +11509,57 @@ mod tests {
             "compatible_pool_size":4,
             "compatible_players_needed":1,
             "missing_roles":[],
+            "queue_position":1,
+            "waited_seconds":12,
+            "expires_in_seconds":1788,
             "eta_seconds":42,
             "message":"waiting_for_role_distribution"
         });
         let rendered = author_queue_hint(&ticket, &hint);
+        assert!(rendered.contains("data-author-queue-hint-state=\"unavailable\""));
+        assert!(!rendered.contains("42"));
+
+        let waiting_hint = serde_json::json!({
+            "schema":"hepta.paper_raid.matchmaking_queue_hint.v1",
+            "state":"waiting",
+            "compatible_pool_size":4,
+            "compatible_players_needed":1,
+            "missing_roles":[],
+            "queue_position":1,
+            "waited_seconds":12,
+            "expires_in_seconds":1788,
+            "eta_seconds":null,
+            "message":"waiting_for_role_distribution"
+        });
+        let rendered = author_queue_hint(&ticket, &waiting_hint);
         assert!(rendered.contains("data-author-queue-hint-state=\"waiting\""));
         assert!(rendered.contains("None named by Hepta"));
         assert!(rendered.contains("Waiting for a valid one-player-per-Author-role distribution"));
-        assert!(!rendered.contains("42"));
-        assert!(!rendered.contains("ETA"));
+        assert!(rendered.contains("Start ETA / <span lang=\"zh-Hans\">开局 ETA</span>"));
+        assert!(rendered.contains("Unknown until compatible players arrive"));
+        assert!(rendered.contains("12s"));
+        assert!(rendered.contains("29m 48s"));
+
+        let ready_ticket = serde_json::json!({
+            "status":"queued",
+            "requested_team_size":3,
+            "private_party":false
+        });
+        let ready_hint = serde_json::json!({
+            "schema":"hepta.paper_raid.matchmaking_queue_hint.v1",
+            "state":"ready",
+            "compatible_pool_size":3,
+            "compatible_players_needed":0,
+            "missing_roles":[],
+            "queue_position":1,
+            "waited_seconds":12,
+            "expires_in_seconds":1788,
+            "eta_seconds":0,
+            "message":"compatible_team_ready"
+        });
+        let rendered = author_queue_hint(&ready_ticket, &ready_hint);
+        assert!(rendered.contains("data-queue-eta-state=\"ready\""));
+        assert!(rendered.contains("Ready now / 可立即开局"));
 
         let mut unknown_reason = hint;
         unknown_reason["message"] = serde_json::json!("unrecognized_wait_reason");
@@ -11427,7 +11576,11 @@ mod tests {
             serde_json::json!({
                 "schema":schema,"state":state,"message":message,
                 "compatible_pool_size":pool,"compatible_players_needed":needed,
-                "missing_roles":roles
+                "missing_roles":roles,
+                "queue_position":if pool > 0 { serde_json::json!(1) } else { serde_json::Value::Null },
+                "waited_seconds":12,
+                "expires_in_seconds":1788,
+                "eta_seconds":if state == "ready" { serde_json::json!(0) } else { serde_json::Value::Null }
             })
         };
         let ready = ("ready", "compatible_team_ready");

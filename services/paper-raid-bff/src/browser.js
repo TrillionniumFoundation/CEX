@@ -3856,6 +3856,49 @@ function bindQueueForms() {
   }
 }
 
+// Lobby queue status is a read-only projection.  Keep its freshness visible
+// without auto-navigating: a reload can discard an in-memory human signing key
+// on adjacent flows, so the player chooses when to refresh the page.
+function bindLobbyQueueFreshness() {
+  if (window.location.pathname !== "/league") return;
+  const panel = document.querySelector("[data-lobby-queue-panel]");
+  const countdown = panel?.querySelector("[data-queue-refresh-countdown]");
+  const state = panel?.querySelector("[data-queue-freshness-state]");
+  const button = panel?.querySelector("[data-queue-refresh]");
+  if (!panel || !countdown || !state || !button) return;
+  const configured = Number(panel.dataset.queueRefreshSeconds || "");
+  if (!Number.isSafeInteger(configured) || configured < 1 || configured > 300) {
+    state.textContent = "Refresh timing unavailable / 刷新时序不可用";
+    countdown.textContent = "—";
+    return;
+  }
+  let remaining = configured;
+  const render = () => {
+    if (remaining <= 0) {
+      state.textContent = "Refresh check available now / 现在可刷新检查";
+      countdown.textContent = "now / 现在";
+      button.classList.add("ready");
+      return;
+    }
+    state.textContent = "Next refresh check in / 距下一次刷新检查";
+    countdown.textContent = `${remaining}s`;
+    button.classList.remove("ready");
+  };
+  render();
+  const timer = window.setInterval(() => {
+    remaining = Math.max(0, remaining - 1);
+    render();
+    if (remaining === 0) window.clearInterval(timer);
+  }, 1000);
+  button.addEventListener("click", () => {
+    if (button.disabled) return;
+    savePlayerFocusContext(button);
+    button.disabled = true;
+    button.textContent = "Refreshing authoritative queue… / 正在刷新权威队列……";
+    window.location.reload();
+  });
+}
+
 function bindProposalCountdowns() {
   for (const element of document.querySelectorAll(".proposal-countdown")) {
     const deadline = Date.parse(element.dataset.proposalExpiresAt || "");
@@ -5350,6 +5393,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindAgentRotation();
   bindLocalSigning();
   bindQueueForms();
+  bindLobbyQueueFreshness();
   bindProposalCountdowns();
   bindChallengeCountdowns();
   bindChallengeOutcomeForms();
