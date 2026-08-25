@@ -1423,21 +1423,23 @@ async fn lobby(State(state): State<AppState>, headers: HeaderMap) -> Result<Resp
     if !session.identity.has_scope(AlphaIdentityScope::Author) {
         return Err(AppError::Forbidden);
     }
-    let (challenges, tickets, proposals, bindings, raid_state) = tokio::join!(
+    let (challenges, tickets, proposals, bindings, raid_state, progression) = tokio::join!(
         state.hepta.list_public_challenges(&session.identity),
         state.hepta.list_matchmaking_tickets(&session.identity),
         state.hepta.list_team_proposals(&session.identity),
         state.hepta.list_current_agent_bindings(&session.identity),
         state.hepta.get_player_raid_state(&session.identity),
+        db::load_player_progression(&state.pool, session.identity.player_id),
     );
     state.metrics.observe_match_queue(tickets.as_ref().ok());
-    Ok(html::lobby(
+    Ok(html::lobby_with_progression(
         &session.identity,
         read_state(&challenges),
         read_state(&tickets),
         read_state(&proposals),
         read_state(&bindings),
         read_state(&raid_state),
+        progression_state(&progression),
     ))
 }
 
@@ -2321,6 +2323,15 @@ fn read_state(result: &Result<Value, AppError>) -> html::ReadState<'_> {
     match result {
         Ok(value) => html::ReadState::Available(value),
         Err(AppError::NotFound) => html::ReadState::NotFound,
+        Err(_) => html::ReadState::Unavailable,
+    }
+}
+
+fn progression_state(
+    result: &Result<db::PlayerProgression, sqlx::Error>,
+) -> html::ReadState<'_, db::PlayerProgression> {
+    match result {
+        Ok(value) => html::ReadState::Available(value),
         Err(_) => html::ReadState::Unavailable,
     }
 }
