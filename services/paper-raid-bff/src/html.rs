@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 use crate::{
     config::{AlphaAuthorRole, AlphaIdentity, AlphaIdentityScope},
+    db::PlayerProgression,
     hepta::{
         AuthenticatedPaperReviewState, AuthenticatedPaperRoom, HeptaPaperTerminalOutcome,
         HeptaPaperTerminalReason,
@@ -133,6 +134,29 @@ pub fn lobby(
     bindings: ReadState<'_>,
     raid_state: ReadState<'_>,
 ) -> Response {
+    lobby_with_progression(
+        identity,
+        challenges,
+        tickets,
+        proposals,
+        bindings,
+        raid_state,
+        ReadState::Unavailable,
+    )
+}
+
+/// Render the lobby with the durable, BFF-local non-economic progression
+/// projection. `lobby` remains a compatibility wrapper for callers that do
+/// not have the optional DB read yet.
+pub fn lobby_with_progression(
+    identity: &AlphaIdentity,
+    challenges: ReadState<'_>,
+    tickets: ReadState<'_>,
+    proposals: ReadState<'_>,
+    bindings: ReadState<'_>,
+    raid_state: ReadState<'_>,
+    progression: ReadState<'_, PlayerProgression>,
+) -> Response {
     let player_id_text = identity.player_id.to_string();
     let queue_agent_ready = bindings
         .value()
@@ -203,12 +227,13 @@ pub fn lobby(
     let continue_raid = active_raid_card(raid_state);
     let agent_pairing = agent_bridge_pairing_panel();
     let queue_snapshot = lobby_queue_snapshot_notice();
+    let progression_card = player_progression_card(progression);
     let body = format!(
         r#"<section class="hero"><span class="eyebrow">PAPER RAID · 论文远征</span><h1>Research Lobby</h1><p>Welcome, {}. Hepta is the only matchmaking and research authority.</p></section>
         <section class="panel player-path-steps" data-player-path="three_steps" aria-labelledby="player-path-heading"><span class="eyebrow">PLAY PATH / <span lang="zh-Hans">开局路径</span></span><h2 id="player-path-heading">Start in three steps / <span lang="zh-Hans">三步开始</span></h2><ol><li><strong>1 · Sign in / 登录</strong><span>Use your invited identity; no public or economic account is created here.</span></li><li><strong>2 · Pair / 配对</strong><span>Pair one external Agent Bridge when your Author role requires it.</span></li><li><strong>3 · Choose a role / 选择角色</strong><span>Pick a preferred Author role, then join the next compatible three-Author start.</span></li></ol><p class="muted">The page only displays Hepta-derived queue and review timing. Unknown means unknown; the browser never predicts arrival.</p></section>
         <section class="panel practice-entry"><span class="pill">15–20 MIN · SOLO</span><h2>Learn all three Author roles / 单人熟悉三个作者角色</h2><p>Preview Captain, Evidence, and Experiment decisions in a separate unranked practice. It creates no scientific finality, qualification, ranking, score, reward, or economic authority.</p><a class="button" href="/league/practice">Open solo practice / 打开单人练习</a></section>
         <section class="panel quick-raid-entry"><span class="pill">15 MIN · FIXED SEED</span><h2>Quick Raid · make one real Paper Bundle / 快速远征：完成一份真实论文包</h2><p>After pairing one Agent, run the authoritative fixed-seed Evidence Audit slice: one EvidenceCard, one Experiment Run, and one visible Paper Bundle preview. It is paper-scoped and non-economic; no rank, score, reward, or portable scientific finality is created.</p><a class="button" href="/league/quick-raid">Start Quick Raid / 开始快速远征</a></section>
-        {}{}{}
+        {}{}{}{}
         <section class="panel"><h2>Challenges / 研究挑战</h2><p class="source-state">Hepta: {}</p><div class="grid">{}</div></section>
         <section class="grid"><article class="card lobby-queue-panel" data-lobby-queue-panel data-queue-refresh-seconds="{}" data-queue-fetched-at="{}"><h2>My Queue / 我的队列</h2><p class="source-state">Hepta: {}</p>{}<div class="lobby-queue-fragment" data-lobby-queue-fragment>{}</div></article><article class="card"><h2>Team Proposals / 组队提案</h2><p class="source-state">Hepta: {}</p>{}</article><article class="card author-start-boundary"><h2>3-Author start, asynchronous review / <span lang="zh-Hans">三作者同步开局，评审异步接力</span></h2><p>Exactly 3 Author players start the live Author Raid together: Captain, Evidence, and Experiment, each with an independently bound external Agent. Evaluator, Reviewer 1, Reviewer 2, and Reproducer are not part of that start. After the Authors freeze the PaperBundle, eligible independent identities take separate time-bounded assignments from later review pools.</p><p class="muted">The Author queue reports only Author-role coverage. It never waits for all review identities to be online together. Login keys never leave this page except in the login request.</p></article></section>
         <section class="panel"><h2>External Agent key continuity / 外部 Agent 密钥连续性</h2><p class="source-state">Hepta: {}</p><p>Rotation requires independent signatures from both the currently bound key and the replacement key. Only public proof fields enter this browser.</p><div class="action-grid">{}</div></section>"#,
@@ -216,6 +241,7 @@ pub fn lobby(
         mission_board,
         continue_raid,
         agent_pairing,
+        progression_card,
         escape(challenges.label()),
         challenge_cards,
         LOBBY_QUEUE_REFRESH_SECONDS,
@@ -233,6 +259,89 @@ pub fn lobby(
 
 fn agent_bridge_pairing_panel() -> String {
     r#"<section class="panel bridge-onboarding-primary agent-pairing-panel"><span class="pill">AGENT BRIDGE V2</span><h2>Pair an external Agent / 配对外部 Agent</h2><p>Generate one 5-minute pairing code in this authenticated browser, then enter it only at the local Bridge prompt. The BFF stores only its SHA-256 hash. The Bridge never receives your login key, browser cookie, CSRF token, or bearer credential, and never writes the code to a URL, deep link, argv, environment, config, state, or disk.</p><form class="agent-pairing-grant-form"><button type="submit">Generate one-time pairing code / 生成一次性配对码</button><output></output></form><div class="agent-pairing-code" hidden><p><strong>Shown once / 仅显示一次</strong> — copy it now; refreshing cannot recover it.</p><code class="agent-pairing-code-value"></code><button type="button" class="agent-pairing-copy">Copy code / 复制配对码</button></div><ol><li>Open the installed Paper Raid Agent Bridge on the Agent host / 在 Agent 主机打开已安装的 Paper Raid Agent Bridge。</li><li>Choose <strong>Pair</strong> and type or paste the one-time code into its local prompt / 选择“配对”，在本地提示框输入或粘贴一次性码。</li><li>Keep this page open. It checks authenticated pairing status and returns only after the BFF observes a post-pairing signed, self-declared healthy report from that Bridge / 保持本页打开；仅在 BFF 观察到该 Bridge 配对后签名提交的自声明健康报告后自动返回。</li></ol><p>The installed Bridge performs pairing-context discovery, AgentBinding V3 proof, authoritative recovery after a lost response, and persists only the resulting public binding state. The player path never asks you to copy a terminal command, JSON, UUID, or digest.</p><div class="agent-pairing-status"><button type="button" class="agent-pairing-refresh">Check pairing now / 立即检查配对状态</button><button type="button" class="agent-pairing-revoke" hidden>Revoke unused code / 撤销未使用配对码</button><output></output></div></section>"#.to_string()
+}
+
+/// Render the player's non-economic milestone surface.  The counts come from
+/// the BFF's append-only identifier-only telemetry and completed unranked
+/// practice rows; they are intentionally not treated as Hepta challenge or
+/// settlement authority.
+fn player_progression_card(state: ReadState<'_, PlayerProgression>) -> String {
+    let ReadState::Available(progress) = state else {
+        return r#"<section class="panel player-progression unavailable" data-progression-schema="hepta.paper_raid.player_progression.v1"><span class="eyebrow">PLAYER PROGRESSION / <span lang="zh-Hans">玩家成长</span></span><h2>Non-economic milestones / 非经济里程碑</h2><p>Progression is temporarily unavailable. No unlock, rank, reward, score, or economic state is inferred. / 成长投影暂不可用；不推断任何解锁、排名、奖励、积分或经济状态。</p></section>"#.to_string();
+    };
+
+    let badge = |key: &str, unlocked: bool, title: &str, detail: &str| {
+        format!(
+            r#"<li data-badge="{}" data-unlocked="{}"><strong>{}</strong><span>{}</span></li>"#,
+            escape(key),
+            unlocked,
+            escape(title),
+            escape(detail),
+        )
+    };
+    let badges = [
+        badge(
+            "role_sampler",
+            progress.practice_completed_count > 0,
+            "Role sampler / 三角色熟悉",
+            if progress.practice_completed_count > 0 {
+                "Solo practice completed; Captain, Evidence, and Experiment decisions are familiar."
+            } else {
+                "Complete solo practice to rehearse all three Author roles."
+            },
+        ),
+        badge(
+            "first_move",
+            progress.first_action_count > 0,
+            "First move / 第一手",
+            if progress.first_action_count > 0 {
+                "Your first authoritative Paper action is recorded."
+            } else {
+                "Create the first Paper action in a real Raid."
+            },
+        ),
+        badge(
+            "paper_finisher",
+            progress.completed_raid_count > 0,
+            "Paper finisher / 论文完成者",
+            if progress.completed_raid_count > 0 {
+                "At least one Author Raid reached submission_ready."
+            } else {
+                "Finish one Author Raid to earn this local milestone."
+            },
+        ),
+        badge(
+            "replay_analyst",
+            progress.replay_started_count > 0,
+            "Replay analyst / 回放分析员",
+            if progress.replay_started_count > 0 {
+                "You opened a read-only event replay."
+            } else {
+                "Start a read-only replay after your first Raid."
+            },
+        ),
+    ]
+    .join("");
+    let next_goal = if progress.practice_completed_count == 0 {
+        "Complete solo practice / 完成单人练习"
+    } else if progress.first_action_count == 0 {
+        "Make the first Paper action / 完成第一手论文动作"
+    } else if progress.completed_raid_count == 0 {
+        "Finish the first Author Raid / 完成首局作者远征"
+    } else if progress.replay_started_count == 0 {
+        "Review your event stream / 回放本局事件流"
+    } else {
+        "Play the next compatible challenge / 开始下一场兼容挑战"
+    };
+    format!(
+        r#"<section class="panel player-progression" data-progression-schema="hepta.paper_raid.player_progression.v1" data-first-actions="{}" data-completed-raids="{}" data-replays="{}" data-practice-completions="{}"><span class="eyebrow">PLAYER PROGRESSION / <span lang="zh-Hans">玩家成长</span></span><h2>Build your Author craft / 累积作者熟练度</h2><p>These durable BFF milestones make the next session legible without turning progress into a financial or competitive claim. / 这些持久的 BFF 里程碑帮助你看懂下一局，但不构成金融或竞技资格。</p><ul class="progression-badges">{}</ul><p class="progression-next"><strong>Next goal / 下一目标:</strong> {}</p><p class="muted">Projection schema v1 · non-economic only. It never unlocks ranking, reward, score, scientific finality, or settlement authority. / 仅非经济投影；绝不解锁排行、奖励、积分、科学终局或结算权威。</p></section>"#,
+        progress.first_action_count,
+        progress.completed_raid_count,
+        progress.replay_started_count,
+        progress.practice_completed_count,
+        badges,
+        escape(next_goal),
+    )
 }
 
 const NON_ECONOMIC_PROGRESSION_NOTICE: &str = "Non-economic only; no ranking, reward, score, or economic eligibility / 仅非经济进度；不解锁排行、奖励、积分或经济资格";
@@ -9265,7 +9374,7 @@ header{align-items:center;border-bottom:1px solid var(--line);display:flex;justi
 main{margin:auto;max-width:1180px;padding:clamp(24px,5vw,64px) clamp(16px,4vw,44px)}.hero{border-left:4px solid var(--cyan);padding:8px 0 12px 22px;margin-bottom:28px}.eyebrow{color:var(--amber);font-size:12px;font-weight:800;letter-spacing:.16em}.hero h1{font-size:clamp(32px,7vw,72px);line-height:1;margin:10px 0}.hero p{color:var(--muted);max-width:760px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:14px 0}.card,.panel{background:linear-gradient(145deg,#142036,#0d1421);border:1px solid var(--line);border-radius:14px;padding:18px;min-height:120px}.card h2,.panel h2{font-size:14px;letter-spacing:.05em;margin:0 0 12px}.card p{color:var(--text)}.unavailable{border-style:dashed;color:var(--muted)}.muted,.action p{color:var(--muted)}.dot{background:var(--pink);border-radius:50%;display:inline-block;height:8px;margin-right:8px;width:8px}.pill,.status{border:1px solid var(--amber);border-radius:999px;color:var(--amber);display:inline-block;font-size:12px;font-weight:800;padding:4px 9px}.status{padding:6px 12px}.status.missing{border-color:var(--pink);color:var(--pink)}.source-state{color:var(--muted);font-size:12px}.roster,.record-list{display:grid;gap:10px;list-style:none;margin:0;padding:0}.roster li{align-items:center;border-bottom:1px solid var(--line);display:grid;gap:8px;grid-template-columns:90px 1fr 1fr 1fr;padding:10px 0}.roster span{color:var(--muted);overflow-wrap:anywhere}.record-list li,.record-list a{align-items:center;display:flex;gap:8px;justify-content:space-between}.record-list a{color:var(--text);text-decoration:none;width:100%}.action-grid{display:grid;gap:14px;grid-template-columns:repeat(2,minmax(0,1fr))}.action{border:1px solid var(--line);border-radius:12px;padding:16px}.action h3{margin-top:0}form{display:grid;gap:12px}label{color:var(--muted);display:grid;font-size:12px;gap:6px}input,textarea,select,button{background:#07101d;border:1px solid var(--line);border-radius:8px;color:var(--text);font:inherit;padding:10px 12px}textarea{font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;resize:vertical}button{background:#12334a;border-color:var(--cyan);color:var(--cyan);cursor:pointer;font-weight:800}button:hover{filter:brightness(1.2)}button.danger{border-color:var(--pink);color:var(--pink)}button:disabled{cursor:wait;opacity:.55}:where(a,button,input,textarea,select,summary,[tabindex]):focus-visible{outline:3px solid var(--amber);outline-offset:3px}output{color:var(--amber);font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere;white-space:pre-wrap}output.result-error{color:var(--pink)}output.result-ok{color:var(--amber)}output[data-player-message=friendly]{font-family:Inter,ui-sans-serif,system-ui,sans-serif;font-size:13px}.player-error-details{border-left:2px solid var(--line);margin-top:4px;padding-left:10px}.player-error-details>summary{color:var(--muted);cursor:pointer;font-size:12px;font-weight:700}.player-error-details[open]>summary{color:var(--cyan)}.player-error-raw{display:block;font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;margin-top:7px;white-space:pre-wrap}.narrow{margin:auto;max-width:540px}#toast{background:#101826;border:1px solid var(--line);border-radius:10px;bottom:18px;display:block;max-width:min(520px,90vw);padding:12px 16px;position:fixed;right:18px;z-index:10}#toast[hidden]{display:none}code{color:var(--cyan);overflow-wrap:anywhere}footer{padding:28px;text-align:center}
 main>p>a:only-child{align-items:center;display:inline-flex;min-block-size:24px}summary{min-block-size:24px}:where(a,button,input,textarea,select,summary,[tabindex]):focus-visible{box-shadow:0 0 0 9px var(--focus-backdrop)}.queue-form.rematch-target{border:2px solid var(--cyan);border-radius:10px;padding:10px}
 .key-vault{margin-bottom:18px;min-height:auto}.key-vault summary{color:var(--cyan);cursor:pointer;font-weight:800}.key-vault form{margin:14px 0}.human-key-status{display:block;margin-top:10px}.challenge-rules{display:grid;gap:7px;margin:12px 0}.challenge-rules div{border-bottom:1px solid var(--line);display:grid;gap:4px;padding:5px 0}.challenge-rules dt{color:var(--muted);font-size:11px}.challenge-rules dd{margin:0}
-  .player-path-steps{border-color:var(--cyan);margin-bottom:18px}.player-path-steps h2{font-size:22px;margin:7px 0 12px}.player-path-steps ol{display:grid;gap:9px;grid-template-columns:repeat(3,minmax(0,1fr));list-style:none;margin:0;padding:0}.player-path-steps li{border:1px solid var(--line);border-radius:10px;display:grid;gap:5px;padding:11px}.player-path-steps li strong{color:var(--text)}.player-path-steps li span{color:var(--muted);font-size:12px;line-height:1.35}.player-path-steps p{margin-bottom:0}.mission-board{display:grid;gap:18px;grid-template-columns:minmax(220px,.8fr) minmax(0,2fr);margin-bottom:20px}.mission-board h2{font-size:24px;letter-spacing:0;margin:6px 0}.raid-steps{display:grid;gap:8px;grid-template-columns:repeat(5,minmax(0,1fr));list-style:none;margin:0;padding:0}.raid-steps li{border:1px solid var(--line);border-radius:10px;display:grid;gap:8px;padding:12px}.raid-steps li>span{color:var(--muted);font-size:11px;font-weight:900}.raid-steps strong{display:block}.raid-steps p{color:var(--muted);font-size:11px;line-height:1.35;margin:4px 0 0}.raid-steps [data-step-state=current]{background:#12334a;border-color:var(--cyan)}.raid-steps [data-step-state=current]>span{color:var(--cyan)}.raid-steps [data-step-state=complete]{border-color:#3b8f78}.raid-steps [data-step-state=complete]>span{color:#67e8b5}.role-kit{border:1px solid var(--line);border-radius:10px;display:grid;gap:7px;margin:0;padding:12px}.role-kit legend{color:var(--amber);font-size:12px;font-weight:800;padding:0 6px}.role-kit span{color:var(--muted);font-size:12px}.role-kit strong{color:var(--text)}.role-choice{align-items:start;border:1px solid var(--line);border-radius:8px;display:grid;gap:9px;grid-template-columns:auto 1fr;margin:0;padding:9px}.role-choice input{margin-top:3px}.role-choice small{display:block;line-height:1.35;margin-top:3px}.role-choice[data-preference-rank="1"]{border-color:var(--cyan)}.advanced-action summary{color:var(--muted);cursor:pointer;font-weight:800}.advanced-action[open] summary{color:var(--cyan);margin-bottom:12px}.continue-raid{border-color:var(--cyan);margin-bottom:18px}.button{border:1px solid var(--cyan);border-radius:8px;color:var(--cyan);display:inline-block;font-weight:800;padding:10px 12px;text-decoration:none}.guided-action{border:1px solid var(--cyan);border-radius:12px;padding:16px}.guided-action.blocked{border-color:var(--amber)}.live-status{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.live-status span{border:1px solid var(--line);border-radius:999px;padding:6px 10px}.live-connection[data-state=live]{border-color:#3b8f78;color:#67e8b5}.live-connection[data-state=catching-up],.live-connection[data-state=reconnecting]{border-color:var(--amber);color:var(--amber)}.live-participants,.live-events,.timeline-replay-events{display:grid;gap:8px;list-style:none;padding:0}.live-participants li,.live-events li,.timeline-replay-events li{border:1px solid var(--line);border-radius:8px;padding:10px}.live-participants [data-connected=true]{color:#67e8b5}.live-participants [data-connected=false]{color:var(--muted)}.timeline-controls{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}.timeline-controls button{min-height:42px}.timeline-replay{border:1px solid var(--cyan);border-radius:10px;margin-top:12px;padding:12px}.timeline-replay[hidden]{display:none}.timeline-replay-events li{border-color:#3b8f78}.timeline-replay-status{display:block;margin-top:8px}.after-action-progression .badge-list{display:flex;flex-wrap:wrap;gap:7px;list-style:none;margin:10px 0;padding:0}.after-action-progression .badge-list li{border:1px solid #3b8f78;border-radius:999px;color:#67e8b5;font-size:12px;padding:5px 9px}.after-action-replay{border-color:var(--cyan)}
+  .player-path-steps{border-color:var(--cyan);margin-bottom:18px}.player-path-steps h2{font-size:22px;margin:7px 0 12px}.player-path-steps ol{display:grid;gap:9px;grid-template-columns:repeat(3,minmax(0,1fr));list-style:none;margin:0;padding:0}.player-path-steps li{border:1px solid var(--line);border-radius:10px;display:grid;gap:5px;padding:11px}.player-path-steps li strong{color:var(--text)}.player-path-steps li span{color:var(--muted);font-size:12px;line-height:1.35}.player-path-steps p{margin-bottom:0}.mission-board{display:grid;gap:18px;grid-template-columns:minmax(220px,.8fr) minmax(0,2fr);margin-bottom:20px}.mission-board h2{font-size:24px;letter-spacing:0;margin:6px 0}.raid-steps{display:grid;gap:8px;grid-template-columns:repeat(5,minmax(0,1fr));list-style:none;margin:0;padding:0}.raid-steps li{border:1px solid var(--line);border-radius:10px;display:grid;gap:8px;padding:12px}.raid-steps li>span{color:var(--muted);font-size:11px;font-weight:900}.raid-steps strong{display:block}.raid-steps p{color:var(--muted);font-size:11px;line-height:1.35;margin:4px 0 0}.raid-steps [data-step-state=current]{background:#12334a;border-color:var(--cyan)}.raid-steps [data-step-state=current]>span{color:var(--cyan)}.raid-steps [data-step-state=complete]{border-color:#3b8f78}.raid-steps [data-step-state=complete]>span{color:#67e8b5}.role-kit{border:1px solid var(--line);border-radius:10px;display:grid;gap:7px;margin:0;padding:12px}.role-kit legend{color:var(--amber);font-size:12px;font-weight:800;padding:0 6px}.role-kit span{color:var(--muted);font-size:12px}.role-kit strong{color:var(--text)}.role-choice{align-items:start;border:1px solid var(--line);border-radius:8px;display:grid;gap:9px;grid-template-columns:auto 1fr;margin:0;padding:9px}.role-choice input{margin-top:3px}.role-choice small{display:block;line-height:1.35;margin-top:3px}.role-choice[data-preference-rank="1"]{border-color:var(--cyan)}.advanced-action summary{color:var(--muted);cursor:pointer;font-weight:800}.advanced-action[open] summary{color:var(--cyan);margin-bottom:12px}.continue-raid{border-color:var(--cyan);margin-bottom:18px}.button{border:1px solid var(--cyan);border-radius:8px;color:var(--cyan);display:inline-block;font-weight:800;padding:10px 12px;text-decoration:none}.guided-action{border:1px solid var(--cyan);border-radius:12px;padding:16px}.guided-action.blocked{border-color:var(--amber)}.live-status{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.live-status span{border:1px solid var(--line);border-radius:999px;padding:6px 10px}.live-connection[data-state=live]{border-color:#3b8f78;color:#67e8b5}.live-connection[data-state=catching-up],.live-connection[data-state=reconnecting]{border-color:var(--amber);color:var(--amber)}.live-participants,.live-events,.timeline-replay-events{display:grid;gap:8px;list-style:none;padding:0}.live-participants li,.live-events li,.timeline-replay-events li{border:1px solid var(--line);border-radius:8px;padding:10px}.live-participants [data-connected=true]{color:#67e8b5}.live-participants [data-connected=false]{color:var(--muted)}.timeline-controls{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}.timeline-controls button{min-height:42px}.timeline-replay{border:1px solid var(--cyan);border-radius:10px;margin-top:12px;padding:12px}.timeline-replay[hidden]{display:none}.timeline-replay-events li{border-color:#3b8f78}.timeline-replay-status{display:block;margin-top:8px}.player-progression{border-color:#3b8f78;margin:18px 0}.player-progression h2{font-size:22px;letter-spacing:0;margin:7px 0 10px}.progression-badges{display:grid;gap:8px;grid-template-columns:repeat(4,minmax(0,1fr));list-style:none;margin:12px 0;padding:0}.progression-badges li{border:1px solid var(--line);border-radius:10px;display:grid;gap:5px;padding:10px}.progression-badges li[data-unlocked="true"]{border-color:#3b8f78}.progression-badges li[data-unlocked="true"] strong{color:#67e8b5}.progression-badges li span{color:var(--muted);font-size:11px;line-height:1.35}.progression-next{border-left:3px solid var(--cyan);padding-left:10px}.after-action-progression .badge-list{display:flex;flex-wrap:wrap;gap:7px;list-style:none;margin:10px 0;padding:0}.after-action-progression .badge-list li{border:1px solid #3b8f78;border-radius:999px;color:#67e8b5;font-size:12px;padding:5px 9px}.after-action-replay{border-color:var(--cyan)}
 .paper-room-hero{margin-bottom:18px}.paper-room-basic{border-color:var(--cyan);display:grid;gap:16px;margin-bottom:16px;min-height:auto}.paper-room-basic>h2{font-size:clamp(24px,4vw,38px);letter-spacing:0;margin:0}.paper-room-personal-objective{font-size:clamp(15px,2vw,18px);margin:0;max-width:70ch}.paper-room-basic-grid{display:grid;gap:14px;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.paper-room-blocker,.paper-room-next-step{border:1px solid var(--line);border-radius:12px;min-width:0;padding:14px}.paper-room-blocker h3,.paper-room-next-step h3{font-size:13px;margin:0 0 8px}.paper-room-blocker-reason{font-weight:700;margin:0;overflow-wrap:anywhere}.paper-room-blocker-reason[data-blocker-state=blocked]{color:var(--amber)}.paper-room-blocker-reason[data-blocker-state=ready]{color:#67e8b5}.paper-room-more-blockers{color:var(--muted);font-size:12px;margin:8px 0 0}.paper-room-next-step{align-content:start;display:grid;gap:10px}.paper-room-next-step p{margin:0;overflow-wrap:anywhere}.paper-room-primary-button{justify-self:start;min-height:44px;max-width:100%;scroll-margin-block:28px}.paper-room-advanced{margin-top:16px;min-height:auto}.paper-room-advanced-summary{cursor:pointer;font-size:16px;font-weight:800}.paper-room-advanced-summary span,.paper-room-advanced-summary small{display:block}.paper-room-advanced-summary small{color:var(--muted);font-size:12px;font-weight:500;margin-top:4px}.paper-room-advanced[open]>.paper-room-advanced-summary{color:var(--cyan);margin-bottom:18px}.paper-room-advanced-content{display:grid;gap:16px;min-width:0}.paper-room-authority{border:1px solid var(--line);border-radius:12px;padding:14px}.paper-room-authority>h2{font-size:20px;margin:7px 0 14px}.paper-room-authority-facts{display:grid;gap:8px;grid-template-columns:repeat(2,minmax(0,1fr));margin:0 0 14px}.paper-room-authority-facts div{border-bottom:1px solid var(--line);display:grid;gap:3px;min-width:0;padding:7px}.paper-room-authority-facts dt{color:var(--muted);font-size:11px}.paper-room-authority-facts dd{margin:0;overflow-wrap:anywhere}.raid-command-center{border-color:var(--cyan);display:grid;gap:20px;grid-template-columns:minmax(0,1.3fr) minmax(260px,.7fr);margin-bottom:18px}.phase-objective h2{font-size:clamp(22px,4vw,36px);letter-spacing:0;margin:7px 0}.phase-readiness ul{display:grid;gap:7px;margin:0 0 8px;padding-left:20px}.phase-readiness .ready{color:#67e8b5}.projected-actions{margin-top:14px}.projected-actions ul{display:flex;flex-wrap:wrap;gap:6px;list-style:none;margin:7px 0 0;padding:0}.projected-actions li{border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:11px;padding:4px 8px}.primary-action{background:#0b2637;border:1px solid var(--cyan);border-radius:12px;padding:16px;scroll-margin-block:28px}.work-item-panel,.research-session-panel,.revision-panel,.material-panel{margin:14px 0}.work-board{display:grid;gap:10px}.work-card,.session-card,.release-approval{border:1px solid var(--line);border-radius:10px;padding:14px}.work-card h3,.session-card h3{margin:8px 0}.accepted-artifact-field[hidden]{display:none}.session-control-stack{display:grid;gap:9px}.materialization-summary{border:1px solid #3b8f78;border-radius:10px;margin:12px 0;padding:14px}.materialization-summary.missing{border-color:var(--pink)}.materialization-summary.pending{border-color:var(--line)}.materialized-sections{display:grid;gap:7px;list-style:none;margin:10px 0 0;padding:0}.materialized-sections li{border-top:1px solid var(--line);display:grid;gap:4px;padding-top:8px}.materialized-sections span,.materialized-sections small{color:var(--muted)}.release-author{border:1px solid var(--line);border-radius:8px;display:grid;gap:8px;margin:9px 0;padding:10px}.release-author legend,fieldset>legend{color:var(--amber);font-size:12px;font-weight:800}.developer-tools{margin-top:22px}.developer-tools>summary{color:var(--muted);cursor:pointer;font-size:15px;font-weight:800}.developer-tools[open]>summary{color:var(--cyan);margin-bottom:12px}.eligibility-grid{display:grid;gap:5px;grid-template-columns:repeat(2,minmax(0,1fr));list-style:none;margin:10px 0 0;padding:0}.eligibility-grid li{border:1px solid var(--line);border-radius:7px;display:flex;font-size:11px;gap:6px;justify-content:space-between;padding:6px}.eligibility-grid [data-eligible=true]{border-color:#3b8f78;color:#67e8b5}.eligibility-grid [data-eligible=false]{color:var(--muted)}.status.verified{border-color:#3b8f78;color:#67e8b5}.ticket-list .ticket-card{align-items:stretch;display:grid;gap:8px}.ticket-card>div{display:flex;gap:8px;justify-content:space-between}.ticket-card form{display:block}.review-queue-empty{text-align:center}.review-queue-empty .button{margin-top:12px}.review-boundary{border-color:var(--cyan);display:grid;gap:18px;grid-template-columns:2fr 1fr;margin-bottom:18px}.review-boundary dl,.review-facts{display:grid;gap:7px;margin:0}.review-boundary dl div,.review-facts div{border-bottom:1px solid var(--line);display:grid;gap:4px;padding:7px 0}.review-boundary dt,.review-facts dt{color:var(--muted);font-size:11px}.review-boundary dd,.review-facts dd{margin:0;overflow-wrap:anywhere}.review-queue-grid{display:grid;gap:16px}.review-queue-card>header{align-items:start;background:none;border:0;display:flex;gap:12px;justify-content:space-between;padding:0;position:static}.review-queue-card>header h2{font-size:24px;letter-spacing:0;margin:6px 0 12px}.review-facts{grid-template-columns:repeat(2,minmax(0,1fr));margin:16px 0}.review-columns{display:grid;gap:14px;grid-template-columns:repeat(2,minmax(0,1fr))}.review-columns>section{border:1px solid var(--line);border-radius:10px;padding:13px}.review-columns h3{font-size:12px;margin:0 0 10px}.review-assignments{display:grid;gap:9px;list-style:none;margin:0;padding:0}.review-assignments li{align-items:center;display:flex;gap:10px;justify-content:space-between}.review-assignments span,.review-open-slots small{color:var(--muted);display:block;font-size:11px}.review-open-slots{display:grid;gap:8px}.review-claim-form{align-items:center;border-bottom:1px solid var(--line);display:grid;gap:8px;grid-template-columns:1fr auto;padding:8px 0}.review-claim-form output{grid-column:1/-1}.review-protocol-gap{border-color:var(--amber);margin-top:18px}.review-protocol-gap li{margin:6px 0}.challenge-availability{border-left:3px solid var(--cyan);padding-left:10px}.challenge[data-challenge-status=closed] .challenge-availability,.challenge[data-challenge-status=draft] .challenge-availability,.challenge[data-challenge-status=unavailable] .challenge-availability{border-color:var(--amber);color:var(--muted)}.review-artifact-list{display:grid;gap:10px;list-style:none;margin:14px 0 0;padding:0}.review-artifact-item{align-items:center;border:1px solid var(--line);border-radius:10px;display:flex;gap:14px;justify-content:space-between;padding:13px}.review-artifact-item>div:first-child{display:grid;gap:4px;min-width:0}.review-artifact-filename{overflow-wrap:anywhere}.review-artifact-item span,.review-artifact-item small{color:var(--muted)}.review-artifact-actions{display:flex;flex-wrap:wrap;gap:8px}.review-artifact-actions .button{margin:0}
 .role-resource-panel{border-color:#3b8f78;margin:14px 0}.role-resource-panel .facts{display:grid;gap:8px;grid-template-columns:repeat(3,minmax(0,1fr));margin:12px 0}.role-resource-panel .facts article{border:1px solid var(--line);border-radius:9px;display:grid;gap:2px;min-height:auto;padding:10px}.role-resource-panel .facts strong{color:#67e8b5;font-size:20px}.role-resource-panel .facts span{color:var(--muted);font-size:11px}.review-sla{border:1px solid #3b8f78;border-radius:10px;margin-top:12px;padding:11px}.review-sla.unavailable{border-color:var(--amber)}.review-sla p{margin:4px 0 0}
 .challenge-ruleset-panel{border-color:var(--amber);display:grid;gap:16px;margin-bottom:18px}.challenge-ruleset-header{display:grid;gap:16px;grid-template-columns:minmax(220px,1fr) minmax(300px,1.2fr)}.challenge-ruleset-header h2{font-size:24px;margin:8px 0}.challenge-ruleset-facts{display:grid;gap:6px;grid-template-columns:repeat(2,minmax(0,1fr));margin:0}.challenge-ruleset-facts div{border-bottom:1px solid var(--line);display:grid;gap:3px;padding:6px}.challenge-ruleset-facts dt{color:var(--muted);font-size:11px}.challenge-ruleset-facts dd{margin:0}.challenge-clock,.challenge-outcome,.challenge-victory{border:1px solid var(--line);border-radius:10px;padding:13px}.challenge-clock strong,.challenge-outcome strong{display:block;font-size:18px;margin-top:5px}.challenge-clock p,.challenge-outcome p{color:var(--muted);margin-bottom:0}.challenge-victory ul,.challenge-phase-gates ol,.challenge-phase-gates ul{display:grid;gap:6px;margin:8px 0;padding-left:22px}.challenge-phase-gates summary,.challenge-terminal-controls summary{color:var(--cyan);cursor:pointer;font-weight:800}.challenge-terminal-grid{display:grid;gap:12px;grid-template-columns:repeat(2,minmax(0,1fr));margin-top:12px}.challenge-terminal-grid form{border:1px solid var(--line);border-radius:10px;padding:12px}.challenge-countdown[data-state=active]{color:#67e8b5}.challenge-countdown[data-state=overtime]{color:var(--amber)}.challenge-countdown[data-state=expired]{color:var(--pink)}
@@ -11494,6 +11603,59 @@ mod tests {
         ));
         assert!(!body.contains("at least 7 identities"));
         assert!(!body.contains("Roles / 职业<input"));
+    }
+
+    #[test]
+    fn player_progression_card_fails_closed_when_projection_is_unavailable() {
+        let rendered = player_progression_card(ReadState::Unavailable);
+        assert!(
+            rendered.contains("data-progression-schema=\"hepta.paper_raid.player_progression.v1\"")
+        );
+        assert!(rendered.contains("Progression is temporarily unavailable"));
+        assert!(!rendered.contains("data-unlocked=\"true\""));
+        assert!(rendered.contains("No unlock, rank, reward, score, or economic state is inferred"));
+    }
+
+    #[test]
+    fn player_progression_card_exposes_only_durable_non_economic_milestones() {
+        let progress = PlayerProgression {
+            first_action_count: 1,
+            completed_raid_count: 2,
+            replay_started_count: 1,
+            practice_completed_count: 1,
+        };
+        let rendered = player_progression_card(ReadState::Available(&progress));
+        assert!(rendered.contains("data-first-actions=\"1\""));
+        assert!(rendered.contains("data-completed-raids=\"2\""));
+        assert!(rendered.contains("data-replays=\"1\""));
+        assert!(rendered.contains("data-practice-completions=\"1\""));
+        for badge in [
+            "role_sampler",
+            "first_move",
+            "paper_finisher",
+            "replay_analyst",
+        ] {
+            assert!(
+                rendered.contains(&format!("data-badge=\"{badge}\" data-unlocked=\"true\"")),
+                "missing unlocked badge {badge}"
+            );
+        }
+        assert!(rendered.contains("Next goal / 下一目标"));
+        assert!(rendered.contains("Play the next compatible challenge / 开始下一场兼容挑战"));
+        assert!(rendered.contains("Projection schema v1 · non-economic only"));
+        assert!(rendered.contains("never unlocks ranking, reward, score, scientific finality"));
+    }
+
+    #[test]
+    fn player_progression_card_orders_next_goal_without_inventing_progress() {
+        let progress = PlayerProgression::default();
+        let rendered = player_progression_card(ReadState::Available(&progress));
+        assert!(rendered.contains("data-first-actions=\"0\""));
+        assert!(rendered.contains("data-completed-raids=\"0\""));
+        assert!(rendered.contains("data-replays=\"0\""));
+        assert!(rendered.contains("data-practice-completions=\"0\""));
+        assert!(rendered.contains("Complete solo practice / 完成单人练习"));
+        assert!(!rendered.contains("data-unlocked=\"true\""));
     }
 
     #[test]

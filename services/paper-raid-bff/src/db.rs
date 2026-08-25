@@ -94,6 +94,51 @@ pub async fn record_product_event(
     Ok(())
 }
 
+/// Durable, identifier-only progression counters for the player lobby.
+///
+/// These values are derived from the append-only product-event ledger and the
+/// unranked practice session table.  They are deliberately a BFF presentation
+/// projection: they never grant Hepta authority, alter a challenge, or unlock
+/// ranking/reward/economic state.  Keeping the projection query-based means a
+/// restart (or a metrics reset) cannot lose a player's non-economic milestones.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PlayerProgression {
+    pub first_action_count: u64,
+    pub completed_raid_count: u64,
+    pub replay_started_count: u64,
+    pub practice_completed_count: u64,
+}
+
+pub async fn load_player_progression(
+    pool: &PgPool,
+    player_id: Uuid,
+) -> Result<PlayerProgression, sqlx::Error> {
+    let row = sqlx::query_as::<_, (i64, i64, i64, i64)>(
+        "SELECT
+             count(*) FILTER (WHERE event_name = 'first_action'),
+             count(*) FILTER (WHERE event_name = 'raid_completed'),
+             count(*) FILTER (WHERE event_name = 'replay_started'),
+             (SELECT count(*)
+                FROM paper_raid_bff_practice_sessions
+               WHERE player_id = $1 AND stage = 'completed')
+           FROM paper_raid_bff_product_events
+          WHERE player_id = $1",
+    )
+    .bind(player_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(PlayerProgression {
+        first_action_count: u64::try_from(row.0)
+            .map_err(|_| sqlx::Error::Protocol("negative first_action count".into()))?,
+        completed_raid_count: u64::try_from(row.1)
+            .map_err(|_| sqlx::Error::Protocol("negative raid_completed count".into()))?,
+        replay_started_count: u64::try_from(row.2)
+            .map_err(|_| sqlx::Error::Protocol("negative replay_started count".into()))?,
+        practice_completed_count: u64::try_from(row.3)
+            .map_err(|_| sqlx::Error::Protocol("negative practice count".into()))?,
+    })
+}
+
 pub async fn ready(pool: &PgPool) -> bool {
     sqlx::query_scalar::<_, i32>("SELECT 1")
         .fetch_one(pool)
