@@ -719,12 +719,17 @@ The browser alpha is a same-origin, external-script flow:
    read-only projection: durable role mastery, portable challenge unlocks and
    immutable gameplay-replay authority remain unavailable. The Room can play
    back at most 64 already-authenticated Hepta/Nakama timeline records as a
-   presentation-only, read-only replay; playback never emits a command,
-   telemetry event, scientific fact, rank, reward or economic state. The AAR
-   derives session-scoped explanatory badges and offers a challenge-scoped
-   manual rematch link that only focuses the matching Lobby queue form; it
-   never submits a ticket automatically. `Sync now` remains the durable
-   live/archive catch-up control rather than a second replay authority.
+   presentation-only, read-only replay. Starting playback may submit one
+   best-effort `replay_started` product signal for the BFF-local progression
+   card. That row is identifier-only (the server binds the session/player and
+   the browser may include only the already-scoped paper identifier); it never
+   carries authority, hash, digest, signature, or player-facing UUID material.
+   A failed signal is ignored. The replay itself never emits a command,
+   scientific fact, rank, reward or economic state. The AAR derives
+   session-scoped explanatory badges and offers a challenge-scoped manual
+   rematch link that only focuses the matching Lobby queue form; it never
+   submits a ticket automatically. `Sync now` remains the durable live/archive
+   catch-up control rather than a second replay authority.
 8. `/league/review` is the assignment-scoped independent Review Raid surface.
    It renders typed evaluator draft, two-reviewer attestation, quorum/finalize
    and reproduction actions from a frozen review bundle. The ordinary Review

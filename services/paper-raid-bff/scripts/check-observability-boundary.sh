@@ -65,6 +65,29 @@ rg -q --fixed-strings 'recordProductEvent("stale_ui_reload", { paperId })' "$bro
   exit 1
 }
 
+# Replay progression is intentionally a bounded, identifier-only browser
+# signal. It must remain best-effort and must not grow into authority/hash
+# material or a second replay command path.
+replay_begin=$(sed -n '/function createTimelineReplayController(/,/const stop = () => {/p' "$browser")
+grep -q -- 'recordProductEvent("replay_started", {' <<<"$replay_begin" || {
+  echo "read-only replay is missing its durable identifier-only milestone" >&2
+  exit 1
+}
+grep -q -- 'paperId: card.dataset.paperId || null' <<<"$replay_begin" || {
+  echo "replay milestone is missing the existing paper scope" >&2
+  exit 1
+}
+grep -q -- '}).catch(() => {});' <<<"$replay_begin" || {
+  echo "replay milestone is not best-effort" >&2
+  exit 1
+}
+for forbidden in authority hash digest signature 'uuid('; do
+  if grep -q -- "$forbidden" <<<"$replay_begin"; then
+    echo "replay milestone contains forbidden authority material: $forbidden" >&2
+    exit 1
+  fi
+done
+
 # Readiness remains an authority/dependency gate. Metrics are intentionally
 # absent from the ready join and predicate, so monitoring failure cannot make
 # the application advertise a false domain-readiness state.
