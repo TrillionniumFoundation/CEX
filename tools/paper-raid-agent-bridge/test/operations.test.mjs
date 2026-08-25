@@ -1255,3 +1255,33 @@ test("delivery draft is a stable Agent declaration and drives deterministic prop
     /Proposal V2 requires a delivery_draft_id-bound delivery/,
   );
 });
+
+test("delivery draft can fail closed on an ambiguous response without retrying", async t => {
+  const item = await fixture(t, "delivery-draft-no-retry");
+  await saveBridgeState(
+    item.statePath,
+    item.identity,
+    item.binding,
+    NOW,
+  );
+  const draftInput = {
+    paper_id: PAPER_ID,
+    work_item_id: WORK_ID,
+    section_key: "methods",
+    artifact_manifest_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    payload_hash: `sha256:${"aa".repeat(32)}`,
+  };
+  let calls = 0;
+  await assert.rejects(
+    prepareDeliveryDraft(item.config, item.identity, draftInput, {
+      nowUnix: NOW + 5,
+      retryLostResponse: false,
+      fetchImplementation: async () => {
+        calls += 1;
+        throw new Error("simulated lost response");
+      },
+    }),
+    /agent_bridge_transport_failed/,
+  );
+  assert.equal(calls, 1);
+});
