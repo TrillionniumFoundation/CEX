@@ -705,10 +705,15 @@ The browser alpha is a same-origin, external-script flow:
    signatures locally. Active-key ownership and signature verification remain
    Hepta write-time responsibilities before its authenticated read model
    crosses the sealed BFF boundary. This is a
-   read-only projection: durable role mastery, challenge unlocks, immutable
-   gameplay replay and automatic rematch remain unavailable. The timeline `Sync now`
-   control is only live/archive catch-up and is no longer labelled as replay
-   telemetry.
+   read-only projection: durable role mastery, portable challenge unlocks and
+   immutable gameplay-replay authority remain unavailable. The Room can play
+   back at most 64 already-authenticated Hepta/Nakama timeline records as a
+   presentation-only, read-only replay; playback never emits a command,
+   telemetry event, scientific fact, rank, reward or economic state. The AAR
+   derives session-scoped explanatory badges and offers a challenge-scoped
+   manual rematch link that only focuses the matching Lobby queue form; it
+   never submits a ticket automatically. `Sync now` remains the durable
+   live/archive catch-up control rather than a second replay authority.
 8. `/league/review` is the assignment-scoped independent Review Raid surface.
    It renders typed evaluator draft, two-reviewer attestation, quorum/finalize
    and reproduction actions from a frozen review bundle. The ordinary Review
@@ -738,8 +743,10 @@ The browser alpha is a same-origin, external-script flow:
    events. A reload safely replays every Nakama archive from zero. Catch-up
    pages run immediately while `has_more` is true and the UI does not claim
    `Live` until all pages are current. Nakama realtime delivery remains a hint;
-   durable archive catch-up is the recovery authority. The Nakama HTTP key
-   never reaches the browser.
+   durable archive catch-up is the recovery authority. The optional bounded
+   replay controls consume only those already-visible records and do not
+   change cursor, roster, room or finality authority. The Nakama HTTP key never
+   reaches the browser.
 
 CAS upload is streamed and capped independently at 32 MiB. The BFF recomputes
 the requested `sha256:<64-lowercase-hex>` API digest and returns both that
