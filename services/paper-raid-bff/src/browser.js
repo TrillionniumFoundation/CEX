@@ -5383,6 +5383,17 @@ function bindQuickRaid() {
       }
     });
   }
+  for (const form of document.querySelectorAll(".quick-raid-abandon-form")) {
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      submitPracticeMutation(
+        form,
+        "/api/quick-raid/abandon",
+        { expected_version: quickRaidVersion(form) },
+        "Quick Raid left. Returning to the local summary… / 已退出快速远征，正在返回本地摘要……",
+      );
+    });
+  }
 }
 
 document.addEventListener("DOMContentLoaded", async () => {

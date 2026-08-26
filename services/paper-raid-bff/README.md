@@ -39,6 +39,13 @@ integrity hashes stay in the server-side record and are not serialized into the
 player view. The rendered page still shows the human-readable result and the
 explicit `finality=none` / `portable=false` boundary.
 
+An active slice can be left explicitly from the browser (`POST
+/api/quick-raid/abandon`) instead of waiting for its 15-minute expiry. That
+transition is terminal only for the local Quick Raid projection. A completed
+page renders the frozen metric rows alongside the seed, declared experiment,
+and conclusion, so a first-time player can see what the Paper Bundle contains
+without receiving an authority hash or a portable result.
+
 ## Provider-neutral OIDC foundation
 
 `src/oidc.rs` freezes the provider-neutral OIDC security contract before any
