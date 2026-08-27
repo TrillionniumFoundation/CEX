@@ -3,6 +3,7 @@ pub(crate) mod service_auth;
 
 pub mod api;
 pub mod state;
+pub mod v2;
 
 use axum::{
     middleware,
@@ -25,6 +26,7 @@ pub fn build_router(state: AppState) -> Router {
     );
     let protected_audit_write = Router::new()
         .route("/v1/audit/events", post(api::create_event))
+        .route("/v1/audit/events/v2", post(v2::create_event_v2))
         .route_layer(middleware::from_fn_with_state(
             audit_write_auth,
             service_auth::require_service_auth,
@@ -33,10 +35,15 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(api::health))
         .route("/metrics", get(api::metrics))
+        .route("/metrics/audit-v2", get(v2::metrics_v2))
         .merge(protected_audit_write)
         .route(
             "/v1/audit/events/trace/:trace_id",
             get(api::list_events_by_trace),
+        )
+        .route(
+            "/v1/audit/events/v2/trace/:trace_id",
+            get(v2::list_events_by_trace_v2),
         )
         .with_state(state)
 }
