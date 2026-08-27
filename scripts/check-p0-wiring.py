@@ -101,7 +101,8 @@ def verify_core_startup_wiring() -> None:
         "services/identity-service/src/lib_entry.rs",
         'include!("lib.rs")',
         "harden_runtime_state",
-        "install_internal_http_client",
+        "state.http = internal_http",
+        "state.api_keys = Arc::new(HashMap::new())",
     )
 
 
