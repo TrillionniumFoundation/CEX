@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trillionnium.example/schemas/cex-release-baseline-manifest-v1.schema.json",
+  "title": "CEX Release Baseline Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "status",
+    "project_id",
+    "release_id",
+    "generated_at",
+    "source",
+    "dependencies",
+    "database",
+    "build",
+    "evidence",
+    "approvals"
+  ],
+  "properties": {
+    "schema": { "const": "cex.release-baseline-manifest.v1" },
+    "status": {
+      "enum": ["draft", "candidate", "released", "revoked"]
+    },
+    "project_id": { "const": "hepta-control-plane" },
+    "release_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "branch", "commit_sha", "tree_sha"],
+      "properties": {
+        "repository": { "const": "TrillionniumFoundation/CEX" },
+        "branch": { "type": "string", "minLength": 1 },
+        "commit_sha": { "$ref": "#/$defs/gitSha" },
+        "tree_sha": { "$ref": "#/$defs/gitSha" }
+      }
+    },
+    "dependencies": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cargo_lock_sha256"],
+      "properties": {
+        "cargo_lock_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["migration_head", "migration_sha256"],
+      "properties": {
+        "migration_head": {
+          "type": "string",
+          "pattern": "^[0-9]{4}_[a-z0-9][a-z0-9._-]*\\.sql$"
+        },
+        "migration_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workflow_run_id", "artifacts", "images", "sbom", "provenance"],
+      "properties": {
+        "workflow_run_id": { "type": ["integer", "null"], "minimum": 1 },
+        "artifacts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/digestedArtifact" }
+        },
+        "images": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "digest"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              }
+            }
+          }
+        },
+        "sbom": { "anyOf": [{ "$ref": "#/$defs/digestedArtifact" }, { "type": "null" }] },
+        "provenance": { "anyOf": [{ "$ref": "#/$defs/digestedArtifact" }, { "type": "null" }] }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "status", "uri", "sha256"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "status": { "enum": ["pending", "pass", "fail", "waived"] },
+          "uri": { "type": ["string", "null"] },
+          "sha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+          "waiver": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "approvals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["role", "actor", "decision", "decided_at"],
+        "properties": {
+          "role": { "type": "string", "minLength": 1 },
+          "actor": { "type": "string", "minLength": 1 },
+          "decision": { "enum": ["approve", "reject", "revoke"] },
+          "decided_at": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+    "revocation": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["reason", "revoked_at", "actor"],
+      "properties": {
+        "reason": { "type": "string", "minLength": 1 },
+        "revoked_at": { "type": "string", "format": "date-time" },
+        "actor": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  "$defs": {
+    "gitSha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "digestedArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "uri", "sha256"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "uri": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}

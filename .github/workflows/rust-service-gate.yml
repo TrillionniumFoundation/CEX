@@ -55,6 +55,9 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Verify release manifest contract
+        run: python scripts/check-release-baseline-manifest.py docs/templates/cex-release-baseline-manifest-v1.json --allow-template
+
       - name: Verify formatting
         run: cargo fmt --all --check
 
@@ -77,6 +80,9 @@ jobs:
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
+
+      - name: Verify release manifest contract
+        run: python3 scripts/check-release-baseline-manifest.py docs/templates/cex-release-baseline-manifest-v1.json --allow-template
 
       - name: Verify formatting
         run: cargo fmt --all --check

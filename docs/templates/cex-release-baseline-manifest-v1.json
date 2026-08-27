@@ -1,0 +1,59 @@
+{
+  "schema": "cex.release-baseline-manifest.v1",
+  "status": "draft",
+  "project_id": "hepta-control-plane",
+  "release_id": "cex-p0-template",
+  "generated_at": "2026-08-27T00:00:00Z",
+  "source": {
+    "repository": "TrillionniumFoundation/CEX",
+    "branch": "REPLACE_BRANCH",
+    "commit_sha": "0000000000000000000000000000000000000000",
+    "tree_sha": "0000000000000000000000000000000000000000"
+  },
+  "dependencies": {
+    "cargo_lock_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "database": {
+    "migration_head": "0057_add_durable_saga_outbox_v1.sql",
+    "migration_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "build": {
+    "workflow_run_id": null,
+    "artifacts": [],
+    "images": [],
+    "sbom": null,
+    "provenance": null
+  },
+  "evidence": [
+    {
+      "name": "hosted-ci",
+      "status": "pending",
+      "uri": null,
+      "sha256": null,
+      "waiver": null
+    },
+    {
+      "name": "migration-upgrade",
+      "status": "pending",
+      "uri": null,
+      "sha256": null,
+      "waiver": null
+    },
+    {
+      "name": "backup-restore",
+      "status": "pending",
+      "uri": null,
+      "sha256": null,
+      "waiver": null
+    },
+    {
+      "name": "soak",
+      "status": "pending",
+      "uri": null,
+      "sha256": null,
+      "waiver": null
+    }
+  ],
+  "approvals": [],
+  "revocation": null
+}
