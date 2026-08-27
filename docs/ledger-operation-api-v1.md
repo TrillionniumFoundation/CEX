@@ -4,6 +4,7 @@
 - Database authority: `cex_apply_ledger_effect_v1`
 - Effect schema: `cex.ledger.effect.v1`
 - Audit event: `ledger.effect.persisted`
+- Shared request type: `shared_types::ledger_v2::LedgerEffectRequestV1`
 
 ## Canonical routes
 
@@ -25,8 +26,9 @@ state transitions remain in the single PostgreSQL function.
   "trace_id": "uuid",
   "operation_id": "uuid-or-null",
   "operation_kind": "reserve",
-  "amount_minor": 1250000,
+  "currency_unit": "credit",
   "currency_scale": 6,
+  "amount_minor": "1250000",
   "reference_type": "invocation",
   "reference_id": "uuid",
   "idempotency_scope": "org:example:reserve",
@@ -35,7 +37,11 @@ state transitions remain in the single PostgreSQL function.
 ```
 
 Allowed operation kinds are reserve, consume, refund and grant. The request never accepts a
-binary floating-point value.
+binary floating-point value. `amount_minor` is serialized as a decimal JSON string so browser
+and SDK runtimes cannot silently round values beyond their safe integer range.
+
+The service normalizes and validates `currency_unit`, validates `currency_scale`, and rejects
+a request whose currency/scale differs from the authoritative account contract.
 
 When `operation_id` is omitted, the service derives a stable UUID from the scoped
 idempotency pair. Exact retries therefore resolve to the same operation. A client-supplied
@@ -76,6 +82,10 @@ effect receipt. The replay does not apply the account mutation again.
 }
 ```
 
+The current database response retains JSON numeric minor-unit fields. SDK response hardening
+must eventually encode all value-bearing integers as strings before public-browser exposure;
+the internal caller contract already uses strings on write.
+
 ## Stable error categories
 
 The API does not return SQL or driver messages. It maps failures to stable categories:
@@ -84,6 +94,7 @@ The API does not return SQL or driver messages. It maps failures to stable categ
 - `ledger_account_not_found`;
 - `ledger_insufficient_funds`;
 - `ledger_operation_invalid`;
+- `ledger_currency_mismatch`;
 - `ledger_operation_persistence_unavailable`;
 - `ledger_org_forbidden`;
 - `explicit_trace_required`.
@@ -98,6 +109,6 @@ Operation lookup returns one effect. Trace lookup is ordered by creation time an
 ## Rollout boundary
 
 The canonical API is expand-only. Existing `/v1/ledger/*` routes remain compatibility paths.
-Production cutover still requires Gateway/Execution caller migration, traffic telemetry,
-compiled HTTP tests, concurrent database tests, and a configuration gate rejecting residual
-compatibility writes.
+Production cutover still requires a durable Invocation ledger contract, Execution settlement
+support, Gateway caller migration, compatibility traffic telemetry, compiled HTTP tests,
+concurrent database tests, and a configuration gate rejecting residual compatibility writes.
