@@ -8,9 +8,11 @@ on:
       - 'scripts/check-p0-migrations.py'
       - 'scripts/check-p0-migrations-postgres.sh'
       - 'scripts/check-audit-source-baseline-postgres.sh'
+      - 'scripts/check-ledger-operation-identity-postgres.sh'
       - 'scripts/backfill-audit-source-baselines.sh'
       - 'docs/templates/cex-release-baseline-manifest-v1.json'
       - 'docs/audit-source-baseline-backfill-v1.md'
+      - 'docs/ledger-operation-identity-v1.md'
       - '.github/workflows/p0-migration-gate.yml'
   pull_request:
     paths:
@@ -18,9 +20,11 @@ on:
       - 'scripts/check-p0-migrations.py'
       - 'scripts/check-p0-migrations-postgres.sh'
       - 'scripts/check-audit-source-baseline-postgres.sh'
+      - 'scripts/check-ledger-operation-identity-postgres.sh'
       - 'scripts/backfill-audit-source-baselines.sh'
       - 'docs/templates/cex-release-baseline-manifest-v1.json'
       - 'docs/audit-source-baseline-backfill-v1.md'
+      - 'docs/ledger-operation-identity-v1.md'
       - '.github/workflows/p0-migration-gate.yml'
 
 permissions:
@@ -60,3 +64,6 @@ jobs:
 
       - name: Existing-row Audit baseline lifecycle
         run: bash scripts/check-audit-source-baseline-postgres.sh
+
+      - name: Ledger operation identity and exact replay
+        run: bash scripts/check-ledger-operation-identity-postgres.sh

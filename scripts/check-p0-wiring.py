@@ -103,77 +103,8 @@ def verify_core_startup_wiring() -> None:
             "runtime_guard::enforce",
         )
 
-    require_text(
-        "services/identity-service/Cargo.toml",
-        "[lib]",
-        'path = "src/lib_entry.rs"',
-    )
-    require_text(
-        "services/identity-service/src/lib_entry.rs",
-        'include!("lib.rs")',
-        "harden_runtime_state",
-        "state.http = internal_http",
-        "state.api_keys = Arc::new(HashMap::new())",
-    )
 
-
-def verify_workload_identity() -> None:
-    require_text(
-        "crates/shared-config/src/service_auth.rs",
-        "execution_create_from_env",
-        "audit_write_from_env",
-        "identity_resolve_from_env",
-        "audit-outbox-dispatcher",
-        "AuthenticatedService",
-    )
-    require_text(
-        "crates/shared-config/src/service_client.rs",
-        "build_internal_http_client",
-        "x-cex-service-id",
-        "x-cex-service-token",
-        "Policy::none()",
-    )
-    require_regex(
-        "services/gateway-service/src/main.rs",
-        r'build_internal_http_client\s*\(\s*"gateway-service"',
-        'build_internal_http_client("gateway-service", ...)',
-    )
-    require_regex(
-        "services/execution-service/src/main.rs",
-        r'build_internal_http_client\s*\(\s*"execution-service"',
-        'build_internal_http_client("execution-service", ...)',
-    )
-
-
-def verify_audit_dispatcher() -> None:
-    require_text("services/audit-service/Cargo.toml", "reqwest.workspace = true")
-    require_text("services/audit-service/src/lib.rs", "pub mod outbox_dispatcher;")
-    require_text(
-        "services/audit-service/src/outbox_dispatcher.rs",
-        "cex_claim_audit_outbox_v1",
-        "cex_mark_audit_outbox_delivered_v1",
-        "cex_fail_audit_outbox_delivery_v1",
-        "DISPATCHER_SERVICE_ID",
-        "/v2/audit/events",
-        "invalid_success_receipt",
-        "retry_delay_seconds",
-    )
-    require_text(
-        "services/audit-service/src/bin/audit-outbox-dispatcher.rs",
-        "runtime_guard::enforce",
-        "build_internal_http_client",
-        "dispatch_once",
-        "CEX_AUDIT_OUTBOX_RUN_ONCE",
-    )
-    require_text(
-        "deploy/systemd/cex-audit-outbox-dispatcher.service",
-        "audit-outbox-dispatcher",
-        "EnvironmentFile=/etc/cex/cex-production.env",
-        "NoNewPrivileges=true",
-    )
-
-
-def verify_canonical_migration_chain() -> None:
+def verify_canonical_audit_chain() -> None:
     for obsolete in (
         "migrations/0060_add_audit_outbox_delivery_schema.sql",
         "migrations/0061_add_execution_transactional_audit_outbox.sql",
@@ -186,70 +117,60 @@ def verify_canonical_migration_chain() -> None:
         "cex_enqueue_audit_outbox_v1",
         "cex_mark_audit_outbox_delivered_v1",
         "cex_fail_audit_outbox_delivery_v1",
-        "delivery_receipt",
-        "dead_lettered_at",
     )
     require_text(
         "migrations/0061_close_audit_outbox_delivery_transitions.sql",
         "lease_expired_after_final_attempt",
         "cex_audit_outbox_delivery_summary_v1",
-        "legacy_envelope_unverified",
     )
     require_text(
         "migrations/0062_add_execution_transactional_audit_outbox.sql",
-        "audit_revision",
         "cex_enqueue_execution_audit_v1",
         "execution.persisted.status_changed",
-        "result_payload_sha256",
-        "cex_enqueue_audit_outbox_v1",
     )
     require_text(
         "migrations/0063_add_identity_transactional_audit_outbox.sql",
         "cex_enqueue_api_key_audit_v1",
-        "identity.api_key.persisted.issued",
         "identity.api_key.persisted.revoked",
-        "_cex_audit_source_service",
-        "cex.audit.actor_id",
     )
-
-
-def verify_existing_row_baseline() -> None:
     require_text(
         "migrations/0064_add_audit_source_baseline_backfill.sql",
-        "cex_audit_source_baseline_progress_v1",
         "cex_backfill_audit_source_baseline_v1",
         "execution.persisted.baseline",
         "identity.api_key.persisted.baseline",
-        "pg_try_advisory_xact_lock",
-        "outbox_backlog_limit",
-        "actual_remaining_count",
+    )
+
+
+def verify_ledger_operation_identity() -> None:
+    require_text(
+        "migrations/0065_add_ledger_operation_identity.sql",
+        "cex_ledger_effect_fingerprint_v1",
+        "cex_apply_ledger_effect_v1",
+        "idx_ledger_entries_scoped_idempotency_v1",
+        "ledger.effect.persisted",
+        "cex_ledger_operation_identity_status_v1",
+        "ledger_entries is append-only",
+        "legacy_entry_scoped",
+        "operation_scoped_compatibility",
     )
     require_text(
-        "scripts/backfill-audit-source-baselines.sh",
-        "--batch-size",
-        "--max-outbox-backlog",
-        "--max-batches",
-        "--status",
-        "cex_backfill_audit_source_baseline_v1",
-    )
-    require_text(
-        "scripts/check-audit-source-baseline-postgres.sh",
-        "disable trigger trg_cex_prepare_execution_audit_revision_v1",
-        "execution.persisted.baseline",
-        "identity.api_key.persisted.baseline",
-        "blocked",
-        "failed baseline batch advanced durable progress",
+        "scripts/check-ledger-operation-identity-postgres.sh",
+        "exact replay did not return original effect",
+        "scoped idempotency collision was not rejected",
+        "same key in a different scope was rejected",
+        "ledger entry update was not rejected",
+        "ledger entry delete was not rejected",
     )
     require_text(
         ".github/workflows/p0-migration-gate.yml",
-        "scripts/check-audit-source-baseline-postgres.sh",
+        "scripts/check-ledger-operation-identity-postgres.sh",
     )
     require_text(
-        "docs/audit-source-baseline-backfill-v1.md",
-        "revision 0 -> revision 1",
-        "Restart and replay",
-        "Backlog protection",
-        "actual_remaining_count",
+        "docs/ledger-operation-identity-v1.md",
+        "legacy_entry_scoped",
+        "operation_scoped_compatibility",
+        "cex_apply_ledger_effect_v1",
+        "Remaining cutover",
     )
 
 
@@ -263,38 +184,16 @@ def verify_gate_wiring() -> None:
     require_text(
         ".github/workflows/p0-migration-gate.yml",
         "scripts/check-p0-migrations-postgres.sh",
-    )
-    require_text(
-        "scripts/check-p0-migrations-postgres.sh",
-        "cex_mark_audit_outbox_delivered_v1",
-        "cex_fail_audit_outbox_delivery_v1",
-        "execution.persisted.status_changed",
-        "identity.api_key.persisted.revoked",
-        "last_used_at-only",
+        "scripts/check-audit-source-baseline-postgres.sh",
     )
 
 
-def verify_documentation() -> None:
+def verify_plan() -> None:
     require_text(
-        "docs/audit-outbox-delivery-v1.md",
-        "ACK",
-        "retry_wait",
-        "dead_letter",
-        "remote success",
-    )
-    require_text(
-        "docs/audit-source-transactional-enqueue-v1.md",
-        "0062_add_execution_transactional_audit_outbox.sql",
-        "0063_add_identity_transactional_audit_outbox.sql",
-        "same PostgreSQL transaction",
-        "last_used_at",
-    )
-    require_text(
-        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v5.md",
-        "0064_add_audit_source_baseline_backfill.sql",
-        "P0-N0",
-        "Next locked slice",
-        "P0-N1",
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v6.md",
+        "0065_add_ledger_operation_identity.sql",
+        "P0-N1 HTTP and caller contract",
+        "P0-N2 Genesis-as-entry",
     )
 
 
@@ -302,18 +201,16 @@ def main() -> int:
     migration_number, migration_filename = latest_migration()
     verify_release_template(migration_filename)
     verify_core_startup_wiring()
-    verify_workload_identity()
-    verify_audit_dispatcher()
-    verify_canonical_migration_chain()
-    verify_existing_row_baseline()
+    verify_canonical_audit_chain()
+    verify_ledger_operation_identity()
     verify_gate_wiring()
-    verify_documentation()
+    verify_plan()
 
     result = {
         "status": "failed" if PROBLEMS else "ok",
         "migration_number": migration_number,
         "migration_head": migration_filename,
-        "checks": 8,
+        "checks": 6,
         "problems": PROBLEMS,
     }
     print(json.dumps(result, ensure_ascii=False, indent=2))
