@@ -2,7 +2,7 @@
 
 ## Scope
 
-`POST /v1/audit/events` is now protected by the internal workload-identity middleware when `CEX_INTERNAL_SERVICE_AUTH_MODE=enforce`.
+`POST /v1/audit/events` is protected by the internal workload-identity middleware when `CEX_INTERNAL_SERVICE_AUTH_MODE=enforce`.
 
 Registered writers:
 
@@ -14,18 +14,32 @@ The audit service requires all three writer tokens in production-like profiles. 
 
 ## Writer identity binding
 
-An authenticated request cannot choose its persisted service identity. The audit handler overwrites `AuditEventCreateRequest.actor_type` with the authenticated `x-cex-service-id` value.
+The existing audit contract uses `actor_type` for business semantics such as `policy-engine`, `approver`, or a service role. Replacing it with the authenticated workload would lose information, so v1 keeps that field unchanged.
 
-`actor_id` remains the domain actor/operator identity supplied by the authenticated service. This keeps two concepts separate:
+Instead, the audit service writes authenticated workload identity into the server-owned payload key:
 
-- writer/service identity: authenticated workload;
-- domain actor identity: user, administrator, worker, or operator represented by that service.
+```json
+{
+  "_cex_audit_writer": {
+    "service_id": "execution-service",
+    "authentication": "workload-token-v1"
+  }
+}
+```
 
-Compatibility mode preserves the legacy `actor_type` so existing local tests and unprotected development flows can continue while migration is in progress.
+Rules:
+
+- callers cannot select the persisted writer identity;
+- any caller-supplied `_cex_audit_writer` value is overwritten;
+- scalar/array payloads are wrapped under `event_payload` so writer metadata can be attached;
+- compatibility mode does not mutate legacy payloads;
+- `actor_type` and `actor_id` remain domain actor information.
+
+This payload representation is transitional. A later migration will add a dedicated `writer_service_id` column and versioned event envelope, then backfill from the reserved metadata key.
 
 ## Identity authority hardening in the same slice
 
-Identity now uses a library entry wrapper that installs an authenticated internal HTTP client and clears the in-memory/static API-key map in production-like profiles after environment loading.
+Identity uses a library entry wrapper that installs an authenticated internal HTTP client and clears the in-memory/static API-key map in production-like profiles after environment loading.
 
 Consequences:
 
@@ -34,7 +48,7 @@ Consequences:
 - database lookup failures return backend-unavailable rather than authenticating through static state;
 - local/dev tests retain their existing static-key behavior.
 
-The legacy static fallback code still exists in the included source and should be physically removed in a later refactor once the branch has executable CI evidence.
+The legacy static fallback source still exists and should be physically removed once the branch has executable CI evidence.
 
 ## Configuration
 
@@ -64,9 +78,10 @@ Configuration errors reject audit-service startup before listening in production
 
 Authentication does not by itself make the audit trail compliance-grade. The next required layer is:
 
-1. transactional audit outbox in each source service;
-2. at-least-once delivery with event id dedupe;
-3. append-only database role and retention policy;
-4. per-tenant sequence/hash-chain or signed receipt;
-5. backlog age metrics and alerting;
-6. payload schema versioning and redaction policy.
+1. dedicated writer columns and versioned event envelope;
+2. transactional audit outbox in each source service;
+3. at-least-once delivery with event-id dedupe;
+4. append-only database role and retention policy;
+5. per-tenant sequence/hash-chain or signed receipt;
+6. backlog age metrics and alerting;
+7. payload schema versioning and redaction policy.

@@ -4,7 +4,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 use shared_config::{
     admin_principal_allows_org, admin_principal_has_scope, authorize_scoped_admin_from_map,
     AdminPrincipal,
@@ -13,6 +13,8 @@ use shared_types::{AuditEventCreateRequest, AuditEventRecord};
 use uuid::Uuid;
 
 use crate::{service_auth::AuthenticatedService, state::AppState};
+
+const AUDIT_WRITER_METADATA_KEY: &str = "_cex_audit_writer";
 
 pub async fn health() -> &'static str {
     "audit-service ok"
@@ -68,8 +70,27 @@ fn bind_authenticated_writer(
     request: &mut AuditEventCreateRequest,
     writer: &AuthenticatedService,
 ) {
-    if writer.authenticated {
-        request.actor_type = writer.service_id.clone();
+    if !writer.authenticated {
+        return;
+    }
+
+    let metadata = json!({
+        "service_id": writer.service_id,
+        "authentication": "workload-token-v1",
+    });
+
+    match &mut request.payload {
+        Value::Object(payload) => {
+            // The server owns this reserved key. Any caller-supplied value is replaced.
+            payload.insert(AUDIT_WRITER_METADATA_KEY.to_string(), metadata);
+        }
+        payload => {
+            let original = std::mem::replace(payload, Value::Null);
+            *payload = json!({
+                "event_payload": original,
+                AUDIT_WRITER_METADATA_KEY: metadata,
+            });
+        }
     }
 }
 
@@ -168,20 +189,48 @@ fn enforce_trace_org_boundary(
 mod tests {
     use super::*;
 
-    fn request(actor_type: &str) -> AuditEventCreateRequest {
+    fn request(actor_type: &str, payload: Value) -> AuditEventCreateRequest {
         AuditEventCreateRequest {
             trace_id: Uuid::new_v4(),
             org_id: Some(Uuid::new_v4().to_string()),
             actor_type: actor_type.to_string(),
             actor_id: Some("operator".to_string()),
             event_type: "test.event".to_string(),
-            payload: json!({"ok": true}),
+            payload,
         }
     }
 
     #[test]
-    fn authenticated_writer_overrides_spoofed_actor_type() {
-        let mut req = request("spoofed-service");
+    fn authenticated_writer_preserves_domain_actor_and_overrides_reserved_metadata() {
+        let mut req = request(
+            "policy-engine",
+            json!({
+                "ok": true,
+                AUDIT_WRITER_METADATA_KEY: {"service_id": "spoofed-service"}
+            }),
+        );
+        bind_authenticated_writer(
+            &mut req,
+            &AuthenticatedService {
+                service_id: "execution-service".to_string(),
+                authenticated: true,
+            },
+        );
+
+        assert_eq!(req.actor_type, "policy-engine");
+        assert_eq!(
+            req.payload[AUDIT_WRITER_METADATA_KEY]["service_id"],
+            "execution-service"
+        );
+        assert_eq!(
+            req.payload[AUDIT_WRITER_METADATA_KEY]["authentication"],
+            "workload-token-v1"
+        );
+    }
+
+    #[test]
+    fn scalar_payload_is_wrapped_without_losing_original_value() {
+        let mut req = request("gateway-service", json!("original"));
         bind_authenticated_writer(
             &mut req,
             &AuthenticatedService {
@@ -189,12 +238,17 @@ mod tests {
                 authenticated: true,
             },
         );
-        assert_eq!(req.actor_type, "gateway-service");
+        assert_eq!(req.payload["event_payload"], "original");
+        assert_eq!(
+            req.payload[AUDIT_WRITER_METADATA_KEY]["service_id"],
+            "gateway-service"
+        );
     }
 
     #[test]
-    fn compatibility_mode_preserves_legacy_actor_type() {
-        let mut req = request("legacy-test-writer");
+    fn compatibility_mode_preserves_legacy_payload() {
+        let original = json!({"ok": true});
+        let mut req = request("legacy-test-writer", original.clone());
         bind_authenticated_writer(
             &mut req,
             &AuthenticatedService {
@@ -203,5 +257,6 @@ mod tests {
             },
         );
         assert_eq!(req.actor_type, "legacy-test-writer");
+        assert_eq!(req.payload, original);
     }
 }
