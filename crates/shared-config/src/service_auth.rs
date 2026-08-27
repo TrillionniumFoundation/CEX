@@ -1,6 +1,6 @@
 use axum::{
     extract::{Request, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, Method, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
     Json,
@@ -47,6 +47,16 @@ impl ServiceAuthConfig {
             env::var(TOKEN_MAP_ENV).ok().as_deref(),
             require_enforce,
             "execution:create",
+            &["gateway-service"],
+        )
+    }
+
+    pub fn identity_resolve_from_env(require_enforce: bool) -> Result<Self, String> {
+        Self::from_values(
+            env::var(AUTH_MODE_ENV).ok().as_deref(),
+            env::var(TOKEN_MAP_ENV).ok().as_deref(),
+            require_enforce,
+            "identity:resolve",
             &["gateway-service"],
         )
     }
@@ -157,26 +167,48 @@ impl ServiceAuthConfig {
 
 pub async fn require_service_auth(
     State(config): State<Arc<ServiceAuthConfig>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    authenticate_and_continue(&config, request, next).await
+}
+
+pub async fn require_identity_resolve_auth(
+    State(config): State<Arc<ServiceAuthConfig>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if request.method() == Method::POST && request.uri().path() == "/v1/auth/resolve" {
+        authenticate_and_continue(&config, request, next).await
+    } else {
+        next.run(request).await
+    }
+}
+
+async fn authenticate_and_continue(
+    config: &ServiceAuthConfig,
     mut request: Request,
     next: Next,
 ) -> Response {
     let principal = match config.authenticate(request.headers()) {
         Ok(principal) => principal,
-        Err(code) => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({
-                    "error": "internal service authentication failed",
-                    "code": code,
-                    "operation": config.operation,
-                })),
-            )
-                .into_response()
-        }
+        Err(code) => return auth_failure(config.operation, code),
     };
 
     request.extensions_mut().insert(principal);
     next.run(request).await
+}
+
+fn auth_failure(operation: &'static str, code: &'static str) -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({
+            "error": "internal service authentication failed",
+            "code": code,
+            "operation": operation,
+        })),
+    )
+        .into_response()
 }
 
 fn parse_mode(raw: Option<&str>) -> Result<ServiceAuthMode, String> {
@@ -249,6 +281,21 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(config.mode, ServiceAuthMode::Enforce));
+    }
+
+    #[test]
+    fn identity_resolve_only_requires_gateway_identity() {
+        let token_map = format!(r#"{{"gateway-service":"{GATEWAY_TOKEN}"}}"#);
+        let config = ServiceAuthConfig::from_values(
+            Some("enforce"),
+            Some(&token_map),
+            true,
+            "identity:resolve",
+            &["gateway-service"],
+        )
+        .unwrap();
+        assert_eq!(config.allowed_tokens.len(), 1);
+        assert!(config.allowed_tokens.contains_key("gateway-service"));
     }
 
     #[test]
