@@ -38,6 +38,12 @@ def require_text(relative_path: str, *needles: str) -> None:
             PROBLEMS.append(f"{relative_path} is not wired to required marker: {needle}")
 
 
+def require_regex(relative_path: str, pattern: str, description: str) -> None:
+    content = read_text(relative_path)
+    if content and re.search(pattern, content, flags=re.MULTILINE) is None:
+        PROBLEMS.append(f"{relative_path} is not wired to required pattern: {description}")
+
+
 def latest_migration_head() -> str:
     migrations = sorted(
         path
@@ -88,7 +94,7 @@ def verify_core_startup_wiring() -> None:
 
     require_text(
         "services/identity-service/Cargo.toml",
-        '[lib]',
+        "[lib]",
         'path = "src/lib_entry.rs"',
     )
     require_text(
@@ -116,7 +122,11 @@ def verify_workload_identity_wiring() -> None:
     require_text(
         "services/gateway-service/src/main.rs",
         "service_client.rs",
-        'build_internal_http_client("gateway-service"',
+    )
+    require_regex(
+        "services/gateway-service/src/main.rs",
+        r'build_internal_http_client\s*\(\s*"gateway-service"',
+        'build_internal_http_client("gateway-service", ...)',
     )
     require_text(
         "services/identity-service/src/main.rs",
@@ -127,8 +137,12 @@ def verify_workload_identity_wiring() -> None:
     require_text(
         "services/execution-service/src/main.rs",
         "service_client.rs",
-        'build_internal_http_client("execution-service"',
         "validate_internal_service_auth",
+    )
+    require_regex(
+        "services/execution-service/src/main.rs",
+        r'build_internal_http_client\s*\(\s*"execution-service"',
+        'build_internal_http_client("execution-service", ...)',
     )
     require_text(
         "services/execution-service/src/lib.rs",
