@@ -24,14 +24,29 @@ pub async fn create_invocation(state: AppState, req: InvocationRequest) -> Invoc
     let record = legacy::create_invocation(state.clone(), req).await;
 
     if saga_shadow_write_enabled() {
-        if let Err(error) = persist_shadow_commands(&state, &record).await {
-            // Shadow writes are observational in v1 and must never change the
-            // authoritative synchronous response. The error remains visible to
-            // operators until metrics/backlog surfaces are wired in the next slice.
-            eprintln!(
-                "gateway-service: saga shadow write failed invocation_id={}: {error}",
-                record.invocation_id
-            );
+        state
+            .metrics
+            .saga_shadow_write_attempts
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        match persist_shadow_commands(&state, &record).await {
+            Ok(()) => {
+                state
+                    .metrics
+                    .saga_shadow_write_successes
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            Err(error) => {
+                state
+                    .metrics
+                    .saga_shadow_write_failures
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // Shadow writes are observational in v1 and must never change the
+                // authoritative synchronous response.
+                eprintln!(
+                    "gateway-service: saga shadow write failed invocation_id={}: {error}",
+                    record.invocation_id
+                );
+            }
         }
     }
 
