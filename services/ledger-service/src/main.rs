@@ -2,10 +2,13 @@
 mod runtime_guard;
 
 use ledger_service::{
-    build_router, repository::postgres::PostgresLedgerRepository, state::AppState,
+    build_router,
+    repository::{postgres::PostgresLedgerRepository, LedgerRepositoryHandle},
+    state::AppState,
 };
 use runtime_guard::ServiceKind;
 use shared_tracing::init_tracing;
+use std::sync::Arc;
 
 fn env_flag(name: &str, default: bool) -> bool {
     std::env::var(name)
@@ -31,16 +34,20 @@ async fn main() {
 
     let fail_fast = env_flag("LEDGER_FAIL_FAST", false);
 
-    let repository = match PostgresLedgerRepository::connect_from_env().await {
-        Ok(repo) => std::sync::Arc::new(repo),
-        Err(err) if fail_fast => {
-            eprintln!("ledger repository connection failed with LEDGER_FAIL_FAST=true: {err}");
-            std::process::exit(1);
-        }
-        Err(_) => PostgresLedgerRepository::new_placeholder(),
-    };
+    let (repository, operation_pool): (LedgerRepositoryHandle, _) =
+        match PostgresLedgerRepository::connect_from_env().await {
+            Ok(repo) => {
+                let operation_pool = repo.pool.clone();
+                (Arc::new(repo), operation_pool)
+            }
+            Err(err) if fail_fast => {
+                eprintln!("ledger repository connection failed with LEDGER_FAIL_FAST=true: {err}");
+                std::process::exit(1);
+            }
+            Err(_) => (PostgresLedgerRepository::new_placeholder(), None),
+        };
 
-    let state = AppState::new(repository);
+    let state = AppState::new_with_operation_pool(repository, operation_pool);
     let app = build_router(state);
 
     let bind_addr =

@@ -1,4 +1,5 @@
 pub mod api;
+pub mod ledger_effects;
 pub mod repository;
 pub mod state;
 
@@ -12,6 +13,18 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(api::health))
         .route("/metrics", get(api::metrics))
+        .route(
+            "/v2/ledger/effects",
+            post(ledger_effects::apply_effect),
+        )
+        .route(
+            "/v2/ledger/effects/:operation_id",
+            get(ledger_effects::get_effect),
+        )
+        .route(
+            "/v2/ledger/traces/:trace_id",
+            get(ledger_effects::list_trace),
+        )
         .route(
             "/v1/trnm/economy/readiness",
             get(api::trnm_economy_readiness),

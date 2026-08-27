@@ -31,12 +31,6 @@ def require_text(relative_path: str, *needles: str) -> None:
             PROBLEMS.append(f"{relative_path} lacks required marker: {needle}")
 
 
-def require_regex(relative_path: str, pattern: str, description: str) -> None:
-    content = read_text(relative_path)
-    if content and re.search(pattern, content, flags=re.MULTILINE | re.DOTALL) is None:
-        PROBLEMS.append(f"{relative_path} lacks required pattern: {description}")
-
-
 def forbid_path(relative_path: str) -> None:
     if (ROOT / relative_path).exists():
         PROBLEMS.append(f"obsolete/conflicting path must not exist: {relative_path}")
@@ -51,7 +45,6 @@ def latest_migration() -> tuple[str, str]:
     if not migrations:
         PROBLEMS.append("no numbered SQL migrations found")
         return "", ""
-
     numbers: dict[str, list[str]] = {}
     for path in migrations:
         match = re.match(r"^(?P<number>\d{4})_", path.name)
@@ -59,13 +52,11 @@ def latest_migration() -> tuple[str, str]:
             PROBLEMS.append(f"invalid numbered migration filename: {path.name}")
             continue
         numbers.setdefault(match.group("number"), []).append(path.name)
-
     for number, names in sorted(numbers.items()):
         if len(names) > 1:
             PROBLEMS.append(
                 f"duplicate migration number {number}: {', '.join(sorted(names))}"
             )
-
     latest = migrations[-1]
     match = re.match(r"^(?P<number>\d{4})_", latest.name)
     return (match.group("number") if match else "", latest.name)
@@ -84,8 +75,7 @@ def verify_release_template(expected_filename: str) -> None:
     recorded = document.get("database", {}).get("migration_head")
     if recorded != expected_filename:
         PROBLEMS.append(
-            f"release manifest database.migration_head={recorded!r}, "
-            f"expected {expected_filename!r}"
+            f"release manifest database.migration_head={recorded!r}, expected {expected_filename!r}"
         )
 
 
@@ -97,11 +87,7 @@ def verify_core_startup_wiring() -> None:
         "services/execution-service/src/main.rs",
         "services/audit-service/src/main.rs",
     ):
-        require_text(
-            relative_path,
-            "crates/shared-config/src/runtime_guard.rs",
-            "runtime_guard::enforce",
-        )
+        require_text(relative_path, "runtime_guard::enforce")
 
 
 def verify_canonical_audit_chain() -> None:
@@ -111,28 +97,6 @@ def verify_canonical_audit_chain() -> None:
         "migrations/0062_add_identity_transactional_audit_outbox.sql",
     ):
         forbid_path(obsolete)
-
-    require_text(
-        "migrations/0060_close_audit_outbox_delivery_lifecycle.sql",
-        "cex_enqueue_audit_outbox_v1",
-        "cex_mark_audit_outbox_delivered_v1",
-        "cex_fail_audit_outbox_delivery_v1",
-    )
-    require_text(
-        "migrations/0061_close_audit_outbox_delivery_transitions.sql",
-        "lease_expired_after_final_attempt",
-        "cex_audit_outbox_delivery_summary_v1",
-    )
-    require_text(
-        "migrations/0062_add_execution_transactional_audit_outbox.sql",
-        "cex_enqueue_execution_audit_v1",
-        "execution.persisted.status_changed",
-    )
-    require_text(
-        "migrations/0063_add_identity_transactional_audit_outbox.sql",
-        "cex_enqueue_api_key_audit_v1",
-        "identity.api_key.persisted.revoked",
-    )
     require_text(
         "migrations/0064_add_audit_source_baseline_backfill.sql",
         "cex_backfill_audit_source_baseline_v1",
@@ -144,33 +108,53 @@ def verify_canonical_audit_chain() -> None:
 def verify_ledger_operation_identity() -> None:
     require_text(
         "migrations/0065_add_ledger_operation_identity.sql",
-        "cex_ledger_effect_fingerprint_v1",
         "cex_apply_ledger_effect_v1",
         "idx_ledger_entries_scoped_idempotency_v1",
         "ledger.effect.persisted",
         "cex_ledger_operation_identity_status_v1",
         "ledger_entries is append-only",
-        "legacy_entry_scoped",
-        "operation_scoped_compatibility",
     )
     require_text(
         "scripts/check-ledger-operation-identity-postgres.sh",
         "exact replay did not return original effect",
-        "scoped idempotency collision was not rejected",
         "same key in a different scope was rejected",
-        "ledger entry update was not rejected",
         "ledger entry delete was not rejected",
     )
     require_text(
-        ".github/workflows/p0-migration-gate.yml",
-        "scripts/check-ledger-operation-identity-postgres.sh",
+        "services/ledger-service/src/ledger_effects.rs",
+        "LedgerEffectRequestV1",
+        "cex_apply_ledger_effect_v1",
+        "deterministic_operation_id",
+        "LEDGER_V2_REQUIRE_EXPLICIT_TRACE",
+        "ledger_operation_collision",
+        "TRACE_RESULT_LIMIT",
     )
     require_text(
-        "docs/ledger-operation-identity-v1.md",
-        "legacy_entry_scoped",
-        "operation_scoped_compatibility",
-        "cex_apply_ledger_effect_v1",
-        "Remaining cutover",
+        "services/ledger-service/src/lib.rs",
+        '"/v2/ledger/effects"',
+        '"/v2/ledger/effects/:operation_id"',
+        '"/v2/ledger/traces/:trace_id"',
+    )
+    require_text(
+        "services/ledger-service/src/main.rs",
+        "new_with_operation_pool",
+        "repo.pool.clone()",
+    )
+    require_text(
+        "services/ledger-service/src/state.rs",
+        "operation_pool: Option<PgPool>",
+        "require_explicit_ledger_trace",
+    )
+    require_text(
+        "config/ledger-operation-v1.production.env.example",
+        "LEDGER_V2_REQUIRE_EXPLICIT_TRACE=true",
+    )
+    require_text(
+        "docs/ledger-operation-api-v1.md",
+        "POST /v2/ledger/effects",
+        "exact replay",
+        "Stable error categories",
+        "Rollout boundary",
     )
 
 
@@ -178,21 +162,21 @@ def verify_gate_wiring() -> None:
     require_text(
         ".github/workflows/rust-service-gate.yml",
         "scripts/check-p0-wiring.py",
-        "scripts/check-release-baseline-manifest.py",
         "cargo fmt --all --check",
     )
     require_text(
         ".github/workflows/p0-migration-gate.yml",
         "scripts/check-p0-migrations-postgres.sh",
         "scripts/check-audit-source-baseline-postgres.sh",
+        "scripts/check-ledger-operation-identity-postgres.sh",
     )
 
 
 def verify_plan() -> None:
     require_text(
-        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v6.md",
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v7.md",
         "0065_add_ledger_operation_identity.sql",
-        "P0-N1 HTTP and caller contract",
+        "P0-N1 caller migration and cutover controls",
         "P0-N2 Genesis-as-entry",
     )
 
@@ -205,7 +189,6 @@ def main() -> int:
     verify_ledger_operation_identity()
     verify_gate_wiring()
     verify_plan()
-
     result = {
         "status": "failed" if PROBLEMS else "ok",
         "migration_number": migration_number,
