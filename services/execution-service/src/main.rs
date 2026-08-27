@@ -1,7 +1,7 @@
 #[path = "../../../crates/shared-config/src/runtime_guard.rs"]
 mod runtime_guard;
 
-use execution_service::{build_router, state::AppState};
+use execution_service::{build_router, state::AppState, validate_internal_service_auth};
 use runtime_guard::ServiceKind;
 use shared_tracing::init_tracing;
 
@@ -16,6 +16,10 @@ async fn main() {
             std::process::exit(runtime_guard::CONFIG_ERROR_EXIT_CODE);
         }
     };
+    if let Err(error) = validate_internal_service_auth(startup.profile.is_production_like()) {
+        eprintln!("execution-service startup rejected: {error}");
+        std::process::exit(runtime_guard::CONFIG_ERROR_EXIT_CODE);
+    }
     eprintln!(
         "execution-service startup guard accepted profile={} db_preflight={}",
         startup.profile, startup.database_preflight
