@@ -27,6 +27,12 @@ enum ServiceAuthMode {
     Enforce,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthenticatedService {
+    pub service_id: String,
+    pub authenticated: bool,
+}
+
 #[derive(Clone)]
 pub struct ServiceAuthConfig {
     mode: ServiceAuthMode,
@@ -42,6 +48,20 @@ impl ServiceAuthConfig {
             require_enforce,
             "execution:create",
             &["gateway-service"],
+        )
+    }
+
+    pub fn audit_write_from_env(require_enforce: bool) -> Result<Self, String> {
+        Self::from_values(
+            env::var(AUTH_MODE_ENV).ok().as_deref(),
+            env::var(TOKEN_MAP_ENV).ok().as_deref(),
+            require_enforce,
+            "audit:write",
+            &[
+                "gateway-service",
+                "identity-service",
+                "execution-service",
+            ],
         )
     }
 
@@ -96,9 +116,15 @@ impl ServiceAuthConfig {
         })
     }
 
-    fn authorize(&self, headers: &HeaderMap) -> Result<(), &'static str> {
+    fn authenticate(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<AuthenticatedService, &'static str> {
         if matches!(self.mode, ServiceAuthMode::Off) {
-            return Ok(());
+            return Ok(AuthenticatedService {
+                service_id: "compatibility-unauthenticated".to_string(),
+                authenticated: false,
+            });
         }
 
         let service_id = headers
@@ -119,7 +145,10 @@ impl ServiceAuthConfig {
             .ok_or("service_identity_not_allowed")?;
 
         if constant_time_eq(expected_token.as_bytes(), supplied_token.as_bytes()) {
-            Ok(())
+            Ok(AuthenticatedService {
+                service_id: service_id.to_string(),
+                authenticated: true,
+            })
         } else {
             Err("invalid_service_token")
         }
@@ -128,21 +157,25 @@ impl ServiceAuthConfig {
 
 pub async fn require_service_auth(
     State(config): State<Arc<ServiceAuthConfig>>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Response {
-    if let Err(code) = config.authorize(request.headers()) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({
-                "error": "internal service authentication failed",
-                "code": code,
-                "operation": config.operation,
-            })),
-        )
-            .into_response();
-    }
+    let principal = match config.authenticate(request.headers()) {
+        Ok(principal) => principal,
+        Err(code) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "internal service authentication failed",
+                    "code": code,
+                    "operation": config.operation,
+                })),
+            )
+                .into_response()
+        }
+    };
 
+    request.extensions_mut().insert(principal);
     next.run(request).await
 }
 
@@ -197,19 +230,45 @@ fn constant_time_eq(expected: &[u8], supplied: &[u8]) -> bool {
 mod tests {
     use super::*;
 
-    const STRONG_TOKEN: &str = "9f2d37f86cf447a6b78015f4307d05f91dd2dbd65ad94faca1d8aa03c67dff45";
+    const GATEWAY_TOKEN: &str =
+        "9f2d37f86cf447a6b78015f4307d05f91dd2dbd65ad94faca1d8aa03c67dff45";
+    const IDENTITY_TOKEN: &str =
+        "a34eec99e9034dcc94ef660136ebdd3719978e3dd9874312ab7b7c2b9b14ea81";
+    const EXECUTION_TOKEN: &str =
+        "ed34683df2c7423d81a5e8db2267463fa0246fd2970741f0b104c21f9f32f4fb";
 
     #[test]
     fn enforce_mode_requires_allowed_caller_token() {
+        let token_map = format!(r#"{{"gateway-service":"{GATEWAY_TOKEN}"}}"#);
         let config = ServiceAuthConfig::from_values(
             Some("enforce"),
-            Some(&format!(r#"{{"gateway-service":"{STRONG_TOKEN}"}}"#)),
+            Some(&token_map),
             true,
             "execution:create",
             &["gateway-service"],
         )
         .unwrap();
         assert!(matches!(config.mode, ServiceAuthMode::Enforce));
+    }
+
+    #[test]
+    fn audit_writer_config_requires_every_registered_writer() {
+        let token_map = format!(
+            r#"{{"gateway-service":"{GATEWAY_TOKEN}","identity-service":"{IDENTITY_TOKEN}","execution-service":"{EXECUTION_TOKEN}"}}"#
+        );
+        let config = ServiceAuthConfig::from_values(
+            Some("enforce"),
+            Some(&token_map),
+            true,
+            "audit:write",
+            &[
+                "gateway-service",
+                "identity-service",
+                "execution-service",
+            ],
+        )
+        .unwrap();
+        assert_eq!(config.allowed_tokens.len(), 3);
     }
 
     #[test]
@@ -227,6 +286,21 @@ mod tests {
     }
 
     #[test]
+    fn compatibility_mode_yields_untrusted_principal() {
+        let config = ServiceAuthConfig::from_values(
+            Some("off"),
+            None,
+            false,
+            "audit:write",
+            &["gateway-service"],
+        )
+        .unwrap();
+        let principal = config.authenticate(&HeaderMap::new()).unwrap();
+        assert!(!principal.authenticated);
+        assert_eq!(principal.service_id, "compatibility-unauthenticated");
+    }
+
+    #[test]
     fn weak_and_short_tokens_are_rejected() {
         assert!(validate_token("gateway-service", "short").is_err());
         assert!(validate_token(
@@ -238,8 +312,11 @@ mod tests {
 
     #[test]
     fn token_comparison_handles_length_and_value_mismatch() {
-        assert!(constant_time_eq(STRONG_TOKEN.as_bytes(), STRONG_TOKEN.as_bytes()));
-        assert!(!constant_time_eq(STRONG_TOKEN.as_bytes(), b"different"));
+        assert!(constant_time_eq(
+            GATEWAY_TOKEN.as_bytes(),
+            GATEWAY_TOKEN.as_bytes()
+        ));
+        assert!(!constant_time_eq(GATEWAY_TOKEN.as_bytes(), b"different"));
         assert!(!constant_time_eq(b"same-prefix-a", b"same-prefix-b"));
     }
 }

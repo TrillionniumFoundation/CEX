@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
@@ -12,7 +12,7 @@ use shared_config::{
 use shared_types::{AuditEventCreateRequest, AuditEventRecord};
 use uuid::Uuid;
 
-use crate::state::AppState;
+use crate::{service_auth::AuthenticatedService, state::AppState};
 
 pub async fn health() -> &'static str {
     "audit-service ok"
@@ -48,9 +48,12 @@ pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 pub async fn create_event(
+    Extension(writer): Extension<AuthenticatedService>,
     State(state): State<AppState>,
-    Json(req): Json<AuditEventCreateRequest>,
+    Json(mut req): Json<AuditEventCreateRequest>,
 ) -> impl IntoResponse {
+    bind_authenticated_writer(&mut req, &writer);
+
     match state.create_event(req).await {
         Ok(record) => (StatusCode::CREATED, Json(record)).into_response(),
         Err(err) => (
@@ -58,6 +61,15 @@ pub async fn create_event(
             Json(json!({ "error": err })),
         )
             .into_response(),
+    }
+}
+
+fn bind_authenticated_writer(
+    request: &mut AuditEventCreateRequest,
+    writer: &AuthenticatedService,
+) {
+    if writer.authenticated {
+        request.actor_type = writer.service_id.clone();
     }
 }
 
@@ -149,5 +161,47 @@ fn enforce_trace_org_boundary(
                 "message": trace_org_id,
             })),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(actor_type: &str) -> AuditEventCreateRequest {
+        AuditEventCreateRequest {
+            trace_id: Uuid::new_v4(),
+            org_id: Some(Uuid::new_v4().to_string()),
+            actor_type: actor_type.to_string(),
+            actor_id: Some("operator".to_string()),
+            event_type: "test.event".to_string(),
+            payload: json!({"ok": true}),
+        }
+    }
+
+    #[test]
+    fn authenticated_writer_overrides_spoofed_actor_type() {
+        let mut req = request("spoofed-service");
+        bind_authenticated_writer(
+            &mut req,
+            &AuthenticatedService {
+                service_id: "gateway-service".to_string(),
+                authenticated: true,
+            },
+        );
+        assert_eq!(req.actor_type, "gateway-service");
+    }
+
+    #[test]
+    fn compatibility_mode_preserves_legacy_actor_type() {
+        let mut req = request("legacy-test-writer");
+        bind_authenticated_writer(
+            &mut req,
+            &AuthenticatedService {
+                service_id: "compatibility-unauthenticated".to_string(),
+                authenticated: false,
+            },
+        );
+        assert_eq!(req.actor_type, "legacy-test-writer");
     }
 }

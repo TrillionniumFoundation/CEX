@@ -1,7 +1,9 @@
 #[path = "../../../crates/shared-config/src/runtime_guard.rs"]
 mod runtime_guard;
+#[path = "../../../crates/shared-config/src/service_client.rs"]
+mod service_client;
 
-use identity_service::{build_router, AppState};
+use identity_service::{build_router, harden_runtime_state, AppState};
 use runtime_guard::ServiceKind;
 use shared_tracing::init_tracing;
 
@@ -16,6 +18,16 @@ async fn main() {
             std::process::exit(runtime_guard::CONFIG_ERROR_EXIT_CODE);
         }
     };
+    let internal_http = match service_client::build_internal_http_client(
+        "identity-service",
+        startup.profile.is_production_like(),
+    ) {
+        Ok(client) => client,
+        Err(error) => {
+            eprintln!("identity-service startup rejected: {error}");
+            std::process::exit(runtime_guard::CONFIG_ERROR_EXIT_CODE);
+        }
+    };
     eprintln!(
         "identity-service startup guard accepted profile={} db_preflight={} static_fallback_disabled={}",
         startup.profile,
@@ -23,7 +35,12 @@ async fn main() {
         startup.identity_static_fallback_disabled
     );
 
-    let state = AppState::from_env().await;
+    let mut state = AppState::from_env().await;
+    harden_runtime_state(
+        &mut state,
+        internal_http,
+        startup.profile.is_production_like(),
+    );
     let app = build_router(state);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:7001")
