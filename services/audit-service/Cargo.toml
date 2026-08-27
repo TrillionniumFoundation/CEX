@@ -12,10 +12,10 @@ serde_json.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 sqlx.workspace = true
+reqwest.workspace = true
 shared-tracing = { path = "../../crates/shared-tracing" }
 shared-types = { path = "../../crates/shared-types" }
 shared-config = { path = "../../crates/shared-config" }
 
 [dev-dependencies]
-reqwest.workspace = true
 tower = { version = "0.5", features = ["util"] }
