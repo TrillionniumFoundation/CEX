@@ -14,7 +14,7 @@
     "cargo_lock_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   },
   "database": {
-    "migration_head": "0063_add_identity_transactional_audit_outbox.sql",
+    "migration_head": "0064_add_audit_source_baseline_backfill.sql",
     "migration_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   },
   "build": {

@@ -213,6 +213,46 @@ def verify_canonical_migration_chain() -> None:
     )
 
 
+def verify_existing_row_baseline() -> None:
+    require_text(
+        "migrations/0064_add_audit_source_baseline_backfill.sql",
+        "cex_audit_source_baseline_progress_v1",
+        "cex_backfill_audit_source_baseline_v1",
+        "execution.persisted.baseline",
+        "identity.api_key.persisted.baseline",
+        "pg_try_advisory_xact_lock",
+        "outbox_backlog_limit",
+        "actual_remaining_count",
+    )
+    require_text(
+        "scripts/backfill-audit-source-baselines.sh",
+        "--batch-size",
+        "--max-outbox-backlog",
+        "--max-batches",
+        "--status",
+        "cex_backfill_audit_source_baseline_v1",
+    )
+    require_text(
+        "scripts/check-audit-source-baseline-postgres.sh",
+        "disable trigger trg_cex_prepare_execution_audit_revision_v1",
+        "execution.persisted.baseline",
+        "identity.api_key.persisted.baseline",
+        "blocked",
+        "failed baseline batch advanced durable progress",
+    )
+    require_text(
+        ".github/workflows/p0-migration-gate.yml",
+        "scripts/check-audit-source-baseline-postgres.sh",
+    )
+    require_text(
+        "docs/audit-source-baseline-backfill-v1.md",
+        "revision 0 -> revision 1",
+        "Restart and replay",
+        "Backlog protection",
+        "actual_remaining_count",
+    )
+
+
 def verify_gate_wiring() -> None:
     require_text(
         ".github/workflows/rust-service-gate.yml",
@@ -250,10 +290,11 @@ def verify_documentation() -> None:
         "last_used_at",
     )
     require_text(
-        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v4.md",
-        "0063_add_identity_transactional_audit_outbox.sql",
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v5.md",
+        "0064_add_audit_source_baseline_backfill.sql",
         "P0-N0",
         "Next locked slice",
+        "P0-N1",
     )
 
 
@@ -264,6 +305,7 @@ def main() -> int:
     verify_workload_identity()
     verify_audit_dispatcher()
     verify_canonical_migration_chain()
+    verify_existing_row_baseline()
     verify_gate_wiring()
     verify_documentation()
 
@@ -271,7 +313,7 @@ def main() -> int:
         "status": "failed" if PROBLEMS else "ok",
         "migration_number": migration_number,
         "migration_head": migration_filename,
-        "checks": 7,
+        "checks": 8,
         "problems": PROBLEMS,
     }
     print(json.dumps(result, ensure_ascii=False, indent=2))

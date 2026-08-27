@@ -85,7 +85,8 @@ select set_config('cex.audit.actor_label', 'Principal Label', true);
 Schema migrations deliberately do not flood the outbox with every pre-existing Execution
 or API-key row. Rows predating the source triggers retain `audit_revision = 0`.
 
-The bounded baseline job must:
+Migration `0064_add_audit_source_baseline_backfill.sql` and
+`scripts/backfill-audit-source-baselines.sh` implement the bounded baseline candidate:
 
 - select revision-0 rows in deterministic batches;
 - serialize a single worker per source;
@@ -95,8 +96,9 @@ The bounded baseline job must:
 - remain exact-replay safe after restart;
 - report residual counts and completion/blocked state.
 
-Production promotion remains blocked until residual revision-0 rows reach zero or have a
-reviewed waiver.
+Production promotion remains blocked until the job is executed in staging, residual
+revision-0 rows reach zero or have a reviewed waiver, and dispatcher backlog/age stays
+within SLO.
 
 ## Trigger trade-offs
 
@@ -146,7 +148,7 @@ dispatcher SLO evidence, rollback drill, consumer migration and an ADR.
 
 ## Next locked slice
 
-1. existing-row Audit baseline/backfill;
+1. execute and qualify existing-row Audit baseline/backfill;
 2. immutable Ledger trace/operation identity;
 3. genesis-as-entry;
 4. Money v2 backfill/read cutover;

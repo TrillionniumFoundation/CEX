@@ -7,14 +7,20 @@ on:
       - 'migrations/**'
       - 'scripts/check-p0-migrations.py'
       - 'scripts/check-p0-migrations-postgres.sh'
+      - 'scripts/check-audit-source-baseline-postgres.sh'
+      - 'scripts/backfill-audit-source-baselines.sh'
       - 'docs/templates/cex-release-baseline-manifest-v1.json'
+      - 'docs/audit-source-baseline-backfill-v1.md'
       - '.github/workflows/p0-migration-gate.yml'
   pull_request:
     paths:
       - 'migrations/**'
       - 'scripts/check-p0-migrations.py'
       - 'scripts/check-p0-migrations-postgres.sh'
+      - 'scripts/check-audit-source-baseline-postgres.sh'
+      - 'scripts/backfill-audit-source-baselines.sh'
       - 'docs/templates/cex-release-baseline-manifest-v1.json'
+      - 'docs/audit-source-baseline-backfill-v1.md'
       - '.github/workflows/p0-migration-gate.yml'
 
 permissions:
@@ -51,3 +57,6 @@ jobs:
 
       - name: Fresh apply and P0 database assertions
         run: bash scripts/check-p0-migrations-postgres.sh
+
+      - name: Existing-row Audit baseline lifecycle
+        run: bash scripts/check-audit-source-baseline-postgres.sh
