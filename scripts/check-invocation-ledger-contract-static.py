@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+"""Static contract checks for migration 0066 and its rollout evidence."""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+problems: list[str] = []
+
+
+def require(path: str, *markers: str) -> None:
+    file_path = ROOT / path
+    if not file_path.is_file():
+        problems.append(f"missing required file: {path}")
+        return
+    content = file_path.read_text(encoding="utf-8")
+    for marker in markers:
+        if marker not in content:
+            problems.append(f"{path} lacks required marker: {marker}")
+
+
+require(
+    "migrations/0066_add_invocation_ledger_contract.sql",
+    "cex_invocation_ledger_contracts_v1",
+    "cex_register_invocation_ledger_contract_v1",
+    "cex_invocation_ledger_effect_request_v1",
+    "cex_bind_invocation_ledger_effect_v1",
+    "invocation.ledger_contract.registered",
+    "amount_minor::text",
+    "missing_effect_evidence",
+)
+require(
+    "scripts/check-invocation-ledger-contract-postgres.sh",
+    "exact registration replay failed",
+    "contract collision was not rejected",
+    "reserve did not advance contract state",
+    "consume did not terminally settle contract",
+    "wrong operation identity did not fail closed",
+)
+require(
+    "docs/invocation-ledger-contract-v1.md",
+    "reserved-value leak",
+    "registered -> reserved -> consumed/refunded",
+    "Execution",
+)
+require(
+    "docs/templates/cex-release-baseline-manifest-v1.json",
+    "0066_add_invocation_ledger_contract.sql",
+)
+
+print(json.dumps({
+    "status": "failed" if problems else "ok",
+    "problems": problems,
+}, ensure_ascii=False, indent=2))
+raise SystemExit(1 if problems else 0)
