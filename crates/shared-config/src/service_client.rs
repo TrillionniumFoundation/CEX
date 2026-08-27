@@ -1,5 +1,6 @@
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
+    redirect::Policy,
     Client,
 };
 use std::{collections::HashMap, env};
@@ -35,8 +36,11 @@ pub fn build_internal_http_client(
         ));
     }
 
+    let mut builder = Client::builder().redirect(Policy::none());
     if matches!(mode, ServiceAuthMode::Off) {
-        return Ok(Client::new());
+        return builder
+            .build()
+            .map_err(|error| format!("build internal HTTP client: {error}"));
     }
 
     let raw = env::var(TOKEN_MAP_ENV)
@@ -64,9 +68,9 @@ pub fn build_internal_http_client(
         HeaderValue::from_str(token)
             .map_err(|error| format!("invalid internal service token: {error}"))?,
     );
+    builder = builder.default_headers(headers);
 
-    Client::builder()
-        .default_headers(headers)
+    builder
         .build()
         .map_err(|error| format!("build authenticated internal HTTP client: {error}"))
 }
@@ -85,7 +89,7 @@ fn parse_mode(raw: Option<&str>) -> Result<ServiceAuthMode, String> {
 }
 
 fn validate_token(service_id: &str, token: &str) -> Result<(), String> {
-    if token.as_bytes().len() < MIN_TOKEN_BYTES {
+    if token.len() < MIN_TOKEN_BYTES {
         return Err(format!(
             "internal token for {service_id} must be at least {MIN_TOKEN_BYTES} bytes"
         ));
