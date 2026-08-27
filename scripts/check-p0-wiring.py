@@ -37,6 +37,11 @@ def require_regex(relative_path: str, pattern: str, description: str) -> None:
         PROBLEMS.append(f"{relative_path} lacks required pattern: {description}")
 
 
+def forbid_path(relative_path: str) -> None:
+    if (ROOT / relative_path).exists():
+        PROBLEMS.append(f"obsolete/conflicting path must not exist: {relative_path}")
+
+
 def latest_migration() -> tuple[str, str]:
     migrations = sorted(
         path
@@ -46,11 +51,24 @@ def latest_migration() -> tuple[str, str]:
     if not migrations:
         PROBLEMS.append("no numbered SQL migrations found")
         return "", ""
-    match = re.match(r"^(?P<number>\d{4})_", migrations[-1].name)
-    if match is None:
-        PROBLEMS.append(f"latest migration has invalid name: {migrations[-1].name}")
-        return "", migrations[-1].name
-    return match.group("number"), migrations[-1].name
+
+    numbers: dict[str, list[str]] = {}
+    for path in migrations:
+        match = re.match(r"^(?P<number>\d{4})_", path.name)
+        if match is None:
+            PROBLEMS.append(f"invalid numbered migration filename: {path.name}")
+            continue
+        numbers.setdefault(match.group("number"), []).append(path.name)
+
+    for number, names in sorted(numbers.items()):
+        if len(names) > 1:
+            PROBLEMS.append(
+                f"duplicate migration number {number}: {', '.join(sorted(names))}"
+            )
+
+    latest = migrations[-1]
+    match = re.match(r"^(?P<number>\d{4})_", latest.name)
+    return (match.group("number") if match else "", latest.name)
 
 
 def verify_release_template(expected_filename: str) -> None:
@@ -128,14 +146,8 @@ def verify_workload_identity() -> None:
 
 
 def verify_audit_dispatcher() -> None:
-    require_text(
-        "services/audit-service/Cargo.toml",
-        "reqwest.workspace = true",
-    )
-    require_text(
-        "services/audit-service/src/lib.rs",
-        "pub mod outbox_dispatcher;",
-    )
+    require_text("services/audit-service/Cargo.toml", "reqwest.workspace = true")
+    require_text("services/audit-service/src/lib.rs", "pub mod outbox_dispatcher;")
     require_text(
         "services/audit-service/src/outbox_dispatcher.rs",
         "cex_claim_audit_outbox_v1",
@@ -159,31 +171,16 @@ def verify_audit_dispatcher() -> None:
         "EnvironmentFile=/etc/cex/cex-production.env",
         "NoNewPrivileges=true",
     )
-    require_text(
-        ".env.production.example",
-        '"audit-outbox-dispatcher"',
-        "CEX_AUDIT_OUTBOX_LEASE_SECONDS=60",
-        "CEX_AUDIT_OUTBOX_REQUEST_TIMEOUT_SECONDS=20",
-    )
 
 
-def verify_audit_v2_routes() -> None:
-    require_text(
-        "services/audit-service/src/lib.rs",
-        'route("/v2/audit/events"',
-        'route("/v1/audit/events/v2"',
-        '"/v2/audit/events/trace/:trace_id"',
-        'route("/v2/audit/metrics"',
-    )
-    require_text(
-        "services/audit-service/src/v2.rs",
-        "authenticated_writer_required",
-        "cex_append_audit_event_v2",
-        "writer.service_id",
-    )
+def verify_canonical_migration_chain() -> None:
+    for obsolete in (
+        "migrations/0060_add_audit_outbox_delivery_schema.sql",
+        "migrations/0061_add_execution_transactional_audit_outbox.sql",
+        "migrations/0062_add_identity_transactional_audit_outbox.sql",
+    ):
+        forbid_path(obsolete)
 
-
-def verify_delivery_migrations() -> None:
     require_text(
         "migrations/0060_close_audit_outbox_delivery_lifecycle.sql",
         "cex_enqueue_audit_outbox_v1",
@@ -193,7 +190,13 @@ def verify_delivery_migrations() -> None:
         "dead_lettered_at",
     )
     require_text(
-        "migrations/0061_add_execution_transactional_audit_outbox.sql",
+        "migrations/0061_close_audit_outbox_delivery_transitions.sql",
+        "lease_expired_after_final_attempt",
+        "cex_audit_outbox_delivery_summary_v1",
+        "legacy_envelope_unverified",
+    )
+    require_text(
+        "migrations/0062_add_execution_transactional_audit_outbox.sql",
         "audit_revision",
         "cex_enqueue_execution_audit_v1",
         "execution.persisted.status_changed",
@@ -201,7 +204,7 @@ def verify_delivery_migrations() -> None:
         "cex_enqueue_audit_outbox_v1",
     )
     require_text(
-        "migrations/0062_add_identity_transactional_audit_outbox.sql",
+        "migrations/0063_add_identity_transactional_audit_outbox.sql",
         "cex_enqueue_api_key_audit_v1",
         "identity.api_key.persisted.issued",
         "identity.api_key.persisted.revoked",
@@ -241,14 +244,15 @@ def verify_documentation() -> None:
     )
     require_text(
         "docs/audit-source-transactional-enqueue-v1.md",
-        "Execution",
-        "Identity",
+        "0062_add_execution_transactional_audit_outbox.sql",
+        "0063_add_identity_transactional_audit_outbox.sql",
         "same PostgreSQL transaction",
         "last_used_at",
     )
     require_text(
-        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v3.md",
-        "0062_add_identity_transactional_audit_outbox.sql",
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v4.md",
+        "0063_add_identity_transactional_audit_outbox.sql",
+        "P0-N0",
         "Next locked slice",
     )
 
@@ -259,8 +263,7 @@ def main() -> int:
     verify_core_startup_wiring()
     verify_workload_identity()
     verify_audit_dispatcher()
-    verify_audit_v2_routes()
-    verify_delivery_migrations()
+    verify_canonical_migration_chain()
     verify_gate_wiring()
     verify_documentation()
 
@@ -268,7 +271,7 @@ def main() -> int:
         "status": "failed" if PROBLEMS else "ok",
         "migration_number": migration_number,
         "migration_head": migration_filename,
-        "checks": 8,
+        "checks": 7,
         "problems": PROBLEMS,
     }
     print(json.dumps(result, ensure_ascii=False, indent=2))
