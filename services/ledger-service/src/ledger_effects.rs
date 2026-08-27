@@ -4,35 +4,22 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use shared_config::{
     admin_principal_allows_org, admin_principal_has_scope, authorize_scoped_admin_from_map,
     AdminAuthorizationFailure, AdminPrincipal,
 };
+use shared_types::ledger_v2::{
+    LedgerEffectRequestV1, LEDGER_EFFECT_SCHEMA_V1,
+};
 use sqlx::Row;
 use uuid::Uuid;
 
 use crate::state::AppState;
 
-const LEDGER_EFFECT_SCHEMA_V1: &str = "cex.ledger.effect.v1";
 const LEDGER_SOURCE_SERVICE: &str = "ledger-service";
 const TRACE_RESULT_LIMIT: i64 = 200;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LedgerEffectRequestV1 {
-    pub account_id: Uuid,
-    pub trace_id: Option<Uuid>,
-    pub operation_id: Option<Uuid>,
-    pub operation_kind: String,
-    pub amount_minor: i64,
-    pub currency_scale: i16,
-    pub reference_type: Option<String>,
-    pub reference_id: Option<Uuid>,
-    pub idempotency_scope: String,
-    pub idempotency_key: String,
-}
 
 pub async fn apply_effect(
     State(state): State<AppState>,
@@ -54,25 +41,26 @@ pub async fn apply_effect(
         }
     };
 
-    if let Err((code, message)) = validate_request(&request) {
-        return error_response(StatusCode::BAD_REQUEST, code, &message);
+    if let Err(error) = request.validate(state.require_explicit_ledger_trace) {
+        return error_response(StatusCode::BAD_REQUEST, error.code(), &error.to_string());
     }
-    if state.require_explicit_ledger_trace && request.trace_id.is_none() {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "explicit_trace_required",
-            "trace_id is required by the production ledger operation profile",
-        );
-    }
+    let money = match request.money() {
+        Ok(money) => money,
+        Err(error) => {
+            return error_response(StatusCode::BAD_REQUEST, error.code(), &error.to_string())
+        }
+    };
 
-    let account_org_id = match sqlx::query_scalar::<_, String>(
-        "select org_id::text from public.accounts where account_id = $1",
+    let account_row = match sqlx::query(
+        "select org_id::text as org_id, currency_unit, currency_scale
+           from public.accounts
+          where account_id = $1",
     )
     .bind(request.account_id)
     .fetch_optional(pool)
     .await
     {
-        Ok(Some(org_id)) => org_id,
+        Ok(Some(row)) => row,
         Ok(None) => {
             return error_response(
                 StatusCode::NOT_FOUND,
@@ -80,11 +68,33 @@ pub async fn apply_effect(
                 "account not found",
             )
         }
-        Err(error) => return database_error_response("load account tenancy", error),
+        Err(error) => return database_error_response("load account contract", error),
+    };
+
+    let account_org_id: String = match account_row.try_get("org_id") {
+        Ok(value) => value,
+        Err(error) => return database_error_response("decode account tenancy", error),
+    };
+    let account_currency_unit: String = match account_row.try_get("currency_unit") {
+        Ok(value) => value,
+        Err(error) => return database_error_response("decode account currency", error),
+    };
+    let account_currency_scale: i16 = match account_row.try_get("currency_scale") {
+        Ok(value) => value,
+        Err(error) => return database_error_response("decode account scale", error),
     };
 
     if let Err(response) = enforce_org_boundary(&admin, &account_org_id) {
         return response;
+    }
+    if money.currency != account_currency_unit
+        || i16::from(money.scale) != account_currency_scale
+    {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "ledger_currency_mismatch",
+            "request currency/scale does not match the account contract",
+        );
     }
 
     let scope = request.idempotency_scope.trim();
@@ -114,9 +124,9 @@ pub async fn apply_effect(
     .bind(request.account_id)
     .bind(trace_id)
     .bind(operation_id)
-    .bind(request.operation_kind.trim())
-    .bind(request.amount_minor)
-    .bind(request.currency_scale)
+    .bind(request.operation_kind.as_str())
+    .bind(money.minor_units)
+    .bind(i16::from(money.scale))
     .bind(request.reference_type.as_deref().map(str::trim))
     .bind(request.reference_id)
     .bind(scope)
@@ -214,14 +224,14 @@ pub async fn get_effect(
     };
     let org_id: String = match row.try_get("org_id") {
         Ok(value) => value,
-        Err(error) => return database_error_response("decode ledger effect tenancy", error.into()),
+        Err(error) => return database_error_response("decode ledger effect tenancy", error),
     };
     if let Err(response) = enforce_org_boundary(&admin, &org_id) {
         return response;
     }
     let result_text: String = match row.try_get("result_text") {
         Ok(value) => value,
-        Err(error) => return database_error_response("decode ledger effect", error.into()),
+        Err(error) => return database_error_response("decode ledger effect", error),
     };
     decode_json_response(result_text)
 }
@@ -280,16 +290,14 @@ pub async fn list_trace(
     for row in rows {
         let org_id: String = match row.try_get("org_id") {
             Ok(value) => value,
-            Err(error) => {
-                return database_error_response("decode ledger trace tenancy", error.into())
-            }
+            Err(error) => return database_error_response("decode ledger trace tenancy", error),
         };
         if let Err(response) = enforce_org_boundary(&admin, &org_id) {
             return response;
         }
         let result_text: String = match row.try_get("result_text") {
             Ok(value) => value,
-            Err(error) => return database_error_response("decode ledger trace", error.into()),
+            Err(error) => return database_error_response("decode ledger trace", error),
         };
         match serde_json::from_str::<Value>(&result_text) {
             Ok(value) => results.push(value),
@@ -310,98 +318,6 @@ pub async fn list_trace(
         "effects": results,
     })))
         .into_response()
-}
-
-fn validate_request(request: &LedgerEffectRequestV1) -> Result<(), (&'static str, String)> {
-    if request.account_id.is_nil() {
-        return Err((
-            "invalid_account_id",
-            "account_id must not be the nil UUID".to_string(),
-        ));
-    }
-    if request.trace_id.is_some_and(|value| value.is_nil()) {
-        return Err((
-            "invalid_trace_id",
-            "trace_id must not be the nil UUID".to_string(),
-        ));
-    }
-    if request.operation_id.is_some_and(|value| value.is_nil()) {
-        return Err((
-            "invalid_operation_id",
-            "operation_id must not be the nil UUID".to_string(),
-        ));
-    }
-    if !matches!(
-        request.operation_kind.trim(),
-        "reserve" | "consume" | "refund" | "grant"
-    ) {
-        return Err((
-            "unsupported_operation_kind",
-            "operation_kind must be reserve, consume, refund, or grant".to_string(),
-        ));
-    }
-    if request.amount_minor <= 0 {
-        return Err((
-            "invalid_amount_minor",
-            "amount_minor must be positive".to_string(),
-        ));
-    }
-    if !(0..=6).contains(&request.currency_scale) {
-        return Err((
-            "invalid_currency_scale",
-            "currency_scale must be between 0 and 6".to_string(),
-        ));
-    }
-    validate_component(
-        "invalid_idempotency_scope",
-        "idempotency_scope",
-        &request.idempotency_scope,
-        160,
-    )?;
-    let key = request.idempotency_key.trim();
-    if key.is_empty() || key.chars().count() > 256 || key.chars().any(char::is_control) {
-        return Err((
-            "invalid_idempotency_key",
-            "idempotency_key must contain 1..256 non-control characters".to_string(),
-        ));
-    }
-    if request.reference_type.is_some() != request.reference_id.is_some() {
-        return Err((
-            "invalid_reference_binding",
-            "reference_type and reference_id must be supplied together".to_string(),
-        ));
-    }
-    if let Some(reference_type) = request.reference_type.as_deref() {
-        validate_component(
-            "invalid_reference_type",
-            "reference_type",
-            reference_type,
-            128,
-        )?;
-    }
-    Ok(())
-}
-
-fn validate_component(
-    code: &'static str,
-    field: &str,
-    raw: &str,
-    maximum: usize,
-) -> Result<(), (&'static str, String)> {
-    let value = raw.trim();
-    let valid = !value.is_empty()
-        && value.len() <= maximum
-        && value.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-' | ':')
-        });
-    if valid {
-        Ok(())
-    } else {
-        Err((
-            code,
-            format!("{field} must use 1..{maximum} characters from [A-Za-z0-9._:-]"),
-        ))
-    }
 }
 
 fn deterministic_operation_id(scope: &str, key: &str) -> Uuid {
@@ -503,21 +419,7 @@ fn error_response(status: StatusCode, code: &'static str, message: &str) -> Resp
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn request() -> LedgerEffectRequestV1 {
-        LedgerEffectRequestV1 {
-            account_id: Uuid::new_v4(),
-            trace_id: Some(Uuid::new_v4()),
-            operation_id: None,
-            operation_kind: "reserve".to_string(),
-            amount_minor: 1_000_000,
-            currency_scale: 6,
-            reference_type: Some("invocation".to_string()),
-            reference_id: Some(Uuid::new_v4()),
-            idempotency_scope: "org:test:reserve".to_string(),
-            idempotency_key: "reserve:test".to_string(),
-        }
-    }
+    use shared_types::ledger_v2::LedgerOperationKind;
 
     #[test]
     fn deterministic_operation_identity_is_stable_and_scoped() {
@@ -530,19 +432,32 @@ mod tests {
     }
 
     #[test]
-    fn request_validation_rejects_ambiguous_or_binary_float_shapes() {
-        assert!(validate_request(&request()).is_ok());
+    fn shared_request_contract_rejects_missing_trace_and_nonpositive_amount() {
+        let mut request = LedgerEffectRequestV1 {
+            account_id: Uuid::new_v4(),
+            trace_id: Some(Uuid::new_v4()),
+            operation_id: None,
+            operation_kind: LedgerOperationKind::Reserve,
+            currency_unit: "credit".to_string(),
+            currency_scale: 6,
+            amount_minor: 1_000_000,
+            reference_type: Some("invocation".to_string()),
+            reference_id: Some(Uuid::new_v4()),
+            idempotency_scope: "org:test:reserve".to_string(),
+            idempotency_key: "reserve:test".to_string(),
+        };
+        assert!(request.validate(true).is_ok());
 
-        let mut invalid = request();
-        invalid.amount_minor = 0;
-        assert!(validate_request(&invalid).is_err());
-
-        let mut invalid = request();
-        invalid.reference_id = None;
-        assert!(validate_request(&invalid).is_err());
-
-        let mut invalid = request();
-        invalid.idempotency_scope = "bad scope".to_string();
-        assert!(validate_request(&invalid).is_err());
+        request.trace_id = None;
+        assert_eq!(
+            request.validate(true).unwrap_err().code(),
+            "explicit_trace_required"
+        );
+        request.trace_id = Some(Uuid::new_v4());
+        request.amount_minor = 0;
+        assert_eq!(
+            request.validate(true).unwrap_err().code(),
+            "invalid_amount_minor"
+        );
     }
 }

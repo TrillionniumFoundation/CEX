@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -63,8 +64,7 @@ def latest_migration() -> tuple[str, str]:
 
 
 def verify_release_template(expected_filename: str) -> None:
-    relative_path = "docs/templates/cex-release-baseline-manifest-v1.json"
-    raw = read_text(relative_path)
+    raw = read_text("docs/templates/cex-release-baseline-manifest-v1.json")
     if not raw:
         return
     try:
@@ -79,7 +79,7 @@ def verify_release_template(expected_filename: str) -> None:
         )
 
 
-def verify_core_startup_wiring() -> None:
+def verify_core() -> None:
     for relative_path in (
         "services/gateway-service/src/main.rs",
         "services/identity-service/src/main.rs",
@@ -89,76 +89,74 @@ def verify_core_startup_wiring() -> None:
     ):
         require_text(relative_path, "runtime_guard::enforce")
 
-
-def verify_canonical_audit_chain() -> None:
     for obsolete in (
         "migrations/0060_add_audit_outbox_delivery_schema.sql",
         "migrations/0061_add_execution_transactional_audit_outbox.sql",
         "migrations/0062_add_identity_transactional_audit_outbox.sql",
     ):
         forbid_path(obsolete)
+
     require_text(
         "migrations/0064_add_audit_source_baseline_backfill.sql",
         "cex_backfill_audit_source_baseline_v1",
         "execution.persisted.baseline",
         "identity.api_key.persisted.baseline",
     )
-
-
-def verify_ledger_operation_identity() -> None:
     require_text(
         "migrations/0065_add_ledger_operation_identity.sql",
         "cex_apply_ledger_effect_v1",
         "idx_ledger_entries_scoped_idempotency_v1",
         "ledger.effect.persisted",
-        "cex_ledger_operation_identity_status_v1",
         "ledger_entries is append-only",
     )
+
+
+def verify_exact_caller_contract() -> None:
     require_text(
-        "scripts/check-ledger-operation-identity-postgres.sh",
-        "exact replay did not return original effect",
-        "same key in a different scope was rejected",
-        "ledger entry delete was not rejected",
+        "crates/shared-types/src/ledger_v2.rs",
+        "LedgerEffectRequestV1",
+        "LedgerOperationKind",
+        "i64_string",
+        "ExplicitTraceRequired",
     )
     require_text(
         "services/ledger-service/src/ledger_effects.rs",
-        "LedgerEffectRequestV1",
+        "shared_types::ledger_v2",
+        "request.validate",
+        "ledger_currency_mismatch",
         "cex_apply_ledger_effect_v1",
-        "deterministic_operation_id",
-        "LEDGER_V2_REQUIRE_EXPLICIT_TRACE",
-        "ledger_operation_collision",
-        "TRACE_RESULT_LIMIT",
     )
     require_text(
-        "services/ledger-service/src/lib.rs",
-        '"/v2/ledger/effects"',
-        '"/v2/ledger/effects/:operation_id"',
-        '"/v2/ledger/traces/:trace_id"',
+        "services/gateway-service/src/infrastructure/ledger_v2_client.rs",
+        "CEX_GATEWAY_LEDGER_MODE",
+        "apply_ledger_effect_v2",
+        "invocation_ledger_effect",
+        "MoneyAmount",
     )
     require_text(
-        "services/ledger-service/src/main.rs",
-        "new_with_operation_pool",
-        "repo.pool.clone()",
+        "docs/ledger-caller-cutover-v1.md",
+        "No canonical caller may derive minor units",
+        "cutover_ready=false",
     )
-    require_text(
-        "services/ledger-service/src/state.rs",
-        "operation_pool: Option<PgPool>",
-        "require_explicit_ledger_trace",
-    )
-    require_text(
-        "config/ledger-operation-v1.production.env.example",
-        "LEDGER_V2_REQUIRE_EXPLICIT_TRACE=true",
-    )
-    require_text(
-        "docs/ledger-operation-api-v1.md",
-        "POST /v2/ledger/effects",
-        "exact replay",
-        "Stable error categories",
-        "Rollout boundary",
-    )
+    try:
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/check-ledger-caller-cutover.py")],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+    except OSError as error:
+        PROBLEMS.append(f"cannot execute Ledger caller cutover gate: {error}")
+    else:
+        if result.returncode != 0:
+            PROBLEMS.append(
+                "Ledger caller cutover gate failed: " + result.stdout.strip()
+            )
 
 
-def verify_gate_wiring() -> None:
+def verify_gates_and_plan() -> None:
     require_text(
         ".github/workflows/rust-service-gate.yml",
         "scripts/check-p0-wiring.py",
@@ -170,13 +168,9 @@ def verify_gate_wiring() -> None:
         "scripts/check-audit-source-baseline-postgres.sh",
         "scripts/check-ledger-operation-identity-postgres.sh",
     )
-
-
-def verify_plan() -> None:
     require_text(
-        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v7.md",
-        "0065_add_ledger_operation_identity.sql",
-        "P0-N1 caller migration and cutover controls",
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v8.md",
+        "caller migration blocked until exact reserve contract",
         "P0-N2 Genesis-as-entry",
     )
 
@@ -184,16 +178,14 @@ def verify_plan() -> None:
 def main() -> int:
     migration_number, migration_filename = latest_migration()
     verify_release_template(migration_filename)
-    verify_core_startup_wiring()
-    verify_canonical_audit_chain()
-    verify_ledger_operation_identity()
-    verify_gate_wiring()
-    verify_plan()
+    verify_core()
+    verify_exact_caller_contract()
+    verify_gates_and_plan()
     result = {
         "status": "failed" if PROBLEMS else "ok",
         "migration_number": migration_number,
         "migration_head": migration_filename,
-        "checks": 6,
+        "checks": 4,
         "problems": PROBLEMS,
     }
     print(json.dumps(result, ensure_ascii=False, indent=2))
