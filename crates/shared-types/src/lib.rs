@@ -4,6 +4,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 pub mod money;
+pub mod saga;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraceContext {

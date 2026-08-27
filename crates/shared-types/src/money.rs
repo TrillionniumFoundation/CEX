@@ -18,11 +18,9 @@ impl MoneyAmount {
         scale: u8,
         minor_units: i64,
     ) -> Result<Self, MoneyError> {
-        let currency = normalize_currency(currency.into())?;
-        validate_scale(scale)?;
         Ok(Self {
-            currency,
-            scale,
+            currency: normalize_currency(currency.into())?,
+            scale: validate_scale(scale)?,
             minor_units,
         })
     }
@@ -40,12 +38,12 @@ impl MoneyAmount {
         scale: u8,
         raw: &str,
     ) -> Result<Self, MoneyError> {
-        validate_scale(scale)?;
+        let scale = validate_scale(scale)?;
         let raw = raw.trim();
         if raw.is_empty() {
             return Err(MoneyError::InvalidDecimal("amount is empty".to_string()));
         }
-        if raw.contains(['e', 'E']) {
+        if raw.contains('e') || raw.contains('E') {
             return Err(MoneyError::InvalidDecimal(
                 "scientific notation is forbidden".to_string(),
             ));
@@ -67,19 +65,15 @@ impl MoneyAmount {
         let fraction = parts.next().unwrap_or_default();
         if parts.next().is_some() {
             return Err(MoneyError::InvalidDecimal(
-                "amount contains more than one decimal point".to_string(),
+                "amount contains multiple decimal points".to_string(),
             ));
         }
-        if whole.is_empty() && fraction.is_empty() {
-            return Err(MoneyError::InvalidDecimal(
-                "amount has no digits".to_string(),
-            ));
-        }
-        if !whole.chars().all(|ch| ch.is_ascii_digit())
+        if (whole.is_empty() && fraction.is_empty())
+            || !whole.chars().all(|ch| ch.is_ascii_digit())
             || !fraction.chars().all(|ch| ch.is_ascii_digit())
         {
             return Err(MoneyError::InvalidDecimal(
-                "amount contains non-decimal digits".to_string(),
+                "amount contains invalid decimal digits".to_string(),
             ));
         }
         if fraction.len() > usize::from(scale) {
@@ -89,60 +83,51 @@ impl MoneyAmount {
             });
         }
 
-        let whole_value = if whole.is_empty() {
-            0_i64
+        let whole = if whole.is_empty() {
+            0_i128
         } else {
-            whole
-                .parse::<i64>()
-                .map_err(|_| MoneyError::Overflow)?
+            whole.parse::<i128>().map_err(|_| MoneyError::Overflow)?
         };
-        let factor = scale_factor(scale)?;
-        let mut minor_units = whole_value
-            .checked_mul(factor)
-            .ok_or(MoneyError::Overflow)?;
+        let factor = 10_i128.pow(u32::from(scale));
+        let mut total = whole.checked_mul(factor).ok_or(MoneyError::Overflow)?;
 
         if !fraction.is_empty() {
             let fraction_value = fraction
-                .parse::<i64>()
+                .parse::<i128>()
                 .map_err(|_| MoneyError::Overflow)?;
             let padding = u32::from(scale)
-                .checked_sub(
-                    u32::try_from(fraction.len()).map_err(|_| MoneyError::Overflow)?,
-                )
+                - u32::try_from(fraction.len()).map_err(|_| MoneyError::Overflow)?;
+            let fraction_minor = fraction_value
+                .checked_mul(10_i128.pow(padding))
                 .ok_or(MoneyError::Overflow)?;
-            let padded = fraction_value
-                .checked_mul(10_i64.checked_pow(padding).ok_or(MoneyError::Overflow)?)
-                .ok_or(MoneyError::Overflow)?;
-            minor_units = minor_units
-                .checked_add(padded)
+            total = total
+                .checked_add(fraction_minor)
                 .ok_or(MoneyError::Overflow)?;
         }
 
         if negative {
-            minor_units = minor_units.checked_neg().ok_or(MoneyError::Overflow)?;
+            total = total.checked_neg().ok_or(MoneyError::Overflow)?;
         }
-
+        let minor_units = i64::try_from(total).map_err(|_| MoneyError::Overflow)?;
         Self::new(currency, scale, minor_units)
     }
 
     pub fn format_decimal(&self) -> String {
-        let factor = scale_factor(self.scale).expect("validated MoneyAmount scale");
-        let negative = self.minor_units.is_negative();
-        let absolute = i128::from(self.minor_units).abs();
-        let factor = i128::from(factor);
+        let factor = 10_i128.pow(u32::from(self.scale));
+        let value = i128::from(self.minor_units);
+        let absolute = value.abs();
+        let sign = if value.is_negative() { "-" } else { "" };
         let whole = absolute / factor;
-        let fraction = absolute % factor;
 
         if self.scale == 0 {
-            return format!("{}{}", if negative { "-" } else { "" }, whole);
+            return format!("{sign}{whole}");
         }
 
+        let fraction = absolute % factor;
         format!(
-            "{}{}.{:0width$}",
-            if negative { "-" } else { "" },
-            whole,
+            "{sign}{whole}.{:0width$}",
             fraction,
-            width = usize::from(self.scale),
+            width = usize::from(self.scale)
         )
     }
 
@@ -181,10 +166,8 @@ impl MoneyAmount {
             Ok(())
         } else {
             Err(MoneyError::Incompatible {
-                left_currency: self.currency.clone(),
-                left_scale: self.scale,
-                right_currency: other.currency.clone(),
-                right_scale: other.scale,
+                left: format!("{}/{}", self.currency, self.scale),
+                right: format!("{}/{}", other.currency, other.scale),
             })
         }
     }
@@ -195,16 +178,8 @@ pub enum MoneyError {
     InvalidCurrency(String),
     InvalidScale(u8),
     InvalidDecimal(String),
-    ScaleExceeded {
-        configured: u8,
-        actual: usize,
-    },
-    Incompatible {
-        left_currency: String,
-        left_scale: u8,
-        right_currency: String,
-        right_scale: u8,
-    },
+    ScaleExceeded { configured: u8, actual: usize },
+    Incompatible { left: String, right: String },
     NonPositive,
     Overflow,
 }
@@ -212,30 +187,21 @@ pub enum MoneyError {
 impl fmt::Display for MoneyError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidCurrency(currency) => write!(
+            Self::InvalidCurrency(value) => write!(formatter, "invalid currency '{value}'"),
+            Self::InvalidScale(value) => write!(
                 formatter,
-                "invalid currency '{currency}'; use 1-16 lowercase ASCII letters, digits, '.', '_' or '-'"
-            ),
-            Self::InvalidScale(scale) => write!(
-                formatter,
-                "invalid money scale {scale}; maximum supported scale is {MAX_MONEY_SCALE}"
+                "invalid money scale {value}; maximum is {MAX_MONEY_SCALE}"
             ),
             Self::InvalidDecimal(message) => write!(formatter, "invalid decimal amount: {message}"),
             Self::ScaleExceeded { configured, actual } => write!(
                 formatter,
-                "decimal amount has {actual} fractional digits, configured scale is {configured}"
+                "amount has {actual} fractional digits; configured scale is {configured}"
             ),
-            Self::Incompatible {
-                left_currency,
-                left_scale,
-                right_currency,
-                right_scale,
-            } => write!(
-                formatter,
-                "incompatible money values: {left_currency}/{left_scale} vs {right_currency}/{right_scale}"
-            ),
+            Self::Incompatible { left, right } => {
+                write!(formatter, "incompatible money values: {left} vs {right}")
+            }
             Self::NonPositive => formatter.write_str("money amount must be positive"),
-            Self::Overflow => formatter.write_str("money amount exceeds signed 64-bit minor-unit range"),
+            Self::Overflow => formatter.write_str("money amount exceeds i64 minor-unit range"),
         }
     }
 }
@@ -255,19 +221,12 @@ fn normalize_currency(currency: String) -> Result<String, MoneyError> {
     Ok(currency)
 }
 
-fn validate_scale(scale: u8) -> Result<(), MoneyError> {
+fn validate_scale(scale: u8) -> Result<u8, MoneyError> {
     if scale <= MAX_MONEY_SCALE {
-        Ok(())
+        Ok(scale)
     } else {
         Err(MoneyError::InvalidScale(scale))
     }
-}
-
-fn scale_factor(scale: u8) -> Result<i64, MoneyError> {
-    validate_scale(scale)?;
-    10_i64
-        .checked_pow(u32::from(scale))
-        .ok_or(MoneyError::Overflow)
 }
 
 mod i64_string {
@@ -284,8 +243,9 @@ mod i64_string {
     where
         D: Deserializer<'de>,
     {
-        let raw = String::deserialize(deserializer)?;
-        raw.parse::<i64>().map_err(D::Error::custom)
+        String::deserialize(deserializer)?
+            .parse::<i64>()
+            .map_err(D::Error::custom)
     }
 }
 
@@ -294,21 +254,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn decimal_parser_is_exact_and_pads_fraction() {
+    fn parser_is_exact_and_rejects_implicit_rounding() {
         let amount = MoneyAmount::parse_decimal("credit", 6, "12.34").unwrap();
         assert_eq!(amount.minor_units, 12_340_000);
         assert_eq!(amount.format_decimal(), "12.340000");
-    }
-
-    #[test]
-    fn parser_handles_negative_values_without_float_conversion() {
-        let amount = MoneyAmount::parse_decimal("credit", 6, "-0.000001").unwrap();
-        assert_eq!(amount.minor_units, -1);
-        assert_eq!(amount.format_decimal(), "-0.000001");
-    }
-
-    #[test]
-    fn parser_rejects_excess_precision_and_scientific_notation() {
         assert!(matches!(
             MoneyAmount::parse_decimal("credit", 6, "1.0000001"),
             Err(MoneyError::ScaleExceeded { .. })
@@ -317,29 +266,34 @@ mod tests {
     }
 
     #[test]
-    fn arithmetic_requires_matching_currency_and_scale() {
+    fn parser_handles_negative_minimum_unit() {
+        let amount = MoneyAmount::parse_decimal("credit", 6, "-0.000001").unwrap();
+        assert_eq!(amount.minor_units, -1);
+        assert_eq!(amount.format_decimal(), "-0.000001");
+    }
+
+    #[test]
+    fn arithmetic_requires_same_currency_and_scale() {
         let left = MoneyAmount::credits(10);
-        let right = MoneyAmount::new("wallet_credit", 6, 5).unwrap();
+        let other = MoneyAmount::new("wallet_credit", 6, 5).unwrap();
         assert!(matches!(
-            left.checked_add(&right),
+            left.checked_add(&other),
             Err(MoneyError::Incompatible { .. })
         ));
     }
 
     #[test]
-    fn minor_units_serialize_as_string_for_json_safety() {
+    fn json_uses_string_for_large_minor_units() {
         let amount = MoneyAmount::credits(9_007_199_254_740_993);
-        let json = serde_json::to_value(&amount).unwrap();
-        assert_eq!(json["minor_units"], "9007199254740993");
-        let decoded: MoneyAmount = serde_json::from_value(json).unwrap();
-        assert_eq!(decoded, amount);
+        let value = serde_json::to_value(&amount).unwrap();
+        assert_eq!(value["minor_units"], "9007199254740993");
+        assert_eq!(serde_json::from_value::<MoneyAmount>(value).unwrap(), amount);
     }
 
     #[test]
-    fn checked_arithmetic_detects_overflow() {
-        let max = MoneyAmount::credits(i64::MAX);
+    fn checked_add_detects_overflow() {
         assert!(matches!(
-            max.checked_add(&MoneyAmount::credits(1)),
+            MoneyAmount::credits(i64::MAX).checked_add(&MoneyAmount::credits(1)),
             Err(MoneyError::Overflow)
         ));
     }
