@@ -21,8 +21,8 @@
 
 A shared wire contract now represents Ledger effects without binary floating point:
 
-- `amount_minor` is an `i64` serialized as a string;
-- currency and scale are explicit;
+- `amount_minor` is an `i64` serialized as a JSON string;
+- currency unit and scale are explicit;
 - operation kind is an enum;
 - trace/operation IDs are UUIDs;
 - reference binding and scoped idempotency are validated centrally.
@@ -31,7 +31,7 @@ Ledger service consumes the shared contract and checks currency/scale against th
 Gateway has an exact v2 client, rollout-mode parser and deterministic Invocation effect
 builder that accepts `MoneyAmount`, never `f64`.
 
-## 3. Caller migration blocked until exact reserve contract
+## 3. caller migration blocked until exact reserve contract
 
 Invocation ingress, stored request payload and Execution creation still carry
 `reserve_amount: f64`. Therefore Gateway Invocation orchestration is intentionally not wired
@@ -40,16 +40,18 @@ to `apply_ledger_effect_v2` yet.
 The safety gate fails if v2 orchestration is enabled before the authoritative exact reserve
 field exists, or if the client contains multiplication/cast/rounding bridges.
 
-This is the next locked implementation slice:
+The dependency order is stricter than a simple Gateway switch:
 
-1. expand Invocation ingress with exact `reserve_money`;
-2. reject dual legacy/exact input;
-3. persist exact money without breaking historical payload decode;
-4. add `legacy_v1`, `dual`, `require_v2` orchestration behavior;
-5. route exact reserve/refund through canonical Ledger v2;
-6. propagate exact reserve to Execution;
-7. add compatibility counters and production rejection;
-8. execute HTTP/persistence/rollback tests.
+1. persist an exact Invocation ledger contract;
+2. make Execution consume/refund read the same durable contract;
+3. only then allow Gateway reserve/refund to use v2;
+4. preserve v1 behind an explicit rollback mode;
+5. reject dual legacy/exact input;
+6. add compatibility counters and production rejection;
+7. execute HTTP, persistence, settlement, restart and rollback tests.
+
+Opening Gateway v2 before Execution can settle the same exact reservation would create a
+reserved-value leak, so the safety gate must continue to report `cutover_ready=false`.
 
 ## 4. P0-N2 Genesis-as-entry
 
