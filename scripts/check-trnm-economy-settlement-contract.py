@@ -78,7 +78,7 @@ for token in (
     "trnm_economy_reward_budget_v1",
     "intent_bytes bytea not null",
     "digest(intent_bytes, 'sha256')",
-    "convert_from(intent_bytes, 'UTF8')::jsonb = intent_json",
+    "convert_from(intent_bytes, 'utf8')::jsonb = intent_json",
     "before update or delete",
     "before truncate",
     "errcode = '55000'",
