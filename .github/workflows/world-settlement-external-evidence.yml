@@ -1,0 +1,150 @@
+name: world-settlement-external-evidence
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - ci/world-settlement-capture-boundary-v1
+    paths:
+      - '.github/workflows/world-settlement-external-evidence.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/world-settlement-external-evidence.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: world-settlement-external-evidence-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  WORLD_REPOSITORY: TrillionniumFoundation/Trillionnium-World
+  WORLD_COMMIT: 4e47969124422c69761dcd40cf923308306797eb
+  WORLD_TREE: 0c836ad428a4dde322ed44d9388196585c498284
+  TRNM_SETTLEMENT_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/world_settlement
+  TRNM_REQUIRE_SETTLEMENT_DATABASE_TEST: '1'
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: '0'
+  RUST_BACKTRACE: '1'
+  RUST_TEST_THREADS: '1'
+
+jobs:
+  exact-world-postgresql-contracts:
+    name: world-settlement-external/exact-postgresql-contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: world_settlement
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d world_settlement"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Checkout evidence definition
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Checkout exact World candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ env.WORLD_REPOSITORY }}
+          ref: ${{ env.WORLD_COMMIT }}
+          path: world
+          persist-credentials: false
+      - name: Verify exact World commit and tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_commit="$(git -C world rev-parse HEAD)"
+          actual_tree="$(git -C world rev-parse HEAD^{tree})"
+          test "$actual_commit" = "$WORLD_COMMIT"
+          test "$actual_tree" = "$WORLD_TREE"
+          git -C world diff --exit-code
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
+          rustup default 1.98.0
+          rustc --version --verbose
+          cargo --version --verbose
+      - name: Resolve locked World workspace
+        working-directory: world/trillionnium
+        run: cargo metadata --locked --no-deps --format-version 1 > /dev/null
+      - name: Format game-server package
+        working-directory: world/trillionnium
+        run: cargo fmt -p trnm-game-server -- --check
+      - name: Prove capture commit precedes remote start
+        working-directory: world/trillionnium
+        run: cargo test -p trnm-game-server --test settlement_capture_commit_boundary --locked
+      - name: Re-run settlement identity and lease contract
+        working-directory: world/trillionnium
+        run: cargo test -p trnm-game-server --test settlement_database_contract --locked
+      - name: Re-run account serialization contract
+        working-directory: world/trillionnium
+        run: cargo test -p trnm-game-server --test settlement_serialization_database --locked
+      - name: Strict lint for capture-boundary target
+        working-directory: world/trillionnium
+        run: cargo clippy -p trnm-game-server --test settlement_capture_commit_boundary --locked -- -D warnings
+      - name: Write bounded external evidence
+        shell: bash
+        run: |
+          mkdir -p evidence
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          world_commit = os.environ['WORLD_COMMIT']
+          world_tree = os.environ['WORLD_TREE']
+          payload = {
+              'schema': 'trnm_world_settlement_external_ci_evidence_v1',
+              'repository': os.environ['WORLD_REPOSITORY'],
+              'commit': world_commit,
+              'tree': world_tree,
+              'evidence_repository': os.environ['GITHUB_REPOSITORY'],
+              'workflow': os.environ['GITHUB_WORKFLOW'],
+              'run_id': int(os.environ['GITHUB_RUN_ID']),
+              'run_attempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
+              'runner_os': os.environ['RUNNER_OS'],
+              'postgres_image': 'postgres:16.4-alpine',
+              'rust_toolchain': '1.98.0',
+              'checks': [
+                  'cargo fmt -p trnm-game-server -- --check',
+                  'settlement_capture_commit_boundary',
+                  'settlement_database_contract',
+                  'settlement_serialization_database',
+                  'clippy settlement_capture_commit_boundary -D warnings',
+              ],
+              'native_world_actions_run': False,
+              'promotion_effect': 'none',
+              'limitations': [
+                  'external CI is not a native Trillionnium-World workflow run',
+                  'source and PostgreSQL tests are not deployment evidence',
+                  'no trusted settlement, public online, public market, custody, or commercial release credit',
+              ],
+          }
+          canonical = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()
+          payload['evidence_payload_sha256'] = hashlib.sha256(canonical).hexdigest()
+          Path('evidence/world-settlement-external-evidence.json').write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
+          PY
+          python3 -m json.tool evidence/world-settlement-external-evidence.json > /dev/null
+      - name: Upload external evidence artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: world-settlement-external-evidence-${{ env.WORLD_COMMIT }}
+          path: evidence/world-settlement-external-evidence.json
+          if-no-files-found: error
+          retention-days: 30
