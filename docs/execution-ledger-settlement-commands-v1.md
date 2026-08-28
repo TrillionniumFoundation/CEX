@@ -2,7 +2,13 @@
 
 - Status: P0 implementation candidate
 - Source baseline: `feature/hepta-production-baseline-p0@ff13a4f27b05dfaaf9c7cce4905f670a5f61f85f`
-- Migration: `0067_add_execution_ledger_settlement_commands.sql`
+- Migration series:
+  - `0067_add_execution_ledger_settlement_schema.sql`
+  - `0068_add_execution_ledger_settlement_guards.sql`
+  - `0069_add_execution_ledger_settlement_enqueue.sql`
+  - `0070_add_execution_ledger_settlement_claim.sql`
+  - `0071_add_execution_ledger_settlement_finish.sql`
+  - `0072_add_execution_ledger_settlement_operator.sql`
 - Worker: `execution-settlement-worker`
 - Canonical Ledger target: `POST /v2/ledger/effects`
 - Exact request authority: `cex_invocation_ledger_effect_request_v1`
@@ -11,8 +17,9 @@
 
 Execution currently performs provider and Ledger network calls while a business SQL transaction
 and locked Execution/Invocation rows remain open. The isolated exact settlement adapter cannot be
-safely activated inside that transaction. Migration 0067 introduces a durable consume/refund
-command and a worker that performs Ledger I/O only after the claim transaction commits.
+safely activated inside that transaction. The 0067–0072 migration series introduces a durable
+consume/refund command and a worker that performs Ledger I/O only after the claim transaction
+commits.
 
 The target sequence is:
 
@@ -176,22 +183,22 @@ request time is bounded.
 
 ## 10. Activation and rollback
 
-The expand migration is safe to deploy while all commands remain `shadow`. The worker ignores
-shadow commands. Rollout is:
+The expand migration series is safe to deploy while all commands remain `shadow`. The worker
+ignores shadow commands. Rollout is:
 
-1. deploy 0067, worker binary and metrics;
+1. deploy migrations 0067–0072, the worker binary and metrics;
 2. enqueue shadow commands from a staging caller and compare intent/projection;
 3. promote selected commands to active;
 4. validate first-apply, exact-replay and unknown-outcome recovery;
 5. only then activate caller-side enqueue and remove the matching legacy side effect.
 
-Rollback stops the worker and keeps commands/evidence intact. The migration is append-only; tables,
-commands and receipts must not be dropped to simulate rollback.
+Rollback stops the worker and keeps commands/evidence intact. The migrations are append-only;
+tables, commands and receipts must not be dropped to simulate rollback.
 
 ## 11. Evidence required before merge
 
 - Rust formatting, compile and unit tests on the exact commit/tree;
-- fresh and upgrade PostgreSQL execution of all migrations;
+- fresh and upgrade PostgreSQL execution of all migrations through 0072;
 - command lifecycle and concurrency probe;
 - remote-success/local-receipt-failure crash injection;
 - worker restart and lease-expiry replay;
