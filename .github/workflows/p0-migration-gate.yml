@@ -11,6 +11,7 @@ on:
       - 'scripts/check-ledger-operation-identity-postgres.sh'
       - 'scripts/check-invocation-ledger-contract-static.py'
       - 'scripts/check-invocation-ledger-contract-postgres.sh'
+      - 'scripts/check-invocation-ledger-terminal-postgres.sh'
       - 'scripts/backfill-audit-source-baselines.sh'
       - 'docs/templates/cex-release-baseline-manifest-v1.json'
       - 'docs/audit-source-baseline-backfill-v1.md'
@@ -26,6 +27,7 @@ on:
       - 'scripts/check-ledger-operation-identity-postgres.sh'
       - 'scripts/check-invocation-ledger-contract-static.py'
       - 'scripts/check-invocation-ledger-contract-postgres.sh'
+      - 'scripts/check-invocation-ledger-terminal-postgres.sh'
       - 'scripts/backfill-audit-source-baselines.sh'
       - 'docs/templates/cex-release-baseline-manifest-v1.json'
       - 'docs/audit-source-baseline-backfill-v1.md'
@@ -79,3 +81,6 @@ jobs:
 
       - name: Invocation Ledger contract lifecycle
         run: bash scripts/check-invocation-ledger-contract-postgres.sh
+
+      - name: Invocation Ledger terminal exclusivity
+        run: bash scripts/check-invocation-ledger-terminal-postgres.sh
