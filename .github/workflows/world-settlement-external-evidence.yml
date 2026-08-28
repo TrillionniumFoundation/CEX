@@ -22,8 +22,8 @@ concurrency:
 
 env:
   WORLD_REPOSITORY: TrillionniumFoundation/Trillionnium-World
-  WORLD_COMMIT: e64ab8b276e1575aa2b77688a836f64116597307
-  WORLD_TREE: d17c9f60d4b71204bf07b4bca79f6aed195544b9
+  WORLD_COMMIT: ee881a0fec0f40091eaeba67c667ea82ff9d440a
+  WORLD_TREE: ed4610ee910b835fb23833de5e12fe2cca16544b
   TRNM_SETTLEMENT_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/world_settlement
   TRNM_REQUIRE_SETTLEMENT_DATABASE_TEST: '1'
   CARGO_TERM_COLOR: never
@@ -80,15 +80,33 @@ jobs:
       - name: Resolve locked World workspace
         working-directory: world/trillionnium
         run: cargo metadata --locked --no-deps --format-version 1 > /dev/null
-      - name: Format capture-boundary test only
+      - name: Format settlement slice files
         working-directory: world/trillionnium
-        run: rustfmt --edition 2021 --check crates/trnm-game-server/tests/settlement_capture_commit_boundary.rs
+        run: |
+          rustfmt --edition 2021 --check \
+            crates/trnm-game-server/src/bin/trnm-entitlement-signer.rs \
+            crates/trnm-game-server/tests/settlement_capture_commit_boundary.rs \
+            crates/trnm-game-server/tests/settlement_database_contract.rs \
+            crates/trnm-game-server/tests/settlement_serialization_database.rs
       - name: Prove capture commit precedes remote start
         working-directory: world/trillionnium
         run: cargo test -p trnm-game-server --lib --test settlement_capture_commit_boundary --locked
-      - name: Strict lint for capture-boundary target
+      - name: Prove settlement identity and lease fencing
         working-directory: world/trillionnium
-        run: cargo clippy -p trnm-game-server --lib --test settlement_capture_commit_boundary --locked -- -D warnings
+        run: cargo test -p trnm-game-server --lib --test settlement_database_contract --locked
+      - name: Prove account serialization and unrelated concurrency
+        working-directory: world/trillionnium
+        run: cargo test -p trnm-game-server --lib --test settlement_serialization_database --locked
+      - name: Strict lint for settlement evidence targets
+        working-directory: world/trillionnium
+        run: |
+          cargo clippy -p trnm-game-server \
+            --lib \
+            --bin trnm-entitlement-signer \
+            --test settlement_capture_commit_boundary \
+            --test settlement_database_contract \
+            --test settlement_serialization_database \
+            --locked -- -D warnings
       - name: Write bounded external evidence
         shell: bash
         run: |
@@ -114,16 +132,17 @@ jobs:
               'postgres_image': 'postgres:16.4-alpine',
               'rust_toolchain': '1.98.0',
               'checks': [
-                  'rustfmt settlement_capture_commit_boundary.rs --check',
+                  'rustfmt settlement slice files --check',
                   'settlement_capture_commit_boundary',
-                  'clippy settlement_capture_commit_boundary -D warnings',
+                  'settlement_database_contract',
+                  'settlement_serialization_database',
+                  'clippy settlement evidence targets -D warnings',
               ],
               'native_world_actions_run': False,
               'promotion_effect': 'none',
               'limitations': [
                   'external CI is not a native Trillionnium-World workflow run',
                   'the stacked settlement recovery branch has package-wide rustfmt drift outside this slice',
-                  'the inherited settlement_database_contract and settlement_serialization_database imports require a separate exact repair before they can be re-run under sqlx-core 0.8 module paths',
                   'source and PostgreSQL tests are not deployment evidence',
                   'no trusted settlement, public online, public market, custody, or commercial release credit',
               ],
