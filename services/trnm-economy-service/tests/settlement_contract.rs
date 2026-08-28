@@ -92,7 +92,7 @@ fn authority_registry(audience: &str) -> AuthorityRegistry {
     .expect("test authority registry")
 }
 
-fn app(pool: PgPool, signing_key: &SigningKey, audience: &str) -> Router {
+fn build_test_app(pool: PgPool, signing_key: &SigningKey, audience: &str) -> Router {
     let repository = SettlementRepository::new(pool);
     build_router(AppState::new(
         repository,
@@ -296,7 +296,7 @@ async fn durable_receipt_lookup_owner_contract_matrix() {
     reset_schema(&pool).await;
 
     let signing_key = SigningKey::from_bytes(&[7_u8; 32]);
-    let app = app(pool.clone(), &signing_key, EXPECTED_GAME_AUTHORITY_AUDIENCE);
+    let app = build_test_app(pool.clone(), &signing_key, EXPECTED_GAME_AUTHORITY_AUDIENCE);
 
     let (readiness_status, readiness) = send(
         app.clone(),
@@ -401,7 +401,7 @@ async fn durable_receipt_lookup_owner_contract_matrix() {
     assert_eq!(missing_auth_status, StatusCode::UNAUTHORIZED);
     assert_eq!(missing_auth["code"], "missing_game_authority");
 
-    let wrong_audience_app = app(pool.clone(), &signing_key, "wrong-audience");
+    let wrong_audience_app = build_test_app(pool.clone(), &signing_key, "wrong-audience");
     let wrong_audience_intent = complete_contract_intent("contract-wrong-audience");
     let (wrong_audience_status, wrong_audience) = post_intent(
         wrong_audience_app,
