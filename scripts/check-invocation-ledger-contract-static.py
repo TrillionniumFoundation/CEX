@@ -41,9 +41,18 @@ require(
     "wrong operation identity did not fail closed",
 )
 require(
+    "scripts/check-invocation-ledger-terminal-postgres.sh",
+    "refund-after-consume terminal transition was not rejected",
+    "consume-after-refund terminal transition was not rejected",
+    "rejection changed durable state",
+    "terminal settlement evidence is inconsistent",
+    "P0 Invocation Ledger terminal exclusivity gate passed",
+)
+require(
     "docs/invocation-ledger-contract-v1.md",
     "reserved-value leak",
     "registered -> reserved -> consumed/refunded",
+    "independent terminal-exclusivity probe",
     "Execution",
 )
 require(
