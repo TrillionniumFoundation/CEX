@@ -1,0 +1,17 @@
+{
+  "schema": "trnm_world_cex_settlement_external_lock_v1",
+  "world": {
+    "repository": "TrillionniumFoundation/Trillionnium-World",
+    "commit": "2a16bfc8301cace94e8a2db97510d15fdd8992da",
+    "tree": "fe2530be3cd0c8a353991013a139a84ae9313f25"
+  },
+  "cex_owner": {
+    "repository": "TrillionniumFoundation/CEX",
+    "commit": "ea2a257b45df63182e6a58f8265b8edb9154ec89",
+    "tree": "9dddb54c9e9cd2ab4e87fd170a17547518f53225"
+  },
+  "promotion_effect": "none",
+  "native_world_actions_run": false,
+  "public_online": false,
+  "public_player_market": false
+}
