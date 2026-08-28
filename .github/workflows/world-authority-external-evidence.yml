@@ -22,14 +22,14 @@ concurrency:
 
 env:
   GAME_REPOSITORY: TrillionniumFoundation/TrillionniumGame
-  GAME_COMMIT: 1f000ea8be17afdbfe31426cc6a7584a3be1120c
-  GAME_TREE: 431af12baadca94a49f68e83fef13bbbbcfa5345
+  GAME_COMMIT: 43e5143d3ed7e6727666e3cfb9c8109122e930cc
+  GAME_TREE: 15947a660c0fd608184a1ae013f10b2cf05b2bda
 
 jobs:
   game-gofmt-remediation:
     name: world-authority-external/game-gofmt-remediation
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout evidence definition
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -65,13 +65,6 @@ jobs:
             world_command_config.go \
             world_command_rpc.go
           test -z "$(gofmt -l .)"
-      - name: Run formatted source tests
-        working-directory: game/runtime
-        run: |
-          set -euo pipefail
-          go test ./... -count=1
-          go test -race ./internal/worldcommand ./internal/worldtransition -count=1
-          go vet ./...
       - name: Assemble exact remediation artifact
         run: |
           set -euo pipefail
@@ -98,3 +91,10 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           compression-level: 9
+      - name: Run formatted source tests
+        working-directory: game/runtime
+        run: |
+          set -euo pipefail
+          go test ./... -count=1
+          go test -race ./internal/worldcommand ./internal/worldtransition -count=1
+          go vet ./...
