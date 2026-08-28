@@ -87,10 +87,7 @@ impl AuthorityRegistry {
         let mut matched_wrong_audience = false;
         for principal in &self.principals {
             if !principal.active
-                || !constant_time_equal(
-                    supplied_hash.as_bytes(),
-                    principal.token_sha256.as_bytes(),
-                )
+                || !constant_time_equal(supplied_hash.as_bytes(), principal.token_sha256.as_bytes())
             {
                 continue;
             }

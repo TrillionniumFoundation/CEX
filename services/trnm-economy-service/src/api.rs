@@ -1,14 +1,12 @@
 use crate::{
-    config::{
-        AuthorizationFailure, AuthorityIdentity, AuthorityRegistry, IssuerKeyRegistry,
-    },
+    config::{AuthorityIdentity, AuthorityRegistry, AuthorizationFailure, IssuerKeyRegistry},
     contract::{
         canonical_sha256, serialized_intent_hash, EconomicIntent, EconomicIntentKind,
         EntitlementIssuerKeyStatusRequest, EntitlementIssuerKeyStatusResponse,
         ServerSignedValueEntitlementV2, SettlementErrorBody, SettlementReadiness,
         SettlementReceiptLookupResponse, SubmitIntentRequest, ValueEntitlementSource,
-        BATTLE_WALLET_REWARD_PER_EVENT_CAP, ENTITLEMENT_SIGNER_ISSUER,
-        GAME_AUTHORITY_HEADER, INTENT_HASH_HEADER, SERVER_SIGNED_VALUE_ENTITLEMENT_METADATA_KEY,
+        BATTLE_WALLET_REWARD_PER_EVENT_CAP, ENTITLEMENT_SIGNER_ISSUER, GAME_AUTHORITY_HEADER,
+        INTENT_HASH_HEADER, SERVER_SIGNED_VALUE_ENTITLEMENT_METADATA_KEY,
         SERVER_SIGNED_VALUE_ENTITLEMENT_V2_CONTRACT, SETTLEMENT_CONTRACT_VERSION,
         SETTLEMENT_ERROR_CONTRACT, SETTLEMENT_RECEIPT_LOOKUP_CONTRACT,
         TERM_EXCHANGE_PROTOCOL_VERSION,
@@ -56,10 +54,7 @@ pub fn build_router(state: AppState) -> Router {
             post(issuer_key_status),
         )
         .route("/v1/trnm/economy/intents", post(submit_intent))
-        .route(
-            "/v1/trnm/economy/receipts/by-intent",
-            get(lookup_receipt),
-        )
+        .route("/v1/trnm/economy/receipts/by-intent", get(lookup_receipt))
         .with_state(state)
 }
 
@@ -99,10 +94,9 @@ async fn issuer_key_status(
     Json(request): Json<EntitlementIssuerKeyStatusRequest>,
 ) -> Result<Json<EntitlementIssuerKeyStatusResponse>, ApiError> {
     authorize(&state, &headers)?;
-    let key = state
-        .issuer_keys
-        .get(&request.key_id)
-        .ok_or_else(|| ApiError::not_found("issuer_key_not_found", "issuer key is not registered"))?;
+    let key = state.issuer_keys.get(&request.key_id).ok_or_else(|| {
+        ApiError::not_found("issuer_key_not_found", "issuer key is not registered")
+    })?;
     Ok(Json(EntitlementIssuerKeyStatusResponse {
         key_id: key.key_id.clone(),
         issuer: key.issuer.clone(),
@@ -186,8 +180,10 @@ fn authorize(state: &AppState, headers: &HeaderMap) -> Result<AuthorityIdentity,
     let supplied = headers
         .get(GAME_AUTHORITY_HEADER)
         .and_then(|value| value.to_str().ok());
-    state.authorities.authorize(supplied).map_err(|failure| {
-        match failure {
+    state
+        .authorities
+        .authorize(supplied)
+        .map_err(|failure| match failure {
             AuthorizationFailure::Missing => ApiError::unauthorized(
                 "missing_game_authority",
                 "x-trnm-game-authority is required",
@@ -200,8 +196,7 @@ fn authorize(state: &AppState, headers: &HeaderMap) -> Result<AuthorityIdentity,
                 "wrong_game_authority_audience",
                 "game authority credential is not scoped to trnm-cex-settlement-v1",
             ),
-        }
-    })
+        })
 }
 
 fn require_intent_hash(headers: &HeaderMap) -> Result<String, ApiError> {
@@ -209,10 +204,7 @@ fn require_intent_hash(headers: &HeaderMap) -> Result<String, ApiError> {
         .get(INTENT_HASH_HEADER)
         .and_then(|value| value.to_str().ok())
         .ok_or_else(|| {
-            ApiError::bad_request(
-                "missing_intent_hash",
-                "x-trnm-intent-sha256 is required",
-            )
+            ApiError::bad_request("missing_intent_hash", "x-trnm-intent-sha256 is required")
         })?;
     if !canonical_sha256(value) {
         return Err(ApiError::bad_request(
@@ -339,8 +331,8 @@ fn validate_release_reward(
                 "release_reward requires a server-signed value entitlement",
             )
         })?;
-    let entitlement: ServerSignedValueEntitlementV2 =
-        serde_json::from_value(entitlement_value).map_err(|error| {
+    let entitlement: ServerSignedValueEntitlementV2 = serde_json::from_value(entitlement_value)
+        .map_err(|error| {
             ApiError::unprocessable(
                 "invalid_value_entitlement",
                 format!("decode server-signed entitlement: {error}"),
@@ -369,8 +361,8 @@ fn validate_entitlement(
     issuer_keys: &IssuerKeyRegistry,
 ) -> Result<(), ApiError> {
     let now = Utc::now().timestamp();
-    let issued_at = DateTime::<Utc>::from_timestamp(entitlement.issued_at_epoch, 0)
-        .ok_or_else(|| {
+    let issued_at =
+        DateTime::<Utc>::from_timestamp(entitlement.issued_at_epoch, 0).ok_or_else(|| {
             ApiError::unprocessable(
                 "invalid_entitlement_time",
                 "entitlement issued_at is outside the supported range",
@@ -433,12 +425,14 @@ fn map_repository_error(error: RepositoryError) -> ApiError {
             "intent_hash_conflict",
             "intent_id exists under different immutable bytes",
         ),
-        RepositoryError::AccountNotFound => {
-            ApiError::unprocessable("wallet_account_not_found", "CEX wallet account does not exist")
-        }
-        RepositoryError::AccountInactive => {
-            ApiError::forbidden("wallet_account_inactive", "CEX wallet account is not active")
-        }
+        RepositoryError::AccountNotFound => ApiError::unprocessable(
+            "wallet_account_not_found",
+            "CEX wallet account does not exist",
+        ),
+        RepositoryError::AccountInactive => ApiError::forbidden(
+            "wallet_account_inactive",
+            "CEX wallet account is not active",
+        ),
         RepositoryError::AccountCurrencyMismatch => ApiError::unprocessable(
             "wallet_currency_mismatch",
             "CEX wallet account is not denominated in wallet_credits",

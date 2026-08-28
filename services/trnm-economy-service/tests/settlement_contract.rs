@@ -296,14 +296,17 @@ async fn durable_receipt_lookup_owner_contract_matrix() {
     reset_schema(&pool).await;
 
     let signing_key = SigningKey::from_bytes(&[7_u8; 32]);
-    let app = app(
-        pool.clone(),
-        &signing_key,
-        EXPECTED_GAME_AUTHORITY_AUDIENCE,
-    );
+    let app = app(pool.clone(), &signing_key, EXPECTED_GAME_AUTHORITY_AUDIENCE);
 
-    let (readiness_status, readiness) =
-        send(app.clone(), Method::GET, "/v1/trnm/economy/readiness", None, None, None).await;
+    let (readiness_status, readiness) = send(
+        app.clone(),
+        Method::GET,
+        "/v1/trnm/economy/readiness",
+        None,
+        None,
+        None,
+    )
+    .await;
     assert_eq!(readiness_status, StatusCode::OK);
     assert_eq!(readiness["status"], "ok");
     assert_eq!(readiness["public_player_market_enabled"], false);
@@ -355,16 +358,21 @@ async fn durable_receipt_lookup_owner_contract_matrix() {
         post_intent(app.clone(), Some(AUTHORITY_TOKEN), &intent, None).await;
     assert_eq!(duplicate_status, StatusCode::OK);
     assert_eq!(duplicate_receipt, lookup["receipt"]);
-    assert_eq!(wallet_balance_and_counts(&pool, account_id).await, (25, 1, 1));
+    assert_eq!(
+        wallet_balance_and_counts(&pool, account_id).await,
+        (25, 1, 1)
+    );
 
-    let mut conflict =
-        signed_reward_intent(&signing_key, account_id, "reward-response-loss", 30);
+    let mut conflict = signed_reward_intent(&signing_key, account_id, "reward-response-loss", 30);
     conflict.term_id = intent.term_id.clone();
     let (conflict_status, conflict_body) =
         post_intent(app.clone(), Some(AUTHORITY_TOKEN), &conflict, None).await;
     assert_eq!(conflict_status, StatusCode::CONFLICT);
     assert_eq!(conflict_body["code"], "intent_hash_conflict");
-    assert_eq!(wallet_balance_and_counts(&pool, account_id).await, (25, 1, 1));
+    assert_eq!(
+        wallet_balance_and_counts(&pool, account_id).await,
+        (25, 1, 1)
+    );
 
     let concurrent = signed_reward_intent(&signing_key, account_id, "reward-concurrent", 10);
     let first_app = app.clone();
@@ -378,11 +386,18 @@ async fn durable_receipt_lookup_owner_contract_matrix() {
     assert_eq!(left.0, StatusCode::OK);
     assert_eq!(right.0, StatusCode::OK);
     assert_eq!(left.1, right.1);
-    assert_eq!(wallet_balance_and_counts(&pool, account_id).await, (35, 2, 2));
+    assert_eq!(
+        wallet_balance_and_counts(&pool, account_id).await,
+        (35, 2, 2)
+    );
 
-    let (missing_auth_status, missing_auth) =
-        post_intent(app.clone(), None, &complete_contract_intent("contract-missing-auth"), None)
-            .await;
+    let (missing_auth_status, missing_auth) = post_intent(
+        app.clone(),
+        None,
+        &complete_contract_intent("contract-missing-auth"),
+        None,
+    )
+    .await;
     assert_eq!(missing_auth_status, StatusCode::UNAUTHORIZED);
     assert_eq!(missing_auth["code"], "missing_game_authority");
 
@@ -447,8 +462,7 @@ async fn durable_receipt_lookup_owner_contract_matrix() {
             &format!("reward-cap-{ordinal}"),
             100,
         );
-        let (status, _) =
-            post_intent(app.clone(), Some(AUTHORITY_TOKEN), &capped, None).await;
+        let (status, _) = post_intent(app.clone(), Some(AUTHORITY_TOKEN), &capped, None).await;
         assert_eq!(status, StatusCode::OK);
     }
     let over_cap = signed_reward_intent(&signing_key, capped_account, "reward-cap-over", 1);

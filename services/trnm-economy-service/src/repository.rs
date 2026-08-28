@@ -1,7 +1,7 @@
 use crate::contract::{
-    stable_receipt_id, stable_settlement_reference, EconomicIntent, EconomicReceipt,
-    ReceiptStatus, SettlementBackendKind, SETTLEMENT_BACKEND_ID,
-    SETTLEMENT_RECEIPT_LOOKUP_CONTRACT, TERM_EXCHANGE_PROTOCOL_VERSION,
+    stable_receipt_id, stable_settlement_reference, EconomicIntent, EconomicReceipt, ReceiptStatus,
+    SettlementBackendKind, SETTLEMENT_BACKEND_ID, SETTLEMENT_RECEIPT_LOOKUP_CONTRACT,
+    TERM_EXCHANGE_PROTOCOL_VERSION,
 };
 use chrono::Utc;
 use serde_json::json;
@@ -47,10 +47,7 @@ impl SettlementRepository {
     }
 
     pub async fn apply_migration(&self) -> Result<(), RepositoryError> {
-        self.pool
-            .execute(MIGRATION)
-            .await
-            .map_err(database_error)?;
+        self.pool.execute(MIGRATION).await.map_err(database_error)?;
         Ok(())
     }
 
@@ -213,9 +210,7 @@ async fn load_existing(
     row.map(decode_stored_receipt).transpose()
 }
 
-fn decode_stored_receipt(
-    row: PgRow,
-) -> Result<(String, EconomicReceipt), RepositoryError> {
+fn decode_stored_receipt(row: PgRow) -> Result<(String, EconomicReceipt), RepositoryError> {
     let intent_hash = row
         .try_get::<String, _>("intent_hash")
         .map_err(|error| RepositoryError::StoredReceiptCorrupt(error.to_string()))?;
@@ -284,9 +279,7 @@ async fn apply_release_reward(
     .await
     .map_err(database_error)?;
 
-    if current.saturating_add(amount_credits)
-        > crate::contract::BATTLE_WALLET_REWARD_DAILY_CAP
-    {
+    if current.saturating_add(amount_credits) > crate::contract::BATTLE_WALLET_REWARD_DAILY_CAP {
         return Err(RepositoryError::DailyRewardLimit);
     }
 

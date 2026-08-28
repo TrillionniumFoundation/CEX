@@ -4,8 +4,7 @@ use sha2::{Digest, Sha256};
 
 pub const TERM_EXCHANGE_PROTOCOL_VERSION: &str = "term_exchange_protocol_v2";
 pub const SETTLEMENT_CONTRACT_VERSION: &str = "trnm_cex_settlement_v1";
-pub const SETTLEMENT_RECEIPT_LOOKUP_CONTRACT: &str =
-    "trnm_cex_settlement_receipt_lookup_v1";
+pub const SETTLEMENT_RECEIPT_LOOKUP_CONTRACT: &str = "trnm_cex_settlement_receipt_lookup_v1";
 pub const SETTLEMENT_ERROR_CONTRACT: &str = "trnm_cex_settlement_error_v1";
 pub const SETTLEMENT_BACKEND_ID: &str = "cex-settlement-backend";
 pub const GAME_AUTHORITY_HEADER: &str = "x-trnm-game-authority";
@@ -13,8 +12,7 @@ pub const INTENT_HASH_HEADER: &str = "x-trnm-intent-sha256";
 pub const EXPECTED_GAME_AUTHORITY_AUDIENCE: &str = "trnm-cex-settlement-v1";
 pub const SERVER_SIGNED_VALUE_ENTITLEMENT_V2_CONTRACT: &str =
     "trnm_server_signed_value_entitlement_v2";
-pub const SERVER_SIGNED_VALUE_ENTITLEMENT_METADATA_KEY: &str =
-    "server_signed_value_entitlement";
+pub const SERVER_SIGNED_VALUE_ENTITLEMENT_METADATA_KEY: &str = "server_signed_value_entitlement";
 pub const ENTITLEMENT_SIGNER_ISSUER: &str = "trnm-online-game-server";
 pub const BATTLE_WALLET_REWARD_PER_EVENT_CAP: i64 = 100;
 pub const BATTLE_WALLET_REWARD_DAILY_CAP: i64 = 300;
