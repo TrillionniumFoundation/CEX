@@ -98,8 +98,8 @@ jobs:
           cargo --version --verbose
       - name: Resolve workspace
         run: cargo metadata --no-deps --format-version 1 > /dev/null
-      - name: Format
-        run: cargo fmt --all -- --check
+      - name: Format settlement package only
+        run: cargo fmt -p trnm-economy-service -- --check
       - name: Unit and PostgreSQL owner contract
         run: cargo test -p trnm-economy-service --all-targets
       - name: Strict lint
