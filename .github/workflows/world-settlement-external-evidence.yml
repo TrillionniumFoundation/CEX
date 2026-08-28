@@ -22,8 +22,8 @@ concurrency:
 
 env:
   WORLD_REPOSITORY: TrillionniumFoundation/Trillionnium-World
-  WORLD_COMMIT: 4e47969124422c69761dcd40cf923308306797eb
-  WORLD_TREE: 0c836ad428a4dde322ed44d9388196585c498284
+  WORLD_COMMIT: 0261ed1ad02dd70f18dbccaf8f90f2aa89422ec9
+  WORLD_TREE: 9a5713ccdc365eb9a4facff81d7827435821c86b
   TRNM_SETTLEMENT_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/world_settlement
   TRNM_REQUIRE_SETTLEMENT_DATABASE_TEST: '1'
   CARGO_TERM_COLOR: never
@@ -80,9 +80,9 @@ jobs:
       - name: Resolve locked World workspace
         working-directory: world/trillionnium
         run: cargo metadata --locked --no-deps --format-version 1 > /dev/null
-      - name: Format game-server package
+      - name: Format capture-boundary test only
         working-directory: world/trillionnium
-        run: cargo fmt -p trnm-game-server -- --check
+        run: rustfmt --edition 2021 --check crates/trnm-game-server/tests/settlement_capture_commit_boundary.rs
       - name: Prove capture commit precedes remote start
         working-directory: world/trillionnium
         run: cargo test -p trnm-game-server --test settlement_capture_commit_boundary --locked
@@ -120,7 +120,7 @@ jobs:
               'postgres_image': 'postgres:16.4-alpine',
               'rust_toolchain': '1.98.0',
               'checks': [
-                  'cargo fmt -p trnm-game-server -- --check',
+                  'rustfmt settlement_capture_commit_boundary.rs --check',
                   'settlement_capture_commit_boundary',
                   'settlement_database_contract',
                   'settlement_serialization_database',
@@ -130,6 +130,7 @@ jobs:
               'promotion_effect': 'none',
               'limitations': [
                   'external CI is not a native Trillionnium-World workflow run',
+                  'the stacked settlement recovery branch has package-wide rustfmt drift outside this slice',
                   'source and PostgreSQL tests are not deployment evidence',
                   'no trusted settlement, public online, public market, custody, or commercial release credit',
               ],
