@@ -178,6 +178,7 @@ jobs:
                   'exact-intent-byte-immutability',
                   'strict-clippy',
                   'release-build',
+                  'extracted-artifact-checksum-verification',
               ],
               'sha256': hashes,
               'limitations': [
@@ -193,7 +194,17 @@ jobs:
               encoding='utf-8',
           )
           PY
-          sha256sum evidence/* | sort > evidence/SHA256SUMS
+          (
+            cd evidence
+            sha256sum \
+              Cargo.lock \
+              trnm-economy-service \
+              0010_trnm_economy_settlement_v1.sql \
+              source-status.json \
+              manifest.json \
+              | sort > SHA256SUMS
+            sha256sum --check SHA256SUMS
+          )
       - name: Upload exact-head candidate and evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
