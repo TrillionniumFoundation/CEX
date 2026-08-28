@@ -22,20 +22,25 @@ concurrency:
 
 env:
   WORLD_REPOSITORY: TrillionniumFoundation/Trillionnium-World
-  WORLD_COMMIT: ee881a0fec0f40091eaeba67c667ea82ff9d440a
-  WORLD_TREE: ed4610ee910b835fb23833de5e12fe2cca16544b
+  WORLD_COMMIT: b101fcd96f65a2e12be842f12b796e5eaac0e8dd
+  WORLD_TREE: e63a6310c41dcdff21a6dc218b7d36c0e765e071
+  CEX_OWNER_REPOSITORY: TrillionniumFoundation/CEX
+  CEX_OWNER_COMMIT: ea2a257b45df63182e6a58f8265b8edb9154ec89
+  CEX_OWNER_TREE: 9dddb54c9e9cd2ab4e87fd170a17547518f53225
   TRNM_SETTLEMENT_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/world_settlement
   TRNM_REQUIRE_SETTLEMENT_DATABASE_TEST: '1'
+  TRNM_CEX_SETTLEMENT_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/world_settlement
+  TRNM_REQUIRE_CEX_SETTLEMENT_DATABASE_TEST: '1'
   CARGO_TERM_COLOR: never
   CARGO_INCREMENTAL: '0'
   RUST_BACKTRACE: '1'
   RUST_TEST_THREADS: '1'
 
 jobs:
-  exact-world-postgresql-contracts:
-    name: world-settlement-external/exact-postgresql-contracts
+  exact-world-cex-contracts:
+    name: world-settlement-external/exact-gap-closure
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 120
     services:
       postgres:
         image: postgres:16.4-alpine
@@ -60,15 +65,23 @@ jobs:
           ref: ${{ env.WORLD_COMMIT }}
           path: world
           persist-credentials: false
-      - name: Verify exact World commit and tree
+      - name: Checkout exact CEX owner candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ env.CEX_OWNER_REPOSITORY }}
+          ref: ${{ env.CEX_OWNER_COMMIT }}
+          path: cex-owner
+          persist-credentials: false
+      - name: Verify exact commits and trees
         shell: bash
         run: |
           set -euo pipefail
-          actual_commit="$(git -C world rev-parse HEAD)"
-          actual_tree="$(git -C world rev-parse HEAD^{tree})"
-          test "$actual_commit" = "$WORLD_COMMIT"
-          test "$actual_tree" = "$WORLD_TREE"
+          test "$(git -C world rev-parse HEAD)" = "$WORLD_COMMIT"
+          test "$(git -C world rev-parse 'HEAD^{tree}')" = "$WORLD_TREE"
+          test "$(git -C cex-owner rev-parse HEAD)" = "$CEX_OWNER_COMMIT"
+          test "$(git -C cex-owner rev-parse 'HEAD^{tree}')" = "$CEX_OWNER_TREE"
           git -C world diff --exit-code
+          git -C cex-owner diff --exit-code
       - name: Install pinned Rust toolchain
         shell: bash
         run: |
@@ -77,37 +90,89 @@ jobs:
           rustup default 1.98.0
           rustc --version --verbose
           cargo --version --verbose
-      - name: Resolve locked World workspace
-        working-directory: world/trillionnium
-        run: cargo metadata --locked --no-deps --format-version 1 > /dev/null
-      - name: Format settlement slice files
+      - name: Enforce World source and overclaim boundaries
+        working-directory: world
+        run: |
+          python3 -m py_compile \
+            scripts/check-trnm-settlement-runtime-status.py \
+            scripts/test-trnm-settlement-runtime-status-negative.py \
+            scripts/check-world-main-governance.py
+          python3 -m json.tool docs/status/settlement-runtime-v1.json > /dev/null
+          python3 -m json.tool docs/status/world-main-governance-v1.json > /dev/null
+          python3 scripts/check-trnm-settlement-runtime-status.py
+          python3 scripts/test-trnm-settlement-runtime-status-negative.py
+          python3 scripts/check-world-main-governance.py
+          bash -n scripts/check-trnm-settlement-transaction-boundary.sh
+          bash -n scripts/check_trnm_settlement_transaction_boundary.sh
+          ./scripts/check-trnm-settlement-transaction-boundary.sh
+          ./scripts/check_trnm_settlement_transaction_boundary.sh
+      - name: Enforce exact World-to-CEX compatibility
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          world = Path('world/trillionnium/crates/trnm-game-server/src/cex.rs').read_text(encoding='utf-8')
+          cex = Path('cex-owner/services/trnm-economy-service/src/api.rs').read_text(encoding='utf-8')
+          cex_contract = Path('cex-owner/services/trnm-economy-service/src/contract.rs').read_text(encoding='utf-8')
+          required_both = (
+              '/v1/trnm/economy/receipts/by-intent',
+              'x-trnm-intent-sha256',
+          )
+          for marker in required_both:
+              if marker not in world or marker not in cex:
+                  raise SystemExit(f'cross-repository contract marker missing: {marker}')
+          for marker in (
+              '/v1/trnm/economy/intents',
+              'intent_hash_conflict',
+              'wrong_game_authority_audience',
+          ):
+              if marker not in cex:
+                  raise SystemExit(f'CEX owner contract marker missing: {marker}')
+          for marker in (
+              'TERM_EXCHANGE_PROTOCOL_VERSION',
+              'stable_receipt_id',
+              'serialized_intent_hash',
+          ):
+              if marker not in cex_contract:
+                  raise SystemExit(f'CEX durable contract marker missing: {marker}')
+          print('World-to-CEX exact source compatibility: PASS')
+          PY
+      - name: Validate exact CEX owner source
+        working-directory: cex-owner
+        run: |
+          python3 scripts/check-trnm-economy-settlement-contract.py
+          python3 scripts/test-trnm-economy-settlement-status-negative.py
+          cargo generate-lockfile
+          cargo metadata --locked --no-deps --format-version 1 > /dev/null
+          cargo fmt -p trnm-economy-service -- --check
+          cargo test -p trnm-economy-service --all-targets --locked
+          cargo clippy -p trnm-economy-service --all-targets --locked -- -D warnings
+      - name: Resolve and format exact World workspace
         working-directory: world/trillionnium
         run: |
-          rustfmt --edition 2021 --check \
-            crates/trnm-game-server/src/bin/trnm-entitlement-signer.rs \
-            crates/trnm-game-server/tests/settlement_capture_commit_boundary.rs \
-            crates/trnm-game-server/tests/settlement_database_contract.rs \
-            crates/trnm-game-server/tests/settlement_serialization_database.rs
-      - name: Prove capture commit precedes remote start
-        working-directory: world/trillionnium
-        run: cargo test -p trnm-game-server --lib --test settlement_capture_commit_boundary --locked
-      - name: Prove settlement identity and lease fencing
-        working-directory: world/trillionnium
-        run: cargo test -p trnm-game-server --lib --test settlement_database_contract --locked
-      - name: Prove account serialization and unrelated concurrency
-        working-directory: world/trillionnium
-        run: cargo test -p trnm-game-server --lib --test settlement_serialization_database --locked
-      - name: Strict lint for settlement evidence targets
+          cargo metadata --locked --no-deps --format-version 1 > /dev/null
+          cargo fmt --all -- --check
+      - name: Run World settlement unit and ownership contracts
         working-directory: world/trillionnium
         run: |
-          cargo clippy -p trnm-game-server \
-            --lib \
-            --bin trnm-entitlement-signer \
-            --test settlement_capture_commit_boundary \
-            --test settlement_database_contract \
-            --test settlement_serialization_database \
-            --locked -- -D warnings
-      - name: Write bounded external evidence
+          cargo test -p trnm-game-server --lib --locked
+          cargo test -p trnm-game-server --bin trnm-entitlement-signer --locked
+          cargo test -p trnm-game-server --test settlement_game_server_boundary --locked
+          cargo test -p trnm-game-server --test settlement_remote_identity_contract --locked
+          cargo test -p trnm-game-server --test settlement_worker_contract --locked
+          cargo test -p trnm-game-server --test settlement_fault_model --locked
+      - name: Run World PostgreSQL settlement contracts
+        working-directory: world/trillionnium
+        run: |
+          cargo test -p trnm-game-server --test settlement_capture_commit_boundary --locked
+          cargo test -p trnm-game-server --test settlement_database_contract --locked
+          cargo test -p trnm-game-server --test settlement_serialization_database --locked
+          cargo test -p trnm-game-server --test settlement_operator_controls_database --locked
+      - name: Strict lint for complete World settlement target
+        working-directory: world/trillionnium
+        run: cargo clippy -p trnm-game-server --all-targets --locked -- -D warnings
+      - name: Write exact cross-repository evidence
         shell: bash
         run: |
           mkdir -p evidence
@@ -117,13 +182,18 @@ jobs:
           import os
           from pathlib import Path
 
-          world_commit = os.environ['WORLD_COMMIT']
-          world_tree = os.environ['WORLD_TREE']
           payload = {
-              'schema': 'trnm_world_settlement_external_ci_evidence_v1',
-              'repository': os.environ['WORLD_REPOSITORY'],
-              'commit': world_commit,
-              'tree': world_tree,
+              'schema': 'trnm_world_cex_settlement_external_ci_evidence_v2',
+              'world': {
+                  'repository': os.environ['WORLD_REPOSITORY'],
+                  'commit': os.environ['WORLD_COMMIT'],
+                  'tree': os.environ['WORLD_TREE'],
+              },
+              'cex_owner': {
+                  'repository': os.environ['CEX_OWNER_REPOSITORY'],
+                  'commit': os.environ['CEX_OWNER_COMMIT'],
+                  'tree': os.environ['CEX_OWNER_TREE'],
+              },
               'evidence_repository': os.environ['GITHUB_REPOSITORY'],
               'workflow': os.environ['GITHUB_WORKFLOW'],
               'run_id': int(os.environ['GITHUB_RUN_ID']),
@@ -132,32 +202,39 @@ jobs:
               'postgres_image': 'postgres:16.4-alpine',
               'rust_toolchain': '1.98.0',
               'checks': [
-                  'rustfmt settlement slice files --check',
-                  'settlement_capture_commit_boundary',
-                  'settlement_database_contract',
-                  'settlement_serialization_database',
-                  'clippy settlement evidence targets -D warnings',
+                  'world fail-closed source and status contracts',
+                  'world governance source projection',
+                  'exact World-to-CEX compatibility',
+                  'CEX owner static and negative contracts',
+                  'CEX owner PostgreSQL Rust tests and Clippy',
+                  'World package-wide rustfmt',
+                  'World generated ownership, signer, identity, worker and fault tests',
+                  'World capture, lease, serialization and operator PostgreSQL tests',
+                  'World all-target Clippy',
               ],
               'native_world_actions_run': False,
               'promotion_effect': 'none',
               'limitations': [
                   'external CI is not a native Trillionnium-World workflow run',
-                  'the stacked settlement recovery branch has package-wide rustfmt drift outside this slice',
                   'source and PostgreSQL tests are not deployment evidence',
+                  'CEX and World pull requests remain unmerged candidates',
+                  'main ruleset and independent reviewer evidence remain required',
                   'no trusted settlement, public online, public market, custody, or commercial release credit',
               ],
           }
           canonical = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()
           payload['evidence_payload_sha256'] = hashlib.sha256(canonical).hexdigest()
-          Path('evidence/world-settlement-external-evidence.json').write_text(
+          Path('evidence/world-cex-settlement-external-evidence.json').write_text(
               json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8'
           )
           PY
-          python3 -m json.tool evidence/world-settlement-external-evidence.json > /dev/null
-      - name: Upload external evidence artifact
+          python3 -m json.tool evidence/world-cex-settlement-external-evidence.json > /dev/null
+          sha256sum evidence/world-cex-settlement-external-evidence.json > evidence/SHA256SUMS
+      - name: Upload exact cross-repository evidence artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: world-settlement-external-evidence-${{ env.WORLD_COMMIT }}
-          path: evidence/world-settlement-external-evidence.json
+          name: world-cex-settlement-${{ env.WORLD_COMMIT }}-${{ env.CEX_OWNER_COMMIT }}
+          path: evidence/
           if-no-files-found: error
           retention-days: 30
+          compression-level: 9
