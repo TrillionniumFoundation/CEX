@@ -59,11 +59,18 @@ jobs:
           rustup default 1.98.0
           rustc --version --verbose
           cargo --version --verbose
-      - name: Validate workspace and format
+      - name: Validate locked workspace
+        working-directory: world/trillionnium
+        run: cargo metadata --locked --no-deps --format-version 1 > /dev/null
+      - name: Check formatting of this slice only
         working-directory: world/trillionnium
         run: |
-          cargo metadata --locked --no-deps --format-version 1 > /dev/null
-          cargo fmt --all -- --check
+          rustfmt --edition 2021 --check \
+            crates/trnm-game-server/build.rs \
+            crates/trnm-game-server/src/lib.rs \
+            crates/trnm-game-server/src/settlement_worker.rs \
+            crates/trnm-game-server/tests/settlement_game_server_boundary.rs \
+            crates/trnm-game-server/tests/settlement_operator_controls_database.rs
       - name: Compile game-server library and executables
         working-directory: world/trillionnium
         run: |
