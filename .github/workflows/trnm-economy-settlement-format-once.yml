@@ -1,0 +1,37 @@
+name: trnm-economy-settlement-format-once
+
+on:
+  push:
+    branches:
+      - fix/cex-settlement-receipt-lookup-v1
+    paths:
+      - '.github/workflows/trnm-economy-settlement-format-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  rustfmt:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - name: Install pinned rustfmt
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt
+          rustup default 1.98.0
+      - name: Format workspace and push exact result
+        run: |
+          cargo fmt --all
+          if git diff --quiet; then
+            echo 'rustfmt produced no changes'
+            exit 0
+          fi
+          git config user.name 'trnm-settlement-format-bot'
+          git config user.email 'trnm-settlement-format-bot@users.noreply.github.com'
+          git add Cargo.toml services/trnm-economy-service
+          git commit -m 'style(settlement): apply pinned rustfmt'
+          git push origin HEAD:fix/cex-settlement-receipt-lookup-v1
