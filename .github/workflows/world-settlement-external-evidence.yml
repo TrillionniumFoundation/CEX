@@ -154,11 +154,62 @@ jobs:
           cargo fmt -p trnm-economy-service -- --check
           cargo test -p trnm-economy-service --all-targets --locked
           cargo clippy -p trnm-economy-service --all-targets --locked -- -D warnings
-      - name: Resolve and format exact World workspace
+      - name: Apply pinned rustfmt to the exact World worktree
         working-directory: world/trillionnium
         run: |
           cargo metadata --locked --no-deps --format-version 1 > /dev/null
-          cargo fmt --all -- --check
+          cargo fmt --all
+      - name: Assemble exact World rustfmt remediation
+        run: |
+          set -euo pipefail
+          mkdir -p run/world-rustfmt/formatted-files run/world-rustfmt/generated
+          git -C world diff --binary --full-index > run/world-rustfmt/world-rustfmt.patch
+          git -C world diff --name-only --diff-filter=ACMRT > run/world-rustfmt/changed-files.txt
+          if test -s run/world-rustfmt/changed-files.txt; then
+            while IFS= read -r path; do
+              mkdir -p "run/world-rustfmt/formatted-files/$(dirname "$path")"
+              cp "world/$path" "run/world-rustfmt/formatted-files/$path"
+            done < run/world-rustfmt/changed-files.txt
+          fi
+          generated=$(find world/trillionnium/target -path '*/out/trnm_game_server_lib_generated.rs' -type f -print -quit || true)
+          worker_generated=$(find world/trillionnium/target -path '*/out/trnm_settlement_worker_generated.rs' -type f -print -quit || true)
+          test -z "$generated" || cp "$generated" run/world-rustfmt/generated/trnm_game_server_lib_generated.rs
+          test -z "$worker_generated" || cp "$worker_generated" run/world-rustfmt/generated/trnm_settlement_worker_generated.rs
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path('run/world-rustfmt')
+          changed = (root / 'changed-files.txt').read_text().splitlines()
+          files = sorted(path for path in root.rglob('*') if path.is_file())
+          payload = {
+              'schema': 'trnm_world_settlement_rustfmt_remediation_v1',
+              'world_commit': os.environ.get('WORLD_COMMIT', '${{ steps.lock.outputs.world_commit }}'),
+              'world_tree': '${{ steps.lock.outputs.world_tree }}',
+              'rust_toolchain': '1.98.0',
+              'changed_files': changed,
+              'clean_before_tests': not changed,
+              'sha256': {
+                  str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+                  for path in files
+              },
+          }
+          canonical = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()
+          payload['payload_sha256'] = hashlib.sha256(canonical).hexdigest()
+          (root / 'manifest.json').write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
+          PY
+          (
+            cd run/world-rustfmt
+            find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+            sha256sum --check SHA256SUMS
+          )
+      - name: Upload World rustfmt remediation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: world-rustfmt-${{ steps.lock.outputs.world_commit }}
+          path: run/world-rustfmt/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 9
       - name: Run World settlement unit and ownership contracts
         working-directory: world/trillionnium
         run: |
@@ -178,6 +229,8 @@ jobs:
       - name: Strict lint for complete World settlement target
         working-directory: world/trillionnium
         run: cargo clippy -p trnm-game-server --all-targets --locked -- -D warnings
+      - name: Require the exact World source to need no remediation
+        run: git -C world diff --exit-code
       - name: Write exact cross-repository evidence
         env:
           WORLD_REPOSITORY: ${{ steps.lock.outputs.world_repository }}
