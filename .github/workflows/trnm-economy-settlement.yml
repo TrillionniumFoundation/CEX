@@ -1,0 +1,106 @@
+name: trnm-economy-settlement
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/trnm-economy-settlement.yml'
+      - 'Cargo.toml'
+      - 'migrations/0010_trnm_economy_settlement_v1.sql'
+      - 'services/trnm-economy-service/**'
+      - 'docs/trnm-economy-settlement-receipt-lookup-v1.md'
+      - 'docs/status/trnm-economy-settlement-v1.json'
+      - 'scripts/check-trnm-economy-settlement-contract.py'
+      - 'scripts/test-trnm-economy-settlement-status-negative.py'
+  push:
+    branches:
+      - fix/cex-settlement-receipt-lookup-v1
+    paths:
+      - '.github/workflows/trnm-economy-settlement.yml'
+      - 'Cargo.toml'
+      - 'migrations/0010_trnm_economy_settlement_v1.sql'
+      - 'services/trnm-economy-service/**'
+      - 'docs/trnm-economy-settlement-receipt-lookup-v1.md'
+      - 'docs/status/trnm-economy-settlement-v1.json'
+      - 'scripts/check-trnm-economy-settlement-contract.py'
+      - 'scripts/test-trnm-economy-settlement-status-negative.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trnm-economy-settlement-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: '0'
+  RUST_BACKTRACE: '1'
+  RUST_TEST_THREADS: '1'
+
+jobs:
+  static-contracts:
+    name: trnm-economy-settlement/static-contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Parse configuration artifacts
+        run: |
+          python3 -m py_compile \
+            scripts/check-trnm-economy-settlement-contract.py \
+            scripts/test-trnm-economy-settlement-status-negative.py
+          python3 - <<'PY'
+          import json
+          import tomllib
+          from pathlib import Path
+          json.loads(Path('docs/status/trnm-economy-settlement-v1.json').read_text())
+          tomllib.loads(Path('Cargo.toml').read_text())
+          tomllib.loads(Path('services/trnm-economy-service/Cargo.toml').read_text())
+          PY
+      - name: Enforce source and status boundaries
+        run: python3 scripts/check-trnm-economy-settlement-contract.py
+      - name: Reject promotion overclaims
+        run: python3 scripts/test-trnm-economy-settlement-status-negative.py
+
+  rust-postgresql-contracts:
+    name: trnm-economy-settlement/rust-postgresql-contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cex_settlement
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d cex_settlement"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      TRNM_CEX_SETTLEMENT_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cex_settlement
+      TRNM_REQUIRE_CEX_SETTLEMENT_DATABASE_TEST: '1'
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
+          rustup default 1.98.0
+          rustc --version --verbose
+          cargo --version --verbose
+      - name: Resolve workspace
+        run: cargo metadata --no-deps --format-version 1 > /dev/null
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Unit and PostgreSQL owner contract
+        run: cargo test -p trnm-economy-service --all-targets
+      - name: Strict lint
+        run: cargo clippy -p trnm-economy-service --all-targets -- -D warnings
