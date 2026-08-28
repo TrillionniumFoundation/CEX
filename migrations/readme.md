@@ -45,3 +45,13 @@ strict Review Chain proof manifest/fileset 与 terminal bundle 的不可空绑�
 完整 evidence digest 约束和 relational/JSON parity guard；重复应用会核对列类型、
 not-null/default 目录形状；任何旧格式记录、带不兼容记录的部分迁移或 bundle
 schema 漂移均失败关闭。
+
+CEX P0 production-baseline 的 canonical migration head 当前为
+`0072_add_execution_ledger_settlement_operator.sql`。0065 为 Ledger effect
+增加不可变 operation provenance；0066 建立 Invocation 与 reserve/consume/refund
+的精确 durable contract。P0-N5 的 Execution 终态结算按职责拆成唯一编号的
+0067–0072：schema/fingerprint、数据库 guard 与 append-only transition evidence、
+exact enqueue 与 shadow promotion、短事务 claim/lease 和 verified receipt、
+worker outcome persistence，以及 operator acknowledgement/requeue/status projection。
+这些迁移必须按编号完整执行；不得把已拆分、已废弃的
+`0067_add_execution_ledger_settlement_commands.sql` 重新加入链中。
