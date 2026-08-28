@@ -33,8 +33,22 @@ def require(relative: str, *markers: str) -> str:
     return content
 
 
-migration = require(
-    "migrations/0067_add_execution_ledger_settlement_commands.sql",
+MIGRATION_PATHS = [
+    "migrations/0067_add_execution_ledger_settlement_schema.sql",
+    "migrations/0068_add_execution_ledger_settlement_guards.sql",
+    "migrations/0069_add_execution_ledger_settlement_enqueue.sql",
+    "migrations/0070_add_execution_ledger_settlement_claim.sql",
+    "migrations/0071_add_execution_ledger_settlement_finish.sql",
+    "migrations/0072_add_execution_ledger_settlement_operator.sql",
+]
+migration_parts = [read(relative) for relative in MIGRATION_PATHS]
+migration = "\n".join(migration_parts)
+for relative, content in zip(MIGRATION_PATHS, migration_parts):
+    if content and not content.strip().lower().startswith("begin;"):
+        PROBLEMS.append(f"{relative} must begin with BEGIN")
+    if content and not content.strip().lower().endswith("commit;"):
+        PROBLEMS.append(f"{relative} must end with COMMIT")
+for marker in (
     "cex_execution_ledger_settlement_commands_v1",
     "cex_validate_execution_ledger_settlement_insert_v1",
     "cex_enqueue_execution_ledger_settlement_v1",
@@ -47,17 +61,20 @@ migration = require(
     "execution_mode = 'active'",
     "cex_execution_ledger_settlement_status_v1",
     "cex_enqueue_audit_outbox_v1",
-)
-if migration and not migration.strip().lower().startswith("begin;"):
-    PROBLEMS.append("0067 migration must begin with BEGIN")
-if migration and not migration.strip().lower().endswith("commit;"):
-    PROBLEMS.append("0067 migration must end with COMMIT")
-# The marker is compared case-insensitively because SQL formatting is not normative.
+):
+    if marker not in migration:
+        PROBLEMS.append(f"settlement migration series lacks required marker: {marker}")
 if "for update skip locked" not in migration.lower():
-    PROBLEMS.append("0067 claim function lacks FOR UPDATE SKIP LOCKED")
+    PROBLEMS.append("settlement claim function lacks FOR UPDATE SKIP LOCKED")
 
-worker = require(
-    "services/execution-service/src/settlement_worker.rs",
+WORKER_PARTS = [
+    "services/execution-service/src/settlement_worker_config.rs",
+    "services/execution-service/src/settlement_worker_runtime.rs",
+    "services/execution-service/src/settlement_worker_helpers.rs",
+    "services/execution-service/src/settlement_worker_tests.rs",
+]
+worker = "\n".join(read(relative) for relative in WORKER_PARTS)
+for marker in (
     "cex_claim_execution_ledger_settlements_v1",
     "settle_invocation",
     "cex_finish_execution_ledger_settlement_v1",
@@ -67,7 +84,17 @@ worker = require(
     "claim is intentionally left for lease recovery",
     "CEX_EXECUTION_SETTLEMENT_WORKER_ID",
     "CEX_EXECUTION_LEDGER_MODE=dual or require_v2",
+):
+    if marker not in worker:
+        PROBLEMS.append(f"settlement worker source series lacks required marker: {marker}")
+require(
+    "services/execution-service/src/settlement_worker.rs",
+    'include!("settlement_worker_config.rs")',
+    'include!("settlement_worker_runtime.rs")',
+    'include!("settlement_worker_helpers.rs")',
+    'include!("settlement_worker_tests.rs")',
 )
+
 for pattern in (
     r"\bf64\b",
     r"reserve_amount",
@@ -162,13 +189,13 @@ if manifest_raw:
     except (json.JSONDecodeError, KeyError, TypeError) as error:
         PROBLEMS.append(f"cannot decode release manifest template: {error}")
     else:
-        expected = "0067_add_execution_ledger_settlement_commands.sql"
+        expected = "0072_add_execution_ledger_settlement_operator.sql"
         if actual != expected:
             PROBLEMS.append(f"release manifest migration_head={actual!r}, expected {expected!r}")
 
 result = {
     "status": "failed" if PROBLEMS else "ok",
-    "migration_head": "0067_add_execution_ledger_settlement_commands.sql",
+    "migration_head": "0072_add_execution_ledger_settlement_operator.sql",
     "api_adapter_activated": "settle_invocation(" in api if api else None,
     "problems": PROBLEMS,
 }
