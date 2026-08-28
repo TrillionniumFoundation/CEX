@@ -97,21 +97,16 @@ def verify_core() -> None:
         forbid_path(obsolete)
 
     require_text(
-        "migrations/0064_add_audit_source_baseline_backfill.sql",
-        "cex_backfill_audit_source_baseline_v1",
-        "execution.persisted.baseline",
-        "identity.api_key.persisted.baseline",
-    )
-    require_text(
-        "migrations/0065_add_ledger_operation_identity.sql",
-        "cex_apply_ledger_effect_v1",
-        "idx_ledger_entries_scoped_idempotency_v1",
-        "ledger.effect.persisted",
-        "ledger_entries is append-only",
+        "migrations/0066_add_invocation_ledger_contract.sql",
+        "cex_invocation_ledger_contracts_v1",
+        "cex_register_invocation_ledger_contract_v1",
+        "cex_invocation_ledger_effect_request_v1",
+        "cex_bind_invocation_ledger_effect_v1",
+        "missing_effect_evidence",
     )
 
 
-def verify_exact_caller_contract() -> None:
+def verify_exact_contracts() -> None:
     require_text(
         "crates/shared-types/src/ledger_v2.rs",
         "LedgerEffectRequestV1",
@@ -122,7 +117,6 @@ def verify_exact_caller_contract() -> None:
     require_text(
         "services/ledger-service/src/ledger_effects.rs",
         "shared_types::ledger_v2",
-        "request.validate",
         "ledger_currency_mismatch",
         "cex_apply_ledger_effect_v1",
     )
@@ -130,30 +124,36 @@ def verify_exact_caller_contract() -> None:
         "services/gateway-service/src/infrastructure/ledger_v2_client.rs",
         "CEX_GATEWAY_LEDGER_MODE",
         "apply_ledger_effect_v2",
-        "invocation_ledger_effect",
         "MoneyAmount",
     )
     require_text(
-        "docs/ledger-caller-cutover-v1.md",
-        "No canonical caller may derive minor units",
-        "cutover_ready=false",
+        "services/execution-service/src/ledger_settlement.rs",
+        "ExecutionLedgerMode",
+        "cex_invocation_ledger_effect_request_v1",
+        "RetryableExactReplay",
+        "ReconcileRequired",
+        "validate_success_receipt",
     )
-    try:
-        result = subprocess.run(
-            [sys.executable, str(ROOT / "scripts/check-ledger-caller-cutover.py")],
-            cwd=ROOT,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            check=False,
-        )
-    except OSError as error:
-        PROBLEMS.append(f"cannot execute Ledger caller cutover gate: {error}")
-    else:
-        if result.returncode != 0:
-            PROBLEMS.append(
-                "Ledger caller cutover gate failed: " + result.stdout.strip()
+
+    for script in (
+        "scripts/check-ledger-caller-cutover.py",
+        "scripts/check-invocation-ledger-contract-static.py",
+        "scripts/check-execution-ledger-settlement.py",
+    ):
+        try:
+            result = subprocess.run(
+                [sys.executable, str(ROOT / script)],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                check=False,
             )
+        except OSError as error:
+            PROBLEMS.append(f"cannot execute {script}: {error}")
+        else:
+            if result.returncode != 0:
+                PROBLEMS.append(f"{script} failed: {result.stdout.strip()}")
 
 
 def verify_gates_and_plan() -> None:
@@ -164,14 +164,13 @@ def verify_gates_and_plan() -> None:
     )
     require_text(
         ".github/workflows/p0-migration-gate.yml",
-        "scripts/check-p0-migrations-postgres.sh",
-        "scripts/check-audit-source-baseline-postgres.sh",
+        "scripts/check-invocation-ledger-terminal-postgres.sh",
         "scripts/check-ledger-operation-identity-postgres.sh",
     )
     require_text(
-        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v8.md",
-        "caller migration blocked until exact reserve contract",
-        "P0-N2 Genesis-as-entry",
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v10.md",
+        "P0-N5 transaction separation remains the activation blocker",
+        "settlement command and receipt schema",
     )
 
 
@@ -179,7 +178,7 @@ def main() -> int:
     migration_number, migration_filename = latest_migration()
     verify_release_template(migration_filename)
     verify_core()
-    verify_exact_caller_contract()
+    verify_exact_contracts()
     verify_gates_and_plan()
     result = {
         "status": "failed" if PROBLEMS else "ok",

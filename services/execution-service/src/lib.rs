@@ -3,6 +3,7 @@ mod service_auth;
 
 pub mod api;
 pub mod dispatch_policy;
+pub mod ledger_settlement;
 pub mod providers;
 pub mod state;
 
