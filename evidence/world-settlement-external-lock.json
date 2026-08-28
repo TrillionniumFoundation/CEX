@@ -2,8 +2,8 @@
   "schema": "trnm_world_cex_settlement_external_lock_v1",
   "world": {
     "repository": "TrillionniumFoundation/Trillionnium-World",
-    "commit": "49f81692362a443edb1cd1510e046d93aa0a8e2f",
-    "tree": "55ae01232c78fdfab963f53552fec6587b8557d8"
+    "commit": "e6995fbd97a7e9d64950d13f066cb8c24d55f8c6",
+    "tree": "1197c3760fc3af5b5286c6dc18e2bc982923c1d0"
   },
   "cex_owner": {
     "repository": "TrillionniumFoundation/CEX",
