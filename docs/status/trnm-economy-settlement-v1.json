@@ -18,6 +18,10 @@
     "owner_repository_receipt_lookup_endpoint",
     "lookup_and_submit_share_one_postgresql_authority",
     "intent_id_and_sha256_are_immutable",
+    "exact_serialized_intent_bytes_are_durable",
+    "database_recomputes_intent_sha256",
+    "runtime_revalidates_durable_bytes_hash_and_json",
+    "receipt_rows_reject_update_delete_and_truncate",
     "exact_duplicate_reuses_the_durable_receipt",
     "mismatched_hash_returns_immutable_conflict",
     "release_reward_ledger_and_receipt_commit_atomically",
@@ -25,7 +29,7 @@
     "active_ed25519_entitlement_key_verification",
     "game_authority_audience_binding",
     "restrictive_receipt_foreign_keys",
-    "postgresql_response_loss_and_concurrency_contract_tests"
+    "postgresql_response_loss_concurrency_exact_bytes_and_immutability_contract_tests"
   ],
   "open_gates": [
     "obtain_exact_commit_github_actions_evidence",
