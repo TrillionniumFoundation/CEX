@@ -67,7 +67,11 @@ Content-Type: application/json
 ```
 
 The supplied hash is recomputed from the exact typed `EconomicIntent` JSON
-encoding before any value mutation begins.
+encoding before any value mutation begins. The resulting byte sequence—not
+only a normalized `jsonb` projection—is persisted as `bytea`. PostgreSQL
+recomputes SHA-256 from those bytes and rejects any row whose bytes, hash,
+primary-key intent ID, JSON projection, receipt identity or receipt evidence
+diverge.
 
 Supported candidate kinds:
 
@@ -88,6 +92,14 @@ x-trnm-game-authority: <credential>
 x-trnm-intent-sha256: <same exact hash>
 ```
 
+Before returning a stored receipt, the service independently revalidates:
+
+- `SHA-256(intent_bytes) == intent_hash`;
+- decoding the exact bytes produces the stored JSON projection;
+- the typed intent ID equals the table primary key;
+- the receipt ID is derived from the exact intent hash;
+- receipt intent/term identity and evidence bind the exact stored intent.
+
 Response:
 
 ```json
@@ -107,7 +119,7 @@ Response:
     "settlement_reference": "trnm-cex-settlement-v1:...",
     "ledger_entry_id": "...",
     "reason": null,
-    "evidence": {},
+    "evidence": {"intent_hash":"..."},
     "finalized_at_epoch": 0
   }
 }
@@ -135,7 +147,8 @@ The immutable identities are:
 
 ```text
 intent_id
-intent_hash = SHA-256(exact EconomicIntent JSON bytes)
+intent_bytes = exact serde EconomicIntent JSON bytes
+intent_hash = SHA-256(intent_bytes)
 receipt_id = trnm-cex-receipt-v1:<intent_hash>
 ```
 
@@ -144,16 +157,19 @@ from `intent_id`.
 
 Within that transaction:
 
-1. an existing row with the same hash returns the stored receipt;
-2. an existing row with a different hash returns an immutable conflict;
-3. a new reward locks the wallet account and daily-budget row;
-4. the account balance and ledger entry are written;
-5. the exact intent and receipt are inserted;
-6. the transaction commits;
-7. only after commit may the HTTP success response be emitted.
+1. an existing row is decoded and revalidated from its exact bytes;
+2. an existing row with the same exact bytes/hash returns the stored receipt;
+3. an existing row with different bytes or hash returns an immutable conflict;
+4. a new reward locks the wallet account and daily-budget row;
+5. the account balance and ledger entry are written;
+6. exact intent bytes, the JSON projection and receipt are inserted;
+7. PostgreSQL recomputes and checks the byte digest and all identity bindings;
+8. the transaction commits;
+9. only after commit may the HTTP success response be emitted.
 
-No in-memory cache is authoritative. Receipt and budget foreign keys use
-`ON DELETE RESTRICT`.
+The receipt table has statement-level triggers that reject `UPDATE`, `DELETE`
+and `TRUNCATE` with SQLSTATE `55000`. No in-memory cache is authoritative.
+Receipt, account and ledger foreign keys use `ON DELETE RESTRICT`.
 
 ## Reward policy
 
@@ -176,15 +192,13 @@ entitlements and policy-limit violations produce no ledger mutation.
 All errors use `trnm_cex_settlement_error_v1` and include stable `code` and
 `retryable` fields.
 
-Important mappings:
-
 | HTTP | Code | Meaning |
 |---|---|---|
 | 400 | `invalid_intent_hash` | malformed hash |
 | 401 | `missing_game_authority` / `invalid_game_authority` | missing or invalid credential |
 | 403 | `wrong_game_authority_audience` | valid principal for another audience |
 | 404 | `intent_not_found` | neither durable intent nor receipt exists |
-| 409 | `intent_hash_conflict` | immutable ID/hash collision |
+| 409 | `intent_hash_conflict` | immutable ID/hash/byte collision |
 | 422 | policy or entitlement code | permanent input/policy rejection |
 | 503 | `settlement_database_unavailable` | ambiguous infrastructure failure; do not submit again without lookup |
 
@@ -198,12 +212,22 @@ The mandatory PostgreSQL contract suite covers:
 - exact duplicate receipt reuse with one ledger mutation;
 - concurrent duplicate submission with one mutation;
 - immutable hash conflict;
+- exact stored byte equality and runtime byte/hash/JSON revalidation;
+- direct SQL bytes/hash mismatch rejection;
+- receipt-row update, delete and truncate rejection;
 - missing credential, wrong audience and malformed hash;
 - invalid Ed25519 signature;
 - non-value contract completion;
 - per-account daily reward cap;
 - lookup hash mismatch.
 
-Promotion still requires exact-commit GitHub Actions, review, merge, immutable
-deployment artifact, deployed process-kill/response-loss tests, retention and
-restore approval, and a cross-repository component lock.
+The exact-head workflow checks out the PR head SHA rather than GitHub's
+synthetic merge ref. It emits a retained candidate artifact containing the
+release binary, generated dependency lock, migration, source status,
+SHA-256 manifest, exact commit/tree and workflow identity. That artifact is a
+source/build candidate only, not deployment evidence.
+
+Promotion still requires a committed dependency lock, review, merge,
+independently reviewed immutable deployment artifact, deployed
+process-kill/response-loss tests, retention and restore approval, and a
+cross-repository component lock.
