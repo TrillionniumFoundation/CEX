@@ -3,8 +3,8 @@ use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, Executor, PgPool, Row};
 use trnm_economy_service::{
     contract::{
-        serialized_intent_hash, stable_receipt_id, ActorRef, EconomicIntent,
-        EconomicIntentKind, IdempotencyKey, TERM_EXCHANGE_PROTOCOL_VERSION,
+        serialized_intent_hash, stable_receipt_id, ActorRef, EconomicIntent, EconomicIntentKind,
+        IdempotencyKey, TERM_EXCHANGE_PROTOCOL_VERSION,
     },
     repository::SettlementPlan,
     SettlementRepository,
@@ -91,10 +91,7 @@ async fn exact_intent_bytes_are_durable_hash_checked_and_append_only() {
     let intent = complete_contract_intent("contract-exact-bytes");
     let intent_bytes = serde_json::to_vec(&intent).expect("encode exact intent bytes");
     let intent_hash = serialized_intent_hash(&intent).expect("hash exact intent bytes");
-    assert_eq!(
-        intent_hash,
-        format!("{:x}", Sha256::digest(&intent_bytes))
-    );
+    assert_eq!(intent_hash, format!("{:x}", Sha256::digest(&intent_bytes)));
 
     let receipt = repository
         .submit(
@@ -140,16 +137,13 @@ async fn exact_intent_bytes_are_durable_hash_checked_and_append_only() {
     let bad_bytes = serde_json::to_vec(&bad_intent).unwrap();
     let bad_json = serde_json::to_value(&bad_intent).unwrap();
     let declared_hash = "0".repeat(64);
-    assert_ne!(
-        declared_hash,
-        format!("{:x}", Sha256::digest(&bad_bytes))
-    );
+    assert_ne!(declared_hash, format!("{:x}", Sha256::digest(&bad_bytes)));
     let bad_receipt_id = stable_receipt_id(&declared_hash);
     let bad_receipt = json!({
         "protocol_version": TERM_EXCHANGE_PROTOCOL_VERSION,
-        "receipt_id": bad_receipt_id,
-        "intent_id": bad_intent.intent_id,
-        "term_id": bad_intent.term_id,
+        "receipt_id": bad_receipt_id.clone(),
+        "intent_id": bad_intent.intent_id.clone(),
+        "term_id": bad_intent.term_id.clone(),
         "backend_id": "cex-settlement-backend",
         "backend_kind": "cex",
         "status": "settled",
@@ -157,7 +151,7 @@ async fn exact_intent_bytes_are_durable_hash_checked_and_append_only() {
         "settlement_reference": null,
         "ledger_entry_id": null,
         "reason": null,
-        "evidence": {"intent_hash": declared_hash},
+        "evidence": {"intent_hash": declared_hash.clone()},
         "finalized_at_epoch": 1_787_918_400_i64
     });
     let digest_error = sqlx::query(
