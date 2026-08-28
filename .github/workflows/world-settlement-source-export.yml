@@ -18,7 +18,7 @@ jobs:
     env:
       WORLD_REPOSITORY: TrillionniumFoundation/Trillionnium-World
       WORLD_COMMIT: ee881a0fec0f40091eaeba67c667ea82ff9d440a
-      WORLD_TREE: 8f30d4f9786122516a391607265f484c3bfdbd9e
+      WORLD_TREE: ed4610ee910b835fb23833de5e12fe2cca16544b
     steps:
       - name: Checkout exact World candidate
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -51,7 +51,7 @@ jobs:
               'schema': 'trnm_world_settlement_source_export_v1',
               'repository': 'TrillionniumFoundation/Trillionnium-World',
               'commit': 'ee881a0fec0f40091eaeba67c667ea82ff9d440a',
-              'tree': '8f30d4f9786122516a391607265f484c3bfdbd9e',
+              'tree': 'ed4610ee910b835fb23833de5e12fe2cca16544b',
               'files': sorted(path.name for path in Path('export').iterdir()),
           }
           Path('export/manifest.json').write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
