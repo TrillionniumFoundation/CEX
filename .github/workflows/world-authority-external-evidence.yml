@@ -7,11 +7,13 @@ on:
       - ci/world-settlement-capture-boundary-v1
     paths:
       - '.github/workflows/world-authority-external-evidence.yml'
+      - 'evidence/world-authority-external-lock.json'
   pull_request:
     branches:
       - main
     paths:
       - '.github/workflows/world-authority-external-evidence.yml'
+      - 'evidence/world-authority-external-lock.json'
 
 permissions:
   contents: read
@@ -19,14 +21,6 @@ permissions:
 concurrency:
   group: world-authority-external-evidence-${{ github.ref }}
   cancel-in-progress: true
-
-env:
-  WORLD_REPOSITORY: TrillionniumFoundation/Trillionnium-World
-  WORLD_COMMIT: 9166444848c15059ebc9412a70149d253d1780bb
-  WORLD_TREE: a0fd2c7f619009e5a87ed76eaaa6ac80d99bb50d
-  GAME_REPOSITORY: TrillionniumFoundation/TrillionniumGame
-  GAME_COMMIT: 1db1ce5fa2469c4e96575dc1caf06a11f3b66d16
-  GAME_TREE: dd5cf06e923cd755c00dc01feafb8af82242fc05
 
 jobs:
   world-fixture:
@@ -36,17 +30,38 @@ jobs:
     steps:
       - name: Checkout evidence definition
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Load exact authority lock
+        id: lock
+        run: |
+          jq -e '
+            .schema == "trnm_world_authority_external_lock_v1" and
+            (.world.repository | type == "string") and
+            (.world.commit | test("^[0-9a-f]{40}$")) and
+            (.world.tree | test("^[0-9a-f]{40}$")) and
+            .world.role == "deterministic_fixture_only" and
+            (.game_nakama.repository | type == "string") and
+            (.game_nakama.commit | test("^[0-9a-f]{40}$")) and
+            (.game_nakama.tree | test("^[0-9a-f]{40}$")) and
+            .game_nakama.role == "target_authority_candidate" and
+            .cutover_authorized == false and
+            .closed_online_promoted == false and
+            .public_online_enabled == false and
+            .public_player_market_enabled == false
+          ' evidence/world-authority-external-lock.json >/dev/null
+          echo "world_repository=$(jq -r '.world.repository' evidence/world-authority-external-lock.json)" >> "$GITHUB_OUTPUT"
+          echo "world_commit=$(jq -r '.world.commit' evidence/world-authority-external-lock.json)" >> "$GITHUB_OUTPUT"
+          echo "world_tree=$(jq -r '.world.tree' evidence/world-authority-external-lock.json)" >> "$GITHUB_OUTPUT"
       - name: Checkout exact World transition fixture
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          repository: ${{ env.WORLD_REPOSITORY }}
-          ref: ${{ env.WORLD_COMMIT }}
+          repository: ${{ steps.lock.outputs.world_repository }}
+          ref: ${{ steps.lock.outputs.world_commit }}
           path: world
           persist-credentials: false
       - name: Verify exact World identity
         run: |
-          test "$(git -C world rev-parse HEAD)" = "$WORLD_COMMIT"
-          test "$(git -C world rev-parse 'HEAD^{tree}')" = "$WORLD_TREE"
+          test "$(git -C world rev-parse HEAD)" = "${{ steps.lock.outputs.world_commit }}"
+          test "$(git -C world rev-parse 'HEAD^{tree}')" = "${{ steps.lock.outputs.world_tree }}"
           git -C world diff --exit-code
       - name: Set up exact Go toolchain
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
@@ -70,7 +85,7 @@ jobs:
       - name: Validate World smoke evidence
         working-directory: world
         run: |
-          jq -e --arg commit "$WORLD_COMMIT" '
+          jq -e --arg commit "${{ steps.lock.outputs.world_commit }}" '
             .contract_version == "trnm_world_transition_https_fixture_smoke_v1" and
             .repository == "TrillionniumFoundation/Trillionnium-World" and
             .commit == $commit and
@@ -88,7 +103,7 @@ jobs:
       - name: Upload exact World fixture evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: world-transition-fixture-${{ env.WORLD_COMMIT }}
+          name: world-transition-fixture-${{ steps.lock.outputs.world_commit }}
           path: world/run/world-transition-https-fixture-v1
           if-no-files-found: error
           retention-days: 30
@@ -98,17 +113,36 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
+      - name: Checkout evidence definition
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Load exact authority lock
+        id: lock
+        run: |
+          jq -e '
+            .schema == "trnm_world_authority_external_lock_v1" and
+            (.game_nakama.repository | type == "string") and
+            (.game_nakama.commit | test("^[0-9a-f]{40}$")) and
+            (.game_nakama.tree | test("^[0-9a-f]{40}$")) and
+            .game_nakama.role == "target_authority_candidate" and
+            .cutover_authorized == false and
+            .closed_online_promoted == false and
+            .public_online_enabled == false and
+            .public_player_market_enabled == false
+          ' evidence/world-authority-external-lock.json >/dev/null
+          echo "game_repository=$(jq -r '.game_nakama.repository' evidence/world-authority-external-lock.json)" >> "$GITHUB_OUTPUT"
+          echo "game_commit=$(jq -r '.game_nakama.commit' evidence/world-authority-external-lock.json)" >> "$GITHUB_OUTPUT"
+          echo "game_tree=$(jq -r '.game_nakama.tree' evidence/world-authority-external-lock.json)" >> "$GITHUB_OUTPUT"
       - name: Checkout exact Game/Nakama runtime
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          repository: ${{ env.GAME_REPOSITORY }}
-          ref: ${{ env.GAME_COMMIT }}
+          repository: ${{ steps.lock.outputs.game_repository }}
+          ref: ${{ steps.lock.outputs.game_commit }}
           path: game
           persist-credentials: false
       - name: Verify exact Game identity
         run: |
-          test "$(git -C game rev-parse HEAD)" = "$GAME_COMMIT"
-          test "$(git -C game rev-parse 'HEAD^{tree}')" = "$GAME_TREE"
+          test "$(git -C game rev-parse HEAD)" = "${{ steps.lock.outputs.game_commit }}"
+          test "$(git -C game rev-parse 'HEAD^{tree}')" = "${{ steps.lock.outputs.game_tree }}"
           git -C game diff --exit-code
       - name: Set up exact Go toolchain
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
@@ -164,13 +198,31 @@ jobs:
     timeout-minutes: 55
     needs: game-source
     steps:
+      - name: Checkout evidence definition
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Load exact authority lock
+        id: lock
+        run: |
+          jq -e '
+            .schema == "trnm_world_authority_external_lock_v1" and
+            (.game_nakama.repository | type == "string") and
+            (.game_nakama.commit | test("^[0-9a-f]{40}$")) and
+            (.game_nakama.tree | test("^[0-9a-f]{40}$"))
+          ' evidence/world-authority-external-lock.json >/dev/null
+          echo "game_repository=$(jq -r '.game_nakama.repository' evidence/world-authority-external-lock.json)" >> "$GITHUB_OUTPUT"
+          echo "game_commit=$(jq -r '.game_nakama.commit' evidence/world-authority-external-lock.json)" >> "$GITHUB_OUTPUT"
+          echo "game_tree=$(jq -r '.game_nakama.tree' evidence/world-authority-external-lock.json)" >> "$GITHUB_OUTPUT"
       - name: Checkout exact Game/Nakama runtime
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          repository: ${{ env.GAME_REPOSITORY }}
-          ref: ${{ env.GAME_COMMIT }}
+          repository: ${{ steps.lock.outputs.game_repository }}
+          ref: ${{ steps.lock.outputs.game_commit }}
           path: game
           persist-credentials: false
+      - name: Verify exact Game identity
+        run: |
+          test "$(git -C game rev-parse HEAD)" = "${{ steps.lock.outputs.game_commit }}"
+          test "$(git -C game rev-parse 'HEAD^{tree}')" = "${{ steps.lock.outputs.game_tree }}"
       - name: Set up exact Go toolchain
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
@@ -184,7 +236,7 @@ jobs:
       - name: Validate exact Game fault evidence
         working-directory: game
         run: |
-          jq -e --arg commit "$GAME_COMMIT" '
+          jq -e --arg commit "${{ steps.lock.outputs.game_commit }}" '
             .contract_version == "trnm_game_world_command_deployed_fault_report_v1" and
             .repository == "TrillionniumFoundation/TrillionniumGame" and
             .repository_id == 1323087470 and
@@ -204,7 +256,7 @@ jobs:
       - name: Upload exact Game fault evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: game-world-command-fault-lab-${{ env.GAME_COMMIT }}
+          name: game-world-command-fault-lab-${{ steps.lock.outputs.game_commit }}
           path: game/run/world-command-deployed-runtime-v1
           if-no-files-found: error
           retention-days: 30
@@ -217,28 +269,19 @@ jobs:
       - game-source
       - game-fault-lab
     steps:
+      - name: Checkout evidence definition
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Write exact authority evidence manifest
         run: |
-          mkdir -p evidence
+          mkdir -p evidence-out
           python3 - <<'PY'
-          import hashlib
-          import json
-          import os
+          import hashlib, json, os
           from pathlib import Path
+          lock = json.loads(Path('evidence/world-authority-external-lock.json').read_text())
           payload = {
               'schema': 'trnm_world_authority_external_ci_evidence_v1',
-              'world': {
-                  'repository': os.environ['WORLD_REPOSITORY'],
-                  'commit': os.environ['WORLD_COMMIT'],
-                  'tree': os.environ['WORLD_TREE'],
-                  'role': 'deterministic_fixture_only',
-              },
-              'game_nakama': {
-                  'repository': os.environ['GAME_REPOSITORY'],
-                  'commit': os.environ['GAME_COMMIT'],
-                  'tree': os.environ['GAME_TREE'],
-                  'role': 'target_authority_candidate',
-              },
+              'world': lock['world'],
+              'game_nakama': lock['game_nakama'],
               'run_id': int(os.environ['GITHUB_RUN_ID']),
               'run_attempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
               'checks': [
@@ -261,15 +304,13 @@ jobs:
           }
           canonical = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()
           payload['payload_sha256'] = hashlib.sha256(canonical).hexdigest()
-          Path('evidence/manifest.json').write_text(
-              json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8'
-          )
+          Path('evidence-out/manifest.json').write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
           PY
-          sha256sum evidence/manifest.json > evidence/SHA256SUMS
+          sha256sum evidence-out/manifest.json > evidence-out/SHA256SUMS
       - name: Upload combined authority evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: world-authority-${{ env.WORLD_COMMIT }}-${{ env.GAME_COMMIT }}
-          path: evidence/
+          name: world-authority-${{ github.sha }}
+          path: evidence-out/
           if-no-files-found: error
           retention-days: 30
