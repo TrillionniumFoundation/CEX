@@ -108,13 +108,12 @@ impl SettlementRepository {
         if computed_hash != intent_hash {
             return Err(RepositoryError::Conflict);
         }
-        let intent_json = serde_json::from_slice::<serde_json::Value>(&intent_bytes).map_err(
-            |error| {
+        let intent_json =
+            serde_json::from_slice::<serde_json::Value>(&intent_bytes).map_err(|error| {
                 RepositoryError::StoredReceiptCorrupt(format!(
                     "decode exact durable intent projection: {error}"
                 ))
-            },
-        )?;
+            })?;
 
         let mut transaction = self.pool.begin().await.map_err(database_error)?;
         acquire_intent_lock(&mut transaction, &intent.intent_id).await?;
@@ -257,21 +256,21 @@ fn decode_stored_receipt(row: PgRow) -> Result<StoredSettlementReceipt, Reposito
         ));
     }
 
-    let decoded_intent_value = serde_json::from_slice::<serde_json::Value>(&intent_bytes).map_err(
-        |error| {
+    let decoded_intent_value =
+        serde_json::from_slice::<serde_json::Value>(&intent_bytes).map_err(|error| {
             RepositoryError::StoredReceiptCorrupt(format!(
                 "decode stored exact intent bytes: {error}"
             ))
-        },
-    )?;
+        })?;
     if decoded_intent_value != intent_json {
         return Err(RepositoryError::StoredReceiptCorrupt(
             "stored intent bytes and JSON projection diverge".to_string(),
         ));
     }
-    let intent = serde_json::from_value::<EconomicIntent>(decoded_intent_value).map_err(|error| {
-        RepositoryError::StoredReceiptCorrupt(format!("decode stored economic intent: {error}"))
-    })?;
+    let intent =
+        serde_json::from_value::<EconomicIntent>(decoded_intent_value).map_err(|error| {
+            RepositoryError::StoredReceiptCorrupt(format!("decode stored economic intent: {error}"))
+        })?;
     if intent.intent_id != intent_id {
         return Err(RepositoryError::StoredReceiptCorrupt(
             "stored intent identity diverges from primary key".to_string(),
