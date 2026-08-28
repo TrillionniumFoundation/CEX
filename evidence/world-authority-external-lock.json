@@ -8,8 +8,8 @@
   },
   "game_nakama": {
     "repository": "TrillionniumFoundation/TrillionniumGame",
-    "commit": "1f000ea8be17afdbfe31426cc6a7584a3be1120c",
-    "tree": "431af12baadca94a49f68e83fef13bbbbcfa5345",
+    "commit": "07a293174ad8cc918ceea1cf7adc92839221fe6b",
+    "tree": "a03a0651aaff41ca84f689b3036093c5a6ca1933",
     "role": "target_authority_candidate"
   },
   "cutover_authorized": false,
