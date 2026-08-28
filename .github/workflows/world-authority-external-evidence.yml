@@ -1,0 +1,275 @@
+name: world-authority-external-evidence
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - ci/world-settlement-capture-boundary-v1
+    paths:
+      - '.github/workflows/world-authority-external-evidence.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/world-authority-external-evidence.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: world-authority-external-evidence-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  WORLD_REPOSITORY: TrillionniumFoundation/Trillionnium-World
+  WORLD_COMMIT: 9166444848c15059ebc9412a70149d253d1780bb
+  WORLD_TREE: a0fd2c7f619009e5a87ed76eaaa6ac80d99bb50d
+  GAME_REPOSITORY: TrillionniumFoundation/TrillionniumGame
+  GAME_COMMIT: 0b970f3537c9cd1a0a8248232224a25240d3481f
+  GAME_TREE: bd84f4c48cefbab3901430b3daacbe377a2d3170
+
+jobs:
+  world-fixture:
+    name: world-authority-external/world-fixture
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout evidence definition
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Checkout exact World transition fixture
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ env.WORLD_REPOSITORY }}
+          ref: ${{ env.WORLD_COMMIT }}
+          path: world
+          persist-credentials: false
+      - name: Verify exact World identity
+        run: |
+          test "$(git -C world rev-parse HEAD)" = "$WORLD_COMMIT"
+          test "$(git -C world rev-parse 'HEAD^{tree}')" = "$WORLD_TREE"
+          git -C world diff --exit-code
+      - name: Set up exact Go toolchain
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.23.2'
+          cache: false
+      - name: Run exact World source contract
+        working-directory: world
+        run: |
+          bash -n scripts/check-trnm-world-transition-https-fixture.sh
+          bash -n scripts/test-trnm-world-transition-https-fixture-negative.sh
+          bash -n scripts/check-trnm-world-transition-https-fixture-local.sh
+          bash -n scripts/run-trnm-world-transition-https-fixture-smoke.sh
+          python3 -m json.tool docs/development/world-transition-https-fixture-v1-status.json >/dev/null
+          bash scripts/check-trnm-world-transition-https-fixture-local.sh
+      - name: Run exact World TLS 1.3 container smoke
+        working-directory: world
+        env:
+          TRNM_WORLD_FIXTURE_EVIDENCE_DIR: ${{ github.workspace }}/world/run/world-transition-https-fixture-v1
+        run: timeout 20m bash scripts/run-trnm-world-transition-https-fixture-smoke.sh
+      - name: Validate World smoke evidence
+        working-directory: world
+        run: |
+          jq -e --arg commit "$WORLD_COMMIT" '
+            .contract_version == "trnm_world_transition_https_fixture_smoke_v1" and
+            .repository == "TrillionniumFoundation/Trillionnium-World" and
+            .commit == $commit and
+            .tls_profile == "TLS_1_3_only" and
+            .exact_duplicate_result == true and
+            .durable_result_lookup == true and
+            .fixture_only == true and
+            .cutover_authorized == false and
+            .public_online_enabled == false and
+            .public_player_market_enabled == false
+          ' run/world-transition-https-fixture-v1/report.json >/dev/null
+          cmp run/world-transition-https-fixture-v1/result-first.json run/world-transition-https-fixture-v1/result-second.json
+          cmp run/world-transition-https-fixture-v1/result-first.json run/world-transition-https-fixture-v1/result-lookup.json
+          sha256sum --check run/world-transition-https-fixture-v1/SHA256SUMS
+      - name: Upload exact World fixture evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: world-transition-fixture-${{ env.WORLD_COMMIT }}
+          path: world/run/world-transition-https-fixture-v1
+          if-no-files-found: error
+          retention-days: 30
+
+  game-source:
+    name: world-authority-external/game-source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout exact Game/Nakama runtime
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ env.GAME_REPOSITORY }}
+          ref: ${{ env.GAME_COMMIT }}
+          path: game
+          persist-credentials: false
+      - name: Verify exact Game identity
+        run: |
+          test "$(git -C game rev-parse HEAD)" = "$GAME_COMMIT"
+          test "$(git -C game rev-parse 'HEAD^{tree}')" = "$GAME_TREE"
+          git -C game diff --exit-code
+      - name: Set up exact Go toolchain
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: game/runtime/go.mod
+          cache: false
+      - name: Validate Game entrypoints and authority boundaries
+        working-directory: game
+        run: |
+          bash -n scripts/check-world-command-deployed-runtime-v1.sh
+          bash -n scripts/test-world-command-deployed-runtime-v1-negative.sh
+          bash -n scripts/check-world-command-faultlab-postgres-binding.sh
+          bash -n scripts/test-world-command-faultlab-postgres-binding-negative.sh
+          bash -n scripts/check-world-command-prebuilt-fixture.sh
+          bash -n scripts/check-world-command-deployed-runtime-v1-local.sh
+          bash -n scripts/run-world-command-deployed-fault-lab.sh
+          bash -n scripts/run-world-command-deployed-fault-lab-v2.sh
+          bash -n scripts/run-world-command-deployed-fault-lab-v3.sh
+          python3 -m py_compile scripts/verify-world-command-storage-atomicity.py
+          node --check scripts/blackbox/world-command-fault.mjs
+          bash scripts/check-world-command-deployed-runtime-v1.sh
+          bash scripts/check-world-command-faultlab-postgres-binding.sh
+          bash scripts/test-world-command-faultlab-postgres-binding-negative.sh
+          bash scripts/check-world-command-prebuilt-fixture.sh
+          bash scripts/test-world-command-deployed-runtime-v1-negative.sh
+      - name: Run Game Go contracts, race tests and vet
+        working-directory: game/runtime
+        run: |
+          unformatted=$(gofmt -l .)
+          test -z "$unformatted" || { printf 'unformatted Go files:\n%s\n' "$unformatted" >&2; exit 1; }
+          go test ./... -count=1
+          go test -race ./internal/worldcommand ./internal/worldtransition -count=1
+          go vet ./...
+      - name: Build exact Game plugin and fault-lab binaries
+        working-directory: game/runtime
+        run: |
+          CGO_ENABLED=1 go build -trimpath -buildmode=plugin -o /tmp/backend.so .
+          CGO_ENABLED=0 go build -trimpath -o /tmp/trnm-world-transition-fixture ./cmd/trnm-world-transition-fixture
+          CGO_ENABLED=0 go build -trimpath -o /tmp/trnm-response-drop-proxy ./cmd/trnm-response-drop-proxy
+          CGO_ENABLED=0 go build -trimpath -o /tmp/trnm-tls-fixture ./cmd/trnm-tls-fixture
+      - name: Validate Game Compose shape
+        working-directory: game
+        run: |
+          test -f deploy/world-command-fault-lab/compose.yaml
+          grep -q '^  postgres:' compose.yaml
+          grep -q '^  nakama:' compose.yaml
+          grep -q '^  world-fixture:' deploy/world-command-fault-lab/compose.yaml
+          grep -q '^  response-drop-proxy:' deploy/world-command-fault-lab/compose.yaml
+
+  game-fault-lab:
+    name: world-authority-external/game-fault-lab
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    needs: game-source
+    steps:
+      - name: Checkout exact Game/Nakama runtime
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ env.GAME_REPOSITORY }}
+          ref: ${{ env.GAME_COMMIT }}
+          path: game
+          persist-credentials: false
+      - name: Set up exact Go toolchain
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: game/runtime/go.mod
+          cache: false
+      - name: Execute isolated PostgreSQL + Game + HTTPS World fault lab
+        working-directory: game
+        env:
+          TRNM_WORLD_COMMAND_EVIDENCE_DIR: ${{ github.workspace }}/game/run/world-command-deployed-runtime-v1
+        run: timeout 45m bash scripts/run-world-command-deployed-fault-lab-v2.sh
+      - name: Validate exact Game fault evidence
+        working-directory: game
+        run: |
+          jq -e --arg commit "$GAME_COMMIT" '
+            .contract_version == "trnm_game_world_command_deployed_fault_report_v1" and
+            .repository == "TrillionniumFoundation/TrillionniumGame" and
+            .repository_id == 1323087470 and
+            .commit == $commit and
+            .environment == "isolated_single_host_postgresql_nakama_https_world_fixture" and
+            .scenario_count == 5 and
+            .all_passed == true and
+            .authority.cutover_authorized == false and
+            .authority.closed_online_promoted == false and
+            .authority.public_online_enabled == false and
+            .authority.public_player_market_enabled == false
+          ' run/world-command-deployed-runtime-v1/report.json >/dev/null
+          test "$(find run/world-command-deployed-runtime-v1/scenarios -name atomicity.json | wc -l)" -eq 5
+          find run/world-command-deployed-runtime-v1/scenarios -name atomicity.json -print0 \
+            | xargs -0 -n1 jq -e '.atomicity_verified == true and .cutover_authorized == false and .public_online_enabled == false' >/dev/null
+          sha256sum --check run/world-command-deployed-runtime-v1/SHA256SUMS
+      - name: Upload exact Game fault evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: game-world-command-fault-lab-${{ env.GAME_COMMIT }}
+          path: game/run/world-command-deployed-runtime-v1
+          if-no-files-found: error
+          retention-days: 30
+
+  combined-evidence:
+    name: world-authority-external/combined-evidence
+    runs-on: ubuntu-24.04
+    needs:
+      - world-fixture
+      - game-source
+      - game-fault-lab
+    steps:
+      - name: Write exact authority evidence manifest
+        run: |
+          mkdir -p evidence
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          payload = {
+              'schema': 'trnm_world_authority_external_ci_evidence_v1',
+              'world': {
+                  'repository': os.environ['WORLD_REPOSITORY'],
+                  'commit': os.environ['WORLD_COMMIT'],
+                  'tree': os.environ['WORLD_TREE'],
+                  'role': 'deterministic_fixture_only',
+              },
+              'game_nakama': {
+                  'repository': os.environ['GAME_REPOSITORY'],
+                  'commit': os.environ['GAME_COMMIT'],
+                  'tree': os.environ['GAME_TREE'],
+                  'role': 'target_authority_candidate',
+              },
+              'run_id': int(os.environ['GITHUB_RUN_ID']),
+              'run_attempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
+              'checks': [
+                  'World exact source and TLS 1.3 container smoke',
+                  'Game authority and storage source/negative contracts',
+                  'Game Go unit/race/vet/build contracts',
+                  'Game five-scenario isolated fault lab',
+              ],
+              'cutover_authorized': False,
+              'closed_online_promoted': False,
+              'public_online_enabled': False,
+              'public_player_market_enabled': False,
+              'limitations': [
+                  'World component is a bounded fixture, not production RTS execution',
+                  'Game fault lab is isolated single-host evidence',
+                  'exact World-owned fixture is not yet wired into the Game fault matrix in this workflow',
+                  'multi-host fencing, endurance, drain, credential revocation and rollback remain required',
+                  'external CI is not native repository governance evidence',
+              ],
+          }
+          canonical = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()
+          payload['payload_sha256'] = hashlib.sha256(canonical).hexdigest()
+          Path('evidence/manifest.json').write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
+          PY
+          sha256sum evidence/manifest.json > evidence/SHA256SUMS
+      - name: Upload combined authority evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: world-authority-${{ env.WORLD_COMMIT }}-${{ env.GAME_COMMIT }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
