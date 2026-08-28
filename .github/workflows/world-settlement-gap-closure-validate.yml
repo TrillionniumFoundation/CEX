@@ -31,7 +31,7 @@ jobs:
           --health-retries 20
     env:
       WORLD_REPOSITORY: TrillionniumFoundation/Trillionnium-World
-      WORLD_COMMIT: ca9dad8e10be3ebe7a9f072db9cc60ec1217483c
+      WORLD_COMMIT: cb94bd51df306b4a5ab89efa20072d7a211d5600
       TRNM_SETTLEMENT_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
       TRNM_REQUIRE_SETTLEMENT_DATABASE_TEST: '1'
       CARGO_TERM_COLOR: never
