@@ -5,6 +5,7 @@ use crate::contract::{
 };
 use chrono::Utc;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgRow, Executor, PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
@@ -35,6 +36,13 @@ pub enum RepositoryError {
     DailyRewardLimit,
     StoredReceiptCorrupt(String),
     Database(String),
+}
+
+#[derive(Debug)]
+struct StoredSettlementReceipt {
+    intent_hash: String,
+    intent_bytes: Vec<u8>,
+    receipt: EconomicReceipt,
 }
 
 impl SettlementRepository {
@@ -72,7 +80,7 @@ impl SettlementRepository {
         intent_id: &str,
     ) -> Result<Option<(String, EconomicReceipt)>, RepositoryError> {
         let row = sqlx::query(
-            "select intent_hash, receipt_json
+            "select intent_id, intent_hash, intent_bytes, intent_json, receipt_json
                from public.trnm_economy_settlement_receipts_v1
               where intent_id = $1",
         )
@@ -81,7 +89,9 @@ impl SettlementRepository {
         .await
         .map_err(database_error)?;
 
-        row.map(decode_stored_receipt).transpose()
+        row.map(decode_stored_receipt)
+            .transpose()
+            .map(|stored| stored.map(|value| (value.intent_hash, value.receipt)))
     }
 
     pub async fn submit(
@@ -91,15 +101,30 @@ impl SettlementRepository {
         authority_id: &str,
         plan: SettlementPlan,
     ) -> Result<EconomicReceipt, RepositoryError> {
+        let intent_bytes = serde_json::to_vec(intent).map_err(|error| {
+            RepositoryError::StoredReceiptCorrupt(format!("encode exact durable intent: {error}"))
+        })?;
+        let computed_hash = format!("{:x}", Sha256::digest(&intent_bytes));
+        if computed_hash != intent_hash {
+            return Err(RepositoryError::Conflict);
+        }
+        let intent_json = serde_json::from_slice::<serde_json::Value>(&intent_bytes).map_err(
+            |error| {
+                RepositoryError::StoredReceiptCorrupt(format!(
+                    "decode exact durable intent projection: {error}"
+                ))
+            },
+        )?;
+
         let mut transaction = self.pool.begin().await.map_err(database_error)?;
         acquire_intent_lock(&mut transaction, &intent.intent_id).await?;
 
         if let Some(existing) = load_existing(&mut transaction, &intent.intent_id).await? {
-            if existing.0 != intent_hash {
+            if existing.intent_hash != intent_hash || existing.intent_bytes != intent_bytes {
                 return Err(RepositoryError::Conflict);
             }
             transaction.commit().await.map_err(database_error)?;
-            return Ok(existing.1);
+            return Ok(existing.receipt);
         }
 
         let (status, account_id, ledger_entry_id) = match plan {
@@ -145,21 +170,19 @@ impl SettlementRepository {
             finalized_at_epoch: Utc::now().timestamp(),
         };
 
-        let intent_json = serde_json::to_value(intent).map_err(|error| {
-            RepositoryError::StoredReceiptCorrupt(format!("encode durable intent: {error}"))
-        })?;
         let receipt_json = serde_json::to_value(&receipt).map_err(|error| {
             RepositoryError::StoredReceiptCorrupt(format!("encode durable receipt: {error}"))
         })?;
 
         sqlx::query(
             "insert into public.trnm_economy_settlement_receipts_v1 (
-                intent_id, intent_hash, intent_json, receipt_id, receipt_json,
+                intent_id, intent_hash, intent_bytes, intent_json, receipt_id, receipt_json,
                 authority_id, account_id, ledger_entry_id
-             ) values ($1, $2, $3, $4, $5, $6, $7, $8)",
+             ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         )
         .bind(&intent.intent_id)
         .bind(intent_hash)
+        .bind(intent_bytes)
         .bind(intent_json)
         .bind(&receipt.receipt_id)
         .bind(receipt_json)
@@ -195,9 +218,9 @@ async fn acquire_intent_lock(
 async fn load_existing(
     transaction: &mut Transaction<'_, Postgres>,
     intent_id: &str,
-) -> Result<Option<(String, EconomicReceipt)>, RepositoryError> {
+) -> Result<Option<StoredSettlementReceipt>, RepositoryError> {
     let row = sqlx::query(
-        "select intent_hash, receipt_json
+        "select intent_id, intent_hash, intent_bytes, intent_json, receipt_json
            from public.trnm_economy_settlement_receipts_v1
           where intent_id = $1
           for update",
@@ -210,17 +233,73 @@ async fn load_existing(
     row.map(decode_stored_receipt).transpose()
 }
 
-fn decode_stored_receipt(row: PgRow) -> Result<(String, EconomicReceipt), RepositoryError> {
+fn decode_stored_receipt(row: PgRow) -> Result<StoredSettlementReceipt, RepositoryError> {
+    let intent_id = row
+        .try_get::<String, _>("intent_id")
+        .map_err(|error| RepositoryError::StoredReceiptCorrupt(error.to_string()))?;
     let intent_hash = row
         .try_get::<String, _>("intent_hash")
+        .map_err(|error| RepositoryError::StoredReceiptCorrupt(error.to_string()))?;
+    let intent_bytes = row
+        .try_get::<Vec<u8>, _>("intent_bytes")
+        .map_err(|error| RepositoryError::StoredReceiptCorrupt(error.to_string()))?;
+    let intent_json = row
+        .try_get::<serde_json::Value, _>("intent_json")
         .map_err(|error| RepositoryError::StoredReceiptCorrupt(error.to_string()))?;
     let receipt_json = row
         .try_get::<serde_json::Value, _>("receipt_json")
         .map_err(|error| RepositoryError::StoredReceiptCorrupt(error.to_string()))?;
-    let receipt = serde_json::from_value(receipt_json).map_err(|error| {
+
+    let computed_hash = format!("{:x}", Sha256::digest(&intent_bytes));
+    if computed_hash != intent_hash {
+        return Err(RepositoryError::StoredReceiptCorrupt(
+            "stored intent bytes do not match intent_hash".to_string(),
+        ));
+    }
+
+    let decoded_intent_value = serde_json::from_slice::<serde_json::Value>(&intent_bytes).map_err(
+        |error| {
+            RepositoryError::StoredReceiptCorrupt(format!(
+                "decode stored exact intent bytes: {error}"
+            ))
+        },
+    )?;
+    if decoded_intent_value != intent_json {
+        return Err(RepositoryError::StoredReceiptCorrupt(
+            "stored intent bytes and JSON projection diverge".to_string(),
+        ));
+    }
+    let intent = serde_json::from_value::<EconomicIntent>(decoded_intent_value).map_err(|error| {
+        RepositoryError::StoredReceiptCorrupt(format!("decode stored economic intent: {error}"))
+    })?;
+    if intent.intent_id != intent_id {
+        return Err(RepositoryError::StoredReceiptCorrupt(
+            "stored intent identity diverges from primary key".to_string(),
+        ));
+    }
+
+    let receipt = serde_json::from_value::<EconomicReceipt>(receipt_json).map_err(|error| {
         RepositoryError::StoredReceiptCorrupt(format!("decode stored receipt: {error}"))
     })?;
-    Ok((intent_hash, receipt))
+    if receipt.intent_id != intent_id
+        || receipt.term_id != intent.term_id
+        || receipt.receipt_id != stable_receipt_id(&intent_hash)
+        || receipt
+            .evidence
+            .get("intent_hash")
+            .and_then(serde_json::Value::as_str)
+            != Some(intent_hash.as_str())
+    {
+        return Err(RepositoryError::StoredReceiptCorrupt(
+            "stored receipt is not bound to exact durable intent bytes".to_string(),
+        ));
+    }
+
+    Ok(StoredSettlementReceipt {
+        intent_hash,
+        intent_bytes,
+        receipt,
+    })
 }
 
 async fn apply_release_reward(
