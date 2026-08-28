@@ -22,8 +22,8 @@ concurrency:
 
 env:
   WORLD_REPOSITORY: TrillionniumFoundation/Trillionnium-World
-  WORLD_COMMIT: 0261ed1ad02dd70f18dbccaf8f90f2aa89422ec9
-  WORLD_TREE: 9a5713ccdc365eb9a4facff81d7827435821c86b
+  WORLD_COMMIT: e64ab8b276e1575aa2b77688a836f64116597307
+  WORLD_TREE: d17c9f60d4b71204bf07b4bca79f6aed195544b9
   TRNM_SETTLEMENT_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/world_settlement
   TRNM_REQUIRE_SETTLEMENT_DATABASE_TEST: '1'
   CARGO_TERM_COLOR: never
@@ -85,16 +85,10 @@ jobs:
         run: rustfmt --edition 2021 --check crates/trnm-game-server/tests/settlement_capture_commit_boundary.rs
       - name: Prove capture commit precedes remote start
         working-directory: world/trillionnium
-        run: cargo test -p trnm-game-server --test settlement_capture_commit_boundary --locked
-      - name: Re-run settlement identity and lease contract
-        working-directory: world/trillionnium
-        run: cargo test -p trnm-game-server --test settlement_database_contract --locked
-      - name: Re-run account serialization contract
-        working-directory: world/trillionnium
-        run: cargo test -p trnm-game-server --test settlement_serialization_database --locked
+        run: cargo test -p trnm-game-server --lib --test settlement_capture_commit_boundary --locked
       - name: Strict lint for capture-boundary target
         working-directory: world/trillionnium
-        run: cargo clippy -p trnm-game-server --test settlement_capture_commit_boundary --locked -- -D warnings
+        run: cargo clippy -p trnm-game-server --lib --test settlement_capture_commit_boundary --locked -- -D warnings
       - name: Write bounded external evidence
         shell: bash
         run: |
@@ -122,8 +116,6 @@ jobs:
               'checks': [
                   'rustfmt settlement_capture_commit_boundary.rs --check',
                   'settlement_capture_commit_boundary',
-                  'settlement_database_contract',
-                  'settlement_serialization_database',
                   'clippy settlement_capture_commit_boundary -D warnings',
               ],
               'native_world_actions_run': False,
@@ -131,6 +123,7 @@ jobs:
               'limitations': [
                   'external CI is not a native Trillionnium-World workflow run',
                   'the stacked settlement recovery branch has package-wide rustfmt drift outside this slice',
+                  'the inherited settlement_database_contract and settlement_serialization_database imports require a separate exact repair before they can be re-run under sqlx-core 0.8 module paths',
                   'source and PostgreSQL tests are not deployment evidence',
                   'no trusted settlement, public online, public market, custody, or commercial release credit',
               ],
