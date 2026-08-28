@@ -14,7 +14,7 @@
     "cargo_lock_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   },
   "database": {
-    "migration_head": "0067_add_execution_ledger_settlement_commands.sql",
+    "migration_head": "0072_add_execution_ledger_settlement_operator.sql",
     "migration_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   },
   "build": {
