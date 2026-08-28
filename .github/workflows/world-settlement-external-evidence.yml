@@ -22,8 +22,8 @@ concurrency:
 
 env:
   WORLD_REPOSITORY: TrillionniumFoundation/Trillionnium-World
-  WORLD_COMMIT: b101fcd96f65a2e12be842f12b796e5eaac0e8dd
-  WORLD_TREE: e63a6310c41dcdff21a6dc218b7d36c0e765e071
+  WORLD_COMMIT: 7861e141ee322b6f765f7c6776a903d14d2ef187
+  WORLD_TREE: 2ef9be052234ea13292aece4a7e324e430e1181e
   CEX_OWNER_REPOSITORY: TrillionniumFoundation/CEX
   CEX_OWNER_COMMIT: ea2a257b45df63182e6a58f8265b8edb9154ec89
   CEX_OWNER_TREE: 9dddb54c9e9cd2ab4e87fd170a17547518f53225
@@ -104,38 +104,25 @@ jobs:
           python3 scripts/check-world-main-governance.py
           bash -n scripts/check-trnm-settlement-transaction-boundary.sh
           bash -n scripts/check_trnm_settlement_transaction_boundary.sh
-          ./scripts/check-trnm-settlement-transaction-boundary.sh
-          ./scripts/check_trnm_settlement_transaction_boundary.sh
+          bash scripts/check-trnm-settlement-transaction-boundary.sh
+          bash scripts/check_trnm_settlement_transaction_boundary.sh
       - name: Enforce exact World-to-CEX compatibility
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
-
           world = Path('world/trillionnium/crates/trnm-game-server/src/cex.rs').read_text(encoding='utf-8')
           cex = Path('cex-owner/services/trnm-economy-service/src/api.rs').read_text(encoding='utf-8')
-          cex_contract = Path('cex-owner/services/trnm-economy-service/src/contract.rs').read_text(encoding='utf-8')
-          required_both = (
-              '/v1/trnm/economy/receipts/by-intent',
-              'x-trnm-intent-sha256',
-          )
-          for marker in required_both:
+          contract = Path('cex-owner/services/trnm-economy-service/src/contract.rs').read_text(encoding='utf-8')
+          for marker in ('/v1/trnm/economy/receipts/by-intent', 'x-trnm-intent-sha256'):
               if marker not in world or marker not in cex:
-                  raise SystemExit(f'cross-repository contract marker missing: {marker}')
-          for marker in (
-              '/v1/trnm/economy/intents',
-              'intent_hash_conflict',
-              'wrong_game_authority_audience',
-          ):
+                  raise SystemExit(f'cross-repository marker missing: {marker}')
+          for marker in ('/v1/trnm/economy/intents', 'intent_hash_conflict', 'wrong_game_authority_audience'):
               if marker not in cex:
-                  raise SystemExit(f'CEX owner contract marker missing: {marker}')
-          for marker in (
-              'TERM_EXCHANGE_PROTOCOL_VERSION',
-              'stable_receipt_id',
-              'serialized_intent_hash',
-          ):
-              if marker not in cex_contract:
-                  raise SystemExit(f'CEX durable contract marker missing: {marker}')
+                  raise SystemExit(f'CEX owner marker missing: {marker}')
+          for marker in ('TERM_EXCHANGE_PROTOCOL_VERSION', 'stable_receipt_id', 'serialized_intent_hash'):
+              if marker not in contract:
+                  raise SystemExit(f'CEX durable marker missing: {marker}')
           print('World-to-CEX exact source compatibility: PASS')
           PY
       - name: Validate exact CEX owner source
@@ -181,7 +168,6 @@ jobs:
           import json
           import os
           from pathlib import Path
-
           payload = {
               'schema': 'trnm_world_cex_settlement_external_ci_evidence_v2',
               'world': {
