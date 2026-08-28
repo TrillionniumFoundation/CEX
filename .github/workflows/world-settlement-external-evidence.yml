@@ -7,11 +7,13 @@ on:
       - ci/world-settlement-capture-boundary-v1
     paths:
       - '.github/workflows/world-settlement-external-evidence.yml'
+      - 'evidence/world-settlement-external-lock.json'
   pull_request:
     branches:
       - main
     paths:
       - '.github/workflows/world-settlement-external-evidence.yml'
+      - 'evidence/world-settlement-external-lock.json'
 
 permissions:
   contents: read
@@ -21,12 +23,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  WORLD_REPOSITORY: TrillionniumFoundation/Trillionnium-World
-  WORLD_COMMIT: 7861e141ee322b6f765f7c6776a903d14d2ef187
-  WORLD_TREE: 2ef9be052234ea13292aece4a7e324e430e1181e
-  CEX_OWNER_REPOSITORY: TrillionniumFoundation/CEX
-  CEX_OWNER_COMMIT: ea2a257b45df63182e6a58f8265b8edb9154ec89
-  CEX_OWNER_TREE: 9dddb54c9e9cd2ab4e87fd170a17547518f53225
   TRNM_SETTLEMENT_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/world_settlement
   TRNM_REQUIRE_SETTLEMENT_DATABASE_TEST: '1'
   TRNM_CEX_SETTLEMENT_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/world_settlement
@@ -58,34 +54,60 @@ jobs:
     steps:
       - name: Checkout evidence definition
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Load and validate exact component lock
+        id: lock
+        run: |
+          set -euo pipefail
+          python3 -m json.tool evidence/world-settlement-external-lock.json >/dev/null
+          jq -e '
+            .schema == "trnm_world_cex_settlement_external_lock_v1" and
+            (.world.repository | type == "string") and
+            (.world.commit | test("^[0-9a-f]{40}$")) and
+            (.world.tree | test("^[0-9a-f]{40}$")) and
+            (.cex_owner.repository | type == "string") and
+            (.cex_owner.commit | test("^[0-9a-f]{40}$")) and
+            (.cex_owner.tree | test("^[0-9a-f]{40}$")) and
+            .promotion_effect == "none" and
+            .native_world_actions_run == false and
+            .public_online == false and
+            .public_player_market == false
+          ' evidence/world-settlement-external-lock.json >/dev/null
+          echo "world_repository=$(jq -r '.world.repository' evidence/world-settlement-external-lock.json)" >> "$GITHUB_OUTPUT"
+          echo "world_commit=$(jq -r '.world.commit' evidence/world-settlement-external-lock.json)" >> "$GITHUB_OUTPUT"
+          echo "world_tree=$(jq -r '.world.tree' evidence/world-settlement-external-lock.json)" >> "$GITHUB_OUTPUT"
+          echo "cex_repository=$(jq -r '.cex_owner.repository' evidence/world-settlement-external-lock.json)" >> "$GITHUB_OUTPUT"
+          echo "cex_commit=$(jq -r '.cex_owner.commit' evidence/world-settlement-external-lock.json)" >> "$GITHUB_OUTPUT"
+          echo "cex_tree=$(jq -r '.cex_owner.tree' evidence/world-settlement-external-lock.json)" >> "$GITHUB_OUTPUT"
       - name: Checkout exact World candidate
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          repository: ${{ env.WORLD_REPOSITORY }}
-          ref: ${{ env.WORLD_COMMIT }}
+          repository: ${{ steps.lock.outputs.world_repository }}
+          ref: ${{ steps.lock.outputs.world_commit }}
           path: world
           persist-credentials: false
       - name: Checkout exact CEX owner candidate
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          repository: ${{ env.CEX_OWNER_REPOSITORY }}
-          ref: ${{ env.CEX_OWNER_COMMIT }}
+          repository: ${{ steps.lock.outputs.cex_repository }}
+          ref: ${{ steps.lock.outputs.cex_commit }}
           path: cex-owner
           persist-credentials: false
       - name: Verify exact commits and trees
-        shell: bash
+        env:
+          WORLD_COMMIT: ${{ steps.lock.outputs.world_commit }}
+          WORLD_TREE: ${{ steps.lock.outputs.world_tree }}
+          CEX_COMMIT: ${{ steps.lock.outputs.cex_commit }}
+          CEX_TREE: ${{ steps.lock.outputs.cex_tree }}
         run: |
           set -euo pipefail
           test "$(git -C world rev-parse HEAD)" = "$WORLD_COMMIT"
           test "$(git -C world rev-parse 'HEAD^{tree}')" = "$WORLD_TREE"
-          test "$(git -C cex-owner rev-parse HEAD)" = "$CEX_OWNER_COMMIT"
-          test "$(git -C cex-owner rev-parse 'HEAD^{tree}')" = "$CEX_OWNER_TREE"
+          test "$(git -C cex-owner rev-parse HEAD)" = "$CEX_COMMIT"
+          test "$(git -C cex-owner rev-parse 'HEAD^{tree}')" = "$CEX_TREE"
           git -C world diff --exit-code
           git -C cex-owner diff --exit-code
       - name: Install pinned Rust toolchain
-        shell: bash
         run: |
-          set -euo pipefail
           rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
           rustup default 1.98.0
           rustc --version --verbose
@@ -97,8 +119,6 @@ jobs:
             scripts/check-trnm-settlement-runtime-status.py \
             scripts/test-trnm-settlement-runtime-status-negative.py \
             scripts/check-world-main-governance.py
-          python3 -m json.tool docs/status/settlement-runtime-v1.json > /dev/null
-          python3 -m json.tool docs/status/world-main-governance-v1.json > /dev/null
           python3 scripts/check-trnm-settlement-runtime-status.py
           python3 scripts/test-trnm-settlement-runtime-status-negative.py
           python3 scripts/check-world-main-governance.py
@@ -107,7 +127,6 @@ jobs:
           bash scripts/check-trnm-settlement-transaction-boundary.sh
           bash scripts/check_trnm_settlement_transaction_boundary.sh
       - name: Enforce exact World-to-CEX compatibility
-        shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -160,44 +179,29 @@ jobs:
         working-directory: world/trillionnium
         run: cargo clippy -p trnm-game-server --all-targets --locked -- -D warnings
       - name: Write exact cross-repository evidence
-        shell: bash
+        env:
+          WORLD_REPOSITORY: ${{ steps.lock.outputs.world_repository }}
+          WORLD_COMMIT: ${{ steps.lock.outputs.world_commit }}
+          WORLD_TREE: ${{ steps.lock.outputs.world_tree }}
+          CEX_REPOSITORY: ${{ steps.lock.outputs.cex_repository }}
+          CEX_COMMIT: ${{ steps.lock.outputs.cex_commit }}
+          CEX_TREE: ${{ steps.lock.outputs.cex_tree }}
         run: |
-          mkdir -p evidence
+          mkdir -p run/world-cex-settlement
           python3 - <<'PY'
-          import hashlib
-          import json
-          import os
+          import hashlib, json, os
           from pathlib import Path
           payload = {
               'schema': 'trnm_world_cex_settlement_external_ci_evidence_v2',
-              'world': {
-                  'repository': os.environ['WORLD_REPOSITORY'],
-                  'commit': os.environ['WORLD_COMMIT'],
-                  'tree': os.environ['WORLD_TREE'],
-              },
-              'cex_owner': {
-                  'repository': os.environ['CEX_OWNER_REPOSITORY'],
-                  'commit': os.environ['CEX_OWNER_COMMIT'],
-                  'tree': os.environ['CEX_OWNER_TREE'],
-              },
+              'world': {'repository': os.environ['WORLD_REPOSITORY'], 'commit': os.environ['WORLD_COMMIT'], 'tree': os.environ['WORLD_TREE']},
+              'cex_owner': {'repository': os.environ['CEX_REPOSITORY'], 'commit': os.environ['CEX_COMMIT'], 'tree': os.environ['CEX_TREE']},
               'evidence_repository': os.environ['GITHUB_REPOSITORY'],
               'workflow': os.environ['GITHUB_WORKFLOW'],
               'run_id': int(os.environ['GITHUB_RUN_ID']),
               'run_attempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
-              'runner_os': os.environ['RUNNER_OS'],
               'postgres_image': 'postgres:16.4-alpine',
               'rust_toolchain': '1.98.0',
-              'checks': [
-                  'world fail-closed source and status contracts',
-                  'world governance source projection',
-                  'exact World-to-CEX compatibility',
-                  'CEX owner static and negative contracts',
-                  'CEX owner PostgreSQL Rust tests and Clippy',
-                  'World package-wide rustfmt',
-                  'World generated ownership, signer, identity, worker and fault tests',
-                  'World capture, lease, serialization and operator PostgreSQL tests',
-                  'World all-target Clippy',
-              ],
+              'source_and_postgresql_checks_passed': True,
               'native_world_actions_run': False,
               'promotion_effect': 'none',
               'limitations': [
@@ -210,17 +214,14 @@ jobs:
           }
           canonical = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()
           payload['evidence_payload_sha256'] = hashlib.sha256(canonical).hexdigest()
-          Path('evidence/world-cex-settlement-external-evidence.json').write_text(
-              json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8'
-          )
+          Path('run/world-cex-settlement/evidence.json').write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
           PY
-          python3 -m json.tool evidence/world-cex-settlement-external-evidence.json > /dev/null
-          sha256sum evidence/world-cex-settlement-external-evidence.json > evidence/SHA256SUMS
+          sha256sum run/world-cex-settlement/evidence.json > run/world-cex-settlement/SHA256SUMS
       - name: Upload exact cross-repository evidence artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: world-cex-settlement-${{ env.WORLD_COMMIT }}-${{ env.CEX_OWNER_COMMIT }}
-          path: evidence/
+          name: world-cex-settlement-${{ steps.lock.outputs.world_commit }}-${{ steps.lock.outputs.cex_commit }}
+          path: run/world-cex-settlement/
           if-no-files-found: error
           retention-days: 30
           compression-level: 9
