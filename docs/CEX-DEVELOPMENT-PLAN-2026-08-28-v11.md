@@ -4,15 +4,15 @@
 - Date: 2026-08-28
 - Integration branch: `feature/hepta-production-baseline-p0`
 - Source baseline: `ff13a4f27b05dfaaf9c7cce4905f670a5f61f85f`
-- Canonical migration head: `0067_add_execution_ledger_settlement_commands.sql`
+- Canonical migration head: `0067–0072 settlement migration series`
 - Release posture: Draft integration candidate; not production-ready
 
 ## 1. Facts corrected before this slice
 
 The canonical remote baseline remained plan v10, migration 0066 and the isolated exact Execution
 adapter. Earlier claims that v11/0067 had already landed were not present in the repository and are
-not treated as evidence. This plan supersedes v10 only when the accompanying 0067 patch is applied
-to the exact source baseline and passes required checks.
+not treated as evidence. This plan supersedes v10 only when the accompanying 0067–0072 migration
+series is applied to the exact source baseline and passes required checks.
 
 ## 2. P0-N5 delivered by this candidate
 
@@ -57,7 +57,7 @@ Deliver:
 5. canonical `/v2/ledger/effects` reserve with stable operation identity;
 6. explicit unknown-result reconciliation;
 7. exact contract propagation into Execution;
-8. same-transaction enqueue of 0067 consume/refund command at the terminal decision point;
+8. same-transaction enqueue of the 0067–0072 consume/refund command at the terminal decision point;
 9. removal of the matching legacy `/v1/ledger/*` side effect from exact paths;
 10. `legacy_v1` / `dual` / `require_v2` telemetry and production-like compatibility rejection.
 
@@ -90,7 +90,7 @@ Deliver:
 - provider network call after claim commit;
 - unknown-result/replay semantics;
 - no prompt in argv and minimal child environment;
-- terminal workflow coordination with 0067 settlement.
+- terminal workflow coordination with the settlement command chain.
 
 ## 6. Security and operations following the transaction work
 
@@ -104,7 +104,7 @@ Deliver:
 
 P0-N5 is complete only when:
 
-- 0067 applies from a fresh database and an upgrade baseline;
+- migrations 0067–0072 apply from a fresh database and an upgrade baseline;
 - Rust formatting, unit tests and all-target workspace compile pass;
 - concurrent claim and exact replay behavior pass against PostgreSQL;
 - crash after remote success/before local receipt is injected and recovered;
