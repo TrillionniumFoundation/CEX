@@ -1,15 +1,21 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [switch]$SkipBlackbox,
     [switch]$KeepRuntimeDown,
-    [switch]$SkipStatusCheck
+    [switch]$SkipStatusCheck,
+    [switch]$SkipDotEnv
 )
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 . (Join-Path $PSScriptRoot '_dev-helpers.ps1')
-Import-CexDotEnv
+if ($SkipDotEnv) {
+    Write-Host '==> skipping .env import for service-local CI'
+}
+else {
+    Import-CexDotEnv
+}
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $steps = [System.Collections.Generic.List[object]]::new()
@@ -110,6 +116,7 @@ try {
 
     $result = [ordered]@{
         ok = $true
+        dotenv_loaded = (-not $SkipDotEnv)
         blackbox = (-not $SkipBlackbox)
         runtime_restarted = $runtimeRestarted
         keep_runtime_down = [bool]$KeepRuntimeDown
@@ -134,6 +141,7 @@ catch {
 
     $result = [ordered]@{
         ok = $false
+        dotenv_loaded = (-not $SkipDotEnv)
         failed_step = $currentStep
         error = $failure.Exception.Message
         blackbox = (-not $SkipBlackbox)
@@ -148,4 +156,3 @@ catch {
 finally {
     Pop-Location
 }
-
