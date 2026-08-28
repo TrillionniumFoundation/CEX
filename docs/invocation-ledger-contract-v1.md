@@ -3,7 +3,8 @@
 - Status: database implementation candidate
 - Migration: `0066_add_invocation_ledger_contract.sql`
 - Schema: `cex.invocation.ledger-contract.v1`
-- PostgreSQL gate: `scripts/check-invocation-ledger-contract-postgres.sh`
+- Lifecycle gate: `scripts/check-invocation-ledger-contract-postgres.sh`
+- Independent terminal gate: `scripts/check-invocation-ledger-terminal-postgres.sh`
 
 ## Problem
 
@@ -65,6 +66,21 @@ entry and Audit intent.
 
 The same trigger advances contract state and stores the last operation/entry evidence.
 
+## Terminal exclusivity evidence
+
+The independent terminal-exclusivity probe uses separate consumed and refunded contracts. It
+sets its rejection flag only inside an actual database exception handler, then verifies:
+
+- refund request after consume is rejected;
+- consume request after refund is rejected;
+- rejected requests add no ledger entry;
+- account balance/reservation values do not change;
+- contract states remain `consumed` and `refunded`;
+- status view reports no missing effect evidence.
+
+This separate probe avoids the false-positive pattern where a test throws its own failure
+exception and then catches that same exception as if the system had rejected the transition.
+
 ## Rollout order
 
 1. deploy 0066 and run fresh/upgrade probes;
@@ -80,6 +96,7 @@ The same trigger advances contract state and stores the last operation/entry evi
 - exact registration replay and collision rejection;
 - tenant/currency mismatch denial;
 - reserve/consume and reserve/refund paths;
+- independent terminal-mutual-exclusion denial;
 - wrong operation ID rollback;
 - account projection, entry, Audit intent and contract-state atomicity;
 - concurrent registration and settlement;
