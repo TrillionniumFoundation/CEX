@@ -1,0 +1,4 @@
+world_commit=ad0fd6378242992cea4e035efe90174f5f2bc138
+world_tree=25d540f93f2a83133f4f6d1b94d3916b1d7498ee
+rust_toolchain=1.98.0
+postgres=16.4-alpine
