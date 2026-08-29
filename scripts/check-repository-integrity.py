@@ -77,8 +77,19 @@ def main() -> int:
 
     authority = json.loads(AUTHORITY_PATH.read_text(encoding="utf-8"))
     canonical = [ROOT / value for value in authority["canonical_documents"].values()]
-    canonical.extend([ROOT / authority["active_plan"], ROOT / authority["active_addendum"], AUTHORITY_PATH])
-    migration_paths = list((ROOT / "migrations").glob("[0-9][0-9][0-9][0-9]_*.sql"))
+    canonical.extend(
+        [
+            ROOT / authority["active_plan"],
+            ROOT / authority["active_addendum"],
+            AUTHORITY_PATH,
+        ]
+    )
+    migration_paths = sorted(
+        (ROOT / "migrations").glob("[0-9][0-9][0-9][0-9]_*.sql"),
+        key=lambda path: path.name,
+    )
+    if not migration_paths:
+        raise SystemExit("no numbered migrations found for integrity attestation")
     workflow_paths = [ROOT / path for path in authority["authoritative_workflows"]]
     workflow_paths.append(ROOT / authority["aggregate_release_workflow"])
 
@@ -99,7 +110,11 @@ def main() -> int:
             "authoritative_workflows": digest_set(workflow_paths),
             "canonical_documents": digest_set(canonical),
             "candidate_trigger": sha256_file(ROOT / authority["shared_trigger"]),
-            "root_readme_observed_only": sha256_file(ROOT / "readme.md") if (ROOT / "readme.md").is_file() else None
+            "root_readme_observed_only": (
+                sha256_file(ROOT / "readme.md")
+                if (ROOT / "readme.md").is_file()
+                else None
+            ),
         },
         "documentation_check": json.loads(docs_check.stdout),
     }

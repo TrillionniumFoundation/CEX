@@ -39,9 +39,9 @@ The active set is validated by `scripts/check-development-docs.py`. The exact re
 - `historical`: retained for audit only; not a source of current status.
 - `template`: shape-only input; never release evidence.
 
-## Scope boundaries
+## Production authorization boundary
 
-Repository qualification may establish that source, migrations, tests, workflows, and generated evidence are internally consistent on one commit/tree. It cannot authorize production. Representative-volume disaster recovery, real deployment and rollback, provider evidence, secret custody, sustained soak, independent reviews, legal/commercial approvals, and final human go/no-go remain externally evidenced gates.
+Repository qualification may establish that source, migrations, tests, workflows, and generated evidence are internally consistent on one commit/tree. It cannot authorize production. Representative-volume disaster recovery, real deployment and rollback, provider evidence, secret custody, sustained soak, independent reviews, legal/commercial approvals, and final human go/no-go remain externally evidenced gates. The production-authorization value remains `not_granted` until those independent records and the final human decision exist.
 
 ## Change protocol
 

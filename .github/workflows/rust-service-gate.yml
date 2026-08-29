@@ -3,6 +3,7 @@ name: rust-service-gate
 on:
   workflow_dispatch:
   # exact-tree: every branch push
+  # shared candidate trigger: docs/release-evidence/p0-candidate-trigger.json
   push:
 
 permissions:
