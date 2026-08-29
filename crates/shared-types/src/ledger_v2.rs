@@ -118,7 +118,7 @@ pub enum LedgerContractError {
 }
 
 impl LedgerContractError {
-    pub const fn code(&self) -> &'static str {
+    pub fn code(&self) -> &'static str {
         match self {
             Self::NilIdentifier("account_id") => "invalid_account_id",
             Self::NilIdentifier("trace_id") => "invalid_trace_id",
