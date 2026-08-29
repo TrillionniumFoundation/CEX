@@ -17,6 +17,7 @@ on:
       - 'docs/audit-source-baseline-backfill-v1.md'
       - 'docs/ledger-operation-identity-v1.md'
       - 'docs/invocation-ledger-contract-v1.md'
+      - 'docs/release-evidence/p0-candidate-trigger.json'
       - '.github/workflows/p0-migration-gate.yml'
   pull_request:
     paths:
@@ -33,6 +34,7 @@ on:
       - 'docs/audit-source-baseline-backfill-v1.md'
       - 'docs/ledger-operation-identity-v1.md'
       - 'docs/invocation-ledger-contract-v1.md'
+      - 'docs/release-evidence/p0-candidate-trigger.json'
       - '.github/workflows/p0-migration-gate.yml'
 
 permissions:
@@ -62,7 +64,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Candidate tree hygiene
+        run: python3 scripts/check-p0-release-candidate-hygiene.py
 
       - name: Static migration contract
         run: python3 scripts/check-p0-migrations.py
