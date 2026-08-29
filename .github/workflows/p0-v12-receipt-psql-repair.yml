@@ -25,46 +25,54 @@ jobs:
         run: |
           set -euo pipefail
           python3 <<'PY'
+          import re
           from pathlib import Path
 
           path = Path('scripts/check-trnm-settlement-receipt-lookup-http.sh')
           text = path.read_text(encoding='utf-8')
-          replacements = [
-              (
-                  '''  committed=$(psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -At \\
-            -v intent_id="$response_loss_intent" \\
-            -c "select count(*) from public.trnm_economic_receipts where intent_id = :'intent_id';")''',
-                  '''  committed=$(psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -At \\
-            -v intent_id="$response_loss_intent" <<'SQL'
-          select count(*) from public.trnm_economic_receipts where intent_id = :'intent_id';
-          SQL
-          )''',
+
+          scalar = re.compile(
+              r'''(?m)^(?P<indent>[ \t]+)-v intent_id="\$response_loss_intent" \\
+          (?P=indent)-c "select count\(\*\) from public\.trnm_economic_receipts where intent_id = :'intent_id';"\)$'''
+          )
+          text, count = scalar.subn(
+              lambda match: (
+                  f'''{match.group('indent')}-v intent_id="$response_loss_intent" <<'SQL'\n'''
+                  "select count(*) from public.trnm_economic_receipts where intent_id = :'intent_id';\n"
+                  "SQL\n)"
               ),
-              (
-                  '''  -v concurrent_intent="$concurrent_intent" \\
-            -c "
-          select json_build_object(''',
-                  '''  -v concurrent_intent="$concurrent_intent" <<'SQL'
-          select json_build_object(''',
-              ),
-              (
-                  '''  )
-          );")
-          
-          ended_at_epoch''',
-                  '''  )
-          );
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit(f'expected one scalar psql replacement, found {count}')
+
+          report_open = re.compile(
+              r'''(?m)^(?P<indent>[ \t]+)-v concurrent_intent="\$concurrent_intent" \\
+          (?P=indent)-c "$'''
+          )
+          text, count = report_open.subn(
+              lambda match: (
+                  f'''{match.group('indent')}-v concurrent_intent="$concurrent_intent" <<'SQL' '''
+              ).rstrip(),
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit(f'expected one report psql opener replacement, found {count}')
+
+          old_close = ''');")
+
+          ended_at_epoch='''
+          new_close = ''');
           SQL
           )
-          
-          ended_at_epoch''',
-              ),
-          ]
-          for old, new in replacements:
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'expected exactly one replacement target, found {count}: {old[:80]!r}')
-              text = text.replace(old, new, 1)
+
+          ended_at_epoch='''
+          if text.count(old_close) != 1:
+              raise SystemExit(f'expected one report psql closer replacement, found {text.count(old_close)}')
+          text = text.replace(old_close, new_close, 1)
+
           path.write_text(text, encoding='utf-8')
           PY
           bash -n scripts/check-trnm-settlement-receipt-lookup-http.sh
