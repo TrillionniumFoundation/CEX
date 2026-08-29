@@ -16,7 +16,8 @@
     "threat_model": "docs/security-threat-model-v1.md",
     "clean_deployment_acceptance": "docs/clean-deployment-acceptance-v1.md",
     "slo_recovery": "docs/slo-recovery-contract-v1.md",
-    "protocol_compatibility": "docs/protocol/version-compatibility-matrix-v1.md"
+    "protocol_compatibility": "docs/protocol/version-compatibility-matrix-v1.md",
+    "trnm_production_credentials": "docs/trnm-production-credential-contract-v1.md"
   },
   "authoritative_workflows": [
     ".github/workflows/p0-migration-gate.yml",
