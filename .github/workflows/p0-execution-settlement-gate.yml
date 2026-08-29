@@ -20,27 +20,13 @@ on:
       - 'config/execution-settlement-worker.env.example'
       - 'ops/systemd/cex-execution-settlement-worker.service'
       - '.github/workflows/p0-execution-settlement-gate.yml'
-  pull_request:
-    paths:
-      - 'migrations/0067_add_execution_ledger_settlement_schema.sql'
-      - 'migrations/0068_add_execution_ledger_settlement_guards.sql'
-      - 'migrations/0069_add_execution_ledger_settlement_enqueue.sql'
-      - 'migrations/0070_add_execution_ledger_settlement_claim.sql'
-      - 'migrations/0071_add_execution_ledger_settlement_finish.sql'
-      - 'migrations/0072_add_execution_ledger_settlement_operator.sql'
-      - 'services/execution-service/**'
-      - 'scripts/check-execution-settlement-commands.py'
-      - 'scripts/check-execution-settlement-commands-postgres.sh'
-      - 'docs/execution-ledger-settlement-commands-v1.md'
-      - 'docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md'
-      - 'docs/templates/cex-release-baseline-manifest-v1.json'
-      - 'docs/release-evidence/p0-candidate-trigger.json'
-      - 'config/execution-settlement-worker.env.example'
-      - 'ops/systemd/cex-execution-settlement-worker.service'
-      - '.github/workflows/p0-execution-settlement-gate.yml'
 
 permissions:
   contents: read
+
+concurrency:
+  group: p0-execution-settlement-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/cex_ci
