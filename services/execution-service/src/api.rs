@@ -159,8 +159,6 @@ pub struct FailExecutionRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 struct StoredInvocationRequest {
-    pub account_id: Option<Uuid>,
-    pub reserve_amount: Option<f64>,
     pub prompt: String,
 }
 
@@ -3207,18 +3205,10 @@ async fn timeout_expired_execution_if_eligible_in_db(
     }
 
     let invocation_state = load_locked_invocation_state(&mut tx, record.invocation_id).await?;
-    let refund_applied = if invocation_state.ledger_reserved && !invocation_state.ledger_refunded {
-        release_reserved_credits(
-            state,
-            &invocation_state.request,
-            record.execution_id,
-            record.invocation_id,
-            "timeout-expired-refund",
-        )
-        .await?
-    } else {
-        false
-    };
+    ensure_no_legacy_settlement(state, &invocation_state, "refund")?;
+    // Exact contracts are settled by the 0074 execution-status trigger after this
+    // transaction commits. A legacy compatibility flag is rejected above.
+    let refund_applied = false;
 
     apply_transition(&mut record, ExecutionStatus::TimedOut);
 
@@ -3678,7 +3668,7 @@ async fn start_execution_inner(state: &AppState, id: Uuid) -> Result<ExecutionRe
             "execution cannot be started from current status",
         )? {
             TransitionDecision::Replay => Ok(record),
-            TransitionDecision::Advance => start_execution_in_db(state, pool, id).await,
+            TransitionDecision::Advance => start_execution_in_db(pool, id).await,
         }
     } else {
         if state.fail_fast {
@@ -4144,7 +4134,6 @@ async fn transition_execution_in_db(
 }
 
 async fn start_execution_in_db(
-    state: &AppState,
     pool: &sqlx::PgPool,
     id: Uuid,
 ) -> Result<ExecutionRecord, ApiError> {
@@ -4175,168 +4164,14 @@ async fn start_execution_in_db(
         TransitionDecision::Advance => {}
     }
 
-    if let Some(provider_target) = record.provider_target.clone() {
-        let invocation_state = load_locked_invocation_state(&mut tx, record.invocation_id).await?;
-        let input = load_provider_dispatch_input_from_db(pool, &record)
-            .await
-            .map_err(ApiError::Unavailable)?;
-        let started_at = Utc::now();
-        let dispatch_result = dispatch_via_provider(
-            &state.http,
-            &state.ollama_base_url,
-            &state.openclaw_cli_bin,
-            &crate::providers::OpenClawCliEnvScope {
-                config_path: state.openclaw_config_path.clone(),
-                state_dir: state.openclaw_state_dir.clone(),
-                agent_dir: state.openclaw_agent_dir.clone(),
-            },
-            state.execution_provider_dispatch_timeout_seconds,
-            &provider_target,
-            &input,
-        )
-        .await;
-
-        match dispatch_result {
-            Ok(output) => {
-                if invocation_state.ledger_reserved && !invocation_state.ledger_refunded {
-                    consume_reserved_credits(
-                        state,
-                        &invocation_state.request,
-                        record.execution_id,
-                        record.invocation_id,
-                    )
-                    .await?;
-                }
-                clear_worker_claim(&mut record);
-                record.status = ExecutionStatus::Succeeded;
-                record.provider_target = Some(output.provider_target);
-                record.started_at = Some(started_at);
-                record.ended_at = Some(Utc::now());
-                record.result_payload = Some(output.result_payload);
-                record.updated_at = Utc::now();
-                record.dispatch_mode = dispatch_mode_for_execution(&record);
-
-                sqlx::query("update executions set status = $2, provider_target = $3, worker_id = $4, lease_expires_at = $5, started_at = $6, ended_at = $7, result_payload = $8::jsonb, updated_at = $9 where execution_id = $1")
-                    .bind(record.execution_id)
-                    .bind(status_to_db(&record.status))
-                    .bind(&record.provider_target)
-                    .bind(&record.worker_id)
-                    .bind(record.lease_expires_at)
-                    .bind(record.started_at)
-                    .bind(record.ended_at)
-                    .bind(serde_json::to_string(record.result_payload.as_ref().expect("provider result payload")).map_err(|e| ApiError::Unavailable(format!("serialize provider result payload failed: {e}")))?)
-                    .bind(record.updated_at)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|e| ApiError::Unavailable(format!("update provider execution success failed: {e}")))?;
-
-                sqlx::query("update invocations set status = 'Succeeded', updated_at = $2, execution_id = $3, ledger_reserved = false, ledger_refunded = false, failure_reason = null where invocation_id = $1")
-                    .bind(record.invocation_id)
-                    .bind(record.updated_at)
-                    .bind(record.execution_id)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|e| ApiError::Unavailable(format!("update invocation after provider success failed: {e}")))?;
-            }
-            Err(err) => {
-                if should_auto_retry_provider_failure(&record, &err.message) {
-                    let backoff_seconds = provider_retry_backoff_seconds(state, &record);
-                    prepare_provider_failure_retry(
-                        &mut record,
-                        &provider_target,
-                        &err.message,
-                        backoff_seconds,
-                    );
-
-                    sqlx::query("update executions set status = $2, worker_id = $3, lease_expires_at = $4, started_at = $5, ended_at = $6, result_payload = $7::jsonb, updated_at = $8 where execution_id = $1")
-                        .bind(record.execution_id)
-                        .bind(status_to_db(&record.status))
-                        .bind(&record.worker_id)
-                        .bind(record.lease_expires_at)
-                        .bind(record.started_at)
-                        .bind(record.ended_at)
-                        .bind(serde_json::to_string(record.result_payload.as_ref().expect("provider retry payload")).map_err(|e| ApiError::Unavailable(format!("serialize provider retry payload failed: {e}")))?)
-                        .bind(record.updated_at)
-                        .execute(&mut *tx)
-                        .await
-                        .map_err(|e| ApiError::Unavailable(format!("update provider execution retry failed: {e}")))?;
-
-                    sqlx::query("update invocations set status = 'Queued', updated_at = $2, execution_id = $3, failure_reason = null where invocation_id = $1")
-                        .bind(record.invocation_id)
-                        .bind(record.updated_at)
-                        .bind(record.execution_id)
-                        .execute(&mut *tx)
-                        .await
-                        .map_err(|e| ApiError::Unavailable(format!("update invocation after provider retry failed: {e}")))?;
-
-                    tx.commit().await.map_err(|e| {
-                        ApiError::Unavailable(format!("commit provider retry tx failed: {e}"))
-                    })?;
-
-                    return Ok(record);
-                }
-
-                let refunded =
-                    if invocation_state.ledger_reserved && !invocation_state.ledger_refunded {
-                        release_reserved_credits(
-                            state,
-                            &invocation_state.request,
-                            record.execution_id,
-                            record.invocation_id,
-                            "provider-start-refund",
-                        )
-                        .await?
-                    } else {
-                        false
-                    };
-
-                clear_worker_claim(&mut record);
-                record.status = if refunded {
-                    ExecutionStatus::Refunded
-                } else {
-                    ExecutionStatus::Failed
-                };
-                record.started_at = Some(started_at);
-                record.ended_at = Some(Utc::now());
-                record.result_payload = Some(json!({
-                    "provider_target": provider_target,
-                    "error": err.message,
-                }));
-                record.updated_at = Utc::now();
-                record.dispatch_mode = dispatch_mode_for_execution(&record);
-
-                sqlx::query("update executions set status = $2, worker_id = $3, lease_expires_at = $4, started_at = $5, ended_at = $6, result_payload = $7::jsonb, updated_at = $8 where execution_id = $1")
-                    .bind(record.execution_id)
-                    .bind(status_to_db(&record.status))
-                    .bind(&record.worker_id)
-                    .bind(record.lease_expires_at)
-                    .bind(record.started_at)
-                    .bind(record.ended_at)
-                    .bind(serde_json::to_string(record.result_payload.as_ref().expect("provider error payload")).map_err(|e| ApiError::Unavailable(format!("serialize provider error payload failed: {e}")))?)
-                    .bind(record.updated_at)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|e| ApiError::Unavailable(format!("update provider execution failure failed: {e}")))?;
-
-                update_invocation_after_refunding_action(
-                    &mut tx,
-                    record.invocation_id,
-                    record.execution_id,
-                    record.updated_at,
-                    if refunded { "Refunded" } else { "Failed" },
-                    false,
-                    refunded,
-                    &Some(err.message),
-                )
-                .await?;
-            }
-        }
-
-        tx.commit()
-            .await
-            .map_err(|e| ApiError::Unavailable(format!("commit provider start tx failed: {e}")))?;
-
-        return Ok(record);
+    if record.provider_target.is_some() {
+        // Provider-backed executions must enter through provider_dispatch,
+        // which enqueues a durable command before worker I/O. The historical
+        // direct adapter path is intentionally unavailable whenever a SQL
+        // transaction is open.
+        return Err(ApiError::Unavailable(
+            "provider-backed execution requires a durable dispatch command".to_string(),
+        ));
     }
 
     apply_transition(&mut record, ExecutionStatus::Running);
@@ -4387,18 +4222,8 @@ async fn reject_execution_in_db(
     }
 
     let invocation_state = load_locked_invocation_state(&mut tx, record.invocation_id).await?;
-    let refund_applied = if invocation_state.ledger_reserved && !invocation_state.ledger_refunded {
-        release_reserved_credits(
-            state,
-            &invocation_state.request,
-            record.execution_id,
-            record.invocation_id,
-            "reject-refund",
-        )
-        .await?
-    } else {
-        false
-    };
+    ensure_no_legacy_settlement(state, &invocation_state, "refund")?;
+    let refund_applied = false;
 
     record.status = ExecutionStatus::Cancelled;
     record.policy_reason = Some(req.reason.clone());
@@ -4598,18 +4423,8 @@ async fn cancel_execution_in_db(
         TransitionDecision::Advance => {}
     }
 
-    let refund_applied = if invocation_state.ledger_reserved && !invocation_state.ledger_refunded {
-        release_reserved_credits(
-            state,
-            &invocation_state.request,
-            record.execution_id,
-            record.invocation_id,
-            "cancel-refund",
-        )
-        .await?
-    } else {
-        false
-    };
+    ensure_no_legacy_settlement(state, &invocation_state, "refund")?;
+    let refund_applied = false;
 
     apply_transition(&mut record, ExecutionStatus::Cancelled);
 
@@ -4676,18 +4491,8 @@ async fn timeout_execution_in_db(
         TransitionDecision::Advance => {}
     }
 
-    let refund_applied = if invocation_state.ledger_reserved && !invocation_state.ledger_refunded {
-        release_reserved_credits(
-            state,
-            &invocation_state.request,
-            record.execution_id,
-            record.invocation_id,
-            "timeout-refund",
-        )
-        .await?
-    } else {
-        false
-    };
+    ensure_no_legacy_settlement(state, &invocation_state, "refund")?;
+    let refund_applied = false;
 
     apply_transition(&mut record, ExecutionStatus::TimedOut);
 
@@ -4748,15 +4553,7 @@ async fn succeed_execution_in_db(
     }
 
     let invocation_state = load_locked_invocation_state(&mut tx, record.invocation_id).await?;
-    if invocation_state.ledger_reserved && !invocation_state.ledger_refunded {
-        consume_reserved_credits(
-            state,
-            &invocation_state.request,
-            record.execution_id,
-            record.invocation_id,
-        )
-        .await?;
-    }
+    ensure_no_legacy_settlement(state, &invocation_state, "consume")?;
 
     apply_transition(&mut record, ExecutionStatus::Succeeded);
 
@@ -4812,18 +4609,8 @@ async fn fail_execution_in_db(
         TransitionDecision::Advance => {}
     }
 
-    let refund_applied = if invocation_state.ledger_reserved && !invocation_state.ledger_refunded {
-        release_reserved_credits(
-            state,
-            &invocation_state.request,
-            record.execution_id,
-            record.invocation_id,
-            "execution-fail-refund",
-        )
-        .await?
-    } else {
-        false
-    };
+    ensure_no_legacy_settlement(state, &invocation_state, "refund")?;
+    let refund_applied = false;
 
     apply_transition(&mut record, ExecutionStatus::Failed);
 
@@ -4857,7 +4644,6 @@ async fn fail_execution_in_db(
 }
 
 struct InvocationState {
-    request: StoredInvocationRequest,
     ledger_reserved: bool,
     ledger_refunded: bool,
 }
@@ -4883,7 +4669,7 @@ async fn load_locked_invocation_state(
     invocation_id: Uuid,
 ) -> Result<InvocationState, ApiError> {
     let row = sqlx::query(
-        "select request_payload::text as request_payload_text, ledger_reserved, ledger_refunded from invocations where invocation_id = $1 for update"
+        "select ledger_reserved, ledger_refunded from invocations where invocation_id = $1 for update"
     )
     .bind(invocation_id)
     .fetch_optional(&mut **tx)
@@ -4896,18 +4682,7 @@ async fn load_locked_invocation_state(
         ));
     };
 
-    let request_payload_text: String = row.try_get("request_payload_text").map_err(|e| {
-        ApiError::Unavailable(format!("read invocation request payload failed: {e}"))
-    })?;
-    let request: StoredInvocationRequest =
-        serde_json::from_str(&request_payload_text).map_err(|e| {
-            ApiError::Unavailable(format!(
-                "decode invocation request failed: {e}; payload={request_payload_text}"
-            ))
-        })?;
-
     Ok(InvocationState {
-        request,
         ledger_reserved: row
             .try_get("ledger_reserved")
             .map_err(|e| ApiError::Unavailable(format!("read ledger_reserved failed: {e}")))?,
@@ -4944,113 +4719,29 @@ async fn update_invocation_after_refunding_action(
     Ok(())
 }
 
-async fn consume_reserved_credits(
+/// Legacy Invocation rows may still carry the historical reservation flags, but
+/// their monetary side effect is no longer executable. Exact Invocation rows
+/// keep both flags false and are settled by the 0074 execution-status trigger,
+/// which enqueues an immutable v2 command in this same transaction. Rejecting a
+/// flagged legacy row before any terminal mutation preserves fail-closed money
+/// semantics and leaves the row available for explicit operator recovery.
+fn ensure_no_legacy_settlement(
     state: &AppState,
-    request: &StoredInvocationRequest,
-    execution_id: Uuid,
-    invocation_id: Uuid,
-) -> Result<(), ApiError> {
-    let Some(account_id) = request.account_id else {
-        return Ok(());
-    };
-    let Some(amount) = request.reserve_amount else {
-        return Ok(());
-    };
-    if amount <= 0.0 {
-        return Ok(());
-    }
-
-    call_ledger_action(
-        state,
-        "consume",
-        account_id,
-        amount,
-        invocation_id,
-        format!("consume:{execution_id}"),
-    )
-    .await
-}
-
-async fn release_reserved_credits(
-    state: &AppState,
-    request: &StoredInvocationRequest,
-    execution_id: Uuid,
-    invocation_id: Uuid,
-    idempotency_prefix: &str,
-) -> Result<bool, ApiError> {
-    let Some(account_id) = request.account_id else {
-        return Ok(false);
-    };
-    let Some(amount) = request.reserve_amount else {
-        return Ok(false);
-    };
-    if amount <= 0.0 {
-        return Ok(false);
-    }
-
-    if let Err(err) = call_ledger_action(
-        state,
-        "refund",
-        account_id,
-        amount,
-        invocation_id,
-        format!("{idempotency_prefix}:{execution_id}"),
-    )
-    .await
-    {
-        state
-            .metrics
-            .refund_failures
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        return Err(err);
-    }
-    Ok(true)
-}
-
-async fn call_ledger_action(
-    state: &AppState,
+    invocation_state: &InvocationState,
     action: &str,
-    account_id: Uuid,
-    amount: f64,
-    invocation_id: Uuid,
-    idempotency_key: String,
 ) -> Result<(), ApiError> {
-    let response = state
-        .http
-        .post(format!("{}/v1/ledger/{action}", state.ledger_base_url))
-        .header("x-admin-token", &state.ledger_manage_token)
-        .json(&json!({
-            "account_id": account_id,
-            "amount": amount,
-            "reference_id": invocation_id,
-            "idempotency_key": idempotency_key,
-        }))
-        .send()
-        .await
-        .map_err(|e| ApiError::Unavailable(format!("ledger {action} request failed: {e}")))?;
-
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|e| ApiError::Unavailable(format!("ledger {action} read body failed: {e}")))?;
-
-    if status.is_success() {
-        return Ok(());
+    if invocation_state.ledger_reserved && !invocation_state.ledger_refunded {
+        if action == "refund" {
+            state
+                .metrics
+                .refund_failures
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        return Err(ApiError::Unavailable(format!(
+            "legacy Ledger {action} settlement is retired; exact durable settlement command required"
+        )));
     }
-
-    if status.as_u16() == 409
-        && body
-            .to_ascii_lowercase()
-            .contains("duplicate idempotency key")
-    {
-        return Ok(());
-    }
-
-    Err(ApiError::Unavailable(format!(
-        "ledger {action} returned status {}: {body}",
-        status.as_u16()
-    )))
+    Ok(())
 }
 
 fn execution_from_row(row: &sqlx::postgres::PgRow) -> Result<ExecutionRecord, ApiError> {
@@ -5787,6 +5478,55 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn legacy_settlement_guard_fails_closed_without_mutating_execution_state() {
+        let state = AppState::new_for_tests(false, None, vec![], vec![]);
+        let legacy = InvocationState {
+            ledger_reserved: true,
+            ledger_refunded: false,
+        };
+
+        let error = ensure_no_legacy_settlement(&state, &legacy, "refund").unwrap_err();
+        match error {
+            ApiError::Unavailable(message) => {
+                assert!(message.contains("retired"));
+                assert!(message.contains("exact durable settlement command required"));
+            }
+            other => panic!("unexpected legacy settlement result: {other:?}"),
+        }
+        assert_eq!(
+            state
+                .metrics
+                .refund_failures
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+
+        // Exact-contract rows have both compatibility flags normalized to false;
+        // their terminal status update is allowed to reach the database trigger.
+        let exact = InvocationState {
+            ledger_reserved: false,
+            ledger_refunded: false,
+        };
+        assert!(ensure_no_legacy_settlement(&state, &exact, "consume").is_ok());
+        assert!(ensure_no_legacy_settlement(&state, &exact, "refund").is_ok());
+        assert_eq!(
+            state
+                .metrics
+                .refund_failures
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+
+        // A previously refunded compatibility row is already settled and does
+        // not need another legacy value write.
+        let already_refunded = InvocationState {
+            ledger_reserved: true,
+            ledger_refunded: true,
+        };
+        assert!(ensure_no_legacy_settlement(&state, &already_refunded, "refund").is_ok());
     }
 
     #[test]

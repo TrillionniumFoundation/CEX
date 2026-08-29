@@ -144,6 +144,58 @@ if api:
     if "cex_claim_execution_ledger_settlements_v1" in api:
         PROBLEMS.append("api.rs must not act as the settlement worker")
 
+    # Monetary value writes were retired in v12.  The API may still expose the
+    # historical reservation flags for compatibility/read-only diagnostics, but
+    # it must never call the old HTTP Ledger routes or carry the old floating
+    # point request payload through a terminal transition.
+    for marker in (
+        "/v1/ledger/",
+        "call_ledger_action(",
+        "consume_reserved_credits(",
+        "release_reserved_credits(",
+    ):
+        if marker in api:
+            PROBLEMS.append(f"api.rs contains retired Ledger settlement marker: {marker}")
+
+    for marker in (
+        "fn ensure_no_legacy_settlement(",
+        "legacy Ledger",
+        "exact durable settlement command required",
+        "provider-backed execution requires a durable dispatch command",
+    ):
+        if marker not in api:
+            PROBLEMS.append(f"api.rs lacks fail-closed v12 marker: {marker}")
+
+    # A provider dispatch must be durably claimed/enqueued before any network
+    # I/O.  Keep this assertion scoped to the historical DB helper: the
+    # no-pool test-only path intentionally invokes the adapter directly, while
+    # production routes are intercepted by provider_dispatch.rs.
+    start_match = re.search(
+        r"async\s+fn\s+start_execution_in_db\([\s\S]*?(?=\nasync\s+fn\s+reject_execution_in_db)",
+        api,
+    )
+    if not start_match:
+        PROBLEMS.append("api.rs start_execution_in_db function cannot be isolated")
+    else:
+        start_source = start_match.group(0)
+        if "state: &AppState" in start_source:
+            PROBLEMS.append(
+                "start_execution_in_db must not receive AppState while holding a SQL transaction"
+            )
+        for marker in (
+            "dispatch_via_provider",
+            "reqwest",
+            "ledger_base_url",
+            "ledger_manage_token",
+            ".send(",
+            "state.http",
+        ):
+            if marker in start_source:
+                PROBLEMS.append(
+                    "start_execution_in_db contains provider/Ledger network I/O marker: "
+                    f"{marker}"
+                )
+
 require(
     "scripts/check-execution-settlement-commands-postgres.sh",
     "claim_lease_expired_after_final_attempt_unknown_outcome",
