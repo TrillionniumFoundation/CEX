@@ -234,10 +234,7 @@ async fn prepare_exact_reserve(
     }
 }
 
-fn authenticate(
-    headers: &HeaderMap,
-    expected_token: &str,
-) -> Result<String, AuthenticationError> {
+fn authenticate(headers: &HeaderMap, expected_token: &str) -> Result<String, AuthenticationError> {
     let authorization = headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
