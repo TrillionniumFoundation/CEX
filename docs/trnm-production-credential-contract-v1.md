@@ -2,7 +2,7 @@
 
 Status: operational security contract
 
-This document defines the launch-time credential and issuer-registry requirements for `scripts/run-trnm-economy-service.sh`. It does not contain credentials and is not approval to activate production traffic. The blank, fail-closed deployment template is `deploy/trnm-economy/trnm-production.env.example`.
+This document defines the launch-time credential and issuer-registry requirements for `scripts/run-trnm-economy-service.sh`. It does not contain credentials and is not approval to activate production traffic. The blank, fail-closed deployment template is `deploy/trnm-economy/trnm-production.env.example`. Repository production authorization remains `not_granted`.
 
 ## Required runtime inputs
 
