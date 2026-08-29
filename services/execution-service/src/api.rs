@@ -157,11 +157,6 @@ pub struct FailExecutionRequest {
     pub reason: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct StoredInvocationRequest {
-    pub prompt: String,
-}
-
 #[derive(Debug, Clone)]
 struct RefundingOutcome {
     pub record: ExecutionRecord,
@@ -3231,8 +3226,6 @@ async fn timeout_expired_execution_if_eligible_in_db(
         } else {
             "TimedOut"
         },
-        false,
-        refund_applied,
         &Some(reason.to_string()),
     )
     .await?;
@@ -3532,31 +3525,6 @@ async fn load_execution_from_db(
     Ok(Some(record))
 }
 
-async fn load_provider_dispatch_input_from_db(
-    pool: &sqlx::PgPool,
-    record: &ExecutionRecord,
-) -> Result<ProviderDispatchInput, String> {
-    let row = sqlx::query("select request_payload from invocations where invocation_id = $1")
-        .bind(record.invocation_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| format!("load invocation request payload failed: {e}"))?;
-
-    let Some(row) = row else {
-        return Err("invocation not found for execution provider dispatch".to_string());
-    };
-
-    let payload: Value = row
-        .try_get("request_payload")
-        .map_err(|e| format!("read invocation request payload failed: {e}"))?;
-    let stored: StoredInvocationRequest = serde_json::from_value(payload)
-        .map_err(|e| format!("decode invocation request payload failed: {e}"))?;
-
-    Ok(ProviderDispatchInput {
-        prompt: stored.prompt,
-    })
-}
-
 async fn approve_execution_inner(
     state: &AppState,
     id: Uuid,
@@ -3783,7 +3751,7 @@ async fn retry_execution_inner(
     req: &RetryExecutionRequest,
 ) -> Result<ExecutionRecord, ApiError> {
     if let Some(pool) = &state.pool {
-        return retry_execution_in_db(pool, id, req).await;
+        return retry_execution_in_db(state, pool, id, req).await;
     }
 
     if state.fail_fast {
@@ -4133,10 +4101,7 @@ async fn transition_execution_in_db(
     Ok(record)
 }
 
-async fn start_execution_in_db(
-    pool: &sqlx::PgPool,
-    id: Uuid,
-) -> Result<ExecutionRecord, ApiError> {
+async fn start_execution_in_db(pool: &sqlx::PgPool, id: Uuid) -> Result<ExecutionRecord, ApiError> {
     let mut tx = pool
         .begin()
         .await
@@ -4265,8 +4230,6 @@ async fn reject_execution_in_db(
         } else {
             "Cancelled"
         },
-        false,
-        refund_applied,
         &record.policy_reason,
     )
     .await?;
@@ -4282,6 +4245,7 @@ async fn reject_execution_in_db(
 }
 
 async fn retry_execution_in_db(
+    state: &AppState,
     pool: &sqlx::PgPool,
     id: Uuid,
     req: &RetryExecutionRequest,
@@ -4296,6 +4260,10 @@ async fn retry_execution_in_db(
     ensure_retryable_execution(&record)?;
 
     let invocation_state = load_locked_invocation_state(&mut tx, record.invocation_id).await?;
+    // Retrying a historical compatibility reservation would otherwise clear
+    // its legacy flags without proving a refund.  Refuse that mutation; exact
+    // contracts keep both compatibility flags false and remain retryable.
+    ensure_no_legacy_settlement(state, &invocation_state, "retry")?;
     if invocation_state.ledger_refunded {
         return Err(conflict_error(
             "execution cannot be retried after refund",
@@ -4318,7 +4286,7 @@ async fn retry_execution_in_db(
         .await
         .map_err(|e| ApiError::Unavailable(format!("update execution retry failed: {e}")))?;
 
-    sqlx::query("update invocations set status = 'Queued', updated_at = $2, execution_id = $3, ledger_reserved = false, ledger_refunded = false, failure_reason = null where invocation_id = $1")
+    sqlx::query("update invocations set status = 'Queued', updated_at = $2, execution_id = $3, failure_reason = null where invocation_id = $1")
         .bind(record.invocation_id)
         .bind(record.updated_at)
         .bind(record.execution_id)
@@ -4447,8 +4415,6 @@ async fn cancel_execution_in_db(
         } else {
             "Cancelled"
         },
-        false,
-        refund_applied,
         &Some(req.reason.clone()),
     )
     .await?;
@@ -4515,8 +4481,6 @@ async fn timeout_execution_in_db(
         } else {
             "TimedOut"
         },
-        false,
-        refund_applied,
         &Some(req.reason.clone()),
     )
     .await?;
@@ -4566,7 +4530,7 @@ async fn succeed_execution_in_db(
     .await
     .map_err(|e| ApiError::Unavailable(format!("update execution succeed failed: {e}")))?;
 
-    sqlx::query("update invocations set status = 'Succeeded', updated_at = $2, execution_id = $3, ledger_reserved = false, ledger_refunded = false, failure_reason = null where invocation_id = $1")
+    sqlx::query("update invocations set status = 'Succeeded', updated_at = $2, execution_id = $3, failure_reason = null where invocation_id = $1")
         .bind(record.invocation_id)
         .bind(record.updated_at)
         .bind(record.execution_id)
@@ -4627,8 +4591,6 @@ async fn fail_execution_in_db(
         record.execution_id,
         record.updated_at,
         if refund_applied { "Refunded" } else { "Failed" },
-        false,
-        refund_applied,
         &Some(req.reason.clone()),
     )
     .await?;
@@ -4692,26 +4654,21 @@ async fn load_locked_invocation_state(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn update_invocation_after_refunding_action(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     invocation_id: Uuid,
     execution_id: Uuid,
     updated_at: chrono::DateTime<chrono::Utc>,
     status: &str,
-    ledger_reserved: bool,
-    ledger_refunded: bool,
     failure_reason: &Option<String>,
 ) -> Result<(), ApiError> {
     sqlx::query(
-        "update invocations set status = $2, updated_at = $3, execution_id = $4, ledger_reserved = $5, ledger_refunded = $6, failure_reason = $7 where invocation_id = $1"
+        "update invocations set status = $2, updated_at = $3, execution_id = $4, failure_reason = $5 where invocation_id = $1"
     )
     .bind(invocation_id)
     .bind(status)
     .bind(updated_at)
     .bind(execution_id)
-    .bind(ledger_reserved)
-    .bind(ledger_refunded)
     .bind(failure_reason)
     .execute(&mut **tx)
     .await
