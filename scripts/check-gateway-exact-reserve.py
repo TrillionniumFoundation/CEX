@@ -99,7 +99,9 @@ for relative, content in (
         r"\.begin\s*\(\s*\)\s*\.await",
     ):
         if re.search(pattern, content):
-            PROBLEMS.append(f"{relative} contains forbidden legacy-money/long-transaction marker: {pattern}")
+            PROBLEMS.append(
+                f"{relative} contains forbidden legacy-money/long-transaction marker: {pattern}"
+            )
 
 claim_offset = worker.find("cex_claim_gateway_exact_reserves_v1")
 network_offset = worker.find("/v2/ledger/effects")
@@ -154,6 +156,14 @@ require(
     "not production-ready",
 )
 
+numbered_migrations = sorted(
+    ROOT.glob("migrations/[0-9][0-9][0-9][0-9]_*.sql"),
+    key=lambda path: path.name,
+)
+release_migration_head = numbered_migrations[-1].name if numbered_migrations else None
+if release_migration_head is None:
+    PROBLEMS.append("cannot resolve numbered migration head")
+
 manifest_raw = read("docs/templates/cex-release-baseline-manifest-v1.json")
 if manifest_raw:
     try:
@@ -162,13 +172,16 @@ if manifest_raw:
     except (json.JSONDecodeError, KeyError, TypeError) as error:
         PROBLEMS.append(f"cannot decode release manifest template: {error}")
     else:
-        expected = "0073_add_gateway_exact_reserve_commands.sql"
-        if actual != expected:
-            PROBLEMS.append(f"release manifest migration_head={actual!r}, expected {expected!r}")
+        if actual != release_migration_head:
+            PROBLEMS.append(
+                f"release manifest migration_head={actual!r}, "
+                f"expected repository head {release_migration_head!r}"
+            )
 
 result = {
     "status": "failed" if PROBLEMS else "ok",
-    "migration_head": "0073_add_gateway_exact_reserve_commands.sql",
+    "gateway_contract_migration": "0073_add_gateway_exact_reserve_commands.sql",
+    "release_migration_head": release_migration_head,
     "legacy_money_conversion_allowed": False,
     "active_by_default": False,
     "problems": PROBLEMS,
