@@ -36,6 +36,9 @@ TEMPORARY_EXACT_PATHS = (
     ".github/workflows/p0-v12-trnm-exact-cutover.yml",
     ".github/workflows/p0-v12-trnm-exact-cutover-runner.yml",
     ".github/workflows/p0-v12-trnm-receipt-smoke.yml",
+    ".github/workflows/world-settlement-final-convergence-v2.yml",
+    ".github/workflows/world-settlement-final-convergence-v3.yml",
+    ".github/workflows/world-settlement-final-validation-v2.yml",
 )
 TEMPORARY_WORKFLOW_PATTERNS = (
     ".github/workflows/*self-repair*.yml",
@@ -81,7 +84,7 @@ def require_file(path: str) -> str:
 def git_identity() -> tuple[str | None, str | None]:
     """Return the checked-out commit/tree used by this hygiene record.
 
-    The release collector consumes this JSON as local evidence.  Stamping the
+    The release collector consumes this JSON as local evidence. Stamping the
     identity here means the packet cannot silently fall back to an unbound
     ``unknown`` record when the checker is run in the hosted checkout.
     """
