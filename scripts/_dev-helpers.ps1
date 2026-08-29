@@ -1,4 +1,4 @@
-﻿$script:ProjectRoot = Split-Path -Parent $PSScriptRoot
+$script:ProjectRoot = Split-Path -Parent $PSScriptRoot
 
 function Import-CexDotEnv {
     param(

@@ -26,8 +26,7 @@ use uuid::Uuid;
 const CORE_MIGRATION: &str = include_str!("../../../migrations/0001_init_core_tables.sql");
 const SUMMARY_MIGRATION: &str =
     include_str!("../../../migrations/0002_add_account_summary_columns.sql");
-const SETTLEMENT_MIGRATION: &str =
-    include_str!("../../../migrations/0010_trnm_economy_settlement_v1.sql");
+const SETTLEMENT_MIGRATION: &str = include_str!("../migrations/settlement_v1.sql");
 const AUTHORITY_TOKEN: &str = "world-authority-token-for-contract-tests";
 const ORG_ID: &str = "00000000-0000-0000-0000-00000000ce01";
 const KEY_ID: &str = "test-ed25519-key-v1";

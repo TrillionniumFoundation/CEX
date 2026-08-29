@@ -1,4 +1,4 @@
-﻿# COMPATIBILITY SHIM
+# COMPATIBILITY SHIM
 # Original script moved to scripts\\legacy\\settlement-regression-check.ps1.
 # Preferred entrypoints:
 #   powershell -ExecutionPolicy Bypass -File .\\gate-local.ps1

@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string[]]$Packages = @('identity-service','ledger-service','execution-service','audit-service','capability-service','gateway-service')
 )

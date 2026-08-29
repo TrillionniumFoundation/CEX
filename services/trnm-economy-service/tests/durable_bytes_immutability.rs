@@ -13,8 +13,7 @@ use trnm_economy_service::{
 const CORE_MIGRATION: &str = include_str!("../../../migrations/0001_init_core_tables.sql");
 const SUMMARY_MIGRATION: &str =
     include_str!("../../../migrations/0002_add_account_summary_columns.sql");
-const SETTLEMENT_MIGRATION: &str =
-    include_str!("../../../migrations/0010_trnm_economy_settlement_v1.sql");
+const SETTLEMENT_MIGRATION: &str = include_str!("../migrations/settlement_v1.sql");
 
 fn require_database_url() -> Option<String> {
     match std::env::var("TRNM_CEX_SETTLEMENT_TEST_DATABASE_URL") {

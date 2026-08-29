@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string]$OrgId = '00000000-0000-0000-0000-00000000ce01',
     [string]$OrgName = 'Local Dev Org',

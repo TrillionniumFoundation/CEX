@@ -1,4 +1,4 @@
-﻿# DEPRECATED REGRESSION SCRIPT
+# DEPRECATED REGRESSION SCRIPT
 # Regression coverage for this script now exists in Rust tests and the unified gate.
 # Preferred entrypoints:
 #   powershell -ExecutionPolicy Bypass -File .\gate-local.ps1

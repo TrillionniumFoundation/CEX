@@ -1,4 +1,4 @@
-﻿# Autopilot Scaffold
+# Autopilot Scaffold
 
 This folder holds the first repo-local scaffold for a 30-role autopilot system.
 

@@ -74,9 +74,9 @@ impl LookupFailure {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::ImmutableConflict => StatusCode::CONFLICT,
-            Self::ReceiptNotFinalized
-            | Self::CorruptBinding
-            | Self::DatabaseUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            Self::ReceiptNotFinalized | Self::CorruptBinding | Self::DatabaseUnavailable => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
         }
     }
 
@@ -229,17 +229,13 @@ fn resolve_binding(
     }
 
     let receipt_id = receipt_id.expect("receipt_id checked above");
-    let receipt: EconomicReceipt = serde_json::from_value(
-        receipt_json.expect("receipt_json checked above"),
-    )
-    .map_err(|_| LookupFailure::CorruptBinding)?;
+    let receipt: EconomicReceipt =
+        serde_json::from_value(receipt_json.expect("receipt_json checked above"))
+            .map_err(|_| LookupFailure::CorruptBinding)?;
     if receipt.intent_id != intent_id
         || receipt.receipt_id != receipt_id
         || receipt.protocol_version != TERM_EXCHANGE_PROTOCOL_VERSION
-        || receipt
-            .evidence
-            .get("payload_hash")
-            .and_then(Value::as_str)
+        || receipt.evidence.get("payload_hash").and_then(Value::as_str)
             != Some(stored_hash.as_str())
     {
         return Err(LookupFailure::CorruptBinding);
@@ -302,15 +298,13 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{build_router, repository::postgres::PostgresLedgerRepository};
     use axum::{
         body::{to_bytes, Body},
         http::Request,
     };
-    use crate::{build_router, repository::postgres::PostgresLedgerRepository};
     use serde_json::json;
-    use term_exchange_protocol::{
-        ReceiptStatus, SettlementBackendKind, CEX_SETTLEMENT_BACKEND_ID,
-    };
+    use term_exchange_protocol::{ReceiptStatus, SettlementBackendKind, CEX_SETTLEMENT_BACKEND_ID};
     use tower::ServiceExt;
 
     fn stored_binding(intent_id: &str) -> (String, StoredReceiptBinding) {
@@ -355,8 +349,7 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("response body");
-        serde_json::from_slice::<Value>(&body)
-            .expect("JSON response")["error"]["code"]
+        serde_json::from_slice::<Value>(&body).expect("JSON response")["error"]["code"]
             .as_str()
             .expect("error code")
             .to_string()
@@ -481,7 +474,10 @@ mod tests {
             )
             .await
             .expect("response");
-        assert_eq!(database_unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            database_unavailable.status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
         assert_ne!(database_unavailable.status(), StatusCode::NOT_FOUND);
         assert_eq!(
             error_code(database_unavailable).await,

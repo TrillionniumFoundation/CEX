@@ -1,4 +1,4 @@
-﻿# Regression Coverage Matrix
+# Regression Coverage Matrix
 
 This file tracks how the old PowerShell regression scripts map onto the newer Rust-based test layers.
 

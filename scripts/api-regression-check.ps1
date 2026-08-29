@@ -1,4 +1,4 @@
-﻿# COMPATIBILITY SHIM
+# COMPATIBILITY SHIM
 # Original script moved to scripts\\legacy\\api-regression-check.ps1.
 # Preferred entrypoints:
 #   powershell -ExecutionPolicy Bypass -File .\\gate-local.ps1

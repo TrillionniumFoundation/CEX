@@ -1,4 +1,4 @@
-﻿# Legacy regression scripts
+# Legacy regression scripts
 
 This folder contains the original PowerShell regression scripts that were superseded by Rust coverage.
 

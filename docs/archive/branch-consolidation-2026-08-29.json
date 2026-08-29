@@ -1,0 +1,521 @@
+{
+  "all_source_tips_are_ancestors": true,
+  "branches": [
+    {
+      "branch": "automation/consolidate-all-branches-20260829",
+      "committer_epoch": 1787990655,
+      "sha": "fffea1cea1cb1f3b6ac23bb35a794d8d1a26fa75"
+    },
+    {
+      "branch": "automation/p0-n2-source-export",
+      "committer_epoch": 1787915009,
+      "sha": "8b1d792af9643552825a3b3a50953cb6d81f4766"
+    },
+    {
+      "branch": "ci/world-settlement-capture-boundary-v1",
+      "committer_epoch": 1787984118,
+      "sha": "6ee36fe5c490f1397045c21013f66976c300b767"
+    },
+    {
+      "branch": "ci/world-settlement-gap-closure-v1",
+      "committer_epoch": 1787929866,
+      "sha": "b30be901d5a682e87ea3ad315e32d48191b54599"
+    },
+    {
+      "branch": "feature/hepta-p1-accessibility-static",
+      "committer_epoch": 1787060663,
+      "sha": "b57044d777ff4e812bca60a8a13c44e68dc52f74"
+    },
+    {
+      "branch": "feature/hepta-p1-async-onboarding",
+      "committer_epoch": 1787067794,
+      "sha": "e2a57329e63b84ac1925871555754c6e6d9a8f6e"
+    },
+    {
+      "branch": "feature/hepta-p1-bridge-pairing",
+      "committer_epoch": 1787069862,
+      "sha": "d49a6fa815ed123c107122fa11276a9fbde569d7"
+    },
+    {
+      "branch": "feature/hepta-p1-browser-a11y",
+      "committer_epoch": 1787076747,
+      "sha": "5f0cb6c03267a94ec782d085e33e7c8540c97283"
+    },
+    {
+      "branch": "feature/hepta-p1-error-language-focus",
+      "committer_epoch": 1787054319,
+      "sha": "17deacd6fb2ed1dc46e656634dd0c73906051cc0"
+    },
+    {
+      "branch": "feature/hepta-p1-paper-room-ux",
+      "committer_epoch": 1787052615,
+      "sha": "8c3bf7f15eae20bbcfd85c7c7a41a8c35e056474"
+    },
+    {
+      "branch": "feature/hepta-p1-practice-agent-bridge",
+      "committer_epoch": 1787062521,
+      "sha": "9eb177378e68fb51e82c92f04187d45cfdf2a7b4"
+    },
+    {
+      "branch": "feature/hepta-p1-practice-unranked-core",
+      "committer_epoch": 1787054414,
+      "sha": "fe8f2007fc82a1a33491c4bf15e9d0d7c3128151"
+    },
+    {
+      "branch": "feature/hepta-p1-practice-unranked-ui",
+      "committer_epoch": 1787058347,
+      "sha": "87a6802ff4b3ac0cf92ee9829e82d10485cfd9cf"
+    },
+    {
+      "branch": "feature/hepta-p1-quick-raid-minimal",
+      "committer_epoch": 1787704210,
+      "sha": "b29fffa7e09c7c04bf66faa7a2910ed248e40ece"
+    },
+    {
+      "branch": "feature/hepta-paper-raid-alpha-candidate",
+      "committer_epoch": 1786348459,
+      "sha": "5d03537579ee78b3df81901d00a3eb899ebc62c2"
+    },
+    {
+      "branch": "feature/hepta-paper-raid-bff-v1",
+      "committer_epoch": 1785947503,
+      "sha": "b8bb3f48b8ae9541c8c7baa4ec7f0b9c24b6b59c"
+    },
+    {
+      "branch": "feature/hepta-paper-raid-first-playable-telemetry",
+      "committer_epoch": 1786348459,
+      "sha": "5d03537579ee78b3df81901d00a3eb899ebc62c2"
+    },
+    {
+      "branch": "feature/hepta-paper-raid-player-p0",
+      "committer_epoch": 1787033519,
+      "sha": "97d11b1a13e4d9f0c1c3186291cd7fadf9afadfa"
+    },
+    {
+      "branch": "feature/hepta-paper-raid-player-p1",
+      "committer_epoch": 1787076781,
+      "sha": "e12a7df4fb57671b05fba6ed793a95961cb4ad91"
+    },
+    {
+      "branch": "feature/hepta-paper-raid-true-first-playable",
+      "committer_epoch": 1787818496,
+      "sha": "b29949822028ae528a704ad7aa532ffdb0ec0626"
+    },
+    {
+      "branch": "feature/hepta-paper-raid-v1",
+      "committer_epoch": 1785951883,
+      "sha": "5f4c85a8a92d78dc0d0389bcb364d7f3155c3e69"
+    },
+    {
+      "branch": "feature/hepta-production-baseline-p0",
+      "committer_epoch": 1787903915,
+      "sha": "78554727fc97083b3def7f2a9d9e148b019fbe96"
+    },
+    {
+      "branch": "feature/hepta-production-baseline-p0-durable-audit",
+      "committer_epoch": 1787854523,
+      "sha": "744d840ffdadf3c3a56c2a90d6a025a5af435031"
+    },
+    {
+      "branch": "feature/hepta-production-baseline-p0-exact-gateway",
+      "committer_epoch": 1787903915,
+      "sha": "78554727fc97083b3def7f2a9d9e148b019fbe96"
+    },
+    {
+      "branch": "feature/hepta-production-baseline-p0-next",
+      "committer_epoch": 1787835852,
+      "sha": "003ed50282f2c4209ac88715614737e013dee556"
+    },
+    {
+      "branch": "feature/hepta-production-baseline-p0-repair",
+      "committer_epoch": 1787903915,
+      "sha": "78554727fc97083b3def7f2a9d9e148b019fbe96"
+    },
+    {
+      "branch": "feature/hepta-production-baseline-p0-tmp-check",
+      "committer_epoch": 1787875449,
+      "sha": "ff13a4f27b05dfaaf9c7cce4905f670a5f61f85f"
+    },
+    {
+      "branch": "feature/hepta-production-baseline-p0-tmp-check-2",
+      "committer_epoch": 1787875449,
+      "sha": "ff13a4f27b05dfaaf9c7cce4905f670a5f61f85f"
+    },
+    {
+      "branch": "feature/hepta-production-baseline-p0-tmp-check-3",
+      "committer_epoch": 1787875449,
+      "sha": "ff13a4f27b05dfaaf9c7cce4905f670a5f61f85f"
+    },
+    {
+      "branch": "feature/hepta-production-baseline-p0-tmp-check-4",
+      "committer_epoch": 1787875449,
+      "sha": "ff13a4f27b05dfaaf9c7cce4905f670a5f61f85f"
+    },
+    {
+      "branch": "feature/hepta-production-baseline-p0-tmp-check-5",
+      "committer_epoch": 1787875449,
+      "sha": "ff13a4f27b05dfaaf9c7cce4905f670a5f61f85f"
+    },
+    {
+      "branch": "feature/hepta-production-baseline-p0-tmp-check-6",
+      "committer_epoch": 1787901259,
+      "sha": "e3c3c1a730c86a6ec8b8e11bc8b892a8f1489c49"
+    },
+    {
+      "branch": "feature/hepta-research-league-v1",
+      "committer_epoch": 1785901969,
+      "sha": "10513d0c9792273c2850fc1ce7c6b3e46ab5c74d"
+    },
+    {
+      "branch": "feature/p0-all-blockers-closure-v1",
+      "committer_epoch": 1787942476,
+      "sha": "ae91f83a3e786c866919ebd8482f20ca752d5a5e"
+    },
+    {
+      "branch": "feature/p0-n2-account-genesis-as-entry-v1",
+      "committer_epoch": 1787911485,
+      "sha": "cfd7558e4809386df13317a851e37bab0a9a0c7a"
+    },
+    {
+      "branch": "feature/p0-n3-account-projection-parity-v1",
+      "committer_epoch": 1787926966,
+      "sha": "6231bd6642643df1a11d5b7b6327d903f600497a"
+    },
+    {
+      "branch": "feature/p0-n6-gateway-exact-reserve-v1",
+      "committer_epoch": 1787911485,
+      "sha": "cfd7558e4809386df13317a851e37bab0a9a0c7a"
+    },
+    {
+      "branch": "feature/settlement-all-blockers-closure-v1",
+      "committer_epoch": 1787989924,
+      "sha": "cf127aacf9cbfab814b75f60800f43a239a5eed9"
+    },
+    {
+      "branch": "fix/cex-settlement-receipt-lookup-v1",
+      "committer_epoch": 1787938094,
+      "sha": "12d1925e447be412d3c233da31330e71982362ca"
+    },
+    {
+      "branch": "fix/hepta-delivery-draft-retry",
+      "committer_epoch": 1787676923,
+      "sha": "17a3a507f3565205cd91ad8166d4ce97d32a0369"
+    },
+    {
+      "branch": "tmp/gpt-schema-probe-20260828",
+      "committer_epoch": 1787835852,
+      "sha": "003ed50282f2c4209ac88715614737e013dee556"
+    }
+  ],
+  "final_branch_policy": "retain only refs/heads/main",
+  "generated_at": "2026-08-29T08:04:34.789464Z",
+  "main_before": "6edbe27bfb65594c40549fb67b42c0ebca997185",
+  "policy": {
+    "canonical_migration_source": "feature/settlement-all-blockers-closure-v1",
+    "conflict_resolution": "later incoming branch wins conflicted path",
+    "order": "oldest-first; canonical candidates and controller last"
+  },
+  "pre_validation_head": "4b2261905080752165e8ce6e0f9afa2e1a40d7aa",
+  "results": [
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "feature/hepta-research-league-v1"
+      ],
+      "conflicts": [],
+      "representative": "feature/hepta-research-league-v1",
+      "sha": "10513d0c9792273c2850fc1ce7c6b3e46ab5c74d"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "feature/hepta-paper-raid-bff-v1"
+      ],
+      "conflicts": [],
+      "representative": "feature/hepta-paper-raid-bff-v1",
+      "sha": "b8bb3f48b8ae9541c8c7baa4ec7f0b9c24b6b59c"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "feature/hepta-paper-raid-v1"
+      ],
+      "conflicts": [],
+      "representative": "feature/hepta-paper-raid-v1",
+      "sha": "5f4c85a8a92d78dc0d0389bcb364d7f3155c3e69"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "feature/hepta-paper-raid-player-p0"
+      ],
+      "conflicts": [],
+      "representative": "feature/hepta-paper-raid-player-p0",
+      "sha": "97d11b1a13e4d9f0c1c3186291cd7fadf9afadfa"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "feature/hepta-p1-paper-room-ux"
+      ],
+      "conflicts": [],
+      "representative": "feature/hepta-p1-paper-room-ux",
+      "sha": "8c3bf7f15eae20bbcfd85c7c7a41a8c35e056474"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "feature/hepta-p1-error-language-focus"
+      ],
+      "conflicts": [],
+      "representative": "feature/hepta-p1-error-language-focus",
+      "sha": "17deacd6fb2ed1dc46e656634dd0c73906051cc0"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "feature/hepta-p1-practice-unranked-core"
+      ],
+      "conflicts": [],
+      "representative": "feature/hepta-p1-practice-unranked-core",
+      "sha": "fe8f2007fc82a1a33491c4bf15e9d0d7c3128151"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "feature/hepta-p1-practice-unranked-ui"
+      ],
+      "conflicts": [],
+      "representative": "feature/hepta-p1-practice-unranked-ui",
+      "sha": "87a6802ff4b3ac0cf92ee9829e82d10485cfd9cf"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "feature/hepta-p1-accessibility-static"
+      ],
+      "conflicts": [],
+      "representative": "feature/hepta-p1-accessibility-static",
+      "sha": "b57044d777ff4e812bca60a8a13c44e68dc52f74"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "feature/hepta-p1-practice-agent-bridge"
+      ],
+      "conflicts": [],
+      "representative": "feature/hepta-p1-practice-agent-bridge",
+      "sha": "9eb177378e68fb51e82c92f04187d45cfdf2a7b4"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "feature/hepta-p1-async-onboarding"
+      ],
+      "conflicts": [],
+      "representative": "feature/hepta-p1-async-onboarding",
+      "sha": "e2a57329e63b84ac1925871555754c6e6d9a8f6e"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "feature/hepta-p1-bridge-pairing"
+      ],
+      "conflicts": [],
+      "representative": "feature/hepta-p1-bridge-pairing",
+      "sha": "d49a6fa815ed123c107122fa11276a9fbde569d7"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "feature/hepta-p1-browser-a11y"
+      ],
+      "conflicts": [],
+      "representative": "feature/hepta-p1-browser-a11y",
+      "sha": "5f0cb6c03267a94ec782d085e33e7c8540c97283"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "feature/hepta-paper-raid-player-p1"
+      ],
+      "conflicts": [],
+      "representative": "feature/hepta-paper-raid-player-p1",
+      "sha": "e12a7df4fb57671b05fba6ed793a95961cb4ad91"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "fix/hepta-delivery-draft-retry"
+      ],
+      "conflicts": [],
+      "representative": "fix/hepta-delivery-draft-retry",
+      "sha": "17a3a507f3565205cd91ad8166d4ce97d32a0369"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "feature/hepta-p1-quick-raid-minimal"
+      ],
+      "conflicts": [],
+      "representative": "feature/hepta-p1-quick-raid-minimal",
+      "sha": "b29fffa7e09c7c04bf66faa7a2910ed248e40ece"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "feature/hepta-paper-raid-true-first-playable"
+      ],
+      "conflicts": [],
+      "representative": "feature/hepta-paper-raid-true-first-playable",
+      "sha": "b29949822028ae528a704ad7aa532ffdb0ec0626"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "feature/hepta-production-baseline-p0-next",
+        "tmp/gpt-schema-probe-20260828"
+      ],
+      "conflicts": [],
+      "representative": "tmp/gpt-schema-probe-20260828",
+      "sha": "003ed50282f2c4209ac88715614737e013dee556"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "feature/hepta-production-baseline-p0-durable-audit"
+      ],
+      "conflicts": [],
+      "representative": "feature/hepta-production-baseline-p0-durable-audit",
+      "sha": "744d840ffdadf3c3a56c2a90d6a025a5af435031"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "feature/hepta-production-baseline-p0-tmp-check",
+        "feature/hepta-production-baseline-p0-tmp-check-2",
+        "feature/hepta-production-baseline-p0-tmp-check-3",
+        "feature/hepta-production-baseline-p0-tmp-check-4",
+        "feature/hepta-production-baseline-p0-tmp-check-5"
+      ],
+      "conflicts": [],
+      "representative": "feature/hepta-production-baseline-p0-tmp-check-5",
+      "sha": "ff13a4f27b05dfaaf9c7cce4905f670a5f61f85f"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "feature/hepta-production-baseline-p0-tmp-check-6"
+      ],
+      "conflicts": [],
+      "representative": "feature/hepta-production-baseline-p0-tmp-check-6",
+      "sha": "e3c3c1a730c86a6ec8b8e11bc8b892a8f1489c49"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "feature/hepta-production-baseline-p0",
+        "feature/hepta-production-baseline-p0-exact-gateway",
+        "feature/hepta-production-baseline-p0-repair"
+      ],
+      "conflicts": [],
+      "representative": "feature/hepta-production-baseline-p0-repair",
+      "sha": "78554727fc97083b3def7f2a9d9e148b019fbe96"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "feature/p0-n2-account-genesis-as-entry-v1",
+        "feature/p0-n6-gateway-exact-reserve-v1"
+      ],
+      "conflicts": [],
+      "representative": "feature/p0-n6-gateway-exact-reserve-v1",
+      "sha": "cfd7558e4809386df13317a851e37bab0a9a0c7a"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "automation/p0-n2-source-export"
+      ],
+      "conflicts": [],
+      "representative": "automation/p0-n2-source-export",
+      "sha": "8b1d792af9643552825a3b3a50953cb6d81f4766"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "feature/p0-n3-account-projection-parity-v1"
+      ],
+      "conflicts": [],
+      "representative": "feature/p0-n3-account-projection-parity-v1",
+      "sha": "6231bd6642643df1a11d5b7b6327d903f600497a"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "ci/world-settlement-gap-closure-v1"
+      ],
+      "conflicts": [],
+      "representative": "ci/world-settlement-gap-closure-v1",
+      "sha": "b30be901d5a682e87ea3ad315e32d48191b54599"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "fix/cex-settlement-receipt-lookup-v1"
+      ],
+      "conflicts": [],
+      "representative": "fix/cex-settlement-receipt-lookup-v1",
+      "sha": "12d1925e447be412d3c233da31330e71982362ca"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "feature/p0-all-blockers-closure-v1"
+      ],
+      "conflicts": [],
+      "representative": "feature/p0-all-blockers-closure-v1",
+      "sha": "ae91f83a3e786c866919ebd8482f20ca752d5a5e"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "ci/world-settlement-capture-boundary-v1"
+      ],
+      "conflicts": [],
+      "representative": "ci/world-settlement-capture-boundary-v1",
+      "sha": "6ee36fe5c490f1397045c21013f66976c300b767"
+    },
+    {
+      "action": "already_included",
+      "aliases": [
+        "feature/hepta-paper-raid-alpha-candidate",
+        "feature/hepta-paper-raid-first-playable-telemetry"
+      ],
+      "conflicts": [],
+      "representative": "feature/hepta-paper-raid-alpha-candidate",
+      "sha": "5d03537579ee78b3df81901d00a3eb899ebc62c2"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "feature/settlement-all-blockers-closure-v1"
+      ],
+      "conflicts": [],
+      "representative": "feature/settlement-all-blockers-closure-v1",
+      "sha": "cf127aacf9cbfab814b75f60800f43a239a5eed9"
+    },
+    {
+      "action": "merged_cleanly",
+      "aliases": [
+        "automation/consolidate-all-branches-20260829"
+      ],
+      "conflicts": [],
+      "representative": "automation/consolidate-all-branches-20260829",
+      "sha": "fffea1cea1cb1f3b6ac23bb35a794d8d1a26fa75"
+    }
+  ],
+  "schema": "cex.branch-consolidation-ledger.v1",
+  "source_branch_count": 41,
+  "unique_tip_count": 32
+}
