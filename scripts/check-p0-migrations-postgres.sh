@@ -330,6 +330,14 @@ begin
         raise exception 'audit outbox collision probe did not execute';
     end if;
 
+    -- Exact account opening and Ledger effects above legitimately enqueue
+    -- earlier Audit intents. Delay every non-target row so this probe tests
+    -- the requested outbox row instead of relying on an empty global queue.
+    update public.cex_audit_outbox_v1
+       set available_at = now() + interval '1 hour'
+     where outbox_id <> first_row.outbox_id
+       and status in ('pending', 'retry_wait');
+
     select *
       into claimed_row
       from public.cex_claim_audit_outbox_v1('p0-audit-worker', 1, 30);
