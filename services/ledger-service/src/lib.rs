@@ -1,5 +1,6 @@
 pub mod account_control;
 pub mod api;
+pub mod exact_memory;
 pub mod inventory_signature;
 pub mod ledger_effects;
 pub mod repository;
@@ -15,8 +16,8 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(api::health))
         .route("/metrics", get(api::metrics))
-        .route("/v2/accounts", post(account_control::open_account_v2))
-        .route("/v2/accounts/:id", get(account_control::get_account_exact))
+        .route("/v2/accounts", post(exact_memory::open_account))
+        .route("/v2/accounts/:id", get(exact_memory::get_account))
         .route(
             "/v2/account-opening-inventories",
             post(account_control::build_inventory),
@@ -41,14 +42,14 @@ pub fn build_router(state: AppState) -> Router {
             "/v2/account-projections/repair",
             post(account_control::repair_projection),
         )
-        .route("/v2/ledger/effects", post(ledger_effects::apply_effect))
+        .route("/v2/ledger/effects", post(exact_memory::apply_effect))
         .route(
             "/v2/ledger/effects/:operation_id",
-            get(ledger_effects::get_effect),
+            get(exact_memory::get_effect),
         )
         .route(
             "/v2/ledger/traces/:trace_id",
-            get(ledger_effects::list_trace),
+            get(exact_memory::list_trace),
         )
         .route(
             "/v1/trnm/economy/readiness",
@@ -124,7 +125,7 @@ pub fn build_router(state: AppState) -> Router {
             post(api::post_trnm_economy_maintenance),
         )
         .route("/v1/accounts", post(account_control::legacy_create_account))
-        .route("/v1/accounts/:id", get(account_control::get_account_exact))
+        .route("/v1/accounts/:id", get(exact_memory::get_account))
         .route(
             "/v1/ledger/reserve",
             post(account_control::gone_legacy_value_write),
