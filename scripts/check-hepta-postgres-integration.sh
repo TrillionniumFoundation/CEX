@@ -40,6 +40,8 @@ case "$HEPTA_TEST_DATABASE_URL" in
   *) echo 'HEPTA_TEST_DATABASE_URL must be a PostgreSQL URL' >&2; exit 1 ;;
 esac
 
+python3 scripts/check-hepta-lint-ownership.py
+
 if [[ "$MODE" == 'recovery-only' ]]; then
   cargo test --locked -p hepta-research-league --test postgres_recovery -- --test-threads=1
 else
@@ -62,8 +64,10 @@ Path(sys.argv[1]).write_text(json.dumps({
     "commit_sha": sys.argv[2],
     "mode": sys.argv[3],
     "postgres_required": True,
+    "lint_policy": "exact_body_hash_plus_module_local_expectation",
     "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     "checks": [
+        "exact-lint-ownership",
         "restart-persistence",
         "multi-instance-disjoint-outbox-claim",
         "wrong-owner-ack-rejection",

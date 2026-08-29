@@ -24,6 +24,7 @@ Run, in order:
 
 ```bash
 python3 scripts/check-development-docs.py
+python3 scripts/check-hepta-lint-ownership.py
 python3 scripts/check-p0-release-candidate-hygiene.py
 python3 scripts/check-p0-wiring.py
 python3 scripts/check-repository-integrity.py --output run/repository-integrity.json
@@ -53,11 +54,13 @@ Provide a dedicated PostgreSQL URL and force strict execution:
 ```bash
 export HEPTA_TEST_DATABASE_URL='postgres://user:password@127.0.0.1:5432/hepta_test'
 export HEPTA_REQUIRE_POSTGRES_TESTS=1
+python3 scripts/check-hepta-lint-ownership.py
 bash scripts/check-hepta-postgres-integration.sh --mode full
 ```
 
 Acceptance requires:
 
+- exact source-body lint ownership validates before Cargo execution;
 - fresh schema initialization succeeds;
 - `/ready` reports database reachability and valid security configuration;
 - two service instances persist disjoint Agent records;
@@ -66,9 +69,10 @@ Acceptance requires:
 - concurrent workers claim different events;
 - wrong-owner acknowledgement is rejected;
 - an expired worker lease is reclaimed and acknowledged by a new worker;
-- all Hepta targets and Clippy pass.
+- every unit and integration target passes;
+- all-target Clippy passes with `-D warnings` and no broad warning allowance.
 
-A missing database URL in strict mode is a failure, not a skip.
+A missing database URL in strict mode is a failure, not a skip. A recovery-only result is supporting evidence and cannot substitute for the full package lane.
 
 ## 5. Paper Raid first-playable evidence
 
@@ -89,7 +93,7 @@ The aggregate gate must:
 
 ## 7. Fail-closed conditions
 
-Reject the candidate on any placeholder hash/run ID, missing gate, different head SHA, migration-head mismatch, skipped strict database test, unpinned third-party Action, temporary remediation workflow, legacy monetary write, ambiguous provider retry, mutable evidence, or inferred external approval.
+Reject the candidate on any placeholder hash/run ID, missing gate, different head SHA, migration-head mismatch, skipped strict database test, incomplete Hepta package lane, unguarded lint suppression, unpinned third-party Action, temporary remediation workflow, legacy monetary write, ambiguous provider retry, mutable evidence, or inferred external approval.
 
 ## 8. External deployment acceptance
 

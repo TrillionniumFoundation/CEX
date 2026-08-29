@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,7 @@ EXPECTED_PLAN = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"
 EXPECTED_ADDENDUM = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md"
 EXPECTED_MIGRATION_HEAD = "0084_make_provider_reconciliation_replay_terminal_safe.sql"
 EXPECTED_REQUIREMENTS = {
-    "V12-A", "V12-B", "V12-C", "V12-D", "V12-E", "V12-F", "V12-G", "V12-H", "V12-I",
+    "V12-A", "V12-B", "V12-C", "V12-D", "V12-E", "V12-F", "V12-G", "V12-H", "V12-I", "V12-J",
     "V12-X1", "V12-X2", "V12-X3", "V12-X4", "V12-X5", "V12-X6", "V12-X7", "V12-X8",
 }
 PROBLEMS: list[str] = []
@@ -143,7 +144,6 @@ def validate_traceability(authority: dict[str, Any]) -> None:
         source = item.get("source")
         if not isinstance(source, list) or not source:
             PROBLEMS.append(f"{requirement_id} must name at least one normative source")
-            source = []
         for field in ("source", "implementation", "verification", "gates"):
             paths = item.get(field)
             if not isinstance(paths, list):
@@ -185,6 +185,7 @@ def validate_repository_wiring() -> None:
         "HEPTA_REQUIRE_POSTGRES_TESTS: '1'",
         "scripts/check-development-docs.py",
         "scripts/check-repository-integrity.py",
+        "scripts/check-hepta-lint-ownership.py",
         "scripts/check-hepta-postgres-integration.sh",
     ):
         if marker not in rust_gate:
@@ -202,6 +203,16 @@ def validate_repository_wiring() -> None:
     for marker in ("HEPTA_REQUIRE_POSTGRES_TESTS", "strict PostgreSQL integration test"):
         if marker not in hepta_test:
             PROBLEMS.append(f"Hepta PostgreSQL recovery test can still silently skip: missing {marker}")
+    lint_check = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/check-hepta-lint-ownership.py")],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    if lint_check.returncode != 0:
+        PROBLEMS.append("Hepta lint ownership contract failed: " + lint_check.stdout.strip())
     require_markers(
         "docs/index.md",
         "Authority order",
@@ -212,6 +223,7 @@ def validate_repository_wiring() -> None:
         EXPECTED_ADDENDUM,
         "Block H",
         "Block I",
+        "Block J",
         "REPOSITORY_CLOSED_CANDIDATE",
         "External production gates remain upstream blockers",
     )

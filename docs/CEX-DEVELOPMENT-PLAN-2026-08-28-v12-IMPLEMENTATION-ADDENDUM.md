@@ -47,6 +47,26 @@ Closure evidence:
 - the `hepta-postgres-integration` job inside `rust-service-gate` succeeds on the exact candidate SHA;
 - the aggregate release-candidate workflow reruns the strict recovery test and stores a Hepta evidence record.
 
+### Block J — complete-suite lint ownership and fail-closed source identity
+
+The complete Hepta package suite is authoritative. A recovery-only test cannot substitute for package tests plus all-target Clippy. Where a child module inherits the Base64 engine trait from `paper_raid_v2` and also carries the same local trait import, the repository may use only a module-local lint expectation bound to an immutable source-body Git blob. A crate-wide warning allowance, `-A warnings`, or unguarded source split is forbidden.
+
+Required behavior:
+
+- all unit and integration tests execute before strict Clippy in the full hosted lane;
+- Clippy runs with `-D warnings` over every Hepta target;
+- the four source bodies and four thin wrappers are validated by `scripts/check-hepta-lint-ownership.py`;
+- each body has an exact Git blob SHA and exactly one known inherited `Engine` import;
+- each wrapper uses `expect(unused_imports)`, never `allow(unused_imports)`;
+- any body or wrapper drift fails before Cargo execution and requires direct source cleanup or an explicitly reviewed new contract;
+- the exact lint contract is included in retained Hepta evidence.
+
+Closure evidence:
+
+- `scripts/check-hepta-lint-ownership.py` succeeds;
+- `scripts/check-hepta-postgres-integration.sh --mode full` succeeds;
+- the exact-SHA Hepta job reports every test successful and Clippy clean under warnings denied.
+
 ## 2. Documentation completion contract
 
 The active documentation set must define all of the following:
@@ -58,7 +78,8 @@ The active documentation set must define all of the following:
 5. clean-deployment acceptance from an empty database through exact-tree evidence generation;
 6. SLI/SLO targets, recovery semantics, and the distinction between CI regression evidence and production qualification;
 7. protocol read/write authority, compatibility, migration, and retirement conditions;
-8. machine-readable requirement-to-code-to-test-to-gate traceability.
+8. machine-readable requirement-to-code-to-test-to-gate traceability;
+9. complete-suite lint ownership without broad warning suppression.
 
 Documentation is complete only when the checker validates the files and the exact-tree integrity record binds their digests. Word count or file presence alone is not completion.
 
@@ -67,8 +88,8 @@ Documentation is complete only when the checker validates the files and the exac
 The final candidate sequence is:
 
 1. freeze one candidate commit/tree;
-2. run documentation, hygiene, static wiring, and repository-integrity checks;
-3. run the five authoritative v12 workflows, with `rust-service-gate` containing Blocks H and I;
+2. run documentation, hygiene, static wiring, lint-ownership, and repository-integrity checks;
+3. run the five authoritative v12 workflows, with `rust-service-gate` containing Blocks H, I, and J;
 4. run the aggregate candidate workflow on the same SHA;
 5. generate and validate the immutable evidence payload and candidate manifest;
 6. report actual branch/ruleset enforcement without inference;
@@ -89,7 +110,8 @@ This addendum is closed on one exact commit only when:
 - all active documents and machine-readable ledgers validate;
 - all repository-actionable traceability entries resolve to existing files and executable gates;
 - strict Hepta PostgreSQL recovery cannot skip;
+- the exact Hepta lint ownership contract validates and the complete package suite passes;
 - the exact-tree integrity record is generated and included in release evidence;
 - the five authoritative workflows and aggregate candidate workflow succeed on that SHA;
-- no placeholder, temporary remediation workflow, or fabricated external approval is used;
+- no placeholder, temporary remediation workflow, broad warning allowance, or fabricated external approval is used;
 - the generated candidate manifest continues to deny production authorization.
