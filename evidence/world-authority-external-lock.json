@@ -14,6 +14,11 @@
     "tree": "4a4c30cbbff5fd5bf42e1586f77804e49c602fda",
     "role": "target_authority_candidate"
   },
+  "manual_rearm": {
+    "actor": "Tomasrgbsf",
+    "generation": 3,
+    "reason": "break bot-authored refresh loop and execute human-authored exact-source relay"
+  },
   "activation": "shadow_only",
   "cutover_authorized": false,
   "closed_online_promoted": false,

@@ -1,10 +1,9 @@
 name: world-authority-lock-refresh
 
+# Deliberately manual-only. Automatic push refresh created bot-authored commits
+# whose pull_request checks concluded action_required without allocating jobs.
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - ci/world-settlement-capture-boundary-v1
 
 permissions:
   contents: write
