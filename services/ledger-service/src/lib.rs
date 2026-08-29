@@ -1,3 +1,8 @@
+#![allow(clippy::result_large_err)]
+// Ledger transport helpers intentionally return complete Axum `Response` values so every
+// authentication, integrity and availability failure retains its exact status and body.
+// Keep this exception at the HTTP crate boundary rather than weakening workspace Clippy policy.
+
 pub mod account_control;
 pub mod api;
 pub mod exact_memory;
