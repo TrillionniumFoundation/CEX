@@ -1,0 +1,53 @@
+name: closure-self-patch
+
+on:
+  push:
+    branches:
+      - feature/settlement-all-blockers-closure-v1
+    paths:
+      - .github/workflows/closure-self-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-reviewed-closure-fixes:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/settlement-all-blockers-closure-v1
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Apply deterministic reviewed fixes
+        run: python3 scripts/apply-closure-fixes.py
+
+      - name: Format Rust workspace
+        run: cargo fmt --all
+
+      - name: Validate wiring and patch shape
+        run: |
+          python3 scripts/check-p0-wiring.py
+          git diff --check
+
+      - name: Run consumer-entry library regression suite
+        run: cargo test -p consumer-entry-api --lib
+
+      - name: Commit reviewed closure fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            migrations/0056_expand_exact_money_minor_units.sql \
+            services/consumer-entry-api/src/term_exchange_backend.rs \
+            services/consumer-entry-api/src/tests.rs \
+            services/ledger-service/src/api.rs
+          git diff --cached --quiet && { echo "No changes to commit"; exit 1; }
+          git commit -m "fix(closure): close exact money and migration gaps"
+          git push origin HEAD:feature/settlement-all-blockers-closure-v1
