@@ -6,6 +6,8 @@ on:
       - fix/p0-v12-final-closure
     paths:
       - '.github/workflows/p0-v12-trnm-exact-cutover-runner.yml'
+      - '.github/workflows/p0-v12-trnm-exact-cutover.yml'
+      - 'scripts/p0-v12-trnm-exact-cutover-extract.py'
 
 permissions:
   contents: write
