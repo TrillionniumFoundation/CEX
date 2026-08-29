@@ -11,6 +11,14 @@ require_line() {
   fi
 }
 
+require_token() {
+  local file="$1" token="$2"
+  if ! grep -Fq -- "$token" "$file"; then
+    echo "missing required token in ${file#$ROOT_DIR/}: $token" >&2
+    exit 1
+  fi
+}
+
 ledger_unit="$ROOT_DIR/deploy/systemd/cex-trnm-ledger.service"
 consumer_unit="$ROOT_DIR/deploy/systemd/cex-trnm-consumer.service"
 for setting in CPUAccounting=true CPUWeight=200 CPUQuota=100% \
@@ -36,9 +44,11 @@ jq -e '
   and (.services.postgres.command | index("max_connections=50")) != null
 ' >/dev/null <<<"$compose_json"
 
-rg -q 'LEDGER_DATABASE_MAX_CONNECTIONS' \
+for file in \
   "$ROOT_DIR/scripts/run-trnm-economy-service.sh" \
-  "$ROOT_DIR/services/ledger-service/src/repository/postgres.rs"
+  "$ROOT_DIR/services/ledger-service/src/repository/postgres.rs"; do
+  require_token "$file" 'LEDGER_DATABASE_MAX_CONNECTIONS'
+done
 
 installed=false
 if [[ "${TRNM_REQUIRE_INSTALLED_RESOURCE_BUDGETS:-0}" == 1 ]]; then
