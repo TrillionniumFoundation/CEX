@@ -17,8 +17,24 @@ EXPECTED_PLAN = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"
 EXPECTED_ADDENDUM = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md"
 EXPECTED_MIGRATION_HEAD = "0084_make_provider_reconciliation_replay_terminal_safe.sql"
 EXPECTED_REQUIREMENTS = {
-    "V12-A", "V12-B", "V12-C", "V12-D", "V12-E", "V12-F", "V12-G", "V12-H", "V12-I", "V12-J",
-    "V12-X1", "V12-X2", "V12-X3", "V12-X4", "V12-X5", "V12-X6", "V12-X7", "V12-X8",
+    "V12-A",
+    "V12-B",
+    "V12-C",
+    "V12-D",
+    "V12-E",
+    "V12-F",
+    "V12-G",
+    "V12-H",
+    "V12-I",
+    "V12-J",
+    "V12-X1",
+    "V12-X2",
+    "V12-X3",
+    "V12-X4",
+    "V12-X5",
+    "V12-X6",
+    "V12-X7",
+    "V12-X8",
 }
 PROBLEMS: list[str] = []
 
@@ -80,18 +96,33 @@ def validate_authority() -> dict[str, Any]:
         PROBLEMS.append("development authority must deny production authorization")
     if authority.get("external_gate_policy") != "independent_evidence_required":
         PROBLEMS.append("external gate policy must require independent evidence")
-    for key in ("active_plan", "active_addendum", "shared_trigger", "aggregate_release_workflow"):
+
+    for key in (
+        "active_plan",
+        "active_addendum",
+        "shared_trigger",
+        "aggregate_release_workflow",
+    ):
         require_path(authority.get(key), f"authority.{key}")
+
     workflows = authority.get("authoritative_workflows")
     if not isinstance(workflows, list) or len(workflows) != 5:
         PROBLEMS.append("authority must name exactly five authoritative workflows")
     else:
         for index, path in enumerate(workflows):
             require_path(path, f"authority.authoritative_workflows[{index}]")
+
     canonical = authority.get("canonical_documents")
     required_keys = {
-        "entrypoint", "component_status", "traceability", "hepta_state_machines",
-        "threat_model", "clean_deployment_acceptance", "slo_recovery", "protocol_compatibility",
+        "entrypoint",
+        "component_status",
+        "traceability",
+        "hepta_state_machines",
+        "threat_model",
+        "clean_deployment_acceptance",
+        "slo_recovery",
+        "protocol_compatibility",
+        "trnm_production_credentials",
     }
     if not isinstance(canonical, dict) or set(canonical) != required_keys:
         PROBLEMS.append("canonical document set is incomplete or contains unversioned additions")
@@ -99,13 +130,26 @@ def validate_authority() -> dict[str, Any]:
         for key, path in canonical.items():
             require_path(path, f"authority.canonical_documents.{key}")
             text = read_text(path) if isinstance(path, str) else ""
-            if re.search(r"(?:^|[\s`])/(?:home|data|Users)/", text) or re.search(r"\b[A-Za-z]:\\", text):
-                PROBLEMS.append(f"canonical document contains a machine-specific absolute path: {path}")
+            if re.search(r"(?:^|[\s`])/(?:home|data|Users)/", text) or re.search(
+                r"\b[A-Za-z]:\\", text
+            ):
+                PROBLEMS.append(
+                    f"canonical document contains a machine-specific absolute path: {path}"
+                )
             if isinstance(path, str) and Path(path).name.lower() == "readme.md":
-                PROBLEMS.append("root README must not be part of the normative document authority chain")
+                PROBLEMS.append(
+                    "root README must not be part of the normative document authority chain"
+                )
+
     external = authority.get("external_production_scope")
-    if not isinstance(external, dict) or external.get("self_certifiable") is not False or external.get("status") != "blocked_upstream":
-        PROBLEMS.append("external production scope must remain non-self-certifiable and blocked_upstream")
+    if (
+        not isinstance(external, dict)
+        or external.get("self_certifiable") is not False
+        or external.get("status") != "blocked_upstream"
+    ):
+        PROBLEMS.append(
+            "external production scope must remain non-self-certifiable and blocked_upstream"
+        )
     return authority
 
 
@@ -121,10 +165,12 @@ def validate_traceability(authority: dict[str, Any]) -> None:
     ):
         if trace.get(field) != expected:
             PROBLEMS.append(f"traceability {field} is stale")
+
     requirements = trace.get("requirements")
     if not isinstance(requirements, list):
         PROBLEMS.append("traceability requirements must be a list")
         return
+
     seen: set[str] = set()
     for index, item in enumerate(requirements):
         label = f"requirements[{index}]"
@@ -138,12 +184,14 @@ def validate_traceability(authority: dict[str, Any]) -> None:
         if requirement_id in seen:
             PROBLEMS.append(f"duplicate traceability requirement: {requirement_id}")
         seen.add(requirement_id)
+
         classification = item.get("classification")
         if classification not in {"repository_actionable", "external"}:
             PROBLEMS.append(f"{requirement_id} classification is invalid")
         source = item.get("source")
         if not isinstance(source, list) or not source:
             PROBLEMS.append(f"{requirement_id} must name at least one normative source")
+
         for field in ("source", "implementation", "verification", "gates"):
             paths = item.get(field)
             if not isinstance(paths, list):
@@ -151,17 +199,29 @@ def validate_traceability(authority: dict[str, Any]) -> None:
                 continue
             for path in paths:
                 require_path(path, f"{requirement_id}.{field}")
+
         if classification == "repository_actionable":
-            if item.get("self_certifiable") is not True or item.get("status") != "required_hosted_exact_sha":
+            if (
+                item.get("self_certifiable") is not True
+                or item.get("status") != "required_hosted_exact_sha"
+            ):
                 PROBLEMS.append(f"{requirement_id} repository evidence policy is invalid")
             for field in ("implementation", "verification", "gates"):
                 if not item.get(field):
-                    PROBLEMS.append(f"{requirement_id} lacks executable {field} traceability")
+                    PROBLEMS.append(
+                        f"{requirement_id} lacks executable {field} traceability"
+                    )
         elif classification == "external":
-            if item.get("self_certifiable") is not False or item.get("status") != "blocked_upstream":
+            if (
+                item.get("self_certifiable") is not False
+                or item.get("status") != "blocked_upstream"
+            ):
                 PROBLEMS.append(f"{requirement_id} external evidence policy is invalid")
             if item.get("gates") or item.get("verification"):
-                PROBLEMS.append(f"{requirement_id} must not claim a repository gate can self-certify it")
+                PROBLEMS.append(
+                    f"{requirement_id} must not claim a repository gate can self-certify it"
+                )
+
     if seen != EXPECTED_REQUIREMENTS:
         PROBLEMS.append(
             "traceability requirement set mismatch: missing="
@@ -177,6 +237,7 @@ def validate_repository_wiring() -> None:
     migrations = sorted((ROOT / "migrations").glob("[0-9][0-9][0-9][0-9]_*.sql"))
     if not migrations or migrations[-1].name != EXPECTED_MIGRATION_HEAD:
         PROBLEMS.append("repository migration head does not match v12 authority")
+
     rust_gate = read_text(".github/workflows/rust-service-gate.yml")
     for marker in (
         "# exact-tree: every branch push",
@@ -189,7 +250,10 @@ def validate_repository_wiring() -> None:
         "scripts/check-hepta-postgres-integration.sh",
     ):
         if marker not in rust_gate:
-            PROBLEMS.append(f"rust-service-gate lacks required v12 addendum marker: {marker}")
+            PROBLEMS.append(
+                f"rust-service-gate lacks required v12 addendum marker: {marker}"
+            )
+
     release_gate = read_text(".github/workflows/p0-release-candidate-gate.yml")
     for marker in (
         "scripts/check-development-docs.py",
@@ -198,11 +262,17 @@ def validate_repository_wiring() -> None:
         "scripts/check-hepta-postgres-integration.sh --mode recovery-only",
     ):
         if marker not in release_gate:
-            PROBLEMS.append(f"release candidate gate lacks required addendum marker: {marker}")
+            PROBLEMS.append(
+                f"release candidate gate lacks required addendum marker: {marker}"
+            )
+
     hepta_test = read_text("services/hepta-research-league/tests/postgres_recovery.rs")
     for marker in ("HEPTA_REQUIRE_POSTGRES_TESTS", "strict PostgreSQL integration test"):
         if marker not in hepta_test:
-            PROBLEMS.append(f"Hepta PostgreSQL recovery test can still silently skip: missing {marker}")
+            PROBLEMS.append(
+                f"Hepta PostgreSQL recovery test can still silently skip: missing {marker}"
+            )
+
     lint_check = subprocess.run(
         [sys.executable, str(ROOT / "scripts/check-hepta-lint-ownership.py")],
         cwd=ROOT,
@@ -212,12 +282,35 @@ def validate_repository_wiring() -> None:
         check=False,
     )
     if lint_check.returncode != 0:
-        PROBLEMS.append("Hepta lint ownership contract failed: " + lint_check.stdout.strip())
+        PROBLEMS.append(
+            "Hepta lint ownership contract failed: " + lint_check.stdout.strip()
+        )
+
     require_markers(
         "docs/index.md",
         "Authority order",
         "Production authorization",
         "scripts/check-development-docs.py",
+        "trnm-production-credential-contract-v1.md",
+    )
+    require_markers(
+        "docs/trnm-production-credential-contract-v1.md",
+        "Status: operational security contract",
+        "pairwise distinct",
+        "TRNM_ENTITLEMENT_ISSUER_REGISTRY_PATH",
+        "deploy/trnm-economy/trnm-production.env.example",
+        "production authorization",
+    )
+    require_markers(
+        "deploy/trnm-economy/trnm-production.env.example",
+        "LEDGER_ADMIN_TOKEN=",
+        "TRNM_VALUE_ENTITLEMENT_SIGNING_SECRET=",
+        "TRNM_GAME_AUTHORITY_TOKEN=",
+        "TRNM_PLAYER_SESSION_SIGNING_SECRET=",
+        "CONSUMER_ENTRY_INGRESS_TOKEN=",
+        "CONSUMER_ENTRY_SESSION_AUTH_SECRET=",
+        "CEX_GATEWAY_API_KEY=",
+        "CONSUMER_ENTRY_LEAGUE_WEB_SESSION_SECRET=",
     )
     require_markers(
         EXPECTED_ADDENDUM,
