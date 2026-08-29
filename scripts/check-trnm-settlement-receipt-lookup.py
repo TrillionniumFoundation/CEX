@@ -98,6 +98,29 @@ def main() -> int:
     ):
         require(problems, marker in native, f"native submission is missing {marker!r}")
 
+    for marker in (
+        "cex_apply_ledger_effect_v1",
+        "balance_minor",
+        "reserved_minor",
+        "credits_to_minor",
+        "exact_ledger_effects",
+        "cex_open_account_v2",
+    ):
+        require(problems, marker in native, f"TRNM exact-money cutover is missing {marker!r}")
+    for forbidden in (
+        "append_native_entry(",
+        "balance::float8",
+        "reserved::float8",
+        "seller_hold_amount::float8",
+        "amount as f64",
+        "update accounts set balance =",
+    ):
+        require(
+  problems,
+  forbidden not in native,
+  f"TRNM native economy still contains legacy monetary write/read {forbidden!r}",
+        )
+
     migration_sql = compact_sql(migration)
     require(
         problems,

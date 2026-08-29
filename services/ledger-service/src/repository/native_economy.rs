@@ -19,10 +19,40 @@ use super::{
     postgres::PostgresLedgerRepository, LedgerActionError, TrnmPlayerIdentityRecord,
     TrnmPlayerSessionRecord,
 };
-use crate::state::AccountRecord;
-
 const DEFAULT_SELLER_REVERSIBLE_WINDOW_SECONDS: i64 = 86_400;
 const MAX_SELLER_REVERSIBLE_WINDOW_SECONDS: i64 = 30 * 86_400;
+const EXACT_LEDGER_SOURCE_SERVICE: &str = "ledger-service";
+const EXACT_LEDGER_SOURCE_PRINCIPAL: &str = "trnm-game-authority";
+
+#[derive(Debug, Clone)]
+struct ExactAccountRecord {
+    account_id: Uuid,
+    currency_unit: String,
+    currency_scale: i16,
+    balance_minor: i64,
+    reserved_minor: i64,
+}
+
+impl ExactAccountRecord {
+    fn available_minor(&self) -> Result<i64, LedgerActionError> {
+        self.balance_minor
+            .checked_sub(self.reserved_minor)
+            .ok_or_else(|| {
+                LedgerActionError::Other(
+                    "TRNM exact account projection overflowed while computing available funds"
+                        .to_string(),
+                )
+            })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ExactLedgerEffect {
+    entry_id: Uuid,
+    operation_id: Uuid,
+    amount_minor: i64,
+    currency_scale: i16,
+}
 
 impl PostgresLedgerRepository {
     pub(super) async fn execute_trnm_native_intent(
@@ -140,21 +170,18 @@ impl PostgresLedgerRepository {
                     Ok(())
                 } else {
                     consume_value_entitlement(&mut tx, intent, account_id, amount).await?;
-                    let mut account = load_account_for_update(&mut tx, account_id).await?;
-                    account.balance += amount as f64;
-                    update_account(&mut tx, &account).await?;
-                    let entry_id = append_native_entry(
+                    let effect = apply_intent_effect(
                         &mut tx,
+                        intent,
                         account_id,
-                        "credit",
+                        "grant",
                         amount,
                         "release_reward",
-                        &intent.idempotency_key.key,
                     )
                     .await?;
                     receipt.status = ReceiptStatus::ApprovedRelease;
                     receipt.progression_class = receipt.status.progression_class();
-                    receipt.ledger_entry_id = Some(entry_id.to_string());
+                    record_exact_effect(&mut receipt, "release_reward", effect, true);
                     Ok(())
                 }
             }
@@ -164,30 +191,25 @@ impl PostgresLedgerRepository {
                     receipt.progression_class = receipt.status.progression_class();
                     Ok(())
                 } else {
-                    let mut account = load_account_for_update(&mut tx, account_id).await?;
-                    let available = account.balance - account.reserved;
-                    if available + 1e-9 < amount as f64 {
+                    let account = load_exact_account_for_update(&mut tx, account_id).await?;
+                    let amount_minor =
+                        credits_to_minor(&account, intent_currency(intent)?, amount)?;
+                    let available_minor = account.available_minor()?;
+                    if available_minor < amount_minor {
                         receipt.status = ReceiptStatus::FailedBadResponse;
                         receipt.progression_class = receipt.status.progression_class();
                         receipt.reason = Some(format!(
-                            "insufficient available wallet credits: available={available:.0}, requested={amount}"
-                        ));
+                  "insufficient available wallet credits: available_minor={available_minor}, requested_minor={amount_minor}"
+              ));
                         Ok(())
                     } else {
-                        account.reserved += amount as f64;
-                        update_account(&mut tx, &account).await?;
-                        let entry_id = append_native_entry(
-                            &mut tx,
-                            account_id,
-                            "debit",
-                            amount,
-                            "reserve",
-                            &intent.idempotency_key.key,
+                        let effect = apply_intent_effect(
+                            &mut tx, intent, account_id, "reserve", amount, "reserve",
                         )
                         .await?;
                         receipt.status = ReceiptStatus::Reserved;
                         receipt.progression_class = receipt.status.progression_class();
-                        receipt.ledger_entry_id = Some(entry_id.to_string());
+                        record_exact_effect(&mut receipt, "reserve", effect, true);
                         Ok(())
                     }
                 }
@@ -231,14 +253,18 @@ impl PostgresLedgerRepository {
             .await
             .map_err(|error| db_error("begin TRNM wallet reconciliation", error))?;
         release_matured_seller_holds(&mut tx, account_id).await?;
-        let account = load_account_for_update(&mut tx, account_id).await?;
+        let account = load_exact_account_for_update(&mut tx, account_id).await?;
+        let available_minor = account.available_minor()?;
+        let available_credits = minor_to_whole_credits(available_minor, account.currency_scale)?;
+        let reserved_credits =
+            minor_to_whole_credits(account.reserved_minor, account.currency_scale)?;
         let cursor = sqlx::query_scalar::<_, i64>(
             "insert into trnm_economy_reconciliation_cursors (actor_id, account_id, cursor)
-             values ($1, $2, $3)
-             on conflict (actor_id, account_id) do update set
-                 cursor = greatest(trnm_economy_reconciliation_cursors.cursor, excluded.cursor),
-                 updated_at = now()
-             returning cursor",
+   values ($1, $2, $3)
+   on conflict (actor_id, account_id) do update set
+       cursor = greatest(trnm_economy_reconciliation_cursors.cursor, excluded.cursor),
+       updated_at = now()
+   returning cursor",
         )
         .bind(actor_id)
         .bind(account_id)
@@ -251,12 +277,11 @@ impl PostgresLedgerRepository {
             .map_err(|error| db_error("commit TRNM wallet reconciliation", error))?;
         Ok(WalletSnapshot {
             account_id: account_id.to_string(),
-            available_credits: (account.balance - account.reserved).round() as i64,
-            reserved_credits: account.reserved.round() as i64,
+            available_credits,
+            reserved_credits,
             observed_at_cursor: u64::try_from(cursor).unwrap_or_default(),
         })
     }
-
     pub(super) async fn register_trnm_native_player_identity(
         &self,
         player_id: &str,
@@ -271,7 +296,7 @@ impl PostgresLedgerRepository {
             .begin()
             .await
             .map_err(|error| db_error("begin TRNM identity registration", error))?;
-        let _ = load_account_for_update(&mut tx, account_id).await?;
+        let _ = load_exact_account_for_update(&mut tx, account_id).await?;
         let recovery_key_hash = recovery_key_hash(recovery_key)?;
         sqlx::query(
             "insert into trnm_player_identities (
@@ -382,15 +407,22 @@ impl PostgresLedgerRepository {
             ));
         }
         let account_id = Uuid::new_v4();
-        sqlx::query(
-            "insert into accounts (account_id, org_id, account_type, currency_unit, status)
-             values ($1, $2, 'trnm-online-player', 'credit', 'active')",
+        let opening_trace_id = deterministic_uuid(&format!(
+            "trnm-product-registration:{org_id}:{player_id}:{account_id}"
+        ));
+        sqlx::query_scalar::<_, Value>(
+            "select public.cex_open_account_v2(
+                $1, $2, $3, 'trnm-online-player', 'credit', 6::smallint, 0::bigint,
+                'trnm.product.registration', $4, 'trnm-product-registration'
+             )",
         )
         .bind(account_id)
         .bind(org_id)
-        .execute(&mut *tx)
+        .bind(opening_trace_id)
+        .bind(format!("player:{player_id}"))
+        .fetch_one(&mut *tx)
         .await
-        .map_err(|error| db_error("create TRNM product account", error))?;
+        .map_err(|error| db_error("create exact TRNM product account", error))?;
         let recovery_key_hash = recovery_key_hash(recovery_key)?;
         sqlx::query(
             "insert into trnm_player_identities (
@@ -1238,70 +1270,251 @@ fn escrow_metadata(
     Ok((purchase_id.to_string(), buyer, seller, asset_id, quantity))
 }
 
-async fn load_account_for_update(
+async fn load_exact_account_for_update(
     tx: &mut Transaction<'_, Postgres>,
     account_id: Uuid,
-) -> Result<AccountRecord, LedgerActionError> {
+) -> Result<ExactAccountRecord, LedgerActionError> {
     let row = sqlx::query(
-        "select account_id, org_id::text as org_id, account_type, currency_unit,
-                balance::float8 as balance, reserved::float8 as reserved
-         from accounts where account_id = $1 for update",
+        "select account_id, currency_unit, currency_scale, balance_minor, reserved_minor, status
+         from public.accounts where account_id = $1 for update",
     )
     .bind(account_id)
     .fetch_optional(&mut **tx)
     .await
-    .map_err(|error| db_error("load native-economy account", error))?
+    .map_err(|error| db_error("load exact native-economy account", error))?
     .ok_or(LedgerActionError::AccountNotFound)?;
-    Ok(AccountRecord {
+    let status: String = row.try_get("status").map_err(row_error)?;
+    if status != "active" {
+        return Err(LedgerActionError::IdentityRejected(
+            "TRNM account is not active".to_string(),
+        ));
+    }
+    Ok(ExactAccountRecord {
         account_id: row.try_get("account_id").map_err(row_error)?,
-        org_id: row.try_get("org_id").map_err(row_error)?,
-        account_type: row.try_get("account_type").map_err(row_error)?,
         currency_unit: row.try_get("currency_unit").map_err(row_error)?,
-        balance: row.try_get("balance").map_err(row_error)?,
-        reserved: row.try_get("reserved").map_err(row_error)?,
+        currency_scale: row.try_get("currency_scale").map_err(row_error)?,
+        balance_minor: row.try_get("balance_minor").map_err(row_error)?,
+        reserved_minor: row.try_get("reserved_minor").map_err(row_error)?,
     })
 }
 
-async fn update_account(
-    tx: &mut Transaction<'_, Postgres>,
-    account: &AccountRecord,
-) -> Result<(), LedgerActionError> {
-    sqlx::query("update accounts set balance = $2, reserved = $3 where account_id = $1")
-        .bind(account.account_id)
-        .bind(account.balance)
-        .bind(account.reserved)
-        .execute(&mut **tx)
-        .await
-        .map_err(|error| db_error("update native-economy account", error))?;
-    Ok(())
+fn minor_factor(currency_scale: i16) -> Result<i64, LedgerActionError> {
+    let exponent = u32::try_from(currency_scale).map_err(|_| {
+        LedgerActionError::Other("TRNM currency scale cannot be negative".to_string())
+    })?;
+    if exponent > 6 {
+        return Err(LedgerActionError::Other(
+            "TRNM currency scale exceeds the exact Ledger limit".to_string(),
+        ));
+    }
+    10_i64.checked_pow(exponent).ok_or_else(|| {
+        LedgerActionError::Other("TRNM currency scale factor overflowed".to_string())
+    })
 }
 
-async fn append_native_entry(
+fn credits_to_minor(
+    account: &ExactAccountRecord,
+    expected_currency: &str,
+    amount_credits: i64,
+) -> Result<i64, LedgerActionError> {
+    if account.currency_unit != expected_currency {
+        return Err(LedgerActionError::IdentityRejected(format!(
+            "TRNM intent currency {} does not match account currency {}",
+            expected_currency, account.currency_unit
+        )));
+    }
+    if amount_credits <= 0 {
+        return Err(LedgerActionError::Other(
+            "TRNM exact Ledger amount must be positive".to_string(),
+        ));
+    }
+    amount_credits
+        .checked_mul(minor_factor(account.currency_scale)?)
+        .ok_or_else(|| LedgerActionError::Other("TRNM minor-unit amount overflowed".to_string()))
+}
+
+fn intent_currency(intent: &EconomicIntent) -> Result<&str, LedgerActionError> {
+    let currency = intent.currency.as_deref().ok_or_else(|| {
+        LedgerActionError::IdentityRejected(
+            "TRNM value intent currency is required for exact Ledger writes".to_string(),
+        )
+    })?;
+    if currency.trim().is_empty() {
+        return Err(LedgerActionError::IdentityRejected(
+            "TRNM value intent currency cannot be empty".to_string(),
+        ));
+    }
+    Ok(currency)
+}
+
+fn minor_to_whole_credits(
+    amount_minor: i64,
+    currency_scale: i16,
+) -> Result<i64, LedgerActionError> {
+    let factor = minor_factor(currency_scale)?;
+    if amount_minor % factor != 0 {
+        return Err(LedgerActionError::Other(
+            "TRNM whole-credit protocol cannot represent a fractional exact balance".to_string(),
+        ));
+    }
+    Ok(amount_minor / factor)
+}
+
+fn parse_whole_credit_amount(raw: &str, field: &str) -> Result<i64, LedgerActionError> {
+    let trimmed = raw.trim();
+    let whole = if let Some((whole, fraction)) = trimmed.split_once('.') {
+        if fraction.is_empty() || !fraction.chars().all(|character| character == '0') {
+            return Err(LedgerActionError::Other(format!(
+                "{field} is not an exact whole-credit amount"
+            )));
+        }
+        whole
+    } else {
+        trimmed
+    };
+    whole.parse::<i64>().map_err(|_| {
+        LedgerActionError::Other(format!("{field} is not a valid exact whole-credit amount"))
+    })
+}
+
+fn deterministic_uuid(material: &str) -> Uuid {
+    let digest = Sha256::digest(material.as_bytes());
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(bytes)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn apply_exact_effect(
     tx: &mut Transaction<'_, Postgres>,
     account_id: Uuid,
-    direction: &str,
-    amount: i64,
-    reason: &str,
-    idempotency_key: &str,
-) -> Result<Uuid, LedgerActionError> {
-    let entry_id = Uuid::new_v4();
-    sqlx::query(
-        "insert into ledger_entries (
-             entry_id, account_id, direction, amount, reason, reference_type, idempotency_key
-         ) values ($1, $2, $3, $4, $5, 'trnm_native_economy', $6)",
+    expected_currency: &str,
+    operation_kind: &str,
+    amount_credits: i64,
+    trace_material: &str,
+    operation_material: &str,
+    idempotency_scope: &str,
+    source_principal: &str,
+    reference_type: &str,
+    reference_material: &str,
+) -> Result<ExactLedgerEffect, LedgerActionError> {
+    let account = load_exact_account_for_update(tx, account_id).await?;
+    let amount_minor = credits_to_minor(&account, expected_currency, amount_credits)?;
+    let trace_id = deterministic_uuid(&format!("trnm-native-trace:{trace_material}"));
+    let operation_id = deterministic_uuid(&format!(
+        "trnm-native-operation:{operation_material}:{account_id}:{operation_kind}"
+    ));
+    let reference_id = deterministic_uuid(&format!(
+        "trnm-native-reference:{reference_type}:{reference_material}"
+    ));
+    let idempotency_key = format!(
+        "sha256:{:x}",
+        Sha256::digest(format!("{operation_material}:{account_id}:{operation_kind}").as_bytes())
+    );
+    let result_text = sqlx::query_scalar::<_, String>(
+        "select public.cex_apply_ledger_effect_v1(
+  $1, $2, $3, $4, $5, $6,
+  $7, $8, $9, $10, $11, $12, 'explicit'
+         )::text",
     )
-    .bind(entry_id)
     .bind(account_id)
-    .bind(direction)
-    .bind(amount as f64)
-    .bind(reason)
-    .bind(idempotency_key)
-    .execute(&mut **tx)
+    .bind(trace_id)
+    .bind(operation_id)
+    .bind(operation_kind)
+    .bind(amount_minor)
+    .bind(account.currency_scale)
+    .bind(reference_type)
+    .bind(reference_id)
+    .bind(idempotency_scope)
+    .bind(&idempotency_key)
+    .bind(EXACT_LEDGER_SOURCE_SERVICE)
+    .bind(source_principal)
+    .fetch_one(&mut **tx)
     .await
-    .map_err(|error| db_error("append native-economy ledger entry", error))?;
-    Ok(entry_id)
+    .map_err(|error| db_error("apply exact TRNM Ledger effect", error))?;
+    let result: Value = serde_json::from_str(&result_text).map_err(|error| {
+        LedgerActionError::Other(format!("decode exact TRNM Ledger effect failed: {error}"))
+    })?;
+    let entry_id = result
+        .pointer("/effect/entry_id")
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .ok_or_else(|| {
+            LedgerActionError::Other(
+                "exact TRNM Ledger effect did not return an entry_id".to_string(),
+            )
+        })?;
+    Ok(ExactLedgerEffect {
+        entry_id,
+        operation_id,
+        amount_minor,
+        currency_scale: account.currency_scale,
+    })
 }
 
+async fn apply_intent_effect(
+    tx: &mut Transaction<'_, Postgres>,
+    intent: &EconomicIntent,
+    account_id: Uuid,
+    operation_kind: &str,
+    amount_credits: i64,
+    lane: &str,
+) -> Result<ExactLedgerEffect, LedgerActionError> {
+    let operation_material = format!(
+        "intent:{}:{}:{}:{}",
+        intent.intent_id, intent.idempotency_key.scope, intent.idempotency_key.key, lane
+    );
+    let idempotency_scope = format!("trnm.native.{operation_kind}");
+    apply_exact_effect(
+        tx,
+        account_id,
+        intent_currency(intent)?,
+        operation_kind,
+        amount_credits,
+        &intent.intent_id,
+        &operation_material,
+        &idempotency_scope,
+        EXACT_LEDGER_SOURCE_PRINCIPAL,
+        "trnm_economic_intent",
+        &intent.intent_id,
+    )
+    .await
+}
+
+fn record_exact_effect(
+    receipt: &mut EconomicReceipt,
+    lane: &str,
+    effect: ExactLedgerEffect,
+    primary: bool,
+) {
+    if primary {
+        receipt.ledger_entry_id = Some(effect.entry_id.to_string());
+    }
+    if !receipt.evidence.is_object() {
+        receipt.evidence = json!({});
+    }
+    let effects = receipt
+        .evidence
+        .as_object_mut()
+        .expect("receipt evidence was normalized to an object")
+        .entry("exact_ledger_effects")
+        .or_insert_with(|| json!([]));
+    if !effects.is_array() {
+        *effects = json!([]);
+    }
+    effects
+        .as_array_mut()
+        .expect("exact_ledger_effects was normalized to an array")
+        .push(json!({
+        "lane": lane,
+        "entry_id": effect.entry_id,
+        "operation_id": effect.operation_id,
+        "amount_minor": effect.amount_minor.to_string(),
+        "currency_scale": effect.currency_scale,
+              }));
+}
 async fn open_escrow(
     tx: &mut Transaction<'_, Postgres>,
     intent: &EconomicIntent,
@@ -1316,29 +1529,19 @@ async fn open_escrow(
         receipt.reason = Some("invalid escrow participants or amount".to_string());
         return Ok(());
     }
-    let mut buyer_account = load_account_for_update(tx, buyer).await?;
-    if buyer_account.reserved + 1e-9 < amount as f64 {
+    let buyer_account = load_exact_account_for_update(tx, buyer).await?;
+    let amount_minor = credits_to_minor(&buyer_account, intent_currency(intent)?, amount)?;
+    if buyer_account.reserved_minor < amount_minor {
         receipt.status = ReceiptStatus::FailedLedger;
         receipt.progression_class = receipt.status.progression_class();
         receipt.reason = Some("buyer reservation is not available for escrow".to_string());
         return Ok(());
     }
-    buyer_account.reserved -= amount as f64;
-    buyer_account.balance -= amount as f64;
-    update_account(tx, &buyer_account).await?;
-    let entry_id = append_native_entry(
-        tx,
-        buyer,
-        "debit",
-        amount,
-        "escrow_hold",
-        &intent.idempotency_key.key,
-    )
-    .await?;
+    let effect = apply_intent_effect(tx, intent, buyer, "consume", amount, "escrow_hold").await?;
     sqlx::query(
         "insert into trnm_escrow_trades (
-             purchase_id, buyer_account_id, seller_account_id, asset_id, quantity,
-             amount, status, reserve_intent_id, settle_intent_id
+   purchase_id, buyer_account_id, seller_account_id, asset_id, quantity,
+   amount, status, reserve_intent_id, settle_intent_id
          ) values ($1, $2, $3, $4, $5, $6, 'held', $7, $8)",
     )
     .bind(&purchase_id)
@@ -1346,7 +1549,7 @@ async fn open_escrow(
     .bind(seller)
     .bind(&asset_id)
     .bind(quantity)
-    .bind(amount as f64)
+    .bind(amount)
     .bind(metadata_string(intent, "reserve_intent_id").unwrap_or("missing-reserve-intent"))
     .bind(&intent.intent_id)
     .execute(&mut **tx)
@@ -1354,12 +1557,11 @@ async fn open_escrow(
     .map_err(|error| db_error("open TRNM escrow", error))?;
     receipt.status = ReceiptStatus::Settled;
     receipt.progression_class = receipt.status.progression_class();
-    receipt.ledger_entry_id = Some(entry_id.to_string());
+    record_exact_effect(receipt, "escrow_hold", effect, true);
     receipt.evidence["escrow_status"] = json!("held");
     receipt.evidence["purchase_id"] = json!(purchase_id);
     Ok(())
 }
-
 async fn commit_escrow(
     tx: &mut Transaction<'_, Postgres>,
     intent: &EconomicIntent,
@@ -1374,8 +1576,7 @@ async fn commit_escrow(
         return Ok(());
     }
     let row = sqlx::query(
-        "select amount::float8 as amount, status, seller_hold_amount::float8 as seller_hold_amount,
-                seller_hold_released
+        "select amount::text as amount_text, status, seller_hold_released
          from trnm_escrow_trades
          where purchase_id = $1 and buyer_account_id = $2 and seller_account_id = $3
          for update",
@@ -1393,7 +1594,10 @@ async fn commit_escrow(
         return Ok(());
     };
     let status: String = row.try_get("status").map_err(row_error)?;
-    let amount = row.try_get::<f64, _>("amount").map_err(row_error)?.round() as i64;
+    let amount = parse_whole_credit_amount(
+        &row.try_get::<String, _>("amount_text").map_err(row_error)?,
+        "escrow amount",
+    )?;
     if status == "committed" {
         receipt.status = ReceiptStatus::Consumed;
         receipt.progression_class = receipt.status.progression_class();
@@ -1409,35 +1613,27 @@ async fn commit_escrow(
         receipt.reason = Some(format!("escrow cannot commit from status {status}"));
         return Ok(());
     }
-    let mut seller_account = load_account_for_update(tx, seller).await?;
-    seller_account.balance += amount as f64;
-    seller_account.reserved += amount as f64;
-    update_account(tx, &seller_account).await?;
-    let entry_id = append_native_entry(
-        tx,
-        seller,
-        "credit",
-        amount,
-        "escrow_commit",
-        &intent.idempotency_key.key,
-    )
-    .await?;
+    let grant_effect =
+        apply_intent_effect(tx, intent, seller, "grant", amount, "escrow_seller_grant").await?;
+    let hold_effect =
+        apply_intent_effect(tx, intent, seller, "reserve", amount, "escrow_seller_hold").await?;
     sqlx::query(
         "update trnm_escrow_trades set status = 'committed', consume_intent_id = $2,
-             seller_hold_amount = $3, seller_hold_released = false,
-             reversible_until = now() + make_interval(secs => $4),
-             updated_at = now() where purchase_id = $1",
+   seller_hold_amount = $3, seller_hold_released = false,
+   reversible_until = now() + ($4::bigint * interval '1 second'),
+   updated_at = now() where purchase_id = $1",
     )
     .bind(&purchase_id)
     .bind(&intent.intent_id)
-    .bind(amount as f64)
-    .bind(seller_reversible_window_seconds(intent) as f64)
+    .bind(amount)
+    .bind(seller_reversible_window_seconds(intent))
     .execute(&mut **tx)
     .await
     .map_err(|error| db_error("commit TRNM escrow", error))?;
     receipt.status = ReceiptStatus::Consumed;
     receipt.progression_class = receipt.status.progression_class();
-    receipt.ledger_entry_id = Some(entry_id.to_string());
+    record_exact_effect(receipt, "escrow_seller_grant", grant_effect, true);
+    record_exact_effect(receipt, "escrow_seller_hold", hold_effect, false);
     receipt.evidence["escrow_status"] = json!("committed");
     receipt.evidence["seller_payout_reserved"] = json!(true);
     receipt.evidence["seller_reversible_window_seconds"] =
@@ -1445,7 +1641,6 @@ async fn commit_escrow(
     receipt.evidence["purchase_id"] = json!(purchase_id);
     Ok(())
 }
-
 async fn refund_or_cancel_escrow(
     tx: &mut Transaction<'_, Postgres>,
     intent: &EconomicIntent,
@@ -1454,31 +1649,36 @@ async fn refund_or_cancel_escrow(
     receipt: &mut EconomicReceipt,
 ) -> Result<(), LedgerActionError> {
     let Some(purchase_id) = metadata_string(intent, "purchase_id") else {
-        let mut account = load_account_for_update(tx, actor_account_id).await?;
-        if amount <= 0 || account.reserved + 1e-9 < amount as f64 {
+        let account = load_exact_account_for_update(tx, actor_account_id).await?;
+        if amount <= 0 {
+            receipt.status = ReceiptStatus::RejectedRefundFailed;
+            receipt.progression_class = receipt.status.progression_class();
+            receipt.reason = Some("refund amount must be positive".to_string());
+            return Ok(());
+        }
+        let amount_minor = credits_to_minor(&account, intent_currency(intent)?, amount)?;
+        if account.reserved_minor < amount_minor {
             receipt.status = ReceiptStatus::RejectedRefundFailed;
             receipt.progression_class = receipt.status.progression_class();
             receipt.reason = Some("reserved wallet credits are unavailable for refund".to_string());
             return Ok(());
         }
-        account.reserved -= amount as f64;
-        update_account(tx, &account).await?;
-        let entry_id = append_native_entry(
+        let effect = apply_intent_effect(
             tx,
+            intent,
             actor_account_id,
-            "credit",
+            "refund",
             amount,
             "refund_reservation",
-            &intent.idempotency_key.key,
         )
         .await?;
         receipt.status = ReceiptStatus::Refunded;
         receipt.progression_class = receipt.status.progression_class();
-        receipt.ledger_entry_id = Some(entry_id.to_string());
+        record_exact_effect(receipt, "refund_reservation", effect, true);
         return Ok(());
     };
     let row = sqlx::query(
-        "select buyer_account_id, amount::float8 as amount, status
+        "select buyer_account_id, amount::text as amount_text, status
          from trnm_escrow_trades where purchase_id = $1 for update",
     )
     .bind(purchase_id)
@@ -1492,7 +1692,10 @@ async fn refund_or_cancel_escrow(
         return Ok(());
     };
     let buyer: Uuid = row.try_get("buyer_account_id").map_err(row_error)?;
-    let escrow_amount = row.try_get::<f64, _>("amount").map_err(row_error)?.round() as i64;
+    let escrow_amount = parse_whole_credit_amount(
+        &row.try_get::<String, _>("amount_text").map_err(row_error)?,
+        "escrow refund amount",
+    )?;
     let status: String = row.try_get("status").map_err(row_error)?;
     if status == "refunded" {
         receipt.status = ReceiptStatus::Refunded;
@@ -1506,21 +1709,11 @@ async fn refund_or_cancel_escrow(
         receipt.reason = Some(format!("escrow cannot refund from status {status}"));
         return Ok(());
     }
-    let mut buyer_account = load_account_for_update(tx, buyer).await?;
-    buyer_account.balance += escrow_amount as f64;
-    update_account(tx, &buyer_account).await?;
-    let entry_id = append_native_entry(
-        tx,
-        buyer,
-        "credit",
-        escrow_amount,
-        "escrow_refund",
-        &intent.idempotency_key.key,
-    )
-    .await?;
+    let effect =
+        apply_intent_effect(tx, intent, buyer, "grant", escrow_amount, "escrow_refund").await?;
     sqlx::query(
         "update trnm_escrow_trades set status = 'refunded', reversal_intent_id = $2,
-             updated_at = now() where purchase_id = $1",
+   updated_at = now() where purchase_id = $1",
     )
     .bind(purchase_id)
     .bind(&intent.intent_id)
@@ -1529,12 +1722,11 @@ async fn refund_or_cancel_escrow(
     .map_err(|error| db_error("refund TRNM escrow", error))?;
     receipt.status = ReceiptStatus::Refunded;
     receipt.progression_class = receipt.status.progression_class();
-    receipt.ledger_entry_id = Some(entry_id.to_string());
+    record_exact_effect(receipt, "escrow_refund", effect, true);
     receipt.evidence["escrow_status"] = json!("refunded");
     receipt.evidence["purchase_id"] = json!(purchase_id);
     Ok(())
 }
-
 async fn reverse_escrow(
     tx: &mut Transaction<'_, Postgres>,
     intent: &EconomicIntent,
@@ -1544,8 +1736,8 @@ async fn reverse_escrow(
         LedgerActionError::Other("chargeback purchase_id is required".to_string())
     })?;
     let row = sqlx::query(
-        "select buyer_account_id, seller_account_id, amount::float8 as amount, status,
-                seller_hold_amount::float8 as seller_hold_amount, seller_hold_released
+        "select buyer_account_id, seller_account_id, amount::text as amount_text, status,
+      seller_hold_amount::text as seller_hold_amount_text, seller_hold_released
          from trnm_escrow_trades where purchase_id = $1 for update",
     )
     .bind(purchase_id)
@@ -1560,11 +1752,15 @@ async fn reverse_escrow(
     };
     let buyer: Uuid = row.try_get("buyer_account_id").map_err(row_error)?;
     let seller: Uuid = row.try_get("seller_account_id").map_err(row_error)?;
-    let amount = row.try_get::<f64, _>("amount").map_err(row_error)?.round() as i64;
-    let seller_hold_amount = row
-        .try_get::<f64, _>("seller_hold_amount")
-        .map_err(row_error)?
-        .round() as i64;
+    let amount = parse_whole_credit_amount(
+        &row.try_get::<String, _>("amount_text").map_err(row_error)?,
+        "chargeback amount",
+    )?;
+    let seller_hold_amount = parse_whole_credit_amount(
+        &row.try_get::<String, _>("seller_hold_amount_text")
+            .map_err(row_error)?,
+        "seller hold amount",
+    )?;
     let seller_hold_released: bool = row.try_get("seller_hold_released").map_err(row_error)?;
     let status: String = row.try_get("status").map_err(row_error)?;
     if status == "reversed" {
@@ -1585,60 +1781,59 @@ async fn reverse_escrow(
     } else {
         [seller, buyer]
     } {
-        locked.push(load_account_for_update(tx, id).await?);
+        locked.push(load_exact_account_for_update(tx, id).await?);
     }
     let seller_index = locked
         .iter()
         .position(|account| account.account_id == seller)
         .expect("seller was locked");
-    let buyer_index = 1 - seller_index;
-    let seller_available = locked[seller_index].balance - locked[seller_index].reserved;
+    let seller_account = &locked[seller_index];
+    let seller_amount_minor = credits_to_minor(seller_account, intent_currency(intent)?, amount)?;
+    let seller_available_minor = seller_account.available_minor()?;
     let reserved_reversal = !seller_hold_released && seller_hold_amount >= amount;
-    if reserved_reversal && locked[seller_index].reserved + 1e-9 < amount as f64 {
+    if reserved_reversal && seller_account.reserved_minor < seller_amount_minor {
         receipt.status = ReceiptStatus::SellerChargebackReserveFailed;
         receipt.progression_class = receipt.status.progression_class();
         receipt.reason = Some("seller payout hold is missing from reserved balance".to_string());
         receipt.evidence["compensation_lane"] = json!("operator_reconciliation_required");
         return Ok(());
     }
-    if !reserved_reversal && seller_available + 1e-9 < amount as f64 {
+    if !reserved_reversal && seller_available_minor < seller_amount_minor {
         receipt.status = ReceiptStatus::SellerChargebackReserveFailed;
         receipt.progression_class = receipt.status.progression_class();
         receipt.reason = Some(format!(
-            "seller funds unavailable for chargeback: available={seller_available:.0}, required={amount}"
+  "seller funds unavailable for chargeback: available_minor={seller_available_minor}, required_minor={seller_amount_minor}"
         ));
         receipt.evidence["compensation_lane"] = json!("retry_required");
         return Ok(());
     }
-    if reserved_reversal {
-        locked[seller_index].reserved -= amount as f64;
+    if !reserved_reversal {
+        let reserve_effect = apply_intent_effect(
+            tx,
+            intent,
+            seller,
+            "reserve",
+            amount,
+            "chargeback_seller_reserve",
+        )
+        .await?;
+        record_exact_effect(receipt, "chargeback_seller_reserve", reserve_effect, false);
     }
-    locked[seller_index].balance -= amount as f64;
-    locked[buyer_index].balance += amount as f64;
-    update_account(tx, &locked[seller_index]).await?;
-    update_account(tx, &locked[buyer_index]).await?;
-    let seller_entry = append_native_entry(
+    let seller_effect = apply_intent_effect(
         tx,
+        intent,
         seller,
-        "debit",
+        "consume",
         amount,
-        "escrow_chargeback",
-        &format!("{}:seller", intent.idempotency_key.key),
+        "chargeback_seller_consume",
     )
     .await?;
-    append_native_entry(
-        tx,
-        buyer,
-        "credit",
-        amount,
-        "escrow_chargeback_refund",
-        &format!("{}:buyer", intent.idempotency_key.key),
-    )
-    .await?;
+    let buyer_effect =
+        apply_intent_effect(tx, intent, buyer, "grant", amount, "chargeback_buyer_grant").await?;
     sqlx::query(
         "update trnm_escrow_trades set status = 'reversed', reversal_intent_id = $2,
-             seller_hold_amount = 0, seller_hold_released = true,
-             updated_at = now() where purchase_id = $1",
+   seller_hold_amount = 0, seller_hold_released = true,
+   updated_at = now() where purchase_id = $1",
     )
     .bind(purchase_id)
     .bind(&intent.intent_id)
@@ -1647,22 +1842,22 @@ async fn reverse_escrow(
     .map_err(|error| db_error("reverse TRNM escrow", error))?;
     receipt.status = ReceiptStatus::SellerChargebackConsumed;
     receipt.progression_class = receipt.status.progression_class();
-    receipt.ledger_entry_id = Some(seller_entry.to_string());
+    record_exact_effect(receipt, "chargeback_seller_consume", seller_effect, true);
+    record_exact_effect(receipt, "chargeback_buyer_grant", buyer_effect, false);
     receipt.evidence["escrow_status"] = json!("reversed");
     receipt.evidence["compensation_lane"] = json!("completed");
     receipt.evidence["seller_payout_hold_consumed"] = json!(reserved_reversal);
     Ok(())
 }
-
 async fn release_matured_seller_holds(
     tx: &mut Transaction<'_, Postgres>,
     seller_account_id: Uuid,
 ) -> Result<(), LedgerActionError> {
     let rows = sqlx::query(
-        "select purchase_id, seller_hold_amount::float8 as seller_hold_amount
+        "select purchase_id, seller_hold_amount::text as seller_hold_amount_text
          from trnm_escrow_trades
          where seller_account_id = $1 and status = 'committed'
-           and seller_hold_released = false and reversible_until <= now()
+ and seller_hold_released = false and reversible_until <= now()
          order by purchase_id for update",
     )
     .bind(seller_account_id)
@@ -1672,25 +1867,49 @@ async fn release_matured_seller_holds(
     if rows.is_empty() {
         return Ok(());
     }
-    let total = rows
-        .iter()
-        .map(|row| row.try_get::<f64, _>("seller_hold_amount"))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(row_error)?
-        .into_iter()
-        .sum::<f64>();
-    let mut seller = load_account_for_update(tx, seller_account_id).await?;
-    if seller.reserved + 1e-9 < total {
+    let seller = load_exact_account_for_update(tx, seller_account_id).await?;
+    let mut releases = Vec::with_capacity(rows.len());
+    let mut total_minor = 0_i64;
+    for row in rows {
+        let purchase_id: String = row.try_get("purchase_id").map_err(row_error)?;
+        let amount = parse_whole_credit_amount(
+            &row.try_get::<String, _>("seller_hold_amount_text")
+                .map_err(row_error)?,
+            "mature seller hold amount",
+        )?;
+        let amount_minor = credits_to_minor(&seller, &seller.currency_unit, amount)?;
+        total_minor = total_minor.checked_add(amount_minor).ok_or_else(|| {
+            LedgerActionError::Other("mature seller hold total overflowed".to_string())
+        })?;
+        releases.push((purchase_id, amount));
+    }
+    if seller.reserved_minor < total_minor {
         return Err(LedgerActionError::Other(
             "seller reserved balance is below matured payout holds".to_string(),
         ));
     }
-    seller.reserved -= total;
-    update_account(tx, &seller).await?;
+    for (purchase_id, amount) in &releases {
+        let operation_material =
+            format!("seller-hold-release:{seller_account_id}:{purchase_id}:{amount}");
+        apply_exact_effect(
+            tx,
+            seller_account_id,
+            &seller.currency_unit,
+            "refund",
+            *amount,
+            purchase_id,
+            &operation_material,
+            "trnm.native.maintenance.refund",
+            "trnm-native-maintenance",
+            "trnm_escrow_purchase",
+            purchase_id,
+        )
+        .await?;
+    }
     sqlx::query(
         "update trnm_escrow_trades set seller_hold_released = true, updated_at = now()
          where seller_account_id = $1 and status = 'committed'
-           and seller_hold_released = false and reversible_until <= now()",
+ and seller_hold_released = false and reversible_until <= now()",
     )
     .bind(seller_account_id)
     .execute(&mut **tx)
@@ -1698,7 +1917,6 @@ async fn release_matured_seller_holds(
     .map_err(|error| db_error("release matured TRNM seller payout holds", error))?;
     Ok(())
 }
-
 async fn persist_native_receipt(
     tx: &mut Transaction<'_, Postgres>,
     intent: &EconomicIntent,
@@ -1775,5 +1993,33 @@ mod credential_tests {
             Sha256::digest(format!("trnm-player-recovery-v1:{credential}").as_bytes())
         );
         assert!(recovery_key_matches(&legacy, credential));
+    }
+
+    #[test]
+    fn exact_credit_conversion_is_checked_and_never_rounds() {
+        let account = ExactAccountRecord {
+            account_id: Uuid::new_v4(),
+            currency_unit: "credit".to_string(),
+            currency_scale: 6,
+            balance_minor: 100_000_000,
+            reserved_minor: 25_000_000,
+        };
+        assert_eq!(
+            credits_to_minor(&account, "credit", 25).unwrap(),
+            25_000_000
+        );
+        assert_eq!(minor_to_whole_credits(75_000_000, 6).unwrap(), 75);
+        assert!(minor_to_whole_credits(75_000_001, 6).is_err());
+        assert!(credits_to_minor(&account, "other", 1).is_err());
+    }
+
+    #[test]
+    fn exact_operation_identity_is_stable_and_lane_scoped() {
+        let reserve = deterministic_uuid("trnm-native-operation:intent:one:reserve");
+        let replay = deterministic_uuid("trnm-native-operation:intent:one:reserve");
+        let consume = deterministic_uuid("trnm-native-operation:intent:one:consume");
+        assert_eq!(reserve, replay);
+        assert_ne!(reserve, consume);
+        assert!(!reserve.is_nil());
     }
 }
