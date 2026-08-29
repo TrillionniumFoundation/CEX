@@ -170,7 +170,13 @@ fn legacy_reserve_break_glass_from_env() -> bool {
         .any(|profile| {
             matches!(
                 profile.as_str(),
-                "beta" | "staging" | "stage" | "production" | "prod"
+                "beta"
+                    | "staging"
+                    | "stage"
+                    | "production"
+                    | "prod"
+                    | "trnm-economy"
+                    | "trnm_economy"
             )
         });
     if production_like_profile {
