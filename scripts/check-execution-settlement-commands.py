@@ -170,9 +170,9 @@ require(
     "fresh explicit acknowledgement",
 )
 require(
-    "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v11.md",
-    "P0-N5 delivered by this candidate",
-    "Gateway exact registration and reserve",
+    "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
+    "P0-N5 durable Execution settlement",
+    "P0-N6 delivered by this candidate",
     "not production-ready",
 )
 require(
