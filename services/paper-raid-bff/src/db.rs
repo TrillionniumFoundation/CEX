@@ -44,6 +44,9 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::Error> {
     ))
     .execute(pool)
     .await?;
+    sqlx::raw_sql(include_str!("../migrations/0009_practice_unranked.sql"))
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -265,7 +268,9 @@ pub async fn invite_schema_ready(pool: &PgPool) -> bool {
     let operator_lineage_exact = installed_parent_source
         .zip(expected_object_audit_parent_source())
         .is_some_and(|(installed, expected)| normalize_sql(&installed) == normalize_sql(expected));
-    operator_lineage_exact && invite_activation_schema_ready(pool).await
+    operator_lineage_exact
+        && invite_activation_schema_ready(pool).await
+        && practice_unranked_schema_ready(pool).await
 }
 
 fn expected_operator_audit_validator_source() -> Option<&'static str> {
@@ -288,6 +293,317 @@ fn expected_object_audit_parent_source() -> Option<&'static str> {
 
 fn normalize_sql(value: &str) -> String {
     value.split_whitespace().collect()
+}
+
+const PRACTICE_UNRANKED_SCHEMA_READY_SQL: &str = r#"
+WITH session_table AS MATERIALIZED (
+    SELECT relation.*
+      FROM pg_class relation
+      JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+     WHERE namespace.nspname = 'public'
+       AND relation.relname = 'paper_raid_bff_practice_sessions'
+), event_table AS MATERIALIZED (
+    SELECT relation.*
+      FROM pg_class relation
+      JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+     WHERE namespace.nspname = 'public'
+       AND relation.relname = 'paper_raid_bff_practice_events'
+), binding_table AS MATERIALIZED (
+    SELECT relation.*
+      FROM pg_class relation
+      JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+     WHERE namespace.nspname = 'public'
+       AND relation.relname = 'paper_raid_bff_agent_bridge_bindings'
+), expected_session_columns AS (
+    SELECT * FROM (VALUES
+        (1,'practice_session_id','uuid'::regtype,TRUE),
+        (2,'subject_id','text'::regtype,TRUE),
+        (3,'player_id','uuid'::regtype,TRUE),
+        (4,'binding_id','uuid'::regtype,TRUE),
+        (5,'mode','text'::regtype,TRUE),
+        (6,'scenario_id','text'::regtype,TRUE),
+        (7,'authority_kind','text'::regtype,TRUE),
+        (8,'stage','text'::regtype,TRUE),
+        (9,'version','int8'::regtype,TRUE),
+        (10,'captain_plan','text'::regtype,FALSE),
+        (11,'evidence_assessment','text'::regtype,FALSE),
+        (12,'bridge_task_id','uuid'::regtype,TRUE),
+        (13,'bridge_task_state','text'::regtype,TRUE),
+        (14,'bridge_result_code','text'::regtype,FALSE),
+        (15,'bridge_result_hash','text'::regtype,FALSE),
+        (16,'experiment_interpretation','text'::regtype,FALSE),
+        (17,'aar_choice','text'::regtype,FALSE),
+        (18,'activation_eligible','bool'::regtype,TRUE),
+        (19,'qualification_eligible','bool'::regtype,TRUE),
+        (20,'scientific_finality_eligible','bool'::regtype,TRUE),
+        (21,'ranking_eligible','bool'::regtype,TRUE),
+        (22,'reward_eligible','bool'::regtype,TRUE),
+        (23,'score_eligible','bool'::regtype,TRUE),
+        (24,'economic_eligible','bool'::regtype,TRUE),
+        (25,'completion_portable','bool'::regtype,TRUE),
+        (26,'created_at','timestamptz'::regtype,TRUE),
+        (27,'expires_at','timestamptz'::regtype,TRUE),
+        (28,'updated_at','timestamptz'::regtype,TRUE),
+        (29,'terminal_at','timestamptz'::regtype,FALSE),
+        (30,'terminal_reason','text'::regtype,FALSE)
+    ) expected(attnum,attname,atttypid,attnotnull)
+), expected_event_columns AS (
+    SELECT * FROM (VALUES
+        (1,'event_id','uuid'::regtype,TRUE),
+        (2,'practice_session_id','uuid'::regtype,TRUE),
+        (3,'actor_kind','text'::regtype,TRUE),
+        (4,'event_kind','text'::regtype,TRUE),
+        (5,'from_version','int8'::regtype,TRUE),
+        (6,'to_version','int8'::regtype,TRUE),
+        (7,'request_hash','text'::regtype,TRUE),
+        (8,'choice_code','text'::regtype,FALSE),
+        (9,'result_hash','text'::regtype,FALSE),
+        (10,'occurred_at','timestamptz'::regtype,TRUE)
+    ) expected(attnum,attname,atttypid,attnotnull)
+), expected_session_constraints AS (
+    SELECT unnest(ARRAY[
+        'paper_raid_bff_practice_sessions_pk',
+        'paper_raid_bff_practice_mode_ck',
+        'paper_raid_bff_practice_scenario_ck',
+        'paper_raid_bff_practice_authority_kind_ck',
+        'paper_raid_bff_practice_stage_ck',
+        'paper_raid_bff_practice_version_ck',
+        'paper_raid_bff_practice_captain_plan_ck',
+        'paper_raid_bff_practice_evidence_assessment_ck',
+        'paper_raid_bff_practice_bridge_state_ck',
+        'paper_raid_bff_practice_bridge_result_code_ck',
+        'paper_raid_bff_practice_bridge_result_hash_ck',
+        'paper_raid_bff_practice_interpretation_ck',
+        'paper_raid_bff_practice_aar_ck',
+        'paper_raid_bff_practice_terminal_reason_ck',
+        'paper_raid_bff_practice_non_nil_ids_ck',
+        'paper_raid_bff_practice_subject_ck',
+        'paper_raid_bff_practice_binding_owner_fk',
+        'paper_raid_bff_practice_ttl_ck',
+        'paper_raid_bff_practice_no_authority_ck',
+        'paper_raid_bff_practice_bridge_result_pair_ck',
+        'paper_raid_bff_practice_answer_prefix_ck',
+        'paper_raid_bff_practice_terminal_binding_ck',
+        'paper_raid_bff_practice_lifecycle_ck'
+    ]) AS conname
+), expected_event_constraints AS (
+    SELECT unnest(ARRAY[
+        'paper_raid_bff_practice_events_pk',
+        'paper_raid_bff_practice_event_session_fk',
+        'paper_raid_bff_practice_event_actor_ck',
+        'paper_raid_bff_practice_event_kind_ck',
+        'paper_raid_bff_practice_event_request_hash_ck',
+        'paper_raid_bff_practice_event_result_hash_ck',
+        'paper_raid_bff_practice_event_non_nil_ck',
+        'paper_raid_bff_practice_event_version_ck',
+        'paper_raid_bff_practice_event_shape_ck'
+    ]) AS conname
+)
+SELECT
+    (SELECT count(*) = 1 AND bool_and(
+        relkind = 'r' AND relpersistence = 'p'
+        AND pg_get_userbyid(relowner) = 'paper_raid_bff'
+        AND NOT relrowsecurity AND NOT relforcerowsecurity
+    ) FROM session_table)
+    AND (SELECT count(*) = 1 AND bool_and(
+        relkind = 'r' AND relpersistence = 'p'
+        AND pg_get_userbyid(relowner) = 'paper_raid_bff'
+        AND NOT relrowsecurity AND NOT relforcerowsecurity
+    ) FROM event_table)
+    AND (SELECT count(*) = 30 AND bool_and(COALESCE(
+        attribute.attnum = expected.attnum
+        AND attribute.attname = expected.attname
+        AND attribute.atttypid = expected.atttypid
+        AND attribute.attnotnull = expected.attnotnull
+        AND attribute.attgenerated = '' AND attribute.attidentity = '', FALSE
+    )) FROM expected_session_columns expected
+        LEFT JOIN session_table relation ON TRUE
+        LEFT JOIN pg_attribute attribute
+          ON attribute.attrelid = relation.oid
+         AND attribute.attnum = expected.attnum AND NOT attribute.attisdropped)
+    AND (SELECT count(*) = 30 FROM pg_attribute attribute
+        JOIN session_table relation ON relation.oid = attribute.attrelid
+        WHERE attribute.attnum > 0 AND NOT attribute.attisdropped)
+    AND (SELECT count(*) = 10 AND bool_and(COALESCE(
+        attribute.attnum = expected.attnum
+        AND attribute.attname = expected.attname
+        AND attribute.atttypid = expected.atttypid
+        AND attribute.attnotnull = expected.attnotnull
+        AND attribute.attgenerated = '' AND attribute.attidentity = '', FALSE
+    )) FROM expected_event_columns expected
+        LEFT JOIN event_table relation ON TRUE
+        LEFT JOIN pg_attribute attribute
+          ON attribute.attrelid = relation.oid
+         AND attribute.attnum = expected.attnum AND NOT attribute.attisdropped)
+    AND (SELECT count(*) = 10 FROM pg_attribute attribute
+        JOIN event_table relation ON relation.oid = attribute.attrelid
+        WHERE attribute.attnum > 0 AND NOT attribute.attisdropped)
+    AND (SELECT count(*) = 23 AND bool_and(COALESCE(
+        constraint_row.convalidated AND constraint_row.conname = expected.conname,
+        FALSE
+    )) FROM expected_session_constraints expected
+        LEFT JOIN session_table relation ON TRUE
+        LEFT JOIN pg_constraint constraint_row
+          ON constraint_row.conrelid = relation.oid
+         AND constraint_row.conname = expected.conname)
+    AND (SELECT count(*) = 23 FROM pg_constraint constraint_row
+        JOIN session_table relation ON relation.oid = constraint_row.conrelid)
+    AND (SELECT count(*) = 9 AND bool_and(COALESCE(
+        constraint_row.convalidated AND constraint_row.conname = expected.conname,
+        FALSE
+    )) FROM expected_event_constraints expected
+        LEFT JOIN event_table relation ON TRUE
+        LEFT JOIN pg_constraint constraint_row
+          ON constraint_row.conrelid = relation.oid
+         AND constraint_row.conname = expected.conname)
+    AND (SELECT count(*) = 9 FROM pg_constraint constraint_row
+        JOIN event_table relation ON relation.oid = constraint_row.conrelid)
+    AND EXISTS (
+        SELECT 1 FROM pg_constraint constraint_row
+        JOIN session_table relation ON relation.oid = constraint_row.conrelid
+        WHERE constraint_row.conname = 'paper_raid_bff_practice_no_authority_ck'
+          AND constraint_row.contype = 'c'
+          AND regexp_replace(
+              pg_get_constraintdef(constraint_row.oid), '[[:space:]]+', '', 'g'
+          ) LIKE '%activation_eligible=false%qualification_eligible=false%scientific_finality_eligible=false%ranking_eligible=false%reward_eligible=false%score_eligible=false%economic_eligible=false%completion_portable=false%'
+    )
+    AND EXISTS (
+        SELECT 1 FROM pg_constraint constraint_row
+        JOIN session_table relation ON relation.oid = constraint_row.conrelid
+        JOIN binding_table binding ON binding.oid = constraint_row.confrelid
+        WHERE constraint_row.conname = 'paper_raid_bff_practice_binding_owner_fk'
+          AND constraint_row.contype = 'f'
+          AND constraint_row.conkey::text = '{4,2,3}'
+          AND constraint_row.confkey::text = '{1,4,5}'
+          AND constraint_row.confdeltype = 'a'
+    )
+    AND (SELECT count(*) = 4 AND bool_and(
+        index_row.indisvalid AND index_row.indisready AND index_row.indislive
+    ) FROM pg_index index_row
+        JOIN session_table relation ON relation.oid = index_row.indrelid)
+    AND EXISTS (
+        SELECT 1 FROM pg_index index_row JOIN pg_class index_relation
+          ON index_relation.oid = index_row.indexrelid
+        JOIN session_table relation ON relation.oid = index_row.indrelid
+        WHERE index_relation.relname = 'paper_raid_bff_one_live_practice_per_player'
+          AND index_row.indisunique AND index_row.indkey::text = '3'
+          AND regexp_replace(
+              pg_get_expr(index_row.indpred,index_row.indrelid),
+              '[[:space:]]+', '', 'g'
+          ) = '(stage<>ALL(ARRAY[''completed''::text,''abandoned''::text,''expired''::text]))'
+    )
+    AND EXISTS (
+        SELECT 1 FROM pg_index index_row JOIN pg_class index_relation
+          ON index_relation.oid = index_row.indexrelid
+        JOIN session_table relation ON relation.oid = index_row.indrelid
+        WHERE index_relation.relname = 'paper_raid_bff_one_live_practice_per_binding'
+          AND index_row.indisunique AND index_row.indkey::text = '4'
+    )
+    AND (SELECT count(*) = 3 AND bool_and(
+        index_row.indisvalid AND index_row.indisready AND index_row.indislive
+    ) FROM pg_index index_row
+        JOIN event_table relation ON relation.oid = index_row.indrelid)
+    AND EXISTS (
+        SELECT 1 FROM pg_index index_row JOIN pg_class index_relation
+          ON index_relation.oid = index_row.indexrelid
+        JOIN binding_table relation ON relation.oid = index_row.indrelid
+        WHERE index_relation.relname = 'paper_raid_bff_agent_binding_owner_uq'
+          AND index_row.indisunique AND index_row.indkey::text = '1 4 5'
+          AND index_row.indpred IS NULL
+    )
+    AND EXISTS (
+        SELECT 1 FROM pg_trigger trigger_row JOIN session_table relation
+          ON relation.oid = trigger_row.tgrelid
+        WHERE trigger_row.tgname = 'paper_raid_bff_practice_session_monotonic'
+          AND NOT trigger_row.tgisinternal AND trigger_row.tgenabled = 'O'
+          AND trigger_row.tgtype = 19
+          AND trigger_row.tgfoid =
+              to_regprocedure('paper_raid_bff_practice_session_monotonic_v1()')
+    )
+    AND (SELECT count(*) = 2 AND bool_and(
+        NOT trigger_row.tgisinternal AND trigger_row.tgenabled = 'O'
+        AND trigger_row.tgfoid =
+            to_regprocedure('paper_raid_bff_reject_practice_event_mutation_v1()')
+        AND (
+            (trigger_row.tgname = 'paper_raid_bff_practice_events_append_only'
+                AND trigger_row.tgtype = 27)
+            OR (trigger_row.tgname = 'paper_raid_bff_practice_events_no_truncate'
+                AND trigger_row.tgtype = 34)
+        )
+    ) FROM pg_trigger trigger_row JOIN event_table relation
+        ON relation.oid = trigger_row.tgrelid
+        WHERE trigger_row.tgname IN (
+            'paper_raid_bff_practice_events_append_only',
+            'paper_raid_bff_practice_events_no_truncate'
+        ))
+    AND EXISTS (
+        SELECT 1 FROM pg_proc procedure JOIN pg_language language
+          ON language.oid = procedure.prolang
+        WHERE procedure.oid =
+            to_regprocedure('paper_raid_bff_practice_session_monotonic_v1()')
+          AND language.lanname = 'plpgsql' AND procedure.prorettype = 'trigger'::regtype
+          AND procedure.pronargs = 0 AND procedure.provolatile = 'v'
+          AND NOT procedure.prosecdef
+          AND procedure.proconfig = ARRAY['search_path=pg_catalog, public']::text[]
+    )
+    AND EXISTS (
+        SELECT 1 FROM pg_proc procedure JOIN pg_language language
+          ON language.oid = procedure.prolang
+        WHERE procedure.oid =
+            to_regprocedure('paper_raid_bff_reject_practice_event_mutation_v1()')
+          AND language.lanname = 'plpgsql' AND procedure.prorettype = 'trigger'::regtype
+          AND procedure.pronargs = 0 AND procedure.provolatile = 'v'
+          AND NOT procedure.prosecdef
+          AND procedure.proconfig = ARRAY['search_path=pg_catalog']::text[]
+    )
+    AND EXISTS (
+        SELECT 1 FROM paper_raid_bff_schema_capabilities
+        WHERE capability = 'practice_unranked_v1'
+    )
+"#;
+
+pub async fn practice_unranked_schema_ready(pool: &PgPool) -> bool {
+    let catalog_ready = sqlx::query_scalar::<_, bool>(PRACTICE_UNRANKED_SCHEMA_READY_SQL)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(false);
+    if !catalog_ready {
+        return false;
+    }
+    let installed_sources = sqlx::query_as::<_, (String, String)>(
+        "SELECT \
+          (SELECT prosrc FROM pg_proc WHERE oid = \
+            to_regprocedure('paper_raid_bff_practice_session_monotonic_v1()')), \
+          (SELECT prosrc FROM pg_proc WHERE oid = \
+            to_regprocedure('paper_raid_bff_reject_practice_event_mutation_v1()'))",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    installed_sources
+        .zip(expected_practice_unranked_sources())
+        .is_some_and(|((monotonic, append_only), expected)| {
+            normalize_sql(&monotonic) == normalize_sql(expected.0)
+                && normalize_sql(&append_only) == normalize_sql(expected.1)
+        })
+}
+
+fn expected_practice_unranked_sources() -> Option<(&'static str, &'static str)> {
+    let migration = include_str!("../migrations/0009_practice_unranked.sql");
+    let source = |marker: &str| {
+        migration
+            .split_once(marker)?
+            .1
+            .split_once("AS $function$")?
+            .1
+            .split_once("$function$;")
+            .map(|(body, _)| body)
+    };
+    Some((
+        source("CREATE OR REPLACE FUNCTION paper_raid_bff_practice_session_monotonic_v1()")?,
+        source("CREATE OR REPLACE FUNCTION paper_raid_bff_reject_practice_event_mutation_v1()")?,
+    ))
 }
 
 pub async fn invite_activation_schema_ready(pool: &PgPool) -> bool {
