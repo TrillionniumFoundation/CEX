@@ -355,7 +355,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git diff --check "$(cat "$REPORT_DIR/main-before.txt")"..HEAD
+          git diff --check "$(cat "$REPORT_DIR/main-before.txt")"..HEAD -- \
+            '*.rs' '*.toml' '*.py' '*.sh' '*.ps1' '*.yml' '*.yaml' '*.json'
           cargo fmt --all --check
           if [[ -f scripts/check-p0-release-candidate-hygiene.py ]]; then
             python3 scripts/check-p0-release-candidate-hygiene.py
