@@ -68,31 +68,31 @@ jobs:
               "\n\nreplace_between(\n    'async fn load_account_for_update('",
               product_start,
           )
-          product_replacement = r'''replace_between(
+          product_replacement = r"""replace_between(
     '''        let account_id = Uuid::new_v4();
         sqlx::query(
-            "insert into accounts (account_id, org_id, account_type, currency_unit, status)''',
+            \"insert into accounts (account_id, org_id, account_type, currency_unit, status)''',
     '        let recovery_key_hash = recovery_key_hash(recovery_key)?;',
     '''        let account_id = Uuid::new_v4();
         let opening_trace_id = deterministic_uuid(&format!(
-            "trnm-product-registration:{org_id}:{player_id}:{account_id}"
+            \"trnm-product-registration:{org_id}:{player_id}:{account_id}\"
         ));
         sqlx::query_scalar::<_, Value>(
-            "select public.cex_open_account_v2(
+            \"select public.cex_open_account_v2(
                 $1, $2, $3, 'trnm-online-player', 'credit', 6::smallint, 0::bigint,
                 'trnm.product.registration', $4, 'trnm-product-registration'
-             )",
+             )\",
         )
         .bind(account_id)
         .bind(org_id)
         .bind(opening_trace_id)
-        .bind(format!("player:{player_id}"))
+        .bind(format!(\"player:{player_id}\"))
         .fetch_one(&mut *tx)
         .await
-        .map_err(|error| db_error("create exact TRNM product account", error))?;
+        .map_err(|error| db_error(\"create exact TRNM product account\", error))?;
 ''',
     'product account opening',
-)'''
+)"""
           patch = patch[:product_start] + product_replacement + patch[product_end:]
           Path('/tmp/p0-v12-trnm-exact-cutover.py').write_text(patch, encoding='utf-8')
           PY
