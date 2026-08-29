@@ -33,7 +33,7 @@ require_secret() {
     exit 78
   fi
   case "$value" in
-    REPLACE_*|*REPLACE_WITH_*|local-dev-key|trnm-economy-local-production-key)
+    REPLACE_*|*REPLACE_WITH_*|local-dev-key|trnm-economy-local-production-*)
       echo "$name still contains a placeholder or local-development credential" >&2
       exit 78
       ;;
