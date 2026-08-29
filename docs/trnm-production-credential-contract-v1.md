@@ -2,7 +2,7 @@
 
 Status: operational security contract
 
-This document defines the launch-time credential and issuer-registry requirements for `scripts/run-trnm-economy-service.sh`. It does not contain credentials and is not approval to activate production traffic.
+This document defines the launch-time credential and issuer-registry requirements for `scripts/run-trnm-economy-service.sh`. It does not contain credentials and is not approval to activate production traffic. The blank, fail-closed deployment template is `deploy/trnm-economy/trnm-production.env.example`.
 
 ## Required runtime inputs
 
@@ -51,4 +51,4 @@ python3 scripts/check-p0-wiring.py
 python3 scripts/check-p0-release-candidate-hygiene.py
 ```
 
-Hosted exact-SHA evidence must rerun after any change to the launcher, runtime profiles, systemd units, credential contract, or candidate trigger. Successful repository checks do not substitute for real secret-custody review or final human go/no-go.
+Hosted exact-SHA evidence must rerun after any change to the launcher, runtime profiles, systemd units, credential contract, environment template, or candidate trigger. Successful repository checks do not substitute for real secret-custody review or final human go/no-go.
