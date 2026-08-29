@@ -1,0 +1,60 @@
+name: p0-v12-response-read-repair
+
+on:
+  push:
+    branches:
+      - fix/p0-v12-final-closure
+    paths:
+      - '.github/workflows/p0-v12-response-read-repair.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repair branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: fix/p0-v12-final-closure
+          fetch-depth: 0
+
+      - name: Use a normal complete HTTP request before discarding response
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('scripts/check-trnm-settlement-receipt-lookup-http.sh')
+          text = path.read_text(encoding='utf-8')
+          old = '''with socket.create_connection((host, int(port)), timeout=5) as connection:
+              connection.sendall(request)
+              connection.shutdown(socket.SHUT_WR)
+              connection.settimeout(15)
+              if not connection.recv(1):
+                  raise SystemExit("ledger-service closed before producing a response")'''
+          new = '''with socket.create_connection((host, int(port)), timeout=5) as connection:
+              connection.settimeout(15)
+              connection.sendall(request)
+              if not connection.recv(1):
+                  raise SystemExit("ledger-service closed before producing a response")'''
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'expected one half-close transport block, found {count}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          bash -n scripts/check-trnm-settlement-receipt-lookup-http.sh
+          python3 scripts/check-trnm-settlement-receipt-lookup.py
+
+      - name: Commit transport repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'CEX P0 closure automation'
+          git config user.email 'actions@users.noreply.github.com'
+          git add scripts/check-trnm-settlement-receipt-lookup-http.sh
+          git diff --cached --check
+          git commit -m 'fix(trnm): discard receipt response after normal HTTP commit'
+          git push origin HEAD:fix/p0-v12-final-closure
