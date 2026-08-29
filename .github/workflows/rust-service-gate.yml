@@ -20,24 +20,6 @@ on:
       - '.env.example'
       - '.env.production.example'
       - '.github/workflows/**'
-  pull_request:
-    paths:
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'deny.toml'
-      - 'gate-local.ps1'
-      - 'scripts/**'
-      - 'services/**'
-      - 'crates/**'
-      - 'migrations/**'
-      - 'config/**'
-      - 'architecture/**'
-      - 'docs/**'
-      - 'docs/release-evidence/p0-candidate-trigger.json'
-      - 'ops/**'
-      - '.env.example'
-      - '.env.production.example'
-      - '.github/workflows/**'
 
 permissions:
   contents: read
