@@ -5,5 +5,5 @@ Requires=cex-trnm-ledger.service cex-trnm-consumer.service
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/alex/projects/hepta-control-plane
-ExecStart=/home/alex/projects/hepta-control-plane/scripts/run-trnm-economy-maintenance.sh
+WorkingDirectory=%h/.openclaw/workspace/CEX
+ExecStart=%h/.openclaw/workspace/CEX/scripts/run-trnm-economy-maintenance.sh
