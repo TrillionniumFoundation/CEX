@@ -1,78 +1,14 @@
-use async_trait::async_trait;
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
     Router,
 };
 use ledger_service::{
-    build_router,
-    repository::{postgres::PostgresLedgerRepository, LedgerActionError, LedgerRepository},
-    state::{AccountRecord, AppState, LedgerEntryRecord},
+    build_router, repository::postgres::PostgresLedgerRepository, state::AppState,
 };
 use serde_json::{json, Value};
-use std::sync::Arc;
 use tower::util::ServiceExt;
 use uuid::Uuid;
-
-struct ActionOtherRepository;
-
-#[async_trait]
-impl LedgerRepository for ActionOtherRepository {
-    async fn create_account(&self, _account: &AccountRecord) -> Result<(), String> {
-        Ok(())
-    }
-
-    async fn get_account(&self, _account_id: Uuid) -> Result<Option<AccountRecord>, String> {
-        Ok(None)
-    }
-
-    async fn append_entry(&self, _entry: &LedgerEntryRecord) -> Result<(), String> {
-        Ok(())
-    }
-
-    async fn find_by_idempotency_key(
-        &self,
-        _idempotency_key: &str,
-    ) -> Result<Option<LedgerEntryRecord>, String> {
-        Ok(None)
-    }
-
-    async fn reserve_credits(
-        &self,
-        _entry: &LedgerEntryRecord,
-    ) -> Result<AccountRecord, LedgerActionError> {
-        Err(LedgerActionError::Other(
-            "forced repository transaction failure".to_string(),
-        ))
-    }
-
-    async fn consume_credits(
-        &self,
-        _entry: &LedgerEntryRecord,
-    ) -> Result<AccountRecord, LedgerActionError> {
-        Err(LedgerActionError::Other(
-            "forced repository transaction failure".to_string(),
-        ))
-    }
-
-    async fn refund_credits(
-        &self,
-        _entry: &LedgerEntryRecord,
-    ) -> Result<AccountRecord, LedgerActionError> {
-        Err(LedgerActionError::Other(
-            "forced repository transaction failure".to_string(),
-        ))
-    }
-
-    async fn grant_credits(
-        &self,
-        _entry: &LedgerEntryRecord,
-    ) -> Result<AccountRecord, LedgerActionError> {
-        Err(LedgerActionError::Other(
-            "forced repository transaction failure".to_string(),
-        ))
-    }
-}
 
 fn test_state() -> AppState {
     AppState::new_for_tests(
@@ -187,44 +123,69 @@ async fn metrics_endpoint_exports_ledger_runtime_gauges() {
     assert!(body.contains("cex_ledger_admin_tokens_total 1\n"));
 }
 
-async fn create_account(app: Router, initial_balance: f64) -> (String, Value) {
+const TEST_ORG_ID: &str = "00000000-0000-0000-0000-00000000ce01";
+const TEST_SCALE: u8 = 6;
+
+fn exact_account_request(account_id: Uuid, opening_minor: i64) -> Value {
+    json!({
+        "account_id": account_id,
+        "org_id": TEST_ORG_ID,
+        "trace_id": Uuid::new_v4(),
+        "account_type": "user",
+        "currency_unit": "credit",
+        "currency_scale": TEST_SCALE,
+        "opening_minor": opening_minor.to_string(),
+        "idempotency_scope": format!("http-flow:account:{account_id}"),
+        "idempotency_key": format!("open:{account_id}"),
+    })
+}
+
+async fn create_account(app: Router, opening_minor: i64) -> (Uuid, Value) {
+    let account_id = Uuid::new_v4();
     let (status, created) = send_json(
         app,
         "POST",
-        "/v1/accounts",
-        json!({
-            "org_id": "00000000-0000-0000-0000-00000000ce01",
-            "account_type": "user",
-            "currency_unit": "credit",
-            "initial_balance": initial_balance
-        }),
+        "/v2/accounts",
+        exact_account_request(account_id, opening_minor),
     )
     .await;
 
     assert_eq!(status, StatusCode::CREATED);
-    (
-        created["account_id"]
-            .as_str()
-            .expect("account id")
-            .to_string(),
-        created,
-    )
+    assert_eq!(created["account"]["account_id"], account_id.to_string());
+    (account_id, created)
+}
+
+fn exact_effect_request(
+    account_id: Uuid,
+    operation_kind: &str,
+    amount_minor: i64,
+    idempotency_key: &str,
+) -> Value {
+    json!({
+        "account_id": account_id,
+        "trace_id": Uuid::new_v4(),
+        "operation_id": Uuid::new_v4(),
+        "operation_kind": operation_kind,
+        "currency_unit": "credit",
+        "currency_scale": TEST_SCALE,
+        "amount_minor": amount_minor.to_string(),
+        "reference_type": "http_flow",
+        "reference_id": Uuid::new_v4(),
+        "idempotency_scope": format!("http-flow:{account_id}:{operation_kind}"),
+        "idempotency_key": idempotency_key,
+    })
 }
 
 #[tokio::test]
 async fn create_account_requires_admin_token() {
     let app = build_router(test_state());
+    let account_id = Uuid::new_v4();
     let (status, body) = send_json_with_headers(
         app,
         "POST",
-        "/v1/accounts",
+        "/v2/accounts",
         &[],
-        json!({
-            "org_id": "00000000-0000-0000-0000-00000000ce01",
-            "account_type": "user",
-            "currency_unit": "credit",
-            "initial_balance": 100.0
-        }),
+        exact_account_request(account_id, 100_000_000),
     )
     .await;
 
@@ -314,16 +275,18 @@ async fn game_authority_can_verify_the_active_online_issuer_fingerprint() {
 #[tokio::test]
 async fn create_account_and_get_round_trip() {
     let app = build_router(test_state());
-    let (account_id, created) = create_account(app.clone(), 100.0).await;
-    assert_eq!(created["balance"], 100.0);
-    assert_eq!(created["reserved"], 0.0);
-    assert_eq!(created["currency_unit"], "credit");
+    let (account_id, created) = create_account(app.clone(), 100_000_000).await;
+    assert_eq!(created["account"]["balance_minor"], "100000000");
+    assert_eq!(created["account"]["reserved_minor"], "0");
+    assert_eq!(created["account"]["currency_unit"], "credit");
+    assert_eq!(created["opening"]["opening_kind"], "genesis");
 
-    let (status, fetched) = get_json(app, &format!("/v1/accounts/{account_id}")).await;
+    let (status, fetched) = get_json(app, &format!("/v2/accounts/{account_id}")).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(fetched["account_id"], created["account_id"]);
-    assert_eq!(fetched["balance"], 100.0);
-    assert_eq!(fetched["reserved"], 0.0);
+    assert_eq!(fetched["account_id"], account_id.to_string());
+    assert_eq!(fetched["balance_minor"], "100000000");
+    assert_eq!(fetched["reserved_minor"], "0");
+    assert_eq!(fetched["schema_version"], "cex.account.money.v2");
 }
 
 #[tokio::test]
@@ -335,24 +298,23 @@ async fn ledger_endpoints_reject_admin_token_for_other_org() {
         vec!["ledger:manage".to_string(), "ledger:read".to_string()],
         vec!["00000000-0000-0000-0000-00000000ce02".to_string()],
     ));
+    let account_id = Uuid::new_v4();
 
     let (status, body) = send_json_with_headers(
         app,
         "POST",
-        "/v1/accounts",
+        "/v2/accounts",
         &[("x-admin-token", "ledger-admin")],
-        json!({
-            "org_id": "00000000-0000-0000-0000-00000000ce01",
-            "account_type": "user",
-            "currency_unit": "credit",
-            "initial_balance": 100.0
-        }),
+        exact_account_request(account_id, 100_000_000),
     )
     .await;
 
     assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(body["error"], "admin token not authorized for org");
-    assert_eq!(body["message"], "00000000-0000-0000-0000-00000000ce01");
+    assert_eq!(body["code"], "ledger_org_forbidden");
+    assert_eq!(
+        body["message"],
+        "authenticated principal is not authorized for this organization"
+    );
 }
 
 #[tokio::test]
@@ -365,302 +327,243 @@ async fn fail_fast_placeholder_repository_rejects_memory_only_account_creation()
         Vec::new(),
     );
     let app = build_router(state.clone());
+    let account_id = Uuid::new_v4();
 
     let (status, body) = send_json(
         app,
         "POST",
-        "/v1/accounts",
-        json!({
-            "org_id": "00000000-0000-0000-0000-00000000ce01",
-            "account_type": "user",
-            "currency_unit": "credit",
-            "initial_balance": 100.0
-        }),
+        "/v2/accounts",
+        exact_account_request(account_id, 100_000_000),
     )
     .await;
 
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-    assert!(body["error"]
-        .as_str()
-        .expect("repository error")
-        .contains("create_account repository failure: postgres pool not initialized"));
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["code"], "ledger_operation_persistence_unavailable");
     assert!(state.accounts.read().await.is_empty());
+    assert!(state
+        .exact_memory
+        .read()
+        .await
+        .account_openings_by_account
+        .is_empty());
 }
 
 #[tokio::test]
 async fn grant_adds_balance_without_reserved_funds() {
     let app = build_router(test_state());
-    let (account_id, _) = create_account(app.clone(), 100.0).await;
+    let (account_id, _) = create_account(app.clone(), 100_000_000).await;
 
     let (grant_status, grant_json) = send_json(
         app.clone(),
         "POST",
-        "/v1/ledger/grant",
-        json!({
-            "account_id": account_id,
-            "amount": 3.15,
-            "reference_id": "league-reward-test",
-            "idempotency_key": "league-reward-key-1"
-        }),
+        "/v2/ledger/effects",
+        exact_effect_request(account_id, "grant", 3_150_000, "league-reward-key-1"),
     )
     .await;
-    assert_eq!(grant_status, StatusCode::OK);
-    assert_eq!(grant_json["account"]["balance"], 103.15);
-    assert_eq!(grant_json["account"]["reserved"], 0.0);
-    assert_eq!(grant_json["entry"]["action"], "grant");
+    assert_eq!(grant_status, StatusCode::CREATED);
+    assert_eq!(grant_json["account"]["balance_minor"], 103_150_000);
+    assert_eq!(grant_json["account"]["reserved_minor"], 0);
+    assert_eq!(grant_json["effect"]["operation_kind"], "grant");
+    assert_eq!(grant_json["effect"]["amount_minor"], 3_150_000);
 
-    let (get_status, fetched) = get_json(app, &format!("/v1/accounts/{account_id}")).await;
+    let (get_status, fetched) = get_json(app, &format!("/v2/accounts/{account_id}")).await;
     assert_eq!(get_status, StatusCode::OK);
-    assert_eq!(fetched["balance"], 103.15);
-    assert_eq!(fetched["reserved"], 0.0);
+    assert_eq!(fetched["balance_minor"], "103150000");
+    assert_eq!(fetched["reserved_minor"], "0");
 }
 
 #[tokio::test]
 async fn reserve_then_consume_updates_reserved_and_balance() {
     let app = build_router(test_state());
-    let (account_id, _) = create_account(app.clone(), 100.0).await;
+    let (account_id, _) = create_account(app.clone(), 100_000_000).await;
 
     let (reserve_status, reserve_json) = send_json(
         app.clone(),
         "POST",
-        "/v1/ledger/reserve",
-        json!({
-            "account_id": account_id,
-            "amount": 5.0,
-            "reference_id": "reserve-test",
-            "idempotency_key": "reserve-key-1"
-        }),
+        "/v2/ledger/effects",
+        exact_effect_request(account_id, "reserve", 5_000_000, "reserve-key-1"),
     )
     .await;
-    assert_eq!(reserve_status, StatusCode::OK);
-    assert_eq!(reserve_json["account"]["balance"], 100.0);
-    assert_eq!(reserve_json["account"]["reserved"], 5.0);
+    assert_eq!(reserve_status, StatusCode::CREATED);
+    assert_eq!(reserve_json["account"]["balance_minor"], 100_000_000);
+    assert_eq!(reserve_json["account"]["reserved_minor"], 5_000_000);
 
     let (consume_status, consume_json) = send_json(
         app.clone(),
         "POST",
-        "/v1/ledger/consume",
-        json!({
-            "account_id": account_id,
-            "amount": 5.0,
-            "reference_id": "consume-test",
-            "idempotency_key": "consume-key-1"
-        }),
+        "/v2/ledger/effects",
+        exact_effect_request(account_id, "consume", 5_000_000, "consume-key-1"),
     )
     .await;
-    assert_eq!(consume_status, StatusCode::OK);
-    assert_eq!(consume_json["account"]["balance"], 95.0);
-    assert_eq!(consume_json["account"]["reserved"], 0.0);
+    assert_eq!(consume_status, StatusCode::CREATED);
+    assert_eq!(consume_json["account"]["balance_minor"], 95_000_000);
+    assert_eq!(consume_json["account"]["reserved_minor"], 0);
 
-    let (get_status, fetched) = get_json(app, &format!("/v1/accounts/{account_id}")).await;
+    let (get_status, fetched) = get_json(app, &format!("/v2/accounts/{account_id}")).await;
     assert_eq!(get_status, StatusCode::OK);
-    assert_eq!(fetched["balance"], 95.0);
-    assert_eq!(fetched["reserved"], 0.0);
+    assert_eq!(fetched["balance_minor"], "95000000");
+    assert_eq!(fetched["reserved_minor"], "0");
 }
 
 #[tokio::test]
 async fn reserve_then_refund_releases_reserved_without_minting_balance() {
     let app = build_router(test_state());
-    let (account_id, _) = create_account(app.clone(), 100.0).await;
+    let (account_id, _) = create_account(app.clone(), 100_000_000).await;
 
     let (reserve_status, reserve_json) = send_json(
         app.clone(),
         "POST",
-        "/v1/ledger/reserve",
-        json!({
-            "account_id": account_id,
-            "amount": 7.0,
-            "reference_id": "refund-test",
-            "idempotency_key": "reserve-key-2"
-        }),
+        "/v2/ledger/effects",
+        exact_effect_request(account_id, "reserve", 7_000_000, "reserve-key-2"),
     )
     .await;
-    assert_eq!(reserve_status, StatusCode::OK);
-    assert_eq!(reserve_json["account"]["balance"], 100.0);
-    assert_eq!(reserve_json["account"]["reserved"], 7.0);
+    assert_eq!(reserve_status, StatusCode::CREATED);
+    assert_eq!(reserve_json["account"]["balance_minor"], 100_000_000);
+    assert_eq!(reserve_json["account"]["reserved_minor"], 7_000_000);
 
     let (refund_status, refund_json) = send_json(
         app.clone(),
         "POST",
-        "/v1/ledger/refund",
-        json!({
-            "account_id": account_id,
-            "amount": 7.0,
-            "reference_id": "refund-test",
-            "idempotency_key": "refund-key-2"
-        }),
+        "/v2/ledger/effects",
+        exact_effect_request(account_id, "refund", 7_000_000, "refund-key-2"),
     )
     .await;
-    assert_eq!(refund_status, StatusCode::OK);
-    assert_eq!(refund_json["account"]["balance"], 100.0);
-    assert_eq!(refund_json["account"]["reserved"], 0.0);
+    assert_eq!(refund_status, StatusCode::CREATED);
+    assert_eq!(refund_json["account"]["balance_minor"], 100_000_000);
+    assert_eq!(refund_json["account"]["reserved_minor"], 0);
 
-    let (get_status, fetched) = get_json(app, &format!("/v1/accounts/{account_id}")).await;
+    let (get_status, fetched) = get_json(app, &format!("/v2/accounts/{account_id}")).await;
     assert_eq!(get_status, StatusCode::OK);
-    assert_eq!(fetched["balance"], 100.0);
-    assert_eq!(fetched["reserved"], 0.0);
+    assert_eq!(fetched["balance_minor"], "100000000");
+    assert_eq!(fetched["reserved_minor"], "0");
 }
 
 #[tokio::test]
-async fn duplicate_idempotency_key_returns_conflict_without_double_reserve() {
+async fn exact_idempotency_replays_without_double_reserve() {
     let app = build_router(test_state());
-    let (account_id, _) = create_account(app.clone(), 100.0).await;
+    let (account_id, _) = create_account(app.clone(), 100_000_000).await;
+    let request_body = exact_effect_request(account_id, "reserve", 8_000_000, "dup-key-1");
 
-    let request_body = json!({
-        "account_id": account_id,
-        "amount": 8.0,
-        "reference_id": "dup-test",
-        "idempotency_key": "dup-key-1"
-    });
-
-    let (first_status, _) = send_json(
+    let (first_status, first_json) = send_json(
         app.clone(),
         "POST",
-        "/v1/ledger/reserve",
+        "/v2/ledger/effects",
         request_body.clone(),
     )
     .await;
     let (second_status, second_json) =
-        send_json(app.clone(), "POST", "/v1/ledger/reserve", request_body).await;
-    assert_eq!(first_status, StatusCode::OK);
-    assert_eq!(second_status, StatusCode::CONFLICT);
-    assert_eq!(second_json["error"], "duplicate idempotency key");
+        send_json(app.clone(), "POST", "/v2/ledger/effects", request_body).await;
 
-    let (get_status, fetched) = get_json(app, &format!("/v1/accounts/{account_id}")).await;
+    assert_eq!(first_status, StatusCode::CREATED);
+    assert_eq!(second_status, StatusCode::OK);
+    assert_eq!(first_json["replayed"], false);
+    assert_eq!(second_json["replayed"], true);
+    assert_eq!(
+        second_json["effect"]["entry_id"],
+        first_json["effect"]["entry_id"]
+    );
+
+    let (get_status, fetched) = get_json(app, &format!("/v2/accounts/{account_id}")).await;
     assert_eq!(get_status, StatusCode::OK);
-    assert_eq!(fetched["balance"], 100.0);
-    assert_eq!(fetched["reserved"], 8.0);
+    assert_eq!(fetched["balance_minor"], "100000000");
+    assert_eq!(fetched["reserved_minor"], "8000000");
 }
 
 #[tokio::test]
-async fn repository_transaction_errors_do_not_fallback_to_memory_success() {
-    let state = AppState::new_for_tests(
-        Arc::new(ActionOtherRepository),
-        false,
-        Some("local-dev-admin-token".to_string()),
-        vec!["ledger:manage".to_string(), "ledger:read".to_string()],
-        Vec::new(),
-    );
+async fn retired_legacy_value_routes_fail_closed_without_memory_mutation() {
+    let state = test_state();
     let app = build_router(state.clone());
-    let (account_id, _) = create_account(app.clone(), 100.0).await;
 
-    let (reserve_status, reserve_json) = send_json(
-        app.clone(),
-        "POST",
-        "/v1/ledger/reserve",
-        json!({
-            "account_id": account_id,
-            "amount": 8.0,
-            "reference_id": "repo-other-failure",
-            "idempotency_key": "repo-other-failure-key"
-        }),
-    )
-    .await;
+    let (account_status, account_body) =
+        send_json(app.clone(), "POST", "/v1/accounts", json!({"legacy": true})).await;
+    assert_eq!(account_status, StatusCode::GONE);
+    assert_eq!(account_body["code"], "ledger_v1_value_write_gone");
 
-    assert_eq!(reserve_status, StatusCode::INTERNAL_SERVER_ERROR);
-    assert!(reserve_json["error"]
-        .as_str()
-        .expect("repository error")
-        .contains("forced repository transaction failure"));
-
-    let (get_status, fetched) = get_json(app, &format!("/v1/accounts/{account_id}")).await;
-    assert_eq!(get_status, StatusCode::OK);
-    assert_eq!(fetched["balance"], 100.0);
-    assert_eq!(fetched["reserved"], 0.0);
+    let (effect_status, effect_body) =
+        send_json(app, "POST", "/v1/ledger/reserve", json!({"legacy": true})).await;
+    assert_eq!(effect_status, StatusCode::GONE);
+    assert_eq!(effect_body["code"], "ledger_v1_value_write_gone");
+    assert!(state.accounts.read().await.is_empty());
     assert!(state.entries.read().await.is_empty());
     assert!(state.idempotency_keys.read().await.is_empty());
+    assert!(state
+        .exact_memory
+        .read()
+        .await
+        .effects_by_operation
+        .is_empty());
 }
 
 #[tokio::test]
-async fn insufficient_amount_paths_return_bad_request() {
+async fn insufficient_exact_amount_paths_are_retryable_after_state_changes() {
     let app = build_router(test_state());
-    let (account_id, _) = create_account(app.clone(), 100.0).await;
+    let (account_id, _) = create_account(app.clone(), 100_000_000).await;
+    let reserve_body = exact_effect_request(account_id, "reserve", 150_000_000, "reserve-too-much");
 
     let (reserve_status, reserve_json) = send_json(
         app.clone(),
         "POST",
-        "/v1/ledger/reserve",
-        json!({
-            "account_id": account_id,
-            "amount": 150.0,
-            "reference_id": "too-much-reserve",
-            "idempotency_key": "reserve-too-much"
-        }),
+        "/v2/ledger/effects",
+        reserve_body.clone(),
     )
     .await;
-    assert_eq!(reserve_status, StatusCode::BAD_REQUEST);
-    assert!(reserve_json["error"]
-        .as_str()
-        .expect("reserve error")
-        .contains("insufficient available balance"));
+    assert_eq!(reserve_status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(reserve_json["code"], "ledger_insufficient_funds");
 
     let (grant_status, _) = send_json(
         app.clone(),
         "POST",
-        "/v1/ledger/grant",
-        json!({
-            "account_id": account_id,
-            "amount": 100.0,
-            "reference_id": "seed-retry-reserve-after-failure",
-            "idempotency_key": "seed-retry-reserve-after-failure"
-        }),
+        "/v2/ledger/effects",
+        exact_effect_request(
+            account_id,
+            "grant",
+            100_000_000,
+            "seed-retry-reserve-after-failure",
+        ),
     )
     .await;
-    assert_eq!(grant_status, StatusCode::OK);
+    assert_eq!(grant_status, StatusCode::CREATED);
 
-    let (reserve_retry_status, reserve_retry_json) = send_json(
-        app.clone(),
-        "POST",
-        "/v1/ledger/reserve",
-        json!({
-            "account_id": account_id,
-            "amount": 150.0,
-            "reference_id": "too-much-reserve",
-            "idempotency_key": "reserve-too-much"
-        }),
-    )
-    .await;
-    assert_eq!(reserve_retry_status, StatusCode::OK);
-    assert_eq!(reserve_retry_json["account"]["balance"], 200.0);
-    assert_eq!(reserve_retry_json["account"]["reserved"], 150.0);
+    let (reserve_retry_status, reserve_retry_json) =
+        send_json(app.clone(), "POST", "/v2/ledger/effects", reserve_body).await;
+    assert_eq!(reserve_retry_status, StatusCode::CREATED);
+    assert_eq!(reserve_retry_json["account"]["balance_minor"], 200_000_000);
+    assert_eq!(reserve_retry_json["account"]["reserved_minor"], 150_000_000);
 
-    let (refund_account_id, _) = create_account(app.clone(), 100.0).await;
-    let refund_body = json!({
-        "account_id": refund_account_id,
-        "amount": 1.0,
-        "reference_id": "refund-without-reserve",
-        "idempotency_key": "refund-without-reserve"
-    });
+    let (refund_account_id, _) = create_account(app.clone(), 100_000_000).await;
+    let refund_body = exact_effect_request(
+        refund_account_id,
+        "refund",
+        1_000_000,
+        "refund-without-reserve",
+    );
     let (refund_status, refund_json) = send_json(
         app.clone(),
         "POST",
-        "/v1/ledger/refund",
+        "/v2/ledger/effects",
         refund_body.clone(),
     )
     .await;
-    assert_eq!(refund_status, StatusCode::BAD_REQUEST);
-    assert!(refund_json["error"]
-        .as_str()
-        .expect("refund error")
-        .contains("insufficient reserved balance"));
+    assert_eq!(refund_status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(refund_json["code"], "ledger_insufficient_funds");
 
     let (reserve_refund_retry_status, _) = send_json(
         app.clone(),
         "POST",
-        "/v1/ledger/reserve",
-        json!({
-            "account_id": refund_account_id,
-            "amount": 1.0,
-            "reference_id": "seed-retry-refund-after-failure",
-            "idempotency_key": "seed-retry-refund-after-failure"
-        }),
+        "/v2/ledger/effects",
+        exact_effect_request(
+            refund_account_id,
+            "reserve",
+            1_000_000,
+            "seed-retry-refund-after-failure",
+        ),
     )
     .await;
-    assert_eq!(reserve_refund_retry_status, StatusCode::OK);
+    assert_eq!(reserve_refund_retry_status, StatusCode::CREATED);
 
     let (refund_retry_status, refund_retry_json) =
-        send_json(app.clone(), "POST", "/v1/ledger/refund", refund_body).await;
-    assert_eq!(refund_retry_status, StatusCode::OK);
-    assert_eq!(refund_retry_json["account"]["balance"], 100.0);
-    assert_eq!(refund_retry_json["account"]["reserved"], 0.0);
+        send_json(app, "POST", "/v2/ledger/effects", refund_body).await;
+    assert_eq!(refund_retry_status, StatusCode::CREATED);
+    assert_eq!(refund_retry_json["account"]["balance_minor"], 100_000_000);
+    assert_eq!(refund_retry_json["account"]["reserved_minor"], 0);
 }
