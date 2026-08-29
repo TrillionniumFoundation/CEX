@@ -1,2 +1,2 @@
-closure_head=01792c79dae7923a438c78c69f668e5d21b89001
-purpose=trigger fresh migration and database assertions after exact Genesis-as-entry fixture update
+closure_head=bca87ea4e88014f160e2d582e4f92f3444f25bfb
+purpose=run hosted fresh-migration and cross-platform Rust gates after exact Ledger v2 test migration
