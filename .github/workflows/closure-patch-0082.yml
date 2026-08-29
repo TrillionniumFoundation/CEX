@@ -14,16 +14,11 @@ jobs:
         with:
           ref: feature/settlement-all-blockers-closure-v1
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - run: python3 scripts/patch-ledger-http-flow-v2.py
-      - run: cargo fmt --all
+      - run: python3 scripts/patch-p0-audit-outbox-fixture.py
       - run: git diff --check
-      - run: cargo test -p ledger-service --test http_flow
       - run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add services/ledger-service/tests/http_flow.rs
-          git commit -m "test(ledger): move HTTP flow coverage to exact v2"
+          git add scripts/check-p0-migrations-postgres.sh
+          git commit -m "fix(ci): isolate Audit outbox lifecycle fixture"
           git push origin HEAD:feature/settlement-all-blockers-closure-v1
