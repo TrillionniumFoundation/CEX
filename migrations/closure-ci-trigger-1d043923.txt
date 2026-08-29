@@ -1,2 +1,2 @@
-closure_head=1d0439233928da8b46ab3f0533913c057653305d
-purpose=trigger fresh and upgrade-safe migration evidence after final provider view compatibility fix
+closure_head=01792c79dae7923a438c78c69f668e5d21b89001
+purpose=trigger fresh migration and database assertions after exact Genesis-as-entry fixture update
