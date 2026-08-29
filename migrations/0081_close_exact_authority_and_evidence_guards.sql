@@ -81,6 +81,27 @@ create trigger trg_cex_reject_compatibility_breakglass_mutation_v1
 before update or delete on public.cex_compatibility_breakglass_evidence_v1
 for each row execute function public.cex_reject_compatibility_breakglass_mutation_v1();
 
+create or replace function public.cex_provider_payload_has_nonzero_legacy_money_v1(
+    p_payload jsonb
+)
+returns boolean
+language sql
+immutable
+strict
+set search_path = pg_catalog, public
+as $$
+    select jsonb_typeof(p_payload) = 'object'
+       and (
+           not public.cex_gateway_legacy_money_is_zero_or_absent_v1(p_payload, 'reserve_amount')
+           or not public.cex_gateway_legacy_money_is_zero_or_absent_v1(p_payload, 'requested_amount')
+           or not public.cex_gateway_legacy_money_is_zero_or_absent_v1(p_payload, 'requested_reserve_amount')
+           or not public.cex_gateway_legacy_money_is_zero_or_absent_v1(p_payload, 'amount')
+           or not public.cex_gateway_legacy_money_is_zero_or_absent_v1(p_payload, 'amount_major')
+           or not public.cex_gateway_legacy_money_is_zero_or_absent_v1(p_payload, 'amount_minor')
+           or not public.cex_gateway_legacy_money_is_zero_or_absent_v1(p_payload, 'price')
+       )
+$$;
+
 create or replace function public.cex_validate_provider_dispatch_authority_v2()
 returns trigger
 language plpgsql
@@ -92,7 +113,7 @@ declare
     reserve_row public.cex_gateway_ledger_reserve_commands_v1%rowtype;
 begin
     -- Until a provider adapter supports an authenticated stdin/file contract,
-    -- exact production dispatch is restricted to the HTTP Ollama adapter. This
+    -- production-capable dispatch is restricted to the HTTP Ollama adapter. This
     -- prevents prompts from appearing in process argv.
     if new.provider_target not like 'ollama://%' then
         raise exception 'provider target lacks an approved non-argv prompt transport';
@@ -127,15 +148,7 @@ begin
            or contract_row.last_entry_id is null then
             raise exception 'provider dispatch requires verified active exact reserve evidence';
         end if;
-    elsif jsonb_typeof(invocation_payload) = 'object'
-       and (
-           invocation_payload ? 'account_id'
-           or invocation_payload ? 'reserve_amount'
-           or invocation_payload ? 'requested_amount'
-           or invocation_payload ? 'amount'
-           or invocation_payload ? 'amount_major'
-           or invocation_payload ? 'price'
-       ) then
+    elsif public.cex_provider_payload_has_nonzero_legacy_money_v1(invocation_payload) then
         raise exception 'value-bearing provider dispatch requires an exact Invocation Ledger contract';
     end if;
 
@@ -148,6 +161,24 @@ drop trigger if exists trg_cex_validate_provider_dispatch_authority_v2
 create trigger trg_cex_validate_provider_dispatch_authority_v2
 before insert on public.cex_provider_dispatch_commands_v1
 for each row execute function public.cex_validate_provider_dispatch_authority_v2();
+
+-- Sealing requires a dedicated workload role used only by the service that
+-- performs real Ed25519 verification. Projection operators cannot self-assert
+-- verified=true directly at the database boundary.
+do $$
+begin
+    if not exists (select 1 from pg_roles where rolname='cex_inventory_signature_verifier') then
+        create role cex_inventory_signature_verifier nologin;
+    end if;
+end
+$$;
+
+revoke execute on function public.cex_seal_account_opening_inventory_v1(
+    uuid,text,text,text,jsonb
+) from public, cex_projection_operator;
+grant execute on function public.cex_seal_account_opening_inventory_v1(
+    uuid,text,text,text,jsonb
+) to cex_inventory_signature_verifier;
 
 create or replace function public.cex_validate_release_evidence_status_v1()
 returns trigger
@@ -207,6 +238,16 @@ select
 from public.cex_invocation_ledger_contracts_v1 contract
 join public.invocations invocation using (invocation_id)
 left join public.cex_gateway_ledger_reserve_commands_v1 reserve using (invocation_id);
+
+create or replace view public.cex_p0_database_role_matrix_v1 as
+select * from (values
+    ('cex_ledger_opening_source','exact account opening and exact reads'),
+    ('cex_projection_operator','inventory build, projection capture, policy and repair evidence'),
+    ('cex_inventory_signature_verifier','server-verified Ed25519 inventory seal admission'),
+    ('cex_provider_dispatch_source','provider command enqueue and explicit terminal decision'),
+    ('cex_provider_dispatch_worker','provider claim and durable outcome'),
+    ('cex_release_evidence_admitter','external release evidence admission')
+) role_matrix(role_name, responsibility);
 
 comment on view public.cex_exact_authority_status_v1 is
     'Fail-closed status for legacy flag leakage and exact reserve authority gaps.';
