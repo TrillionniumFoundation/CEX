@@ -20,5 +20,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add scripts/check-p0-migrations-postgres.sh
-          git commit -m "fix(ci): use exact account opening in migration fixture"
+          git commit -m "fix(ci): use exact Ledger v2 in migration fixture"
           git push origin HEAD:feature/settlement-all-blockers-closure-v1
