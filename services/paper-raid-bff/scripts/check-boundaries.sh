@@ -442,6 +442,7 @@ jq -e '
 ' "$accessctl_sbom" >/dev/null
 
 "$service_root/scripts/check-practice-unranked-boundary.sh"
+"$service_root/scripts/check-quick-raid-boundary.sh"
 node "$service_root/scripts/check-practice-player-ui.mjs"
 node "$service_root/scripts/check-practice-agent-bridge.mjs"
 node "$service_root/scripts/check-browser-crypto.mjs"

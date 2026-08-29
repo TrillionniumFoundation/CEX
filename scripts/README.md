@@ -89,6 +89,15 @@ Database backup/restore production drill:
 
 The drill writes a custom-format `pg_dump`, restores it into a temporary Postgres database, compares core table counts, writes a JSON summary under `run/drills/`, and drops the temporary restore database by default. It uses the same Docker discovery as the Linux gate, including passwordless `sudo -n docker` fallback.
 
+Paper Raid's disposable Hepta and BFF PostgreSQL candidate gates additionally
+run `scripts/check-paper-raid-fresh-restore.sh`. It restores each candidate
+database into a newly-created database, compares the normalized schema and
+exact row count of every public table, and writes a bounded
+`trnm.paper-raid.fresh-restore.v1` summary under `run/paper-raid-restore/`.
+The restore target is dropped after the check; this proves a fresh-project
+logical restore but does not claim off-host backup durability or replace the
+daily production backup policy.
+
 For a machine-readable operator snapshot without running the full gate:
 
 ```bash

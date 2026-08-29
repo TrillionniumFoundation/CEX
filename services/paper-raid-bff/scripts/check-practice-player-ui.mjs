@@ -119,7 +119,7 @@ const pairingBrowser = browser.slice(
   browser.indexOf("function bindAgentBinding()"),
 );
 for (const marker of [
-  'new Set(["/league/practice"])',
+  'new Set(["/league/practice", "/league/quick-raid"])',
   'page.searchParams.getAll("return_to")',
   'grant.state === "consumed"',
   "grant.signed_health_observed_after_pairing === true",

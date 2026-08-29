@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, HashSet},
     net::SocketAddr,
     sync::Arc,
+    time::Duration,
 };
 
 use axum::{
@@ -80,6 +81,24 @@ impl AppState {
             }
         }
         let metrics = Metrics::default();
+        if let Some(snapshot) = db::load_metrics_snapshot(&pool)
+            .await
+            .map_err(|error| format!("cannot load durable BFF metrics snapshot: {error}"))?
+        {
+            metrics
+                .restore_snapshot(&snapshot)
+                .map_err(|error| format!("cannot restore durable BFF metrics snapshot: {error}"))?;
+        }
+        let (initial_snapshot, initial_revision) = metrics
+            .snapshot_with_revision()
+            .map_err(|error| format!("cannot encode durable BFF metrics snapshot: {error}"))?;
+        if !db::persist_metrics_snapshot(&pool, &initial_snapshot)
+            .await
+            .map_err(|error| format!("cannot persist initial BFF metrics snapshot: {error}"))?
+        {
+            return Err("durable BFF metrics snapshot is newer than this process".into());
+        }
+        metrics.mark_persisted(initial_revision);
         let access = config
             .invite_alpha
             .as_ref()
@@ -100,6 +119,7 @@ impl AppState {
         let nakama =
             NakamaArchiveClient::new(config.nakama_base.clone(), config.nakama_http_key.clone())?;
         let cas = CasClient::new(config.cas.clone())?;
+        spawn_metrics_persistence(pool.clone(), metrics.clone());
         Ok(Self {
             config: Arc::new(config),
             pool,
@@ -160,6 +180,39 @@ impl AppState {
             }
         }
     }
+}
+
+fn spawn_metrics_persistence(pool: PgPool, metrics: Metrics) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(
+            metrics::METRICS_PERSIST_INTERVAL_SECONDS,
+        ));
+        loop {
+            interval.tick().await;
+            if !metrics.is_dirty() {
+                continue;
+            }
+            let (snapshot, revision) = match metrics.snapshot_with_revision() {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    tracing::error!(%error, "cannot encode durable BFF metrics snapshot");
+                    continue;
+                }
+            };
+            match db::persist_metrics_snapshot(&pool, &snapshot).await {
+                Ok(true) => metrics.mark_persisted(revision),
+                Ok(false) => {
+                    tracing::warn!(
+                        revision,
+                        "durable BFF metrics snapshot write was superseded by a newer revision"
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "cannot persist durable BFF metrics snapshot; keeping it dirty for retry");
+                }
+            }
+        }
+    });
 }
 
 pub fn router(state: AppState) -> Router {
@@ -262,6 +315,7 @@ pub fn router(state: AppState) -> Router {
         .route("/league/papers/:paper_id", get(paper_room))
         .merge(crate::challenge_materials::router())
         .merge(crate::practice_http::router())
+        .merge(crate::quick_raid_http::router())
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .with_state(state)
         .layer(middleware::from_fn_with_state(
@@ -787,6 +841,12 @@ async fn forward_hepta_command(
             next_csrf,
         );
     }
+    if command.command == CommandName::QueueMatchmaking {
+        let queue_authority = queue_challenge_is_open(&state, &session.identity, &command).await;
+        if let Err(error) = queue_authority {
+            return with_rotated_csrf(private_no_store(error.into_response()), next_csrf);
+        }
+    }
     let result = state
         .hepta
         .forward_command(&session.identity, &command)
@@ -812,6 +872,54 @@ async fn forward_hepta_command(
         Err(error) => error.into_response(),
     };
     with_rotated_csrf(private_no_store(response), next_csrf)
+}
+
+/// Re-read the authoritative challenge catalog immediately before forwarding a
+/// queue mutation.  The Lobby's disabled button is only a usability guard: a
+/// stale tab or direct request must not be able to enqueue a draft, closed,
+/// missing, duplicated, or malformed Challenge through the BFF.
+async fn queue_challenge_is_open(
+    state: &AppState,
+    identity: &AlphaIdentity,
+    command: &BrowserCommand,
+) -> Result<(), AppError> {
+    let challenge_id_text = command
+        .payload
+        .get("challenge_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::Invalid("queue challenge_id must be a canonical UUID".into()))?;
+    let challenge_id = Uuid::parse_str(challenge_id_text)
+        .ok()
+        .filter(|value| value.to_string() == challenge_id_text)
+        .ok_or_else(|| AppError::Invalid("queue challenge_id must be a canonical UUID".into()))?;
+    let catalog = state.hepta.list_public_challenges(identity).await?;
+    validate_open_queue_challenge(&catalog, challenge_id)
+}
+
+fn validate_open_queue_challenge(catalog: &Value, challenge_id: Uuid) -> Result<(), AppError> {
+    let entries = catalog.as_array().ok_or(AppError::Upstream)?;
+    let expected = challenge_id.to_string();
+    let matches = entries
+        .iter()
+        .filter(|entry| {
+            entry
+                .get("challenge_id")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value == expected.as_str())
+        })
+        .collect::<Vec<_>>();
+    if matches.len() > 1 {
+        return Err(AppError::Upstream);
+    }
+    let challenge = matches.into_iter().next().ok_or_else(|| {
+        AppError::Conflict("queue challenge is absent from the authoritative catalog".into())
+    })?;
+    if challenge.get("status").and_then(Value::as_str) != Some("open") {
+        return Err(AppError::Conflict(
+            "queue challenge is not authoritatively open".into(),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -2326,6 +2434,50 @@ fn has_active_agent_binding(value: &Value, player_id: Uuid) -> Result<bool, AppE
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queue_challenge_catalog_is_open_only_and_fail_closed() {
+        let challenge_id = Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
+        let open = json!([{
+            "challenge_id": challenge_id,
+            "status": "open"
+        }]);
+        validate_open_queue_challenge(&open, challenge_id).expect("open challenge queues");
+
+        for status in ["closed", "draft", "unknown"] {
+            let catalog = json!([{
+                "challenge_id": challenge_id,
+                "status": status
+            }]);
+            assert!(matches!(
+                validate_open_queue_challenge(&catalog, challenge_id),
+                Err(AppError::Conflict(_))
+            ));
+        }
+        assert!(matches!(
+            validate_open_queue_challenge(&json!([]), challenge_id),
+            Err(AppError::Conflict(_))
+        ));
+        assert!(matches!(
+            validate_open_queue_challenge(&json!({"challenges": []}), challenge_id),
+            Err(AppError::Upstream)
+        ));
+
+        let duplicate = json!([
+            {"challenge_id": challenge_id, "status": "open"},
+            {"challenge_id": challenge_id, "status": "closed"}
+        ]);
+        assert!(matches!(
+            validate_open_queue_challenge(&duplicate, challenge_id),
+            Err(AppError::Upstream)
+        ));
+
+        let malformed_id = json!([{"challenge_id": "not-a-uuid", "status": "open"}]);
+        assert!(matches!(
+            validate_open_queue_challenge(&malformed_id, challenge_id),
+            Err(AppError::Conflict(_))
+        ));
+    }
 
     #[test]
     fn identity_scopes_separate_author_evaluator_and_reproducer_commands() {

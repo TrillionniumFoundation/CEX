@@ -347,6 +347,7 @@ expected_copy_sources = {
     "services/hepta-research-league/docker/rust-toolchain.manifest",
     "crates/hepta-paper-raid-contracts/Cargo.toml",
     "crates/hepta-paper-raid-contracts/src",
+    "crates/hepta-paper-raid-contracts/assets",
     "services/hepta-research-league/Cargo.toml",
     "services/hepta-research-league/src",
     "vendor/trnm-finality-types/Cargo.toml",

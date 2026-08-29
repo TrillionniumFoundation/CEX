@@ -1755,7 +1755,7 @@ function bindHumanKeyRegistration() {
   });
 }
 
-const AGENT_PAIRING_RETURN_PATHS = new Set(["/league/practice"]);
+const AGENT_PAIRING_RETURN_PATHS = new Set(["/league/practice", "/league/quick-raid"]);
 
 function agentPairingReturnTarget(locationValue = window.location) {
   let page;
@@ -3856,6 +3856,49 @@ function bindQueueForms() {
   }
 }
 
+// Lobby queue status is a read-only projection.  Keep its freshness visible
+// without auto-navigating: a reload can discard an in-memory human signing key
+// on adjacent flows, so the player chooses when to refresh the page.
+function bindLobbyQueueFreshness() {
+  if (window.location.pathname !== "/league") return;
+  const panel = document.querySelector("[data-lobby-queue-panel]");
+  const countdown = panel?.querySelector("[data-queue-refresh-countdown]");
+  const state = panel?.querySelector("[data-queue-freshness-state]");
+  const button = panel?.querySelector("[data-queue-refresh]");
+  if (!panel || !countdown || !state || !button) return;
+  const configured = Number(panel.dataset.queueRefreshSeconds || "");
+  if (!Number.isSafeInteger(configured) || configured < 1 || configured > 300) {
+    state.textContent = "Refresh timing unavailable / 刷新时序不可用";
+    countdown.textContent = "—";
+    return;
+  }
+  let remaining = configured;
+  const render = () => {
+    if (remaining <= 0) {
+      state.textContent = "Refresh check available now / 现在可刷新检查";
+      countdown.textContent = "now / 现在";
+      button.classList.add("ready");
+      return;
+    }
+    state.textContent = "Next refresh check in / 距下一次刷新检查";
+    countdown.textContent = `${remaining}s`;
+    button.classList.remove("ready");
+  };
+  render();
+  const timer = window.setInterval(() => {
+    remaining = Math.max(0, remaining - 1);
+    render();
+    if (remaining === 0) window.clearInterval(timer);
+  }, 1000);
+  button.addEventListener("click", () => {
+    if (button.disabled) return;
+    savePlayerFocusContext(button);
+    button.disabled = true;
+    button.textContent = "Refreshing authoritative queue… / 正在刷新权威队列……";
+    window.location.reload();
+  });
+}
+
 function bindProposalCountdowns() {
   for (const element of document.querySelectorAll(".proposal-countdown")) {
     const deadline = Date.parse(element.dataset.proposalExpiresAt || "");
@@ -4663,6 +4706,124 @@ function semanticEventLabel(event) {
   return base;
 }
 
+const TIMELINE_REPLAY_MAX_EVENTS = 64;
+const TIMELINE_REPLAY_STEP_MS = 650;
+
+function timelineEventRecords(value) {
+  const records = [
+    ...(Array.isArray(value && value.hepta_events) ? value.hepta_events : []).map(event => ({
+      source: "hepta",
+      event,
+    })),
+    ...(Array.isArray(value && value.nakama_archives) ? value.nakama_archives : []).flatMap(entry => (
+      Array.isArray(entry.archive && entry.archive.events)
+        ? entry.archive.events.map(event => ({
+          source: `nakama:${entry.logical_session_id || "unknown"}`,
+          event,
+        }))
+        : []
+    )),
+  ];
+  const seen = new Set();
+  return records.filter(record => {
+    const event = record.event || {};
+    const identity = event.event_id || event.cursor || `${event.event_type || "event"}:${event.sequence || "0"}`;
+    const key = `${record.source}:${identity}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(-TIMELINE_REPLAY_MAX_EVENTS);
+}
+
+function appendTimelineReplayEvent(list, record, index) {
+  const item = document.createElement("li");
+  const event = record && record.event ? record.event : {};
+  const identity = event.event_id || event.cursor || `${event.event_type || "event"}:${event.sequence || "0"}`;
+  item.dataset.replayEventKey = `${record && record.source ? record.source : "unknown"}:${identity}`;
+  item.dataset.replayIndex = String(index + 1);
+  item.textContent = `${index + 1}. ${semanticEventLabel(event)}`;
+  list.append(item);
+}
+
+function createTimelineReplayController(card) {
+  const start = card.querySelector(".timeline-replay-start");
+  const pause = card.querySelector(".timeline-replay-pause");
+  const panel = card.querySelector(".timeline-replay");
+  const list = card.querySelector(".timeline-replay-events");
+  const status = card.querySelector(".timeline-replay-status");
+  let records = [];
+  let timer = null;
+  let running = false;
+  let index = 0;
+  const clearTimer = () => {
+    if (timer !== null) window.clearTimeout(timer);
+    timer = null;
+  };
+  const setStatus = text => {
+    if (status) status.textContent = text;
+  };
+  const finish = () => {
+    clearTimer();
+    running = false;
+    if (pause) pause.hidden = true;
+    if (start) start.disabled = records.length === 0;
+    if (records.length > 0) {
+      setStatus(`Replay complete · ${records.length} event(s) / 回放完成 · ${records.length} 个事件`);
+    }
+  };
+  const step = () => {
+    if (!running) return;
+    if (index >= records.length) {
+      finish();
+      return;
+    }
+    if (!list) {
+      finish();
+      setStatus("Replay surface unavailable / 回放界面不可用");
+      return;
+    }
+    appendTimelineReplayEvent(list, records[index], index);
+    index += 1;
+    setStatus(`Replaying ${index}/${records.length} / 正在回放 ${index}/${records.length}`);
+    timer = window.setTimeout(step, TIMELINE_REPLAY_STEP_MS);
+  };
+  const begin = () => {
+    clearTimer();
+    if (records.length === 0) {
+      if (panel) panel.hidden = false;
+      setStatus("No authenticated events are available yet / 当前尚无可回放的认证事件");
+      return;
+    }
+    running = true;
+    index = 0;
+    if (panel) panel.hidden = false;
+    if (list) list.replaceChildren();
+    if (pause) pause.hidden = false;
+    if (start) start.disabled = true;
+    setStatus(`Replay started · ${records.length} event(s) / 回放开始 · ${records.length} 个事件`);
+    step();
+  };
+  const stop = () => {
+    clearTimer();
+    running = false;
+    if (pause) pause.hidden = true;
+    if (start) start.disabled = records.length === 0;
+    setStatus(`Replay paused at ${index}/${records.length} / 回放已暂停于 ${index}/${records.length}`);
+  };
+  if (start) start.addEventListener("click", begin);
+  if (pause) pause.addEventListener("click", stop);
+  return {
+    setRecords(next) {
+      if (running) return;
+      records = Array.isArray(next) ? next.slice(-TIMELINE_REPLAY_MAX_EVENTS) : [];
+      if (start) start.disabled = records.length === 0;
+      if (records.length === 0) setStatus("Waiting for authenticated events / 等待认证事件");
+      else setStatus(`${records.length} event(s) ready for read-only replay / ${records.length} 个事件可只读回放`);
+    },
+    stop,
+  };
+}
+
 function renderLiveRaid(card, value) {
   card.querySelector(".live-phase").textContent = `Phase / 阶段: ${semanticPhaseLabel(paperRoomPhase(value))}`;
   const participantList = card.querySelector(".live-participants");
@@ -4683,16 +4844,7 @@ function renderLiveRaid(card, value) {
     participantList.replaceChildren(item);
   }
   const eventList = card.querySelector(".live-events");
-  const events = [
-    ...(Array.isArray(value && value.hepta_events) ? value.hepta_events : []).map(event => ({
-      source: "hepta",
-      event,
-    })),
-    ...archives.flatMap(entry => (Array.isArray(entry.archive && entry.archive.events) ? entry.archive.events : []).map(event => ({
-      source: `nakama:${entry.logical_session_id || "unknown"}`,
-      event,
-    })))
-  ];
+  const events = timelineEventRecords({ ...value, nakama_archives: archives });
   for (const record of events.slice(-12)) {
     const event = record.event;
     const identity = event.event_id || event.cursor || `${event.event_type || "event"}:${event.sequence || "0"}`;
@@ -4739,6 +4891,7 @@ function createLiveRaidSync(card) {
   const button = card.querySelector(".timeline-refresh");
   const connection = card.querySelector(".live-connection");
   const output = card.querySelector(".live-detail");
+  const replay = createTimelineReplayController(card);
   const cursor = readLiveCursor(paperId);
   let nakamaSessions = new Map();
   let timer = null;
@@ -4798,6 +4951,7 @@ function createLiveRaidSync(card) {
         }
         value.nakama_archives = archives;
         renderLiveRaid(card, value);
+        replay.setRecords(timelineEventRecords(value));
         authoritySynchronized = true;
         synchronizedPhase = currentPhase;
         cursor.hepta = nextHepta;
@@ -4865,6 +5019,22 @@ function bindProductTelemetry() {
   const paperMatch = window.location.pathname.match(
     /^\/league\/(?:papers|review)\/([0-9a-f-]{36})$/i
   );
+  if (window.location.pathname === "/league") {
+    const challengeId = new URL(window.location.href).searchParams.get("rematch_challenge");
+    if (challengeId && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(challengeId)) {
+      const form = document.querySelector(`form.queue-form[data-challenge-id="${CSS.escape(challengeId)}"]`);
+      if (form) {
+        form.classList.add("rematch-target");
+        const output = form.querySelector("output");
+        renderPlayerMessage(output, "Challenge selected from your last Raid. Review the role and join when ready. / 已从上一局选中挑战；确认角色后再加入。");
+        window.requestAnimationFrame(() => {
+          form.scrollIntoView({ behavior: "smooth", block: "center" });
+          const first = form.querySelector("button.queue-submit:not([disabled])") || form.querySelector("input,select,button");
+          if (first instanceof HTMLElement) first.focus({ preventScroll: true });
+        });
+      }
+    }
+  }
   const navigation = performance.getEntriesByType("navigation")[0];
   if (paperMatch && navigation && navigation.type === "reload") {
     recordProductEvent("reconnected", { paperId: paperMatch[1] }).catch(() => {});
@@ -4912,6 +5082,157 @@ function bindPaperRoomProgressiveDisclosure() {
         }
       });
     });
+  }
+}
+
+const CHALLENGE_MATERIALS_SCHEMA = "hepta.paper_raid.bff.challenge_materials.v1";
+const CHALLENGE_MATERIAL_OBJECTS = Object.freeze({
+  brief: Object.freeze({ role: "playable_brief", label: "Brief / 任务简报" }),
+  dataset: Object.freeze({ role: "dataset", label: "Dataset / 数据集" }),
+  baseline: Object.freeze({ role: "baseline_code", label: "Baseline / 基线" }),
+  evaluator: Object.freeze({ role: "frozen_evaluator", label: "Evaluator / 评估器" }),
+});
+const CHALLENGE_MATERIAL_OBJECT_KEYS = Object.freeze([
+  "object_key", "logical_path", "role", "digest", "size_bytes", "media_type", "download_path",
+]);
+
+function challengeMaterialLogicalPath(value) {
+  if (typeof value !== "string" || value.length < 1 || value.length > 256 ||
+      value.startsWith("/") || value.includes("\\") || value.includes("//") ||
+      value.split("/").some(part => part === "" || part === "." || part === "..") ||
+      !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value)) {
+    throw new Error("challenge_material_logical_path_is_invalid");
+  }
+  return value;
+}
+
+function challengeMaterialMediaType(value) {
+  if (typeof value !== "string" || value.length < 1 || value.length > 128 ||
+      value.trim() !== value || /[\u0000-\u001f\u007f]/u.test(value) || !/^[\x20-\x7e]+$/.test(value)) {
+    throw new Error("challenge_material_media_type_is_invalid");
+  }
+  return value;
+}
+
+async function validateChallengeMaterialProjection(value, paperId) {
+  const expectedPaperId = canonicalUuid(paperId, "paper_id");
+  if (!exactKeys(value, [
+    "schema", "paper_project_id", "challenge_ruleset_snapshot_hash",
+    "material_authority", "objects", "projection_hash",
+  ]) || value.schema !== CHALLENGE_MATERIALS_SCHEMA ||
+      value.paper_project_id !== expectedPaperId ||
+      !value.material_authority || typeof value.material_authority !== "object" ||
+      Array.isArray(value.material_authority) || !Array.isArray(value.objects)) {
+    throw new Error("challenge_material_projection_is_invalid");
+  }
+  const snapshotHash = canonicalDigest(
+    value.challenge_ruleset_snapshot_hash,
+    "challenge_ruleset_snapshot_hash",
+  );
+  if (value.challenge_ruleset_snapshot_hash !== snapshotHash) {
+    throw new Error("challenge_ruleset_snapshot_hash_is_not_canonical");
+  }
+  const projectionHash = canonicalDigest(value.projection_hash, "projection_hash");
+  if (value.projection_hash !== projectionHash || value.objects.length !== 4) {
+    throw new Error("challenge_material_projection_is_not_exactly_four_objects");
+  }
+  const seenKeys = new Set();
+  const seenRoles = new Set();
+  const objects = value.objects.map(object => {
+    if (!exactKeys(object, CHALLENGE_MATERIAL_OBJECT_KEYS) ||
+        typeof object.object_key !== "string" || !Object.hasOwn(CHALLENGE_MATERIAL_OBJECTS, object.object_key) ||
+        seenKeys.has(object.object_key) || seenRoles.has(object.role)) {
+      throw new Error("challenge_material_object_descriptor_is_invalid");
+    }
+    const expected = CHALLENGE_MATERIAL_OBJECTS[object.object_key];
+    if (object.role !== expected.role) throw new Error("challenge_material_object_role_is_invalid");
+    seenKeys.add(object.object_key);
+    seenRoles.add(object.role);
+    const digest = canonicalDigest(object.digest, `${object.object_key}_digest`);
+    if (object.digest !== digest || !Number.isSafeInteger(object.size_bytes) || object.size_bytes < 1 ||
+        object.size_bytes > 32 * 1024 * 1024) {
+      throw new Error("challenge_material_object_size_or_digest_is_invalid");
+    }
+    challengeMaterialLogicalPath(object.logical_path);
+    challengeMaterialMediaType(object.media_type);
+    const expectedDownloadPath = `/api/papers/${expectedPaperId}/challenge-materials/${object.object_key}`;
+    if (object.download_path !== expectedDownloadPath) {
+      throw new Error("challenge_material_download_path_is_not_server_projected");
+    }
+    return object;
+  });
+  if (!Object.keys(CHALLENGE_MATERIAL_OBJECTS).every(key => seenKeys.has(key))) {
+    throw new Error("challenge_material_projection_is_missing_a_required_role");
+  }
+  const frame = { ...value };
+  delete frame.projection_hash;
+  const computedHash = await sha256Label(new TextEncoder().encode(canonicalJson(frame)));
+  if (computedHash !== projectionHash) throw new Error("challenge_material_projection_hash_mismatch");
+  return { paperId: expectedPaperId, projectionHash, objects };
+}
+
+function challengeMaterialUnavailable(panel) {
+  const state = panel.querySelector("[data-challenge-materials-state]");
+  const list = panel.querySelector("[data-challenge-materials-list]");
+  if (list) {
+    list.replaceChildren();
+    list.hidden = true;
+  }
+  if (state) {
+    state.dataset.state = "unavailable";
+    state.textContent = "Frozen challenge materials unavailable. No manual authority file selection is allowed. / 冻结挑战工件不可用；不允许手工选择权威文件。";
+  }
+}
+
+function renderChallengeMaterials(panel, projection) {
+  const state = panel.querySelector("[data-challenge-materials-state]");
+  const list = panel.querySelector("[data-challenge-materials-list]");
+  if (!state || !list) throw new Error("challenge_materials_panel_is_incomplete");
+  list.replaceChildren();
+  for (const object of projection.objects) {
+    const item = document.createElement("li");
+    const details = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = CHALLENGE_MATERIAL_OBJECTS[object.object_key].label;
+    const metadata = document.createElement("small");
+    metadata.textContent = `${object.logical_path} · ${object.media_type} · ${object.size_bytes} bytes`;
+    details.append(title, metadata);
+    const link = document.createElement("a");
+    link.className = "button challenge-materials-download";
+    link.href = `/api/papers/${encodeURIComponent(projection.paperId)}/challenge-materials/${encodeURIComponent(object.object_key)}?digest=${encodeURIComponent(object.digest)}&projection_hash=${encodeURIComponent(projection.projectionHash)}`;
+    link.textContent = "Download / 下载";
+    link.setAttribute("download", "");
+    link.dataset.challengeMaterialObject = object.object_key;
+    item.append(details, link);
+    list.append(item);
+  }
+  state.dataset.state = "available";
+  state.textContent = "Frozen snapshot loaded. Four server-selected materials are ready. / 冻结快照已加载；四项服务器选定工件已就绪。";
+  list.hidden = false;
+}
+
+async function loadChallengeMaterials(panel) {
+  const paperId = canonicalUuid(panel.dataset.paperId, "paper_id");
+  const response = await fetch(`/api/papers/${encodeURIComponent(paperId)}/challenge-materials`, {
+    method: "GET",
+    credentials: "same-origin",
+    headers: { "accept": "application/json" },
+  });
+  const value = await responseValue(response);
+  if (!response.ok) throw new Error("challenge_material_projection_unavailable");
+  const projection = await validateChallengeMaterialProjection(value, paperId);
+  renderChallengeMaterials(panel, projection);
+}
+
+function bindChallengeMaterials() {
+  for (const panel of document.querySelectorAll("[data-challenge-materials]")) {
+    challengeMaterialUnavailable(panel);
+    const state = panel.querySelector("[data-challenge-materials-state]");
+    if (state) {
+      state.dataset.state = "loading";
+      state.textContent = "Loading frozen materials… / 正在加载冻结工件……";
+    }
+    loadChallengeMaterials(panel).catch(() => challengeMaterialUnavailable(panel));
   }
 }
 
@@ -4997,10 +5318,72 @@ function bindPractice() {
   }
 }
 
+const QUICK_RAID_CHOICES = Object.freeze({
+  review_evidence: new Set(["flag_citation_gap", "accept_as_sufficient"]),
+  run_experiment: new Set(["recheck_baseline", "run_candidate"]),
+  publish_paper: new Set(["revise_claim", "retain_with_caveat"]),
+});
+
+function quickRaidVersion(form) {
+  return positiveInteger(form.dataset.quickRaidVersion, "quick_raid_version");
+}
+
+function quickRaidActionPayload(form) {
+  const action = String(form.dataset.quickRaidAction || "");
+  const choices = QUICK_RAID_CHOICES[action];
+  const selected = form.elements.choice && String(form.elements.choice.value || "");
+  if (!choices || !choices.has(selected)) throw new Error("invalid_request");
+  const actionName = action === "review_evidence"
+    ? "review_evidence"
+    : action === "run_experiment"
+      ? "run_experiment"
+      : "publish_paper";
+  return {
+    expected_version: quickRaidVersion(form),
+    action: actionName === "review_evidence"
+      ? { action: "review_evidence", choice: selected }
+      : actionName === "run_experiment"
+        ? { action: "run_experiment", choice: selected }
+        : { action: "publish_paper", conclusion: selected },
+  };
+}
+
+function bindQuickRaid() {
+  if (window.location.pathname !== "/league/quick-raid") return;
+  for (const form of document.querySelectorAll(".quick-raid-start-form")) {
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      submitPracticeMutation(
+        form,
+        "/api/quick-raid/start",
+        {},
+        "Quick Raid ready. Loading the first card… / 快速远征已就绪，正在加载第一张卡……",
+      );
+    });
+  }
+  for (const form of document.querySelectorAll(".quick-raid-action-form")) {
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      try {
+        submitPracticeMutation(
+          form,
+          "/api/quick-raid/action",
+          quickRaidActionPayload(form),
+          "Saved. Loading the next Quick Raid step… / 已保存，正在加载下一步……",
+        );
+      } catch (error) {
+        show(form.querySelector("output"), error.message, false);
+      }
+    });
+  }
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   bindPlayerFocusContext();
   bindPaperRoomProgressiveDisclosure();
+  bindChallengeMaterials();
   bindPractice();
+  bindQuickRaid();
   bindLogin();
   bindHumanKeyCreate();
   bindHumanKeyRegistration();
@@ -5010,6 +5393,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindAgentRotation();
   bindLocalSigning();
   bindQueueForms();
+  bindLobbyQueueFreshness();
   bindProposalCountdowns();
   bindChallengeCountdowns();
   bindChallengeOutcomeForms();

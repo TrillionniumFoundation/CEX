@@ -713,7 +713,13 @@ export async function executeAndSubmitAuthorWorkStart(
     config,
     identity,
     output,
-    options,
+    // A delivery draft is the durable declaration that precedes proposal
+    // submission.  If its response is lost, retrying in the same invocation
+    // would hide the ambiguity and skip the inbox/restart recovery path.  The
+    // server projection is the recovery authority, so leave the draft pending
+    // and let the next work invocation rediscover it.  Proposal submission
+    // below keeps its normal exact retry semantics.
+    { ...options, retryLostResponse: false },
   );
   const freshInbox = await getInbox(config, identity, options);
   const candidate = deliveryCandidateForAuthorOutput(
@@ -776,6 +782,7 @@ export async function prepareDeliveryDraft(
     nowUnix = Math.floor(Date.now() / 1000),
     fetchImplementation,
     draftId,
+    retryLostResponse = true,
   } = {},
 ) {
   const { state, client } = await signedClientState(
@@ -788,7 +795,7 @@ export async function prepareDeliveryDraft(
     path: AGENT_BRIDGE_ENDPOINTS.delivery_drafts,
     nowUnix,
     body: createDeliveryDraftRequest(state, input, { draftId }),
-  });
+  }, { retryLostResponse });
 }
 
 export function createProposalRequest(

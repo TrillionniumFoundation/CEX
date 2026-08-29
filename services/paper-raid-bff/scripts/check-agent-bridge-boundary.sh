@@ -376,6 +376,27 @@ def assert_review_catalog_exact(source: str) -> None:
 
 source = Path(sys.argv[1]).read_text(encoding="utf-8")
 assert_review_catalog_exact(source)
+
+
+def replace_review_query(source: str, needle: str, replacement: str) -> str:
+    """Mutate only the SQL readiness literal under test.
+
+    The Rust module contains other catalog checks before
+    REVIEW_RECEIPT_SCHEMA_READY_SQL.  A whole-file replacement can therefore
+    accidentally hit an unrelated aggregate and make this hostile-mutant
+    check pass for the wrong reason (or fail to exercise the review catalog at
+    all).
+    """
+    start_marker = 'const REVIEW_RECEIPT_SCHEMA_READY_SQL: &str = r#"'
+    start = source.index(start_marker)
+    end = source.index('"#;', start)
+    query = source[start:end]
+    mutated = query.replace(needle, replacement, 1)
+    if mutated == query:
+        raise ReviewCatalogError("review query hostile mutant was not constructed")
+    return source[:start] + mutated + source[end:]
+
+
 hostile_mutants = {
     "partial column catalog": source.replace(
         "count(*) = 25 FROM expected_columns",
@@ -402,10 +423,10 @@ hostile_mutants = {
         "index_row.indoption::text = '0 0 0'",
         1,
     ),
-    "NULL-skipping catalog aggregate": source.replace(
+    "NULL-skipping catalog aggregate": replace_review_query(
+        source,
         "bool_and(COALESCE(",
         "bool_and(",
-        1,
     ),
     "incomplete JSON binding": source.replace(
         '"receipt->\'receipt\'->>\'evaluation_id\'", "evaluation_id"',

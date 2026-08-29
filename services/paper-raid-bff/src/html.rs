@@ -25,7 +25,15 @@ use crate::{
     },
     practice::PracticeStageV1,
     practice_http::PracticePlayerViewV1,
+    quick_raid::{QuickRaidStageV1, QUICK_RAID_FIXED_SEED},
+    quick_raid_http::QuickRaidPlayerViewV1,
 };
+
+/// Lobby reads are intentionally short-lived.  The browser keeps the
+/// authenticated page (and any in-memory human signing key) intact while it
+/// waits, then offers a read-only refresh instead of navigating on its own.
+/// This is a UI freshness hint, not a matchmaking prediction or lease.
+const LOBBY_QUEUE_REFRESH_SECONDS: u64 = 15;
 
 pub enum ReadState<'a, T: ?Sized = Value> {
     Available(&'a T),
@@ -53,6 +61,22 @@ struct ChallengeQueueAvailability {
     explanation: &'static str,
     button_label: &'static str,
     is_open: bool,
+}
+
+struct LobbyQueueSnapshot {
+    fetched_at: String,
+    notice: String,
+}
+
+fn lobby_queue_snapshot_notice() -> LobbyQueueSnapshot {
+    let fetched_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let notice = format!(
+        r#"<div class="queue-freshness" data-queue-freshness data-next-refresh-seconds="{}" aria-live="polite"><p><strong>Authoritative queue snapshot / <span lang="zh-Hans">权威队列快照</span></strong> · <time datetime="{}">loaded now / 刚刚载入</time></p><p class="muted"><span data-queue-freshness-state>Next refresh check in / 距下一次刷新检查</span> <strong data-queue-refresh-countdown>{}s</strong>. This is a read-only freshness hint; it never predicts player arrival. / 这是只读新鲜度提示，不预测玩家到达时间。</p><button class="queue-refresh-button" data-queue-refresh type="button">Refresh queue status / 刷新队列状态</button><output data-queue-refresh-output></output></div>"#,
+        LOBBY_QUEUE_REFRESH_SECONDS,
+        escape(&fetched_at),
+        LOBBY_QUEUE_REFRESH_SECONDS,
+    );
+    LobbyQueueSnapshot { fetched_at, notice }
 }
 
 fn challenge_queue_availability(status: &str) -> ChallengeQueueAvailability {
@@ -178,12 +202,15 @@ pub fn lobby(
     let mission_board = first_raid_mission_board(tickets, proposals, raid_state);
     let continue_raid = active_raid_card(raid_state);
     let agent_pairing = agent_bridge_pairing_panel();
+    let queue_snapshot = lobby_queue_snapshot_notice();
     let body = format!(
         r#"<section class="hero"><span class="eyebrow">PAPER RAID · 论文远征</span><h1>Research Lobby</h1><p>Welcome, {}. Hepta is the only matchmaking and research authority.</p></section>
+        <section class="panel player-path-steps" data-player-path="three_steps" aria-labelledby="player-path-heading"><span class="eyebrow">PLAY PATH / <span lang="zh-Hans">开局路径</span></span><h2 id="player-path-heading">Start in three steps / <span lang="zh-Hans">三步开始</span></h2><ol><li><strong>1 · Sign in / 登录</strong><span>Use your invited identity; no public or economic account is created here.</span></li><li><strong>2 · Pair / 配对</strong><span>Pair one external Agent Bridge when your Author role requires it.</span></li><li><strong>3 · Choose a role / 选择角色</strong><span>Pick a preferred Author role, then join the next compatible three-Author start.</span></li></ol><p class="muted">The page only displays Hepta-derived queue and review timing. Unknown means unknown; the browser never predicts arrival.</p></section>
         <section class="panel practice-entry"><span class="pill">15–20 MIN · SOLO</span><h2>Learn all three Author roles / 单人熟悉三个作者角色</h2><p>Preview Captain, Evidence, and Experiment decisions in a separate unranked practice. It creates no scientific finality, qualification, ranking, score, reward, or economic authority.</p><a class="button" href="/league/practice">Open solo practice / 打开单人练习</a></section>
+        <section class="panel quick-raid-entry"><span class="pill">15 MIN · FIXED SEED</span><h2>Quick Raid · make one real Paper Bundle / 快速远征：完成一份真实论文包</h2><p>After pairing one Agent, run the authoritative fixed-seed Evidence Audit slice: one EvidenceCard, one Experiment Run, and one visible Paper Bundle preview. It is paper-scoped and non-economic; no rank, score, reward, or portable scientific finality is created.</p><a class="button" href="/league/quick-raid">Start Quick Raid / 开始快速远征</a></section>
         {}{}{}
         <section class="panel"><h2>Challenges / 研究挑战</h2><p class="source-state">Hepta: {}</p><div class="grid">{}</div></section>
-        <section class="grid"><article class="card"><h2>My Queue / 我的队列</h2><p class="source-state">Hepta: {}</p>{}</article><article class="card"><h2>Team Proposals / 组队提案</h2><p class="source-state">Hepta: {}</p>{}</article><article class="card author-start-boundary"><h2>3-Author start, asynchronous review / <span lang="zh-Hans">三作者同步开局，评审异步接力</span></h2><p>Exactly 3 Author players start the live Author Raid together: Captain, Evidence, and Experiment, each with an independently bound external Agent. Evaluator, Reviewer 1, Reviewer 2, and Reproducer are not part of that start. After the Authors freeze the PaperBundle, eligible independent identities take separate time-bounded assignments from later review pools.</p><p class="muted">The Author queue reports only Author-role coverage. It never waits for all review identities to be online together. Login keys never leave this page except in the login request.</p></article></section>
+        <section class="grid"><article class="card lobby-queue-panel" data-lobby-queue-panel data-queue-refresh-seconds="{}" data-queue-fetched-at="{}"><h2>My Queue / 我的队列</h2><p class="source-state">Hepta: {}</p>{}<div class="lobby-queue-fragment" data-lobby-queue-fragment>{}</div></article><article class="card"><h2>Team Proposals / 组队提案</h2><p class="source-state">Hepta: {}</p>{}</article><article class="card author-start-boundary"><h2>3-Author start, asynchronous review / <span lang="zh-Hans">三作者同步开局，评审异步接力</span></h2><p>Exactly 3 Author players start the live Author Raid together: Captain, Evidence, and Experiment, each with an independently bound external Agent. Evaluator, Reviewer 1, Reviewer 2, and Reproducer are not part of that start. After the Authors freeze the PaperBundle, eligible independent identities take separate time-bounded assignments from later review pools.</p><p class="muted">The Author queue reports only Author-role coverage. It never waits for all review identities to be online together. Login keys never leave this page except in the login request.</p></article></section>
         <section class="panel"><h2>External Agent key continuity / 外部 Agent 密钥连续性</h2><p class="source-state">Hepta: {}</p><p>Rotation requires independent signatures from both the currently bound key and the replacement key. Only public proof fields enter this browser.</p><div class="action-grid">{}</div></section>"#,
         escape(&identity.display_name),
         mission_board,
@@ -191,7 +218,10 @@ pub fn lobby(
         agent_pairing,
         escape(challenges.label()),
         challenge_cards,
+        LOBBY_QUEUE_REFRESH_SECONDS,
+        escape(&queue_snapshot.fetched_at),
         escape(tickets.label()),
+        queue_snapshot.notice,
         ticket_cards,
         escape(proposals.label()),
         proposal_cards,
@@ -1336,12 +1366,20 @@ fn render_paper_room_with_finality(
         .unwrap_or_default();
     let advanced_body = format!("{advanced_body}{after_action}");
     let artifacts = artifact_links(room, paper_id);
+    // The challenge snapshot is rendered as a read-only shell.  Its bytes and
+    // Paper/Author-scoped download URLs are projected by the authenticated BFF
+    // after the page loads; the browser never asks the player to pick an
+    // evaluator, dataset, baseline, or digest by hand.
+    let challenge_materials = challenge_materials_panel(paper_id);
     let body = format!(
-        r#"<section class="hero paper-room-hero"><span class="eyebrow">PAPER ROOM · <span lang="zh-Hans">论文作战室</span></span><h1>{}</h1><p>Follow the current objective; technical authority remains available below when you need to audit it. / <span lang="zh-Hans">先完成当前目标；需要审计时再查看下方技术权威。</span></p></section>{}{}<details class="panel paper-room-advanced" id="paper-room-advanced"><summary class="paper-room-advanced-summary"><span>Advanced / <span lang="zh-Hans">高级详情</span></span><small>UUIDs, hashes, authority, all controls, and complete records / <span lang="zh-Hans">UUID、摘要、权威、全部操作与完整记录</span></small></summary><div class="paper-room-advanced-content">{}{artifacts}<details class="panel developer-tools"><summary>Developer Tools / <span lang="zh-Hans">开发者工具</span></summary><p class="muted">Exact protocol JSON remains an Alpha fallback for commands that do not yet have a safely derived form or external connector. Needing this section is a known playability gap, never a completed normal path.</p><div class="action-grid">{developer_actions}</div></details></div></details>"#,
+        r#"<section class="hero paper-room-hero"><span class="eyebrow">PAPER ROOM · <span lang="zh-Hans">论文作战室</span></span><h1>{}</h1><p>Follow the current objective; technical authority remains available below when you need to audit it. / <span lang="zh-Hans">先完成当前目标；需要审计时再查看下方技术权威。</span></p></section>{}{}<details class="panel paper-room-advanced" id="paper-room-advanced"><summary class="paper-room-advanced-summary"><span>Advanced / <span lang="zh-Hans">高级详情</span></span><small>UUIDs, hashes, authority, all controls, and complete records / <span lang="zh-Hans">UUID、摘要、权威、全部操作与完整记录</span></small></summary><div class="paper-room-advanced-content">{advanced_body}{challenge_materials}{artifacts}<details class="panel developer-tools"><summary>Developer Tools / <span lang="zh-Hans">开发者工具</span></summary><p class="muted">Exact protocol JSON remains an Alpha fallback for commands that do not yet have a safely derived form or external connector. Needing this section is a known playability gap, never a completed normal path.</p><div class="action-grid">{developer_actions}</div></details></div></details>"#,
         escape(&title),
         basic_actions,
         participation_handoff,
-        advanced_body,
+        advanced_body = advanced_body,
+        challenge_materials = challenge_materials,
+        artifacts = artifacts,
+        developer_actions = developer_actions,
     );
     page("Paper Raid Room", &identity.display_name, &body, true)
 }
@@ -1353,18 +1391,66 @@ fn asynchronous_review_handoff(review: ReadState<'_>) -> String {
     )
 }
 
-fn review_snapshot_availability(review: ReadState<'_>) -> &'static str {
+fn review_snapshot_availability(review: ReadState<'_>) -> String {
     match review {
-        ReadState::Available(_) => {
-            r#"<div class="review-snapshot-availability" data-review-snapshot-state="available"><h3>Authenticated review snapshot available / <span lang="zh-Hans">已认证评审快照可用</span></h3><p>This Author view does not derive current role gaps, assignment status, open slots, or arrival times from submission history.</p></div>"#
-        }
-        ReadState::NotFound => {
-            r#"<div class="review-snapshot-availability unavailable" data-review-snapshot-state="unavailable"><h3>Authenticated review snapshot not published / <span lang="zh-Hans">已认证评审快照尚未发布</span></h3><p>No per-role state, open slot, or arrival time is inferred.</p></div>"#
-        }
-        ReadState::Unavailable => {
-            r#"<div class="review-snapshot-availability unavailable" data-review-snapshot-state="unavailable"><h3>Authenticated review snapshot unavailable / <span lang="zh-Hans">已认证评审快照不可用</span></h3><p>No per-role state, open slot, or arrival time is inferred.</p></div>"#
-        }
+        ReadState::Available(value) => format!(
+            r#"<div class="review-snapshot-availability" data-review-snapshot-state="available"><h3>Authenticated review snapshot available / <span lang="zh-Hans">已认证评审快照可用</span></h3><p>This Author view does not derive current role gaps, assignment status, open slots, or arrival times from submission history.</p>{}</div>"#,
+            review_sla_projection(value),
+        ),
+        ReadState::NotFound => r#"<div class="review-snapshot-availability unavailable" data-review-snapshot-state="unavailable"><h3>Authenticated review snapshot not published / <span lang="zh-Hans">已认证评审快照尚未发布</span></h3><p>No per-role state, open slot, or arrival time is inferred. Review SLA is not inferred either.</p></div>"#.into(),
+        ReadState::Unavailable => r#"<div class="review-snapshot-availability unavailable" data-review-snapshot-state="unavailable"><h3>Authenticated review snapshot unavailable / <span lang="zh-Hans">已认证评审快照不可用</span></h3><p>No per-role state, open slot, or arrival time is inferred. Review SLA is not inferred either.</p></div>"#.into(),
     }
+}
+
+fn review_sla_projection(review: &Value) -> String {
+    let unavailable = || {
+        r#"<div class="review-sla unavailable" data-review-sla-state="unavailable"><strong>Review SLA: not published / 评审 SLA：尚未发布</strong><p class="muted">Hepta has not published a bounded review target; no wait estimate is inferred.</p></div>"#.to_string()
+    };
+    let Some(sla) = review.get("review_sla").and_then(Value::as_object) else {
+        return unavailable();
+    };
+    if sla.len() != 5
+        || sla.get("schema").and_then(Value::as_str) != Some("hepta.paper_raid.review_sla.v1")
+    {
+        return unavailable();
+    }
+    let Some(status) = sla.get("status").and_then(Value::as_str) else {
+        return unavailable();
+    };
+    if !matches!(status, "pending" | "active" | "completed") {
+        return unavailable();
+    }
+    let Some(target_seconds) = sla.get("target_seconds").and_then(Value::as_u64) else {
+        return unavailable();
+    };
+    let Some(remaining_seconds) = sla.get("remaining_seconds").and_then(Value::as_u64) else {
+        return unavailable();
+    };
+    let Some(updated_at) = sla.get("updated_at").and_then(Value::as_str) else {
+        return unavailable();
+    };
+    if !(60..=604_800).contains(&target_seconds)
+        || remaining_seconds > target_seconds
+        || (status == "completed" && remaining_seconds != 0)
+        || canonical_timestamp(updated_at).is_none()
+    {
+        return unavailable();
+    }
+    let remaining = if status == "completed" {
+        "Complete / 已完成".to_string()
+    } else {
+        format!(
+            "{}s remaining / 剩余 {} 秒",
+            remaining_seconds, remaining_seconds
+        )
+    };
+    format!(
+        r#"<div class="review-sla" data-review-sla-state="{}"><strong>Review SLA / 评审时限</strong><p>{} · target {}s / 目标 {} 秒</p><p class="muted">This is a bounded Hepta projection, not a promise of reviewer arrival.</p></div>"#,
+        escape(status),
+        escape(&remaining),
+        target_seconds,
+        target_seconds,
+    )
 }
 
 fn provisional_contribution_card(review: ReadState<'_>) -> String {
@@ -1558,6 +1644,7 @@ enum AarTerminalState {
 
 struct ValidatedAar {
     terminal: ValidatedAarTerminal,
+    challenge_id: Uuid,
     victory: String,
     run_summary: ValidatedRunDebrief,
     role_summary: ValidatedRoleDebrief,
@@ -1574,6 +1661,7 @@ impl ValidatedAar {
         terminal: ValidatedAarTerminal,
     ) -> Option<Self> {
         let paper = room.get("paper")?.as_object()?;
+        let challenge_id = canonical_uuid_value(paper.get("challenge_id")?)?;
         let victory = validated_victory_summary(&Value::Object(paper.clone()))?.to_string();
         let run_summary =
             validated_after_action_runs(room, &Value::Object(paper.clone()), paper_id)?;
@@ -1594,6 +1682,7 @@ impl ValidatedAar {
         .to_string();
         Some(Self {
             terminal,
+            challenge_id,
             victory,
             run_summary,
             role_summary,
@@ -1603,8 +1692,13 @@ impl ValidatedAar {
     }
 
     fn render(&self) -> String {
+        let badges = self.role_summary.session_badges();
+        let badge_items = badges
+            .iter()
+            .map(|badge| format!("<li>{}</li>", player_language_html(badge)))
+            .collect::<String>();
         format!(
-            r#"<section class="panel after-action-report" data-after-action-report="v1"><span class="eyebrow">AFTER ACTION REPORT · 赛后报告</span><h2>{}</h2><p>{}</p><p><strong>Victory contract / 胜利契约:</strong> {}</p><div class="grid">{}{}</div>{}<article class="card after-action-finality"><h3>Scientific finality / 科学终局</h3><p><code>{}</code></p><ul class="eligibility-grid"><li><span>Ranking / 排名</span><strong data-eligible="false">locked</strong></li><li><span>Reward / 奖励</span><strong data-eligible="false">locked</strong></li><li><span>Score / 分数资格</span><strong data-eligible="false">locked</strong></li><li><span>Economic / 经济</span><strong data-eligible="false">locked</strong></li></ul></article><article class="card after-action-progression"><h3>Progression status / 成长状态</h3><p>Role mastery, challenge unlocks, immutable replay and automatic rematch are not authoritative yet. This report does not invent them / 角色熟练度、挑战解锁、不可变回放及自动再匹配尚无权威事实，本报告不会伪造。</p><a class="button" href="/league">Return to Lobby and choose the next Raid / 返回大厅选择下一局</a></article></section>"#,
+            r#"<section class="panel after-action-report" data-after-action-report="v1"><span class="eyebrow">AFTER ACTION REPORT · 赛后报告</span><h2>{}</h2><p>{}</p><p><strong>Victory contract / 胜利契约:</strong> {}</p><div class="grid">{}{}</div>{}<article class="card after-action-finality"><h3>Scientific finality / 科学终局</h3><p><code>{}</code></p><ul class="eligibility-grid"><li><span>Ranking / 排名</span><strong data-eligible="false">locked</strong></li><li><span>Reward / 奖励</span><strong data-eligible="false">locked</strong></li><li><span>Score / 分数资格</span><strong data-eligible="false">locked</strong></li><li><span>Economic / 经济</span><strong data-eligible="false">locked</strong></li></ul></article><article class="card after-action-progression" data-progression-scope="session"><h3>Non-economic progression / 非经济成长</h3><ul class="badge-list">{}</ul><p>These session badges explain verified actions in this Raid only. They are not portable mastery, rank, reward, score, or economic state. Durable challenge unlock authority remains pending / 这些本局徽章只解释本局已验证动作，不是可携带熟练度、排名、奖励、积分或经济状态；持久挑战解锁权威仍待接入。</p><p class="muted">Role mastery, challenge unlocks, immutable replay and automatic rematch are not authoritative yet. This report does not invent them / 角色熟练度、挑战解锁、不可变回放及自动再匹配尚无权威事实，本报告不会伪造。</p><a class="button rematch-link" data-rematch-challenge="{}" href="/league?rematch_challenge={}">Play this challenge again / 再来一局</a></article></section>"#,
             escape(challenge_outcome_label(self.terminal.outcome.code())),
             escape(self.terminal.outcome.reason_label()),
             escape(&self.victory),
@@ -1612,6 +1706,9 @@ impl ValidatedAar {
             self.role_summary.render(),
             self.contribution.render(),
             escape(&self.finality_status),
+            badge_items,
+            escape(&self.challenge_id.to_string()),
+            escape(&self.challenge_id.to_string()),
         )
     }
 }
@@ -2251,6 +2348,26 @@ struct ValidatedRoleDebrief {
 }
 
 impl ValidatedRoleDebrief {
+    fn session_badges(&self) -> Vec<&'static str> {
+        let mut badges = Vec::with_capacity(4);
+        if self.captain > 0 {
+            badges.push("Captain checkpoint / 队长检查点");
+        }
+        if self.evidence > 0 {
+            badges.push("Evidence chain / 证据链");
+        }
+        if self.experiment > 0 {
+            badges.push("Experiment retained / 实验已保留");
+        }
+        if self.retained_failed > 0 {
+            badges.push("Failure disclosed / 失败已披露");
+        }
+        if badges.is_empty() {
+            badges.push("Raid recorded / 远征已记录");
+        }
+        badges
+    }
+
     fn render(&self) -> String {
         format!(
             r#"<article class="card after-action-roles"><h3>Role decisions / 角色决策</h3><p>Captain: {} checkpoint(s) · Evidence: {} assessment(s) · Experiment: {} retained run action(s)</p><p>{} disclosed failed run action(s) preserved as useful evidence / {} 次已披露失败运行作为有用证据保留。</p></article>"#,
@@ -4315,6 +4432,20 @@ fn guided_paper_room(
         rework_controls,
         appeal_controls,
         artifact_upload(paper_id),
+    )
+}
+
+/// Render the read-only shell for the frozen challenge snapshot.
+///
+/// The authoritative four-object projection is intentionally loaded by the
+/// browser from the authenticated BFF endpoint.  Keeping this shell free of
+/// file inputs, digest fields, or player-selected manifests makes the normal
+/// path unambiguous: the snapshot chooses the brief, dataset, baseline, and
+/// evaluator, while the server decides whether each download is authorized.
+fn challenge_materials_panel(paper_id: &str) -> String {
+    format!(
+        r#"<section class="panel challenge-materials-panel" data-challenge-materials data-paper-id="{}" aria-labelledby="challenge-materials-heading"><span class="eyebrow">FROZEN CHALLENGE SNAPSHOT / <span lang="zh-Hans">冻结挑战快照</span></span><h2 id="challenge-materials-heading">Challenge materials / 挑战工件</h2><p class="muted">The current snapshot supplies the brief, dataset, baseline, and evaluator automatically. Download links are server-projected for this Paper and current Author scope; no authoritative file or digest is selected by hand. / 当前快照自动提供任务简报、数据集、基线与评估器。下载入口由服务器按本论文与当前作者权限投影；无需手工选择权威文件或摘要。</p><div class="challenge-materials-state" data-challenge-materials-state="loading" role="status" aria-live="polite">Loading frozen materials… / 正在加载冻结工件……</div><ul class="challenge-materials-list" data-challenge-materials-list hidden></ul></section>"#,
+        escape(paper_id),
     )
 }
 
@@ -8313,6 +8444,205 @@ fn practice_choice_form(
     )
 }
 
+/// Player-facing Quick Raid shell.  The page intentionally exposes only the
+/// fixed seed, EvidenceCard, experiment result, and non-portable bundle
+/// preview; UUIDs, authority hashes, and command JSON remain server/API data.
+pub(crate) fn quick_raid(
+    identity: &AlphaIdentity,
+    state: Option<&QuickRaidPlayerViewV1>,
+    binding_ready: bool,
+) -> Response {
+    let current_step = state.map_or(0, |view| view.step);
+    let completed = state.is_some_and(|view| view.stage == QuickRaidStageV1::Completed);
+    let steps = [
+        (
+            "Evidence",
+            "Review one fixed EvidenceCard / 审阅一张固定证据卡",
+        ),
+        (
+            "Experiment",
+            "Run one deterministic experiment / 执行一次确定性实验",
+        ),
+        ("Captain", "Write the bounded conclusion / 写下受限结论"),
+        (
+            "Bundle",
+            "Inspect the Paper Bundle preview / 查看论文包预览",
+        ),
+    ];
+    let progress = steps
+        .iter()
+        .enumerate()
+        .map(|(index, (role, objective))| {
+            let step = (index + 1) as u8;
+            let status = if completed || (current_step > 0 && step < current_step) {
+                "done"
+            } else if current_step == step {
+                "current"
+            } else {
+                "upcoming"
+            };
+            let aria = if status == "current" { r#" aria-current="step""# } else { "" };
+            format!(
+                r#"<li data-quick-raid-step-state="{}"{}><strong>{} · {}</strong><span>{}</span></li>"#,
+                status,
+                aria,
+                step,
+                escape(role),
+                player_language_html(objective),
+            )
+        })
+        .collect::<String>();
+
+    let prerequisite = || {
+        r#"<section class="panel primary-action quick-raid-prerequisite"><span class="pill">PAIRING REQUIRED · <span lang="zh-Hans">需要配对</span></span><h2>Pair exactly one active Agent Bridge first</h2><p>Quick Raid uses the same owner-bound Bridge boundary as a real Author Raid. Pair in the Research Lobby; this page never asks for a command, UUID, or secret.</p><a class="button" href="/league?return_to=%2Fleague%2Fquick-raid">Open Agent pairing / <span lang="zh-Hans">前往 Agent 配对</span></a></section>"#.to_owned()
+    };
+    let start_form = || {
+        r#"<form class="quick-raid-start-form primary-action"><button class="quick-raid-primary-action" type="submit">Start the 15-minute Quick Raid / 开始 15 分钟快速远征</button><output></output></form>"#.to_owned()
+    };
+    let action = match state {
+        None if !binding_ready => prerequisite(),
+        None => start_form(),
+        Some(view) if view.expired => start_form(),
+        Some(view) if !binding_ready && !view.terminal => prerequisite(),
+        Some(view) => match view.stage {
+            QuickRaidStageV1::EvidenceReview => quick_raid_choice_form(
+                view,
+                "Evidence · Flag the gap / 证据：标出缺口",
+                "The fixed citation covers the baseline, not the claimed improvement.",
+                "review_evidence",
+                &[
+                    ("flag_citation_gap", "Flag the citation gap / 标记引文缺口"),
+                    (
+                        "accept_as_sufficient",
+                        "Accept as sufficient / 认为证据充分",
+                    ),
+                ],
+                "Continue to the experiment / 进入实验",
+            ),
+            QuickRaidStageV1::ExperimentRun => quick_raid_choice_form(
+                view,
+                "Experiment · Pick one run / 实验：选择一次运行",
+                "The seed and metric are frozen; only the declared run path changes.",
+                "run_experiment",
+                &[
+                    ("recheck_baseline", "Recheck the baseline / 复核基线"),
+                    ("run_candidate", "Run the candidate / 运行候选方案"),
+                ],
+                "Run the fixed experiment / 执行固定实验",
+            ),
+            QuickRaidStageV1::PaperBundleReady => quick_raid_choice_form(
+                view,
+                "Captain · Publish one caveat / 队长：发布一条限制",
+                "Choose how the result should be stated in the visible bundle.",
+                "publish_paper",
+                &[
+                    ("revise_claim", "Revise the claim / 修订主张"),
+                    (
+                        "retain_with_caveat",
+                        "Retain with a caveat / 保留并注明限制",
+                    ),
+                ],
+                "Create the Paper Bundle preview / 生成论文包预览",
+            ),
+            QuickRaidStageV1::Completed => {
+                let bundle = view.paper_bundle.as_ref().map(|bundle| format!(
+                    r#"<section class="panel quick-raid-bundle"><span class="pill">PAPER BUNDLE PREVIEW · <span lang="zh-Hans">论文包预览</span></span><h2>One visible result, no portable finality</h2><p>{}</p><dl><div><dt>Seed / 种子</dt><dd><code>{}</code></dd></div><div><dt>Experiment / 实验</dt><dd>{}</dd></div><div><dt>Conclusion / 结论</dt><dd>{:?}</dd></div></dl><p class="muted">This bundle is authoritative only inside this Quick Raid projection. It is not a score, rank, reward, scientific finality, or economic record.</p></section>"#,
+                    escape(&bundle.experiment_run.result),
+                    bundle.seed,
+                    escape(&bundle.experiment_run.choice.code()),
+                    bundle.conclusion,
+                )).unwrap_or_else(|| "<section class=\"panel status missing\"><p>Bundle unavailable; no result is inferred.</p></section>".to_owned());
+                format!("{}{}", bundle, start_form())
+            }
+            QuickRaidStageV1::Abandoned | QuickRaidStageV1::Expired => start_form(),
+        },
+    };
+    let evidence = state.map_or_else(
+        || "<p class=\"muted\">Start to reveal the fixed EvidenceCard.</p>".to_owned(),
+        |view| format!(
+            r#"<article class="card quick-raid-evidence"><h2>Fixed EvidenceCard / 固定证据卡</h2><p><strong>Claim / 主张:</strong> {}</p><p><strong>Observation / 观察:</strong> {}</p><p><strong>Citation / 引文:</strong> {}</p></article>"#,
+            escape(&view.evidence_card.claim), escape(&view.evidence_card.observation), escape(&view.evidence_card.citation)
+        ),
+    );
+    let body = format!(
+        r#"<section class="hero quick-raid-hero"><span class="eyebrow">QUICK RAID · <span lang="zh-Hans">快速远征</span></span><h1>Evidence Audit: 15-minute first run</h1><p>Welcome, {}. One fixed seed, one EvidenceCard, one Experiment Run, and one visible Paper Bundle preview.</p><p class="status verified">Seed {} · 15 minutes · authoritative pack projection · non-economic</p></section><section class="panel quick-raid-boundary"><h2>Small, real, and bounded / 小而真实、边界清晰</h2><ul><li>Fixed seed <code>{}</code>; the challenge pack and ruleset are frozen by Hepta before start.</li><li>Completion is recorded in the append-only Quick Raid projection.</li><li>No ranking, score, reward, economic settlement, or portable scientific finality.</li></ul></section><section class="panel quick-raid-progress"><h2>Four steps / 四步</h2><ol role="list">{}</ol></section>{}{}<p><a href="/league">Back to Research Lobby / <span lang="zh-Hans">返回研究大厅</span></a></p>"#,
+        escape(&identity.display_name),
+        QUICK_RAID_FIXED_SEED,
+        QUICK_RAID_FIXED_SEED,
+        progress,
+        evidence,
+        action,
+    );
+    page("Quick Raid", &identity.display_name, &body, true)
+}
+
+fn quick_raid_choice_form(
+    view: &QuickRaidPlayerViewV1,
+    title: &str,
+    prompt: &str,
+    action: &str,
+    choices: &[(&str, &str)],
+    button: &str,
+) -> String {
+    let options = choices
+        .iter()
+        .map(|(value, label)| format!(r#"<label class="quick-raid-choice"><input type="radio" name="choice" value="{}" required><span>{}</span></label>"#, escape(value), player_language_html(label)))
+        .collect::<String>();
+    format!(
+        r#"<form class="quick-raid-action-form primary-action" data-quick-raid-action="{}" data-quick-raid-version="{}"><h2>{}</h2><p>{}</p><fieldset><legend>Choose one / <span lang="zh-Hans">请选择一项</span></legend>{}</fieldset><button class="quick-raid-primary-action" type="submit">{}</button><output></output></form>"#,
+        escape(action),
+        view.version,
+        player_language_html(title),
+        escape(prompt),
+        options,
+        player_language_html(button)
+    )
+}
+
+#[cfg(test)]
+mod quick_raid_tests {
+    use super::*;
+
+    #[test]
+    fn quick_raid_choice_shell_is_typed_and_non_economic() {
+        let identity = AlphaIdentity::test_identity("quick", Uuid::new_v4(), Uuid::new_v4());
+        let _response = quick_raid(&identity, None, true);
+        let form = quick_raid_choice_form(
+            &QuickRaidPlayerViewV1 {
+                schema: "hepta.paper_raid.quick_raid_player_view.v1",
+                mode: crate::quick_raid::QUICK_RAID_MODE,
+                scenario_id: crate::quick_raid::QUICK_RAID_SCENARIO_V1,
+                challenge_key: crate::quick_raid::QUICK_RAID_CHALLENGE_KEY,
+                seed: crate::quick_raid::QUICK_RAID_FIXED_SEED,
+                stage: QuickRaidStageV1::EvidenceReview,
+                version: 1,
+                step: 1,
+                total_steps: 4,
+                started_at: Utc::now(),
+                expires_at: Utc::now() + chrono::Duration::minutes(15),
+                remaining_seconds: 900,
+                expired: false,
+                terminal: false,
+                evidence_card: crate::quick_raid::QuickRaidEvidenceCardV1::fixed(),
+                evidence_choice: None,
+                experiment_choice: None,
+                experiment_run: None,
+                conclusion: None,
+                paper_bundle: None,
+                eligibility: crate::quick_raid::QuickRaidEligibilityV1::locked(),
+            },
+            "Evidence",
+            "Prompt",
+            "review_evidence",
+            &[("flag_citation_gap", "Flag")],
+            "Continue",
+        );
+        assert!(form.contains("quick-raid-action-form"));
+        assert!(form.contains("data-quick-raid-version=\"1\""));
+        assert!(!form.contains("reward"));
+    }
+}
+
 pub fn onboarding(identity: &AlphaIdentity, stage: OnboardingStage) -> Response {
     let stage_content = match stage {
         OnboardingStage::HumanRegistration => r#"<section class="grid"><article class="card"><h2>1 · Browser-only key / 浏览器私钥</h2><p>Ed25519 signing happens locally with WebCrypto. The BFF never receives private-key bytes.</p></article><article class="card"><h2>2 · Encrypted recovery / 加密备份</h2><p>AES-256-GCM + PBKDF2-SHA-256 encrypts the PKCS#8 key into a downloaded bundle. Keep the file and passphrase separately.</p></article><article class="card"><h2>3 · Human authority / 人类责任</h2><p>Agent output remains a proposal. Acceptance, independent review, authorship consent, and appeal remain human-signed acts.</p></article></section>
@@ -8358,6 +8688,7 @@ pub fn onboarding(identity: &AlphaIdentity, stage: OnboardingStage) -> Response 
     };
     let body = format!(
         r#"<section class="hero"><span class="eyebrow">SECURE ONBOARDING · <span lang="zh-Hans">安全入驻</span></span><h1>Human identity first / <span lang="zh-Hans">人类身份优先</span></h1><p>{}. Human signing keys remain only in browser memory or an encrypted recovery bundle; when the configured role needs an external Agent, its private key remains on that Agent. / <span lang="zh-Hans">人类签名密钥只存在于浏览器内存或加密恢复包；如果已配置的角色需要外部 Agent，Agent 私钥始终留在该外部 Agent。</span></p></section>
+        <section class="panel player-path-steps" data-player-path="three_steps" aria-labelledby="onboarding-path-heading"><span class="eyebrow">PLAYER PATH / <span lang="zh-Hans">玩家路径</span></span><h2 id="onboarding-path-heading">Login → pair → choose your role / <span lang="zh-Hans">登录 → 配对 → 选择角色</span></h2><ol><li><strong>1 · Login / 登录</strong><span>Your invited identity is already scoped by Hepta.</span></li><li><strong>2 · Pair / 配对</strong><span>Only Author roles that need an Agent perform this step.</span></li><li><strong>3 · Role / 角色</strong><span>Choose Captain, Evidence, or Experiment in the Lobby.</span></li></ol><p class="muted">This guidance changes no authority and never creates a ticket by itself.</p></section>
         <section class="panel onboarding-participation-boundary"><span class="eyebrow">PARTICIPATION TIMING / <span lang="zh-Hans">参与时序</span></span><h2>Only 3 Authors start together / <span lang="zh-Hans">仅三位作者同步开局</span></h2><p>Captain, Evidence, and Experiment form the synchronous Author Raid. Evaluator, Reviewer 1, Reviewer 2, and Reproducer do not wait in that starting lobby; after the Authors freeze a PaperBundle, eligible identities take separate time-bounded assignments from independent asynchronous review pools.</p><p class="muted">Onboarding an independent-review identity does not add it to an Author team or require every downstream role to be online together.</p></section>{}"#,
         escape(&identity.display_name),
         stage_content,
@@ -8608,6 +8939,61 @@ fn author_queue_wait_reason(state: &str, message: &str) -> Option<(&'static str,
     Some(reason)
 }
 
+struct AuthorQueueTiming {
+    position: Option<u64>,
+    waited_seconds: u64,
+    expires_in_seconds: u64,
+    eta_seconds: Option<u64>,
+}
+
+/// Accept only the queue timing shape emitted by Hepta.  A non-zero ETA is
+/// deliberately rejected: the current matcher can prove "ready now" (zero)
+/// but does not publish an arrival prediction for a waiting ticket.
+fn authoritative_queue_timing(
+    state: &str,
+    hint: &Value,
+    compatible_pool_size: u64,
+) -> Option<AuthorQueueTiming> {
+    let position = match hint.get("queue_position")? {
+        Value::Null => None,
+        value => Some(value.as_u64().filter(|position| *position > 0)?),
+    };
+    if position.is_some_and(|position| position > compatible_pool_size) {
+        return None;
+    }
+    let waited_seconds = hint.get("waited_seconds")?.as_u64()?;
+    let expires_in_seconds = hint.get("expires_in_seconds")?.as_u64()?;
+    // Author tickets have a 30-minute authoritative TTL.  Keep this bound in
+    // the player projection so an upstream drift cannot become an unbounded
+    // countdown in the browser.
+    if waited_seconds > 1_800 || expires_in_seconds > 1_800 {
+        return None;
+    }
+    let eta_seconds = match hint.get("eta_seconds")? {
+        Value::Null => None,
+        value => Some(value.as_u64()?),
+    };
+    match state {
+        "ready" if eta_seconds == Some(0) && position.is_some() => {}
+        "waiting" if eta_seconds.is_none() => {}
+        _ => return None,
+    }
+    Some(AuthorQueueTiming {
+        position,
+        waited_seconds,
+        expires_in_seconds,
+        eta_seconds,
+    })
+}
+
+fn queue_duration_label(seconds: u64) -> String {
+    if seconds >= 60 {
+        format!("{}m {:02}s", seconds / 60, seconds % 60)
+    } else {
+        format!("{seconds}s")
+    }
+}
+
 fn author_queue_hint(ticket: &Value, hint: &Value) -> String {
     let unavailable_hint = || {
         r#"<div class="author-queue-hint unavailable" data-author-queue-hint-state="unavailable"><strong>3-Author queue status unavailable / <span lang="zh-Hans">三作者队列状态不可用</span></strong><p>The authoritative hint is incomplete; no role gap, wait reason, or arrival time is inferred. / <span lang="zh-Hans">权威提示不完整；不推断角色缺口、等待原因或到达时间。</span></p></div>"#.to_string()
@@ -8663,6 +9049,9 @@ fn author_queue_hint(ticket: &Value, hint: &Value) -> String {
     let Some(pool) = hint.get("compatible_pool_size").and_then(Value::as_u64) else {
         return unavailable_hint();
     };
+    let Some(timing) = authoritative_queue_timing(state, hint, pool) else {
+        return unavailable_hint();
+    };
     let Some(needed) = hint
         .get("compatible_players_needed")
         .and_then(Value::as_u64)
@@ -8707,12 +9096,30 @@ fn author_queue_hint(ticket: &Value, hint: &Value) -> String {
     } else {
         escape(&missing_roles.join(", "))
     };
+    let position_html = timing
+        .position
+        .map(|position| position.to_string())
+        .unwrap_or_else(|| "Outside current bounded scan / 当前不在有界扫描窗口".to_string());
+    let eta_html = if timing.eta_seconds == Some(0) {
+        "Ready now / 可立即开局".to_string()
+    } else {
+        "Unknown until compatible players arrive / 等待兼容玩家，暂无法估算".to_string()
+    };
     format!(
-        r#"<div class="author-queue-hint" data-author-queue-hint-state="{}"><h3>3-Author start status / <span lang="zh-Hans">三作者开局状态</span></h3><dl class="review-facts"><div><dt>Compatible Author pool / <span lang="zh-Hans">兼容作者池</span></dt><dd>{}</dd></div><div><dt>Author players still needed / <span lang="zh-Hans">仍需作者玩家</span></dt><dd>{}</dd></div><div><dt>Current Author role gaps / <span lang="zh-Hans">当前作者角色缺口</span></dt><dd>{}</dd></div><div><dt>Next wait reason / <span lang="zh-Hans">下一等待原因</span></dt><dd>{}</dd></div></dl><p class="muted">This authoritative hint covers only the synchronous 3-Author start. Independent review roles join later; no arrival time is inferred.</p></div>"#,
+        r#"<div class="author-queue-hint" data-author-queue-hint-state="{}" data-queue-eta-state="{}"><h3>3-Author start status / <span lang="zh-Hans">三作者开局状态</span></h3><dl class="review-facts"><div><dt>Queue position / <span lang="zh-Hans">队列位置</span></dt><dd>{}</dd></div><div><dt>Compatible Author pool / <span lang="zh-Hans">兼容作者池</span></dt><dd>{}</dd></div><div><dt>Author players still needed / <span lang="zh-Hans">仍需作者玩家</span></dt><dd>{}</dd></div><div><dt>Current Author role gaps / <span lang="zh-Hans">当前作者角色缺口</span></dt><dd>{}</dd></div><div><dt>Waited / <span lang="zh-Hans">已等待</span></dt><dd>{}</dd></div><div><dt>Ticket expires / <span lang="zh-Hans">票据到期</span></dt><dd>{}</dd></div><div><dt>Start ETA / <span lang="zh-Hans">开局 ETA</span></dt><dd>{}</dd></div><div><dt>Next wait reason / <span lang="zh-Hans">下一等待原因</span></dt><dd>{}</dd></div></dl><p class="muted">This authoritative hint covers only the synchronous 3-Author start. Independent review roles join later; a non-zero arrival time is never inferred.</p></div>"#,
         escape(state),
+        if timing.eta_seconds == Some(0) {
+            "ready"
+        } else {
+            "unknown"
+        },
+        escape(&position_html),
         pool,
         needed,
         gap_html,
+        queue_duration_label(timing.waited_seconds),
+        queue_duration_label(timing.expires_in_seconds),
+        escape(&eta_html),
         player_language_html(wait_reason),
     )
 }
@@ -8765,7 +9172,7 @@ fn artifact_upload(paper_id: &str) -> String {
 
 fn timeline_card(paper_id: &str, summary: &str) -> String {
     format!(
-        r#"<article class="card live-raid" data-paper-id="{}"><h2>Live Raid / 实时协作</h2><p>{}</p><div class="live-status"><span class="live-connection" data-state="connecting">Connecting / 正在连接</span><span class="live-phase">Phase / 阶段: checking…</span></div><ul class="live-participants"><li>Loading teammate presence…</li></ul><ol class="live-events"></ol><button class="timeline-refresh" data-paper-id="{}" type="button">Sync now / 立即同步</button><output class="live-detail"></output></article>"#,
+        r#"<article class="card live-raid" data-paper-id="{}" data-timeline-replay="v1"><h2>Live Raid / 实时协作</h2><p>{}</p><div class="live-status"><span class="live-connection" data-state="connecting">Connecting / 正在连接</span><span class="live-phase">Phase / 阶段: checking…</span></div><ul class="live-participants"><li>Loading teammate presence…</li></ul><ol class="live-events"></ol><div class="timeline-controls"><button class="timeline-refresh" data-paper-id="{}" type="button">Sync now / 立即同步</button><button class="timeline-replay-start" type="button" disabled>Replay event stream / 重播事件流</button><button class="timeline-replay-pause" type="button" hidden>Pause replay / 暂停重播</button></div><section class="timeline-replay" hidden aria-labelledby="timeline-replay-heading"><h3 id="timeline-replay-heading">Read-only replay / 只读回放</h3><p class="muted">This playback uses the authenticated Hepta/Nakama event stream already visible to this player. It never mutates the Raid or creates a scientific fact.</p><ol class="timeline-replay-events" aria-live="polite"></ol><output class="timeline-replay-status" aria-live="polite"></output></section><output class="live-detail"></output></article>"#,
         escape(paper_id),
         escape(summary),
         escape(paper_id),
@@ -8856,17 +9263,20 @@ const CSS: &str = r#"
 *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 20% 0,#11213a 0,#070b12 42%);color:var(--text);font:15px/1.55 Inter,ui-sans-serif,system-ui,sans-serif;min-height:100vh}
 header{align-items:center;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;padding:16px clamp(18px,4vw,56px);position:sticky;top:0;background:#070b12e8;backdrop-filter:blur(12px)}header a{align-items:center;color:var(--cyan);display:inline-flex;font-weight:900;letter-spacing:.12em;min-block-size:24px;text-decoration:none}header span,footer{color:var(--muted)}
 main{margin:auto;max-width:1180px;padding:clamp(24px,5vw,64px) clamp(16px,4vw,44px)}.hero{border-left:4px solid var(--cyan);padding:8px 0 12px 22px;margin-bottom:28px}.eyebrow{color:var(--amber);font-size:12px;font-weight:800;letter-spacing:.16em}.hero h1{font-size:clamp(32px,7vw,72px);line-height:1;margin:10px 0}.hero p{color:var(--muted);max-width:760px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:14px 0}.card,.panel{background:linear-gradient(145deg,#142036,#0d1421);border:1px solid var(--line);border-radius:14px;padding:18px;min-height:120px}.card h2,.panel h2{font-size:14px;letter-spacing:.05em;margin:0 0 12px}.card p{color:var(--text)}.unavailable{border-style:dashed;color:var(--muted)}.muted,.action p{color:var(--muted)}.dot{background:var(--pink);border-radius:50%;display:inline-block;height:8px;margin-right:8px;width:8px}.pill,.status{border:1px solid var(--amber);border-radius:999px;color:var(--amber);display:inline-block;font-size:12px;font-weight:800;padding:4px 9px}.status{padding:6px 12px}.status.missing{border-color:var(--pink);color:var(--pink)}.source-state{color:var(--muted);font-size:12px}.roster,.record-list{display:grid;gap:10px;list-style:none;margin:0;padding:0}.roster li{align-items:center;border-bottom:1px solid var(--line);display:grid;gap:8px;grid-template-columns:90px 1fr 1fr 1fr;padding:10px 0}.roster span{color:var(--muted);overflow-wrap:anywhere}.record-list li,.record-list a{align-items:center;display:flex;gap:8px;justify-content:space-between}.record-list a{color:var(--text);text-decoration:none;width:100%}.action-grid{display:grid;gap:14px;grid-template-columns:repeat(2,minmax(0,1fr))}.action{border:1px solid var(--line);border-radius:12px;padding:16px}.action h3{margin-top:0}form{display:grid;gap:12px}label{color:var(--muted);display:grid;font-size:12px;gap:6px}input,textarea,select,button{background:#07101d;border:1px solid var(--line);border-radius:8px;color:var(--text);font:inherit;padding:10px 12px}textarea{font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;resize:vertical}button{background:#12334a;border-color:var(--cyan);color:var(--cyan);cursor:pointer;font-weight:800}button:hover{filter:brightness(1.2)}button.danger{border-color:var(--pink);color:var(--pink)}button:disabled{cursor:wait;opacity:.55}:where(a,button,input,textarea,select,summary,[tabindex]):focus-visible{outline:3px solid var(--amber);outline-offset:3px}output{color:var(--amber);font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere;white-space:pre-wrap}output.result-error{color:var(--pink)}output.result-ok{color:var(--amber)}output[data-player-message=friendly]{font-family:Inter,ui-sans-serif,system-ui,sans-serif;font-size:13px}.player-error-details{border-left:2px solid var(--line);margin-top:4px;padding-left:10px}.player-error-details>summary{color:var(--muted);cursor:pointer;font-size:12px;font-weight:700}.player-error-details[open]>summary{color:var(--cyan)}.player-error-raw{display:block;font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;margin-top:7px;white-space:pre-wrap}.narrow{margin:auto;max-width:540px}#toast{background:#101826;border:1px solid var(--line);border-radius:10px;bottom:18px;display:block;max-width:min(520px,90vw);padding:12px 16px;position:fixed;right:18px;z-index:10}#toast[hidden]{display:none}code{color:var(--cyan);overflow-wrap:anywhere}footer{padding:28px;text-align:center}
-main>p>a:only-child{align-items:center;display:inline-flex;min-block-size:24px}summary{min-block-size:24px}:where(a,button,input,textarea,select,summary,[tabindex]):focus-visible{box-shadow:0 0 0 9px var(--focus-backdrop)}
+main>p>a:only-child{align-items:center;display:inline-flex;min-block-size:24px}summary{min-block-size:24px}:where(a,button,input,textarea,select,summary,[tabindex]):focus-visible{box-shadow:0 0 0 9px var(--focus-backdrop)}.queue-form.rematch-target{border:2px solid var(--cyan);border-radius:10px;padding:10px}
 .key-vault{margin-bottom:18px;min-height:auto}.key-vault summary{color:var(--cyan);cursor:pointer;font-weight:800}.key-vault form{margin:14px 0}.human-key-status{display:block;margin-top:10px}.challenge-rules{display:grid;gap:7px;margin:12px 0}.challenge-rules div{border-bottom:1px solid var(--line);display:grid;gap:4px;padding:5px 0}.challenge-rules dt{color:var(--muted);font-size:11px}.challenge-rules dd{margin:0}
-  .mission-board{display:grid;gap:18px;grid-template-columns:minmax(220px,.8fr) minmax(0,2fr);margin-bottom:20px}.mission-board h2{font-size:24px;letter-spacing:0;margin:6px 0}.raid-steps{display:grid;gap:8px;grid-template-columns:repeat(5,minmax(0,1fr));list-style:none;margin:0;padding:0}.raid-steps li{border:1px solid var(--line);border-radius:10px;display:grid;gap:8px;padding:12px}.raid-steps li>span{color:var(--muted);font-size:11px;font-weight:900}.raid-steps strong{display:block}.raid-steps p{color:var(--muted);font-size:11px;line-height:1.35;margin:4px 0 0}.raid-steps [data-step-state=current]{background:#12334a;border-color:var(--cyan)}.raid-steps [data-step-state=current]>span{color:var(--cyan)}.raid-steps [data-step-state=complete]{border-color:#3b8f78}.raid-steps [data-step-state=complete]>span{color:#67e8b5}.role-kit{border:1px solid var(--line);border-radius:10px;display:grid;gap:7px;margin:0;padding:12px}.role-kit legend{color:var(--amber);font-size:12px;font-weight:800;padding:0 6px}.role-kit span{color:var(--muted);font-size:12px}.role-kit strong{color:var(--text)}.role-choice{align-items:start;border:1px solid var(--line);border-radius:8px;display:grid;gap:9px;grid-template-columns:auto 1fr;margin:0;padding:9px}.role-choice input{margin-top:3px}.role-choice small{display:block;line-height:1.35;margin-top:3px}.role-choice[data-preference-rank="1"]{border-color:var(--cyan)}.advanced-action summary{color:var(--muted);cursor:pointer;font-weight:800}.advanced-action[open] summary{color:var(--cyan);margin-bottom:12px}.continue-raid{border-color:var(--cyan);margin-bottom:18px}.button{border:1px solid var(--cyan);border-radius:8px;color:var(--cyan);display:inline-block;font-weight:800;padding:10px 12px;text-decoration:none}.guided-action{border:1px solid var(--cyan);border-radius:12px;padding:16px}.guided-action.blocked{border-color:var(--amber)}.live-status{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.live-status span{border:1px solid var(--line);border-radius:999px;padding:6px 10px}.live-connection[data-state=live]{border-color:#3b8f78;color:#67e8b5}.live-connection[data-state=catching-up],.live-connection[data-state=reconnecting]{border-color:var(--amber);color:var(--amber)}.live-participants,.live-events{display:grid;gap:8px;list-style:none;padding:0}.live-participants li,.live-events li{border:1px solid var(--line);border-radius:8px;padding:10px}.live-participants [data-connected=true]{color:#67e8b5}.live-participants [data-connected=false]{color:var(--muted)}
+  .player-path-steps{border-color:var(--cyan);margin-bottom:18px}.player-path-steps h2{font-size:22px;margin:7px 0 12px}.player-path-steps ol{display:grid;gap:9px;grid-template-columns:repeat(3,minmax(0,1fr));list-style:none;margin:0;padding:0}.player-path-steps li{border:1px solid var(--line);border-radius:10px;display:grid;gap:5px;padding:11px}.player-path-steps li strong{color:var(--text)}.player-path-steps li span{color:var(--muted);font-size:12px;line-height:1.35}.player-path-steps p{margin-bottom:0}.mission-board{display:grid;gap:18px;grid-template-columns:minmax(220px,.8fr) minmax(0,2fr);margin-bottom:20px}.mission-board h2{font-size:24px;letter-spacing:0;margin:6px 0}.raid-steps{display:grid;gap:8px;grid-template-columns:repeat(5,minmax(0,1fr));list-style:none;margin:0;padding:0}.raid-steps li{border:1px solid var(--line);border-radius:10px;display:grid;gap:8px;padding:12px}.raid-steps li>span{color:var(--muted);font-size:11px;font-weight:900}.raid-steps strong{display:block}.raid-steps p{color:var(--muted);font-size:11px;line-height:1.35;margin:4px 0 0}.raid-steps [data-step-state=current]{background:#12334a;border-color:var(--cyan)}.raid-steps [data-step-state=current]>span{color:var(--cyan)}.raid-steps [data-step-state=complete]{border-color:#3b8f78}.raid-steps [data-step-state=complete]>span{color:#67e8b5}.role-kit{border:1px solid var(--line);border-radius:10px;display:grid;gap:7px;margin:0;padding:12px}.role-kit legend{color:var(--amber);font-size:12px;font-weight:800;padding:0 6px}.role-kit span{color:var(--muted);font-size:12px}.role-kit strong{color:var(--text)}.role-choice{align-items:start;border:1px solid var(--line);border-radius:8px;display:grid;gap:9px;grid-template-columns:auto 1fr;margin:0;padding:9px}.role-choice input{margin-top:3px}.role-choice small{display:block;line-height:1.35;margin-top:3px}.role-choice[data-preference-rank="1"]{border-color:var(--cyan)}.advanced-action summary{color:var(--muted);cursor:pointer;font-weight:800}.advanced-action[open] summary{color:var(--cyan);margin-bottom:12px}.continue-raid{border-color:var(--cyan);margin-bottom:18px}.button{border:1px solid var(--cyan);border-radius:8px;color:var(--cyan);display:inline-block;font-weight:800;padding:10px 12px;text-decoration:none}.guided-action{border:1px solid var(--cyan);border-radius:12px;padding:16px}.guided-action.blocked{border-color:var(--amber)}.live-status{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.live-status span{border:1px solid var(--line);border-radius:999px;padding:6px 10px}.live-connection[data-state=live]{border-color:#3b8f78;color:#67e8b5}.live-connection[data-state=catching-up],.live-connection[data-state=reconnecting]{border-color:var(--amber);color:var(--amber)}.live-participants,.live-events,.timeline-replay-events{display:grid;gap:8px;list-style:none;padding:0}.live-participants li,.live-events li,.timeline-replay-events li{border:1px solid var(--line);border-radius:8px;padding:10px}.live-participants [data-connected=true]{color:#67e8b5}.live-participants [data-connected=false]{color:var(--muted)}.timeline-controls{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}.timeline-controls button{min-height:42px}.timeline-replay{border:1px solid var(--cyan);border-radius:10px;margin-top:12px;padding:12px}.timeline-replay[hidden]{display:none}.timeline-replay-events li{border-color:#3b8f78}.timeline-replay-status{display:block;margin-top:8px}.after-action-progression .badge-list{display:flex;flex-wrap:wrap;gap:7px;list-style:none;margin:10px 0;padding:0}.after-action-progression .badge-list li{border:1px solid #3b8f78;border-radius:999px;color:#67e8b5;font-size:12px;padding:5px 9px}.after-action-replay{border-color:var(--cyan)}
 .paper-room-hero{margin-bottom:18px}.paper-room-basic{border-color:var(--cyan);display:grid;gap:16px;margin-bottom:16px;min-height:auto}.paper-room-basic>h2{font-size:clamp(24px,4vw,38px);letter-spacing:0;margin:0}.paper-room-personal-objective{font-size:clamp(15px,2vw,18px);margin:0;max-width:70ch}.paper-room-basic-grid{display:grid;gap:14px;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.paper-room-blocker,.paper-room-next-step{border:1px solid var(--line);border-radius:12px;min-width:0;padding:14px}.paper-room-blocker h3,.paper-room-next-step h3{font-size:13px;margin:0 0 8px}.paper-room-blocker-reason{font-weight:700;margin:0;overflow-wrap:anywhere}.paper-room-blocker-reason[data-blocker-state=blocked]{color:var(--amber)}.paper-room-blocker-reason[data-blocker-state=ready]{color:#67e8b5}.paper-room-more-blockers{color:var(--muted);font-size:12px;margin:8px 0 0}.paper-room-next-step{align-content:start;display:grid;gap:10px}.paper-room-next-step p{margin:0;overflow-wrap:anywhere}.paper-room-primary-button{justify-self:start;min-height:44px;max-width:100%;scroll-margin-block:28px}.paper-room-advanced{margin-top:16px;min-height:auto}.paper-room-advanced-summary{cursor:pointer;font-size:16px;font-weight:800}.paper-room-advanced-summary span,.paper-room-advanced-summary small{display:block}.paper-room-advanced-summary small{color:var(--muted);font-size:12px;font-weight:500;margin-top:4px}.paper-room-advanced[open]>.paper-room-advanced-summary{color:var(--cyan);margin-bottom:18px}.paper-room-advanced-content{display:grid;gap:16px;min-width:0}.paper-room-authority{border:1px solid var(--line);border-radius:12px;padding:14px}.paper-room-authority>h2{font-size:20px;margin:7px 0 14px}.paper-room-authority-facts{display:grid;gap:8px;grid-template-columns:repeat(2,minmax(0,1fr));margin:0 0 14px}.paper-room-authority-facts div{border-bottom:1px solid var(--line);display:grid;gap:3px;min-width:0;padding:7px}.paper-room-authority-facts dt{color:var(--muted);font-size:11px}.paper-room-authority-facts dd{margin:0;overflow-wrap:anywhere}.raid-command-center{border-color:var(--cyan);display:grid;gap:20px;grid-template-columns:minmax(0,1.3fr) minmax(260px,.7fr);margin-bottom:18px}.phase-objective h2{font-size:clamp(22px,4vw,36px);letter-spacing:0;margin:7px 0}.phase-readiness ul{display:grid;gap:7px;margin:0 0 8px;padding-left:20px}.phase-readiness .ready{color:#67e8b5}.projected-actions{margin-top:14px}.projected-actions ul{display:flex;flex-wrap:wrap;gap:6px;list-style:none;margin:7px 0 0;padding:0}.projected-actions li{border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:11px;padding:4px 8px}.primary-action{background:#0b2637;border:1px solid var(--cyan);border-radius:12px;padding:16px;scroll-margin-block:28px}.work-item-panel,.research-session-panel,.revision-panel,.material-panel{margin:14px 0}.work-board{display:grid;gap:10px}.work-card,.session-card,.release-approval{border:1px solid var(--line);border-radius:10px;padding:14px}.work-card h3,.session-card h3{margin:8px 0}.accepted-artifact-field[hidden]{display:none}.session-control-stack{display:grid;gap:9px}.materialization-summary{border:1px solid #3b8f78;border-radius:10px;margin:12px 0;padding:14px}.materialization-summary.missing{border-color:var(--pink)}.materialization-summary.pending{border-color:var(--line)}.materialized-sections{display:grid;gap:7px;list-style:none;margin:10px 0 0;padding:0}.materialized-sections li{border-top:1px solid var(--line);display:grid;gap:4px;padding-top:8px}.materialized-sections span,.materialized-sections small{color:var(--muted)}.release-author{border:1px solid var(--line);border-radius:8px;display:grid;gap:8px;margin:9px 0;padding:10px}.release-author legend,fieldset>legend{color:var(--amber);font-size:12px;font-weight:800}.developer-tools{margin-top:22px}.developer-tools>summary{color:var(--muted);cursor:pointer;font-size:15px;font-weight:800}.developer-tools[open]>summary{color:var(--cyan);margin-bottom:12px}.eligibility-grid{display:grid;gap:5px;grid-template-columns:repeat(2,minmax(0,1fr));list-style:none;margin:10px 0 0;padding:0}.eligibility-grid li{border:1px solid var(--line);border-radius:7px;display:flex;font-size:11px;gap:6px;justify-content:space-between;padding:6px}.eligibility-grid [data-eligible=true]{border-color:#3b8f78;color:#67e8b5}.eligibility-grid [data-eligible=false]{color:var(--muted)}.status.verified{border-color:#3b8f78;color:#67e8b5}.ticket-list .ticket-card{align-items:stretch;display:grid;gap:8px}.ticket-card>div{display:flex;gap:8px;justify-content:space-between}.ticket-card form{display:block}.review-queue-empty{text-align:center}.review-queue-empty .button{margin-top:12px}.review-boundary{border-color:var(--cyan);display:grid;gap:18px;grid-template-columns:2fr 1fr;margin-bottom:18px}.review-boundary dl,.review-facts{display:grid;gap:7px;margin:0}.review-boundary dl div,.review-facts div{border-bottom:1px solid var(--line);display:grid;gap:4px;padding:7px 0}.review-boundary dt,.review-facts dt{color:var(--muted);font-size:11px}.review-boundary dd,.review-facts dd{margin:0;overflow-wrap:anywhere}.review-queue-grid{display:grid;gap:16px}.review-queue-card>header{align-items:start;background:none;border:0;display:flex;gap:12px;justify-content:space-between;padding:0;position:static}.review-queue-card>header h2{font-size:24px;letter-spacing:0;margin:6px 0 12px}.review-facts{grid-template-columns:repeat(2,minmax(0,1fr));margin:16px 0}.review-columns{display:grid;gap:14px;grid-template-columns:repeat(2,minmax(0,1fr))}.review-columns>section{border:1px solid var(--line);border-radius:10px;padding:13px}.review-columns h3{font-size:12px;margin:0 0 10px}.review-assignments{display:grid;gap:9px;list-style:none;margin:0;padding:0}.review-assignments li{align-items:center;display:flex;gap:10px;justify-content:space-between}.review-assignments span,.review-open-slots small{color:var(--muted);display:block;font-size:11px}.review-open-slots{display:grid;gap:8px}.review-claim-form{align-items:center;border-bottom:1px solid var(--line);display:grid;gap:8px;grid-template-columns:1fr auto;padding:8px 0}.review-claim-form output{grid-column:1/-1}.review-protocol-gap{border-color:var(--amber);margin-top:18px}.review-protocol-gap li{margin:6px 0}.challenge-availability{border-left:3px solid var(--cyan);padding-left:10px}.challenge[data-challenge-status=closed] .challenge-availability,.challenge[data-challenge-status=draft] .challenge-availability,.challenge[data-challenge-status=unavailable] .challenge-availability{border-color:var(--amber);color:var(--muted)}.review-artifact-list{display:grid;gap:10px;list-style:none;margin:14px 0 0;padding:0}.review-artifact-item{align-items:center;border:1px solid var(--line);border-radius:10px;display:flex;gap:14px;justify-content:space-between;padding:13px}.review-artifact-item>div:first-child{display:grid;gap:4px;min-width:0}.review-artifact-filename{overflow-wrap:anywhere}.review-artifact-item span,.review-artifact-item small{color:var(--muted)}.review-artifact-actions{display:flex;flex-wrap:wrap;gap:8px}.review-artifact-actions .button{margin:0}
-.role-resource-panel{border-color:#3b8f78;margin:14px 0}.role-resource-panel .facts{display:grid;gap:8px;grid-template-columns:repeat(3,minmax(0,1fr));margin:12px 0}.role-resource-panel .facts article{border:1px solid var(--line);border-radius:9px;display:grid;gap:2px;min-height:auto;padding:10px}.role-resource-panel .facts strong{color:#67e8b5;font-size:20px}.role-resource-panel .facts span{color:var(--muted);font-size:11px}
+.role-resource-panel{border-color:#3b8f78;margin:14px 0}.role-resource-panel .facts{display:grid;gap:8px;grid-template-columns:repeat(3,minmax(0,1fr));margin:12px 0}.role-resource-panel .facts article{border:1px solid var(--line);border-radius:9px;display:grid;gap:2px;min-height:auto;padding:10px}.role-resource-panel .facts strong{color:#67e8b5;font-size:20px}.role-resource-panel .facts span{color:var(--muted);font-size:11px}.review-sla{border:1px solid #3b8f78;border-radius:10px;margin-top:12px;padding:11px}.review-sla.unavailable{border-color:var(--amber)}.review-sla p{margin:4px 0 0}
 .challenge-ruleset-panel{border-color:var(--amber);display:grid;gap:16px;margin-bottom:18px}.challenge-ruleset-header{display:grid;gap:16px;grid-template-columns:minmax(220px,1fr) minmax(300px,1.2fr)}.challenge-ruleset-header h2{font-size:24px;margin:8px 0}.challenge-ruleset-facts{display:grid;gap:6px;grid-template-columns:repeat(2,minmax(0,1fr));margin:0}.challenge-ruleset-facts div{border-bottom:1px solid var(--line);display:grid;gap:3px;padding:6px}.challenge-ruleset-facts dt{color:var(--muted);font-size:11px}.challenge-ruleset-facts dd{margin:0}.challenge-clock,.challenge-outcome,.challenge-victory{border:1px solid var(--line);border-radius:10px;padding:13px}.challenge-clock strong,.challenge-outcome strong{display:block;font-size:18px;margin-top:5px}.challenge-clock p,.challenge-outcome p{color:var(--muted);margin-bottom:0}.challenge-victory ul,.challenge-phase-gates ol,.challenge-phase-gates ul{display:grid;gap:6px;margin:8px 0;padding-left:22px}.challenge-phase-gates summary,.challenge-terminal-controls summary{color:var(--cyan);cursor:pointer;font-weight:800}.challenge-terminal-grid{display:grid;gap:12px;grid-template-columns:repeat(2,minmax(0,1fr));margin-top:12px}.challenge-terminal-grid form{border:1px solid var(--line);border-radius:10px;padding:12px}.challenge-countdown[data-state=active]{color:#67e8b5}.challenge-countdown[data-state=overtime]{color:var(--amber)}.challenge-countdown[data-state=expired]{color:var(--pink)}
 .practice-entry{border-color:#3b8f78;margin-bottom:18px}.practice-entry .button{margin-top:8px}.practice-boundary{border-color:var(--amber);margin-bottom:18px}.practice-boundary ul{display:grid;gap:7px;margin:0;padding-left:22px}.practice-progress{margin-bottom:18px}.practice-progress ol{display:grid;gap:8px;grid-template-columns:repeat(5,minmax(0,1fr));list-style:none;margin:0;padding:0}.practice-progress li{border:1px solid var(--line);border-radius:10px;display:grid;gap:5px;padding:11px}.practice-progress li span{color:var(--muted);font-size:11px}.practice-progress .practice-step-status{font-weight:800}.practice-progress [data-practice-step-state=current]{background:#12334a;border-color:var(--cyan)}.practice-progress [data-practice-step-state=current] span{color:var(--cyan)}.practice-progress [data-practice-step-state=done]{border-color:#3b8f78}.practice-progress [data-practice-step-state=done] span{color:#67e8b5}.practice-choice{align-items:start;border:1px solid var(--line);border-radius:9px;display:grid;gap:10px;grid-template-columns:auto 1fr;padding:10px}.practice-choice input{margin-top:3px}.practice-advance-form,.practice-agent-wait,.practice-complete,.practice-expired,.practice-abandoned{margin-bottom:18px}.practice-advance-form fieldset{border:0;display:grid;gap:8px;margin:0;padding:0}.practice-primary-action{justify-self:start}.practice-leave{min-height:auto}.practice-leave summary{color:var(--muted);cursor:pointer;font-weight:800}.practice-leave[open] summary{color:var(--pink);margin-bottom:12px}
-@media(max-width:820px){.grid,.action-grid,.mission-board,.raid-steps,.practice-progress ol,.paper-room-basic-grid,.paper-room-authority-facts,.raid-command-center,.review-boundary,.review-facts,.review-columns,.challenge-ruleset-header,.challenge-ruleset-facts,.challenge-terminal-grid,.role-resource-panel .facts{grid-template-columns:1fr}.roster li{align-items:start;grid-template-columns:1fr}.hero h1{font-size:38px}header{position:static}.card{min-height:auto}}
+@media(max-width:820px){.grid,.action-grid,.mission-board,.raid-steps,.player-path-steps ol,.practice-progress ol,.paper-room-basic-grid,.paper-room-authority-facts,.raid-command-center,.review-boundary,.review-facts,.review-columns,.challenge-ruleset-header,.challenge-ruleset-facts,.challenge-terminal-grid,.role-resource-panel .facts{grid-template-columns:1fr}.roster li{align-items:start;grid-template-columns:1fr}.hero h1{font-size:38px}header{position:static}.card{min-height:auto}}
 @media(max-width:430px){main{padding:22px 12px}.paper-room-basic,.paper-room-advanced{border-radius:12px;padding:14px}.paper-room-primary-button{justify-self:stretch;width:100%}.practice-primary-action{justify-self:stretch;width:100%}.paper-room-advanced-content{gap:12px}.paper-room-authority{padding:12px}}
 @media(max-width:390px){.paper-room-basic>h2{font-size:24px}.paper-room-blocker,.paper-room-next-step{padding:12px}.paper-room-advanced-summary small{font-size:11px}}
 .paper-room-advanced-summary [lang]{display:inline}
+.challenge-materials-panel{border-color:var(--cyan);display:grid;gap:10px;margin:0;min-height:auto}.challenge-materials-panel h2{font-size:20px;margin:4px 0}.challenge-materials-panel p{margin:0;max-width:88ch}.challenge-materials-state{border:1px dashed var(--line);border-radius:9px;color:var(--muted);padding:10px}.challenge-materials-state[data-state=available]{border-color:#3b8f78;color:#67e8b5}.challenge-materials-state[data-state=unavailable]{border-color:var(--amber);color:var(--amber)}.challenge-materials-list{display:grid;gap:9px;list-style:none;margin:0;padding:0}.challenge-materials-list li{align-items:center;border:1px solid var(--line);border-radius:10px;display:flex;gap:12px;justify-content:space-between;padding:11px;min-width:0}.challenge-materials-list li>div:first-child{display:grid;gap:3px;min-width:0}.challenge-materials-list strong,.challenge-materials-list small{overflow-wrap:anywhere}.challenge-materials-list small{color:var(--muted)}.challenge-materials-download{flex:0 0 auto;min-height:42px}
+@media(max-width:430px){.challenge-materials-list li{align-items:stretch;flex-direction:column}.challenge-materials-download{width:100%}}
+.queue-freshness{border:1px solid var(--line);border-radius:10px;display:grid;gap:6px;margin:10px 0;padding:10px}.queue-freshness p{margin:0}.queue-freshness time{color:var(--muted);font-size:11px}.queue-refresh-button{justify-self:start}.queue-refresh-button.ready{border-color:#3b8f78;color:#67e8b5}.queue-freshness output{min-height:1.2em}.author-queue-hint[data-queue-eta-state=ready]{border-color:#3b8f78}.author-queue-hint[data-queue-eta-state=unknown]{border-color:var(--amber)}
 "#;
 
 #[cfg(test)]
@@ -9911,6 +10321,19 @@ mod tests {
         assert!(report
             .contains("1 accepted artifact(s) · 0 accepted review(s) · 100 provisional point(s)"));
         assert!(report.contains("Team provisional XP: 1250 · Your provisional XP: 300"));
+        assert!(report.contains("data-progression-scope=\"session\""));
+        // Bilingual badge labels are rendered through the language helper, so
+        // the Chinese half is wrapped in its own `lang` span.
+        assert!(report.contains("Captain checkpoint"));
+        assert!(report.contains("队长检查点"));
+        assert!(report.contains("Evidence chain"));
+        assert!(report.contains("证据链"));
+        assert!(report.contains("Experiment retained"));
+        assert!(report.contains("实验已保留"));
+        assert!(report.contains("Failure disclosed"));
+        assert!(report.contains("失败已披露"));
+        assert!(report.contains("data-rematch-challenge="));
+        assert!(report.contains("Play this challenge again / 再来一局"));
         assert!(report.contains("&lt;every&gt;"));
         assert!(!report.contains("<every>"));
         assert_eq!(report.matches("data-eligible=\"false\"").count(), 4);
@@ -11040,6 +11463,10 @@ mod tests {
         assert!(body.contains("class=\"generate-party-code\""));
         assert!(body.contains("Only its SHA-256 digest leaves this browser"));
         assert!(body.contains("Private three-person party queue"));
+        assert!(body.contains("data-lobby-queue-panel"));
+        assert!(body.contains("data-queue-refresh-countdown"));
+        assert!(body.contains("Authoritative queue snapshot"));
+        assert!(body.contains("Refresh queue status / 刷新队列状态"));
         assert!(!body.contains("party_code_hash"));
         assert!(body.contains("data-agent-ready=\"false\""));
         assert!(body.contains("请先配对且仅保留一个活跃 Agent"));
@@ -11070,7 +11497,7 @@ mod tests {
     }
 
     #[test]
-    fn author_queue_hint_uses_only_the_typed_authoritative_reason_and_never_an_eta() {
+    fn author_queue_hint_uses_only_typed_timing_and_never_infers_an_eta() {
         let ticket = serde_json::json!({
             "status":"queued",
             "requested_team_size":3,
@@ -11082,15 +11509,57 @@ mod tests {
             "compatible_pool_size":4,
             "compatible_players_needed":1,
             "missing_roles":[],
+            "queue_position":1,
+            "waited_seconds":12,
+            "expires_in_seconds":1788,
             "eta_seconds":42,
             "message":"waiting_for_role_distribution"
         });
         let rendered = author_queue_hint(&ticket, &hint);
+        assert!(rendered.contains("data-author-queue-hint-state=\"unavailable\""));
+        assert!(!rendered.contains("42"));
+
+        let waiting_hint = serde_json::json!({
+            "schema":"hepta.paper_raid.matchmaking_queue_hint.v1",
+            "state":"waiting",
+            "compatible_pool_size":4,
+            "compatible_players_needed":1,
+            "missing_roles":[],
+            "queue_position":1,
+            "waited_seconds":12,
+            "expires_in_seconds":1788,
+            "eta_seconds":null,
+            "message":"waiting_for_role_distribution"
+        });
+        let rendered = author_queue_hint(&ticket, &waiting_hint);
         assert!(rendered.contains("data-author-queue-hint-state=\"waiting\""));
         assert!(rendered.contains("None named by Hepta"));
         assert!(rendered.contains("Waiting for a valid one-player-per-Author-role distribution"));
-        assert!(!rendered.contains("42"));
-        assert!(!rendered.contains("ETA"));
+        assert!(rendered.contains("Start ETA / <span lang=\"zh-Hans\">开局 ETA</span>"));
+        assert!(rendered.contains("Unknown until compatible players arrive"));
+        assert!(rendered.contains("12s"));
+        assert!(rendered.contains("29m 48s"));
+
+        let ready_ticket = serde_json::json!({
+            "status":"queued",
+            "requested_team_size":3,
+            "private_party":false
+        });
+        let ready_hint = serde_json::json!({
+            "schema":"hepta.paper_raid.matchmaking_queue_hint.v1",
+            "state":"ready",
+            "compatible_pool_size":3,
+            "compatible_players_needed":0,
+            "missing_roles":[],
+            "queue_position":1,
+            "waited_seconds":12,
+            "expires_in_seconds":1788,
+            "eta_seconds":0,
+            "message":"compatible_team_ready"
+        });
+        let rendered = author_queue_hint(&ready_ticket, &ready_hint);
+        assert!(rendered.contains("data-queue-eta-state=\"ready\""));
+        assert!(rendered.contains("Ready now / 可立即开局"));
 
         let mut unknown_reason = hint;
         unknown_reason["message"] = serde_json::json!("unrecognized_wait_reason");
@@ -11107,7 +11576,11 @@ mod tests {
             serde_json::json!({
                 "schema":schema,"state":state,"message":message,
                 "compatible_pool_size":pool,"compatible_players_needed":needed,
-                "missing_roles":roles
+                "missing_roles":roles,
+                "queue_position":if pool > 0 { serde_json::json!(1) } else { serde_json::Value::Null },
+                "waited_seconds":12,
+                "expires_in_seconds":1788,
+                "eta_seconds":if state == "ready" { serde_json::json!(0) } else { serde_json::Value::Null }
             })
         };
         let ready = ("ready", "compatible_team_ready");
@@ -11508,6 +11981,7 @@ mod tests {
         let rendered = asynchronous_review_handoff(ReadState::Available(&review));
         assert!(rendered.contains("data-review-snapshot-state=\"available\""));
         assert!(rendered.contains("does not derive current role gaps"));
+        assert!(rendered.contains("data-review-sla-state=\"unavailable\""));
         for stale in [
             "stale-submission",
             "stale-reproduction",
@@ -11527,6 +12001,32 @@ mod tests {
         assert!(unavailable.contains("data-review-snapshot-state=\"unavailable\""));
         assert!(unavailable.contains("Authenticated review snapshot not published"));
         assert!(unavailable.contains("No per-role state, open slot, or arrival time is inferred"));
+    }
+
+    #[test]
+    fn review_sla_projection_only_renders_a_bounded_authoritative_shape() {
+        let valid = serde_json::json!({
+            "review_sla": {
+                "schema": "hepta.paper_raid.review_sla.v1",
+                "status": "active",
+                "target_seconds": 3600,
+                "remaining_seconds": 1200,
+                "updated_at": "2026-08-11T00:01:00Z"
+            }
+        });
+        let rendered = review_sla_projection(&valid);
+        assert!(rendered.contains("data-review-sla-state=\"active\""));
+        assert!(rendered.contains("1200s remaining"));
+        assert!(rendered.contains("target 3600s"));
+
+        let mut tampered = valid.clone();
+        tampered["review_sla"]["remaining_seconds"] = serde_json::json!(3601);
+        let rendered = review_sla_projection(&tampered);
+        assert!(rendered.contains("data-review-sla-state=\"unavailable\""));
+        assert!(!rendered.contains("3601"));
+
+        let absent = review_sla_projection(&serde_json::json!({}));
+        assert!(absent.contains("Review SLA: not published"));
     }
 
     #[tokio::test]
@@ -11628,6 +12128,18 @@ mod tests {
         assert!(advanced.contains("CURRENT OBJECTIVE / 当前目标"));
         assert!(advanced.contains("class=\"create-evidence-card-form\""));
         assert!(advanced.contains("data-paper-id="));
+        let materials_start = advanced
+            .find("data-challenge-materials")
+            .expect("frozen challenge materials panel");
+        let materials_end = advanced[materials_start..]
+            .find("</section>")
+            .map(|offset| materials_start + offset)
+            .expect("frozen challenge materials panel closes");
+        let materials = &advanced[materials_start..materials_end];
+        assert!(materials.contains("brief, dataset, baseline, and evaluator automatically"));
+        assert!(materials.contains("data-challenge-materials-list"));
+        assert!(!materials.contains("<input"));
+        assert!(!materials.contains("type=\"file\""));
         assert!(!body.contains(
             "<details class=\"panel paper-room-advanced\" id=\"paper-room-advanced\" open"
         ));
@@ -11644,6 +12156,11 @@ mod tests {
         assert!(script.contains("bindPlayerFocusContext();"));
         assert!(script.contains("restorePlayerFocusContext();"));
         assert!(script.contains("function bindPaperRoomProgressiveDisclosure()"));
+        assert!(script.contains("function bindChallengeMaterials()"));
+        assert!(script.contains("validateChallengeMaterialProjection"));
+        assert!(script.contains("challenge_material_projection_hash_mismatch"));
+        assert!(script.contains("/challenge-materials`"));
+        assert!(script.contains("No manual authority file selection is allowed"));
         assert!(script.contains("advanced.open = true;"));
         assert!(script.contains("advanced.querySelector(targetSelector)"));
         assert!(script.contains("paperRoomFocusTarget(matchingAction)"));
@@ -11661,6 +12178,20 @@ mod tests {
         assert!(CSS.contains("@media(max-width:430px)"));
         assert!(CSS.contains("@media(max-width:390px)"));
         assert!(CSS.contains(".paper-room-primary-button{justify-self:stretch;width:100%}"));
+        assert!(CSS.contains(".challenge-materials-panel"));
+        assert!(CSS.contains(".challenge-materials-download"));
+    }
+
+    #[test]
+    fn challenge_materials_panel_is_read_only_and_paper_scoped() {
+        let paper_id = "11111111-1111-4111-8111-111111111111";
+        let panel = challenge_materials_panel(paper_id);
+        assert!(panel.contains("data-challenge-materials"));
+        assert!(panel.contains("data-paper-id=\"11111111-1111-4111-8111-111111111111\""));
+        assert!(panel.contains("data-challenge-materials-list"));
+        assert!(!panel.contains("<input"));
+        assert!(!panel.contains("type=\"file\""));
+        assert!(!panel.contains("name=\"digest\""));
     }
 
     #[tokio::test]
@@ -11745,6 +12276,9 @@ mod tests {
         assert!(body.contains("class=\"card live-raid\" data-paper-id=\"paper-a\""));
         assert!(body.contains("Loading teammate presence"));
         assert!(body.contains("Sync now / 立即同步"));
+        assert!(body.contains("data-timeline-replay=\"v1\""));
+        assert!(body.contains("Replay event stream / 重播事件流"));
+        assert!(body.contains("This playback uses the authenticated Hepta/Nakama event stream"));
         assert!(body.contains("data-command=\"submit_appeal\""));
         assert!(body.contains("Sign locally / 本地签名"));
         for command in [
@@ -12806,6 +13340,8 @@ mod tests {
         let body = std::str::from_utf8(&body).expect("UTF-8 onboarding");
         assert!(body.contains("human-key-create-form"));
         assert!(body.contains("human-key-register-form"));
+        assert!(body.contains("data-player-path=\"three_steps\""));
+        assert!(body.contains("Login → pair → choose your role"));
         assert!(body.contains(
             "<button type=\"submit\" disabled>Decrypt into this tab / <span lang=\"zh-Hans\">仅解密到当前标签页</span></button>"
         ));

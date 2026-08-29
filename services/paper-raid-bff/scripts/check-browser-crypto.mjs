@@ -25,6 +25,12 @@ assert.equal(source.includes(".style"), false);
 assert.ok(source.includes("hepta.paper-raid.live-cursor.v1:"));
 assert.equal((source.match(/sessionStorage/g) || []).length, 4);
 assert.ok(source.includes("bindGuidedPaperActions()"));
+assert.ok(source.includes("function bindChallengeMaterials()"));
+assert.ok(source.includes("const CHALLENGE_MATERIALS_SCHEMA"));
+assert.ok(source.includes("validateChallengeMaterialProjection"));
+assert.ok(source.includes("challenge_material_projection_hash_mismatch"));
+assert.ok(source.includes("No manual authority file selection is allowed"));
+assert.ok(source.includes("data-challenge-materials-list"));
 const bindingEntrypoint = source.indexOf('document.addEventListener("DOMContentLoaded", async () => {');
 assert.ok(bindingEntrypoint >= 0);
 const bindingContract = source.slice(bindingEntrypoint);
@@ -94,6 +100,12 @@ assert.ok(source.includes("function bindReviewAuthority()"));
 assert.ok(source.includes("review_authority_marker_missing"));
 assert.ok(source.includes("review_authority_marker_invalid"));
 assert.ok(source.includes("bindReviewAuthority();"));
+assert.ok(source.includes("function timelineEventRecords("));
+assert.ok(source.includes("function createTimelineReplayController("));
+assert.ok(source.includes("TIMELINE_REPLAY_MAX_EVENTS = 64"));
+assert.ok(source.includes("read-only replay / ${records.length} 个事件可只读回放"));
+assert.ok(source.includes('searchParams.get("rematch_challenge")'));
+assert.equal(source.includes("queue-submit.click("), false);
 assert.ok(source.includes('connection.dataset.state = "stale-authority"'));
 assert.ok(source.includes("newHeptaEvents > 0 || currentPhase !== synchronizedPhase"));
 assert.ok(source.includes("const paperWorkflowStates = new Map();"));
@@ -314,7 +326,14 @@ assert.equal((authorQueueHint.match(/!incomplete_private_party/g) || []).length,
 const matchedShortCircuit = authorQueueHint.indexOf('if state == "matched"');
 const compatiblePoolRead = authorQueueHint.indexOf('.get("compatible_pool_size")');
 assert.ok(matchedShortCircuit >= 0 && compatiblePoolRead > matchedShortCircuit);
-assert.equal(authorQueueRendering.includes("eta_seconds"), false);
+assert.ok(authorQueueHint.includes("authoritative_queue_timing"));
+assert.ok(authorQueueRendering.includes("data-queue-eta-state"));
+assert.ok(authorQueueRendering.includes("Unknown until compatible players arrive"));
+assert.ok(htmlSource.includes("data-lobby-queue-panel"));
+assert.ok(htmlSource.includes("data-queue-refresh-countdown"));
+assert.ok(source.includes("bindLobbyQueueFreshness"));
+assert.ok(source.includes("bindLobbyQueueFreshness();"));
+assert.ok(source.includes("savePlayerFocusContext(button)"));
 assert.ok(htmlSource.includes("Provisional contribution telemetry / 暂定贡献遥测"));
 assert.ok(htmlSource.includes('data-after-action-report="v1"'));
 assert.ok(htmlSource.includes("Role mastery, challenge unlocks, immutable replay and automatic rematch are not authoritative yet"));
@@ -705,6 +724,46 @@ const context = vm.createContext({
   },
 });
 vm.runInContext(source, context, { filename: browserUrl.pathname });
+
+const challengePaperId = "00000000-0000-4000-8000-000000000042";
+const challengeObjects = [
+  ["brief", "playable_brief", "challenge/brief.md", "text/markdown; charset=utf-8"],
+  ["dataset", "dataset", "challenge/dataset.json", "application/json"],
+  ["baseline", "baseline_code", "challenge/baseline.py", "text/x-python; charset=utf-8"],
+  ["evaluator", "frozen_evaluator", "challenge/evaluator.py", "text/x-python; charset=utf-8"],
+].map(([object_key, role, logical_path, media_type], index) => ({
+  object_key,
+  logical_path,
+  role,
+  digest: `sha256:${String(index + 1).repeat(64)}`,
+  size_bytes: index + 1,
+  media_type,
+  download_path: `/api/papers/${challengePaperId}/challenge-materials/${object_key}`,
+}));
+const challengeFrame = {
+  schema: "hepta.paper_raid.bff.challenge_materials.v1",
+  paper_project_id: challengePaperId,
+  challenge_ruleset_snapshot_hash: `sha256:${"a".repeat(64)}`,
+  material_authority: { schema: "hepta.paper_raid.frozen_challenge_material_authority.v1" },
+  objects: challengeObjects,
+};
+const challengeProjection = {
+  ...challengeFrame,
+  projection_hash: await context.sha256Label(
+    new TextEncoder().encode(context.canonicalJson(challengeFrame)),
+  ),
+};
+const validatedChallengeProjection = await context.validateChallengeMaterialProjection(
+  challengeProjection,
+  challengePaperId,
+);
+assert.equal(validatedChallengeProjection.objects.length, 4);
+const tamperedChallengeProjection = JSON.parse(JSON.stringify(challengeProjection));
+tamperedChallengeProjection.objects[0].digest = `sha256:${"f".repeat(64)}`;
+await assert.rejects(
+  context.validateChallengeMaterialProjection(tamperedChallengeProjection, challengePaperId),
+  /challenge_material_projection_hash_mismatch/,
+);
 
 assert.equal(
   context.agentPairingReturnTarget(
@@ -1384,6 +1443,28 @@ assert.equal(
   }),
   "Agent proposal received / Agent 建议已收到 · methods",
 );
+const replayRecords = context.timelineEventRecords({
+  hepta_events: [
+    { event_id: "event-1", event_type: "hepta.paper_raid.paper_project.created.v2" },
+    { event_id: "event-1", event_type: "hepta.paper_raid.paper_project.created.v2" },
+  ],
+  nakama_archives: [{
+    logical_session_id: "paper.raid:one",
+    archive: { events: [{ sequence: 1, action_type: "agent_analysis_ready" }] },
+  }],
+});
+assert.equal(replayRecords.length, 2);
+assert.equal(replayRecords[0].source, "hepta");
+assert.equal(replayRecords[1].source, "nakama:paper.raid:one");
+const boundedReplay = context.timelineEventRecords({
+  hepta_events: Array.from({ length: 80 }, (_, index) => ({
+    event_id: `event-${index}`,
+    event_type: "hepta.paper_raid.work_item.created.v2",
+  })),
+  nakama_archives: [],
+});
+assert.equal(boundedReplay.length, 64);
+assert.equal(boundedReplay[0].event.event_id, "event-16");
 
 assert.equal(context.nextHeptaCursor([{ cursor: 2 }, { cursor: 7 }, { cursor: 5 }], 3), 7);
 assert.equal(context.nextHeptaCursor([{ cursor: -1 }, { cursor: "8" }], 4), 4);

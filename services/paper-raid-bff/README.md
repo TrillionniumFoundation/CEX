@@ -17,6 +17,28 @@ Authority stays outside this process:
   bytes whose replay validity is bounded to at most 60 seconds; expired rows
   are deleted on the next signed admission and by retention maintenance.
 
+## Fixed-seed Quick Raid
+
+`/league/quick-raid` is the bounded first-session slice. Before a session is
+created the BFF must observe an open Hepta `authoritative_v1` Challenge Pack
+whose description pins `paper-raid-evidence-audit-quick-seeded-v1`, whose
+ruleset is exactly 900 seconds, and whose gameplay modifiers include
+`quick-raid-fixed-seed`. The server freezes the exact public challenge
+snapshot hash in `quick_raid_sessions`; players cannot supply a challenge id,
+seed, digest, or pack object. The flow records one fixed-seed EvidenceCard, one
+deterministic Experiment Run, and one visible Paper Bundle preview through an
+append-only event stream. The preview is explicitly `finality=none` and
+`portable=false`: it never qualifies an account or creates ranking, score,
+reward, scientific finality, or economic authority.
+`scripts/check-quick-raid-boundary.sh` is the source gate for the Rust/SQL
+false-only locks, route wiring, and browser shell.
+
+The authenticated player JSON is a bounded presentation projection as well:
+EvidenceCard source digests, run/session UUIDs, authority material, and bundle
+integrity hashes stay in the server-side record and are not serialized into the
+player view. The rendered page still shows the human-readable result and the
+explicit `finality=none` / `portable=false` boundary.
+
 ## Provider-neutral OIDC foundation
 
 `src/oidc.rs` freezes the provider-neutral OIDC security contract before any
@@ -575,6 +597,11 @@ The browser alpha is a same-origin, external-script flow:
    `private_party: true|false`; the
    party digest is absent from player read models, Room/outbox events, logs and
    metrics. It is affinity only and grants no identity or gameplay authority.
+   The Lobby marks each queue projection with its authoritative fetch time and
+   a 15-second next-refresh check. Refresh is an explicit read-only page action
+   (never an automatic navigation), so an in-memory human signing key is not
+   discarded while a player waits. The countdown is a freshness hint only; it
+   never turns an unknown arrival estimate into a prediction.
 6. `/league/formation/<proposal-or-team-id>` renders either the proposal or
    formal Team and exposes typed materialization, human-signed readiness,
    locking and Paper creation controls. Protocol JSON is confined to the
@@ -689,10 +716,15 @@ The browser alpha is a same-origin, external-script flow:
    signatures locally. Active-key ownership and signature verification remain
    Hepta write-time responsibilities before its authenticated read model
    crosses the sealed BFF boundary. This is a
-   read-only projection: durable role mastery, challenge unlocks, immutable
-   gameplay replay and automatic rematch remain unavailable. The timeline `Sync now`
-   control is only live/archive catch-up and is no longer labelled as replay
-   telemetry.
+   read-only projection: durable role mastery, portable challenge unlocks and
+   immutable gameplay-replay authority remain unavailable. The Room can play
+   back at most 64 already-authenticated Hepta/Nakama timeline records as a
+   presentation-only, read-only replay; playback never emits a command,
+   telemetry event, scientific fact, rank, reward or economic state. The AAR
+   derives session-scoped explanatory badges and offers a challenge-scoped
+   manual rematch link that only focuses the matching Lobby queue form; it
+   never submits a ticket automatically. `Sync now` remains the durable
+   live/archive catch-up control rather than a second replay authority.
 8. `/league/review` is the assignment-scoped independent Review Raid surface.
    It renders typed evaluator draft, two-reviewer attestation, quorum/finalize
    and reproduction actions from a frozen review bundle. The ordinary Review
@@ -722,8 +754,10 @@ The browser alpha is a same-origin, external-script flow:
    events. A reload safely replays every Nakama archive from zero. Catch-up
    pages run immediately while `has_more` is true and the UI does not claim
    `Live` until all pages are current. Nakama realtime delivery remains a hint;
-   durable archive catch-up is the recovery authority. The Nakama HTTP key
-   never reaches the browser.
+   durable archive catch-up is the recovery authority. The optional bounded
+   replay controls consume only those already-visible records and do not
+   change cursor, roster, room or finality authority. The Nakama HTTP key never
+   reaches the browser.
 
 CAS upload is streamed and capped independently at 32 MiB. The BFF recomputes
 the requested `sha256:<64-lowercase-hex>` API digest and returns both that

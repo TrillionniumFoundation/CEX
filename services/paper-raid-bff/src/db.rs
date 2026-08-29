@@ -47,6 +47,12 @@ pub async fn migrate(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::raw_sql(include_str!("../migrations/0009_practice_unranked.sql"))
         .execute(pool)
         .await?;
+    sqlx::raw_sql(include_str!("../migrations/0010_metrics_persistence.sql"))
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(include_str!("../migrations/0011_quick_raid.sql"))
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -95,6 +101,100 @@ pub async fn ready(pool: &PgPool) -> bool {
         .is_ok()
 }
 
+/// Load the last bounded aggregate metrics snapshot.  A missing row is a
+/// normal first-boot state; a malformed row is surfaced to the caller so the
+/// BFF cannot silently publish counters that were not actually restored.
+pub async fn load_metrics_snapshot(
+    pool: &PgPool,
+) -> Result<Option<serde_json::Value>, sqlx::Error> {
+    let row = sqlx::query_as::<_, (String, i64, serde_json::Value)>(
+        "SELECT snapshot_schema, snapshot_revision, snapshot_json
+           FROM paper_raid_bff_metrics_snapshots
+          WHERE snapshot_name = 'paper_raid_bff'",
+    )
+    .fetch_optional(pool)
+    .await?;
+    let Some((column_schema, column_revision, snapshot)) = row else {
+        return Ok(None);
+    };
+    let payload_schema = snapshot
+        .get("schema")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            sqlx::Error::Protocol("metrics snapshot payload schema is missing".into())
+        })?;
+    let payload_revision = snapshot
+        .get("revision")
+        .and_then(serde_json::Value::as_i64)
+        .ok_or_else(|| {
+            sqlx::Error::Protocol("metrics snapshot payload revision is invalid".into())
+        })?;
+    if column_schema != payload_schema || column_revision != payload_revision {
+        return Err(sqlx::Error::Protocol(
+            "metrics snapshot columns do not match payload".into(),
+        ));
+    }
+    Ok(Some(snapshot))
+}
+
+/// Atomically replace the single durable aggregate snapshot.  The snapshot
+/// schema and revision are repeated in columns so operators can inspect the
+/// health of persistence without decoding the JSON payload.
+pub async fn persist_metrics_snapshot(
+    pool: &PgPool,
+    snapshot: &serde_json::Value,
+) -> Result<bool, sqlx::Error> {
+    let schema = snapshot
+        .get("schema")
+        .and_then(serde_json::Value::as_str)
+        .filter(|schema| *schema == "hepta.paper_raid.metrics_snapshot.v1")
+        .ok_or_else(|| sqlx::Error::Protocol("metrics snapshot schema mismatch".into()))?;
+    let revision = snapshot
+        .get("revision")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| sqlx::Error::Protocol("metrics snapshot revision is invalid".into()))?;
+    let revision = i64::try_from(revision)
+        .map_err(|_| sqlx::Error::Protocol("metrics snapshot revision is too large".into()))?;
+    if !snapshot.is_object() {
+        return Err(sqlx::Error::Protocol(
+            "metrics snapshot must be a JSON object".into(),
+        ));
+    }
+    let result = sqlx::query(
+        "INSERT INTO paper_raid_bff_metrics_snapshots (
+             snapshot_name, snapshot_schema, snapshot_revision, snapshot_json
+         ) VALUES ('paper_raid_bff', $1, $2, $3::jsonb)
+         ON CONFLICT (snapshot_name) DO UPDATE
+           SET snapshot_schema = EXCLUDED.snapshot_schema,
+               snapshot_revision = EXCLUDED.snapshot_revision,
+               snapshot_json = EXCLUDED.snapshot_json,
+               updated_at = now()
+         WHERE EXCLUDED.snapshot_revision >=
+               paper_raid_bff_metrics_snapshots.snapshot_revision",
+    )
+    .bind(schema)
+    .bind(revision)
+    .bind(snapshot)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn metrics_snapshot_schema_ready(pool: &PgPool) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT to_regclass('paper_raid_bff_metrics_snapshots') IS NOT NULL
+             AND EXISTS (
+                 SELECT 1 FROM pg_constraint c
+                  WHERE c.conrelid = 'paper_raid_bff_metrics_snapshots'::regclass
+                    AND c.conname = 'paper_raid_bff_metrics_snapshots_snapshot_schema_check'
+                    AND c.convalidated
+             )",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false)
+}
+
 pub async fn invite_schema_ready(pool: &PgPool) -> bool {
     let catalog_ready = sqlx::query_scalar::<_, bool>(
         "SELECT \
@@ -110,6 +210,7 @@ pub async fn invite_schema_ready(pool: &PgPool) -> bool {
             AND to_regclass('paper_raid_bff_agent_request_uses') IS NOT NULL \
             AND to_regclass('paper_raid_bff_agent_delivery_drafts') IS NOT NULL \
             AND to_regclass('paper_raid_bff_review_execution_receipts') IS NOT NULL \
+            AND to_regclass('paper_raid_bff_metrics_snapshots') IS NOT NULL \
             AND to_regclass('paper_raid_bff_one_pending_agent_delivery_tuple') IS NOT NULL \
             AND to_regclass('paper_raid_bff_agent_delivery_drafts_inbox_idx') IS NOT NULL \
             AND to_regclass('paper_raid_bff_object_audit_attempt_idx') IS NOT NULL \
@@ -271,6 +372,7 @@ pub async fn invite_schema_ready(pool: &PgPool) -> bool {
     operator_lineage_exact
         && invite_activation_schema_ready(pool).await
         && practice_unranked_schema_ready(pool).await
+        && metrics_snapshot_schema_ready(pool).await
 }
 
 fn expected_operator_audit_validator_source() -> Option<&'static str> {
@@ -604,6 +706,24 @@ fn expected_practice_unranked_sources() -> Option<(&'static str, &'static str)> 
         source("CREATE OR REPLACE FUNCTION paper_raid_bff_practice_session_monotonic_v1()")?,
         source("CREATE OR REPLACE FUNCTION paper_raid_bff_reject_practice_event_mutation_v1()")?,
     ))
+}
+
+/// Quick Raid admission is fail-closed when either append-only table or the
+/// capability marker is absent. Invite-alpha deployments run migrations out of
+/// process, so the route must check this on every start rather than assuming
+/// the fixed-alpha startup path ran.
+pub async fn quick_raid_schema_ready(pool: &PgPool) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT to_regclass('paper_raid_bff_quick_raid_sessions') IS NOT NULL
+             AND to_regclass('paper_raid_bff_quick_raid_events') IS NOT NULL
+             AND EXISTS (
+                 SELECT 1 FROM paper_raid_bff_schema_capabilities
+                 WHERE capability = 'quick_raid_fixed_seed_v1'
+             )",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false)
 }
 
 pub async fn invite_activation_schema_ready(pool: &PgPool) -> bool {

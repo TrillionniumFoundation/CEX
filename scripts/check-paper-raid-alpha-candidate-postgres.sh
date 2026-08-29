@@ -56,4 +56,10 @@ HEPTA_TEST_DATABASE_URL="$database_url" \
 
 bash services/paper-raid-bff/scripts/check-postgres.sh
 
+bash scripts/check-paper-raid-fresh-restore.sh \
+  --container "$container_name" \
+  --user hepta \
+  --database hepta \
+  --label hepta
+
 echo "Paper Raid alpha candidate PostgreSQL gate: PASS"
