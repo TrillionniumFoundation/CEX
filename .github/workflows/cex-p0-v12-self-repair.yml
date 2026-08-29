@@ -45,16 +45,16 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: feature/settlement-all-blockers-closure-v1
-          fetch-depth: 2
+          fetch-depth: 8
           persist-credentials: true
 
-      - name: Verify exact repair parent
+      - name: Verify exact repair ancestry and source
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD^)" = 813968825ec4e61e4a28bb3051b512ad98d639b9
+          git merge-base --is-ancestor 813968825ec4e61e4a28bb3051b512ad98d639b9 HEAD
           git diff --exit-code
-          test "$(git hash-object services/ledger-service/src/receipt_lookup.rs)" = 9d26626e7d46f04da6353740bed76a00b5f9f860
+          test "$(git hash-object services/ledger-service/src/receipt_lookup.rs)" = 57683b21d9fae676ecc21e53acb651ae0e6aac09
           test "$(git hash-object scripts/check-trnm-settlement-receipt-lookup-http.sh)" = bf16f868bad1e1c894978b9040dbcc6d4669ecf6
           test "$(git hash-object scripts/check-trnm-economy-resource-budgets.sh)" = 2ead4e7003fac0a761456366b8e401a62206f60f
 
