@@ -1,0 +1,327 @@
+name: world-settlement-final-convergence-v2
+
+on:
+  push:
+    branches:
+      - ci/world-settlement-final-convergence-v2
+    paths:
+      - .github/workflows/world-settlement-final-convergence-v2.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: world-settlement-final-convergence-v2
+  cancel-in-progress: false
+
+env:
+  WORLD_REPOSITORY: TrillionniumFoundation/Trillionnium-World
+  WORLD_COMMIT: 1d4dee6d5add45a64f5c138f424e3bdab369ecd4
+  WORLD_TREE: 955987798812dd631ee30e28bcc20581a8daa45a
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+  RUST_TEST_THREADS: "1"
+  TRNM_SETTLEMENT_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/world_settlement
+  TRNM_REQUIRE_SETTLEMENT_DATABASE_TEST: "1"
+  TRNM_CEX_SETTLEMENT_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/world_settlement
+  TRNM_REQUIRE_CEX_SETTLEMENT_DATABASE_TEST: "1"
+
+jobs:
+  converge:
+    name: world-settlement-final-convergence/full-target
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    services:
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: world_settlement
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d world_settlement"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout exact World candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ env.WORLD_REPOSITORY }}
+          ref: ${{ env.WORLD_COMMIT }}
+          path: world
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact commit, tree and clean checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C world rev-parse HEAD)" = "$WORLD_COMMIT"
+          test "$(git -C world rev-parse 'HEAD^{tree}')" = "$WORLD_TREE"
+          git -C world merge-base --is-ancestor f604d14fbacbd53c3faf09045aaec192879a3f1e "$WORLD_COMMIT"
+          git -C world diff --exit-code
+
+      - name: Apply reviewed idempotent source repairs
+        working-directory: world
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path("trillionnium/crates/trnm-game-server")
+
+          migration = root / "migrations/0018_online_settlement_operator_controls_v1.sql"
+          text = migration.read_text(encoding="utf-8")
+          invalid = """    select job_row, capture.state
+            into job, capture_state
+            from public.trnm_online_settlement_jobs job_row
+            join public.trnm_online_settlement_captures capture
+              on capture.capture_id = job_row.capture_id
+           where job_row.job_id = p_job_id
+           for update of job_row, capture;
+          if not found then
+              raise exception using
+                  errcode = 'P0002',
+                  message = 'settlement replay target does not exist';
+          end if;
+          """
+          repaired = """    select job_row.*
+            into job
+            from public.trnm_online_settlement_jobs job_row
+            join public.trnm_online_settlement_captures capture
+              on capture.capture_id = job_row.capture_id
+           where job_row.job_id = p_job_id
+           for update of job_row, capture;
+          if not found then
+              raise exception using
+                  errcode = 'P0002',
+                  message = 'settlement replay target does not exist';
+          end if;
+
+          select capture.state
+            into capture_state
+            from public.trnm_online_settlement_captures capture
+           where capture.capture_id = job.capture_id;
+          if not found then
+              raise exception using
+                  errcode = '55000',
+                  message = 'settlement replay capture disappeared after lock';
+          end if;
+          """
+          if invalid in text:
+              text = text.replace(invalid, repaired, 1)
+          if "select job_row, capture.state" in text:
+              raise SystemExit("invalid composite record SELECT remains")
+          if "select job_row.*" not in text or "into capture_state" not in text:
+              raise SystemExit("reviewed replay-lock source shape is missing")
+
+          seed = "on conflict (policy_revision) do nothing;\n"
+          sequence_sync = """on conflict (policy_revision) do nothing;
+
+          select pg_catalog.setval(
+              pg_catalog.pg_get_serial_sequence(
+                  'public.trnm_online_settlement_operator_policy_revisions',
+                  'policy_revision'
+              ),
+              (
+                  select max(policy_revision)
+                    from public.trnm_online_settlement_operator_policy_revisions
+              ),
+              true
+          );
+          """
+          if "pg_catalog.pg_get_serial_sequence(" not in text:
+              if text.count(seed) != 1:
+                  raise SystemExit("operator policy seed marker drifted")
+              text = text.replace(seed, sequence_sync, 1)
+          migration.write_text(text, encoding="utf-8")
+
+          database_test = root / "tests/settlement_database_contract.rs"
+          text = database_test.read_text(encoding="utf-8")
+          text = text.replace(
+              "let (_, changed_payload_job) = insert_capture_and_job(",
+              "let (_, _changed_payload_job) = insert_capture_and_job(",
+              1,
+          )
+          database_test.write_text(text, encoding="utf-8")
+
+          operator_test = root / "tests/settlement_operator_controls_database.rs"
+          text = operator_test.read_text(encoding="utf-8")
+          helper = "async fn authorize_replay("
+          annotation = "#[allow(clippy::too_many_arguments)]\nasync fn authorize_replay("
+          if annotation not in text:
+              if text.count(helper) != 1:
+                  raise SystemExit("authorize_replay helper shape drifted")
+              text = text.replace(helper, annotation, 1)
+
+          old_truncate = """        \"delete from public.trnm_online_settlement_operator_policy_revisions\",
+                  \"truncate public.trnm_online_settlement_operator_policy_revisions\",
+              ] {
+                  let error = sqlx::query::query(statement)
+                      .execute(&pool)
+                      .await
+                      .unwrap_err();
+                  assert_sqlstate(error, \"55000\");
+              }
+          """
+          new_truncate = """        \"delete from public.trnm_online_settlement_operator_policy_revisions\",
+              ] {
+                  let error = sqlx::query::query(statement)
+                      .execute(&pool)
+                      .await
+                      .unwrap_err();
+                  assert_sqlstate(error, \"55000\");
+              }
+
+              let policy_truncate = sqlx::query::query(
+                  \"truncate public.trnm_online_settlement_operator_policy_revisions\",
+              )
+              .execute(&pool)
+              .await
+              .unwrap_err();
+              let sqlx::Error::Database(database) = policy_truncate else {
+                  panic!(\"expected PostgreSQL truncate rejection, got {policy_truncate}\");
+              };
+              assert!(
+                  matches!(database.code().as_deref(), Some(\"55000\" | \"0A000\")),
+                  \"expected append-only trigger or FK-first truncate rejection, got {:?}\",
+                  database.code()
+              );
+          """
+          if old_truncate in text:
+              text = text.replace(old_truncate, new_truncate, 1)
+          operator_test.write_text(text, encoding="utf-8")
+
+          build_script = root / "build.rs"
+          text = build_script.read_text(encoding="utf-8")
+          if "use std::{env, fs, path::PathBuf};" in text:
+              text = text.replace(
+                  "use std::{env, fs, path::PathBuf};",
+                  "use std::{\n    env, fs,\n    path::{Path, PathBuf},\n};",
+                  1,
+              )
+          text = text.replace(
+              "fn generate_game_server(out_dir: &PathBuf) {",
+              "fn generate_game_server(out_dir: &Path) {",
+              1,
+          )
+          text = text.replace(
+              "fn generate_settlement_worker(out_dir: &PathBuf) {",
+              "fn generate_settlement_worker(out_dir: &Path) {",
+              1,
+          )
+          build_script.write_text(text, encoding="utf-8")
+          PY
+          git diff --check
+
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
+          rustup default 1.98.0
+          rustc --version --verbose
+          cargo --version --verbose
+
+      - name: Validate static settlement boundaries
+        working-directory: world
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            scripts/check-trnm-settlement-runtime-status.py \
+            scripts/test-trnm-settlement-runtime-status-negative.py \
+            scripts/check-world-main-governance.py
+          python3 scripts/check-trnm-settlement-runtime-status.py
+          python3 scripts/test-trnm-settlement-runtime-status-negative.py
+          python3 scripts/check-world-main-governance.py
+          bash scripts/check-trnm-settlement-transaction-boundary.sh
+          bash scripts/check_trnm_settlement_transaction_boundary.sh
+
+      - name: Apply deterministic formatting and machine fixes
+        working-directory: world/trillionnium
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo metadata --locked --no-deps --format-version 1 > /dev/null
+          cargo fmt -p trnm-game-server
+          cargo clippy --fix -p trnm-game-server --all-targets --locked --allow-dirty --allow-staged
+          cargo fmt -p trnm-game-server
+
+      - name: Enforce remediation scope
+        working-directory: world
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          while IFS= read -r path; do
+            case "$path" in
+              trillionnium/crates/trnm-game-server/*) ;;
+              *) echo "out-of-scope remediation: $path" >&2; exit 1 ;;
+            esac
+          done < <(git diff --name-only)
+          test -s <(git diff --name-only)
+
+      - name: Run complete package and PostgreSQL matrix
+        working-directory: world/trillionnium
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p trnm-game-server --all-targets --locked
+
+      - name: Require clean formatting and strict lint
+        working-directory: world/trillionnium
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt -p trnm-game-server -- --check
+          cargo clippy -p trnm-game-server --all-targets --locked -- -D warnings
+
+      - name: Assemble exact remediation evidence
+        if: always()
+        working-directory: world
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf ../remediation
+          mkdir -p ../remediation/files
+          git diff --binary --full-index > ../remediation/remediation.patch
+          git diff --name-only > ../remediation/changed-files.txt
+          git status --short > ../remediation/git-status.txt
+          while IFS= read -r path; do
+            test -z "$path" && continue
+            mkdir -p "../remediation/files/$(dirname "$path")"
+            cp "$path" "../remediation/files/$path"
+          done < ../remediation/changed-files.txt
+          printf '%s\n' \
+            "world_repository=$WORLD_REPOSITORY" \
+            "candidate_head=$(git rev-parse HEAD)" \
+            "candidate_tree=$(git rev-parse 'HEAD^{tree}')" \
+            "rust_toolchain=1.98.0" \
+            "postgres=16.4-alpine" \
+            "evidence_repository=$GITHUB_REPOSITORY" \
+            "evidence_run_id=$GITHUB_RUN_ID" \
+            "evidence_run_attempt=$GITHUB_RUN_ATTEMPT" \
+            > ../remediation/identity.txt
+          (
+            cd ../remediation
+            find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+            sha256sum --check SHA256SUMS
+          )
+
+      - name: Upload exact remediation evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: world-settlement-final-convergence-${{ env.WORLD_COMMIT }}
+          path: remediation/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 9
