@@ -3,6 +3,7 @@ pub mod api;
 pub mod exact_memory;
 pub mod inventory_signature;
 pub mod ledger_effects;
+pub mod receipt_lookup;
 pub mod repository;
 pub mod state;
 
@@ -112,6 +113,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/v1/trnm/economy/issuer-keys/status",
             post(api::post_trnm_entitlement_issuer_key_status),
+        )
+        .route(
+            "/v1/trnm/economy/receipts/by-intent",
+            get(receipt_lookup::get_trnm_economic_receipt_by_intent),
         )
         .route(
             "/v1/trnm/economy/receipts",
