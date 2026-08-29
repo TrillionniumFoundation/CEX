@@ -42,6 +42,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: rust-service-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: '0'
+
 jobs:
   service-local-gate-windows:
     runs-on: windows-latest
@@ -71,6 +79,9 @@ jobs:
 
       - name: Verify formatting
         run: cargo fmt --all --check
+
+      - name: Compile workspace all targets (Windows)
+        run: cargo check --locked --workspace --all-targets
 
       - name: Run service-local gate (Windows)
         run: ./gate-local.ps1 -ServiceLocalOnly
@@ -103,6 +114,9 @@ jobs:
 
       - name: Verify formatting
         run: cargo fmt --all --check
+
+      - name: Compile workspace all targets (Linux)
+        run: cargo check --locked --workspace --all-targets
 
       - name: Run service-local gate (Linux)
         run: bash ./scripts/gate-local-linux.sh --service-local-only --skip-db-bootstrap
