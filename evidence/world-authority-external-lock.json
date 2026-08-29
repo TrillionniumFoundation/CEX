@@ -14,11 +14,6 @@
     "tree": "4a4c30cbbff5fd5bf42e1586f77804e49c602fda",
     "role": "target_authority_candidate"
   },
-  "manual_rearm": {
-    "actor": "Tomasrgbsf",
-    "generation": 1,
-    "reason": "retrigger exact-source pull-request jobs after bot-authored lock refresh"
-  },
   "activation": "shadow_only",
   "cutover_authorized": false,
   "closed_online_promoted": false,
