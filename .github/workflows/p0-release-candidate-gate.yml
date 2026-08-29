@@ -26,7 +26,7 @@ env:
 jobs:
   repository-candidate-qualification:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 105
     services:
       postgres:
         image: postgres:16
@@ -73,6 +73,16 @@ jobs:
           python3 scripts/check-p0-release-candidate-hygiene.py \
             | tee "$CEX_P0_EVIDENCE_DIR/candidate-hygiene.json"
 
+      - name: Development-document authority and exact-tree integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check-development-docs.py
+          python3 scripts/check-repository-integrity.py \
+            --expected-sha "$GITHUB_SHA" \
+            --expected-tree '${{ steps.source.outputs.tree }}' \
+            --output "$CEX_P0_EVIDENCE_DIR/repository-integrity.json"
+
       - name: Migration and manifest governance
         shell: bash
         run: |
@@ -115,6 +125,14 @@ jobs:
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
+      - name: Strict Hepta PostgreSQL restart and lease recovery
+        env:
+          HEPTA_TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+          HEPTA_REQUIRE_POSTGRES_TESTS: '1'
+        run: |
+          bash scripts/check-hepta-postgres-integration.sh --mode recovery-only \
+            --evidence "$CEX_P0_EVIDENCE_DIR/hepta-postgres-integration.json"
+
       - name: Build Ledger receipt recovery target
         run: cargo build --locked -p ledger-service --bin ledger-service
 
@@ -136,6 +154,8 @@ jobs:
               "commit_sha": sys.argv[2],
               "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
               "checks": [
+                  "development-document-authority",
+                  "repository-integrity",
                   "fresh-migration-and-p0-assertions",
                   "existing-row-audit-baseline",
                   "ledger-operation-identity-and-replay",
@@ -144,6 +164,7 @@ jobs:
                   "gateway-exact-reserve-fault-matrix",
                   "execution-settlement-fault-matrix",
                   "provider-unknown-outcome-reconciliation",
+                  "hepta-postgres-restart-and-lease-recovery",
                   "trnm-settlement-receipt-response-loss-recovery",
               ],
           }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -228,8 +249,9 @@ jobs:
             echo "- Commit: \`$GITHUB_SHA\`"
             echo "- Tree: \`${{ steps.source.outputs.tree }}\`"
             echo "- Migration head: \`0084_make_provider_reconciliation_replay_terminal_safe.sql\`"
-            echo '- Scope: repository exact-money control plane + TRNM receipt recovery v1'
-            echo '- TRNM receipt lookup: response-loss, concurrent duplicate, restart, conflict, auth and database-outage qualified'
+            echo '- Scope: repository exact-money control plane + TRNM receipt recovery + Hepta PostgreSQL recovery + document integrity'
+            echo '- Development authority: active v12 plan plus implementation addendum, machine-validated'
+            echo '- Hepta: strict restart, disjoint claim, wrong-owner rejection and expired-lease recovery qualified'
             echo '- GitHub branch/ruleset state: recorded in repository-governance.json; no enforcement is inferred from source code'
             echo '- Production authorization: not granted; independent external gates remain mandatory'
           } >> "$GITHUB_STEP_SUMMARY"
