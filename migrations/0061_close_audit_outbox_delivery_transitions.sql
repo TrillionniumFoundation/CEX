@@ -59,13 +59,15 @@ begin
 end
 $$;
 
+-- Keep the 0060 parameter name. PostgreSQL identifies this overload by input
+-- types, but CREATE OR REPLACE FUNCTION still rejects input-parameter renames.
 create or replace function public.cex_mark_audit_outbox_delivered_v1(
     p_outbox_id uuid,
     p_worker_id text,
     p_event_id uuid,
     p_event_hash text,
     p_tenant_sequence bigint,
-    p_receipt jsonb,
+    p_delivery_receipt jsonb,
     p_http_status integer default 200
 )
 returns public.cex_audit_outbox_v1
@@ -84,7 +86,7 @@ begin
     if p_tenant_sequence is null or p_tenant_sequence <= 0 then
         raise exception 'audit outbox ACK tenant_sequence must be positive';
     end if;
-    if p_receipt is null or jsonb_typeof(p_receipt) <> 'object' then
+    if p_delivery_receipt is null or jsonb_typeof(p_delivery_receipt) <> 'object' then
         raise exception 'audit outbox ACK receipt must be a JSON object';
     end if;
     if p_http_status is null or p_http_status not between 200 and 299 then
@@ -107,7 +109,8 @@ begin
     if current_outbox.status = 'delivered' then
         if current_outbox.delivered_event_hash is distinct from p_event_hash
            or current_outbox.delivered_tenant_sequence is distinct from p_tenant_sequence
-           or current_outbox.delivery_receipt -> 'record' is distinct from p_receipt -> 'record' then
+           or current_outbox.delivery_receipt -> 'record'
+              is distinct from p_delivery_receipt -> 'record' then
             raise exception using
                 errcode = '23505',
                 message = 'audit outbox ACK collision with different delivery receipt';
@@ -134,7 +137,7 @@ begin
            delivered_at = now(),
            delivered_event_hash = p_event_hash,
            delivered_tenant_sequence = p_tenant_sequence,
-           delivery_receipt = p_receipt,
+           delivery_receipt = p_delivery_receipt,
            dead_lettered_at = null,
            updated_at = now()
      where outbox_id = p_outbox_id
@@ -243,23 +246,40 @@ begin
 end
 $$;
 
-create index if not exists idx_cex_audit_outbox_dead_letter_v1
+-- 0060 already created these names. Recreate them explicitly so upgrades get
+-- the new deterministic tiebreaker instead of silently retaining old indexes.
+drop index if exists public.idx_cex_audit_outbox_dead_letter_v1;
+create index idx_cex_audit_outbox_dead_letter_v1
     on public.cex_audit_outbox_v1 (dead_lettered_at, source_service, outbox_id)
     where status = 'dead_letter';
 
-create index if not exists idx_cex_audit_outbox_delivered_v1
+drop index if exists public.idx_cex_audit_outbox_delivery_v1;
+create index idx_cex_audit_outbox_delivery_v1
     on public.cex_audit_outbox_v1 (delivered_at, source_service, outbox_id)
     where status = 'delivered';
 
+-- Preserve every 0060 column name and ordinal position. New aliases and lease
+-- visibility are appended, which is the only CREATE OR REPLACE VIEW evolution
+-- PostgreSQL accepts without dropping dependent objects.
 create or replace view public.cex_audit_outbox_delivery_summary_v1 as
 select
     source_service,
     status,
     count(*)::bigint as event_count,
     min(available_at) as oldest_available_at,
+    min(last_attempt_at) as oldest_last_attempt_at,
+    max(attempt_count)::integer as max_attempt_count,
+    count(*) filter (where attempt_count >= max_attempts)::bigint as retry_budget_exhausted,
+    count(*) filter (
+        where status = 'delivered'
+          and (
+              delivery_receipt is null
+              or delivered_event_hash is null
+              or delivered_tenant_sequence is null
+          )
+    )::bigint as unverified_delivered,
     min(last_attempt_at) as oldest_attempt_at,
     min(lease_expires_at) filter (where status = 'claimed') as oldest_lease_expiry,
-    count(*) filter (where attempt_count >= max_attempts)::bigint as retry_budget_exhausted,
     count(*) filter (
         where status = 'delivered'
           and (
