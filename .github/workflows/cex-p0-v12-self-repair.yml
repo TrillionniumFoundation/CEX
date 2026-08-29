@@ -66,7 +66,120 @@ jobs:
           from pathlib import Path
 
           lookup = Path("scripts/check-trnm-settlement-receipt-lookup-http.sh")
-          lines = lookup.read_text(encoding="utf-8").splitlines()
+          text = lookup.read_text(encoding="utf-8")
+          old_response_loss = r'''# Send a complete request and deliberately close without reading a response.
+          python3 - "$ledger_addr" "$game_authority_token" "$work_dir/response-loss.request.json" <<'PY'
+          from pathlib import Path
+          import socket
+          import sys
+
+          host, port = sys.argv[1].rsplit(":", 1)
+          token = sys.argv[2]
+          body = Path(sys.argv[3]).read_bytes()
+          request = (
+              f"POST /v1/trnm/economy/intents HTTP/1.1\r\n"
+              f"Host: {host}:{port}\r\n"
+              f"Content-Type: application/json\r\n"
+              f"x-trnm-game-authority: {token}\r\n"
+              f"Content-Length: {len(body)}\r\n"
+              f"Connection: close\r\n\r\n"
+          ).encode() + body
+          with socket.create_connection((host, int(port)), timeout=5) as connection:
+              connection.sendall(request)
+              connection.shutdown(socket.SHUT_WR)
+              # Intentionally do not read the response: this is the response-loss boundary.
+          PY
+          '''
+          new_response_loss = r'''# Relay the request to Ledger, wait until Ledger has committed and produced a
+          # successful upstream response, then drop every response byte before the consumer
+          # can observe status or body. Closing the service socket directly would cancel the
+          # request handler before the side-effect boundary and would not model response loss.
+          python3 - "$ledger_addr" "$game_authority_token" "$work_dir/response-loss.request.json" <<'PY'
+          from pathlib import Path
+          import socket
+          import sys
+          import threading
+
+          upstream_host, upstream_port = sys.argv[1].rsplit(":", 1)
+          token = sys.argv[2]
+          body = Path(sys.argv[3]).read_bytes()
+          request = (
+              f"POST /v1/trnm/economy/intents HTTP/1.1\r\n"
+              f"Host: {upstream_host}:{upstream_port}\r\n"
+              f"Content-Type: application/json\r\n"
+              f"x-trnm-game-authority: {token}\r\n"
+              f"Content-Length: {len(body)}\r\n"
+              f"Connection: close\r\n\r\n"
+          ).encode() + body
+
+          listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+          listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+          listener.bind(("127.0.0.1", 0))
+          listener.listen(1)
+          listener.settimeout(10)
+          relay_errors = []
+          upstream_response = [b""]
+
+          def relay() -> None:
+              try:
+                  downstream, _ = listener.accept()
+                  with downstream:
+                      downstream.settimeout(40)
+                      forwarded = bytearray()
+                      while True:
+                          chunk = downstream.recv(65536)
+                          if not chunk:
+                              break
+                          forwarded.extend(chunk)
+                      with socket.create_connection(
+                          (upstream_host, int(upstream_port)), timeout=10
+                      ) as upstream:
+                          upstream.settimeout(40)
+                          upstream.sendall(forwarded)
+                          upstream.shutdown(socket.SHUT_WR)
+                          response = bytearray()
+                          while True:
+                              chunk = upstream.recv(65536)
+                              if not chunk:
+                                  break
+                              response.extend(chunk)
+                      upstream_response[0] = bytes(response)
+                      # Deliberately send no response bytes to the consumer.
+              except BaseException as error:
+                  relay_errors.append(error)
+
+          relay_thread = threading.Thread(target=relay, daemon=True)
+          relay_thread.start()
+          proxy_host, proxy_port = listener.getsockname()
+          with socket.create_connection((proxy_host, proxy_port), timeout=10) as consumer:
+              consumer.settimeout(45)
+              consumer.sendall(request)
+              consumer.shutdown(socket.SHUT_WR)
+              observed = bytearray()
+              while True:
+                  chunk = consumer.recv(65536)
+                  if not chunk:
+                      break
+                  observed.extend(chunk)
+          relay_thread.join(timeout=45)
+          listener.close()
+          if relay_thread.is_alive():
+              raise SystemExit("response-loss relay did not finish")
+          if relay_errors:
+              raise relay_errors[0]
+          if observed:
+              raise SystemExit("consumer unexpectedly observed response bytes")
+          status_line = upstream_response[0].split(b"\r\n", 1)[0]
+          if b" 200 " not in status_line:
+              raise SystemExit(f"upstream Ledger response was not successful: {status_line!r}")
+          PY
+          '''
+          if text.count(old_response_loss) != 1:
+              raise SystemExit(
+                  f"response-loss transport source count was {text.count(old_response_loss)}, expected 1"
+              )
+          text = text.replace(old_response_loss, new_response_loss, 1)
+          lines = text.splitlines()
 
           committed_start = lines.index('  committed=$(psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -At \\')
           committed_old = [
