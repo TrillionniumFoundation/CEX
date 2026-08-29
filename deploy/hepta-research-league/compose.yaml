@@ -1,12 +1,13 @@
 services:
   hepta:
     image: ${HEPTA_IMAGE:?immutable HEPTA_IMAGE digest is required}
+    pull_policy: never
     restart: unless-stopped
     read_only: true
     tmpfs:
       - /tmp:size=32m,noexec,nosuid,nodev
     ports:
-      - "127.0.0.1:7011:7011"
+      - "127.0.0.1:${HEPTA_HOST_PORT:-7011}:7011"
     environment:
       HEPTA_BIND_ADDR: 0.0.0.0:7011
       HEPTA_DATABASE_URL: ${HEPTA_DATABASE_URL:?required}

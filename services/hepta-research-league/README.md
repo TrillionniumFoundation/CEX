@@ -171,23 +171,55 @@ leases with `FOR UPDATE SKIP LOCKED`. TRNM success remains
 projected. An API token by itself cannot advance the state.
 
 The release Dockerfile pins its Dockerfile frontend, builder, and distroless
-runtime images by digest. A disposable, checksum-pinned Buildx binary performs
+runtime images by digest. The builder receives only the minimal Hepta compile
+workspace, its dedicated pinned-builder `docker/Cargo.lock`, required migrations,
+and embedded OpenAPI documents. Git identity, release timestamps, the tracked SBOM, and release
+labels are not visible to `cargo build`; they enter only after the runtime
+binary has been exported. A disposable, checksum-pinned Buildx binary performs
 the build; the normalized release root is copied into the final image as one
 layer. The three Chain protocol crates required during compilation are
 byte-for-byte vendored from immutable Chain commit
 `e73d1a930991f0e308bf72854b334b6191c7fcc3`; their per-file provenance is in
 `vendor/trnm-chain-vendor-manifest.json` and is revalidated by the release gate.
-The tracked CycloneDX 1.5 application SBOM is regenerated from locked Cargo
-metadata and compared byte-for-byte at release time. The image binds that SBOM
-and the Git source tree through the canonical `org.trillionnium.*` labels; the
-image builder requires two independent `--no-cache` builds to produce the same
-image ID.
+The tracked CycloneDX 1.5 application SBOM is generated only after two
+independent no-cache exports from the pinned builder produce the same runtime
+bytes. It binds the runtime binary plus exact `Cargo.lock`, Dockerfile, and Rust
+toolchain-manifest hashes. The image binds that SBOM and the Git source tree
+through the canonical `org.trillionnium.*` labels; the image gate requires two
+independent `--no-cache` builds to produce the same image ID, scans both
+extracted root filesystems, and then runs the exact image ID against pinned
+PostgreSQL through the Compose/SIGKILL persistence smoke.
 
 See `docs/hepta-failure-recovery-runbook.md` before production rollout. Service
 tokens should be delivered by the deployment secret manager; they are never
 stored in this repository.
 
-Run focused validation with:
+Run the no-Cargo/no-Docker structure and negative gate first:
+
+```bash
+bash scripts/check-hepta-research-league-release-structure.sh
+```
+
+After changing the minimal compile manifests, generate its lock twice from the
+clean immutable revision with the pinned builder, review and commit it, then
+prove that the committed bytes regenerate exactly:
+
+```bash
+bash scripts/generate-hepta-research-league-docker-lock.sh --write
+# review and commit services/hepta-research-league/docker/Cargo.lock
+bash scripts/generate-hepta-research-league-docker-lock.sh --check
+```
+
+Next generate the runtime-bound SBOM with the pinned builder, review and commit
+the resulting SBOM, then prove that the committed bytes regenerate exactly:
+
+```bash
+bash scripts/generate-hepta-research-league-runtime-sbom.sh --write
+# review and commit deploy/hepta-research-league/hepta-research-league.cdx.json
+bash scripts/generate-hepta-research-league-runtime-sbom.sh --check
+```
+
+Run focused source validation with:
 
 ```bash
 cargo fmt --all -- --check
@@ -200,5 +232,14 @@ fails closed when the URL is missing:
 
 ```bash
 HEPTA_TEST_DATABASE_URL='postgres://.../hepta_release_test' \
-  scripts/check-hepta-research-league-release.sh
+  bash scripts/check-hepta-research-league-release.sh
+```
+
+The final image/provenance gate uses only the clean committed archive. It
+requires the pinned base images to be present locally, builds and extracts the
+candidate twice, and invokes the real-image PostgreSQL restart smoke itself:
+
+```bash
+HEPTA_IMAGE_REF='registry.example/hepta-research-league:<immutable-revision>' \
+  bash scripts/build-hepta-research-league-image.sh
 ```
