@@ -241,6 +241,9 @@ assert.ok(staleReviewInvalidation.includes("requestStaleAuthorityRefresh(paperId
 assert.ok(staleReviewInvalidation.includes('card.dataset.authorityState = "stale-pending-workflow"'));
 assert.ok(source.includes("fetch(`/league/review/${encodeURIComponent(paperId)}`"));
 const htmlSource = await readFile(new URL("../src/html.rs", import.meta.url), "utf8");
+const rustTestsStart = htmlSource.indexOf("\n#[cfg(test)]\nmod tests {");
+assert.ok(rustTestsStart > 0, "Rust test module boundary must remain discoverable");
+const productionHtmlSource = htmlSource.slice(0, rustTestsStart);
 assert.ok(htmlSource.includes('class=\"human-key-import-form\"'));
 assert.ok(htmlSource.includes('<button type=\"submit\" disabled>Decrypt into this tab'));
 const heptaSource = await readFile(new URL("../src/hepta.rs", import.meta.url), "utf8");
@@ -253,7 +256,65 @@ assert.equal(htmlSource.includes('.get("party_code_hash")'), false);
 assert.ok(heptaSource.includes("matchmaking_party_payload_is_safe"));
 assert.ok(appSource.includes("matchmaking_party_payload_is_safe(&command.payload)"));
 assert.equal(metricsSource.includes("party_code"), false);
-assert.ok(htmlSource.includes("at least 7 identities across the full flow"));
+assert.equal(productionHtmlSource.includes("at least 7 identities across the full flow"), false);
+const lobbyStart = productionHtmlSource.indexOf("pub fn lobby(");
+const agentPairingStart = productionHtmlSource.indexOf("fn agent_bridge_pairing_panel(", lobbyStart);
+assert.ok(lobbyStart >= 0 && agentPairingStart > lobbyStart);
+const lobbyHtml = productionHtmlSource.slice(lobbyStart, agentPairingStart);
+assert.ok(lobbyHtml.includes("Exactly 3 Author players start the live Author Raid together"));
+assert.ok(lobbyHtml.includes("Evaluator, Reviewer 1, Reviewer 2, and Reproducer are not part of that start"));
+assert.ok(lobbyHtml.includes('3-Author start, asynchronous review / <span lang="zh-Hans">三作者同步开局，评审异步接力</span>'));
+const onboardingStart = productionHtmlSource.indexOf("pub fn onboarding(");
+const browserScriptStart = productionHtmlSource.indexOf("pub fn browser_script(", onboardingStart);
+assert.ok(onboardingStart >= 0 && browserScriptStart > onboardingStart);
+const onboardingHtml = productionHtmlSource.slice(onboardingStart, browserScriptStart);
+assert.ok(onboardingHtml.includes('PARTICIPATION TIMING / <span lang="zh-Hans">参与时序</span>'));
+assert.ok(onboardingHtml.includes('Only 3 Authors start together / <span lang="zh-Hans">仅三位作者同步开局</span>'));
+const reviewHandoffStart = productionHtmlSource.indexOf("fn asynchronous_review_handoff(");
+const contributionCardStart = productionHtmlSource.indexOf("fn provisional_contribution_card(", reviewHandoffStart);
+assert.ok(reviewHandoffStart >= 0 && contributionCardStart > reviewHandoffStart);
+const reviewHandoff = productionHtmlSource.slice(reviewHandoffStart, contributionCardStart);
+assert.ok(reviewHandoff.includes("Exactly 3 Author players—Captain, Evidence, and Experiment"));
+assert.ok(reviewHandoff.includes("data-review-snapshot-state=\"available\""));
+assert.ok(reviewHandoff.includes("data-review-snapshot-state=\"unavailable\""));
+assert.ok(reviewHandoff.includes("does not derive current role gaps"));
+const reviewAvailabilityStart = productionHtmlSource.indexOf("fn review_snapshot_availability(", reviewHandoffStart);
+assert.ok(reviewAvailabilityStart >= 0 && contributionCardStart > reviewAvailabilityStart);
+const reviewAvailability = productionHtmlSource.slice(reviewAvailabilityStart, contributionCardStart);
+for (const forbidden of ['.get("assignments")', '.get("reproductions")', "data-review-slot", "Current role gaps"]) {
+  assert.equal(reviewAvailability.includes(forbidden), false);
+}
+const ticketCardsStart = productionHtmlSource.indexOf("fn matchmaking_ticket_cards(");
+const authorQueueReasonStart = productionHtmlSource.indexOf("fn author_queue_wait_reason(", ticketCardsStart);
+const authorQueueHintStart = productionHtmlSource.indexOf("fn author_queue_hint(", authorQueueReasonStart);
+const commandEditorStart = productionHtmlSource.indexOf("fn command_editor(", authorQueueHintStart);
+assert.ok(ticketCardsStart >= 0 && authorQueueReasonStart > ticketCardsStart);
+assert.ok(authorQueueHintStart >= 0 && commandEditorStart > authorQueueHintStart);
+const authorQueueRendering = productionHtmlSource.slice(ticketCardsStart, commandEditorStart);
+const authorQueueHint = productionHtmlSource.slice(authorQueueHintStart, commandEditorStart);
+for (const terminalMessage of ["team_materialized", "ticket_cancelled", "ticket_expired"]) {
+  assert.ok(authorQueueRendering.includes(terminalMessage));
+}
+for (const terminalStatus of ['"consumed"', '"cancelled"', '"expired"']) {
+  assert.ok(authorQueueRendering.includes(terminalStatus));
+}
+assert.ok(authorQueueHint.includes('.get("missing_roles")'));
+assert.ok(authorQueueHint.includes('.get("message")'));
+assert.ok(authorQueueHint.includes('.get("status")'));
+assert.ok(authorQueueHint.includes('.get("requested_team_size")'));
+assert.ok(authorQueueHint.includes("!= Some(3)"));
+assert.ok(authorQueueHint.includes('.get("private_party")'));
+assert.ok(authorQueueHint.includes("let Some(private_party)"));
+assert.ok(authorQueueRendering.includes("author_queue_hint(ticket, hint)"));
+assert.equal(authorQueueHint.includes(".filter(|pool|"), false);
+assert.ok(authorQueueHint.includes(".filter(|needed| *needed <= 2)"));
+assert.equal((authorQueueHint.match(/pool >= 3/g) || []).length, 1);
+assert.equal((authorQueueHint.match(/pool >= 2/g) || []).length, 1);
+assert.equal((authorQueueHint.match(/!incomplete_private_party/g) || []).length, 3);
+const matchedShortCircuit = authorQueueHint.indexOf('if state == "matched"');
+const compatiblePoolRead = authorQueueHint.indexOf('.get("compatible_pool_size")');
+assert.ok(matchedShortCircuit >= 0 && compatiblePoolRead > matchedShortCircuit);
+assert.equal(authorQueueRendering.includes("eta_seconds"), false);
 assert.ok(htmlSource.includes("Provisional contribution telemetry / 暂定贡献遥测"));
 assert.ok(htmlSource.includes('data-after-action-report="v1"'));
 assert.ok(htmlSource.includes("Role mastery, challenge unlocks, immutable replay and automatic rematch are not authoritative yet"));
