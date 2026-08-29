@@ -18,25 +18,13 @@ on:
       - 'ops/systemd/cex-gateway-exact-reserve-api.service'
       - 'ops/systemd/cex-gateway-exact-reserve-worker.service'
       - '.github/workflows/p0-gateway-exact-reserve-gate.yml'
-  pull_request:
-    paths:
-      - 'migrations/0073_add_gateway_exact_reserve_commands.sql'
-      - 'services/gateway-service/**'
-      - 'crates/shared-config/src/runtime_guard.rs'
-      - 'scripts/check-gateway-exact-reserve.py'
-      - 'scripts/check-gateway-exact-reserve-postgres.sh'
-      - 'scripts/check-p0-release-candidate-hygiene.py'
-      - 'docs/gateway-exact-reserve-v1.md'
-      - 'docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md'
-      - 'docs/templates/cex-release-baseline-manifest-v1.json'
-      - 'docs/release-evidence/p0-candidate-trigger.json'
-      - 'config/gateway-exact-reserve.env.example'
-      - 'ops/systemd/cex-gateway-exact-reserve-api.service'
-      - 'ops/systemd/cex-gateway-exact-reserve-worker.service'
-      - '.github/workflows/p0-gateway-exact-reserve-gate.yml'
 
 permissions:
   contents: read
+
+concurrency:
+  group: p0-gateway-exact-reserve-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/cex_ci
