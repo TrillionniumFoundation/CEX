@@ -5,10 +5,11 @@
   "owner_repository": "TrillionniumFoundation/CEX",
   "issue": 6,
   "status": "implemented_pending_exact_commit_ci",
-  "as_of": "2026-08-28",
-  "branch": "fix/cex-settlement-receipt-lookup-v1",
-  "base_commit": "6edbe27bfb65594c40549fb67b42c0ebca997185",
+  "as_of": "2026-08-30",
+  "branch": "fix/hepta-v12-gap-closure-20260829",
+  "base_commit": "331fef3a57c68e4f774291c3022c8ff2fba6cff6",
   "verified_commit": null,
+  "candidate_evidence_authority": "generated_candidate_manifest_only",
   "contract_version": "trnm_cex_settlement_receipt_lookup_v1",
   "release_effect": "none",
   "trusted_settlement": false,
@@ -31,7 +32,12 @@
     "active_ed25519_entitlement_key_verification",
     "game_authority_audience_binding",
     "restrictive_receipt_foreign_keys",
-    "postgresql_response_loss_concurrency_exact_bytes_and_immutability_contract_tests"
+    "postgresql_response_loss_concurrency_exact_bytes_and_immutability_contract_tests",
+    "native_receipt_append_only_event_history",
+    "latest_receipt_event_lookup_with_compatibility_seed_fallback",
+    "typed_intent_receipt_and_cex_backend_revalidation",
+    "negative_legacy_amount_evidence_fail_closed_to_zero",
+    "normalized_term_exchange_receipt_append_only_history"
   ],
   "open_gates": [
     "obtain_exact_commit_github_actions_evidence",
@@ -53,6 +59,7 @@
     "limitations": [
       "source implementation is not deployment evidence",
       "an empty, skipped, cancelled or failed workflow is a blocker",
+      "the static status file cannot self-declare repository closure",
       "no trusted settlement promotion",
       "no public online or public player market credit"
     ]

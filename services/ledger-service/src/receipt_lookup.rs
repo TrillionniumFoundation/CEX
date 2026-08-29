@@ -7,7 +7,10 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use term_exchange_protocol::{EconomicReceipt, TERM_EXCHANGE_PROTOCOL_VERSION};
+use term_exchange_protocol::{
+    EconomicIntent, EconomicReceipt, SettlementBackendKind, CEX_SETTLEMENT_BACKEND_ID,
+    TERM_EXCHANGE_PROTOCOL_VERSION,
+};
 
 use crate::state::AppState;
 
@@ -236,6 +239,12 @@ fn resolve_binding(
         return Err(LookupFailure::ImmutableConflict);
     }
 
+    let intent: EconomicIntent =
+        serde_json::from_value(intent_json).map_err(|_| LookupFailure::CorruptBinding)?;
+    if intent.validate().is_err() || intent.intent_id != intent_id {
+        return Err(LookupFailure::CorruptBinding);
+    }
+
     match (&receipt_id, &receipt_json) {
         (None, None) => return Err(LookupFailure::ReceiptNotFinalized),
         (Some(_), Some(_)) => {}
@@ -246,17 +255,18 @@ fn resolve_binding(
     let receipt: EconomicReceipt =
         serde_json::from_value(receipt_json.expect("receipt_json checked above"))
             .map_err(|_| LookupFailure::CorruptBinding)?;
-    let expected_amount = intent_json
-        .get("amount_credits")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
+    if receipt.validate_for(&intent).is_err() {
+        return Err(LookupFailure::CorruptBinding);
+    }
+
+    let expected_amount = fail_closed_receipt_amount(&intent);
     let receipt_amount = receipt
         .evidence
         .get("amount_credits")
         .and_then(Value::as_i64);
-    if receipt.intent_id != intent_id
-        || receipt.receipt_id != receipt_id
-        || receipt.protocol_version != TERM_EXCHANGE_PROTOCOL_VERSION
+    if receipt.receipt_id != receipt_id
+        || receipt.backend_id != CEX_SETTLEMENT_BACKEND_ID
+        || receipt.backend_kind != SettlementBackendKind::Cex
         || receipt.evidence.get("payload_hash").and_then(Value::as_str)
             != Some(stored_hash.as_str())
         || receipt_amount != Some(expected_amount)
@@ -270,6 +280,16 @@ fn resolve_binding(
         intent_hash: stored_hash,
         receipt,
     })
+}
+
+/// Mirror the native writer and migration fail-closed evidence rule.
+///
+/// Invalid negative compatibility amounts never become value authority. The
+/// immutable intent bytes and hash remain unchanged, while receipt evidence
+/// records zero so lookup/recovery agrees with both live writes and 0086
+/// backfill rows.
+fn fail_closed_receipt_amount(intent: &EconomicIntent) -> i64 {
+    intent.amount_credits.unwrap_or_default().max(0)
 }
 
 fn sha256_json(value: &Value) -> Result<String, LookupFailure> {
@@ -327,13 +347,18 @@ mod tests {
         http::Request,
     };
     use serde_json::json;
-    use term_exchange_protocol::{ReceiptStatus, SettlementBackendKind, CEX_SETTLEMENT_BACKEND_ID};
+    use term_exchange_protocol::ReceiptStatus;
     use tower::ServiceExt;
 
-    fn stored_binding(intent_id: &str) -> (String, StoredReceiptBinding) {
+    fn stored_binding_with_amount(
+        intent_id: &str,
+        intent_amount: i64,
+        evidence_amount: i64,
+        status: ReceiptStatus,
+    ) -> (String, StoredReceiptBinding) {
         let intent_json = json!({
             "actors": [{"actor_id": "player-a", "actor_kind": "player", "account_id": "00000000-0000-0000-0000-000000000001"}],
-            "amount_credits": 25,
+            "amount_credits": intent_amount,
             "assets": [],
             "created_at_epoch": 1,
             "currency": "credit",
@@ -353,10 +378,13 @@ mod tests {
             "term-a",
             CEX_SETTLEMENT_BACKEND_ID,
             SettlementBackendKind::Cex,
-            ReceiptStatus::ApprovedRelease,
+            status,
             1,
         );
-        receipt.evidence = json!({"payload_hash": payload_hash.clone(), "amount_credits": 25});
+        receipt.evidence = json!({
+            "payload_hash": payload_hash.clone(),
+            "amount_credits": evidence_amount
+        });
         (
             payload_hash.clone(),
             StoredReceiptBinding {
@@ -366,6 +394,10 @@ mod tests {
                 receipt_json: Some(serde_json::to_value(receipt).expect("receipt fixture")),
             },
         )
+    }
+
+    fn stored_binding(intent_id: &str) -> (String, StoredReceiptBinding) {
+        stored_binding_with_amount(intent_id, 25, 25, ReceiptStatus::ApprovedRelease)
     }
 
     async fn error_code(response: Response) -> String {
@@ -397,6 +429,64 @@ mod tests {
         assert_eq!(result.intent_id, intent_id);
         assert_eq!(result.intent_hash, payload_hash);
         assert_eq!(result.receipt.receipt_id, format!("receipt:{intent_id}"));
+    }
+
+    #[test]
+    fn negative_legacy_amount_uses_same_fail_closed_evidence_amount_as_writer() {
+        let intent_id = "world:negative-legacy-amount";
+        let (payload_hash, binding) = stored_binding_with_amount(
+            intent_id,
+            -25,
+            0,
+            ReceiptStatus::SkippedZeroReward,
+        );
+        let result = resolve_binding(intent_id, &payload_hash, binding)
+            .expect("negative legacy amount evidence must remain readable");
+        assert_eq!(
+            result.receipt.evidence["amount_credits"].as_i64(),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn typed_intent_receipt_and_backend_binding_fail_closed() {
+        let (payload_hash, mut progression_mismatch) = stored_binding("progression-mismatch");
+        progression_mismatch
+            .receipt_json
+            .as_mut()
+            .expect("receipt")["progression_class"] = json!("recoverable_hold");
+        assert_eq!(
+            resolve_binding(
+                "progression-mismatch",
+                &payload_hash,
+                progression_mismatch
+            )
+            .unwrap_err(),
+            LookupFailure::CorruptBinding
+        );
+
+        let (payload_hash, mut wrong_backend) = stored_binding("wrong-backend");
+        wrong_backend.receipt_json.as_mut().expect("receipt")["backend_id"] =
+            json!("not-cex");
+        assert_eq!(
+            resolve_binding("wrong-backend", &payload_hash, wrong_backend).unwrap_err(),
+            LookupFailure::CorruptBinding
+        );
+
+        let (mut payload_hash, mut malformed_intent) = stored_binding("malformed-intent");
+        malformed_intent.intent_json.as_mut().expect("intent")["domain"] =
+            json!("not-trnm-game");
+        payload_hash =
+            sha256_json(malformed_intent.intent_json.as_ref().expect("intent")).expect("hash");
+        malformed_intent.payload_hash = Some(payload_hash.clone());
+        malformed_intent
+            .receipt_json
+            .as_mut()
+            .expect("receipt")["evidence"]["payload_hash"] = json!(payload_hash.clone());
+        assert_eq!(
+            resolve_binding("malformed-intent", &payload_hash, malformed_intent).unwrap_err(),
+            LookupFailure::CorruptBinding
+        );
     }
 
     #[test]

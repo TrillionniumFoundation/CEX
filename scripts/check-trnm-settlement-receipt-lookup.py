@@ -85,6 +85,45 @@ def main() -> int:
         "sha256_json(&intent_json)" in module,
         "lookup does not independently verify stored intent bytes against payload_hash",
     )
+    for marker, message in (
+        (
+            "let intent: EconomicIntent",
+            "lookup does not decode the durable bytes into the typed immutable intent",
+        ),
+        (
+            "intent.validate().is_err()",
+            "lookup does not revalidate the typed intent protocol boundary",
+        ),
+        (
+            "receipt.validate_for(&intent).is_err()",
+            "lookup does not validate receipt status/progression and immutable intent binding",
+        ),
+        (
+            "receipt.backend_id != CEX_SETTLEMENT_BACKEND_ID",
+            "lookup does not require the CEX settlement backend identity",
+        ),
+        (
+            "receipt.backend_kind != SettlementBackendKind::Cex",
+            "lookup does not require the typed CEX backend kind",
+        ),
+        (
+            "fn fail_closed_receipt_amount",
+            "lookup does not mirror writer/backfill fail-closed amount normalization",
+        ),
+        (
+            "intent.amount_credits.unwrap_or_default().max(0)",
+            "lookup fail-closed amount normalization does not match the native writer",
+        ),
+        (
+            "negative_legacy_amount_uses_same_fail_closed_evidence_amount_as_writer",
+            "lookup lacks regression coverage for negative legacy amount evidence",
+        ),
+        (
+            "typed_intent_receipt_and_backend_binding_fail_closed",
+            "lookup lacks typed intent/receipt/backend corruption coverage",
+        ),
+    ):
+        require(problems, marker in module, message)
     require(
         problems,
         '.get("payload_hash")' in module,
@@ -143,9 +182,9 @@ def main() -> int:
         "update accounts set balance =",
     ):
         require(
-  problems,
-  forbidden not in native,
-  f"TRNM native economy still contains legacy monetary write/read {forbidden!r}",
+            problems,
+            forbidden not in native,
+            f"TRNM native economy still contains legacy monetary write/read {forbidden!r}",
         )
 
     migration_sql = compact_sql(migration)
@@ -222,6 +261,10 @@ def main() -> int:
         "503",
         "indefinitely",
         "World compatibility window",
+        "EconomicIntent::validate",
+        "EconomicReceipt::validate_for",
+        "cex-settlement-backend",
+        "receipt evidence records zero",
     ):
         require(problems, marker in contract, f"owner contract documentation is missing {marker!r}")
 

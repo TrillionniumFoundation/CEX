@@ -36,6 +36,10 @@ Canonical bytes are produced as follows:
 
 CEX computes and stores this hash before applying the economic effect. The hash is also embedded in every persisted receipt event. Lookup independently recomputes the hash from the durable `intent_json`, compares it with `trnm_economic_intents.payload_hash`, compares the requested hash, and finally compares the latest receipt event's evidence hash.
 
+Hash equality is necessary but not sufficient. Lookup also decodes the durable bytes back into `EconomicIntent`, applies `EconomicIntent::validate`, requires the decoded intent ID to equal the requested ID, decodes the receipt as `EconomicReceipt`, applies `EconomicReceipt::validate_for`, and requires both backend identity fields to remain the canonical CEX values (`cex-settlement-backend` and `cex`). This prevents a byte-consistent but semantically malformed intent, mismatched status/progression pair, or cross-backend receipt from becoming recovery authority.
+
+The native writer and migration 0086 fail closed when a compatibility intent carries a missing or negative `amount_credits`: the immutable intent bytes remain unchanged, while receipt evidence records zero. Lookup applies the same `max(0)` evidence rule, so those retained rows remain readable without converting the invalid amount into value authority.
+
 ## Success response
 
 ```json
@@ -70,10 +74,13 @@ CEX computes and stores this hash before applying the economic effect. The hash 
 - the intent row exists;
 - the stored intent JSON hashes to the stored `payload_hash`;
 - the requested hash equals the stored hash;
+- the durable intent decodes as a valid `EconomicIntent` whose intent ID equals the request;
 - an immutable receipt event exists (with the 0027 seed as a compatibility fallback during upgrade);
 - the decoded receipt ID equals the durable receipt row ID;
-- the receipt intent ID equals the requested intent ID;
-- the receipt evidence hash equals the stored intent hash.
+- `EconomicReceipt::validate_for` accepts the receipt for the decoded intent;
+- the receipt backend ID and kind are exactly the CEX settlement backend;
+- the receipt evidence hash equals the stored intent hash;
+- the receipt evidence amount equals the writer's fail-closed amount projection.
 
 Repeated successful lookups return the latest immutable receipt event for the intent. A later lookup may observe a legitimate appended transition from a recoverable-hold receipt to its final receipt, but never a receipt synthesized from request data or memory. The stable `receipt_id` identifies the intent-level receipt; `event_sequence` distinguishes each immutable attempt.
 
@@ -133,6 +140,8 @@ The exact candidate commit must prove all of the following:
 - lookup recovers that receipt and exactly one corresponding Ledger mutation exists;
 - two concurrent first submissions return the same receipt or an immutable conflict without duplicate mutation;
 - mismatched and malformed hashes fail closed;
+- malformed typed intents, status/progression mismatches, and non-CEX backend receipts fail closed;
+- negative compatibility amounts retain zero-valued fail-closed receipt evidence and remain recoverable without creating value;
 - missing and wrong-audience credentials fail closed;
 - an existing intent without a receipt returns `503`, not `404`;
 - a missing identity alone returns `404`;

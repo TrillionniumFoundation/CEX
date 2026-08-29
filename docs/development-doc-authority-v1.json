@@ -6,7 +6,8 @@
   "migration_head": "0087_add_term_exchange_receipt_event_history.sql",
   "shared_trigger": "docs/release-evidence/p0-candidate-trigger.json",
   "production_authorization": "not_granted",
-  "repository_qualification_result": "REPOSITORY_CLOSED_CANDIDATE",
+  "repository_qualification_result": "PENDING_EXACT_SHA_HOSTED_EVIDENCE",
+  "repository_qualification_authority": "generated_candidate_manifest_only",
   "external_gate_policy": "independent_evidence_required",
   "canonical_documents": {
     "entrypoint": "docs/index.md",

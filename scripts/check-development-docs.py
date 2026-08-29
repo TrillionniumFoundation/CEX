@@ -16,6 +16,8 @@ TRACEABILITY_PATH = "docs/traceability/v12-requirements-v1.json"
 EXPECTED_PLAN = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"
 EXPECTED_ADDENDUM = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md"
 EXPECTED_MIGRATION_HEAD = "0087_add_term_exchange_receipt_event_history.sql"
+EXPECTED_REPOSITORY_QUALIFICATION_RESULT = "PENDING_EXACT_SHA_HOSTED_EVIDENCE"
+EXPECTED_REPOSITORY_QUALIFICATION_AUTHORITY = "generated_candidate_manifest_only"
 EXPECTED_REQUIREMENTS = {
     "V12-A",
     "V12-B",
@@ -96,6 +98,21 @@ def validate_authority() -> dict[str, Any]:
         PROBLEMS.append("development authority must deny production authorization")
     if authority.get("external_gate_policy") != "independent_evidence_required":
         PROBLEMS.append("external gate policy must require independent evidence")
+    if (
+        authority.get("repository_qualification_result")
+        != EXPECTED_REPOSITORY_QUALIFICATION_RESULT
+    ):
+        PROBLEMS.append(
+            "static development authority must remain pending exact-SHA hosted evidence; "
+            "only a generated candidate manifest may record repository closure"
+        )
+    if (
+        authority.get("repository_qualification_authority")
+        != EXPECTED_REPOSITORY_QUALIFICATION_AUTHORITY
+    ):
+        PROBLEMS.append(
+            "repository qualification authority must be the generated candidate manifest only"
+        )
 
     for key in (
         "active_plan",
@@ -333,6 +350,12 @@ def main() -> int:
         "active_addendum": EXPECTED_ADDENDUM,
         "migration_head": EXPECTED_MIGRATION_HEAD,
         "requirements": len(EXPECTED_REQUIREMENTS),
+        "repository_qualification_result": authority.get(
+            "repository_qualification_result"
+        ),
+        "repository_qualification_authority": authority.get(
+            "repository_qualification_authority"
+        ),
         "production_authorization": "not_granted",
         "problems": PROBLEMS,
     }
