@@ -62,8 +62,10 @@ jobs:
       - name: Verify formatting
         run: cargo fmt --all --check
 
-      - name: Compile workspace all targets (Windows)
-        run: cargo check --locked --workspace --all-targets
+      - name: Compile portable workspace targets (Windows)
+        run: |
+          cargo check --locked --workspace --all-targets --exclude trnm-finality-verifier
+          cargo check --locked -p trnm-finality-verifier --lib
 
       - name: Run service-local gate (Windows)
         run: ./gate-local.ps1 -ServiceLocalOnly
