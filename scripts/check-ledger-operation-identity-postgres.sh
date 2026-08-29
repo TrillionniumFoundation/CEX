@@ -12,22 +12,17 @@ begin;
 insert into public.organizations (org_id, name)
 values ('c0000000-0000-4000-8000-000000000001', 'Ledger operation identity org');
 
-insert into public.accounts (
-    account_id,
-    org_id,
-    account_type,
-    currency_unit,
-    balance,
-    reserved,
-    status
-) values (
+select public.cex_open_account_v2(
     'c1000000-0000-4000-8000-000000000001',
     'c0000000-0000-4000-8000-000000000001',
+    'c1100000-0000-4000-8000-000000000001',
     'test',
     'credit',
-    100.000000,
-    0.000000,
-    'active'
+    6::smallint,
+    100000000,
+    'org:c0000000:opening',
+    'account-opening',
+    'p0-ledger-operator'
 );
 
 do $test$
@@ -38,7 +33,7 @@ declare
     collision_rejected boolean := false;
     balance_after bigint;
     reserved_after bigint;
-    entry_count bigint;
+    effect_entry_count bigint;
     audit_intent_count bigint;
 begin
     first_result := public.cex_apply_ledger_effect_v1(
@@ -142,13 +137,14 @@ begin
     end if;
 
     select count(*)::bigint
-      into entry_count
+      into effect_entry_count
       from public.ledger_entries
      where account_id = 'c1000000-0000-4000-8000-000000000001'
-       and provenance_mode = 'explicit';
+       and provenance_mode = 'explicit'
+       and operation_kind in ('reserve', 'grant');
 
-    if entry_count <> 2 then
-        raise exception 'explicit ledger effect count mismatch: %', entry_count;
+    if effect_entry_count <> 2 then
+        raise exception 'explicit business effect count mismatch: %', effect_entry_count;
     end if;
 
     select count(*)::bigint
@@ -157,54 +153,64 @@ begin
      where source_service = 'ledger-service'
        and envelope ->> 'event_type' = 'ledger.effect.persisted'
        and envelope #>> '{payload,account_id}'
-           = 'c1000000-0000-4000-8000-000000000001';
+           = 'c1000000-0000-4000-8000-000000000001'
+       and envelope #>> '{payload,operation_kind}' in ('reserve', 'grant');
 
     if audit_intent_count <> 2 then
-        raise exception 'ledger effect Audit intent count mismatch: %', audit_intent_count;
+        raise exception 'ledger business-effect Audit intent count mismatch: %', audit_intent_count;
     end if;
 end
 $test$;
 
--- Existing v1 writers remain operational during expand/cutover, but are explicitly labelled.
-insert into public.ledger_entries (
-    entry_id,
-    account_id,
-    direction,
-    amount,
-    reason,
-    idempotency_key
-) values (
-    'c5000000-0000-4000-8000-000000000001',
-    'c1000000-0000-4000-8000-000000000001',
-    'credit',
-    1.000000,
-    'grant',
-    'compatibility-key'
-);
-
+-- Exact-only cutover: direct compatibility value writes must fail closed.
 do $test$
 declare
-    compatibility_row public.ledger_entries%rowtype;
+    compatibility_rejected boolean := false;
     mutation_rejected boolean := false;
     delete_rejected boolean := false;
     status_row record;
+    reserve_entry_id uuid;
 begin
-    select *
-      into compatibility_row
-      from public.ledger_entries
-     where entry_id = 'c5000000-0000-4000-8000-000000000001';
+    begin
+        insert into public.ledger_entries (
+            entry_id,
+            account_id,
+            direction,
+            amount,
+            reason,
+            idempotency_key
+        ) values (
+            'c5000000-0000-4000-8000-000000000001',
+            'c1000000-0000-4000-8000-000000000001',
+            'credit',
+            1.000000,
+            'grant',
+            'compatibility-key'
+        );
+    exception
+        when others then compatibility_rejected := true;
+    end;
 
-    if compatibility_row.provenance_mode <> 'operation_scoped_compatibility'
-       or compatibility_row.trace_id is null
-       or compatibility_row.operation_id is null
-       or compatibility_row.request_fingerprint !~ '^sha256:[0-9a-f]{64}$' then
-        raise exception 'compatibility writer did not receive explicit provenance labels';
+    if not compatibility_rejected then
+        raise exception 'direct compatibility Ledger value write was not rejected';
     end if;
+    if exists (
+        select 1
+          from public.ledger_entries
+         where entry_id = 'c5000000-0000-4000-8000-000000000001'
+    ) then
+        raise exception 'rejected compatibility write left a Ledger row';
+    end if;
+
+    select entry_id
+      into reserve_entry_id
+      from public.ledger_entries
+     where operation_id = 'c3000000-0000-4000-8000-000000000001';
 
     begin
         update public.ledger_entries
            set reason = 'tampered'
-         where entry_id = compatibility_row.entry_id;
+         where entry_id = reserve_entry_id;
     exception
         when others then mutation_rejected := true;
     end;
@@ -214,7 +220,7 @@ begin
 
     begin
         delete from public.ledger_entries
-         where entry_id = compatibility_row.entry_id;
+         where entry_id = reserve_entry_id;
     exception
         when others then delete_rejected := true;
     end;
@@ -226,8 +232,9 @@ begin
       from public.cex_ledger_operation_identity_status_v1;
 
     if status_row.missing_provenance_entries <> 0
-       or status_row.explicit_entries < 2
-       or status_row.compatibility_entries < 1
+       or status_row.explicit_entries < 3
+       or status_row.compatibility_entries <> 0
+       or status_row.legacy_entry_scoped_entries <> 0
        or status_row.distinct_operation_ids <> status_row.total_entries then
         raise exception 'ledger operation identity status is not internally consistent';
     end if;
