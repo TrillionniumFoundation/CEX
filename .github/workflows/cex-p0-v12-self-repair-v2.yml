@@ -45,7 +45,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: feature/settlement-all-blockers-closure-v1
-          fetch-depth: 12
+          fetch-depth: 16
           persist-credentials: true
 
       - name: Verify exact repair ancestry and source
@@ -76,11 +76,13 @@ jobs:
               for index in range(transport_start + 1, len(lines))
               if lines[index] == "PY"
           )
-          replacement = r'''# Relay the request to Ledger, wait until Ledger has committed and produced a
-          # successful upstream response, then drop every response byte before the consumer
-          # can observe status or body. Closing the service socket directly would cancel the
-          # handler before the side-effect boundary and would not model response loss.
+          replacement = r'''# Put a one-shot HTTP reverse proxy between the consumer and Ledger. The proxy
+          # waits for Ledger's complete successful response, proving the durable side effect
+          # crossed the upstream boundary, then closes the downstream socket without writing
+          # status or body. This models response loss after commit rather than cancellation.
           python3 - "$ledger_addr" "$game_authority_token" "$work_dir/response-loss.request.json" <<'PY'
+          from http.client import HTTPConnection
+          from http.server import BaseHTTPRequestHandler, HTTPServer
           from pathlib import Path
           import socket
           import sys
@@ -88,55 +90,58 @@ jobs:
 
           upstream_host, upstream_port = sys.argv[1].rsplit(":", 1)
           token = sys.argv[2]
-          body = Path(sys.argv[3]).read_bytes()
+          expected_body = Path(sys.argv[3]).read_bytes()
+          outcome = {"status": None, "body": b"", "error": None}
+
+          class DropResponseHandler(BaseHTTPRequestHandler):
+              protocol_version = "HTTP/1.1"
+
+              def do_POST(self) -> None:
+                  connection = None
+                  try:
+                      length = int(self.headers.get("Content-Length", "0"))
+                      body = self.rfile.read(length)
+                      if body != expected_body:
+                          raise RuntimeError("response-loss proxy received unexpected request body")
+                      connection = HTTPConnection(
+                          upstream_host, int(upstream_port), timeout=40
+                      )
+                      connection.request(
+                          "POST",
+                          self.path,
+                          body=body,
+                          headers={
+                              "Content-Type": "application/json",
+                              "x-trnm-game-authority": token,
+                              "Connection": "close",
+                          },
+                      )
+                      response = connection.getresponse()
+                      outcome["status"] = response.status
+                      outcome["body"] = response.read()
+                  except BaseException as error:
+                      outcome["error"] = error
+                  finally:
+                      if connection is not None:
+                          connection.close()
+                      self.close_connection = True
+                      # Deliberately do not call send_response or write response bytes.
+
+              def log_message(self, format: str, *args: object) -> None:
+                  return
+
+          server = HTTPServer(("127.0.0.1", 0), DropResponseHandler)
+          server_thread = threading.Thread(target=server.handle_request, daemon=True)
+          server_thread.start()
+          proxy_host, proxy_port = server.server_address
           request = (
               f"POST /v1/trnm/economy/intents HTTP/1.1\r\n"
-              f"Host: {upstream_host}:{upstream_port}\r\n"
+              f"Host: {proxy_host}:{proxy_port}\r\n"
               f"Content-Type: application/json\r\n"
               f"x-trnm-game-authority: {token}\r\n"
-              f"Content-Length: {len(body)}\r\n"
+              f"Content-Length: {len(expected_body)}\r\n"
               f"Connection: close\r\n\r\n"
-          ).encode() + body
-
-          listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-          listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-          listener.bind(("127.0.0.1", 0))
-          listener.listen(1)
-          listener.settimeout(10)
-          relay_errors = []
-          upstream_response = [b""]
-
-          def relay() -> None:
-              try:
-                  downstream, _ = listener.accept()
-                  with downstream:
-                      downstream.settimeout(40)
-                      forwarded = bytearray()
-                      while True:
-                          chunk = downstream.recv(65536)
-                          if not chunk:
-                              break
-                          forwarded.extend(chunk)
-                      with socket.create_connection(
-                          (upstream_host, int(upstream_port)), timeout=10
-                      ) as upstream:
-                          upstream.settimeout(40)
-                          upstream.sendall(forwarded)
-                          upstream.shutdown(socket.SHUT_WR)
-                          response = bytearray()
-                          while True:
-                              chunk = upstream.recv(65536)
-                              if not chunk:
-                                  break
-                              response.extend(chunk)
-                      upstream_response[0] = bytes(response)
-                      # Deliberately send no response bytes to the consumer.
-              except BaseException as error:
-                  relay_errors.append(error)
-
-          relay_thread = threading.Thread(target=relay, daemon=True)
-          relay_thread.start()
-          proxy_host, proxy_port = listener.getsockname()
+          ).encode() + expected_body
           with socket.create_connection((proxy_host, proxy_port), timeout=10) as consumer:
               consumer.settimeout(45)
               consumer.sendall(request)
@@ -147,17 +152,19 @@ jobs:
                   if not chunk:
                       break
                   observed.extend(chunk)
-          relay_thread.join(timeout=45)
-          listener.close()
-          if relay_thread.is_alive():
-              raise SystemExit("response-loss relay did not finish")
-          if relay_errors:
-              raise relay_errors[0]
+          server_thread.join(timeout=45)
+          server.server_close()
+          if server_thread.is_alive():
+              raise SystemExit("response-loss HTTP proxy did not finish")
+          if outcome["error"] is not None:
+              raise outcome["error"]
           if observed:
               raise SystemExit("consumer unexpectedly observed response bytes")
-          status_line = upstream_response[0].split(b"\r\n", 1)[0]
-          if b" 200 " not in status_line:
-              raise SystemExit(f"upstream Ledger response was not successful: {status_line!r}")
+          if outcome["status"] != 200:
+              raise SystemExit(
+                  f"upstream Ledger response was not successful: status={outcome['status']} "
+                  f"body={outcome['body']!r}"
+              )
           PY'''.splitlines()
           lines[transport_start : transport_end + 1] = replacement
 
@@ -242,18 +249,13 @@ jobs:
           toolchain: 1.98.0
           components: rustfmt,clippy
 
-      - name: Apply canonical formatting
+      - name: Apply canonical formatting and enforce repair scope
         shell: bash
         run: |
           set -euo pipefail
           cargo fmt --all
           cargo fmt --all -- --check
           git diff --check
-
-      - name: Enforce exact repair scope
-        shell: bash
-        run: |
-          set -euo pipefail
           mapfile -t changed < <(git diff --name-only | sort)
           expected=(
             scripts/check-trnm-economy-resource-budgets.sh
