@@ -62,6 +62,98 @@ async fn request_json_with_tokens(
     (status, body)
 }
 
+async fn request_json_without_service_tokens(
+    app: axum::Router,
+    method: &str,
+    uri: &str,
+    body: Value,
+) -> (StatusCode, Value) {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .expect("build request"),
+        )
+        .await
+        .expect("request succeeds");
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read response body");
+    let body = serde_json::from_slice(&bytes).expect("response is json");
+    (status, body)
+}
+
+#[tokio::test]
+async fn operator_challenge_bootstrap_supports_exact_idempotent_lookup() {
+    let app = app(AppState::default());
+    let challenge_input = json!({
+        "title": "Alpha Baseline Reproduction",
+        "description": "Frozen public-data bootstrap challenge.",
+        "ruleset_version": "paper-raid-alpha-v1",
+        "ruleset_hash": HASH_A,
+        "dataset_manifest_hash": HASH_B,
+        "evaluator_manifest_hash": HASH_C,
+        "status": "open"
+    });
+
+    let (status, unauthorized) = request_json_without_service_tokens(
+        app.clone(),
+        "GET",
+        "/v1/hepta/operator/challenges",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(unauthorized["code"], "operator_auth_failed");
+
+    let (status, empty) = request_json(
+        app.clone(),
+        "GET",
+        "/v1/hepta/operator/challenges",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(empty, json!([]));
+
+    let (status, created) =
+        request_json(app.clone(), "POST", "/v1/hepta/challenges", challenge_input).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let challenge_id = created["challenge_id"].as_str().expect("challenge id");
+
+    let (status, listed) = request_json(
+        app.clone(),
+        "GET",
+        "/v1/hepta/operator/challenges",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed.as_array().expect("challenge list").len(), 1);
+    assert_eq!(listed[0], created);
+
+    let operator_exact_path = format!("/v1/hepta/operator/challenges/{challenge_id}");
+    let (status, exact) = request_json(app.clone(), "GET", &operator_exact_path, json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(exact, created);
+
+    let (status, unauthorized) =
+        request_json_without_service_tokens(app.clone(), "GET", &operator_exact_path, json!({}))
+            .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(unauthorized["code"], "operator_auth_failed");
+
+    let legacy_exact_path = format!("/v1/hepta/challenges/{challenge_id}");
+    let (status, legacy_exact) =
+        request_json_without_service_tokens(app, "GET", &legacy_exact_path, json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(legacy_exact, created);
+}
+
 #[tokio::test]
 async fn external_agent_completes_registration_enrollment_authorization_and_signed_submission() {
     let app = app(AppState::default());

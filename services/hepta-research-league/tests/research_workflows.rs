@@ -698,7 +698,12 @@ async fn evaluation_nakama_and_trnm_flow_is_deterministic_and_finality_gated() {
     assert!(task_package["platform_model_credentials"].is_null());
 
     let (status, ready) = request(router.clone(), "GET", "/ready", json!({})).await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(ready["ready"], false);
+    assert_eq!(ready["database"], "not_configured");
+    assert!(ready["failures"]
+        .as_array()
+        .is_some_and(|failures| failures.contains(&json!("database_pool_missing"))));
     assert_eq!(
         ready["top_level_modules"],
         json!(["hepta", "nakama", "trnm"])

@@ -32,7 +32,18 @@ HEPTA_OPERATOR_TOKEN='<operator-secret>' \
 HEPTA_NAKAMA_TOKEN='<different-nakama-secret>' \
 HEPTA_NAKAMA_AUTHORIZATION_ISSUER_KEY_ID='<trusted-hepta-key-id>' \
 HEPTA_NAKAMA_AUTHORIZATION_ED25519_SEED_BASE64='<secret-manager-32-byte-seed>' \
+HEPTA_NAKAMA_CONTROL_ISSUER_KEY_ID='<separate-control-key-id>' \
+HEPTA_NAKAMA_CONTROL_ED25519_SEED_BASE64='<separate-secret-manager-32-byte-seed>' \
+HEPTA_NAKAMA_BASE_URL='http://nakama:7350' \
+HEPTA_NAKAMA_RUNTIME_HTTP_KEY='<nakama-runtime-http-key>' \
+HEPTA_CONSUMER_EDGE_ISSUER='<consumer-edge-issuer>' \
+HEPTA_CONSUMER_EDGE_AUDIENCE='hepta-paper-raid-v2' \
+HEPTA_CONSUMER_EDGE_ISSUER_KEY_ID='<consumer-edge-key-id>' \
+HEPTA_CONSUMER_EDGE_ED25519_PUBLIC_KEY_BASE64='<consumer-edge-public-key>' \
+TRNM_NAKAMA_AUTHORITY_KEY_ID='<nakama-completion-key-id>' \
+TRNM_NAKAMA_AUTHORITY_PUBLIC_KEY_BASE64='<nakama-completion-public-key>' \
 HEPTA_TRNM_TOKEN='<different-trnm-secret>' \
+HEPTA_FINALITY_MODE='pending_only' \
 HEPTA_TRNM_VALIDATOR_SETS_JSON='<trusted validator-set JSON>' \
 HEPTA_DATABASE_URL='postgres://hepta:...@postgres/hepta' \
 cargo run -p hepta-research-league
@@ -129,14 +140,48 @@ reuse is rejected. Nakama verifies and consumes the signed claim locally, then
 uses its service-authenticated acknowledgement endpoint so Hepta can retain the
 existing submission gate.
 
+Paper Raid v2 uses a separate signed-control key and four durable Nakama RPC
+commands: create, resume, replace-roster, and complete. Hepta commits the exact
+canonical signed request before network I/O and retries those same bytes after
+timeouts or process death. Applied responses are bound to the request by a
+locally signed response seal and are fully revalidated on replay. The
+authorization issuer, control signer, and Nakama completion authority must be
+three distinct Ed25519 keys.
+
+The container contains no shell, curl, or wget. Its Docker and Compose health
+checks use the service binary itself:
+
+```bash
+/usr/local/bin/hepta-research-league --probe-ready
+```
+
+The probe starts no listener and reads no signing key, service token, or
+database URL. It connects to the configured listener's loopback address and
+accepts only HTTP 200, one exact `Content-Type: application/json`, and
+`ready=true`. The `/ready` handler performs the actual PostgreSQL reachability,
+Nakama-control client, key-separation, authority-trust, and finality-mode checks.
+
 ## Operations
 
-Migration `0031_add_hepta_research_league.sql` creates the durable snapshot,
+Migrations `0031` through `0036` create the durable snapshot,
 transactional outbox/inbox, report indexes, and module receipt tables. Writes
 are serialized across instances inside PostgreSQL; outbox workers use expiring
 leases with `FOR UPDATE SKIP LOCKED`. TRNM success remains
 `pending_finality` until a cryptographically verified final receipt is
 projected. An API token by itself cannot advance the state.
+
+The release Dockerfile pins its Dockerfile frontend, builder, and distroless
+runtime images by digest. A disposable, checksum-pinned Buildx binary performs
+the build; the normalized release root is copied into the final image as one
+layer. The three Chain protocol crates required during compilation are
+byte-for-byte vendored from immutable Chain commit
+`e73d1a930991f0e308bf72854b334b6191c7fcc3`; their per-file provenance is in
+`vendor/trnm-chain-vendor-manifest.json` and is revalidated by the release gate.
+The tracked CycloneDX 1.5 application SBOM is regenerated from locked Cargo
+metadata and compared byte-for-byte at release time. The image binds that SBOM
+and the Git source tree through the canonical `org.trillionnium.*` labels; the
+image builder requires two independent `--no-cache` builds to produce the same
+image ID.
 
 See `docs/hepta-failure-recovery-runbook.md` before production rollout. Service
 tokens should be delivered by the deployment secret manager; they are never
