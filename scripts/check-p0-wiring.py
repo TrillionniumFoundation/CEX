@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fast static wiring checks for the CEX P0 production-baseline branch."""
+"""Fast fail-closed static wiring checks for the active CEX P0 v12 candidate."""
 
 from __future__ import annotations
 
@@ -11,6 +11,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PROBLEMS: list[str] = []
+ACTIVE_PLAN = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"
+SHARED_TRIGGER = "docs/release-evidence/p0-candidate-trigger.json"
+MIGRATION_HEAD = "0084_make_provider_reconciliation_replay_terminal_safe.sql"
+AUTHORITATIVE_WORKFLOWS = (
+    ".github/workflows/p0-migration-gate.yml",
+    ".github/workflows/rust-service-gate.yml",
+    ".github/workflows/p0-gateway-exact-reserve-gate.yml",
+    ".github/workflows/p0-execution-settlement-gate.yml",
+    ".github/workflows/p0-provider-reconciliation-gate.yml",
+)
+RELEASE_WORKFLOW = ".github/workflows/p0-release-candidate-gate.yml"
 
 
 def read_text(relative_path: str) -> str:
@@ -77,6 +88,25 @@ def verify_release_template(expected_filename: str) -> None:
         PROBLEMS.append(
             f"release manifest database.migration_head={recorded!r}, expected {expected_filename!r}"
         )
+
+
+def verify_candidate_trigger() -> None:
+    raw = read_text(SHARED_TRIGGER)
+    if not raw:
+        return
+    try:
+        trigger = json.loads(raw)
+    except json.JSONDecodeError as error:
+        PROBLEMS.append(f"invalid P0 candidate trigger JSON: {error}")
+        return
+    if trigger.get("schema") != "cex.p0-candidate-trigger.v1":
+        PROBLEMS.append("candidate trigger schema is not cex.p0-candidate-trigger.v1")
+    if trigger.get("plan") != Path(ACTIVE_PLAN).name:
+        PROBLEMS.append("candidate trigger is not bound to the active v12 plan")
+    if not isinstance(trigger.get("sequence"), int) or trigger["sequence"] < 1:
+        PROBLEMS.append("candidate trigger sequence must be a positive integer")
+    if trigger.get("production_authorization") != "not_granted":
+        PROBLEMS.append("candidate trigger must explicitly deny production authorization")
 
 
 def verify_core() -> None:
@@ -161,30 +191,66 @@ def verify_gates_and_plan() -> None:
         ".github/workflows/rust-service-gate.yml",
         "scripts/check-p0-wiring.py",
         "cargo fmt --all --check",
+        "cargo check --locked --workspace --all-targets",
+        SHARED_TRIGGER,
     )
     require_text(
         ".github/workflows/p0-migration-gate.yml",
         "scripts/check-invocation-ledger-terminal-postgres.sh",
         "scripts/check-ledger-operation-identity-postgres.sh",
+        SHARED_TRIGGER,
     )
     require_text(
-        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v10.md",
-        "P0-N5 transaction separation remains the activation blocker",
-        "settlement command and receipt schema",
+        ".github/workflows/p0-gateway-exact-reserve-gate.yml",
+        "scripts/check-gateway-exact-reserve-postgres.sh",
+        SHARED_TRIGGER,
     )
+    require_text(
+        ".github/workflows/p0-execution-settlement-gate.yml",
+        "scripts/check-execution-settlement-commands-postgres.sh",
+        SHARED_TRIGGER,
+    )
+    require_text(
+        ".github/workflows/p0-provider-reconciliation-gate.yml",
+        "scripts/check-provider-reconciliation-postgres.sh",
+        SHARED_TRIGGER,
+    )
+    require_text(
+        RELEASE_WORKFLOW,
+        "scripts/p0-release-evidence.py collect",
+        "scripts/check-p0-exact-ledger-soak-postgres.sh",
+        "scripts/check-p0-backup-restore-postgres.sh",
+        SHARED_TRIGGER,
+    )
+    require_text(
+        ACTIVE_PLAN,
+        "Status: active all-blocker closure candidate; **not production-ready**.",
+        f"Candidate migration head: `{MIGRATION_HEAD}`.",
+        "External gates that repository edits cannot self-certify",
+        "Definition of repository closure",
+    )
+
+    for workflow in (*AUTHORITATIVE_WORKFLOWS, RELEASE_WORKFLOW):
+        require_text(workflow, SHARED_TRIGGER)
 
 
 def main() -> int:
     migration_number, migration_filename = latest_migration()
+    if migration_filename and migration_filename != MIGRATION_HEAD:
+        PROBLEMS.append(
+            f"active v12 migration head {MIGRATION_HEAD!r} != repository head {migration_filename!r}"
+        )
     verify_release_template(migration_filename)
+    verify_candidate_trigger()
     verify_core()
     verify_exact_contracts()
     verify_gates_and_plan()
     result = {
         "status": "failed" if PROBLEMS else "ok",
+        "plan": Path(ACTIVE_PLAN).name,
         "migration_number": migration_number,
         "migration_head": migration_filename,
-        "checks": 4,
+        "checks": 5,
         "problems": PROBLEMS,
     }
     print(json.dumps(result, ensure_ascii=False, indent=2))
