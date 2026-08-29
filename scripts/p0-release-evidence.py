@@ -97,22 +97,115 @@ def api_json(url: str, token: str) -> dict[str, Any]:
         return json.load(response)
 
 
+def _run_sort_key(run: dict[str, Any]) -> tuple[str, int, int]:
+    """Return a stable newest-first sort key for a workflow run.
+
+    GitHub normally returns integer ``id``/``run_attempt`` values, but keeping
+    this conversion defensive means a malformed (or test-double) response
+    cannot make evidence collection crash while trying to report the run.
+    """
+
+    def as_int(value: Any) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    return (
+        str(run.get("created_at") or ""),
+        as_int(run.get("run_attempt")),
+        as_int(run.get("id")),
+    )
+
+
+def _workflow_runs(
+    repository: str,
+    sha: str,
+    branch: str,
+    token: str,
+) -> list[dict[str, Any]]:
+    """Read all workflow-run pages for one exact SHA and branch.
+
+    ``head_sha`` alone is not sufficient here: the repository can have many
+    branch refs pointing at the same commit, and each ref may have a separate
+    run.  The API's ``branch`` filter narrows the response, while the caller
+    still performs an exact ``head_branch`` check before selecting evidence.
+    Pagination is intentionally handled here rather than relying on the
+    default first page (which can silently omit an older successful run).
+    """
+
+    per_page = 100
+    page = 1
+    runs_by_id: dict[int, dict[str, Any]] = {}
+    runs_without_id: list[dict[str, Any]] = []
+    endpoint = f"https://api.github.com/repos/{repository}/actions/runs"
+
+    while True:
+        url = endpoint + "?" + urllib.parse.urlencode(
+            {
+                "head_sha": sha,
+                "branch": branch,
+                "per_page": per_page,
+                "page": page,
+            }
+        )
+        payload = api_json(url, token)
+        page_runs = payload.get("workflow_runs")
+        if not isinstance(page_runs, list):
+            raise SystemExit("GitHub Actions response lacks workflow_runs")
+
+        for run in page_runs:
+            if not isinstance(run, dict):
+                continue
+            try:
+                run_id = int(run.get("id"))
+            except (TypeError, ValueError):
+                runs_without_id.append(run)
+            else:
+                # A run should occur on exactly one page.  Deduplicating by
+                # id makes collection deterministic if a run is moved between
+                # pages while the API is being polled.
+                runs_by_id[run_id] = run
+
+        if not page_runs:
+            break
+
+        total_count: int | None = None
+        try:
+            if payload.get("total_count") is not None:
+                total_count = int(payload["total_count"])
+        except (TypeError, ValueError):
+            total_count = None
+
+        # The normal GitHub response gives either a short final page or a
+        # total_count.  If neither is useful, fetch one empty page and stop;
+        # this is conservative and also works with lightweight API doubles.
+        if (total_count is not None and page * per_page >= total_count) or (
+            total_count is None and len(page_runs) < per_page
+        ):
+            break
+        page += 1
+        # A broken API response must not make a release job loop forever.
+        if page > 1000:
+            raise SystemExit("GitHub Actions pagination exceeded 1000 pages")
+
+    return list(runs_by_id.values()) + runs_without_id
+
+
 def collect_gate_runs(
     repository: str,
     sha: str,
     token: str,
     attempts: int,
     interval_seconds: int,
+    *,
+    branch: str,
 ) -> dict[str, dict[str, Any]]:
-    endpoint = (
-        f"https://api.github.com/repos/{repository}/actions/runs?"
-        + urllib.parse.urlencode({"head_sha": sha, "per_page": 100})
-    )
+    if not branch:
+        raise SystemExit("branch is required to bind hosted gate evidence")
+
     for attempt in range(1, attempts + 1):
-        payload = api_json(endpoint, token)
-        all_runs = payload.get("workflow_runs")
-        if not isinstance(all_runs, list):
-            raise SystemExit("GitHub Actions response lacks workflow_runs")
+        all_runs = _workflow_runs(repository, sha, branch, token)
 
         selected: dict[str, dict[str, Any]] = {}
         pending: list[str] = []
@@ -122,28 +215,45 @@ def collect_gate_runs(
                 run
                 for run in all_runs
                 if run.get("head_sha") == sha and run.get("path") == path
+                and run.get("head_branch") == branch
             ]
             if not candidates:
-                pending.append(f"{name}:missing")
+                pending.append(f"{name}:missing(branch={branch})")
                 continue
-            candidates.sort(
-                key=lambda run: (
-                    str(run.get("created_at") or ""),
-                    int(run.get("run_attempt") or 0),
-                    int(run.get("id") or 0),
-                ),
-                reverse=True,
+
+            # A newer cancelled/failed rerun must not erase a valid successful
+            # run for this exact branch and SHA.  Prefer the newest successful
+            # run first, then wait on any active run, and only report a
+            # terminal failure when no success exists.
+            successful = [
+                run
+                for run in candidates
+                if str(run.get("status") or "").lower() == "completed"
+                and str(run.get("conclusion") or "").lower() == "success"
+            ]
+            if successful:
+                selected[name] = max(successful, key=_run_sort_key)
+                continue
+
+            active = [
+                run
+                for run in candidates
+                if str(run.get("status") or "").lower() != "completed"
+            ]
+            if active:
+                run = max(active, key=_run_sort_key)
+                pending.append(f"{name}:{run.get('status') or 'unknown'}")
+                continue
+
+            terminal = [
+                run
+                for run in candidates
+                if str(run.get("status") or "").lower() == "completed"
+            ]
+            run = max(terminal, key=_run_sort_key)
+            failures.append(
+                f"{name}:{run.get('conclusion') or 'unknown'}:run={run.get('id')}"
             )
-            run = candidates[0]
-            status = run.get("status")
-            conclusion = run.get("conclusion")
-            if status != "completed":
-                pending.append(f"{name}:{status}")
-                continue
-            if conclusion != "success":
-                failures.append(f"{name}:{conclusion}:run={run.get('id')}")
-                continue
-            selected[name] = run
 
         if failures:
             raise SystemExit("authoritative hosted gate failed: " + ", ".join(failures))
@@ -258,7 +368,14 @@ def collect(args: argparse.Namespace) -> int:
     interval = int(os.environ.get("CEX_P0_GATE_POLL_INTERVAL_SECONDS", "15"))
     if attempts < 1 or attempts > 240 or interval < 1 or interval > 60:
         raise SystemExit("gate polling bounds are invalid")
-    runs = collect_gate_runs(args.repository, args.sha, token, attempts, interval)
+    runs = collect_gate_runs(
+        args.repository,
+        args.sha,
+        token,
+        attempts,
+        interval,
+        branch=args.branch,
+    )
 
     gate_records: dict[str, dict[str, Any]] = {}
     gates_dir = evidence_dir / "hosted-gates"
@@ -269,7 +386,9 @@ def collect(args: argparse.Namespace) -> int:
             "name": name,
             "workflow_path": path,
             "repository": args.repository,
+            "branch": args.branch,
             "head_sha": args.sha,
+            "head_branch": run.get("head_branch"),
             "run_id": int(run["id"]),
             "run_attempt": int(run.get("run_attempt") or 1),
             "event": run.get("event"),
@@ -386,8 +505,52 @@ def normalize_digest(value: str) -> str:
     return "sha256:" + raw
 
 
+def validate_hosted_gate_context(context: dict[str, Any]) -> None:
+    """Fail closed if hosted gate records are not bound to one branch/SHA."""
+
+    hosted = context.get("hosted_gates")
+    if not isinstance(hosted, dict):
+        raise SystemExit("release context lacks hosted_gates")
+    if set(hosted) != set(REQUIRED_GATES):
+        raise SystemExit("release context hosted_gates do not match required gates")
+
+    repository = context.get("repository")
+    branch = context.get("branch")
+    sha = context.get("commit_sha")
+    if not isinstance(repository, str) or not repository:
+        raise SystemExit("release context repository is missing")
+    if not isinstance(branch, str) or not branch:
+        raise SystemExit("release context branch is missing")
+    if not isinstance(sha, str) or not GIT_SHA_RE.fullmatch(sha):
+        raise SystemExit("release context commit_sha is invalid")
+
+    for name, expected_path in REQUIRED_GATES.items():
+        record = hosted.get(name)
+        if not isinstance(record, dict):
+            raise SystemExit(f"release context hosted gate is invalid: {name}")
+        if record.get("repository") != repository:
+            raise SystemExit(f"hosted gate {name} is bound to a different repository")
+        if record.get("workflow_path") != expected_path:
+            raise SystemExit(f"hosted gate {name} has an unexpected workflow path")
+        if record.get("branch") != branch or record.get("head_branch") != branch:
+            raise SystemExit(f"hosted gate {name} is bound to a different branch")
+        if record.get("head_sha") != sha:
+            raise SystemExit(f"hosted gate {name} is bound to a different commit")
+        if record.get("status") != "completed" or record.get("conclusion") != "success":
+            raise SystemExit(f"hosted gate {name} is not a completed success")
+        try:
+            run_id = int(record.get("run_id"))
+        except (TypeError, ValueError):
+            run_id = 0
+        if run_id <= 0:
+            raise SystemExit(f"hosted gate {name} has an invalid run id")
+
+
 def manifest(args: argparse.Namespace) -> int:
     context = json.loads(args.context.read_text(encoding="utf-8"))
+    if not isinstance(context, dict):
+        raise SystemExit("release context must be an object")
+    validate_hosted_gate_context(context)
     payload_digest = normalize_digest(args.payload_digest)
     payload_uri = (
         f"gh://{context['repository']}/actions/runs/{context['workflow_run_id']}"
