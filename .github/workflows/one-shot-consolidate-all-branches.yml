@@ -15,7 +15,7 @@ concurrency:
 
 env:
   AUTOMATION_BRANCH: automation/consolidate-all-branches-20260829
-  REPORT_DIR: run/branch-consolidation
+  REPORT_DIR: ${{ runner.temp }}/cex-branch-consolidation
 
 jobs:
   consolidate:
@@ -23,7 +23,7 @@ jobs:
     timeout-minutes: 180
 
     steps:
-      - name: Checkout automation controller
+      - name: Checkout controller with complete history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
@@ -33,21 +33,17 @@ jobs:
         with:
           components: rustfmt
 
-      - name: Cache Cargo artifacts
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-
-      - name: Snapshot and merge every non-main branch
+      - name: Merge every branch tip into one history
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$REPORT_DIR"
-
           git config user.name "CEX Branch Consolidation"
           git config user.email "branch-consolidation@users.noreply.github.com"
           git fetch --force --prune origin '+refs/heads/*:refs/remotes/origin/*'
 
           MAIN_SHA="$(git rev-parse refs/remotes/origin/main)"
-          echo "$MAIN_SHA" > "$REPORT_DIR/main-before.txt"
+          printf '%s\n' "$MAIN_SHA" > "$REPORT_DIR/main-before.txt"
           git checkout -B consolidated-main refs/remotes/origin/main
 
           python3 - <<'PY'
@@ -59,14 +55,11 @@ jobs:
           from pathlib import Path
 
           report_dir = Path(os.environ["REPORT_DIR"])
-          automation_branch = os.environ["AUTOMATION_BRANCH"]
+          automation = os.environ["AUTOMATION_BRANCH"]
 
-          def git(*args: str, check: bool = True, text: bool = True):
+          def git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
               return subprocess.run(
-                  ["git", *args],
-                  check=check,
-                  capture_output=True,
-                  text=text,
+                  ["git", *args], check=check, capture_output=True, text=True
               )
 
           raw = git(
@@ -74,55 +67,44 @@ jobs:
               "--format=%(refname:strip=3)|%(objectname)|%(committerdate:unix)",
               "refs/remotes/origin",
           ).stdout.splitlines()
-
           branches: list[dict[str, object]] = []
           for line in raw:
               if not line:
                   continue
-              name, sha, timestamp = line.split("|", 2)
+              name, sha, epoch = line.split("|", 2)
               if name in {"HEAD", "main"}:
                   continue
               branches.append(
-                  {
-                      "branch": name,
-                      "sha": sha,
-                      "committer_epoch": int(timestamp),
-                  }
+                  {"branch": name, "sha": sha, "committer_epoch": int(epoch)}
               )
 
-          by_sha: dict[str, list[dict[str, object]]] = {}
+          aliases_by_sha: dict[str, list[dict[str, object]]] = {}
           for branch in branches:
-              by_sha.setdefault(str(branch["sha"]), []).append(branch)
+              aliases_by_sha.setdefault(str(branch["sha"]), []).append(branch)
 
-          special_rank = {
+          rank = {
               "feature/hepta-paper-raid-alpha-candidate": 1,
               "feature/settlement-all-blockers-closure-v1": 2,
-              automation_branch: 3,
+              automation: 3,
           }
-
           groups: list[dict[str, object]] = []
-          for sha, aliases_raw in by_sha.items():
+          for sha, aliases_raw in aliases_by_sha.items():
               aliases = sorted(str(item["branch"]) for item in aliases_raw)
-              timestamp = max(int(item["committer_epoch"]) for item in aliases_raw)
-              ranked = sorted(
-                  aliases,
-                  key=lambda name: (special_rank.get(name, 0), name),
-                  reverse=True,
-              )
-              representative = ranked[0]
+              representative = max(aliases, key=lambda name: (rank.get(name, 0), name))
               groups.append(
                   {
                       "sha": sha,
                       "aliases": aliases,
                       "representative": representative,
-                      "committer_epoch": timestamp,
-                      "special_rank": max(special_rank.get(name, 0) for name in aliases),
+                      "committer_epoch": max(
+                          int(item["committer_epoch"]) for item in aliases_raw
+                      ),
+                      "rank": max(rank.get(name, 0) for name in aliases),
                   }
               )
-
           groups.sort(
               key=lambda item: (
-                  int(item["special_rank"]),
+                  int(item["rank"]),
                   int(item["committer_epoch"]),
                   str(item["representative"]),
               )
@@ -130,27 +112,19 @@ jobs:
 
           plan = {
               "schema": "cex.branch-consolidation-plan.v1",
-              "automation_branch": automation_branch,
               "main_before": git("rev-parse", "refs/remotes/origin/main").stdout.strip(),
               "source_branch_count": len(branches),
               "unique_tip_count": len(groups),
               "branches": sorted(branches, key=lambda item: str(item["branch"])),
               "merge_groups": groups,
               "policy": {
-                  "order": "oldest-tip-first-with-canonical-candidates-and-controller-last",
-                  "conflict_resolution": "incoming-later-branch-wins-conflicted-path",
+                  "order": "oldest-first; canonical candidates and controller last",
+                  "conflict_resolution": "later incoming branch wins conflicted path",
                   "canonical_migration_source": "feature/settlement-all-blockers-closure-v1",
-                  "deletion_preconditions": [
-                      "every source tip is an ancestor of final HEAD",
-                      "repository hygiene checks pass",
-                      "cargo fmt/check/test pass",
-                      "main push succeeds with force-with-lease",
-                  ],
               },
           }
           (report_dir / "plan.json").write_text(
-              json.dumps(plan, indent=2, sort_keys=True) + "\n",
-              encoding="utf-8",
+              json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8"
           )
 
           results: list[dict[str, object]] = []
@@ -158,8 +132,6 @@ jobs:
               sha = str(group["sha"])
               representative = str(group["representative"])
               aliases = list(group["aliases"])
-              remote_ref = f"refs/remotes/origin/{representative}"
-
               if git("merge-base", "--is-ancestor", sha, "HEAD", check=False).returncode == 0:
                   results.append(
                       {
@@ -168,7 +140,6 @@ jobs:
                           "aliases": aliases,
                           "action": "already_included",
                           "conflicts": [],
-                          "head_after": git("rev-parse", "HEAD").stdout.strip(),
                       }
                   )
                   continue
@@ -180,51 +151,36 @@ jobs:
                   "--allow-unrelated-histories",
                   "-X",
                   "theirs",
-                  remote_ref,
+                  f"refs/remotes/origin/{representative}",
                   check=False,
               )
               conflicts: list[str] = []
               if merge.returncode != 0:
-                  unmerged_raw = subprocess.run(
+                  raw_paths = subprocess.run(
                       ["git", "diff", "--name-only", "--diff-filter=U", "-z"],
                       check=True,
                       capture_output=True,
                   ).stdout
-                  if not unmerged_raw:
+                  if not raw_paths:
                       raise SystemExit(
-                          "merge failed without resolvable index conflicts for "
-                          f"{representative}@{sha}: {merge.stderr.strip()}"
+                          f"merge failed without index conflicts: {representative}@{sha}: "
+                          + merge.stderr.strip()
                       )
-                  for raw_path in unmerged_raw.split(b"\0"):
+                  for raw_path in raw_paths.split(b"\0"):
                       if not raw_path:
                           continue
                       path = raw_path.decode("utf-8", "surrogateescape")
                       conflicts.append(path)
-                      has_theirs = git("cat-file", "-e", f":3:{path}", check=False).returncode == 0
-                      if has_theirs:
-                          checkout = git("checkout", "--theirs", "--", path, check=False)
-                          if checkout.returncode != 0:
-                              blob = subprocess.run(
-                                  ["git", "show", f":3:{path}"],
-                                  check=True,
-                                  capture_output=True,
-                              ).stdout
-                              target = Path(path)
-                              target.parent.mkdir(parents=True, exist_ok=True)
-                              target.write_bytes(blob)
+                      if git("cat-file", "-e", f":3:{path}", check=False).returncode == 0:
+                          git("checkout", "--theirs", "--", path)
                       else:
                           git("rm", "-f", "--ignore-unmatch", "--", path, check=False)
-
                   git("add", "-A")
-                  remaining = git(
-                      "diff",
-                      "--name-only",
-                      "--diff-filter=U",
+                  unresolved = git(
+                      "diff", "--name-only", "--diff-filter=U"
                   ).stdout.strip()
-                  if remaining:
-                      raise SystemExit(
-                          f"unresolved conflicts remain after deterministic resolution: {remaining}"
-                      )
+                  if unresolved:
+                      raise SystemExit("unresolved conflicts: " + unresolved)
                   git(
                       "commit",
                       "--no-verify",
@@ -234,7 +190,6 @@ jobs:
                   action = "merged_with_conflict_resolution"
               else:
                   action = "merged_cleanly"
-
               results.append(
                   {
                       "sha": sha,
@@ -242,47 +197,47 @@ jobs:
                       "aliases": aliases,
                       "action": action,
                       "conflicts": sorted(conflicts),
-                      "head_after": git("rev-parse", "HEAD").stdout.strip(),
                   }
               )
 
-          missing: list[str] = []
-          for branch in branches:
-              sha = str(branch["sha"])
-              if git("merge-base", "--is-ancestor", sha, "HEAD", check=False).returncode != 0:
-                  missing.append(f"{branch['branch']}@{sha}")
+          missing = [
+              f"{item['branch']}@{item['sha']}"
+              for item in branches
+              if git(
+                  "merge-base", "--is-ancestor", str(item["sha"]), "HEAD", check=False
+              ).returncode
+              != 0
+          ]
           if missing:
-              raise SystemExit("source tips missing from consolidated history: " + ", ".join(missing))
+              raise SystemExit("source tips missing from final history: " + ", ".join(missing))
 
-          payload = {
+          result = {
               "schema": "cex.branch-consolidation-result.v1",
               "main_before": plan["main_before"],
-              "merge_head": git("rev-parse", "HEAD").stdout.strip(),
-              "source_branch_count": len(branches),
-              "unique_tip_count": len(groups),
+              "merged_head": git("rev-parse", "HEAD").stdout.strip(),
               "all_source_tips_are_ancestors": True,
               "results": results,
           }
           (report_dir / "merge-result.json").write_text(
-              json.dumps(payload, indent=2, sort_keys=True) + "\n",
-              encoding="utf-8",
+              json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
           )
           PY
 
-      - name: Restore canonical migration chain and text encoding
+      - name: Canonicalize final tree and reconcile Cargo lock
         shell: bash
         run: |
           set -euo pipefail
+
           git rm -r -f --ignore-unmatch migrations
-          git checkout refs/remotes/origin/feature/settlement-all-blockers-closure-v1 -- migrations
+          git checkout refs/remotes/origin/feature/settlement-all-blockers-closure-v1 -- \
+            migrations Cargo.lock
 
           python3 - <<'PY'
           from pathlib import Path
           import subprocess
 
-          paths = subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0")
           cleaned = []
-          for raw in paths:
+          for raw in subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0"):
               if not raw:
                   continue
               path = Path(raw.decode("utf-8", "surrogateescape"))
@@ -292,30 +247,12 @@ jobs:
               if data.startswith(b"\xef\xbb\xbf"):
                   path.write_bytes(data[3:])
                   cleaned.append(path.as_posix())
-          print("removed UTF-8 BOM from:", cleaned)
+          print("removed UTF-8 BOM from", cleaned)
           PY
 
           git rm -f --ignore-unmatch .github/workflows/one-shot-consolidate-all-branches.yml
-          git add -A
-          if ! git diff --cached --quiet; then
-            git commit --no-verify -m "chore: restore canonical migration chain after branch consolidation"
-          fi
-
-      - name: Normalize Rust formatting after integration
-        shell: bash
-        run: |
-          set -euo pipefail
           cargo fmt --all
-          if ! git diff --quiet; then
-            git add -A
-            git commit --no-verify -m "style: normalize formatting after branch consolidation"
-          fi
-          cargo fmt --all --check
 
-      - name: Commit consolidation audit ledger
-        shell: bash
-        run: |
-          set -euo pipefail
           python3 - <<'PY'
           from __future__ import annotations
 
@@ -328,17 +265,15 @@ jobs:
           report_dir = Path(os.environ["REPORT_DIR"])
           plan = json.loads((report_dir / "plan.json").read_text(encoding="utf-8"))
           result = json.loads((report_dir / "merge-result.json").read_text(encoding="utf-8"))
-          archive_dir = Path("docs/archive")
-          archive_dir.mkdir(parents=True, exist_ok=True)
-
-          merge_head = subprocess.check_output(
-              ["git", "rev-parse", "HEAD"], text=True
-          ).strip()
+          archive = Path("docs/archive")
+          archive.mkdir(parents=True, exist_ok=True)
           ledger = {
               "schema": "cex.branch-consolidation-ledger.v1",
               "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
               "main_before": plan["main_before"],
-              "merge_head_before_ledger_commit": merge_head,
+              "pre_validation_head": subprocess.check_output(
+                  ["git", "rev-parse", "HEAD"], text=True
+              ).strip(),
               "source_branch_count": plan["source_branch_count"],
               "unique_tip_count": plan["unique_tip_count"],
               "policy": plan["policy"],
@@ -347,146 +282,139 @@ jobs:
               "all_source_tips_are_ancestors": True,
               "final_branch_policy": "retain only refs/heads/main",
           }
-          json_path = archive_dir / "branch-consolidation-2026-08-29.json"
-          json_path.write_text(
-              json.dumps(ledger, indent=2, sort_keys=True) + "\n",
-              encoding="utf-8",
+          (archive / "branch-consolidation-2026-08-29.json").write_text(
+              json.dumps(ledger, indent=2, sort_keys=True) + "\n", encoding="utf-8"
           )
-
-          conflict_count = sum(len(item["conflicts"]) for item in result["results"])
-          merged = sum(
-              item["action"].startswith("merged") for item in result["results"]
-          )
+          conflicts = sum(len(item["conflicts"]) for item in result["results"])
+          merged = sum(item["action"].startswith("merged") for item in result["results"])
           already = sum(item["action"] == "already_included" for item in result["results"])
-          lines = [
-              "# Branch consolidation — 2026-08-29",
-              "",
-              f"- Source branches: **{plan['source_branch_count']}**",
-              f"- Unique branch tips: **{plan['unique_tip_count']}**",
-              f"- Tips merged during this run: **{merged}**",
-              f"- Tips already contained by prior merges: **{already}**",
-              f"- Conflicted paths resolved deterministically: **{conflict_count}**",
-              f"- Main before consolidation: `{plan['main_before']}`",
-              f"- Merge head before this audit commit: `{merge_head}`",
-              "- Every source branch tip, including the one-shot controller, is retained as an ancestor.",
-              "- Final policy: only `main` remains as a branch.",
-              "",
-              "The machine-readable source ledger, merge order, aliases and conflict paths are stored in",
-              "`docs/archive/branch-consolidation-2026-08-29.json`.",
-              "",
-          ]
-          (archive_dir / "branch-consolidation-2026-08-29.md").write_text(
-              "\n".join(lines),
+          (archive / "branch-consolidation-2026-08-29.md").write_text(
+              "\n".join(
+                  [
+                      "# Branch consolidation — 2026-08-29",
+                      "",
+                      f"- Source branches: **{plan['source_branch_count']}**",
+                      f"- Unique branch tips: **{plan['unique_tip_count']}**",
+                      f"- Tips merged: **{merged}**",
+                      f"- Tips already included: **{already}**",
+                      f"- Conflicted paths resolved: **{conflicts}**",
+                      f"- Main before: `{plan['main_before']}`",
+                      "- Every source tip is retained as an ancestor of the final main history.",
+                      "- Final branch policy: only `main` remains.",
+                      "",
+                  ]
+              ),
               encoding="utf-8",
           )
           PY
-          git add docs/archive/branch-consolidation-2026-08-29.json \
-                  docs/archive/branch-consolidation-2026-08-29.md
-          git commit --no-verify -m "docs: record all-branch consolidation ledger"
 
-      - name: Validate consolidated repository
+          # The union of all branches may add workspace members or dependencies.  Allow one
+          # controlled reconciliation, commit it, then all authoritative checks run --locked.
+          cargo check --workspace --all-targets
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit --no-verify -m "merge: consolidate all repository branches into main"
+          fi
+          cargo fmt --all --check
+          cargo metadata --locked --format-version 1 --no-deps >/dev/null
+
+      - name: Validate immutable consolidated tree
         shell: bash
         run: |
           set -euo pipefail
           git diff --check "$(cat "$REPORT_DIR/main-before.txt")"..HEAD -- \
             '*.rs' '*.toml' '*.py' '*.sh' '*.ps1' '*.yml' '*.yaml' '*.json'
-          cargo fmt --all --check
-          if [[ -f scripts/check-p0-release-candidate-hygiene.py ]]; then
-            python3 scripts/check-p0-release-candidate-hygiene.py
-          fi
-          if [[ -f scripts/check-p0-wiring.py ]]; then
-            python3 scripts/check-p0-wiring.py
-          fi
-          if [[ -f scripts/check-trnm-settlement-receipt-lookup.py ]]; then
-            python3 scripts/check-trnm-settlement-receipt-lookup.py
-          fi
+          python3 scripts/check-p0-release-candidate-hygiene.py
+          python3 scripts/check-p0-wiring.py
+          python3 scripts/check-trnm-settlement-receipt-lookup.py
           cargo check --workspace --all-targets --locked
           cargo test --workspace --locked
 
-      - name: Advance main and delete every other branch
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          report = Path(os.environ["REPORT_DIR"])
+          plan = json.loads((report / "plan.json").read_text(encoding="utf-8"))
+          final_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          missing = []
+          for item in plan["branches"]:
+              result = subprocess.run(
+                  ["git", "merge-base", "--is-ancestor", item["sha"], final_sha]
+              )
+              if result.returncode != 0:
+                  missing.append(f"{item['branch']}@{item['sha']}")
+          if missing:
+              raise SystemExit("post-validation ancestor loss: " + ", ".join(missing))
+          (report / "validated-head.txt").write_text(final_sha + "\n", encoding="utf-8")
+          PY
+
+      - name: Advance main and delete all other branches
         shell: bash
         run: |
           set -euo pipefail
-          MAIN_SHA="$(cat "$REPORT_DIR/main-before.txt")"
-          FINAL_SHA="$(git rev-parse HEAD)"
-          echo "$FINAL_SHA" > "$REPORT_DIR/main-after.txt"
+          EXPECTED_MAIN="$(cat "$REPORT_DIR/main-before.txt")"
+          FINAL_SHA="$(cat "$REPORT_DIR/validated-head.txt")"
+          REMOTE_MAIN="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          [[ "$REMOTE_MAIN" == "$EXPECTED_MAIN" ]] || {
+            echo "main moved during consolidation: expected=$EXPECTED_MAIN actual=$REMOTE_MAIN" >&2
+            exit 1
+          }
 
-          git push \
-            --force-with-lease="refs/heads/main:${MAIN_SHA}" \
-            origin HEAD:refs/heads/main
+          git push origin HEAD:refs/heads/main
+          printf '%s\n' "$FINAL_SHA" > "$REPORT_DIR/main-after.txt"
 
           git fetch --force --prune origin '+refs/heads/*:refs/remotes/origin/*'
           mapfile -t branches < <(
-            git for-each-ref \
-              --format='%(refname:strip=3)' \
-              refs/remotes/origin \
-              | grep -vE '^(HEAD|main)$' \
-              | sort -u
+            git for-each-ref --format='%(refname:strip=3)' refs/remotes/origin \
+              | grep -vE '^(HEAD|main)$' | sort -u
           )
-
           : > "$REPORT_DIR/deleted-branches.txt"
           : > "$REPORT_DIR/delete-failures.txt"
+
+          # Delete the controller last so its own running workflow remains addressable.
           for branch in "${branches[@]}"; do
+            [[ "$branch" == "$AUTOMATION_BRANCH" ]] && continue
             if git push origin --delete "$branch"; then
               printf '%s\n' "$branch" >> "$REPORT_DIR/deleted-branches.txt"
             else
               printf '%s\n' "$branch" >> "$REPORT_DIR/delete-failures.txt"
             fi
           done
-
-          if [[ -s "$REPORT_DIR/delete-failures.txt" ]]; then
-            cp "$REPORT_DIR/delete-failures.txt" "$REPORT_DIR/delete-failures-first-pass.txt"
-            : > "$REPORT_DIR/delete-failures.txt"
-            while IFS= read -r branch; do
-              [[ -n "$branch" ]] || continue
-              if git push origin ":refs/heads/$branch"; then
-                printf '%s\n' "$branch" >> "$REPORT_DIR/deleted-branches.txt"
-              else
-                printf '%s\n' "$branch" >> "$REPORT_DIR/delete-failures.txt"
-              fi
-            done < "$REPORT_DIR/delete-failures-first-pass.txt"
+          if printf '%s\n' "${branches[@]}" | grep -Fxq "$AUTOMATION_BRANCH"; then
+            if git push origin --delete "$AUTOMATION_BRANCH"; then
+              printf '%s\n' "$AUTOMATION_BRANCH" >> "$REPORT_DIR/deleted-branches.txt"
+            else
+              printf '%s\n' "$AUTOMATION_BRANCH" >> "$REPORT_DIR/delete-failures.txt"
+            fi
           fi
 
           if [[ -s "$REPORT_DIR/delete-failures.txt" ]]; then
-            echo "failed to delete these branches:" >&2
+            echo "branch deletion failures:" >&2
             cat "$REPORT_DIR/delete-failures.txt" >&2
             exit 1
           fi
 
           git ls-remote --heads origin | sort > "$REPORT_DIR/final-heads.txt"
-          python3 - <<'PY'
-          from pathlib import Path
-          import os
+          [[ "$(wc -l < "$REPORT_DIR/final-heads.txt")" -eq 1 ]]
+          grep -Fxq "$FINAL_SHA	refs/heads/main" "$REPORT_DIR/final-heads.txt"
 
-          report_dir = Path(os.environ["REPORT_DIR"])
-          rows = [
-              line.split()
-              for line in (report_dir / "final-heads.txt").read_text(encoding="utf-8").splitlines()
-              if line.strip()
-          ]
-          expected = (report_dir / "main-after.txt").read_text(encoding="utf-8").strip()
-          if rows != [[expected, "refs/heads/main"]]:
-              raise SystemExit(f"expected only main@{expected}, observed: {rows}")
-          PY
-
-      - name: Publish final consolidation summary
+      - name: Publish final summary
         if: always()
         shell: bash
         run: |
           {
-            echo "## CEX branch consolidation"
+            echo '## CEX all-branch consolidation'
             echo
-            if [[ -f "$REPORT_DIR/main-before.txt" ]]; then
-              echo "- Main before: \`$(cat "$REPORT_DIR/main-before.txt")\`"
-            fi
-            if [[ -f "$REPORT_DIR/main-after.txt" ]]; then
-              echo "- Main after: \`$(cat "$REPORT_DIR/main-after.txt")\`"
-            fi
+            [[ -f "$REPORT_DIR/main-before.txt" ]] && echo "- Main before: \`$(cat "$REPORT_DIR/main-before.txt")\`"
+            [[ -f "$REPORT_DIR/main-after.txt" ]] && echo "- Main after: \`$(cat "$REPORT_DIR/main-after.txt")\`"
             if [[ -f "$REPORT_DIR/deleted-branches.txt" ]]; then
-              echo "- Deleted branches: \`$(sort -u "$REPORT_DIR/deleted-branches.txt" | sed '/^$/d' | wc -l)\`"
+              echo "- Deleted branches: \`$(sed '/^$/d' "$REPORT_DIR/deleted-branches.txt" | sort -u | wc -l)\`"
             fi
             if [[ -f "$REPORT_DIR/final-heads.txt" ]]; then
-              echo "- Final heads:"
+              echo '- Final heads:'
               echo '```text'
               cat "$REPORT_DIR/final-heads.txt"
               echo '```'
@@ -498,6 +426,6 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: cex-branch-consolidation-${{ github.run_id }}
-          path: run/branch-consolidation
+          path: ${{ runner.temp }}/cex-branch-consolidation
           if-no-files-found: warn
           retention-days: 90
