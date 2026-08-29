@@ -12,6 +12,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PROBLEMS: list[str] = []
 ACTIVE_PLAN = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"
+ACTIVE_ADDENDUM = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md"
+DOC_CHECKER = "scripts/check-development-docs.py"
 SHARED_TRIGGER = "docs/release-evidence/p0-candidate-trigger.json"
 MIGRATION_HEAD = "0084_make_provider_reconciliation_replay_terminal_safe.sql"
 AUTHORITATIVE_WORKFLOWS = (
@@ -186,10 +188,28 @@ def verify_exact_contracts() -> None:
                 PROBLEMS.append(f"{script} failed: {result.stdout.strip()}")
 
 
+def verify_development_documents() -> None:
+    result = subprocess.run(
+        [sys.executable, str(ROOT / DOC_CHECKER)],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    if result.returncode != 0:
+        PROBLEMS.append(f"development-document contract failed: {result.stdout.strip()}")
+
+
 def verify_gates_and_plan() -> None:
     require_text(
         ".github/workflows/rust-service-gate.yml",
         "scripts/check-p0-wiring.py",
+        "scripts/check-development-docs.py",
+        "scripts/check-repository-integrity.py",
+        "scripts/check-hepta-postgres-integration.sh",
+        "repository-integrity:",
+        "hepta-postgres-integration:",
         "cargo fmt --all --check",
         "cargo check --locked --workspace --all-targets",
         SHARED_TRIGGER,
@@ -220,6 +240,9 @@ def verify_gates_and_plan() -> None:
         "scripts/p0-release-evidence.py collect",
         "scripts/check-p0-exact-ledger-soak-postgres.sh",
         "scripts/check-p0-backup-restore-postgres.sh",
+        "scripts/check-development-docs.py",
+        "scripts/check-repository-integrity.py",
+        "scripts/check-hepta-postgres-integration.sh --mode recovery-only",
         SHARED_TRIGGER,
     )
     require_text(
@@ -228,6 +251,18 @@ def verify_gates_and_plan() -> None:
         f"Candidate migration head: `{MIGRATION_HEAD}`.",
         "External gates that repository edits cannot self-certify",
         "Definition of repository closure",
+    )
+    require_text(
+        ACTIVE_ADDENDUM,
+        "Block H",
+        "Block I",
+        "REPOSITORY_CLOSED_CANDIDATE",
+        "External production gates remain upstream blockers",
+    )
+    require_text(
+        "services/hepta-research-league/tests/postgres_recovery.rs",
+        "HEPTA_REQUIRE_POSTGRES_TESTS",
+        "strict PostgreSQL integration test",
     )
 
     for workflow in (*AUTHORITATIVE_WORKFLOWS, RELEASE_WORKFLOW):
@@ -244,13 +279,15 @@ def main() -> int:
     verify_candidate_trigger()
     verify_core()
     verify_exact_contracts()
+    verify_development_documents()
     verify_gates_and_plan()
     result = {
         "status": "failed" if PROBLEMS else "ok",
         "plan": Path(ACTIVE_PLAN).name,
+        "addendum": Path(ACTIVE_ADDENDUM).name,
         "migration_number": migration_number,
         "migration_head": migration_filename,
-        "checks": 5,
+        "checks": 6,
         "problems": PROBLEMS,
     }
     print(json.dumps(result, ensure_ascii=False, indent=2))
