@@ -1,5 +1,6 @@
 pub mod account_control;
 pub mod api;
+pub mod inventory_signature;
 pub mod ledger_effects;
 pub mod repository;
 pub mod state;
@@ -19,7 +20,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v2/account-opening-inventories", post(account_control::build_inventory))
         .route(
             "/v2/account-opening-inventories/:run_id/seal",
-            post(account_control::seal_inventory),
+            post(inventory_signature::seal_inventory),
         )
         .route("/v2/account-projections", post(account_control::capture_projection))
         .route("/v2/account-projections/status/:org_id", get(account_control::projection_status))
