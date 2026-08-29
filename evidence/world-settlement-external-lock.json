@@ -3,8 +3,8 @@
   "world": {
     "repository": "TrillionniumFoundation/Trillionnium-World",
     "branch": "fix/world-settlement-gap-closure-v1",
-    "commit": "fa25187b0529ca0258344c75a612d66b706752a0",
-    "tree": "2adfa36dbb305b29cd07344916a4e8e3e0b34bef"
+    "commit": "321a24536b76415eeb2d9237c4bb214f04074ab1",
+    "tree": "6e6eb33e100ad1e26b463edc63e77591ff049487"
   },
   "cex_owner": {
     "repository": "TrillionniumFoundation/CEX",
@@ -14,8 +14,8 @@
   },
   "manual_rearm": {
     "actor": "Tomasrgbsf",
-    "generation": 3,
-    "reason": "break bot-authored refresh loop and execute human-authored exact-source relay"
+    "generation": 4,
+    "reason": "bind repaired worker-contract source and rerun the complete exact-source matrix"
   },
   "promotion_effect": "none",
   "native_world_actions_run": false,
