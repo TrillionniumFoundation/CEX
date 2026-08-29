@@ -80,7 +80,7 @@ jobs:
               if not line:
                   continue
               name, sha, timestamp = line.split("|", 2)
-              if name in {"HEAD", "main", automation_branch}:
+              if name in {"HEAD", "main"}:
                   continue
               branches.append(
                   {
@@ -97,6 +97,7 @@ jobs:
           special_rank = {
               "feature/hepta-paper-raid-alpha-candidate": 1,
               "feature/settlement-all-blockers-closure-v1": 2,
+              automation_branch: 3,
           }
 
           groups: list[dict[str, object]] = []
@@ -136,8 +137,9 @@ jobs:
               "branches": sorted(branches, key=lambda item: str(item["branch"])),
               "merge_groups": groups,
               "policy": {
-                  "order": "oldest-tip-first-with-canonical-candidates-last",
+                  "order": "oldest-tip-first-with-canonical-candidates-and-controller-last",
                   "conflict_resolution": "incoming-later-branch-wins-conflicted-path",
+                  "canonical_migration_source": "feature/settlement-all-blockers-closure-v1",
                   "deletion_preconditions": [
                       "every source tip is an ancestor of final HEAD",
                       "repository hygiene checks pass",
@@ -193,8 +195,7 @@ jobs:
                           "merge failed without resolvable index conflicts for "
                           f"{representative}@{sha}: {merge.stderr.strip()}"
                       )
-                  unmerged = unmerged_raw.split(b"\0")
-                  for raw_path in unmerged:
+                  for raw_path in unmerged_raw.split(b"\0"):
                       if not raw_path:
                           continue
                       path = raw_path.decode("utf-8", "surrogateescape")
@@ -219,7 +220,6 @@ jobs:
                       "diff",
                       "--name-only",
                       "--diff-filter=U",
-                      check=True,
                   ).stdout.strip()
                   if remaining:
                       raise SystemExit(
@@ -268,6 +268,38 @@ jobs:
               encoding="utf-8",
           )
           PY
+
+      - name: Restore canonical migration chain and text encoding
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm -r -f --ignore-unmatch migrations
+          git checkout refs/remotes/origin/feature/settlement-all-blockers-closure-v1 -- migrations
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          paths = subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0")
+          cleaned = []
+          for raw in paths:
+              if not raw:
+                  continue
+              path = Path(raw.decode("utf-8", "surrogateescape"))
+              if not path.is_file():
+                  continue
+              data = path.read_bytes()
+              if data.startswith(b"\xef\xbb\xbf"):
+                  path.write_bytes(data[3:])
+                  cleaned.append(path.as_posix())
+          print("removed UTF-8 BOM from:", cleaned)
+          PY
+
+          git rm -f --ignore-unmatch .github/workflows/one-shot-consolidate-all-branches.yml
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit --no-verify -m "chore: restore canonical migration chain after branch consolidation"
+          fi
 
       - name: Normalize Rust formatting after integration
         shell: bash
@@ -336,7 +368,8 @@ jobs:
               f"- Conflicted paths resolved deterministically: **{conflict_count}**",
               f"- Main before consolidation: `{plan['main_before']}`",
               f"- Merge head before this audit commit: `{merge_head}`",
-              "- Final policy: every source tip is retained in Git history; only `main` remains as a branch.",
+              "- Every source branch tip, including the one-shot controller, is retained as an ancestor.",
+              "- Final policy: only `main` remains as a branch.",
               "",
               "The machine-readable source ledger, merge order, aliases and conflict paths are stored in",
               "`docs/archive/branch-consolidation-2026-08-29.json`.",
