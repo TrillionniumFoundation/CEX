@@ -128,7 +128,7 @@ Audit payload.
 ### Identity
 
 Migration 0062 adds database-owned `api_keys.audit_revision` and same-transaction intents
-for issue, revoke, expiry, material and administrative metadata changes. `last_used_at`-only
+for issue, revoke, expiry, material and administrative metadata changes. `last_used_at-only`
 auth telemetry is suppressed, and raw keys/key hashes are never copied.
 
 See `docs/audit-source-transactional-enqueue-v1.md`.

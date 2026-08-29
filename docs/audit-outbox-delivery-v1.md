@@ -41,7 +41,7 @@ intent is absent. The dispatcher may be temporarily unavailable without losing t
 - complete Audit append receipt;
 - delivered/dead-letter timestamps.
 
-Transitions are exposed through:
+Transitions are exposed only through:
 
 - `cex_claim_audit_outbox_v1`;
 - `cex_mark_audit_outbox_delivered_v1`;
@@ -58,10 +58,8 @@ transaction:
 
 - non-nil event and trace IDs;
 - relational/envelope org parity;
-- strict actor/event component shape;
-- bounded actor id;
 - `cex.audit.event.v2` schema;
-- valid occurrence time;
+- valid actor/event/time/payload shape;
 - no `_cex_audit_writer` spoofing;
 - `_cex_audit_source_service` parity;
 - one immutable event identity.
@@ -127,9 +125,9 @@ attempt-budget exhaustion and dead-letter transition.
 ## Resource bounds
 
 `Content-Length` is rejected before body collection when it exceeds the configured limit.
-The response is then read chunk by chunk and aborted as soon as the cumulative size would
-exceed the same hard limit. Request timeout provides an independent upper bound and must
-remain shorter than the claim lease.
+The collected body is checked again after read. Chunked responses are additionally bounded
+by the request timeout; this version does not claim a streaming byte-hard-cap for a
+malicious chunked peer.
 
 Production defaults:
 
@@ -140,6 +138,8 @@ request timeout:  20s
 poll:              2s
 response limit: 256 KiB
 ```
+
+Request timeout must be shorter than the claim lease.
 
 ## Operation
 

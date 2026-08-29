@@ -3,6 +3,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 use shared_config::{build_admin_principal_map, load_ledger_scoped_admin_tokens, AdminPrincipal};
+use sqlx::PgPool;
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -48,7 +49,9 @@ pub struct AppState {
     pub entries: Arc<RwLock<Vec<LedgerEntryRecord>>>,
     pub idempotency_keys: Arc<RwLock<HashSet<String>>>,
     pub repository: LedgerRepositoryHandle,
+    pub operation_pool: Option<PgPool>,
     pub fail_fast: bool,
+    pub require_explicit_ledger_trace: bool,
     pub admin_tokens: Arc<HashMap<String, AdminPrincipal>>,
     pub entitlement_signing_secret: Arc<String>,
     pub entitlement_key_id: Arc<String>,
@@ -62,6 +65,13 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(repository: LedgerRepositoryHandle) -> Self {
+        Self::new_with_operation_pool(repository, None)
+    }
+
+    pub fn new_with_operation_pool(
+        repository: LedgerRepositoryHandle,
+        operation_pool: Option<PgPool>,
+    ) -> Self {
         let fail_fast = std::env::var("LEDGER_FAIL_FAST")
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
@@ -71,7 +81,12 @@ impl AppState {
             entries: Arc::new(RwLock::new(Vec::new())),
             idempotency_keys: Arc::new(RwLock::new(HashSet::new())),
             repository,
+            operation_pool,
             fail_fast,
+            require_explicit_ledger_trace: env_flag(
+                "LEDGER_V2_REQUIRE_EXPLICIT_TRACE",
+                fail_fast,
+            ),
             admin_tokens: Arc::new(load_admin_tokens()),
             entitlement_signing_secret: Arc::new(required_secret(
                 "TRNM_VALUE_ENTITLEMENT_SIGNING_SECRET",
@@ -141,7 +156,9 @@ impl AppState {
             entries: Arc::new(RwLock::new(Vec::new())),
             idempotency_keys: Arc::new(RwLock::new(HashSet::new())),
             repository,
+            operation_pool: None,
             fail_fast,
+            require_explicit_ledger_trace: false,
             admin_tokens: Arc::new(admin_tokens),
             entitlement_signing_secret: Arc::new("test-entitlement-secret".to_string()),
             entitlement_key_id: Arc::new("test-entitlement-key".to_string()),

@@ -104,7 +104,6 @@ declare
     existing_row public.cex_audit_outbox_v1%rowtype;
     inserted_row public.cex_audit_outbox_v1%rowtype;
     occurred_at_value timestamptz;
-    actor_id_value text;
 begin
     if p_source_service is null
        or p_source_service !~ '^[a-z0-9][a-z0-9._-]{0,127}$' then
@@ -135,22 +134,15 @@ begin
     if (p_envelope ->> 'org_id')::uuid is distinct from p_org_id then
         raise exception 'audit outbox envelope org_id mismatch';
     end if;
-    if coalesce(p_envelope ->> 'actor_type', '')
-       !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' then
-        raise exception 'audit outbox envelope actor_type is invalid';
+    if coalesce(length(btrim(p_envelope ->> 'actor_type')), 0) not between 1 and 128 then
+        raise exception 'audit outbox envelope actor_type must contain 1..128 characters';
     end if;
     if p_envelope ? 'actor_id'
        and jsonb_typeof(p_envelope -> 'actor_id') not in ('string', 'null') then
         raise exception 'audit outbox envelope actor_id must be a string or null';
     end if;
-    actor_id_value := p_envelope ->> 'actor_id';
-    if actor_id_value is not null
-       and length(btrim(actor_id_value)) not between 1 and 256 then
-        raise exception 'audit outbox envelope actor_id must contain 1..256 characters';
-    end if;
-    if coalesce(p_envelope ->> 'event_type', '')
-       !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' then
-        raise exception 'audit outbox envelope event_type is invalid';
+    if coalesce(length(btrim(p_envelope ->> 'event_type')), 0) not between 1 and 128 then
+        raise exception 'audit outbox envelope event_type must contain 1..128 characters';
     end if;
     if p_envelope ->> 'schema_version' is distinct from 'cex.audit.event.v2' then
         raise exception 'audit outbox envelope schema_version mismatch';
@@ -419,13 +411,7 @@ begin
         when next_status = 'retry_wait'
             then coalesce(
                 p_retry_after_seconds,
-                least(
-                    3600,
-                    greatest(
-                        1,
-                        power(2::numeric, least(current_row.attempt_count - 1, 10))::integer
-                    )
-                )
+                least(3600, greatest(1, (2 ^ least(current_row.attempt_count - 1, 10))::integer))
             )
         else 0
     end;

@@ -1,5 +1,5 @@
 use chrono::Utc;
-use reqwest::{header::RETRY_AFTER, Client, Response, StatusCode};
+use reqwest::{header::RETRY_AFTER, Client, StatusCode};
 use serde::Deserialize;
 use serde_json::Value;
 use shared_types::audit_v2::{
@@ -274,7 +274,7 @@ async fn deliver_item(
         ));
     }
 
-    let mut response = client
+    let response = client
         .post(config.endpoint())
         .timeout(config.request_timeout)
         .json(&request)
@@ -306,16 +306,26 @@ async fn deliver_item(
         }
     }
 
-    let body = read_bounded_body(&mut response, config.max_response_bytes)
-        .await
-        .map_err(|message| {
-            DeliveryFailure::retryable(
-                "audit_response_read_error",
-                message,
-                Some(status_code),
-                retry_after,
-            )
-        })?;
+    let body = response.bytes().await.map_err(|error| {
+        DeliveryFailure::retryable(
+            "audit_response_read_error",
+            format!("read Audit v2 response: {error}"),
+            Some(status_code),
+            retry_after,
+        )
+    })?;
+    if body.len() > config.max_response_bytes {
+        return Err(classified_failure(
+            status,
+            "audit_response_too_large",
+            format!(
+                "Audit v2 response body {} exceeds {} bytes",
+                body.len(),
+                config.max_response_bytes
+            ),
+            retry_after,
+        ));
+    }
 
     if status.is_success() {
         let append: AppendResponse = serde_json::from_slice(&body).map_err(|error| {
@@ -364,23 +374,6 @@ async fn deliver_item(
         response_message(&body),
         retry_after,
     ))
-}
-
-async fn read_bounded_body(response: &mut Response, max_bytes: usize) -> Result<Vec<u8>, String> {
-    let mut body = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|error| format!("read Audit v2 response chunk: {error}"))?
-    {
-        if body.len().saturating_add(chunk.len()) > max_bytes {
-            return Err(format!(
-                "Audit v2 response body exceeds configured {max_bytes} byte limit"
-            ));
-        }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
 }
 
 fn classified_failure(

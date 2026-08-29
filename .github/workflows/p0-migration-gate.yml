@@ -7,14 +7,32 @@ on:
       - 'migrations/**'
       - 'scripts/check-p0-migrations.py'
       - 'scripts/check-p0-migrations-postgres.sh'
+      - 'scripts/check-audit-source-baseline-postgres.sh'
+      - 'scripts/check-ledger-operation-identity-postgres.sh'
+      - 'scripts/check-invocation-ledger-contract-static.py'
+      - 'scripts/check-invocation-ledger-contract-postgres.sh'
+      - 'scripts/check-invocation-ledger-terminal-postgres.sh'
+      - 'scripts/backfill-audit-source-baselines.sh'
       - 'docs/templates/cex-release-baseline-manifest-v1.json'
+      - 'docs/audit-source-baseline-backfill-v1.md'
+      - 'docs/ledger-operation-identity-v1.md'
+      - 'docs/invocation-ledger-contract-v1.md'
       - '.github/workflows/p0-migration-gate.yml'
   pull_request:
     paths:
       - 'migrations/**'
       - 'scripts/check-p0-migrations.py'
       - 'scripts/check-p0-migrations-postgres.sh'
+      - 'scripts/check-audit-source-baseline-postgres.sh'
+      - 'scripts/check-ledger-operation-identity-postgres.sh'
+      - 'scripts/check-invocation-ledger-contract-static.py'
+      - 'scripts/check-invocation-ledger-contract-postgres.sh'
+      - 'scripts/check-invocation-ledger-terminal-postgres.sh'
+      - 'scripts/backfill-audit-source-baselines.sh'
       - 'docs/templates/cex-release-baseline-manifest-v1.json'
+      - 'docs/audit-source-baseline-backfill-v1.md'
+      - 'docs/ledger-operation-identity-v1.md'
+      - 'docs/invocation-ledger-contract-v1.md'
       - '.github/workflows/p0-migration-gate.yml'
 
 permissions:
@@ -49,5 +67,20 @@ jobs:
       - name: Static migration contract
         run: python3 scripts/check-p0-migrations.py
 
+      - name: Invocation Ledger contract static wiring
+        run: python3 scripts/check-invocation-ledger-contract-static.py
+
       - name: Fresh apply and P0 database assertions
         run: bash scripts/check-p0-migrations-postgres.sh
+
+      - name: Existing-row Audit baseline lifecycle
+        run: bash scripts/check-audit-source-baseline-postgres.sh
+
+      - name: Ledger operation identity and exact replay
+        run: bash scripts/check-ledger-operation-identity-postgres.sh
+
+      - name: Invocation Ledger contract lifecycle
+        run: bash scripts/check-invocation-ledger-contract-postgres.sh
+
+      - name: Invocation Ledger terminal exclusivity
+        run: bash scripts/check-invocation-ledger-terminal-postgres.sh

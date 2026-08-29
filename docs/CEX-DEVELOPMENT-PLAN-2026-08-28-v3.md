@@ -2,7 +2,7 @@
 
 - Status: Active
 - Date: 2026-08-28
-- Integration branch: `feature/hepta-production-baseline-p0-durable-audit`
+- Integration branch: `feature/hepta-production-baseline-p0`
 - Parent fact baseline: `003ed50282f2c4209ac88715614737e013dee556`
 - Migration head after this batch: `0062_add_identity_transactional_audit_outbox.sql`
 - Release posture: Draft integration candidate; not production-ready
@@ -13,15 +13,10 @@ Development Plan v2 established the production-baseline principles: explicit pro
 profiles, authenticated internal services, exact money, durable saga/outbox, authenticated
 tamper-evident Audit events and machine-bound release evidence.
 
-A remote branch fact check on 2026-08-28 showed that the previous integration branch still
-ended at migration 0059 even though an earlier narrative had described 0060–0062 as
-complete. Plan v3 therefore resets status to repository truth and makes
-`pushed source + executable evidence` the only completion standard.
-
-The first attempted 0061/0062 draft also used an invalid PostgreSQL trigger invocation
-shape. The clean replacement branch was rebuilt from the last verified head and uses
-standard zero-argument trigger functions with `TG_OP`, `OLD` and `NEW` supplied by
-PostgreSQL.
+A remote branch fact check on 2026-08-28 showed that the branch still ended at migration
+0059 even though a prior PR description had described 0060–0062 as complete. Plan v3
+therefore resets status to repository truth and makes `pushed source + executable evidence`
+the only completion standard.
 
 No local narrative, PR body or historical PASS table can advance a work item.
 
@@ -68,7 +63,7 @@ Deliverables:
 
 - database-owned monotonic `api_keys.audit_revision`;
 - same-transaction issue/revoke/expiry/material/metadata intent;
-- no event for `last_used_at`-only updates;
+- no event for `last_used_at-only`;
 - no raw key or key hash in Audit payload;
 - transaction-local admin actor hook;
 - rollback atomicity probes.
@@ -78,7 +73,7 @@ Deliverables:
 ### Source evidence
 
 Required source files, migrations, runtime unit, environment contract, static wiring gate and
-fresh-database probes are committed together on the replacement integration branch.
+fresh-database probes are committed together on the integration branch.
 
 ### Executable evidence
 
@@ -93,7 +88,7 @@ implicitly passed:
 - workload token rotation;
 - Audit outage and ACK-crash fault injection.
 
-The replacement PR must remain Draft and unmerged while these are pending.
+PR #1 must remain Draft and unmerged while these are pending.
 
 ## 4. P0 workstream state
 

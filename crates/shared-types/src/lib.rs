@@ -4,6 +4,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 pub mod audit_v2;
+pub mod ledger_v2;
 pub mod money;
 pub mod saga;
 

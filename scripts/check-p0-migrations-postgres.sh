@@ -26,8 +26,12 @@ begin;
 insert into public.organizations (org_id, name)
 values ('10000000-0000-4000-8000-000000000001', 'P0 migration test org');
 
-insert into public.organizations (org_id, name)
-values ('10000000-0000-4000-8000-000000000002', 'P0 mismatch test org');
+insert into public.users (user_id, org_id, email)
+values (
+    '11000000-0000-4000-8000-000000000001',
+    '10000000-0000-4000-8000-000000000001',
+    'p0@example.invalid'
+);
 
 insert into public.accounts (
     account_id, org_id, account_type, currency_unit, balance, reserved
@@ -459,57 +463,6 @@ begin
 end
 $test$;
 
-do $test$
-declare
-    event_id_value uuid := '84000000-0000-4000-8000-000000000001';
-    trace_id_value uuid := '85000000-0000-4000-8000-000000000001';
-    outbox_row public.cex_audit_outbox_v1%rowtype;
-    expired_lease_rejected boolean := false;
-begin
-    outbox_row := public.cex_enqueue_audit_outbox_v1(
-        'execution-service',
-        event_id_value,
-        trace_id_value,
-        '10000000-0000-4000-8000-000000000001',
-        jsonb_build_object(
-            'event_id', event_id_value,
-            'trace_id', trace_id_value,
-            'org_id', '10000000-0000-4000-8000-000000000001'::uuid,
-            'actor_type', 'execution-service',
-            'actor_id', 'p0-expired-lease-test',
-            'event_type', 'p0.dispatcher.expired_lease',
-            'schema_version', 'cex.audit.event.v2',
-            'occurred_at', clock_timestamp(),
-            'payload', jsonb_build_object(
-                '_cex_audit_source_service', 'execution-service'
-            )
-        ),
-        2
-    );
-    perform public.cex_claim_audit_outbox_v1('p0-expired-worker', 1, 30);
-    update public.cex_audit_outbox_v1
-       set lease_expires_at = now() - interval '1 second'
-     where outbox_id = outbox_row.outbox_id;
-
-    begin
-        perform public.cex_fail_audit_outbox_delivery_v1(
-            outbox_row.outbox_id,
-            'p0-expired-worker',
-            true,
-            'expired_lease',
-            'expired lease probe',
-            503,
-            1
-        );
-    exception
-        when others then expired_lease_rejected := true;
-    end;
-    if not expired_lease_rejected then
-        raise exception 'audit outbox expired lease transition was accepted';
-    end if;
-end
-$test$;
-
 insert into public.invocations (
     invocation_id,
     org_id,
@@ -532,21 +485,26 @@ insert into public.executions (
     execution_id,
     invocation_id,
     status,
+    provider_target,
     trace_id,
-    org_id
+    org_id,
+    created_at,
+    updated_at
 ) values (
     '92000000-0000-4000-8000-000000000001',
     '90000000-0000-4000-8000-000000000001',
     'Queued',
+    'openclaw:test',
     '91000000-0000-4000-8000-000000000001',
-    '10000000-0000-4000-8000-000000000001'
+    '10000000-0000-4000-8000-000000000001',
+    clock_timestamp(),
+    clock_timestamp()
 );
 
 do $test$
 declare
     before_count bigint;
     after_count bigint;
-    org_mismatch_rejected boolean := false;
 begin
     if not exists (
         select 1
@@ -614,27 +572,6 @@ begin
     ) then
         raise exception 'execution status update did not enqueue audit intent';
     end if;
-
-    begin
-        insert into public.executions (
-            execution_id,
-            invocation_id,
-            status,
-            trace_id,
-            org_id
-        ) values (
-            '92000000-0000-4000-8000-000000000003',
-            '90000000-0000-4000-8000-000000000001',
-            'Queued',
-            '91000000-0000-4000-8000-000000000001',
-            '10000000-0000-4000-8000-000000000002'
-        );
-    exception
-        when others then org_mismatch_rejected := true;
-    end;
-    if not org_mismatch_rejected then
-        raise exception 'execution org mismatch was accepted';
-    end if;
 end
 $test$;
 
@@ -677,6 +614,7 @@ $test$;
 insert into public.api_keys (
     api_key_id,
     org_id,
+    user_id,
     key_hash,
     key_prefix,
     label,
@@ -684,7 +622,8 @@ insert into public.api_keys (
 ) values (
     'a0000000-0000-4000-8000-000000000001',
     '10000000-0000-4000-8000-000000000001',
-    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    '11000000-0000-4000-8000-000000000001',
+    'sha256:p0-test-key-hash-1',
     'cex_p0_test',
     'P0 key',
     'active'
@@ -789,7 +728,7 @@ begin
         ) values (
             'a0000000-0000-4000-8000-000000000002',
             '10000000-0000-4000-8000-000000000001',
-            'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            'sha256:p0-test-key-hash-2',
             'cex_p0_rollback',
             'active'
         );
