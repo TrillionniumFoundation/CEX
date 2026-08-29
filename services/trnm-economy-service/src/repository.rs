@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgRow, Executor, PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
-const MIGRATION: &str = include_str!("../../../migrations/0010_trnm_economy_settlement_v1.sql");
+const MIGRATION: &str = include_str!("../migrations/settlement_v1.sql");
 const INTENT_LOCK_SALT: i64 = 0x5452_4e4d_4345_5853;
 
 #[derive(Clone, Debug)]
