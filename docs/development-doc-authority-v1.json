@@ -1,0 +1,58 @@
+{
+  "schema": "cex.development-doc-authority.v1",
+  "status": "active",
+  "active_plan": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
+  "active_addendum": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md",
+  "migration_head": "0084_make_provider_reconciliation_replay_terminal_safe.sql",
+  "shared_trigger": "docs/release-evidence/p0-candidate-trigger.json",
+  "production_authorization": "not_granted",
+  "repository_qualification_result": "REPOSITORY_CLOSED_CANDIDATE",
+  "external_gate_policy": "independent_evidence_required",
+  "canonical_documents": {
+    "entrypoint": "docs/index.md",
+    "component_status": "docs/status/component-status-v1.md",
+    "traceability": "docs/traceability/v12-requirements-v1.json",
+    "hepta_state_machines": "docs/hepta-paper-raid-state-machines-v1.md",
+    "threat_model": "docs/security-threat-model-v1.md",
+    "clean_deployment_acceptance": "docs/clean-deployment-acceptance-v1.md",
+    "slo_recovery": "docs/slo-recovery-contract-v1.md",
+    "protocol_compatibility": "docs/protocol/version-compatibility-matrix-v1.md"
+  },
+  "authoritative_workflows": [
+    ".github/workflows/p0-migration-gate.yml",
+    ".github/workflows/rust-service-gate.yml",
+    ".github/workflows/p0-gateway-exact-reserve-gate.yml",
+    ".github/workflows/p0-execution-settlement-gate.yml",
+    ".github/workflows/p0-provider-reconciliation-gate.yml"
+  ],
+  "aggregate_release_workflow": ".github/workflows/p0-release-candidate-gate.yml",
+  "historical_plan_policy": {
+    "glob": "docs/CEX-DEVELOPMENT-PLAN-*.md",
+    "authority": "historical_unless_equal_to_active_plan",
+    "may_establish_current_status": false
+  },
+  "repository_scope": {
+    "self_certifiable": true,
+    "includes": [
+      "source_and_contract_consistency",
+      "migration_and_upgrade_regression",
+      "hosted_exact_sha_tests",
+      "bounded_ci_soak_and_dump_restore",
+      "immutable_candidate_evidence"
+    ]
+  },
+  "external_production_scope": {
+    "self_certifiable": false,
+    "status": "blocked_upstream",
+    "includes": [
+      "representative_volume_disaster_recovery",
+      "real_deployment_cutover_and_rollback",
+      "real_provider_reconciliation_artifacts",
+      "credential_custody_review",
+      "sustained_production_like_soak",
+      "independent_security_operations_financial_review",
+      "legal_commercial_provider_approval",
+      "final_human_go_no_go"
+    ]
+  }
+}

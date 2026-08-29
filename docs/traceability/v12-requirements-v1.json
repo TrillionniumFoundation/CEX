@@ -1,0 +1,181 @@
+{
+  "schema": "cex.v12-requirement-traceability.v1",
+  "status": "active",
+  "active_plan": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
+  "active_addendum": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md",
+  "migration_head": "0084_make_provider_reconciliation_replay_terminal_safe.sql",
+  "production_authorization": "not_granted",
+  "requirements": [
+    {
+      "id": "V12-A",
+      "title": "Migration correctness and upgrade safety",
+      "classification": "repository_actionable",
+      "status": "required_hosted_exact_sha",
+      "self_certifiable": true,
+      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"],
+      "implementation": ["migrations/0084_make_provider_reconciliation_replay_terminal_safe.sql"],
+      "verification": ["scripts/check-p0-migrations.py", "scripts/check-p0-migrations-postgres.sh"],
+      "gates": [".github/workflows/p0-migration-gate.yml"]
+    },
+    {
+      "id": "V12-B",
+      "title": "Cross-platform Rust and API regression",
+      "classification": "repository_actionable",
+      "status": "required_hosted_exact_sha",
+      "self_certifiable": true,
+      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"],
+      "implementation": ["Cargo.toml", "Cargo.lock", "gate-local.ps1", "scripts/gate-local-linux.sh"],
+      "verification": ["scripts/check-p0-wiring.py", "scripts/check-development-docs.py"],
+      "gates": [".github/workflows/rust-service-gate.yml"]
+    },
+    {
+      "id": "V12-C",
+      "title": "Gateway exact reserve",
+      "classification": "repository_actionable",
+      "status": "required_hosted_exact_sha",
+      "self_certifiable": true,
+      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md", "docs/gateway-exact-reserve-v1.md"],
+      "implementation": ["services/gateway-service/src/infrastructure/ledger_v2_client.rs", "migrations/0073_add_gateway_exact_reserve_commands.sql"],
+      "verification": ["scripts/check-gateway-exact-reserve.py", "scripts/check-gateway-exact-reserve-postgres.sh"],
+      "gates": [".github/workflows/p0-gateway-exact-reserve-gate.yml"]
+    },
+    {
+      "id": "V12-D",
+      "title": "Execution terminal settlement",
+      "classification": "repository_actionable",
+      "status": "required_hosted_exact_sha",
+      "self_certifiable": true,
+      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md", "docs/execution-ledger-settlement-commands-v1.md"],
+      "implementation": ["services/execution-service/src/ledger_settlement.rs", "migrations/0072_add_execution_ledger_settlement_operator.sql"],
+      "verification": ["scripts/check-execution-settlement-commands.py", "scripts/check-execution-settlement-commands-postgres.sh"],
+      "gates": [".github/workflows/p0-execution-settlement-gate.yml"]
+    },
+    {
+      "id": "V12-E",
+      "title": "Provider unknown-outcome reconciliation",
+      "classification": "repository_actionable",
+      "status": "required_hosted_exact_sha",
+      "self_certifiable": true,
+      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"],
+      "implementation": ["migrations/0084_make_provider_reconciliation_replay_terminal_safe.sql"],
+      "verification": ["scripts/check-provider-reconciliation-postgres.sh"],
+      "gates": [".github/workflows/p0-provider-reconciliation-gate.yml"]
+    },
+    {
+      "id": "V12-F",
+      "title": "Audit baseline and durable delivery",
+      "classification": "repository_actionable",
+      "status": "required_hosted_exact_sha",
+      "self_certifiable": true,
+      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md", "docs/audit-source-baseline-backfill-v1.md"],
+      "implementation": ["migrations/0083_fix_audit_baseline_uuid_cursor.sql", "services/audit-service/src/lib.rs"],
+      "verification": ["scripts/check-audit-source-baseline-postgres.sh"],
+      "gates": [".github/workflows/p0-migration-gate.yml", ".github/workflows/p0-release-candidate-gate.yml"]
+    },
+    {
+      "id": "V12-G",
+      "title": "Immutable release evidence",
+      "classification": "repository_actionable",
+      "status": "required_hosted_exact_sha",
+      "self_certifiable": true,
+      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"],
+      "implementation": ["scripts/p0-release-evidence.py", "docs/templates/cex-release-baseline-manifest-v1.json"],
+      "verification": ["scripts/check-release-baseline-manifest.py", "scripts/check-p0-release-candidate-hygiene.py"],
+      "gates": [".github/workflows/p0-release-candidate-gate.yml"]
+    },
+    {
+      "id": "V12-H",
+      "title": "Development-document authority and exact-tree integrity",
+      "classification": "repository_actionable",
+      "status": "required_hosted_exact_sha",
+      "self_certifiable": true,
+      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md", "docs/index.md"],
+      "implementation": ["docs/development-doc-authority-v1.json", "scripts/check-repository-integrity.py"],
+      "verification": ["scripts/check-development-docs.py", "scripts/check-repository-integrity.py"],
+      "gates": [".github/workflows/rust-service-gate.yml", ".github/workflows/p0-release-candidate-gate.yml"]
+    },
+    {
+      "id": "V12-I",
+      "title": "Hepta durable PostgreSQL restart and lease recovery",
+      "classification": "repository_actionable",
+      "status": "required_hosted_exact_sha",
+      "self_certifiable": true,
+      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md", "docs/clean-deployment-acceptance-v1.md"],
+      "implementation": ["services/hepta-research-league/tests/postgres_recovery.rs"],
+      "verification": ["scripts/check-hepta-postgres-integration.sh"],
+      "gates": [".github/workflows/rust-service-gate.yml", ".github/workflows/p0-release-candidate-gate.yml"]
+    },
+    {
+      "id": "V12-X1",
+      "title": "Representative-volume disaster recovery",
+      "classification": "external",
+      "status": "blocked_upstream",
+      "self_certifiable": false,
+      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md", "docs/slo-recovery-contract-v1.md"],
+      "implementation": [], "verification": [], "gates": []
+    },
+    {
+      "id": "V12-X2",
+      "title": "Real deployment cutover and rollback rehearsal",
+      "classification": "external",
+      "status": "blocked_upstream",
+      "self_certifiable": false,
+      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md", "docs/clean-deployment-acceptance-v1.md"],
+      "implementation": [], "verification": [], "gates": []
+    },
+    {
+      "id": "V12-X3",
+      "title": "Real provider reconciliation artifacts",
+      "classification": "external",
+      "status": "blocked_upstream",
+      "self_certifiable": false,
+      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md", "docs/security-threat-model-v1.md"],
+      "implementation": [], "verification": [], "gates": []
+    },
+    {
+      "id": "V12-X4",
+      "title": "Credential custody and break-glass review",
+      "classification": "external",
+      "status": "blocked_upstream",
+      "self_certifiable": false,
+      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md", "docs/security-threat-model-v1.md"],
+      "implementation": [], "verification": [], "gates": []
+    },
+    {
+      "id": "V12-X5",
+      "title": "Sustained production-like soak and SLO qualification",
+      "classification": "external",
+      "status": "blocked_upstream",
+      "self_certifiable": false,
+      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md", "docs/slo-recovery-contract-v1.md"],
+      "implementation": [], "verification": [], "gates": []
+    },
+    {
+      "id": "V12-X6",
+      "title": "Independent security operations and financial-control review",
+      "classification": "external",
+      "status": "blocked_upstream",
+      "self_certifiable": false,
+      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md", "docs/security-threat-model-v1.md"],
+      "implementation": [], "verification": [], "gates": []
+    },
+    {
+      "id": "V12-X7",
+      "title": "Legal commercial or provider approvals",
+      "classification": "external",
+      "status": "blocked_upstream",
+      "self_certifiable": false,
+      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"],
+      "implementation": [], "verification": [], "gates": []
+    },
+    {
+      "id": "V12-X8",
+      "title": "Final human go/no-go",
+      "classification": "external",
+      "status": "blocked_upstream",
+      "self_certifiable": false,
+      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"],
+      "implementation": [], "verification": [], "gates": []
+    }
+  ]
+}
