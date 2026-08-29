@@ -45,6 +45,19 @@ for required in \
   rg -q --fixed-strings "$required" "$migration" || { echo "Quick Raid SQL append-only marker missing: $required" >&2; exit 1; }
 done
 
+# The player slice must expose a complete, bounded result and a recoverable
+# terminal action.  Keep these markers in the source gate so a future UI
+# rewrite cannot silently drop the visible bundle or strand an active session.
+for required in \
+  'quick-raid-bundle' \
+  'data-finality="none"' \
+  'data-portable="false"' \
+  'quick-raid-metrics' \
+  'quick-raid-abandon-form' \
+  '"/api/quick-raid/abandon"'; do
+  rg -q --fixed-strings "$required" "$html" "$browser" "$http" || { echo "Quick Raid player-slice marker missing: $required" >&2; exit 1; }
+done
+
 for required in \
   'pub mod quick_raid;' \
   'pub mod quick_raid_http;' \

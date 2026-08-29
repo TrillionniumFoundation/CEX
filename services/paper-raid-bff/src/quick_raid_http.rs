@@ -8,6 +8,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{de::DeserializeOwned, Deserialize, Serialize, Serializer};
 use serde_json::{json, Value};
+use sha2::Digest;
 use sqlx::{postgres::PgRow, PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
@@ -97,7 +98,7 @@ pub(crate) struct QuickRaidPlayerViewV1 {
 }
 
 impl QuickRaidPlayerViewV1 {
-    fn from_session(session: &QuickRaidSessionV1, now: DateTime<Utc>) -> Self {
+    pub(crate) fn from_session(session: &QuickRaidSessionV1, now: DateTime<Utc>) -> Self {
         let clock_expired = !session.stage.is_terminal() && now >= session.expires_at;
         let stage = if clock_expired {
             QuickRaidStageV1::Expired
@@ -709,9 +710,9 @@ async fn insert_session(
         .bind(&session.authority.authority_hash).bind(i64::try_from(session.authority.seed).map_err(|_| AppError::Internal)?).bind(i32::try_from(session.authority.duration_seconds).map_err(|_| AppError::Internal)?)
         .bind(&session.authority.authority_kind).bind(enum_to_text(session.stage)?).bind(i64::try_from(session.version).map_err(|_| AppError::Internal)?)
         .bind(optional_enum_to_text(session.evidence_choice)?).bind(optional_enum_to_text(session.experiment_choice)?)
-        .bind(session.experiment_run.as_ref().map(|value| serde_json::to_value(value)).transpose().map_err(|_| AppError::Internal)?)
+        .bind(session.experiment_run.as_ref().map(serde_json::to_value).transpose().map_err(|_| AppError::Internal)?)
         .bind(optional_enum_to_text(session.conclusion)?)
-        .bind(session.paper_bundle.as_ref().map(|value| serde_json::to_value(value)).transpose().map_err(|_| AppError::Internal)?)
+        .bind(session.paper_bundle.as_ref().map(serde_json::to_value).transpose().map_err(|_| AppError::Internal)?)
         .bind(session.paper_bundle.as_ref().map(|value| value.paper_bundle_hash.clone()))
         .bind(false).bind(false).bind(false).bind(false).bind(false).bind(false).bind(false).bind(false)
         .bind(session.created_at).bind(session.expires_at).bind(session.updated_at).bind(session.terminal_at)
@@ -728,9 +729,9 @@ async fn persist_transition(
     let result = sqlx::query("UPDATE paper_raid_bff_quick_raid_sessions SET stage=$2,version=$3,evidence_choice=$4,experiment_choice=$5,experiment_run=$6,conclusion=$7,paper_bundle=$8,paper_bundle_hash=$9,updated_at=$10,terminal_at=$11,terminal_reason=$12 WHERE session_id=$1 AND subject_id=$13 AND player_id=$14 AND binding_id=$15 AND version=$16")
         .bind(session.session_id).bind(enum_to_text(session.stage)?).bind(i64::try_from(session.version).map_err(|_| AppError::Internal)?)
         .bind(optional_enum_to_text(session.evidence_choice)?).bind(optional_enum_to_text(session.experiment_choice)?)
-        .bind(session.experiment_run.as_ref().map(|value| serde_json::to_value(value)).transpose().map_err(|_| AppError::Internal)?)
+        .bind(session.experiment_run.as_ref().map(serde_json::to_value).transpose().map_err(|_| AppError::Internal)?)
         .bind(optional_enum_to_text(session.conclusion)?)
-        .bind(session.paper_bundle.as_ref().map(|value| serde_json::to_value(value)).transpose().map_err(|_| AppError::Internal)?)
+        .bind(session.paper_bundle.as_ref().map(serde_json::to_value).transpose().map_err(|_| AppError::Internal)?)
         .bind(session.paper_bundle.as_ref().map(|value| value.paper_bundle_hash.clone()))
         .bind(session.updated_at).bind(session.terminal_at).bind(optional_enum_to_text(session.terminal_reason)?)
         .bind(&session.subject_id).bind(session.player_id).bind(session.binding_id)
@@ -916,9 +917,7 @@ mod tests {
         ] {
             assert!(!object.contains_key(forbidden), "leaked {forbidden}");
         }
-        for forbidden in ["source_digest"] {
-            assert!(encoded["evidence_card"].get(forbidden).is_none());
-        }
+        assert!(encoded["evidence_card"].get("source_digest").is_none());
         assert!(encoded["experiment_run"].is_null());
         assert!(encoded["paper_bundle"].is_null());
     }
@@ -953,5 +952,3 @@ mod tests {
         assert_eq!(bundle["portable"], false);
     }
 }
-
-use sha2::Digest;

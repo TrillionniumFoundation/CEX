@@ -4794,6 +4794,13 @@ function createTimelineReplayController(card) {
       setStatus("No authenticated events are available yet / 当前尚无可回放的认证事件");
       return;
     }
+    // Keep the durable, identifier-only replay milestone in step with the
+    // player-visible replay action.  Telemetry is deliberately best-effort:
+    // a transient product-events failure must never block or alter the
+    // read-only replay itself.
+    recordProductEvent("replay_started", {
+      paperId: card.dataset.paperId || null,
+    }).catch(() => {});
     running = true;
     index = 0;
     if (panel) panel.hidden = false;
@@ -5374,6 +5381,17 @@ function bindQuickRaid() {
       } catch (error) {
         show(form.querySelector("output"), error.message, false);
       }
+    });
+  }
+  for (const form of document.querySelectorAll(".quick-raid-abandon-form")) {
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      submitPracticeMutation(
+        form,
+        "/api/quick-raid/abandon",
+        { expected_version: quickRaidVersion(form) },
+        "Quick Raid left. Returning to the local summary… / 已退出快速远征，正在返回本地摘要……",
+      );
     });
   }
 }

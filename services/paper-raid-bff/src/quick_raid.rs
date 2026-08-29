@@ -806,7 +806,7 @@ impl QuickRaidSessionV1 {
         if now < self.expires_at {
             return Err(QuickRaidError::NotExpired);
         }
-        if !valid_digest(&request_hash).is_ok() {
+        if valid_digest(&request_hash).is_err() {
             return Err(QuickRaidError::InvalidContract("request hash"));
         }
         let from_version = self.version;

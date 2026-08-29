@@ -51,10 +51,17 @@ for (const forbidden of [
   "paper_bundle_hash",
 ]) assert.equal(productionHttp.includes(forbidden), false, `practice HTTP crossed authority boundary: ${forbidden}`);
 
-const practiceHtml = html.slice(
-  html.indexOf("pub(crate) fn practice("),
-  html.indexOf("pub fn onboarding("),
-);
+const practiceStart = html.indexOf("pub(crate) fn practice(");
+const quickRaidStart = html.indexOf("/// Player-facing Quick Raid shell.");
+const onboardingStart = html.indexOf("pub fn onboarding(");
+assert.ok(practiceStart >= 0, "practice page renderer is absent");
+assert.ok(quickRaidStart > practiceStart, "Quick Raid boundary marker is absent");
+assert.ok(onboardingStart > quickRaidStart, "onboarding renderer is absent");
+// Keep this gate scoped to the practice renderer itself.  Quick Raid is a
+// neighbouring player surface in the same Rust module and may legitimately
+// mention owner-bound protocol fields in its server-side fixtures; including
+// it here would make the practice leak check depend on unrelated code.
+const practiceHtml = html.slice(practiceStart, quickRaidStart);
 assert.ok(practiceHtml.length > 1000, "practice page renderer is absent");
 for (const notice of [
   "PRACTICE_UNRANKED",
