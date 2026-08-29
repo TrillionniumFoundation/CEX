@@ -59,11 +59,11 @@ $$;
 -- Abort before schema mutation if current values cannot be represented exactly.
 do $$
 begin
-    perform public.cex_numeric_to_minor(balance, 6)
+    perform public.cex_numeric_to_minor(balance, 6::smallint)
       from public.accounts;
-    perform public.cex_numeric_to_minor(reserved, 6)
+    perform public.cex_numeric_to_minor(reserved, 6::smallint)
       from public.accounts;
-    perform public.cex_numeric_to_minor(amount, 6)
+    perform public.cex_numeric_to_minor(amount, 6::smallint)
       from public.ledger_entries;
 end
 $$;
