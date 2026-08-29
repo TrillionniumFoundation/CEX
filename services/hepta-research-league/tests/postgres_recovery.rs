@@ -52,10 +52,30 @@ async fn request_text(app: axum::Router, uri: &str) -> (StatusCode, String) {
     )
 }
 
+fn postgres_test_database_url() -> Option<String> {
+    let strict = matches!(
+        std::env::var("HEPTA_REQUIRE_POSTGRES_TESTS").as_deref(),
+        Ok("1")
+    );
+    match std::env::var("HEPTA_TEST_DATABASE_URL") {
+        Ok(database_url) if !database_url.trim().is_empty() => Some(database_url),
+        Ok(_) | Err(std::env::VarError::NotPresent) => {
+            assert!(
+                !strict,
+                "strict PostgreSQL integration test requires a nonempty HEPTA_TEST_DATABASE_URL"
+            );
+            eprintln!("HEPTA_TEST_DATABASE_URL unset; PostgreSQL integration test skipped");
+            None
+        }
+        Err(std::env::VarError::NotUnicode(_)) => {
+            panic!("strict PostgreSQL integration test requires a UTF-8 HEPTA_TEST_DATABASE_URL")
+        }
+    }
+}
+
 #[tokio::test]
 async fn postgres_survives_restart_and_multi_instance_outbox_claims_do_not_overlap() {
-    let Ok(database_url) = std::env::var("HEPTA_TEST_DATABASE_URL") else {
-        eprintln!("HEPTA_TEST_DATABASE_URL unset; PostgreSQL integration test skipped");
+    let Some(database_url) = postgres_test_database_url() else {
         return;
     };
     let mut lock = PgConnection::connect(&database_url)
