@@ -202,7 +202,10 @@ pending_hash=$(<"$work_dir/pending.hash")
 start_ledger "$ledger_addr" "$DATABASE_URL" "$work_dir/ledger.log"
 wait_health "$base_url" "$work_dir/ledger.log"
 
-# Send a complete request and deliberately close without reading a response.
+# Send a complete request, wait until the server has produced its response (which
+# occurs only after the durable transaction commits), then discard the response.
+# This models an application that loses the response after the remote side effect,
+# rather than cancelling the request before the server can commit it.
 python3 - "$ledger_addr" "$game_authority_token" "$work_dir/response-loss.request.json" <<'PY'
 from pathlib import Path
 import socket
@@ -222,7 +225,11 @@ request = (
 with socket.create_connection((host, int(port)), timeout=5) as connection:
     connection.sendall(request)
     connection.shutdown(socket.SHUT_WR)
-    # Intentionally do not read the response: this is the response-loss boundary.
+    connection.settimeout(15)
+    if not connection.recv(1):
+        raise SystemExit("ledger-service closed before producing a response")
+    # Deliberately discard the status, headers and body. The caller receives no
+    # usable business response and must recover through receipt lookup.
 PY
 
 committed=0
