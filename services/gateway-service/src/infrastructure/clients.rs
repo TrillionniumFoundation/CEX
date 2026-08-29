@@ -331,12 +331,22 @@ impl ServiceClients {
         })
     }
 
-    pub async fn reserve_credits(&self, req: &LedgerActionRequest) -> Result<(), ServiceCallError> {
+    /// Legacy compatibility write. Canonical Invocation ingress rejects this
+    /// path unless the explicitly governed break-glass switch is enabled.
+    pub async fn reserve_credits_legacy_v1(
+        &self,
+        req: &LedgerActionRequest,
+    ) -> Result<(), ServiceCallError> {
         let url = format!("{}/v1/ledger/reserve", self.ledger_base_url);
         self.post_expect_ledger_success(url, req).await
     }
 
-    pub async fn refund_credits(&self, req: &LedgerActionRequest) -> Result<(), ServiceCallError> {
+    /// Legacy compatibility write. Canonical Invocation ingress rejects this
+    /// path unless the explicitly governed break-glass switch is enabled.
+    pub async fn refund_credits_legacy_v1(
+        &self,
+        req: &LedgerActionRequest,
+    ) -> Result<(), ServiceCallError> {
         let url = format!("{}/v1/ledger/refund", self.ledger_base_url);
         self.post_expect_ledger_success(url, req).await
     }

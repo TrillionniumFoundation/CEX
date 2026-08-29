@@ -1,9 +1,15 @@
 use crate::{
-    domain::invocation::{InvocationRecord, InvocationRequest},
+    domain::invocation::{
+        InvocationRecord, InvocationRequest, LEGACY_RESERVE_REJECTION_CODE,
+        LEGACY_RESERVE_REJECTION_MESSAGE,
+    },
     infrastructure::state::AppState,
 };
 use serde_json::json;
-use shared_types::saga::{operation_key, SagaCommandKind};
+use shared_types::{
+    saga::{operation_key, SagaCommandKind},
+    ExecutionStatus, TraceContext,
+};
 use std::env;
 use uuid::Uuid;
 
@@ -21,6 +27,13 @@ struct ShadowCommand {
 }
 
 pub async fn create_invocation(state: AppState, req: InvocationRequest) -> InvocationRecord {
+    // The canonical invocation boundary is fail-closed for the legacy
+    // major-unit reserve field. The compatibility implementation below is
+    // reachable only through an explicit, non-production break-glass switch.
+    if req.has_legacy_reserve() && !state.legacy_reserve_break_glass {
+        return rejected_legacy_reserve_record(req);
+    }
+
     let record = legacy::create_invocation(state.clone(), req).await;
 
     if saga_shadow_write_enabled() {
@@ -51,6 +64,28 @@ pub async fn create_invocation(state: AppState, req: InvocationRequest) -> Invoc
     }
 
     record
+}
+
+fn rejected_legacy_reserve_record(request: InvocationRequest) -> InvocationRecord {
+    let invocation_id = Uuid::new_v4();
+    InvocationRecord {
+        invocation_id,
+        trace: TraceContext {
+            trace_id: Uuid::new_v4(),
+            created_at: chrono::Utc::now(),
+        },
+        status: ExecutionStatus::Failed,
+        request,
+        ledger_reserved: false,
+        ledger_refunded: false,
+        approval_required: false,
+        execution_id: None,
+        execution: None,
+        policy_reason: None,
+        failure_reason: Some(format!(
+            "{LEGACY_RESERVE_REJECTION_CODE}: {LEGACY_RESERVE_REJECTION_MESSAGE}"
+        )),
+    }
 }
 
 pub async fn get_invocation(state: AppState, id: Uuid) -> Result<Option<InvocationRecord>, String> {
@@ -250,5 +285,19 @@ mod tests {
         let commands = shadow_commands_for_record(&record(None)).unwrap();
         assert_eq!(commands.len(), 1);
         assert_eq!(commands[0].command_kind, SagaCommandKind::ExecutionCreate);
+    }
+
+    #[test]
+    fn canonical_legacy_reserve_rejection_has_no_side_effects() {
+        let rejected = rejected_legacy_reserve_record(record(Some(1.25)).request);
+        assert_eq!(rejected.status, ExecutionStatus::Failed);
+        assert!(!rejected.ledger_reserved);
+        assert!(!rejected.ledger_refunded);
+        assert!(rejected.execution_id.is_none());
+        assert!(rejected.execution.is_none());
+        assert!(rejected
+            .failure_reason
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with(LEGACY_RESERVE_REJECTION_CODE)));
     }
 }

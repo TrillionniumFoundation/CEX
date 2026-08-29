@@ -66,7 +66,7 @@ pub async fn create_invocation(state: AppState, req: InvocationRequest) -> Invoc
             idempotency_key: Some(format!("reserve:{invocation_id}")),
         };
 
-        match state.clients.reserve_credits(&reserve_req).await {
+        match state.clients.reserve_credits_legacy_v1(&reserve_req).await {
             Ok(()) => {
                 if !persisted_invocation_update(
                     &state,
@@ -172,7 +172,7 @@ pub async fn create_invocation(state: AppState, req: InvocationRequest) -> Invoc
                     idempotency_key: Some(format!("refund:{invocation_id}")),
                 };
 
-                match state.clients.refund_credits(&refund_req).await {
+                match state.clients.refund_credits_legacy_v1(&refund_req).await {
                     Ok(()) => {
                         record.ledger_refunded = true;
                         record.status = ExecutionStatus::Refunded;

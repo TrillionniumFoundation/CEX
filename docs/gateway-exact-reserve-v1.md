@@ -7,6 +7,9 @@
 - Canonical Ledger target: `POST /v2/ledger/effects`
 - Contract authority: `cex_invocation_ledger_contracts_v1`
 - Default rollout posture: shadow; active execution disabled
+- Canonical legacy-reserve posture: fail-closed; non-production break-glass only
+
+Machine-readable rollout posture: `legacy_reserve_fail_closed=true`.
 
 ## 1. Objective
 
@@ -39,6 +42,13 @@ commit
 This expand slice does not reinterpret a nonzero legacy `requested_amount`,
 `requested_reserve_amount` or `reserve_amount`. Registration fails closed unless legacy monetary
 intent is zero or absent.
+
+The canonical `POST /v1/invocations` route now rejects a supplied legacy `reserve_amount` before
+authentication, persistence or an upstream call. Clients must first create a non-monetary
+Invocation skeleton (omit `reserve_amount`) and then call the exact-reserve ingress below. The
+serialized skeleton omits the absent compatibility key, which is required by the 0066/0073
+dual-money guard. `CEX_GATEWAY_LEGACY_RESERVE_BREAK_GLASS` is an emergency non-production rollback
+switch and is ignored for production-like profiles.
 
 ## 2. Exact ingress contract
 
@@ -158,23 +168,26 @@ collides.
 ## 9. Shadow qualification and cutover
 
 1. Deploy migration 0073, binaries and metrics with active creation disabled.
-2. Register representative exact contracts in `shadow` and compare the canonical request with the
-   intended Invocation.
+2. Verify the canonical legacy-reserve rejection and create representative non-monetary skeletons;
+   register exact contracts in `shadow` and compare the canonical request with the intended
+   Invocation.
 3. Prove collision, tenant, token rotation, response loss and lease-expiry matrices.
 4. Promote a bounded canary cohort with `cex_promote_gateway_exact_reserve_v1`.
 5. Observe queue age, unknown outcomes and contract/receipt reconciliation.
-6. Only after exact reserve is qualified may the matching legacy reserve side effect be removed from
-   the production request path.
+6. The matching legacy reserve side effect is already blocked on the production request path. Keep
+   it disabled; only an explicitly reviewed non-production break-glass may invoke the compatibility
+   implementation while the exact-field caller cutover is qualified.
 
 Rollback stops both binaries and leaves command/receipt evidence intact. The migration is an
 append-only expand migration; rollback never drops evidence or fabricates legacy money.
 
 ## 10. Known boundary after P0-N6
 
-The existing Gateway lifecycle still creates the non-monetary Invocation skeleton through its
-legacy-compatible route. This candidate adds a strict exact-money registration endpoint rather than
-silently changing the public request schema. A later reviewed caller cutover must make exact ingress
-the sole monetary source and remove the matching legacy reserve/refund call.
+The existing Gateway lifecycle creates the non-monetary Invocation skeleton through its
+legacy-compatible route. The canonical route now fails closed when a legacy floating-point reserve
+is supplied rather than silently calling `/v1/ledger`. A later reviewed caller cutover must add an
+exact reserve field to the public schema and make the exact ingress the sole monetary source; until
+then the explicit two-step exact ingress is the only supported value-bearing path.
 
 The repository remains not production-ready until hosted checks execute on the exact commit/tree,
 least-privilege roles are applied, restore/rollback evidence is bound and the remaining P0 money

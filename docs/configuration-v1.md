@@ -8,8 +8,14 @@
 - `GATEWAY_PORT`
 - `LEDGER_BASE_URL`
 - `EXECUTION_BASE_URL`
+- `CEX_GATEWAY_LEGACY_RESERVE_BREAK_GLASS`
 
-并通过 `crates/shared-config` 统一读取。
+服务地址等基础参数继续通过 `crates/shared-config` 统一读取；该 Gateway 兼容开关由
+`gateway-service` 在启动时直接读取并按运行环境强制收紧。
+
+`CEX_GATEWAY_LEGACY_RESERVE_BREAK_GLASS` defaults to `false`. The canonical Gateway invocation
+route rejects legacy floating-point `reserve_amount` before any upstream call; an enabled value is
+only a non-production rollback switch and is ignored for beta/staging/production profiles.
 
 ## 当前价值
 

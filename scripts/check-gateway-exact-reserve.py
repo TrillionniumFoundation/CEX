@@ -83,6 +83,39 @@ worker = require(
     "CEX_GATEWAY_LEDGER_MODE=dual or require_v2",
     "validate_serial_lease_budget",
 )
+canonical_entry = require(
+    "services/gateway-service/src/application/invocation_service_entry.rs",
+    "req.has_legacy_reserve()",
+    "legacy_reserve_break_glass",
+    "rejected_legacy_reserve_record",
+    "legacy::create_invocation",
+)
+canonical_http = require(
+    "services/gateway-service/src/interfaces/http.rs",
+    "body.has_legacy_reserve()",
+    "state.legacy_reserve_break_glass",
+    "legacy_reserve_requires_exact_ingress_response",
+    "resolve_api_key",
+    "invocation_service::create_invocation",
+)
+invocation_domain = require(
+    "services/gateway-service/src/domain/invocation.rs",
+    'skip_serializing_if = "Option::is_none"',
+    "LEGACY_RESERVE_REJECTION_CODE",
+    "LEGACY_RESERVE_REJECTION_MESSAGE",
+)
+gateway_state = require(
+    "services/gateway-service/src/infrastructure/state.rs",
+    "CEX_GATEWAY_LEGACY_RESERVE_BREAK_GLASS",
+    "legacy_reserve_break_glass_from_env",
+    "env_flag(LEGACY_RESERVE_BREAK_GLASS_ENV, false)",
+    "production-like profile",
+)
+legacy_clients = require(
+    "services/gateway-service/src/infrastructure/clients.rs",
+    "reserve_credits_legacy_v1",
+    "refund_credits_legacy_v1",
+)
 
 for relative, content in (
     ("gateway exact reserve API", api),
@@ -102,6 +135,39 @@ for relative, content in (
             PROBLEMS.append(
                 f"{relative} contains forbidden legacy-money/long-transaction marker: {pattern}"
             )
+
+entry_guard_offset = canonical_entry.find("if req.has_legacy_reserve()")
+entry_legacy_call_offset = canonical_entry.find("legacy::create_invocation")
+if min(entry_guard_offset, entry_legacy_call_offset) < 0 or not (
+    entry_guard_offset < entry_legacy_call_offset
+):
+    PROBLEMS.append(
+        "canonical Invocation entry must fail closed before reaching the legacy implementation"
+    )
+
+http_guard_offset = canonical_http.find("if body.has_legacy_reserve()")
+http_auth_offset = canonical_http.find("resolve_api_key")
+http_service_offset = canonical_http.find("invocation_service::create_invocation")
+if min(http_guard_offset, http_auth_offset, http_service_offset) < 0 or not (
+    http_guard_offset < http_auth_offset < http_service_offset
+):
+    PROBLEMS.append(
+        "Gateway HTTP reserve guard must run before auth resolution and Invocation orchestration"
+    )
+
+if re.search(r"\.reserve_credits\s*\(", canonical_entry) or re.search(
+    r"\.refund_credits\s*\(", canonical_entry
+):
+    PROBLEMS.append(
+        "canonical Invocation entry must not call an unqualified legacy Ledger method"
+    )
+if "legacy_reserve_break_glass: bool" not in gateway_state:
+    PROBLEMS.append("Gateway AppState must carry an explicit legacy reserve break-glass flag")
+
+legacy_break_glass_guarded = (
+    "env_flag(LEGACY_RESERVE_BREAK_GLASS_ENV, false)" in gateway_state
+    and "legacy_reserve_break_glass: bool" in gateway_state
+)
 
 claim_offset = worker.find("cex_claim_gateway_exact_reserves_v1")
 network_offset = worker.find("/v2/ledger/effects")
@@ -126,6 +192,7 @@ require(
     "dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c",
     "Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
     "scripts/check-gateway-exact-reserve.py",
+    "scripts/check-ledger-caller-cutover.py",
     "cargo test --locked -p gateway-service --all-targets",
     "cargo clippy --locked -p gateway-service --all-targets -- -D warnings",
     "scripts/check-gateway-exact-reserve-postgres.sh",
@@ -148,12 +215,29 @@ require(
     "claim transaction commits",
     "reconcile_required",
     "legacy monetary intent is zero",
+    "legacy_reserve_fail_closed=true",
+    "POST /v2/invocations/:invocation_id/exact-reserve",
+)
+require(
+    "docs/ledger-caller-cutover-v1.md",
+    "legacy_reserve_fail_closed=true",
+    "CEX_GATEWAY_LEGACY_RESERVE_BREAK_GLASS=false",
+    "before API-key resolution",
 )
 require(
     "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
     "P0-N6 delivered by this candidate",
     "Genesis-as-entry",
     "not production-ready",
+    "caller migration blocked until exact reserve contract",
+)
+require(
+    "config/gateway-exact-reserve.env.example",
+    "CEX_GATEWAY_LEGACY_RESERVE_BREAK_GLASS=false",
+)
+require(
+    ".env.production.example",
+    "CEX_GATEWAY_LEGACY_RESERVE_BREAK_GLASS=false",
 )
 
 numbered_migrations = sorted(
@@ -183,6 +267,12 @@ result = {
     "gateway_contract_migration": "0073_add_gateway_exact_reserve_commands.sql",
     "release_migration_head": release_migration_head,
     "legacy_money_conversion_allowed": False,
+    "legacy_reserve_fail_closed": entry_guard_offset >= 0
+    and entry_guard_offset < entry_legacy_call_offset
+    and http_guard_offset >= 0
+    and http_guard_offset < http_auth_offset,
+    "legacy_break_glass_default": False,
+    "legacy_break_glass_guarded": legacy_break_glass_guarded,
     "active_by_default": False,
     "problems": PROBLEMS,
 }

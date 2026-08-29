@@ -8,13 +8,18 @@ on:
       - 'services/gateway-service/**'
       - 'crates/shared-config/src/runtime_guard.rs'
       - 'scripts/check-gateway-exact-reserve.py'
+      - 'scripts/check-ledger-caller-cutover.py'
       - 'scripts/check-gateway-exact-reserve-postgres.sh'
       - 'scripts/check-p0-release-candidate-hygiene.py'
       - 'docs/gateway-exact-reserve-v1.md'
+      - 'docs/ledger-caller-cutover-v1.md'
+      - 'docs/configuration-v1.md'
       - 'docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md'
       - 'docs/templates/cex-release-baseline-manifest-v1.json'
       - 'docs/release-evidence/p0-candidate-trigger.json'
       - 'config/gateway-exact-reserve.env.example'
+      - '.env.example'
+      - '.env.production.example'
       - 'ops/systemd/cex-gateway-exact-reserve-api.service'
       - 'ops/systemd/cex-gateway-exact-reserve-worker.service'
       - '.github/workflows/p0-gateway-exact-reserve-gate.yml'
@@ -65,6 +70,9 @@ jobs:
 
       - name: Static P0-N6 architecture gate
         run: python3 scripts/check-gateway-exact-reserve.py
+
+      - name: Canonical Invocation caller cutover guard
+        run: python3 scripts/check-ledger-caller-cutover.py
 
       - name: Migration and release-manifest governance
         run: |

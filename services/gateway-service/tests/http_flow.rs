@@ -443,6 +443,17 @@ async fn start_mock_server(config: MockConfig) -> MockServer {
 }
 
 fn test_state(base_url: String) -> AppState {
+    test_state_with_legacy_reserve_break_glass(base_url, false)
+}
+
+fn legacy_test_state(base_url: String) -> AppState {
+    test_state_with_legacy_reserve_break_glass(base_url, true)
+}
+
+fn test_state_with_legacy_reserve_break_glass(
+    base_url: String,
+    legacy_reserve_break_glass: bool,
+) -> AppState {
     AppState {
         invocations: Arc::new(RwLock::new(HashMap::new())),
         clients: Arc::new(ServiceClients::new(
@@ -454,6 +465,7 @@ fn test_state(base_url: String) -> AppState {
         )),
         pool: None,
         fail_fast: false,
+        legacy_reserve_break_glass,
         metrics: Arc::new(GatewayRuntimeMetrics::default()),
         alert_gateway_upstream_failure_threshold: 1,
     }
@@ -586,6 +598,30 @@ async fn missing_api_key_returns_401_without_upstream_calls() {
 
     let calls = upstream.calls().await;
     assert!(calls.is_empty());
+}
+
+#[tokio::test]
+async fn legacy_reserve_fails_closed_before_auth_or_upstream_calls() {
+    let upstream = start_mock_server(MockConfig::queued()).await;
+    let state = test_state_with_legacy_reserve_break_glass(upstream.base_url.clone(), false);
+    let invocations = state.invocations.clone();
+    let app = build_router(state);
+
+    let request_body = json!({
+        "account_id": Uuid::from_u128(0x11111111111111111111111111111111_u128),
+        "prompt": "legacy reserve must be migrated",
+        "reserve_amount": 5.0
+    });
+
+    let (status, response) = send_json(app, "POST", "/v1/invocations", request_body).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(response["error"], "legacy_reserve_requires_exact_ingress");
+    assert_eq!(
+        response["migration"]["exact_reserve"],
+        "POST /v2/invocations/:invocation_id/exact-reserve"
+    );
+    assert!(invocations.read().await.is_empty());
+    assert!(upstream.calls().await.is_empty());
 }
 
 #[tokio::test]
@@ -740,7 +776,7 @@ async fn get_invocation_returns_cached_execution_snapshot_when_execution_lookup_
 #[tokio::test]
 async fn bearer_authorization_header_is_accepted() {
     let upstream = start_mock_server(MockConfig::queued()).await;
-    let app = build_router(test_state(upstream.base_url.clone()));
+    let app = build_router(legacy_test_state(upstream.base_url.clone()));
 
     let request_body = json!({
         "capability_id": "summarize",
@@ -768,7 +804,7 @@ async fn invalid_capability_id_returns_400_before_ledger() {
     config.capability_body = json!({ "error": "capability not found" });
 
     let upstream = start_mock_server(config).await;
-    let app = build_router(test_state(upstream.base_url.clone()));
+    let app = build_router(legacy_test_state(upstream.base_url.clone()));
 
     let request_body = json!({
         "capability_id": "missing.capability",
@@ -793,7 +829,7 @@ async fn invalid_capability_id_returns_400_before_ledger() {
 #[tokio::test]
 async fn auth_resolution_failure_returns_401_and_stops_before_ledger() {
     let upstream = start_mock_server(MockConfig::auth_failure()).await;
-    let app = build_router(test_state(upstream.base_url.clone()));
+    let app = build_router(legacy_test_state(upstream.base_url.clone()));
 
     let request_body = json!({
         "account_id": Uuid::from_u128(0x66666666666666666666666666666666_u128),
@@ -819,7 +855,7 @@ async fn auth_resolution_failure_returns_401_and_stops_before_ledger() {
 #[tokio::test]
 async fn create_invocation_happy_path_reserves_and_queues_execution() {
     let upstream = start_mock_server(MockConfig::queued()).await;
-    let app = build_router(test_state(upstream.base_url.clone()));
+    let app = build_router(legacy_test_state(upstream.base_url.clone()));
 
     let request_body = json!({
         "capability_id": "summarize",
@@ -891,7 +927,7 @@ async fn create_invocation_immediate_dispatch_auto_starts_provider_capability_an
     });
 
     let upstream = start_mock_server(config).await;
-    let app = build_router(test_state(upstream.base_url.clone()));
+    let app = build_router(legacy_test_state(upstream.base_url.clone()));
 
     let request_body = json!({
         "capability_id": "summarize",
@@ -949,7 +985,7 @@ async fn create_invocation_queued_worker_dispatch_does_not_auto_start_execution(
     });
 
     let upstream = start_mock_server(config).await;
-    let app = build_router(test_state(upstream.base_url.clone()));
+    let app = build_router(legacy_test_state(upstream.base_url.clone()));
 
     let request_body = json!({
         "capability_id": "summarize",
@@ -1016,7 +1052,7 @@ async fn create_invocation_auto_start_failure_returns_refunded_when_provider_exe
     });
 
     let upstream = start_mock_server(config).await;
-    let app = build_router(test_state(upstream.base_url.clone()));
+    let app = build_router(legacy_test_state(upstream.base_url.clone()));
 
     let request_body = json!({
         "capability_id": "summarize",
@@ -1049,7 +1085,7 @@ async fn create_invocation_auto_start_failure_returns_refunded_when_provider_exe
 #[tokio::test]
 async fn create_invocation_returns_accepted_when_execution_needs_approval() {
     let upstream = start_mock_server(MockConfig::awaiting_approval()).await;
-    let app = build_router(test_state(upstream.base_url.clone()));
+    let app = build_router(legacy_test_state(upstream.base_url.clone()));
 
     let request_body = json!({
         "capability_id": "publish",
@@ -1078,7 +1114,7 @@ async fn create_invocation_returns_accepted_when_execution_needs_approval() {
 #[tokio::test]
 async fn reserve_failure_blocks_execution_creation() {
     let upstream = start_mock_server(MockConfig::reserve_failure()).await;
-    let app = build_router(test_state(upstream.base_url.clone()));
+    let app = build_router(legacy_test_state(upstream.base_url.clone()));
 
     let request_body = json!({
         "capability_id": "summarize",
@@ -1106,7 +1142,7 @@ async fn reserve_failure_blocks_execution_creation() {
 #[tokio::test]
 async fn execution_failure_triggers_refund_and_persists_refunded_status() {
     let upstream = start_mock_server(MockConfig::execution_failure_with_refund()).await;
-    let app = build_router(test_state(upstream.base_url.clone()));
+    let app = build_router(legacy_test_state(upstream.base_url.clone()));
 
     let request_body = json!({
         "capability_id": "summarize",
@@ -1152,7 +1188,7 @@ async fn account_org_mismatch_blocks_invocation_before_reserve() {
     });
 
     let upstream = start_mock_server(config).await;
-    let app = build_router(test_state(upstream.base_url.clone()));
+    let app = build_router(legacy_test_state(upstream.base_url.clone()));
 
     let request_body = json!({
         "capability_id": "summarize",

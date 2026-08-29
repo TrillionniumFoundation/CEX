@@ -13,6 +13,7 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 pub const DEFAULT_ALERT_GATEWAY_UPSTREAM_FAILURE_THRESHOLD: usize = 1;
+const LEGACY_RESERVE_BREAK_GLASS_ENV: &str = "CEX_GATEWAY_LEGACY_RESERVE_BREAK_GLASS";
 
 #[derive(Debug, Default)]
 pub struct GatewayRuntimeMetrics {
@@ -89,6 +90,10 @@ pub struct AppState {
     pub clients: Arc<ServiceClients>,
     pub pool: Option<PgPool>,
     pub fail_fast: bool,
+    /// Explicitly governed compatibility escape hatch for the legacy
+    /// `reserve_amount: f64` path. It is disabled for production-like
+    /// profiles and defaults to false everywhere else.
+    pub legacy_reserve_break_glass: bool,
     pub metrics: Arc<GatewayRuntimeMetrics>,
     pub alert_gateway_upstream_failure_threshold: usize,
 }
@@ -100,6 +105,7 @@ impl AppState {
             "ALERT_GATEWAY_UPSTREAM_FAILURE_THRESHOLD",
             DEFAULT_ALERT_GATEWAY_UPSTREAM_FAILURE_THRESHOLD,
         );
+        let legacy_reserve_break_glass = legacy_reserve_break_glass_from_env();
         let pool = match env::var("DATABASE_URL") {
             Ok(database_url) => match PgPool::connect(&database_url).await {
                 Ok(pool) => Some(pool),
@@ -127,6 +133,7 @@ impl AppState {
             clients: Arc::new(clients),
             pool,
             fail_fast,
+            legacy_reserve_break_glass,
             metrics: Arc::new(GatewayRuntimeMetrics::default()),
             alert_gateway_upstream_failure_threshold,
         }
@@ -149,4 +156,32 @@ fn positive_usize_env(name: &str, default_value: usize) -> usize {
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(default_value)
+}
+
+fn legacy_reserve_break_glass_from_env() -> bool {
+    if !env_flag(LEGACY_RESERVE_BREAK_GLASS_ENV, false) {
+        return false;
+    }
+
+    let production_like_profile = ["CEX_RUNTIME_PROFILE", "APP_ENV"]
+        .into_iter()
+        .filter_map(|name| env::var(name).ok())
+        .map(|value| value.trim().to_ascii_lowercase())
+        .any(|profile| {
+            matches!(
+                profile.as_str(),
+                "beta" | "staging" | "stage" | "production" | "prod"
+            )
+        });
+    if production_like_profile {
+        eprintln!(
+            "gateway-service: {LEGACY_RESERVE_BREAK_GLASS_ENV}=true is ignored in production-like profile; legacy reserve remains fail-closed"
+        );
+        return false;
+    }
+
+    eprintln!(
+        "gateway-service: legacy reserve break-glass enabled for a non-production profile; exact reserve ingress remains the required migration path"
+    );
+    true
 }

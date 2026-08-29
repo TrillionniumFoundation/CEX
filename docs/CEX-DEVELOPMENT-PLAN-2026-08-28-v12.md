@@ -41,6 +41,12 @@ The Gateway exact path accepts canonical string minor units, rejects dual exact/
 intent and binds one immutable Invocation Ledger contract to one reserve operation. Claims and
 outcomes run in separate transactions around the Ledger v2 network call.
 
+The caller migration is blocked until the exact reserve contract is authoritative (machine-readable
+marker: `caller migration blocked until exact reserve contract`). The canonical
+`POST /v1/invocations` path therefore rejects legacy `reserve_amount: f64` before authentication,
+persistence or upstream calls; only the explicit non-production break-glass compatibility switch
+may invoke the retired v1 reserve/refund methods.
+
 ### Genesis-as-entry and exact account authority
 
 **Genesis-as-entry** is the only supported non-zero account opening model. The account is opened
@@ -114,6 +120,7 @@ candidate commit.
 Required evidence:
 
 - static architecture and legacy-money exclusion;
+- canonical Invocation legacy-reserve fail-closed guard and exact-ingress migration evidence;
 - Gateway package tests and clippy with warnings denied;
 - fresh migration lifecycle;
 - Invocation exact contract lifecycle;

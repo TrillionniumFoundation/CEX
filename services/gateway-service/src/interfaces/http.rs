@@ -11,7 +11,9 @@ use uuid::Uuid;
 
 use crate::{
     application::invocation_service,
-    domain::invocation::CreateInvocationBody,
+    domain::invocation::{
+        CreateInvocationBody, LEGACY_RESERVE_REJECTION_CODE, LEGACY_RESERVE_REJECTION_MESSAGE,
+    },
     infrastructure::{
         clients::ServiceCallError,
         state::{
@@ -224,6 +226,14 @@ async fn create_invocation(
         .metrics
         .invocation_create_requests
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+    // Reject legacy floating-point money before API-key resolution, capability
+    // lookup, persistence or any other upstream call. The only exception is an
+    // explicitly enabled non-production break-glass state used during rollback.
+    if body.has_legacy_reserve() && !state.legacy_reserve_break_glass {
+        return legacy_reserve_requires_exact_ingress_response();
+    }
+
     let Some(api_key) = extract_api_key(&headers) else {
         state
             .metrics
@@ -324,6 +334,21 @@ async fn create_invocation(
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
     (status, Json(record)).into_response()
+}
+
+fn legacy_reserve_requires_exact_ingress_response() -> axum::response::Response {
+    (
+        StatusCode::CONFLICT,
+        Json(serde_json::json!({
+            "error": LEGACY_RESERVE_REJECTION_CODE,
+            "message": LEGACY_RESERVE_REJECTION_MESSAGE,
+            "migration": {
+                "create_invocation": "POST /v1/invocations without reserve_amount",
+                "exact_reserve": "POST /v2/invocations/:invocation_id/exact-reserve"
+            }
+        })),
+    )
+        .into_response()
 }
 
 async fn get_invocation(
