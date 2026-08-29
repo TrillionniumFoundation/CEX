@@ -1,0 +1,93 @@
+name: world-settlement-gap-closure-validate
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - ci/world-settlement-gap-closure-v1
+    paths:
+      - '.github/workflows/world-settlement-gap-closure-validate.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate-exact-world-candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    services:
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      WORLD_REPOSITORY: TrillionniumFoundation/Trillionnium-World
+      WORLD_COMMIT: cb94bd51df306b4a5ab89efa20072d7a211d5600
+      TRNM_SETTLEMENT_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+      TRNM_REQUIRE_SETTLEMENT_DATABASE_TEST: '1'
+      CARGO_TERM_COLOR: never
+      CARGO_INCREMENTAL: '0'
+      RUST_BACKTRACE: '1'
+      RUST_TEST_THREADS: '1'
+    steps:
+      - name: Checkout exact World candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: ${{ env.WORLD_REPOSITORY }}
+          ref: ${{ env.WORLD_COMMIT }}
+          path: world
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify exact World commit and tree
+        working-directory: world
+        run: |
+          test "$(git rev-parse HEAD)" = "${WORLD_COMMIT}"
+          git rev-parse HEAD
+          git rev-parse 'HEAD^{tree}'
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
+          rustup default 1.98.0
+          rustc --version --verbose
+          cargo --version --verbose
+      - name: Validate locked workspace
+        working-directory: world/trillionnium
+        run: cargo metadata --locked --no-deps --format-version 1 > /dev/null
+      - name: Check formatting of this slice only
+        working-directory: world/trillionnium
+        run: |
+          rustfmt --edition 2021 --check \
+            crates/trnm-game-server/build.rs \
+            crates/trnm-game-server/src/lib.rs \
+            crates/trnm-game-server/src/settlement_worker.rs \
+            crates/trnm-game-server/tests/settlement_game_server_boundary.rs \
+            crates/trnm-game-server/tests/settlement_operator_controls_database.rs
+      - name: Compile game-server library and executables
+        working-directory: world/trillionnium
+        run: |
+          cargo test -p trnm-game-server --lib --locked
+          cargo test -p trnm-game-server --bin trnm-entitlement-signer --locked
+          cargo build -p trnm-game-server --bin trnm-game-server --bin trnm-settlement-worker --locked
+      - name: Run settlement contracts
+        working-directory: world/trillionnium
+        run: |
+          cargo test -p trnm-game-server --test settlement_game_server_boundary --locked
+          cargo test -p trnm-game-server --test settlement_remote_identity_contract --locked
+          cargo test -p trnm-game-server --test settlement_worker_contract --locked
+          cargo test -p trnm-game-server --test settlement_fault_model --locked
+          cargo test -p trnm-game-server --test settlement_capture_commit_boundary --locked
+          cargo test -p trnm-game-server --test settlement_database_contract --locked
+          cargo test -p trnm-game-server --test settlement_serialization_database --locked
+          cargo test -p trnm-game-server --test settlement_operator_controls_database --locked
+      - name: Strict game-server lint
+        working-directory: world/trillionnium
+        run: cargo clippy -p trnm-game-server --all-targets --locked -- -D warnings
