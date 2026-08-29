@@ -11,6 +11,7 @@ on:
       - 'scripts/check-provider-reconciliation-postgres.sh'
       - 'docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md'
       - 'docs/templates/cex-release-baseline-manifest-v1.json'
+      - 'docs/release-evidence/p0-candidate-trigger.json'
       - '.github/workflows/p0-provider-reconciliation-gate.yml'
   pull_request:
     paths:
@@ -21,6 +22,7 @@ on:
       - 'scripts/check-provider-reconciliation-postgres.sh'
       - 'docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md'
       - 'docs/templates/cex-release-baseline-manifest-v1.json'
+      - 'docs/release-evidence/p0-candidate-trigger.json'
       - '.github/workflows/p0-provider-reconciliation-gate.yml'
 
 permissions:
@@ -51,6 +53,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Candidate tree hygiene
+        run: python3 scripts/check-p0-release-candidate-hygiene.py
 
       - name: Migration and release-manifest governance
         run: |
