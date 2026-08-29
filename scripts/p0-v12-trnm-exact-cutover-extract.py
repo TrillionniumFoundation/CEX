@@ -53,6 +53,38 @@ product_replacement = """replace_between(
 )"""
 
 patch = patch[:product_start] + product_replacement + patch[product_end:]
+
+currency_helper_marker = "fn minor_to_whole_credits("
+if patch.count(currency_helper_marker) != 1:
+    raise SystemExit("exact currency helper insertion marker missing or duplicated")
+currency_helper = """fn intent_currency(intent: &EconomicIntent) -> Result<&str, LedgerActionError> {
+    let currency = intent.currency.as_deref().ok_or_else(|| {
+        LedgerActionError::IdentityRejected(
+            "TRNM value intent currency is required for exact Ledger writes".to_string(),
+        )
+    })?;
+    if currency.trim().is_empty() {
+        return Err(LedgerActionError::IdentityRejected(
+            "TRNM value intent currency cannot be empty".to_string(),
+        ));
+    }
+    Ok(currency)
+}
+
+"""
+patch = patch.replace(currency_helper_marker, currency_helper + currency_helper_marker, 1)
+
+legacy_currency_reference = "&intent.currency"
+legacy_currency_references = patch.count(legacy_currency_reference)
+if legacy_currency_references != 5:
+    raise SystemExit(
+        "expected five optional intent currency references, "
+        f"found {legacy_currency_references}"
+    )
+patch = patch.replace(legacy_currency_reference, "intent_currency(intent)?")
+if patch.count("intent_currency(intent)?") != 5:
+    raise SystemExit("exact intent currency rewiring is incomplete")
+
 compile(patch, str(OUTPUT), "exec")
 OUTPUT.write_text(patch, encoding="utf-8")
 print(f"wrote {OUTPUT} ({len(patch)} bytes)")
