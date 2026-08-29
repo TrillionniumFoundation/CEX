@@ -2,6 +2,7 @@
 pub(crate) mod service_auth;
 
 pub mod api;
+pub mod outbox_dispatcher;
 pub mod state;
 pub mod v2;
 
@@ -26,9 +27,7 @@ pub fn build_router(state: AppState) -> Router {
     );
     let protected_audit_write = Router::new()
         .route("/v1/audit/events", post(api::create_event))
-        // Compatibility alias retained while existing writers migrate.
         .route("/v1/audit/events/v2", post(v2::create_event_v2))
-        // Canonical versioned Audit v2 endpoint.
         .route("/v2/audit/events", post(v2::create_event_v2))
         .route_layer(middleware::from_fn_with_state(
             audit_write_auth,
@@ -38,21 +37,17 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(api::health))
         .route("/metrics", get(api::metrics))
-        // Compatibility/operator alias.
         .route("/metrics/audit-v2", get(v2::metrics_v2))
-        // Canonical Audit v2 metrics endpoint.
         .route("/v2/audit/metrics", get(v2::metrics_v2))
         .merge(protected_audit_write)
         .route(
             "/v1/audit/events/trace/:trace_id",
             get(api::list_events_by_trace),
         )
-        // Compatibility alias retained while readers migrate.
         .route(
             "/v1/audit/events/v2/trace/:trace_id",
             get(v2::list_events_by_trace_v2),
         )
-        // Canonical versioned Audit v2 read endpoint.
         .route(
             "/v2/audit/events/trace/:trace_id",
             get(v2::list_events_by_trace_v2),

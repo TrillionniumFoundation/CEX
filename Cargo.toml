@@ -38,7 +38,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono"] }
 term-exchange-protocol = { package = "trnm-economy-protocol", version = "=2.4.0", path = "vendor/trnm-economy-protocol" }
 trnm-research-protocol = { version = "=0.1.0", path = "vendor/trnm-research-protocol" }

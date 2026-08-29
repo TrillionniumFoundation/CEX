@@ -71,6 +71,7 @@ impl ServiceAuthConfig {
                 "gateway-service",
                 "identity-service",
                 "execution-service",
+                "audit-outbox-dispatcher",
             ],
         )
     }
@@ -225,7 +226,7 @@ fn parse_mode(raw: Option<&str>) -> Result<ServiceAuthMode, String> {
 }
 
 fn validate_token(service_id: &str, token: &str) -> Result<(), String> {
-    if token.as_bytes().len() < MIN_TOKEN_BYTES {
+    if token.len() < MIN_TOKEN_BYTES {
         return Err(format!(
             "internal token for {service_id} must be at least {MIN_TOKEN_BYTES} bytes"
         ));
@@ -268,6 +269,8 @@ mod tests {
         "a34eec99e9034dcc94ef660136ebdd3719978e3dd9874312ab7b7c2b9b14ea81";
     const EXECUTION_TOKEN: &str =
         "ed34683df2c7423d81a5e8db2267463fa0246fd2970741f0b104c21f9f32f4fb";
+    const DISPATCHER_TOKEN: &str =
+        "7c80ec8780d94989843c24824f46892c48fcdb23c3d848a38f3211fa2ad2871a";
 
     #[test]
     fn enforce_mode_requires_allowed_caller_token() {
@@ -299,9 +302,9 @@ mod tests {
     }
 
     #[test]
-    fn audit_writer_config_requires_every_registered_writer() {
+    fn audit_writer_config_includes_the_dispatcher() {
         let token_map = format!(
-            r#"{{"gateway-service":"{GATEWAY_TOKEN}","identity-service":"{IDENTITY_TOKEN}","execution-service":"{EXECUTION_TOKEN}"}}"#
+            r#"{{"gateway-service":"{GATEWAY_TOKEN}","identity-service":"{IDENTITY_TOKEN}","execution-service":"{EXECUTION_TOKEN}","audit-outbox-dispatcher":"{DISPATCHER_TOKEN}"}}"#
         );
         let config = ServiceAuthConfig::from_values(
             Some("enforce"),
@@ -312,10 +315,14 @@ mod tests {
                 "gateway-service",
                 "identity-service",
                 "execution-service",
+                "audit-outbox-dispatcher",
             ],
         )
         .unwrap();
-        assert_eq!(config.allowed_tokens.len(), 3);
+        assert_eq!(config.allowed_tokens.len(), 4);
+        assert!(config
+            .allowed_tokens
+            .contains_key("audit-outbox-dispatcher"));
     }
 
     #[test]
