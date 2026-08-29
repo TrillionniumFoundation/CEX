@@ -78,16 +78,19 @@ create index idx_cex_saga_commands_claim_v1
     )
     where status in ('pending', 'claimed', 'retry_wait');
 
+-- PostgreSQL permits CREATE OR REPLACE VIEW to append columns, but not to
+-- insert them before existing columns. Preserve the 0057 public column order
+-- and append execution_mode so both fresh and 0057->0058 upgrades are valid.
 create or replace view public.cex_saga_queue_summary_v1 as
 select
-    execution_mode,
     command_kind,
     status,
     count(*)::bigint as command_count,
     min(available_at) as oldest_available_at,
     min(lease_expires_at) filter (where status = 'claimed') as oldest_lease_expiry,
-    count(*) filter (where attempt_count >= max_attempts)::bigint as retry_budget_exhausted
+    count(*) filter (where attempt_count >= max_attempts)::bigint as retry_budget_exhausted,
+    execution_mode
 from public.cex_saga_commands_v1
-group by execution_mode, command_kind, status;
+group by command_kind, status, execution_mode;
 
 commit;
