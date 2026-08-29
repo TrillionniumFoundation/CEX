@@ -249,6 +249,7 @@ pub fn router(state: AppState) -> Router {
         .route("/league/formation/:team_id", get(formation))
         .route("/league/papers/:paper_id", get(paper_room))
         .merge(crate::challenge_materials::router())
+        .merge(crate::practice_http::router())
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .with_state(state)
         .layer(middleware::from_fn_with_state(
