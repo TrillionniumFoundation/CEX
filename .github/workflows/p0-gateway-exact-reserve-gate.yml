@@ -5,10 +5,11 @@ on:
   push:
     paths:
       - 'migrations/0073_add_gateway_exact_reserve_commands.sql'
-      - 'services/gateway-service/src/bin/gateway-exact-reserve-api.rs'
-      - 'services/gateway-service/src/bin/gateway-exact-reserve-worker.rs'
+      - 'services/gateway-service/**'
+      - 'crates/shared-config/src/runtime_guard.rs'
       - 'scripts/check-gateway-exact-reserve.py'
       - 'scripts/check-gateway-exact-reserve-postgres.sh'
+      - 'scripts/check-p0-release-candidate-hygiene.py'
       - 'docs/gateway-exact-reserve-v1.md'
       - 'docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md'
       - 'docs/templates/cex-release-baseline-manifest-v1.json'
@@ -20,10 +21,11 @@ on:
   pull_request:
     paths:
       - 'migrations/0073_add_gateway_exact_reserve_commands.sql'
-      - 'services/gateway-service/src/bin/gateway-exact-reserve-api.rs'
-      - 'services/gateway-service/src/bin/gateway-exact-reserve-worker.rs'
+      - 'services/gateway-service/**'
+      - 'crates/shared-config/src/runtime_guard.rs'
       - 'scripts/check-gateway-exact-reserve.py'
       - 'scripts/check-gateway-exact-reserve-postgres.sh'
+      - 'scripts/check-p0-release-candidate-hygiene.py'
       - 'docs/gateway-exact-reserve-v1.md'
       - 'docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md'
       - 'docs/templates/cex-release-baseline-manifest-v1.json'
