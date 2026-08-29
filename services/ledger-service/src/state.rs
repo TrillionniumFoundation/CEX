@@ -2,6 +2,7 @@ use crate::repository::LedgerRepositoryHandle;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use shared_config::{build_admin_principal_map, load_ledger_scoped_admin_tokens, AdminPrincipal};
 use sqlx::PgPool;
 use std::{
@@ -31,6 +32,17 @@ pub struct LedgerEntryRecord {
     pub idempotency_key: Option<String>,
 }
 
+/// Exact-memory state exists only for non-production service-local tests that do not
+/// provision PostgreSQL. It preserves immutable request comparison and scoped
+/// idempotency; production-like profiles still require `operation_pool`.
+#[derive(Debug, Default)]
+pub struct ExactMemoryLedger {
+    pub account_openings_by_account: HashMap<Uuid, Value>,
+    pub account_opening_account_by_key: HashMap<String, Uuid>,
+    pub effects_by_operation: HashMap<Uuid, Value>,
+    pub effect_operation_by_key: HashMap<String, Uuid>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntitlementIssuerKey {
     pub issuer: String,
@@ -48,6 +60,7 @@ pub struct AppState {
     pub accounts: Arc<RwLock<HashMap<Uuid, AccountRecord>>>,
     pub entries: Arc<RwLock<Vec<LedgerEntryRecord>>>,
     pub idempotency_keys: Arc<RwLock<HashSet<String>>>,
+    pub exact_memory: Arc<RwLock<ExactMemoryLedger>>,
     pub repository: LedgerRepositoryHandle,
     pub operation_pool: Option<PgPool>,
     pub fail_fast: bool,
@@ -80,6 +93,7 @@ impl AppState {
             accounts: Arc::new(RwLock::new(HashMap::new())),
             entries: Arc::new(RwLock::new(Vec::new())),
             idempotency_keys: Arc::new(RwLock::new(HashSet::new())),
+            exact_memory: Arc::new(RwLock::new(ExactMemoryLedger::default())),
             repository,
             operation_pool,
             fail_fast,
@@ -152,6 +166,7 @@ impl AppState {
             accounts: Arc::new(RwLock::new(HashMap::new())),
             entries: Arc::new(RwLock::new(Vec::new())),
             idempotency_keys: Arc::new(RwLock::new(HashSet::new())),
+            exact_memory: Arc::new(RwLock::new(ExactMemoryLedger::default())),
             repository,
             operation_pool: None,
             fail_fast,
