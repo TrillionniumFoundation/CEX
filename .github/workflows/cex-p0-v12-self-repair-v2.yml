@@ -1,0 +1,311 @@
+name: cex-p0-v12-self-repair-v2
+
+on:
+  push:
+    branches:
+      - feature/settlement-all-blockers-closure-v1
+    paths:
+      - .github/workflows/cex-p0-v12-self-repair-v2.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cex-p0-v12-self-repair
+  cancel-in-progress: false
+
+env:
+  DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/cex_ci
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+  RUST_TEST_THREADS: "1"
+
+jobs:
+  repair-test-commit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cex
+          POSTGRES_PASSWORD: cex_ci_password
+          POSTGRES_DB: cex_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cex -d cex_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Checkout guarded candidate branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feature/settlement-all-blockers-closure-v1
+          fetch-depth: 12
+          persist-credentials: true
+
+      - name: Verify exact repair ancestry and source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor 813968825ec4e61e4a28bb3051b512ad98d639b9 HEAD
+          git diff --exit-code
+          test "$(git hash-object services/ledger-service/src/receipt_lookup.rs)" = 57683b21d9fae676ecc21e53acb651ae0e6aac09
+          test "$(git hash-object scripts/check-trnm-settlement-receipt-lookup-http.sh)" = bf16f868bad1e1c894978b9040dbcc6d4669ecf6
+          test "$(git hash-object scripts/check-trnm-economy-resource-budgets.sh)" = 2ead4e7003fac0a761456366b8e401a62206f60f
+
+      - name: Apply deterministic repository repairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY_REPAIR'
+          from pathlib import Path
+
+          lookup = Path("scripts/check-trnm-settlement-receipt-lookup-http.sh")
+          lines = lookup.read_text(encoding="utf-8").splitlines()
+
+          transport_start = lines.index(
+              "# Send a complete request and deliberately close without reading a response."
+          )
+          transport_end = next(
+              index
+              for index in range(transport_start + 1, len(lines))
+              if lines[index] == "PY"
+          )
+          replacement = r'''# Relay the request to Ledger, wait until Ledger has committed and produced a
+          # successful upstream response, then drop every response byte before the consumer
+          # can observe status or body. Closing the service socket directly would cancel the
+          # handler before the side-effect boundary and would not model response loss.
+          python3 - "$ledger_addr" "$game_authority_token" "$work_dir/response-loss.request.json" <<'PY'
+          from pathlib import Path
+          import socket
+          import sys
+          import threading
+
+          upstream_host, upstream_port = sys.argv[1].rsplit(":", 1)
+          token = sys.argv[2]
+          body = Path(sys.argv[3]).read_bytes()
+          request = (
+              f"POST /v1/trnm/economy/intents HTTP/1.1\r\n"
+              f"Host: {upstream_host}:{upstream_port}\r\n"
+              f"Content-Type: application/json\r\n"
+              f"x-trnm-game-authority: {token}\r\n"
+              f"Content-Length: {len(body)}\r\n"
+              f"Connection: close\r\n\r\n"
+          ).encode() + body
+
+          listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+          listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+          listener.bind(("127.0.0.1", 0))
+          listener.listen(1)
+          listener.settimeout(10)
+          relay_errors = []
+          upstream_response = [b""]
+
+          def relay() -> None:
+              try:
+                  downstream, _ = listener.accept()
+                  with downstream:
+                      downstream.settimeout(40)
+                      forwarded = bytearray()
+                      while True:
+                          chunk = downstream.recv(65536)
+                          if not chunk:
+                              break
+                          forwarded.extend(chunk)
+                      with socket.create_connection(
+                          (upstream_host, int(upstream_port)), timeout=10
+                      ) as upstream:
+                          upstream.settimeout(40)
+                          upstream.sendall(forwarded)
+                          upstream.shutdown(socket.SHUT_WR)
+                          response = bytearray()
+                          while True:
+                              chunk = upstream.recv(65536)
+                              if not chunk:
+                                  break
+                              response.extend(chunk)
+                      upstream_response[0] = bytes(response)
+                      # Deliberately send no response bytes to the consumer.
+              except BaseException as error:
+                  relay_errors.append(error)
+
+          relay_thread = threading.Thread(target=relay, daemon=True)
+          relay_thread.start()
+          proxy_host, proxy_port = listener.getsockname()
+          with socket.create_connection((proxy_host, proxy_port), timeout=10) as consumer:
+              consumer.settimeout(45)
+              consumer.sendall(request)
+              consumer.shutdown(socket.SHUT_WR)
+              observed = bytearray()
+              while True:
+                  chunk = consumer.recv(65536)
+                  if not chunk:
+                      break
+                  observed.extend(chunk)
+          relay_thread.join(timeout=45)
+          listener.close()
+          if relay_thread.is_alive():
+              raise SystemExit("response-loss relay did not finish")
+          if relay_errors:
+              raise relay_errors[0]
+          if observed:
+              raise SystemExit("consumer unexpectedly observed response bytes")
+          status_line = upstream_response[0].split(b"\r\n", 1)[0]
+          if b" 200 " not in status_line:
+              raise SystemExit(f"upstream Ledger response was not successful: {status_line!r}")
+          PY'''.splitlines()
+          lines[transport_start : transport_end + 1] = replacement
+
+          committed_start = lines.index(
+              '  committed=$(psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -At \\'
+          )
+          committed_old = [
+              '  committed=$(psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -At \\',
+              '    -v intent_id="$response_loss_intent" \\',
+              '    -c "select count(*) from public.trnm_economic_receipts where intent_id = :\'intent_id\';")',
+          ]
+          if lines[committed_start : committed_start + len(committed_old)] != committed_old:
+              raise SystemExit("response-loss commit polling source drifted")
+          lines[committed_start : committed_start + len(committed_old)] = [
+              '  committed=$(',
+              '    psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -At \\',
+              '      -v intent_id="$response_loss_intent" <<\'SQL\'',
+              "select count(*) from public.trnm_economic_receipts where intent_id = :'intent_id';",
+              'SQL',
+              '  )',
+          ]
+
+          raw_start = lines.index(
+              'raw_database=$(psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -At \\'
+          )
+          raw_end = next(
+              index
+              for index in range(raw_start + 1, len(lines))
+              if lines[index] == ');")'
+          )
+          raw_block = lines[raw_start : raw_end + 1]
+          expected_prefix = [
+              'raw_database=$(psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -At \\',
+              '  -v account_id="$account_id" \\',
+              '  -v response_loss_intent="$response_loss_intent" \\',
+              '  -v concurrent_intent="$concurrent_intent" \\',
+              '  -c "',
+          ]
+          if raw_block[:5] != expected_prefix or raw_block[-1] != ');")':
+              raise SystemExit("database evidence query source drifted")
+          lines[raw_start : raw_end + 1] = [
+              'raw_database=$(',
+              '  psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -At \\',
+              '    -v account_id="$account_id" \\',
+              '    -v response_loss_intent="$response_loss_intent" \\',
+              '    -v concurrent_intent="$concurrent_intent" <<\'SQL\'',
+              *raw_block[5:-1],
+              ');',
+              'SQL',
+              ')',
+          ]
+          lookup.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+          budgets = Path("scripts/check-trnm-economy-resource-budgets.sh")
+          text = budgets.read_text(encoding="utf-8")
+          old = """rg -q 'LEDGER_DATABASE_MAX_CONNECTIONS' \\
+            \"$ROOT_DIR/scripts/run-trnm-economy-service.sh\" \\
+            \"$ROOT_DIR/services/ledger-service/src/repository/postgres.rs\"
+          """
+          new = """for path in \\
+            \"$ROOT_DIR/scripts/run-trnm-economy-service.sh\" \\
+            \"$ROOT_DIR/services/ledger-service/src/repository/postgres.rs\"; do
+            if ! grep -Fq 'LEDGER_DATABASE_MAX_CONNECTIONS' \"$path\"; then
+              echo \"missing Ledger pool budget wiring in ${path#$ROOT_DIR/}\" >&2
+              exit 1
+            fi
+          done
+          """
+          if text.count(old) != 1:
+              raise SystemExit(
+                  f"ripgrep dependency source count was {text.count(old)}, expected 1"
+              )
+          budgets.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY_REPAIR
+          bash -n scripts/check-trnm-settlement-receipt-lookup-http.sh
+          bash -n scripts/check-trnm-economy-resource-budgets.sh
+          git diff --check
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.98.0
+          components: rustfmt,clippy
+
+      - name: Apply canonical formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check
+
+      - name: Enforce exact repair scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t changed < <(git diff --name-only | sort)
+          expected=(
+            scripts/check-trnm-economy-resource-budgets.sh
+            scripts/check-trnm-settlement-receipt-lookup-http.sh
+            services/ledger-service/src/receipt_lookup.rs
+          )
+          printf '%s\n' "${changed[@]}"
+          test "${#changed[@]}" -eq "${#expected[@]}"
+          for index in "${!expected[@]}"; do
+            test "${changed[$index]}" = "${expected[$index]}"
+          done
+
+      - name: Prove static, database, HTTP and resource contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check-p0-release-candidate-hygiene.py
+          python3 scripts/check-p0-wiring.py
+          python3 scripts/check-trnm-settlement-receipt-lookup.py
+          bash scripts/check-p0-migrations-postgres.sh
+          cargo build --locked -p ledger-service --bin ledger-service
+          bash scripts/check-trnm-settlement-receipt-lookup-http.sh
+          bash scripts/check-trnm-economy-resource-budgets.sh
+          cargo test --locked -p ledger-service
+          cargo clippy --locked -p ledger-service --all-targets -- -D warnings
+
+      - name: Commit proven fixes and remove repair scaffolding
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/cex-p0-v12-self-repair.yml
+          rm .github/workflows/cex-p0-v12-self-repair-v2.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            services/ledger-service/src/receipt_lookup.rs \
+            scripts/check-trnm-settlement-receipt-lookup-http.sh \
+            scripts/check-trnm-economy-resource-budgets.sh \
+            .github/workflows/cex-p0-v12-self-repair.yml \
+            .github/workflows/cex-p0-v12-self-repair-v2.yml
+          git diff --cached --check
+          mapfile -t staged < <(git diff --cached --name-only | sort)
+          expected=(
+            .github/workflows/cex-p0-v12-self-repair-v2.yml
+            .github/workflows/cex-p0-v12-self-repair.yml
+            scripts/check-trnm-economy-resource-budgets.sh
+            scripts/check-trnm-settlement-receipt-lookup-http.sh
+            services/ledger-service/src/receipt_lookup.rs
+          )
+          test "${#staged[@]}" -eq "${#expected[@]}"
+          for index in "${!expected[@]}"; do
+            test "${staged[$index]}" = "${expected[$index]}"
+          done
+          git commit -m 'fix(p0): close final repository CI gaps'
+          git push origin HEAD:feature/settlement-all-blockers-closure-v1
