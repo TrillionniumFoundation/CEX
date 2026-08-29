@@ -25,32 +25,13 @@ on:
       - 'docs/release-evidence/p0-candidate-trigger.json'
       - '.github/workflows/p0-migration-gate.yml'
       - '.github/workflows/p0-release-candidate-gate.yml'
-  pull_request:
-    paths:
-      - 'migrations/**'
-      - 'services/ledger-service/src/lib.rs'
-      - 'services/ledger-service/src/receipt_lookup.rs'
-      - 'scripts/check-p0-migrations.py'
-      - 'scripts/check-p0-migrations-postgres.sh'
-      - 'scripts/check-audit-source-baseline-postgres.sh'
-      - 'scripts/check-ledger-operation-identity-postgres.sh'
-      - 'scripts/check-invocation-ledger-contract-static.py'
-      - 'scripts/check-invocation-ledger-contract-postgres.sh'
-      - 'scripts/check-invocation-ledger-terminal-postgres.sh'
-      - 'scripts/check-trnm-settlement-receipt-lookup.py'
-      - 'scripts/check-trnm-settlement-receipt-lookup-http.sh'
-      - 'scripts/backfill-audit-source-baselines.sh'
-      - 'docs/templates/cex-release-baseline-manifest-v1.json'
-      - 'docs/audit-source-baseline-backfill-v1.md'
-      - 'docs/ledger-operation-identity-v1.md'
-      - 'docs/invocation-ledger-contract-v1.md'
-      - 'docs/protocol/trnm-settlement-receipt-recovery-v1.md'
-      - 'docs/release-evidence/p0-candidate-trigger.json'
-      - '.github/workflows/p0-migration-gate.yml'
-      - '.github/workflows/p0-release-candidate-gate.yml'
 
 permissions:
   contents: read
+
+concurrency:
+  group: p0-migration-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/cex_ci
