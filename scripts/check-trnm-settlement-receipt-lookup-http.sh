@@ -228,8 +228,10 @@ PY
 committed=0
 for _ in $(seq 1 120); do
   committed=$(psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -At \
-    -v intent_id="$response_loss_intent" \
-    -c "select count(*) from public.trnm_economic_receipts where intent_id = :'intent_id';")
+    -v intent_id="$response_loss_intent" <<'SQL'
+select count(*) from public.trnm_economic_receipts where intent_id = :'intent_id';
+SQL
+)
   if [[ "$committed" == "1" ]]; then
     break
   fi
@@ -338,8 +340,7 @@ stop_ledger
 raw_database=$(psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -At \
   -v account_id="$account_id" \
   -v response_loss_intent="$response_loss_intent" \
-  -v concurrent_intent="$concurrent_intent" \
-  -c "
+  -v concurrent_intent="$concurrent_intent" <<'SQL'
 select json_build_object(
   'intent_count', (
     select count(*) from public.trnm_economic_intents
@@ -364,7 +365,9 @@ select json_build_object(
   'concurrent_receipt_id', (
     select receipt_id from public.trnm_economic_receipts where intent_id = :'concurrent_intent'
   )
-);")
+);
+SQL
+)
 
 ended_at_epoch=$(date +%s)
 python3 - \
