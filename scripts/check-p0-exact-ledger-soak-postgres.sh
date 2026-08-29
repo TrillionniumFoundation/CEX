@@ -16,6 +16,7 @@ started_at_epoch=$(date +%s)
 
 psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -v iterations="$iterations" <<'SQL'
 begin;
+select set_config('cex.p0_soak_iterations', :'iterations', true);
 
 insert into public.organizations (org_id, name)
 values ('90000000-0000-4000-8000-000000000001', 'P0 exact Ledger soak org')
@@ -40,7 +41,7 @@ declare
     first_result jsonb;
     replay_result jsonb;
     account_id_value constant uuid := '90000000-0000-4000-8000-000000000101';
-    expected_iterations integer := :'iterations';
+    expected_iterations integer := current_setting('cex.p0_soak_iterations')::integer;
     balance_value bigint;
     reserved_value bigint;
     entry_count bigint;
