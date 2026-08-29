@@ -1,0 +1,70 @@
+name: p0-provider-reconciliation-gate
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'migrations/0078_add_durable_provider_dispatch.sql'
+      - 'migrations/0081_close_exact_authority_and_evidence_guards.sql'
+      - 'migrations/0082_close_provider_unknown_outcome_reconciliation.sql'
+      - 'migrations/0084_make_provider_reconciliation_replay_terminal_safe.sql'
+      - 'scripts/check-provider-reconciliation-postgres.sh'
+      - 'docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md'
+      - 'docs/templates/cex-release-baseline-manifest-v1.json'
+      - '.github/workflows/p0-provider-reconciliation-gate.yml'
+  pull_request:
+    paths:
+      - 'migrations/0078_add_durable_provider_dispatch.sql'
+      - 'migrations/0081_close_exact_authority_and_evidence_guards.sql'
+      - 'migrations/0082_close_provider_unknown_outcome_reconciliation.sql'
+      - 'migrations/0084_make_provider_reconciliation_replay_terminal_safe.sql'
+      - 'scripts/check-provider-reconciliation-postgres.sh'
+      - 'docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md'
+      - 'docs/templates/cex-release-baseline-manifest-v1.json'
+      - '.github/workflows/p0-provider-reconciliation-gate.yml'
+
+permissions:
+  contents: read
+
+env:
+  DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/cex_ci
+
+jobs:
+  provider-reconciliation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cex
+          POSTGRES_PASSWORD: cex_ci_password
+          POSTGRES_DB: cex_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cex -d cex_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Migration and release-manifest governance
+        run: |
+          python3 scripts/check-p0-migrations.py
+          python3 scripts/check-release-baseline-manifest.py \
+            docs/templates/cex-release-baseline-manifest-v1.json --allow-template
+
+      - name: Apply fresh migration chain
+        run: |
+          while IFS= read -r migration; do
+            echo "applying $(basename "$migration")"
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$migration" >/dev/null
+          done < <(find migrations -maxdepth 1 -type f \
+            -name '[0-9][0-9][0-9][0-9]_*.sql' | sort)
+
+      - name: Provider unknown-outcome reconciliation lifecycle
+        run: bash scripts/check-provider-reconciliation-postgres.sh
