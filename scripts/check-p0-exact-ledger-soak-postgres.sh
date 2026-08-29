@@ -143,7 +143,7 @@ begin
        or entry_count <> 1 + expected_iterations::bigint * 3
        or operation_count <> entry_count
        or compatibility_count <> 0
-       or audit_count <> expected_iterations::bigint * 3 then
+       or audit_count <> entry_count then
         raise exception using message=format(
             'P0 exact soak invariant failed balance=%s reserved=%s entries=%s operations=%s compatibility=%s audit=%s',
             balance_value,reserved_value,entry_count,operation_count,compatibility_count,audit_count
