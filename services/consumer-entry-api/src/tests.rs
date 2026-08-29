@@ -2577,7 +2577,7 @@ async fn term_exchange_kernel_manifest_declares_cex_as_first_backend() {
     assert_eq!(body["runtime_requirements"]["fail_closed"], true);
     assert_eq!(
         body["backend_adapter_contract_version"],
-        "trillionnium_term_exchange_backend_adapter_v1"
+        "trillionnium_term_exchange_backend_adapter_v2"
     );
     assert_eq!(
         body["current_backend_adapter"]["trait"],
@@ -15366,10 +15366,17 @@ fn exact_test_uuid(namespace: &str) -> uuid::Uuid {
     uuid::Uuid::from_bytes(bytes)
 }
 
+const EXACT_TEST_CURRENCY_SCALE: u8 = 6;
+
 fn exact_test_minor(value: f64) -> i64 {
-    assert!(value.is_finite() && value >= 0.0 && value.fract() == 0.0);
-    assert!(value <= i64::MAX as f64);
-    value as i64
+    assert!(value.is_finite() && value >= 0.0);
+    let factor = 10_i64.pow(u32::from(EXACT_TEST_CURRENCY_SCALE));
+    let scaled = value * factor as f64;
+    let rounded = scaled.round();
+    let tolerance = f64::EPSILON * scaled.abs().max(1.0) * 16.0;
+    assert!((scaled - rounded).abs() <= tolerance);
+    assert!(rounded <= i64::MAX as f64);
+    rounded as i64
 }
 
 async fn create_real_ledger_account(
@@ -15390,7 +15397,7 @@ async fn create_real_ledger_account(
             "trace_id": trace_id,
             "account_type": "world_player",
             "currency_unit": "credits",
-            "currency_scale": 0,
+            "currency_scale": EXACT_TEST_CURRENCY_SCALE,
             "opening_minor": opening_minor.to_string(),
             "idempotency_scope": "consumer_entry_e2e_account",
             "idempotency_key": format!("open:{account_id}"),
@@ -15464,7 +15471,7 @@ async fn apply_real_ledger_action(
             "trace_id": trace_id,
             "operation_kind": action,
             "currency_unit": "credits",
-            "currency_scale": 0,
+            "currency_scale": EXACT_TEST_CURRENCY_SCALE,
             "amount_minor": amount_minor.to_string(),
             "reference_type": "consumer_entry_test",
             "reference_id": reference_id,

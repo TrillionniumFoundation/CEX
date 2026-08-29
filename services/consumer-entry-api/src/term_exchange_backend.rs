@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 pub(super) const TERM_EXCHANGE_BACKEND_ADAPTER_CONTRACT_VERSION: &str =
     "trillionnium_term_exchange_backend_adapter_v2";
+const TERM_EXCHANGE_EXACT_CURRENCY_SCALE: u8 = 6;
 
 #[derive(Debug, Clone)]
 pub(super) struct TermExchangeLedgerActionRequest {
@@ -129,7 +130,25 @@ async fn execute_cex_ledger_action(
     state: &AppState,
     request: TermExchangeLedgerActionRequest,
 ) -> TermExchangeBackendReceipt {
-    if request.amount_credits <= 0 {
+    let amount_minor = match exact_minor_from_compatibility_amount(
+        request.amount,
+        TERM_EXCHANGE_EXACT_CURRENCY_SCALE,
+    ) {
+        Ok(value) => value,
+        Err(error) => {
+            return backend_receipt(
+                request,
+                "failed_ledger",
+                None,
+                None,
+                None,
+                Some(error),
+                None,
+                json!({"amount_conversion": "rejected"}),
+            )
+        }
+    };
+    if amount_minor <= 0 {
         let raw_status = if request.term_id.contains("purchase") {
             "skipped_zero_price"
         } else {
@@ -260,8 +279,8 @@ async fn execute_cex_ledger_action(
         "operation_id": operation_id,
         "operation_kind": operation_kind,
         "currency_unit": currency,
-        "currency_scale": 0,
-        "amount_minor": request.amount_credits.to_string(),
+        "currency_scale": TERM_EXCHANGE_EXACT_CURRENCY_SCALE,
+        "amount_minor": amount_minor.to_string(),
         "reference_type": "term_exchange",
         "reference_id": reference_id,
         "idempotency_scope": scope,
@@ -515,6 +534,27 @@ fn minor_to_f64(value: i64, scale: u8) -> f64 {
     value as f64 / 10_i64.pow(u32::from(scale)) as f64
 }
 
+fn exact_minor_from_compatibility_amount(value: f64, scale: u8) -> Result<i64, String> {
+    if !value.is_finite() || value < 0.0 {
+        return Err("settlement amount must be a finite non-negative value".to_string());
+    }
+    let factor = 10_i64
+        .checked_pow(u32::from(scale))
+        .ok_or_else(|| "settlement currency scale is unsupported".to_string())?;
+    let scaled = value * factor as f64;
+    let rounded = scaled.round();
+    let tolerance = f64::EPSILON * scaled.abs().max(1.0) * 16.0;
+    if (scaled - rounded).abs() > tolerance {
+        return Err(format!(
+            "settlement amount {value} exceeds configured scale {scale}"
+        ));
+    }
+    if rounded > i64::MAX as f64 {
+        return Err("settlement amount exceeds signed minor-unit range".to_string());
+    }
+    Ok(rounded as i64)
+}
+
 fn deterministic_uuid(namespace: &str) -> Uuid {
     let digest = Sha256::digest(namespace.as_bytes());
     let mut bytes = [0_u8; 16];
@@ -664,6 +704,20 @@ mod tests {
         assert_eq!(intent.idempotency_key.key, "league_reward:reward-1");
         assert_eq!(intent.actors[0].account_id.as_deref(), Some("acct-1"));
         assert_eq!(intent.assets[0].quantity, 42);
+    }
+
+    #[test]
+    fn compatibility_amount_is_converted_to_exact_minor_units() {
+        assert_eq!(
+            exact_minor_from_compatibility_amount(4.24, 6).unwrap(),
+            4_240_000
+        );
+        assert_eq!(
+            exact_minor_from_compatibility_amount(0.000_001, 6).unwrap(),
+            1
+        );
+        assert!(exact_minor_from_compatibility_amount(0.000_000_1, 6).is_err());
+        assert!(exact_minor_from_compatibility_amount(f64::NAN, 6).is_err());
     }
 
     #[test]

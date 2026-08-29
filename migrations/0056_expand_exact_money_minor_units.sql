@@ -77,11 +77,11 @@ update public.accounts
    set currency_scale = coalesce(currency_scale, 6),
        balance_minor = coalesce(
            balance_minor,
-           public.cex_numeric_to_minor(balance, coalesce(currency_scale, 6))
+           public.cex_numeric_to_minor(balance, coalesce(currency_scale, 6::smallint))
        ),
        reserved_minor = coalesce(
            reserved_minor,
-           public.cex_numeric_to_minor(reserved, coalesce(currency_scale, 6))
+           public.cex_numeric_to_minor(reserved, coalesce(currency_scale, 6::smallint))
        )
  where currency_scale is null
     or balance_minor is null
@@ -101,7 +101,7 @@ update public.ledger_entries
    set currency_scale = coalesce(currency_scale, 6),
        amount_minor = coalesce(
            amount_minor,
-           public.cex_numeric_to_minor(amount, coalesce(currency_scale, 6))
+           public.cex_numeric_to_minor(amount, coalesce(currency_scale, 6::smallint))
        )
  where currency_scale is null
     or amount_minor is null;
