@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Move the P0-N5 database fixture onto exact account-opening authority."""
+"""Move P0-N5 fixtures and governance onto exact authority and plan v12."""
 
 from pathlib import Path
 
-path = Path(__file__).resolve().parents[1] / "scripts/check-execution-settlement-commands-postgres.sh"
-text = path.read_text(encoding="utf-8")
+root = Path(__file__).resolve().parents[1]
 
+fixture_path = root / "scripts/check-execution-settlement-commands-postgres.sh"
+text = fixture_path.read_text(encoding="utf-8")
 old_account = """insert into public.accounts (
     account_id, org_id, account_type, currency_unit, balance, reserved, status
 ) values (
@@ -45,7 +46,34 @@ new_scale = """            'credit',
 """
 if text.count(old_scale) != 1:
     raise SystemExit(f"expected one untyped P0-N5 contract scale, found {text.count(old_scale)}")
-text = text.replace(old_scale, new_scale)
+fixture_path.write_text(text.replace(old_scale, new_scale), encoding="utf-8")
 
-path.write_text(text, encoding="utf-8")
-print("P0-N5 settlement fixture now uses exact account opening and typed money")
+static_path = root / "scripts/check-execution-settlement-commands.py"
+static_text = static_path.read_text(encoding="utf-8")
+old_plan = '''require(
+    "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v11.md",
+    "P0-N5 delivered by this candidate",
+    "Gateway exact registration and reserve",
+    "not production-ready",
+)
+'''
+new_plan = '''require(
+    "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
+    "P0-N5 durable Execution settlement",
+    "P0-N6 delivered by this candidate",
+    "not production-ready",
+)
+'''
+if static_text.count(old_plan) != 1:
+    raise SystemExit(f"expected one v11 Execution plan contract, found {static_text.count(old_plan)}")
+static_path.write_text(static_text.replace(old_plan, new_plan), encoding="utf-8")
+
+workflow_path = root / ".github/workflows/p0-execution-settlement-gate.yml"
+workflow_text = workflow_path.read_text(encoding="utf-8")
+old_ref = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v11.md"
+new_ref = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"
+if workflow_text.count(old_ref) != 2:
+    raise SystemExit(f"expected two v11 workflow path filters, found {workflow_text.count(old_ref)}")
+workflow_path.write_text(workflow_text.replace(old_ref, new_ref), encoding="utf-8")
+
+print("P0-N5 fixture and governance now use exact authority and plan v12")
