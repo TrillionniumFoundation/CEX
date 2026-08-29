@@ -14,7 +14,10 @@ use gateway_service::{
     },
 };
 use serde_json::{json, Value};
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{atomic::Ordering, Arc},
+};
 use tokio::{
     net::TcpListener,
     sync::{Mutex, RwLock},
@@ -515,6 +518,56 @@ async fn get_json_with_auth(
 
 async fn get_json(app: Router, uri: &str) -> (StatusCode, Value) {
     get_json_with_auth(app, uri, Some(("x-api-key", "local-dev-key"))).await
+}
+
+async fn get_text(app: Router, uri: &str) -> (StatusCode, String, String) {
+    let request = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(Body::empty())
+        .expect("build get request");
+
+    let response = app.oneshot(request).await.expect("router response");
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read response body");
+    let text = String::from_utf8(bytes.to_vec()).expect("decode text body");
+    (status, content_type, text)
+}
+
+#[tokio::test]
+async fn metrics_endpoint_exports_gateway_counters_and_signals() {
+    let upstream = start_mock_server(MockConfig::queued()).await;
+    let state = test_state(upstream.base_url.clone());
+    state
+        .metrics
+        .invocation_create_requests
+        .store(2, Ordering::Relaxed);
+    state
+        .metrics
+        .invocation_create_upstream_failures
+        .store(1, Ordering::Relaxed);
+    let app = build_router(state);
+
+    let (status, content_type, body) = get_text(app, "/metrics").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(content_type.starts_with("text/plain; version=0.0.4"));
+    assert!(
+        body.contains("cex_gateway_runtime_counter_total{name=\"invocation_create_requests\"} 2\n")
+    );
+    assert!(body.contains(
+        "cex_gateway_operator_signal_active{name=\"invocation_create_upstream_failures\"} 1\n"
+    ));
+    assert!(body.contains(
+        "cex_gateway_operator_signal_threshold{name=\"invocation_create_upstream_failures\"} 1\n"
+    ));
 }
 
 #[tokio::test]

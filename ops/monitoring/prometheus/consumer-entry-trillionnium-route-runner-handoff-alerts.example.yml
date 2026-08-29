@@ -1,0 +1,460 @@
+# Example Prometheus alert rules for Trillionnium route-runner handoff readiness.
+# These rules consume direct consumer-entry /metrics gauges so operators do not
+# need to infer handoff health only from health JSON, E2E summaries, or signoff artifacts.
+
+groups:
+  - name: cex-consumer-entry-trillionnium-route-runner-handoff
+    rules:
+      - alert: CexTrillionniumRouteRunnerHandoffAllGatesNotGreen
+        expr: cex_consumer_entry_trillionnium_route_runner_handoff_all_gates_green == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: page
+        annotations:
+          summary: Trillionnium route-runner handoff gates are not all green
+          description: |
+            At least one of the route-runner handoff readiness gates is not green across
+            playability, closed-beta, real-user beta, or public-commercial health evidence.
+            This blocks a production signoff-quality Trillionnium handoff posture.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.route_runner_handoff_gate, .trillionnium_world_closed_beta_prototype.route_runner_handoff_gate, .trillionnium_world_real_user_beta.route_runner_handoff_gate, .trillionnium_world_public_commercial_product.route_runner_handoff_gate'"
+
+      - alert: CexTrillionniumRouteRunnerHandoffFeedSourceMissing
+        expr: cex_consumer_entry_trillionnium_route_runner_handoff_feed_source_count < 7
+        for: 5m
+        labels:
+          severity: critical
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: page
+        annotations:
+          summary: Trillionnium route-runner handoff feed source is missing or incomplete
+          description: |
+            The client feed source count dropped below the expected handoff-ready source set.
+            The route_runner_handoff source may have disappeared from /feed or /app feed hydration.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.route_runner_handoff_gate'"
+
+      - alert: CexTrillionniumRouteRunnerHandoffRunnerCountZero
+        expr: cex_consumer_entry_trillionnium_route_runner_handoff_runner_count == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: chat
+        annotations:
+          summary: Trillionnium route-runner handoff has no active runners
+          description: |
+            Route-runner handoff evidence exists but currently reports zero runners.
+            Check whether world map projection, feed hydration, or seeded first-session routes regressed.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/metrics | grep cex_consumer_entry_trillionnium_route_runner_handoff"
+
+      - alert: CexTrillionniumRouteRunnerHandoffActionsMissing
+        expr: cex_consumer_entry_trillionnium_route_runner_handoff_reward_claim_action_count == 0 or cex_consumer_entry_trillionnium_route_runner_handoff_next_route_action_count == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: chat
+        annotations:
+          summary: Trillionnium route-runner handoff actions are missing
+          description: |
+            Reward-claim or next-route handoff actions dropped to zero. Players may see runners
+            without a clear claim-reward / open-next-route path.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.route_runner_handoff_gate | {reward_claim_action_count, next_route_action_count, first_next_route_status}'"
+
+      - alert: CexTrillionniumRouteRunnerHandoffRouteMasteryMissing
+        expr: cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_contract_visible == 0 or cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_runner_count == 0 or cex_consumer_entry_trillionnium_route_runner_handoff_first_route_mastery_xp == 0 or cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_tier_visible == 0 or cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_next_goal_evidence_visible == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: chat
+        annotations:
+          summary: Trillionnium route-runner mastery progression is missing
+          description: |
+            Route-runner handoff is expected to expose the trillionnium_route_mastery_v1 contract,
+            at least one mastery runner, non-zero first-runner XP, a visible tier, and an
+            evidence-anchored next goal. If this fires, players may still see route runners but lose
+            visible XP/tier/next-goal progression.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/metrics | grep 'cex_consumer_entry_trillionnium_route_runner_handoff_.*mastery'"
+
+      - alert: CexTrillionniumWorldMapReadabilityLodNotGreen
+        expr: cex_consumer_entry_trillionnium_world_map_readability_lod_gate_green == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: page
+        annotations:
+          summary: Trillionnium World Map readability/LOD gate is not green
+          description: |
+            The mobile first-screen map readability budget is no longer green. Players may see too
+            many visible markers/runners, missing LOD contract data, or an over-dense route-first
+            screen before they can understand the next action.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.map_readability_lod_gate'"
+
+      - alert: CexTrillionniumWorldMapRuntimeSafetyNotGreen
+        expr: cex_consumer_entry_trillionnium_world_map_runtime_safety_gate_green == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: page
+        annotations:
+          summary: Trillionnium World Map runtime safety gate is not green
+          description: |
+            The combined map runtime safety contract regressed. This usually means RUM split
+            coverage, weak-network recovery, private personalized cache policy, or delta/304
+            compatibility disappeared from the `/app` or `/world` map surface.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_map_runtime_safety_gate'"
+
+      - alert: CexTrillionniumWorldMapDensityScalabilityNotGreen
+        expr: cex_consumer_entry_trillionnium_world_map_density_scalability_gate_green == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: page
+        annotations:
+          summary: Trillionnium World Map density scalability gate is not green
+          description: |
+            The P1 density/scalability contract regressed. Operators should verify backend
+            projection cache, server-timing visibility, frontend virtualization, and adaptive
+            density scheduling before increasing marker density or rollout cohorts.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_map_runtime_safety_gate | {density_scalability_contract_version, projection_cache_strategy_visible, frontend_virtualization_visible, adaptive_density_scheduler_visible}'"
+
+      - alert: CexTrillionniumWorldMapOfflineActionQueueNotGreen
+        expr: cex_consumer_entry_trillionnium_world_map_offline_action_queue_gate_green == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: page
+        annotations:
+          summary: Trillionnium World Map offline action queue gate is not green
+          description: |
+            The P1 weak-network productization path regressed. Mobile users may lose the visible
+            offline banner, pending action queue, or conflict-sync recovery path during reconnect.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_map_runtime_safety_gate | {offline_action_queue_contract_version, offline_banner_visible, pending_action_queue_visible, conflict_sync_recovery_visible}'"
+
+      - alert: CexTrillionniumWorldMapRumSloEnforcedNotGreen
+        expr: cex_consumer_entry_trillionnium_world_map_rum_slo_enforcement_active == 1 and cex_consumer_entry_trillionnium_world_map_rum_slo_raw_split_green == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: page
+        annotations:
+          summary: Trillionnium World Map RUM SLO is enforced and not green
+          description: |
+            The RUM SLO gate has enough samples to enforce, and at least one app/world or
+            mobile/desktop split is outside the map runtime budget. Treat this as a production
+            player-experience regression before adding map density or promoting a new renderer.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_map_rum_slo_gate'"
+
+      - alert: CexTrillionniumWorldMapRumSloWarmupRawRed
+        expr: cex_consumer_entry_trillionnium_world_map_rum_slo_warming == 1 and cex_consumer_entry_trillionnium_world_map_rum_slo_raw_split_green == 0
+        for: 15m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: product
+        annotations:
+          summary: Trillionnium World Map RUM warmup has a raw red split
+          description: |
+            The top-level RUM SLO gate is still in low-sample warmup, but raw split telemetry is
+            already red. Product ops should inspect sample count, surface/device split, and recent
+            weak-network recovery before treating the green warmup gate as launch comfort.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/metrics | grep 'cex_consumer_entry_trillionnium_world_map_rum_slo'"
+
+      - alert: CexTrillionniumWorldMapRumMatrixCoverageMissing
+        expr: cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_gate_green == 0 or cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_missing_bucket_count > 0
+        for: 15m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: product
+        annotations:
+          summary: Trillionnium World Map real-user RUM matrix has missing buckets
+          description: |
+            The P0-next RUM matrix should cover /app and /world across mobile/desktop and cold,
+            warm-delta/304, and weak-network cached-snapshot sample kinds. Missing buckets mean a
+            green warmup gate is not enough for signoff-quality production evidence.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/metrics | grep 'cex_consumer_entry_trillionnium_world_map_rum_sample_matrix'"
+
+      - alert: CexTrillionniumWorldMapDeltaCacheNotGreen
+        expr: cex_consumer_entry_trillionnium_world_map_delta_cache_gate_green == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: page
+        annotations:
+          summary: Trillionnium World Map delta/cache gate is not green
+          description: |
+            The map delta/cache contract is not production-safe. Check entity-group cursor
+            compatibility, 304 responses, snapshot fallback behavior, and delta failure rate before
+            expanding map density or relying on weak-network recovery.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_map_delta_cache_gate'"
+
+      - alert: CexTrillionniumWorldMapWeakNetworkResilienceNotGreen
+        expr: cex_consumer_entry_trillionnium_world_map_weak_network_resilience_gate_green == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: page
+        annotations:
+          summary: Trillionnium World Map weak-network resilience gate is not green
+          description: |
+            The map surface no longer exposes the required delta-first, snapshot-fallback, and
+            last-good cached snapshot strategy. Mobile players may see blank or stale map states
+            during network failures.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/metrics | grep 'cex_consumer_entry_trillionnium_world_map_weak_network'"
+
+      - alert: CexTrillionniumWorldMapLocationPrivacyNotGreen
+        expr: cex_consumer_entry_trillionnium_world_map_location_privacy_gate_green == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: security
+        annotations:
+          summary: Trillionnium World Map location privacy gate is not green
+          description: |
+            Personalized map caches or RUM payloads are no longer privacy-safe. Stop promotion and
+            verify that RUM excludes lat/lng while viewport and delta cache-control stay private.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_map_runtime_safety_gate'"
+
+      - alert: CexTrillionniumRouteRunnerFunnelTelemetryMissing
+        expr: cex_consumer_entry_trillionnium_route_runner_funnel_telemetry_contract_visible == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: chat
+        annotations:
+          summary: Trillionnium route-runner funnel telemetry contract is missing
+          description: |
+            The route-runner funnel telemetry contract disappeared from health/metrics. Product ops
+            may lose route_started, evidence_submitted, reward_claimed, next_route_opened,
+            recovery, daily-return, or time-to-reward observability.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/metrics | grep cex_consumer_entry_trillionnium_route_runner_funnel"
+
+      - alert: CexTrillionniumRouteRunnerRewardToNextRouteWeak
+        expr: cex_consumer_entry_trillionnium_route_runner_funnel_reward_to_next_route_percent < 5
+        for: 30m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: product
+        annotations:
+          summary: Trillionnium reward-to-next-route conversion is weak
+          description: |
+            Players are claiming rewards but not opening the next route at a healthy rate. Keep
+            optimizing the one-route-first CTA, reward/XP copy, and next-route unlock motivation
+            before adding map density or promoting a new renderer.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.route_runner_funnel_telemetry_gate | {reward_to_next_route_conversion_percent,d1_resume_rate_percent,time_to_next_route_seconds}'"
+
+      - alert: CexTrillionniumWorldCommercialDashboardNotGreen
+        expr: cex_consumer_entry_trillionnium_world_commercial_operating_dashboard_gate_green == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: product
+        annotations:
+          summary: Trillionnium commercial operating dashboard is not green
+          description: |
+            Public-commercial posture should expose operating metrics, not only a 100% gate: route
+            start → paid task, reward claim → next commission, seller quality, buyer repeat, and
+            dispute/refund/reopen counts.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.commercial_operating_dashboard_gate, .trillionnium_world_public_commercial_product.commercial_operating_dashboard_gate'"
+
+      - alert: CexTrillionniumWorldRouteRecommendationQualityNotGreen
+        expr: cex_consumer_entry_trillionnium_world_route_recommendation_quality_gate_green == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: product
+        annotations:
+          summary: Trillionnium route recommendation quality gate is not green
+          description: |
+            The P0-next recommendation quality contract regressed. Check reward-to-next-route lift,
+            abandon risk, and denominator consistency before trusting route recommendations as a
+            commercial/retention lever.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/metrics | grep 'cex_consumer_entry_trillionnium_world_route_recommendation'"
+
+
+      - alert: CexTrillionniumWorldRouteRecommendationQualityBelowTarget
+        expr: cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_percent < cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_target_percent
+        for: 30m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: product
+        annotations:
+          summary: Trillionnium route recommendation quality is below target
+          description: |
+            The quality contract is visible but the actual recommendation quality score fell below
+            the commercial readiness target. Inspect reward lift, abandon risk, raw counts, and risk
+            controls before promoting route recommendations as a retention/commercial lever.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.commercial_operating_dashboard_gate | {route_recommendation_quality_status,route_recommendation_quality_score_percent,route_recommendation_quality_score_target_percent,route_recommendation_quality_score_ready,route_recommendation_raw_counts_preserved,route_recommendation_risk_controls_visible}'"
+
+      - alert: CexTrillionniumWorldFutureEngineReadinessNotGreen
+        expr: cex_consumer_entry_trillionnium_world_future_engine_readiness_gate_green == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: chat
+        annotations:
+          summary: Trillionnium future map-engine readiness gate is not green
+          description: |
+            The renderer-adapter future-engine readiness contract is not green. Leaflet should remain
+            live, MapLibre should stay shadow/planned, and promotion should stay blocked until LOD,
+            telemetry, rollback, and adapter preconditions are visible.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.future_engine_readiness_gate'"
+
+      - alert: CexTrillionniumWorldMapMapLibreShadowParityNotGreen
+        expr: cex_consumer_entry_trillionnium_world_map_maplibre_shadow_parity_gate_green == 0 or cex_consumer_entry_trillionnium_world_map_maplibre_canary_rollback_ready == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: chat
+        annotations:
+          summary: Trillionnium MapLibre shadow parity/canary rollback gate is not green
+          description: |
+            The P1.5 renderer migration safety contract regressed. Leaflet must remain live and
+            MapLibre must remain shadow-only until marker cluster, popup, focus/action parity and
+            rollback drill readiness are visible again.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.future_engine_readiness_gate | {maplibre_shadow_parity_contract_version, maplibre_shadow_marker_cluster_popup_focus_parity_visible, maplibre_canary_rollback_drill_visible, shadow_renderer_status}'"
+
+
+      - alert: CexTrillionniumWorldMapMapLibreCanaryNotZero
+        expr: cex_consumer_entry_trillionnium_world_map_maplibre_canary_percent > 0
+        for: 5m
+        labels:
+          severity: critical
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: page
+        annotations:
+          summary: Trillionnium MapLibre shadow canary is no longer zero
+          description: |
+            MapLibre must remain shadow-only until a new explicit signoff promotes it. Any non-zero
+            canary percent means the candidate renderer is leaking toward user-facing rollout and
+            should be rolled back to Leaflet/OpenStreetMap immediately.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.future_engine_readiness_gate | {active_engine_id,candidate_engine_id,shadow_renderer_status,maplibre_shadow_only,maplibre_canary_percent,maplibre_canary_starts_at_zero,maplibre_max_canary_percent_without_new_signoff,maplibre_rollback_drill_evidence_required}'"
+
+      - alert: CexTrillionniumWorldMapGameplayAccessibilityI18nNotGreen
+        expr: cex_consumer_entry_trillionnium_world_map_gameplay_accessibility_i18n_gate_green == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: product
+        annotations:
+          summary: Trillionnium map gameplay accessibility/i18n gate is not green
+          description: |
+            The P2 semantic gameplay polish contract regressed. Verify semantic legend/avatar
+            feedback copy still exposes screen-reader labels, reduced-motion behavior, 44px touch
+            targets, and bilingual/i18n hooks before widening beta traffic.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_map_runtime_safety_gate | {gameplay_accessibility_contract_version, screen_reader_reduced_motion_touch_targets_visible}'"

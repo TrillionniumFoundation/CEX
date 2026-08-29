@@ -2,6 +2,9 @@
 
 ## Current state
 
+Readiness evidence and explicit non-100% blockers are summarized in `docs/production-readiness-evidence-v1.md`.
+
+
 CEX is now back to a green workspace test baseline on this branch.
 
 That removes the immediate compile blocker, but it does **not** mean production readiness. The remaining gaps are mainly in ingress hardening, production operations, and stronger policy / abuse controls.
@@ -55,7 +58,7 @@ Required:
 
 Still missing in repo shape:
 
-- consistent metrics surface across core services (consumer-entry / matrix-entry 现在已有 `/metrics` Prometheus 文本面，外加 `/health` JSON；其中 consumer-entry 还已开始暴露 identity governance gauge，例如 binding loaded / registry loaded / ref-integrity / actor gate / approval source / approval coverage；但 execution / gateway 仍主要停留在最小 `/v1/info` 计数快照，尚未统一成 exporter)
+- consistent metrics surface across core services (consumer-entry / matrix-entry 现在已有 `/metrics` Prometheus 文本面，外加 `/health` JSON；其中 consumer-entry 还已开始暴露 identity governance gauge，例如 binding loaded / registry loaded / ref-integrity / actor gate / approval source / approval coverage；execution `/v1/info` 现在已补到更接近值班面的 runtime/operator snapshot，包含 queued-worker backlog/lease/retry 信号，以及 provider failure 分类汇总与阈值信号（billing / timeout / auth / rate_limited / unavailable / unknown / dead_letter / retry_budget_exhausted）；execution-service 也已提供原生 `/metrics` Prometheus 文本面，导出 runtime counters、status gauges、queued-worker gauges、provider failure gauges 与 operator signal gauges；gateway-service 也已提供原生 `/metrics`，导出 gateway runtime counters 与 operator signal gauges；identity/ledger/audit/capability 也已补最小 native `/metrics` up/config/count gauges，当前 core services 已都有 Prometheus 文本面)
 - alerting rules
 - SLO / error-budget policy
 - rollback and incident playbooks
@@ -65,6 +68,9 @@ Current operator doc baseline:
 - `docs/operator-runbook-v1.md` 已收口当前最小排障路径，覆盖 `/health` + `/v1/info` + worker queue summary 的一线判断与 restart/degraded upstream/partial outage 处理顺序，但仍不是完整 on-call 手册
 - `docs/alert-rules-draft-v1.md` 已把当前最小 signal 面收成告警草案，明确哪些字段可直接触发 high/critical；仓库现在还额外补了 focused example files：consumer-entry identity governance（`ops/monitoring/prometheus/consumer-entry-identity-governance-alerts.example.yml`、`ops/monitoring/alertmanager/consumer-entry-identity-governance-routing.example.yml`）、跨服务 core runtime wrapper line（`ops/monitoring/prometheus/core-runtime-operator-signals-from-wrapper.example.yml`、`ops/monitoring/alertmanager/core-runtime-operator-signals-from-wrapper-routing.example.yml`）、product-edge wrapper line（`ops/monitoring/prometheus/product-edge-operator-signals-from-wrapper.example.yml`、`ops/monitoring/alertmanager/product-edge-operator-signals-from-wrapper-routing.example.yml`）以及 monitoring-deploy wrapper line（`ops/monitoring/prometheus/monitoring-deploy-operator-signals-from-wrapper.example.yml`、`ops/monitoring/alertmanager/monitoring-deploy-operator-signals-from-wrapper-routing.example.yml`）。同时还新增了 combined starter bundle（`ops/monitoring/prometheus/minimal-wrapper-monitoring-bundle.example.yml`、`ops/monitoring/alertmanager/minimal-wrapper-monitoring-bundle.example.yml`）、machine-readable inventory（`ops/monitoring/monitoring-bundle-manifest.example.yml`）、repo-local assemble helper（`scripts/assemble-monitoring-bundles.sh` / `--check`）、export helper（`scripts/export-monitoring-bundles.sh`）、install helper（`scripts/install-monitoring-bundles.sh`）、symlink/overlay helper（`scripts/overlay-monitoring-bundles.sh`）、live-target deploy helper（`scripts/deploy-monitoring-bundles.sh`）、post-deploy reload helper（`scripts/reload-monitoring-targets.sh`，现支持 `failure-policy=restart` + service-specific restart commands）和 post-deploy health verification helper（`scripts/verify-monitoring-targets.sh`，支持 attempts/delay retry），以及 repo-local bridge `scripts/render-operator-signals-prometheus.sh`，可把 unified wrapper JSON 渲染成 Prometheus text exposition。不过它们仍只是起步模板，不是覆盖全仓的正式 exporter + Prometheus/Alertmanager 规则库
 - `docs/openclaw-operator-signal-cron-v1.md` 已给出把 repo-local signal wrapper 接到 OpenClaw cron 的模板与 helper，但还没做成正式内置监控产品面
+- `.env.production.example` 已给出 production posture 的最小 env skeleton，覆盖 non-default gateway/admin tokens、entry ingress/session-auth、edge durable stores、identity/session-auth governance 文件、OpenClaw provider probe 与 soak 配置；它是 secret-managed runtime 的模板，不应填真实值后提交
+- `scripts/bootstrap-local-production-env.sh` 可生成 ignored 的本机 production-posture env（`run/local-production/.env`），并借助 `CEX_ENV_FILE` 让 runtime/readiness 在不污染 `.env` 的情况下用非默认 token、entry protection、durable edge stores 和 repo-local OpenClaw scope 进行本地生产姿态演练；这仍是 local generated secret profile，不是正式 secret-management/deploy
+- `scripts/check-production-readiness.sh` 现在给出一个更严格的 pre-production verdict：串起 deployment posture、runtime status、native metrics smoke、operator signals、provider failure/dead-letter 清单，以及默认要求配置的 live provider probe（由 `scripts/probe-openclaw-provider.sh` 通过 repo-local OpenClaw scope 执行）。脚本默认 `CEX_READINESS_MODE=production`，会拒绝 local-dev key/admin token、缺失 ingress token、缺失 session-auth enforcement、缺失 edge replay/rate-limit durable store，并会从 consumer-entry / matrix-entry live `/health` 复核实际运行时保护是否真的开启；Linux/local smoke 必须显式 `CEX_READINESS_MODE=local` 才跳过这些生产姿态检查。Linux runtime 已默认启动 consumer-entry / matrix-entry 并写入 repo-local identity binding/registry/approved-revision defaults 来压实 entry governance 检查。`scripts/soak-runtime.sh` 进一步把 runtime status、metrics smoke、operator signals、worker queue summary 与 start/end provider probe 写成 bounded JSONL soak；`scripts/drill-db-backup-restore.sh` 现在可对 Docker Postgres 执行 pg_dump -> 临时库 restore -> core table count compare 的本地 DR drill。当前在 Linux/local 上已用 `google/gemini-2.5-flash` 跑通 readiness smoke、短时 soak，并通过 `run/local-production/.env` 演练过默认 production posture readiness；但这仍是本机生成 secret 的 production-posture profile，不是正式 secret-management/deploy。100% 仍需更长 soak / 正式部署 / Windows gate 或明确豁免
 
 ### 3. Strengthen policy and abuse guardrails
 
@@ -77,10 +83,11 @@ Required:
 
 Current repo status:
 
-- execution retry budget exists
+- execution retry budget exists; queued-worker provider failures now also distinguish retryable vs non-retryable classes, so timeout / rate-limit / provider-unavailable failures can auto-requeue with bounded exponential backoff while billing/auth-style failures still terminate and refund rather than loop
 - approval threshold exists
 - execution policy now supports configurable approval/block keywords, capability-prefix rules, and optional hard reserve reject threshold
-- policy still remains service-local and env-driven, not yet a full standalone policy/risk layer
+- execution policy can now load a repo/local JSON bundle via `EXECUTION_POLICY_BUNDLE_PATH` (example: `config/execution-policy.production.example.json`), with emergency env overrides still taking precedence and load status exposed through `/v1/info.policy`
+- policy still remains service-local and file/env-driven, not yet a full standalone DB-backed policy/risk layer
 
 Still missing:
 
@@ -101,7 +108,7 @@ Still missing:
 
 - real commercial billing / subscription / entitlements
 - stronger tenant isolation and secret management review
-- disaster recovery drill and migration rollback rehearsal
+- disaster recovery drill and migration rollback rehearsal (local Docker Postgres backup/restore drill now exists through `scripts/drill-db-backup-restore.sh`; formal production restore/rollback still needs environment evidence)
 - external abuse review and threat model
 - on-call ownership and incident lifecycle
 

@@ -14,7 +14,8 @@ $runDir = Join-Path $projectRoot 'run'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 
-$exe = Join-Path $projectRoot ("target\\debug\\{0}.exe" -f $Package)
+$exeName = if ($IsWindows) { "{0}.exe" -f $Package } else { $Package }
+$exe = Join-Path $projectRoot (Join-Path 'target/debug' $exeName)
 if (-not (Test-Path $exe)) {
     throw "Built executable not found: $exe"
 }

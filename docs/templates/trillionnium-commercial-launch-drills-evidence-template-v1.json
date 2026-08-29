@@ -1,0 +1,87 @@
+{
+  "contract_version": "trillionnium_commercial_launch_drills_evidence_v1",
+  "template": true,
+  "synthetic": false,
+  "operator_attestation": {
+    "payment_or_sandbox_provider_checked": true,
+    "refund_support_owner_assigned": true,
+    "legal_privacy_review_completed": true,
+    "operator_runbook_reviewed": true,
+    "traffic_error_budget_reviewed": true,
+    "no_secrets_or_personal_data_in_evidence": true,
+    "notes": "Replace with sanitized launch-drill note. Use ticket/log references only, not secrets or personal data."
+  },
+  "drill_window": {
+    "started_at": "YYYY-MM-DDTHH:MM:SSZ",
+    "environment": "sandbox-provider-or-production-like-dry-run",
+    "build_or_commit": "COMMIT_SHA_OR_BUILD_ID",
+    "launch_commander_role": "operator-role-only"
+  },
+  "drills": [
+    {
+      "drill_id": "payment_reserve_consume_reconciliation",
+      "passed": true,
+      "owner": "ops-payment-owner",
+      "evidence_ref": "ticket-or-sanitized-log-ref",
+      "rollback_or_escalation": "Stop paid launch and disable paid task entry if reconciliation fails."
+    },
+    {
+      "drill_id": "refund_chargeback_recovery",
+      "passed": true,
+      "owner": "support-refund-owner",
+      "evidence_ref": "ticket-or-sanitized-log-ref",
+      "rollback_or_escalation": "Escalate to finance/support owner; freeze affected order until ledger correction is verified."
+    },
+    {
+      "drill_id": "customer_support_escalation",
+      "passed": true,
+      "owner": "support-lead",
+      "evidence_ref": "ticket-or-sanitized-log-ref",
+      "rollback_or_escalation": "Escalate unresolved paid-user issue to launch commander."
+    },
+    {
+      "drill_id": "legal_privacy_osm_review",
+      "passed": true,
+      "owner": "legal-privacy-owner",
+      "evidence_ref": "review-or-checklist-ref",
+      "rollback_or_escalation": "Block public traffic if attribution/privacy/tile-server obligations are not met."
+    },
+    {
+      "drill_id": "operator_incident_runbook",
+      "passed": true,
+      "owner": "oncall-owner",
+      "evidence_ref": "incident-drill-ref",
+      "rollback_or_escalation": "Follow operator runbook; page product/infra owner on unresolved critical alerts."
+    },
+    {
+      "drill_id": "live_traffic_error_budget",
+      "passed": true,
+      "owner": "launch-commander",
+      "evidence_ref": "traffic-plan-ref",
+      "rollback_or_escalation": "Stop ramp or roll back if error-budget threshold is breached."
+    }
+  ],
+  "metrics": {
+    "refund_recovery_minutes": 45,
+    "support_first_response_minutes": 30,
+    "incident_ack_minutes": 10,
+    "error_budget_policy_defined": true,
+    "privacy_data_inventory_reviewed": true,
+    "payment_refund_reconciliation_done": true
+  },
+  "risk_register": [
+    {
+      "risk_id": "risk-example",
+      "launch_blocker": false,
+      "status": "resolved",
+      "owner": "owner-id",
+      "note": "Sanitized note only."
+    }
+  ],
+  "operator_summary": {
+    "launch_decision": "replace_with_go_no_go_or_followup_needed",
+    "required_followups_before_public_paid_launch": [
+      "Replace with real follow-ups from the drill."
+    ]
+  }
+}

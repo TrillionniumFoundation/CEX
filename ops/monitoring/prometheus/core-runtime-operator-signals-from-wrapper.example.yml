@@ -105,6 +105,38 @@ groups:
           first_action: "curl -s http://127.0.0.1:7003/v1/info | jq '.runtime.queued_worker, .operator_signals.queued_worker_retry_budget_exhausted'"
           runbook: docs/operator-runbook-v1.md
 
+      - alert: CexExecutionProviderDeadLetters
+        expr: cex_operator_signal_active{service="execution",name="provider_dead_letters"} == 1
+        for: 5m
+        labels:
+          severity: critical
+          service: execution-service
+          family: provider
+          route_hint: page
+        annotations:
+          summary: execution provider dead-letter failures are active
+          description: |
+            execution-service reports terminal provider failures that should not be blindly retried.
+            This includes non-retryable provider errors and retryable errors whose attempt budget is exhausted.
+          first_action: "curl -s http://127.0.0.1:7003/v1/info | jq '.runtime.provider_failures, .operator_signals.provider_dead_letters'"
+          runbook: docs/operator-runbook-v1.md
+
+      - alert: CexExecutionProviderRetryBudgetExhausted
+        expr: cex_operator_signal_active{service="execution",name="provider_retry_budget_exhausted"} == 1
+        for: 5m
+        labels:
+          severity: critical
+          service: execution-service
+          family: provider
+          route_hint: page
+        annotations:
+          summary: execution provider retry budget exhausted is active
+          description: |
+            execution-service reports provider-backed executions that consumed their retry budget and reached terminal failure.
+            Inspect the provider failure class before any manual retry or provider switch.
+          first_action: "curl -s http://127.0.0.1:7003/v1/info | jq '.runtime.provider_failures, .operator_signals.provider_retry_budget_exhausted'"
+          runbook: docs/operator-runbook-v1.md
+
       - alert: CexExecutionAuditFailures
         expr: cex_operator_signal_active{service="execution",name="audit_failures"} == 1
         for: 5m

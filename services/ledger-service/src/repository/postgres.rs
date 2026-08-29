@@ -1,12 +1,24 @@
 use async_trait::async_trait;
-use sqlx::{PgPool, Row};
-use std::sync::Arc;
+use sqlx::{postgres::PgPoolOptions, PgPool, Row};
+use std::{sync::Arc, time::Duration};
 use uuid::Uuid;
 
+fn database_pool_is_operational(
+    pool_size: u32,
+    idle_connections: usize,
+    max_connections: u32,
+) -> bool {
+    idle_connections > 0 || pool_size < max_connections
+}
+
 use crate::{
-    repository::{LedgerActionError, LedgerRepository, LedgerRepositoryHandle},
+    repository::{
+        LedgerActionError, LedgerRepository, LedgerRepositoryHandle, PostgresOperationalReadiness,
+        TrnmPlayerIdentityRecord, TrnmPlayerSessionRecord,
+    },
     state::{AccountRecord, LedgerEntryRecord},
 };
+use term_exchange_protocol::{EconomicIntent, EconomicReceipt, WalletSnapshot};
 
 pub struct PostgresLedgerRepository {
     pub database_url: Option<String>,
@@ -24,8 +36,30 @@ impl PostgresLedgerRepository {
     pub async fn connect_from_env() -> Result<Self, String> {
         let database_url =
             std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL is not set".to_string())?;
+        let connect_timeout_seconds = std::env::var("LEDGER_DATABASE_CONNECT_TIMEOUT_SECONDS")
+            .ok()
+            .and_then(|raw| raw.parse::<u64>().ok())
+            .filter(|seconds| *seconds > 0)
+            .unwrap_or(5);
+        let max_connections = match std::env::var("LEDGER_DATABASE_MAX_CONNECTIONS") {
+            Ok(raw) => raw.parse::<u32>().map_err(|_| {
+                "LEDGER_DATABASE_MAX_CONNECTIONS must be an integer between 1 and 32".to_string()
+            })?,
+            Err(std::env::VarError::NotPresent) => 8,
+            Err(error) => {
+                return Err(format!(
+                    "read LEDGER_DATABASE_MAX_CONNECTIONS from environment: {error}"
+                ))
+            }
+        };
+        if !(1..=32).contains(&max_connections) {
+            return Err("LEDGER_DATABASE_MAX_CONNECTIONS must be between 1 and 32".to_string());
+        }
 
-        let pool = PgPool::connect(&database_url)
+        let pool = PgPoolOptions::new()
+            .max_connections(max_connections)
+            .acquire_timeout(Duration::from_secs(connect_timeout_seconds))
+            .connect(&database_url)
             .await
             .map_err(|e| format!("failed to connect postgres: {e}"))?;
 
@@ -118,7 +152,7 @@ impl PostgresLedgerRepository {
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         entry: &LedgerEntryRecord,
     ) -> Result<(), LedgerActionError> {
-        let direction = if entry.action == "refund" {
+        let direction = if entry.action == "refund" || entry.action == "grant" {
             "credit"
         } else {
             "debit"
@@ -240,10 +274,104 @@ impl PostgresLedgerRepository {
 
         Ok(account)
     }
+
+    pub async fn grant_transaction_skeleton(
+        &self,
+        entry: &LedgerEntryRecord,
+    ) -> Result<AccountRecord, LedgerActionError> {
+        let pool = self.pool_or_unavailable()?;
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|e| LedgerActionError::Other(format!("begin tx failed: {e}")))?;
+
+        Self::check_duplicate_idempotency(&mut tx, entry.idempotency_key.as_deref()).await?;
+
+        let mut account = Self::load_account_for_update(&mut tx, entry.account_id).await?;
+        account.balance += entry.amount;
+        Self::update_account_summary(&mut tx, &account).await?;
+        Self::append_entry_in_tx(&mut tx, entry).await?;
+
+        tx.commit()
+            .await
+            .map_err(|e| LedgerActionError::Other(format!("commit tx failed: {e}")))?;
+
+        Ok(account)
+    }
 }
 
 #[async_trait]
 impl LedgerRepository for PostgresLedgerRepository {
+    fn persistence_ready(&self) -> bool {
+        self.pool.is_some()
+    }
+
+    async fn persistence_healthy(&self) -> bool {
+        match &self.pool {
+            Some(pool) => sqlx::query_scalar::<_, i32>("select 1")
+                .fetch_one(pool)
+                .await
+                .is_ok(),
+            None => false,
+        }
+    }
+
+    async fn postgres_operational_readiness(&self) -> PostgresOperationalReadiness {
+        let Some(pool) = &self.pool else {
+            return PostgresOperationalReadiness::default();
+        };
+        let row =
+            sqlx::query_as::<_, (bool, bool, bool, i64, i64, Option<String>, Option<String>)>(
+                "select
+                current_setting('archive_mode', true) = 'on' as archive_mode_on,
+                coalesce(btrim(current_setting('archive_command', true)), '') <> ''
+                    as archive_command_configured,
+                last_failed_time is null
+                    or coalesce(last_archived_time >= last_failed_time, false)
+                    as archiver_recovered,
+                archived_count,
+                failed_count,
+                last_archived_wal,
+                last_failed_wal
+             from pg_stat_archiver",
+            )
+            .fetch_one(pool)
+            .await;
+        let Ok((
+            archive_mode_on,
+            archive_command_configured,
+            archiver_recovered,
+            archived_count,
+            failed_count,
+            last_archived_wal,
+            last_failed_wal,
+        )) = row
+        else {
+            return PostgresOperationalReadiness::default();
+        };
+        let pool_max_connections = pool.options().get_max_connections();
+        let pool_size = pool.size();
+        let pool_idle_connections = pool.num_idle();
+        PostgresOperationalReadiness {
+            query_healthy: true,
+            pool_saturation_healthy: database_pool_is_operational(
+                pool_size,
+                pool_idle_connections,
+                pool_max_connections,
+            ),
+            pool_max_connections,
+            pool_size,
+            pool_idle_connections,
+            archive_mode_on,
+            archive_command_configured,
+            archiver_recovered,
+            archived_count,
+            failed_count,
+            last_archived_wal,
+            last_failed_wal,
+        }
+    }
+
     async fn create_account(&self, account: &AccountRecord) -> Result<(), String> {
         let pool = self
             .pool
@@ -377,5 +505,176 @@ impl LedgerRepository for PostgresLedgerRepository {
         entry: &LedgerEntryRecord,
     ) -> Result<AccountRecord, LedgerActionError> {
         self.refund_transaction_skeleton(entry).await
+    }
+
+    async fn grant_credits(
+        &self,
+        entry: &LedgerEntryRecord,
+    ) -> Result<AccountRecord, LedgerActionError> {
+        self.grant_transaction_skeleton(entry).await
+    }
+
+    async fn execute_trnm_economic_intent(
+        &self,
+        intent: &EconomicIntent,
+    ) -> Result<EconomicReceipt, LedgerActionError> {
+        self.execute_trnm_native_intent(intent).await
+    }
+
+    async fn reconcile_trnm_wallet(
+        &self,
+        actor_id: &str,
+        account_id: Uuid,
+        requested_cursor: u64,
+    ) -> Result<WalletSnapshot, LedgerActionError> {
+        self.reconcile_trnm_native_wallet(actor_id, account_id, requested_cursor)
+            .await
+    }
+
+    async fn register_trnm_player_identity(
+        &self,
+        player_id: &str,
+        account_id: Uuid,
+        recovery_key: &str,
+    ) -> Result<TrnmPlayerIdentityRecord, LedgerActionError> {
+        self.register_trnm_native_player_identity(player_id, account_id, recovery_key)
+            .await
+    }
+
+    async fn register_trnm_product_player(
+        &self,
+        player_id: &str,
+        recovery_key: &str,
+        org_id: Uuid,
+        invite_code: &str,
+    ) -> Result<TrnmPlayerIdentityRecord, LedgerActionError> {
+        self.register_trnm_native_product_player(player_id, recovery_key, org_id, invite_code)
+            .await
+    }
+
+    async fn issue_trnm_product_registration_invite(
+        &self,
+        lifetime_seconds: i64,
+        max_uses: i32,
+    ) -> Result<serde_json::Value, LedgerActionError> {
+        self.issue_trnm_native_product_registration_invite(lifetime_seconds, max_uses)
+            .await
+    }
+
+    async fn submit_trnm_identity_appeal(
+        &self,
+        player_id: &str,
+        recovery_key: &str,
+        message: &str,
+    ) -> Result<serde_json::Value, LedgerActionError> {
+        self.submit_trnm_native_identity_appeal(player_id, recovery_key, message)
+            .await
+    }
+
+    async fn resolve_trnm_identity_appeal(
+        &self,
+        appeal_id: Uuid,
+        decision: &str,
+        resolution: &str,
+    ) -> Result<serde_json::Value, LedgerActionError> {
+        self.resolve_trnm_native_identity_appeal(appeal_id, decision, resolution)
+            .await
+    }
+
+    async fn recover_trnm_player_identity(
+        &self,
+        player_id: &str,
+        recovery_key: &str,
+        new_recovery_key: &str,
+    ) -> Result<TrnmPlayerIdentityRecord, LedgerActionError> {
+        self.recover_trnm_native_player_identity(player_id, recovery_key, new_recovery_key)
+            .await
+    }
+
+    async fn set_trnm_player_identity_status(
+        &self,
+        player_id: &str,
+        status: &str,
+    ) -> Result<TrnmPlayerIdentityRecord, LedgerActionError> {
+        self.set_trnm_native_player_identity_status(player_id, status)
+            .await
+    }
+
+    async fn create_trnm_player_session(
+        &self,
+        player_id: &str,
+        recovery_key: &str,
+        device_id: &str,
+        session_id: Uuid,
+        token_hash: &str,
+        issued_at_epoch: i64,
+        expires_at_epoch: i64,
+    ) -> Result<TrnmPlayerSessionRecord, LedgerActionError> {
+        self.create_trnm_native_player_session(
+            player_id,
+            recovery_key,
+            device_id,
+            session_id,
+            token_hash,
+            issued_at_epoch,
+            expires_at_epoch,
+        )
+        .await
+    }
+
+    async fn authenticate_trnm_player_identity(
+        &self,
+        player_id: &str,
+        recovery_key: &str,
+    ) -> Result<TrnmPlayerIdentityRecord, LedgerActionError> {
+        self.authenticate_trnm_native_player_identity(player_id, recovery_key)
+            .await
+    }
+
+    async fn verify_trnm_player_session(
+        &self,
+        session_id: Uuid,
+        token_hash: &str,
+        actor_id: &str,
+        account_id: Uuid,
+        recovery_generation: i64,
+    ) -> Result<TrnmPlayerSessionRecord, LedgerActionError> {
+        self.verify_trnm_native_player_session(
+            session_id,
+            token_hash,
+            actor_id,
+            account_id,
+            recovery_generation,
+        )
+        .await
+    }
+
+    async fn revoke_trnm_player_session(
+        &self,
+        session_id: Uuid,
+        reason: &str,
+    ) -> Result<(), LedgerActionError> {
+        self.revoke_trnm_native_player_session(session_id, reason)
+            .await
+    }
+
+    async fn list_trnm_economic_receipts(&self) -> Result<Vec<EconomicReceipt>, LedgerActionError> {
+        self.list_trnm_native_receipts().await
+    }
+
+    async fn maintain_trnm_native_economy(&self) -> Result<serde_json::Value, LedgerActionError> {
+        self.run_trnm_native_maintenance().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::database_pool_is_operational;
+
+    #[test]
+    fn readiness_only_reports_saturation_at_the_pool_limit() {
+        assert!(database_pool_is_operational(1, 0, 8));
+        assert!(database_pool_is_operational(8, 1, 8));
+        assert!(!database_pool_is_operational(8, 0, 8));
     }
 }

@@ -12,11 +12,20 @@ use state::AppState;
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(api::health))
+        .route("/metrics", get(api::metrics))
         .route("/v1/executions", post(api::create_execution))
         .route("/v1/executions/worker-queue", get(api::worker_queue))
         .route(
             "/v1/executions/worker-queue/summary",
             get(api::worker_queue_summary),
+        )
+        .route(
+            "/v1/executions/provider-dead-letters",
+            get(api::provider_dead_letters),
+        )
+        .route(
+            "/v1/executions/provider-failures",
+            get(api::provider_failures),
         )
         .route("/v1/executions/claim-next", post(api::claim_next_execution))
         .route(
@@ -32,6 +41,14 @@ pub fn build_router(state: AppState) -> Router {
             post(api::timeout_expired_executions),
         )
         .route("/v1/executions/:id", get(api::get_execution))
+        .route(
+            "/v1/executions/:id/provider-dead-letter/ack",
+            post(api::acknowledge_provider_dead_letter),
+        )
+        .route(
+            "/v1/executions/:id/provider-failure/ack",
+            post(api::acknowledge_provider_failure),
+        )
         .route("/v1/executions/:id/approve", post(api::approve_execution))
         .route("/v1/executions/:id/reject", post(api::reject_execution))
         .route("/v1/executions/:id/dispatch", post(api::dispatch_execution))

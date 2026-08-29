@@ -66,6 +66,42 @@ This mode:
 - keeps runtime down after the cargo test phase
 - is suitable for CI runners that only need service-local coverage
 
+## 3. Linux equivalent full gate
+
+Use this on a Linux host when you want the same practical validation shape as the Windows full gate, but you do not have `pwsh`/`powershell` available.
+
+```bash
+./scripts/gate-local-linux.sh
+```
+
+What it does:
+
+- loads `.env` when present, otherwise falls back to `.env.example`
+- applies SQL migrations and seeds the default local-dev org/key when DB bootstrap is available
+- runs `cargo test --workspace`
+- starts a repo-local detached Linux runtime through `scripts/runtime-manager-linux.sh`
+- explicitly disables the detached queued-worker loop during the gate (`CEX_ENABLE_QUEUED_WORKER=0`) so the ignored runtime suites remain deterministic
+- if `run/openclaw-cex/openclaw.json` exists, the runtime manager auto-scopes OpenClaw bridge/import calls to that isolated repo-local state instead of the default `~/.openclaw/main` scope
+- injects a temporary `powershell` compatibility shim so the existing ignored Rust runtime suites can still call the expected repo scripts
+- runs the ignored runtime black-box and approval DB-probe tests for:
+  - `audit-service/tests/runtime_blackbox.rs`
+  - `identity-service/tests/runtime_blackbox.rs`
+  - `gateway-service/tests/runtime_blackbox.rs`
+  - `gateway-service/tests/runtime_approval_probe.rs`
+- verifies runtime health again at the end
+
+Helpful flags:
+
+```bash
+./scripts/gate-local-linux.sh --service-local-only
+./scripts/gate-local-linux.sh --skip-db-bootstrap
+./scripts/gate-local-linux.sh --skip-workspace
+```
+
+Use `--skip-db-bootstrap` when the database is already provisioned but the current user does not have a usable `psql` client or Docker access for applying migrations/seeding. When direct Docker socket access is denied but passwordless `sudo docker` is available, the Linux helper automatically falls back to `sudo -n docker` for containerized Postgres; set `CEX_DOCKER_USE_SUDO=1` to force that path.
+
+PowerShell Core on Linux can run `gate-local.ps1` end-to-end for the current core runtime gate. The PowerShell dotenv helper honors `CEX_ENV_FILE`, then `.env`, then `.env.example`, matching the Linux helper fallback; Docker discovery falls back to a repo-local `sudo -n docker` shim when direct socket access is unavailable. Use `scripts/gate-local-linux.sh` for the Linux-native core+entry runtime gate and metrics smoke.
+
 ## Under the hood
 
 `gate-local.ps1` is the friendly root entrypoint.
@@ -134,11 +170,13 @@ That matrix tracks which PowerShell scripts are now covered by Rust tests and th
 
 ### Hosted workflow
 
-The standard hosted workflow uses **service-local-only** mode on `windows-latest`:
+The standard hosted workflow now runs **service-local-only** validation on both `windows-latest` and `ubuntu-latest`:
 
 - file: `.github/workflows/rust-service-gate.yml`
-- validates the Rust service-local tests on relevant pushes / pull requests
-- does **not** attempt to boot the full detached local runtime
+- Windows job runs `./gate-local.ps1 -ServiceLocalOnly`
+- Linux job runs `bash ./scripts/gate-local-linux.sh --service-local-only --skip-db-bootstrap`; full runtime mode starts core plus entry services, seeds repo-local entry identity governance defaults under `run/linux-runtime/entry-config/`, and runs `scripts/smoke-runtime-metrics.sh` after runtime blackbox/status to assert native core/entry `/metrics` endpoints are live; `scripts/check-production-readiness.sh` (default `CEX_READINESS_MODE=production`) and `scripts/soak-runtime.sh` are intentionally stricter production signoff tools and should stay separate from hosted CI unless live provider credentials, production-posture env, and runtime budgets are explicitly provisioned
+- validates the Rust service-local tests on relevant pushes / pull requests across both OS families
+- does **not** attempt to boot the full detached local runtime or provision DB/infra on the hosted runner
 
 ### Self-hosted full gate workflow
 

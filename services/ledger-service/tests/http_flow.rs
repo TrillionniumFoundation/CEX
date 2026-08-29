@@ -1,13 +1,78 @@
+use async_trait::async_trait;
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
     Router,
 };
 use ledger_service::{
-    build_router, repository::postgres::PostgresLedgerRepository, state::AppState,
+    build_router,
+    repository::{postgres::PostgresLedgerRepository, LedgerActionError, LedgerRepository},
+    state::{AccountRecord, AppState, LedgerEntryRecord},
 };
 use serde_json::{json, Value};
+use std::sync::Arc;
 use tower::util::ServiceExt;
+use uuid::Uuid;
+
+struct ActionOtherRepository;
+
+#[async_trait]
+impl LedgerRepository for ActionOtherRepository {
+    async fn create_account(&self, _account: &AccountRecord) -> Result<(), String> {
+        Ok(())
+    }
+
+    async fn get_account(&self, _account_id: Uuid) -> Result<Option<AccountRecord>, String> {
+        Ok(None)
+    }
+
+    async fn append_entry(&self, _entry: &LedgerEntryRecord) -> Result<(), String> {
+        Ok(())
+    }
+
+    async fn find_by_idempotency_key(
+        &self,
+        _idempotency_key: &str,
+    ) -> Result<Option<LedgerEntryRecord>, String> {
+        Ok(None)
+    }
+
+    async fn reserve_credits(
+        &self,
+        _entry: &LedgerEntryRecord,
+    ) -> Result<AccountRecord, LedgerActionError> {
+        Err(LedgerActionError::Other(
+            "forced repository transaction failure".to_string(),
+        ))
+    }
+
+    async fn consume_credits(
+        &self,
+        _entry: &LedgerEntryRecord,
+    ) -> Result<AccountRecord, LedgerActionError> {
+        Err(LedgerActionError::Other(
+            "forced repository transaction failure".to_string(),
+        ))
+    }
+
+    async fn refund_credits(
+        &self,
+        _entry: &LedgerEntryRecord,
+    ) -> Result<AccountRecord, LedgerActionError> {
+        Err(LedgerActionError::Other(
+            "forced repository transaction failure".to_string(),
+        ))
+    }
+
+    async fn grant_credits(
+        &self,
+        _entry: &LedgerEntryRecord,
+    ) -> Result<AccountRecord, LedgerActionError> {
+        Err(LedgerActionError::Other(
+            "forced repository transaction failure".to_string(),
+        ))
+    }
+}
 
 fn test_state() -> AppState {
     AppState::new_for_tests(
@@ -87,6 +152,41 @@ async fn get_json(app: Router, uri: &str) -> (StatusCode, Value) {
     get_json_with_headers(app, uri, &[("x-admin-token", "local-dev-admin-token")]).await
 }
 
+async fn get_text(app: Router, uri: &str) -> (StatusCode, String, String) {
+    let request = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(Body::empty())
+        .expect("build get request");
+
+    let response = app.oneshot(request).await.expect("router response");
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read response body");
+    let text = String::from_utf8(bytes.to_vec()).expect("decode response text");
+    (status, content_type, text)
+}
+
+#[tokio::test]
+async fn metrics_endpoint_exports_ledger_runtime_gauges() {
+    let app = build_router(test_state());
+
+    let (status, content_type, body) = get_text(app, "/metrics").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(content_type.starts_with("text/plain; version=0.0.4"));
+    assert!(body.contains("cex_ledger_service_up 1\n"));
+    assert!(body.contains("cex_ledger_memory_accounts_total 0\n"));
+    assert!(body.contains("cex_ledger_memory_entries_total 0\n"));
+    assert!(body.contains("cex_ledger_admin_tokens_total 1\n"));
+}
+
 async fn create_account(app: Router, initial_balance: f64) -> (String, Value) {
     let (status, created) = send_json(
         app,
@@ -133,6 +233,85 @@ async fn create_account_requires_admin_token() {
 }
 
 #[tokio::test]
+async fn trnm_session_verify_requires_a_signed_player_session() {
+    let app = build_router(test_state());
+    let (status, body) = send_json_with_headers(
+        app,
+        "POST",
+        "/v1/trnm/identity/session/verify",
+        &[],
+        json!({
+            "player_id": "player-a",
+            "account_id": "00000000-0000-0000-0000-000000000001"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(!body["error"].as_str().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn only_the_scoped_game_authority_may_issue_value_entitlements() {
+    let body = json!({
+        "actor_id": "player-a",
+        "account_id": "00000000-0000-0000-0000-000000000001",
+        "source": "battle",
+        "source_id": "battle-a",
+        "intent_id": "intent-a",
+        "amount_credits": 25
+    });
+    let (admin_status, _) = send_json_with_headers(
+        build_router(test_state()),
+        "POST",
+        "/v1/trnm/economy/entitlements",
+        &[("x-admin-token", "local-dev-admin-token")],
+        body.clone(),
+    )
+    .await;
+    assert_eq!(admin_status, StatusCode::UNAUTHORIZED);
+
+    let (authority_status, entitlement) = send_json_with_headers(
+        build_router(test_state()),
+        "POST",
+        "/v1/trnm/economy/entitlements",
+        &[("x-trnm-game-authority", "test-game-authority-token")],
+        body,
+    )
+    .await;
+    assert_eq!(authority_status, StatusCode::CREATED);
+    assert_eq!(entitlement["actor_id"], "player-a");
+    assert_eq!(entitlement["amount_credits"], 25);
+}
+
+#[tokio::test]
+async fn game_authority_can_verify_the_active_online_issuer_fingerprint() {
+    let body = json!({"key_id": "test-online-ed25519-v1"});
+    let (anonymous_status, _) = send_json_with_headers(
+        build_router(test_state()),
+        "POST",
+        "/v1/trnm/economy/issuer-keys/status",
+        &[],
+        body.clone(),
+    )
+    .await;
+    assert_eq!(anonymous_status, StatusCode::UNAUTHORIZED);
+    let (status, key) = send_json_with_headers(
+        build_router(test_state()),
+        "POST",
+        "/v1/trnm/economy/issuer-keys/status",
+        &[("x-trnm-game-authority", "test-game-authority-token")],
+        body,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(key["key_id"], "test-online-ed25519-v1");
+    assert_eq!(key["issuer"], "trnm-online-game-server");
+    assert_eq!(key["status"], "active");
+    assert_eq!(key["signature_algorithm"], "ed25519");
+    assert_eq!(key["public_key_sha256"].as_str().unwrap().len(), 64);
+}
+
+#[tokio::test]
 async fn create_account_and_get_round_trip() {
     let app = build_router(test_state());
     let (account_id, created) = create_account(app.clone(), 100.0).await;
@@ -174,6 +353,66 @@ async fn ledger_endpoints_reject_admin_token_for_other_org() {
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(body["error"], "admin token not authorized for org");
     assert_eq!(body["message"], "00000000-0000-0000-0000-00000000ce01");
+}
+
+#[tokio::test]
+async fn fail_fast_placeholder_repository_rejects_memory_only_account_creation() {
+    let state = AppState::new_for_tests(
+        PostgresLedgerRepository::new_placeholder(),
+        true,
+        Some("local-dev-admin-token".to_string()),
+        vec!["ledger:manage".to_string(), "ledger:read".to_string()],
+        Vec::new(),
+    );
+    let app = build_router(state.clone());
+
+    let (status, body) = send_json(
+        app,
+        "POST",
+        "/v1/accounts",
+        json!({
+            "org_id": "00000000-0000-0000-0000-00000000ce01",
+            "account_type": "user",
+            "currency_unit": "credit",
+            "initial_balance": 100.0
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(body["error"]
+        .as_str()
+        .expect("repository error")
+        .contains("create_account repository failure: postgres pool not initialized"));
+    assert!(state.accounts.read().await.is_empty());
+}
+
+#[tokio::test]
+async fn grant_adds_balance_without_reserved_funds() {
+    let app = build_router(test_state());
+    let (account_id, _) = create_account(app.clone(), 100.0).await;
+
+    let (grant_status, grant_json) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/ledger/grant",
+        json!({
+            "account_id": account_id,
+            "amount": 3.15,
+            "reference_id": "league-reward-test",
+            "idempotency_key": "league-reward-key-1"
+        }),
+    )
+    .await;
+    assert_eq!(grant_status, StatusCode::OK);
+    assert_eq!(grant_json["account"]["balance"], 103.15);
+    assert_eq!(grant_json["account"]["reserved"], 0.0);
+    assert_eq!(grant_json["entry"]["action"], "grant");
+
+    let (get_status, fetched) = get_json(app, &format!("/v1/accounts/{account_id}")).await;
+    assert_eq!(get_status, StatusCode::OK);
+    assert_eq!(fetched["balance"], 103.15);
+    assert_eq!(fetched["reserved"], 0.0);
 }
 
 #[tokio::test]
@@ -294,6 +533,45 @@ async fn duplicate_idempotency_key_returns_conflict_without_double_reserve() {
 }
 
 #[tokio::test]
+async fn repository_transaction_errors_do_not_fallback_to_memory_success() {
+    let state = AppState::new_for_tests(
+        Arc::new(ActionOtherRepository),
+        false,
+        Some("local-dev-admin-token".to_string()),
+        vec!["ledger:manage".to_string(), "ledger:read".to_string()],
+        Vec::new(),
+    );
+    let app = build_router(state.clone());
+    let (account_id, _) = create_account(app.clone(), 100.0).await;
+
+    let (reserve_status, reserve_json) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/ledger/reserve",
+        json!({
+            "account_id": account_id,
+            "amount": 8.0,
+            "reference_id": "repo-other-failure",
+            "idempotency_key": "repo-other-failure-key"
+        }),
+    )
+    .await;
+
+    assert_eq!(reserve_status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(reserve_json["error"]
+        .as_str()
+        .expect("repository error")
+        .contains("forced repository transaction failure"));
+
+    let (get_status, fetched) = get_json(app, &format!("/v1/accounts/{account_id}")).await;
+    assert_eq!(get_status, StatusCode::OK);
+    assert_eq!(fetched["balance"], 100.0);
+    assert_eq!(fetched["reserved"], 0.0);
+    assert!(state.entries.read().await.is_empty());
+    assert!(state.idempotency_keys.read().await.is_empty());
+}
+
+#[tokio::test]
 async fn insufficient_amount_paths_return_bad_request() {
     let app = build_router(test_state());
     let (account_id, _) = create_account(app.clone(), 100.0).await;
@@ -316,16 +594,48 @@ async fn insufficient_amount_paths_return_bad_request() {
         .expect("reserve error")
         .contains("insufficient available balance"));
 
+    let (grant_status, _) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/ledger/grant",
+        json!({
+            "account_id": account_id,
+            "amount": 100.0,
+            "reference_id": "seed-retry-reserve-after-failure",
+            "idempotency_key": "seed-retry-reserve-after-failure"
+        }),
+    )
+    .await;
+    assert_eq!(grant_status, StatusCode::OK);
+
+    let (reserve_retry_status, reserve_retry_json) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/ledger/reserve",
+        json!({
+            "account_id": account_id,
+            "amount": 150.0,
+            "reference_id": "too-much-reserve",
+            "idempotency_key": "reserve-too-much"
+        }),
+    )
+    .await;
+    assert_eq!(reserve_retry_status, StatusCode::OK);
+    assert_eq!(reserve_retry_json["account"]["balance"], 200.0);
+    assert_eq!(reserve_retry_json["account"]["reserved"], 150.0);
+
+    let (refund_account_id, _) = create_account(app.clone(), 100.0).await;
+    let refund_body = json!({
+        "account_id": refund_account_id,
+        "amount": 1.0,
+        "reference_id": "refund-without-reserve",
+        "idempotency_key": "refund-without-reserve"
+    });
     let (refund_status, refund_json) = send_json(
         app.clone(),
         "POST",
         "/v1/ledger/refund",
-        json!({
-            "account_id": account_id,
-            "amount": 1.0,
-            "reference_id": "refund-without-reserve",
-            "idempotency_key": "refund-without-reserve"
-        }),
+        refund_body.clone(),
     )
     .await;
     assert_eq!(refund_status, StatusCode::BAD_REQUEST);
@@ -333,4 +643,24 @@ async fn insufficient_amount_paths_return_bad_request() {
         .as_str()
         .expect("refund error")
         .contains("insufficient reserved balance"));
+
+    let (reserve_refund_retry_status, _) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/ledger/reserve",
+        json!({
+            "account_id": refund_account_id,
+            "amount": 1.0,
+            "reference_id": "seed-retry-refund-after-failure",
+            "idempotency_key": "seed-retry-refund-after-failure"
+        }),
+    )
+    .await;
+    assert_eq!(reserve_refund_retry_status, StatusCode::OK);
+
+    let (refund_retry_status, refund_retry_json) =
+        send_json(app.clone(), "POST", "/v1/ledger/refund", refund_body).await;
+    assert_eq!(refund_retry_status, StatusCode::OK);
+    assert_eq!(refund_retry_json["account"]["balance"], 100.0);
+    assert_eq!(refund_retry_json["account"]["reserved"], 0.0);
 }

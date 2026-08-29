@@ -1,6 +1,6 @@
 use reqwest::{Client, StatusCode};
 use serde_json::{json, Value};
-use shared_config::{load_audit_scoped_admin_tokens, select_audit_read_token};
+use shared_config::{load_audit_scoped_admin_tokens, select_audit_read_token, ScopedAdminToken};
 use std::{path::PathBuf, process::Command};
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
@@ -22,8 +22,11 @@ fn scripts_dir() -> PathBuf {
 }
 
 fn run_powershell_script(script_name: &str, extra_args: &[&str]) -> String {
-    let script_path = scripts_dir().join(script_name);
+    let script_dir = scripts_dir();
+    let repo_root = script_dir.parent().expect("repo root");
+    let script_path = script_dir.join(script_name);
     let output = Command::new("powershell")
+        .current_dir(repo_root)
         .arg("-NoProfile")
         .arg("-ExecutionPolicy")
         .arg("Bypass")
@@ -90,12 +93,19 @@ async fn restart_runtime(client: &Client) {
     );
 }
 
-fn resolve_audit_admin_token() -> String {
+fn resolve_audit_admin_token_record() -> ScopedAdminToken {
     let tokens = load_audit_scoped_admin_tokens();
     select_audit_read_token(&tokens)
         .expect("audit read token")
-        .token
         .clone()
+}
+
+fn resolve_audit_admin_token() -> String {
+    resolve_audit_admin_token_record().token
+}
+
+fn resolve_audit_trace_org_id() -> Option<String> {
+    resolve_audit_admin_token_record().org_ids.first().cloned()
 }
 
 async fn post_json(client: &Client, url: &str, body: Value) -> (StatusCode, Value) {
@@ -193,11 +203,13 @@ async fn audit_runtime_trace_read_accepts_configured_admin_token() {
     assert_health(&client).await;
 
     let trace_id = Uuid::new_v4();
+    let audit_org_id = resolve_audit_trace_org_id();
     let (create_status, created) = post_json(
         &client,
         "http://127.0.0.1:7004/v1/audit/events",
         json!({
             "trace_id": trace_id,
+            "org_id": audit_org_id,
             "actor_type": "identity-service",
             "actor_id": "local-dev-admin",
             "event_type": "identity.api_key.revoked",

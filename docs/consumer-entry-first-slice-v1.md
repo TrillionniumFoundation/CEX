@@ -28,6 +28,14 @@ This first slice is intentionally small:
 
 现在会额外暴露 Prometheus 文本格式指标，至少覆盖 task create / lookup、rate limit、replay hits、identity binding reload / actor rejection / audit failure，以及 profile 安全基线相关 gauge（如 `cex_consumer_entry_profile_validation_ok`、`cex_consumer_entry_ingress_protected`、`cex_consumer_entry_require_identity_binding`）。identity source-of-truth 相关也会通过 `cex_consumer_entry_identity_registry_users`、`cex_consumer_entry_identity_registry_refs`、`cex_consumer_entry_identity_registry_missing_refs` 暴露。durable quota 相关也会通过 `cex_consumer_entry_rate_limit_store_enabled` 与 `cex_consumer_entry_rate_limit_bucket_count` 暴露。现在还会额外暴露 identity governance gauge，包括 `cex_consumer_entry_identity_governance_valid`、`cex_consumer_entry_identity_binding_loaded`、`cex_consumer_entry_identity_registry_loaded`、`cex_consumer_entry_identity_ref_integrity_ok`、`cex_consumer_entry_identity_actor_gate_valid`、`cex_consumer_entry_identity_approval_source_valid` 与 `cex_consumer_entry_identity_approval_coverage_valid`，以及 session-auth issuer registry governance gauge，如 `cex_consumer_entry_session_auth_issuer_registry_governance_valid`、`cex_consumer_entry_session_auth_issuer_registry_approval_source_valid`、`cex_consumer_entry_session_auth_issuer_registry_approval_coverage_valid`，用于把 admin / health 面里的治理结论直接变成可 scrape 的 operator signal。
 
+### Web game shells
+
+`GET /league` exposes the Trillionnium League server-rendered game shell.
+
+`GET /world` exposes the Trillionnium World server-rendered open-world shell with zones, locations, Agent residents/NPCs, player assets, asset upgrade form, companies/shops/listings, Commerce / Work Orders, Faction Reputation Map, World Contracts, contract completion form, and world event timeline.
+
+`GET /app` exposes the Trillionnium Client App shell: World Map, Face Duel, Social, Wallet, and Progression modules. The World Map module now uses a real-world map engine (`leaflet_openstreetmap_v1`: Leaflet + OpenStreetMap raster tiles) as the global real-world mirror base and overlays Trillionnium/Gather-style LOD nodes/routes as lightweight markers, with the text map kept as fallback. `GET /v1/world/map/:matrix_user_id/viewport` now exposes the camera-scoped viewport contract for region shards / Web Mercator tile shards / LOD / nearby POIs, `/world/web/map-viewport` provides the same viewport stream to the browser under the signed web session/local-dev shell, and `/world` has real-map parity with a Leaflet panel plus live viewport/tile hydration instead of only text/grid cards. `GET /v1/client/app/:matrix_user_id` returns the same module model for Matrix/mobile clients. `GET /v1/league/players/:matrix_user_id/progression` exposes the player progression model: 门派 / skills / tools / skins / experience data points / level-by-successful-task-count. `POST /league/web/action` supports interactive League actions (`join`, `guild`, `team`, `raid`, `draft`, `submit`). `POST /world/web/action` records free-form World actions. `GET /v1/world/map/:matrix_user_id`, `POST /v1/world/map/move`, and `POST /world/web/map-move` expose the early Hero's Tale + Gather-style detailed map loop. `POST /world/web/asset` upgrades an asset from the browser. `POST /world/web/company` launches a company/shop/listing from an asset. `POST /world/web/listing` publishes a priced service listing from a company. `POST /world/web/buy` buys/hires a listing, creates a purchase + work order, attempts buyer Ledger reserve, credits seller revenue through Ledger when available, and updates faction standing. `POST /world/web/work-deliver` records seller fulfillment evidence for a work order, `POST /world/web/work-accept` lets the buyer accept/close it while attempting buyer Ledger consume, `POST /world/web/work-reject` lets the buyer reject delivered work and refund reserved buyer funds, `POST /world/web/work-reopen` re-reserves buyer funds so the same rejected work order can be redelivered, and `POST /world/web/work-cancel` lets the buyer cancel open work before delivery and refund reserved funds. `POST /world/web/contract` completes an existing contract from the browser. Matrix `/app` shows the mobile client hub, `/duel nearby <出招>` starts a Pokémon-like face duel, `/social` shows WeChat/Telegram-like contacts, `/pay` aliases wallet, `/progression|/level` shows 门派/经验/等级, `/skills` shows the skill tree, `/tools|/装备` shows equipment/tools, `/skins|/皮肤` shows multi-agent skins/capabilities, `/map` shows the detailed map, `/go <direction|node-id>` moves the player, `/contract` records a task-backed World Contract through the signed Matrix identity path, `/complete` scores/settles the delivery, `/upgrade` grows World assets, `/company` launches operating companies, `/sell` publishes shop listings, `/buy` creates work, `/work deliver` submits fulfillment, `/work accept` closes it, `/work reject` refunds/rejects it, `/work reopen` reopens it for redelivery, `/work cancel` cancels open work before delivery, `/work` lists commerce, and `/factions` shows reputation. Outside local-dev, browser mutation paths use signed web session + CSRF protection.
+
 ### Create a task from a generic chat payload
 
 `POST /v1/chat/tasks`
@@ -478,28 +486,24 @@ curl -s -X POST http://127.0.0.1:8090/v1/matrix/messages \
 
 ## What this is NOT yet
 
-This is not a full Matrix appservice or bot integration yet.
+This is still not a full Matrix appservice integration, but the local Matrix/Element bot path now has a real-room loop: `matrix-bot-poller` reads Synapse `/sync`, `matrix-bot-relay` forwards events to `matrix-entry-adapter`, and replies are sent back to the same Matrix room.
 
-Still missing:
+Current local Matrix/Element frontend slice:
 
-- real Matrix event ingestion / auth
+- `/task ...` creates a CEX task and projects a structured `🧾 CEX 任务卡`
+- `/status <task-id>` reads the CEX task projection and returns the same status card shape
+- `/balance` / `/wallet` / `/余额` / `/钱包` calls `GET /v1/matrix/users/:matrix_user_id/wallet` and projects a wallet card
+- `/plans` / `/package` / `/套餐` projects the package/plan metadata
+- `scripts/start-matrix-live-stack.sh` can start local Synapse + Element Web + relay + poller, and `scripts/check-matrix-live-room-e2e.sh` validates the real room loop end-to-end
+
+Still missing beyond this local production frontend slice:
+
+- Matrix appservice registration
 - a shared multi-service identity source-of-truth service, instead of the current repo-local `product_users` registry inside the binding document
-- task persistence
 - confirmation callbacks
-- credits page
-- product session model
 - attachment handling
-- push / live updates
+- richer Element customization beyond HTML-compatible Matrix message cards
 - ingress auth beyond shared edge token
 - durable replay protection and quota enforcement are still incomplete: `consumer-entry-api` now supports persisted replay for Matrix `event_id` and generic chat `idempotency_key`, exposes user / room / session / org scoped rate-limit buckets with optional local persistence, and can optionally resolve caller identity through a local binding file plus repo-local `product_users` registry into a normalized `identity_scope`, but richer identity-bound quota policy, distributed anti-abuse state, and a shared identity source still remain beyond the current local-file layer
 
-## Recommended next step after this slice
-
-Build a minimal Matrix adapter that:
-
-1. listens for room message events
-2. parses mobile command (`/help`, `/task`, `/status`) for v1 移动端直接体验
-3. calls `consumer-entry-api /v1/matrix/messages` for task creation
-4. sends projected task updates back into the room
-
-移动端交互规范见：`docs/matrix-mobile-command-spec-v1.md`.
+移动端交互规范见：`docs/matrix-mobile-command-spec-v1.md`；真实房间验收见：`docs/matrix-bot-entry-e2e-checklist-v1.md`.

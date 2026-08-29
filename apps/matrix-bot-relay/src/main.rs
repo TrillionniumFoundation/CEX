@@ -479,7 +479,7 @@ async fn handle_inbound_matrix_event(
     }
 
     if let Some(event_id) = event.event_id.as_deref() {
-        let mut ids = state.inner.recent_event_ids.lock().await;
+        let ids = state.inner.recent_event_ids.lock().await;
         if ids.contains(&event_id.to_string()) {
             state.inner.metrics.inc_duplicate_events();
             return (
@@ -494,11 +494,6 @@ async fn handle_inbound_matrix_event(
                 }),
             )
                 .into_response();
-        }
-
-        ids.push_front(event_id.to_string());
-        while ids.len() > state.config().max_recent_event_ids {
-            ids.pop_back();
         }
     }
 
@@ -566,6 +561,8 @@ async fn handle_inbound_matrix_event(
         )
             .into_response();
     }
+
+    remember_recent_event_id(&state, event.event_id.as_deref()).await;
 
     let projected_reply = upstream.get("projected_reply").cloned();
     if projected_reply.is_none() {
@@ -739,6 +736,20 @@ async fn handle_inbound_matrix_event(
     };
 
     send_result
+}
+
+async fn remember_recent_event_id(state: &AppState, event_id: Option<&str>) {
+    let Some(event_id) = event_id else {
+        return;
+    };
+    let mut ids = state.inner.recent_event_ids.lock().await;
+    if ids.contains(&event_id.to_string()) {
+        return;
+    }
+    ids.push_front(event_id.to_string());
+    while ids.len() > state.config().max_recent_event_ids {
+        ids.pop_back();
+    }
 }
 
 fn is_retryable_status(status: ReqStatusCode) -> bool {

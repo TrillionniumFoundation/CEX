@@ -17,6 +17,8 @@ ALERT_MATRIX_ENTRY_RATE_LIMITED_THRESHOLD="${ALERT_MATRIX_ENTRY_RATE_LIMITED_THR
 ALERT_MATRIX_ENTRY_INGRESS_AUTH_FAILURE_THRESHOLD="${ALERT_MATRIX_ENTRY_INGRESS_AUTH_FAILURE_THRESHOLD:-5}"
 ALERT_MATRIX_ENTRY_DUPLICATE_EVENT_THRESHOLD="${ALERT_MATRIX_ENTRY_DUPLICATE_EVENT_THRESHOLD:-25}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-5}"
+FETCH_RETRIES="${FETCH_RETRIES:-2}"
+FETCH_RETRY_DELAY_SECONDS="${FETCH_RETRY_DELAY_SECONDS:-1}"
 OUTPUT_MODE="pretty"
 
 usage() {
@@ -45,6 +47,8 @@ Config via env:
   ALERT_MATRIX_ENTRY_INGRESS_AUTH_FAILURE_THRESHOLD
   ALERT_MATRIX_ENTRY_DUPLICATE_EVENT_THRESHOLD
   TIMEOUT_SECONDS
+  FETCH_RETRIES                  (extra retries after the first attempt)
+  FETCH_RETRY_DELAY_SECONDS
 EOF
 }
 
@@ -83,6 +87,8 @@ require_non_negative_integer ALERT_CONSUMER_ENTRY_INGRESS_AUTH_FAILURE_THRESHOLD
 require_non_negative_integer ALERT_MATRIX_ENTRY_RATE_LIMITED_THRESHOLD "$ALERT_MATRIX_ENTRY_RATE_LIMITED_THRESHOLD"
 require_non_negative_integer ALERT_MATRIX_ENTRY_INGRESS_AUTH_FAILURE_THRESHOLD "$ALERT_MATRIX_ENTRY_INGRESS_AUTH_FAILURE_THRESHOLD"
 require_non_negative_integer ALERT_MATRIX_ENTRY_DUPLICATE_EVENT_THRESHOLD "$ALERT_MATRIX_ENTRY_DUPLICATE_EVENT_THRESHOLD"
+require_non_negative_integer FETCH_RETRIES "$FETCH_RETRIES"
+require_non_negative_integer FETCH_RETRY_DELAY_SECONDS "$FETCH_RETRY_DELAY_SECONDS"
 if [[ "$MONITORING_DEPLOY_ALERT_ON_DEPLOY_ONLY" != "0" && "$MONITORING_DEPLOY_ALERT_ON_DEPLOY_ONLY" != "1" ]]; then
   echo "invalid MONITORING_DEPLOY_ALERT_ON_DEPLOY_ONLY: $MONITORING_DEPLOY_ALERT_ON_DEPLOY_ONLY" >&2
   exit 64
@@ -98,10 +104,14 @@ fetch_json() {
   local url="$1"
   local body_file="$2"
   local err_file="$3"
+  local attempt=1
+  local max_attempts=$((FETCH_RETRIES + 1))
 
-  if local http_code; http_code="$(curl -sS -m "$TIMEOUT_SECONDS" -w '%{http_code}' -o "$body_file" "$url" 2>"$err_file")"; then
+  while (( attempt <= max_attempts )); do
+    : > "$err_file"
+    if local http_code; http_code="$(curl -sS -m "$TIMEOUT_SECONDS" -w '%{http_code}' -o "$body_file" "$url" 2>"$err_file")"; then
     if [[ "$http_code" =~ ^2[0-9][0-9]$ ]] && jq empty "$body_file" >/dev/null 2>&1; then
-      printf '{"ok":true,"http_code":"%s"}' "$http_code"
+      printf '{"ok":true,"http_code":"%s","attempts":%s}' "$http_code" "$attempt"
       return 0
     fi
 
@@ -114,26 +124,39 @@ fetch_json() {
         message="response was not valid json"
       fi
     fi
-    printf '{"ok":false,"http_code":"%s","error":%s}' "$http_code" "$(jq -Rn --arg v "$message" '$v')"
+    if [[ "$http_code" =~ ^5[0-9][0-9]$ ]] && (( attempt < max_attempts )); then
+      sleep "$FETCH_RETRY_DELAY_SECONDS"
+      attempt=$((attempt + 1))
+      continue
+    fi
+
+    printf '{"ok":false,"http_code":"%s","attempts":%s,"error":%s}' "$http_code" "$attempt" "$(jq -Rn --arg v "$message" '$v')"
     return 0
-  fi
+    fi
 
   local message
   message="$(cat "$err_file" 2>/dev/null || true)"
   if [[ -z "$message" ]]; then
     message="curl request failed"
   fi
-  printf '{"ok":false,"http_code":"000","error":%s}' "$(jq -Rn --arg v "$message" '$v')"
+    if (( attempt < max_attempts )); then
+      sleep "$FETCH_RETRY_DELAY_SECONDS"
+      attempt=$((attempt + 1))
+      continue
+    fi
+    printf '{"ok":false,"http_code":"000","attempts":%s,"error":%s}' "$attempt" "$(jq -Rn --arg v "$message" '$v')"
+    return 0
+  done
 }
 
 severity_for_signal() {
   local service="$1"
   local name="$2"
   case "$service:$name" in
-    execution:refund_failures|gateway:endpoint_unreachable|execution:endpoint_unreachable|execution:runtime_error)
+    execution:refund_failures|execution:provider_dead_letters|execution:provider_retry_budget_exhausted|gateway:endpoint_unreachable|execution:endpoint_unreachable|execution:runtime_error)
       printf 'critical'
       ;;
-    gateway:invocation_create_upstream_failures|execution:approval_backlog|execution:queued_worker_lease_expired|execution:queued_worker_retry_budget_exhausted|execution:audit_failures|consumer_entry:endpoint_unreachable|consumer_entry:health_status_not_ok|consumer_entry:rate_limited_requests|consumer_entry:ingress_auth_failures|consumer_entry:identity_governance_invalid|consumer_entry:identity_binding_not_loaded|consumer_entry:identity_registry_not_loaded|consumer_entry:identity_ref_integrity_not_ok|consumer_entry:identity_actor_gate_invalid|consumer_entry:identity_approval_source_invalid|consumer_entry:identity_approval_coverage_invalid|consumer_entry:session_auth_issuer_registry_governance_invalid|consumer_entry:session_auth_issuer_registry_not_loaded|consumer_entry:session_auth_issuer_registry_actor_gate_invalid|consumer_entry:session_auth_issuer_registry_approval_source_invalid|consumer_entry:session_auth_issuer_registry_approval_coverage_invalid|consumer_entry:session_auth_issuer_registry_revision_missing|matrix_entry:endpoint_unreachable|matrix_entry:health_status_not_ok|matrix_entry:rate_limited_requests|matrix_entry:ingress_auth_failures|matrix_entry:duplicate_events|matrix_entry:consumer_entry_session_auth_governance_invalid|matrix_entry:consumer_entry_session_auth_selection_invalid|matrix_entry:consumer_entry_session_auth_issuer_registry_not_loaded|matrix_entry:consumer_entry_session_auth_issuer_registry_revision_missing|matrix_entry:consumer_entry_session_auth_approval_source_invalid|matrix_entry:consumer_entry_session_auth_approval_coverage_invalid)
+    gateway:invocation_create_upstream_failures|execution:approval_backlog|execution:queued_worker_lease_expired|execution:queued_worker_retry_budget_exhausted|execution:provider_failures|execution:provider_billing_failures|execution:provider_timeout_failures|execution:audit_failures|consumer_entry:endpoint_unreachable|consumer_entry:health_status_not_ok|consumer_entry:rate_limited_requests|consumer_entry:ingress_auth_failures|consumer_entry:identity_governance_invalid|consumer_entry:identity_binding_not_loaded|consumer_entry:identity_registry_not_loaded|consumer_entry:identity_ref_integrity_not_ok|consumer_entry:identity_actor_gate_invalid|consumer_entry:identity_approval_source_invalid|consumer_entry:identity_approval_coverage_invalid|consumer_entry:session_auth_issuer_registry_governance_invalid|consumer_entry:session_auth_issuer_registry_not_loaded|consumer_entry:session_auth_issuer_registry_actor_gate_invalid|consumer_entry:session_auth_issuer_registry_approval_source_invalid|consumer_entry:session_auth_issuer_registry_approval_coverage_invalid|consumer_entry:session_auth_issuer_registry_revision_missing|matrix_entry:endpoint_unreachable|matrix_entry:health_status_not_ok|matrix_entry:rate_limited_requests|matrix_entry:ingress_auth_failures|matrix_entry:duplicate_events|matrix_entry:consumer_entry_session_auth_governance_invalid|matrix_entry:consumer_entry_session_auth_selection_invalid|matrix_entry:consumer_entry_session_auth_issuer_registry_not_loaded|matrix_entry:consumer_entry_session_auth_issuer_registry_revision_missing|matrix_entry:consumer_entry_session_auth_approval_source_invalid|matrix_entry:consumer_entry_session_auth_approval_coverage_invalid)
       printf 'warn'
       ;;
     *)

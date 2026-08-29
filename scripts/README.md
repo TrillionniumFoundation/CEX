@@ -2,7 +2,7 @@
 
 ## Preferred entrypoints
 
-Day-to-day regression validation should use:
+Day-to-day regression validation on Windows should use:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\gate-local.ps1
@@ -14,11 +14,80 @@ or CI-safe/service-local mode:
 powershell -ExecutionPolicy Bypass -File .\gate-local.ps1 -ServiceLocalOnly
 ```
 
-The lower-level orchestrator is:
+The PowerShell helper also honors `CEX_ENV_FILE`, then `.env`, then `.env.example`; this lets PowerShell Core run service-local and full core-runtime gates on Linux without requiring a checked-in `.env`. On Linux, PowerShell Docker discovery also falls back to a repo-local `sudo -n docker` shim when direct Docker socket access is denied.
+
+On Linux, use the repo-local equivalent full gate:
+
+```bash
+./scripts/gate-local-linux.sh
+```
+
+Useful Linux variants:
+
+```bash
+./scripts/gate-local-linux.sh --service-local-only
+./scripts/gate-local-linux.sh --skip-db-bootstrap
+./scripts/gate-local-linux.sh --with-trillionnium-ui-audit
+```
+
+Set `CEX_LINUX_GATE_TRILLIONNIUM_UI_AUDIT=1` to enable the same Trillionnium UI audit from env-driven gate runs.
+
+For DB bootstrap, the Linux helpers prefer local `psql`, then Docker Postgres. If the Docker socket is not directly accessible but passwordless `sudo docker` works, they automatically use `sudo -n docker`; set `CEX_DOCKER_USE_SUDO=1` to force that path.
+
+The lower-level Windows orchestrator is:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\rust-regression-check.ps1
 ```
+
+The Linux gate relies on:
+
+```bash
+./scripts/runtime-manager-linux.sh
+./scripts/seed-local-dev.sh
+```
+
+The detached Linux runtime now also starts a repo-local queued-worker loop and the product-edge `consumer-entry-api` / `matrix-entry-adapter` surfaces by default, and it rebuilds the Rust service binaries before launch so a restart does not silently boot stale code. It writes a local identity binding/registry/approved-revision bundle under `run/linux-runtime/entry-config/` when those entry governance paths are not supplied, so operator-signal checks exercise the real identity governance path instead of treating missing bindings as healthy. If you intentionally want to reuse already-built binaries, set `CEX_RUNTIME_SKIP_BUILD=1`. Useful commands:
+
+```bash
+./scripts/runtime-manager-linux.sh restart
+./scripts/execution-queued-worker.sh status
+./scripts/execution-queued-worker.sh once
+```
+
+For the Trillionnium `/app`, `/world`, and `/league` browser surfaces, run the dedicated UI regression audit after starting the local-production runtime:
+
+```bash
+CEX_ENV_FILE=run/local-production/.env ./scripts/check-trillionnium-ui-audit.sh
+```
+
+The audit checks English-mode visible CJK leaks, actionable horizontal overflow, first-viewport tapability, and mobile/tablet/desktop ordering/height budgets for the current first-playable UI. It writes JSON plus first-viewport screenshots under `run/trillionnium-ui-audit/`.
+
+For the hard Trillionnium playability scorecard gate, run:
+
+```bash
+CEX_ENV_FILE=run/local-production/.env ./scripts/check-trillionnium-world-playability-scorecard.sh
+```
+
+The scorecard reads `consumer-entry-api /health` plus `/metrics` and requires the five user-facing product metrics to be `10.0/10`: technical reliability, first playable completeness, real-player comprehension cost, long-term replayability, and economy/social strategy depth. It also keeps 10 diagnostic sub-axes (onboarding, intent mapping, quest clarity, scoring/reward explainability, feedback/recovery, economy balance, social/co-op, retention/progression, surface feedback, observability) at `10.0/10`. It writes JSON under `run/playability-scorecard/`. The real-user-beta and public-commercial wrappers also require this scorecard before they pass.
+
+Set `CEX_ENABLE_QUEUED_WORKER=0` when you need deterministic gate/debug behavior without background queue consumption. Set `CEX_ENABLE_ENTRY_SERVICES=0` only when you explicitly want the older core-only local runtime.
+
+If you want CEX to use a repo-local isolated OpenClaw scope instead of the default `~/.openclaw` / `main` agent, bootstrap it once with:
+
+```bash
+./scripts/bootstrap-openclaw-cex.sh
+```
+
+That writes an isolated config under `run/openclaw-cex/`; `runtime-manager-linux.sh` will auto-detect that default location and export `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_AGENT_DIR`, and `CAPABILITY_OPENCLAW_MODELS_JSON_PATH` before starting services and the Linux queued worker.
+
+Database backup/restore production drill:
+
+```bash
+./scripts/drill-db-backup-restore.sh
+```
+
+The drill writes a custom-format `pg_dump`, restores it into a temporary Postgres database, compares core table counts, writes a JSON summary under `run/drills/`, and drops the temporary restore database by default. It uses the same Docker discovery as the Linux gate, including passwordless `sudo -n docker` fallback.
 
 For a machine-readable operator snapshot without running the full gate:
 
@@ -34,10 +103,63 @@ If you want to turn that unified JSON into Prometheus text exposition, use:
 ./scripts/render-operator-signals-prometheus.sh run/operator-signals/last.json
 ```
 
+For a direct runtime smoke of the native core and entry Prometheus endpoints:
+
+```bash
+./scripts/smoke-runtime-metrics.sh
+```
+
+For a live OpenClaw provider smoke probe through the repo-local CEX scope:
+
+```bash
+./scripts/probe-openclaw-provider.sh --model minimax/MiniMax-M2.5
+```
+
+For a stricter pre-production verdict that combines runtime health, native metrics, unified operator signals, provider dead-letter blockers, and an optional-but-required-by-default live provider probe:
+
+```bash
+CEX_READINESS_MODE=local CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash ./scripts/check-production-readiness.sh
+```
+
+A non-zero result is expected while provider failures, dead letters, external billing/quota blockers, or production-posture checks remain. The script defaults to `CEX_READINESS_MODE=production`, which rejects local-dev keys, missing ingress tokens, missing session-auth enforcement, non-durable edge replay/rate-limit stores, and live entry runtimes whose `/health` still shows those protections disabled. It also calls `scripts/check-trillionnium-game-account-auth.sh` in read-only mode to gate the `/account` client contract, register/login/profile/password-change/session-refresh/session-revoke/session/logout advertisement, password-auth posture, auth rate-limit configuration, aggregate auth metrics exposure, no-secret observability boundary, and public-launch boundary. Use `CEX_READINESS_MODE=local` for the Linux/local smoke path only; production signoff should leave provider probing required and set `CEX_PROVIDER_PROBE_MODEL` to the provider/model intended for launch. To avoid repeated wrapper/signoff runs burning through short provider rate windows, readiness accepts a fresh successful provider-probe readiness log for the same model for `CEX_PROVIDER_PROBE_SUCCESS_MAX_AGE_SECONDS` seconds (default `21600`) before making another live call. The Trillionnium real-user-beta and public-commercial wrappers inherit `CEX_PROVIDER_PROBE_MODEL` / `CEX_PROVIDER_PROBE_TRANSPORT` from the loaded env unless their wrapper-specific overrides are set.
+
+For an explicit game-account gate outside full production readiness:
+
+```bash
+./scripts/check-trillionnium-game-account-auth.sh
+CEX_GAME_ACCOUNT_AUTH_MUTATING_SMOKE=1 ./scripts/check-trillionnium-game-account-auth.sh
+```
+
+The default account gate is read-only. It also requires allowlisted account return links, the `/app` and `/world` account-session bridge cards, the `/world` account identity binding contract, aggregate account-auth counters on `/metrics`, and the account readiness JSON to declare `trillionnium_game_account_auth_observability_v1` with no password/token/cookie logging. The mutating smoke requires password auth to be enabled and verifies register/session/profile/password-change/session-refresh/session-revoke/logout, account-profile identity binding on the `/world` first-human surface, Argon2id registry storage, plaintext absence, old-password rejection, new-password login, CSRF rotation, all-device revocation, and bad-login rate limiting.
+
+For a bounded runtime soak that repeats runtime status, metrics smoke, operator signals, and worker-queue checks, while probing the live provider at the beginning and end when configured:
+
+```bash
+CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash   CEX_SOAK_DURATION_SECONDS=300   CEX_SOAK_INTERVAL_SECONDS=30   ./scripts/soak-runtime.sh
+```
+
+The soak writes JSONL plus a summary under `run/soak/` and exits non-zero on any failed tick or provider probe.
+
+The current readiness evidence matrix and known non-100% blockers are tracked in `docs/production-readiness-evidence-v1.md`. The final scoped Linux self-hosted signoff entrypoint is `scripts/check-production-signoff.sh`; it requires a clean repo, production readiness, and fresh 2h+ soak evidence. In production mode, readiness also requires the Trillionnium five user-facing playability metrics at 10/10 plus a fresh successful `scripts/drill-db-backup-restore.sh` summary by default; set `CEX_DB_BACKUP_RESTORE_DRILL_REQUIRED=0` only for local smoke/debug runs.
+
+A production-posture env skeleton is available at `.env.production.example`; it enumerates the non-default keys, ingress/session-auth controls, durable edge stores, identity governance files, and provider probe settings that the default production readiness mode expects. `scripts/bootstrap-local-production-env.sh` writes owner-only local env and policy files; production readiness rejects a `CEX_ENV_FILE` that is group/other readable. Set `CEX_REQUIRED_BLOCK_CAPABILITY_PREFIXES` to require the live execution policy bundle to block known non-launch providers before signoff. Production readiness also requires a fresh monitoring deploy verification metadata file by default (`CEX_MONITORING_DEPLOY_METADATA_PATH`).
+
+For a local generated production-posture profile (high-entropy local secrets, durable edge files under `run/local-production/`, and a repo-local OpenClaw CEX scope), use:
+
+```bash
+./scripts/bootstrap-local-production-env.sh --force
+CEX_ENV_FILE=run/local-production/.env ./scripts/runtime-manager-linux.sh restart
+CEX_ENV_FILE=run/local-production/.env CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash ./scripts/check-production-readiness.sh
+```
+
+`CEX_ENV_FILE` is honored by the shared shell helpers and lets local signoff avoid mutating `.env`.
+
 It now aggregates:
 
 - core surfaces: `gateway /v1/info`, `execution /v1/info`
 - supporting product-edge surfaces: `consumer-entry-api /health`, `matrix-entry-adapter /health`
+
+Provider-backed execution failures can be drilled from the execution service with `GET /v1/executions/provider-failures`, and dead-letter-only incidents with `GET /v1/executions/provider-dead-letters`; acknowledged historical items remain queryable with `include_acknowledged=true` / `acknowledged_only=true`, while active signals ignore acked items. A single item can be acknowledged with `POST /v1/executions/:id/provider-failure/ack` (or the dead-letter alias) after the root cause is linked to an external incident or manually closed. `check-operator-signals.sh` treats active `execution:provider_dead_letters` and `execution:provider_retry_budget_exhausted` as critical by default. Execution-service also exposes a native `GET /metrics` Prometheus text endpoint for runtime counters, lifecycle status gauges, queued-worker gauges, provider failure gauges, and operator signal gauges; gateway-service exposes native `GET /metrics` for gateway runtime counters and operator signal gauges; identity/ledger/audit/capability expose minimal native `GET /metrics` up/config/count gauges.
 
 It also promotes a small set of entry-surface metrics into warn signals via env-driven thresholds:
 
@@ -405,4 +527,3 @@ They are still fine for:
 But they are **not** the default regression authority anymore.
 
 When they do inspect gateway invocation reads, the retained compatibility/manual scripts now also emit a standardized nested execution snapshot object (for example `execution_snapshot`, `initial_execution_snapshot`, `final_execution_snapshot`, or `<flow>_execution_snapshot_*`) via the shared `Get-CexInvocationExecutionSnapshotObject` helper in `_dev-helpers.ps1`. Their top-level JSON result envelopes are also now normalized through the shared `New-CexLegacyResultObject` helper, so the common `ok=true` + ordered payload shape no longer has to be reassembled in each script. On top of that, the repeated nested account and invocation/execution state fragments are now starting to converge on shared helpers like `Get-CexAccountStateObject`, `Get-CexInvocationExecutionStateObject`, `Get-CexFlowCheckpointObject`, and `Get-CexFlowCheckpointState`; repeated health / audit-event outputs can now use `Get-CexHealthStateObject` and `Get-CexAuditEventTypeList`; approval DB row fragments can now converge on `Get-CexApprovalDbStateObject` / `Get-CexApprovalDbStateFromPsqlLine`; and repeated operational steps like creating ledger accounts, submitting gateway invocations, or restarting the detached local runtime can now use `New-CexLedgerAccount`, `New-CexGatewayInvocation`, and `Restart-CexDetachedRuntime` instead of each script hand-rolling the same POST bodies, process invocations, and error-handling shims.
-

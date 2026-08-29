@@ -2,9 +2,9 @@
 # Bundle kind: alertmanager
 # Source files:
 # - ops/monitoring/alertmanager/consumer-entry-identity-governance-routing.example.yml
-# - ops/monitoring/alertmanager/core-runtime-operator-signals-from-wrapper-routing.example.yml
 # - ops/monitoring/alertmanager/product-edge-operator-signals-from-wrapper-routing.example.yml
 # - ops/monitoring/alertmanager/monitoring-deploy-operator-signals-from-wrapper-routing.example.yml
+# - ops/monitoring/alertmanager/core-runtime-operator-signals-from-wrapper-routing.example.yml
 
 route:
   receiver: cex-operator-chat
@@ -29,14 +29,6 @@ route:
     receiver: cex-operator-chat
     continue: false
   - matchers:
-    - severity="critical"
-    receiver: cex-operator-page
-    continue: false
-  - matchers:
-    - severity="warning"
-    receiver: cex-operator-chat
-    continue: false
-  - matchers:
     - service="consumer-entry-api"
     - family="entry-abuse"
     receiver: cex-operator-chat
@@ -47,11 +39,25 @@ route:
     receiver: cex-operator-chat
     continue: false
   - matchers:
+    - service="consumer-entry-api"
+    - family="product-edge"
+    - component="trillionnium-route-runner-handoff"
+    receiver: cex-operator-chat
+    continue: false
+  - matchers:
     - family="product-edge"
     receiver: cex-operator-chat
     continue: false
   - matchers:
     - family="monitoring-deploy"
+    receiver: cex-operator-chat
+    continue: false
+  - matchers:
+    - severity="critical"
+    receiver: cex-operator-page
+    continue: false
+  - matchers:
+    - severity="warning"
     receiver: cex-operator-chat
     continue: false
 receivers:
@@ -95,24 +101,6 @@ inhibit_rules:
   - service
   - family
 - source_matchers:
-  - alertname="CexExecutionInfoEndpointUnreachable"
-  target_matchers:
-  - alertname="CexGatewayInvocationCreateUpstreamFailures"
-  equal:
-  - family
-- source_matchers:
-  - alertname="CexExecutionRefundFailures"
-  target_matchers:
-  - alertname="CexGatewayInvocationCreateUpstreamFailures"
-  equal:
-  - family
-- source_matchers:
-  - alertname="CexExecutionRefundFailures"
-  target_matchers:
-  - alertname="CexExecutionAuditFailures"
-  equal:
-  - service
-- source_matchers:
   - alertname="CexConsumerEntryHealthEndpointUnreachable"
   target_matchers:
   - alertname="CexConsumerEntryHealthStatusNotOk"
@@ -139,5 +127,23 @@ inhibit_rules:
   - alertname="CexMonitoringDeployMetadataUnreadable"
   target_matchers:
   - alertname="CexMonitoringDeployPostActionStatus"
+  equal:
+  - service
+- source_matchers:
+  - alertname="CexExecutionInfoEndpointUnreachable"
+  target_matchers:
+  - alertname="CexGatewayInvocationCreateUpstreamFailures"
+  equal:
+  - family
+- source_matchers:
+  - alertname="CexExecutionRefundFailures"
+  target_matchers:
+  - alertname="CexGatewayInvocationCreateUpstreamFailures"
+  equal:
+  - family
+- source_matchers:
+  - alertname="CexExecutionRefundFailures"
+  target_matchers:
+  - alertname="CexExecutionAuditFailures"
   equal:
   - service

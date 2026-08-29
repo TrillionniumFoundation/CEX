@@ -1,0 +1,82 @@
+{
+  "contract_version": "trillionnium_first_beta_cohort_evidence_v1",
+  "template": true,
+  "synthetic": false,
+  "cohort_name": "first-beta-YYYYMMDD",
+  "operator_attestation": {
+    "real_human_participants": true,
+    "fresh_or_reset_sessions": true,
+    "no_staff_coaching_during_task": true,
+    "raw_notes_retained": true,
+    "no_secrets_or_personal_data_in_evidence": true,
+    "notes": "Replace this with a sanitized operator note after collecting real, consented participant observations."
+  },
+  "cohort": {
+    "study_id": "first-beta-YYYYMMDD",
+    "started_at": "YYYY-MM-DDTHH:MM:SSZ",
+    "environment": "production-like-beta-or-local-production",
+    "build_or_commit": "COMMIT_SHA_OR_BUILD_ID",
+    "facilitator_role": "operator-role-only"
+  },
+  "participants": [
+    {
+      "participant_id": "p01",
+      "consent_obtained": true,
+      "fresh_or_reset_session": true,
+      "staff_prompted_next_click": false,
+      "steps": {
+        "first_screen_understood": true,
+        "opened_primary_cta": true,
+        "entered_tactics_board": true,
+        "trained_before_attack": true,
+        "completed_first_route": true,
+        "reward_claimed": true,
+        "next_route_opened": true
+      },
+      "timings_seconds": {
+        "time_to_first_action": 45,
+        "time_to_reward_claim": 420
+      },
+      "confusion_events": [
+        {
+          "category": "replace_with_real_category",
+          "step": "replace_with_real_step",
+          "severity": "minor",
+          "note": "Use product-friction notes only; do not include personal data."
+        }
+      ],
+      "dropoff_step": null,
+      "observer_notes": "Sanitized UX observation only."
+    },
+    {
+      "participant_id": "p02",
+      "consent_obtained": true,
+      "fresh_or_reset_session": true,
+      "staff_prompted_next_click": false,
+      "steps": {
+        "first_screen_understood": true,
+        "opened_primary_cta": true,
+        "entered_tactics_board": true,
+        "trained_before_attack": true,
+        "completed_first_route": true,
+        "reward_claimed": true,
+        "next_route_opened": true
+      },
+      "timings_seconds": {
+        "time_to_first_action": 60,
+        "time_to_reward_claim": 480
+      },
+      "confusion_events": [],
+      "dropoff_step": null,
+      "observer_notes": "Duplicate this participant object until there are 5-10 real participants."
+    }
+  ],
+  "operator_summary": {
+    "top_friction": [
+      "Replace with real recurring friction themes after the cohort."
+    ],
+    "recommended_fixes_before_next_cohort": [
+      "Replace with real product follow-ups."
+    ]
+  }
+}

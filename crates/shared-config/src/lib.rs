@@ -180,23 +180,36 @@ pub fn build_single_scoped_admin_token(
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ScopedAdminTokenDevDefault<'a> {
+    pub token: &'a str,
+    pub actor_id: &'a str,
+    pub actor_label: &'a str,
+    pub scopes: &'a [&'a str],
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ScopedAdminTokenEnvConfig<'a> {
+    pub bundle_env_names: &'a [&'a str],
+    pub bundle_default_actor_id: &'a str,
+    pub bundle_default_actor_label: &'a str,
+    pub single_env_names: &'a [&'a str],
+    pub single_default_actor_id: &'a str,
+    pub single_default_actor_label: &'a str,
+    pub single_default_scopes: &'a [&'a str],
+    pub dev_default: Option<ScopedAdminTokenDevDefault<'a>>,
+}
+
 pub fn load_scoped_admin_tokens_from_env(
-    bundle_env_names: &[&str],
-    bundle_default_actor_id: &str,
-    bundle_default_actor_label: &str,
-    single_env_names: &[&str],
-    single_default_actor_id: &str,
-    single_default_actor_label: &str,
-    single_default_scopes: &[&str],
-    dev_default: Option<(&str, &str, &str, &[&str])>,
+    config: ScopedAdminTokenEnvConfig<'_>,
 ) -> Vec<ScopedAdminToken> {
-    for env_name in bundle_env_names {
+    for env_name in config.bundle_env_names {
         if let Some(raw) = get_trimmed_env(env_name) {
             if let Ok(records) = parse_scoped_admin_token_records(&raw) {
                 let tokens = normalize_scoped_admin_token_records(
                     records,
-                    bundle_default_actor_id,
-                    bundle_default_actor_label,
+                    config.bundle_default_actor_id,
+                    config.bundle_default_actor_label,
                 );
                 if !tokens.is_empty() {
                     return tokens;
@@ -205,24 +218,24 @@ pub fn load_scoped_admin_tokens_from_env(
         }
     }
 
-    for env_name in single_env_names {
+    for env_name in config.single_env_names {
         if let Some(value) = get_trimmed_env(env_name) {
             return vec![build_single_scoped_admin_token(
                 value,
-                single_default_actor_id,
-                single_default_actor_label,
-                single_default_scopes,
+                config.single_default_actor_id,
+                config.single_default_actor_label,
+                config.single_default_scopes,
             )];
         }
     }
 
     if app_env_is_dev() {
-        if let Some((token, actor_id, actor_label, scopes)) = dev_default {
+        if let Some(default) = config.dev_default {
             return vec![build_single_scoped_admin_token(
-                token.to_string(),
-                actor_id,
-                actor_label,
-                scopes,
+                default.token.to_string(),
+                default.actor_id,
+                default.actor_label,
+                default.scopes,
             )];
         }
     }
@@ -231,75 +244,75 @@ pub fn load_scoped_admin_tokens_from_env(
 }
 
 pub fn load_identity_scoped_admin_tokens() -> Vec<ScopedAdminToken> {
-    load_scoped_admin_tokens_from_env(
-        &["IDENTITY_ADMIN_TOKENS_JSON"],
-        "identity-admin",
-        "Identity Admin",
-        &["IDENTITY_ADMIN_TOKEN"],
-        "identity-admin",
-        "Identity Admin",
-        &["api_keys:manage", "audit:read"],
-        Some((
-            "local-dev-admin-token",
-            "local-dev-admin",
-            "Local Dev Admin",
-            &["api_keys:manage", "audit:read"],
-        )),
-    )
+    load_scoped_admin_tokens_from_env(ScopedAdminTokenEnvConfig {
+        bundle_env_names: &["IDENTITY_ADMIN_TOKENS_JSON"],
+        bundle_default_actor_id: "identity-admin",
+        bundle_default_actor_label: "Identity Admin",
+        single_env_names: &["IDENTITY_ADMIN_TOKEN"],
+        single_default_actor_id: "identity-admin",
+        single_default_actor_label: "Identity Admin",
+        single_default_scopes: &["api_keys:manage", "audit:read"],
+        dev_default: Some(ScopedAdminTokenDevDefault {
+            token: "local-dev-admin-token",
+            actor_id: "local-dev-admin",
+            actor_label: "Local Dev Admin",
+            scopes: &["api_keys:manage", "audit:read"],
+        }),
+    })
 }
 
 pub fn load_audit_scoped_admin_tokens() -> Vec<ScopedAdminToken> {
-    load_scoped_admin_tokens_from_env(
-        &["AUDIT_ADMIN_TOKENS_JSON", "IDENTITY_ADMIN_TOKENS_JSON"],
-        "audit-admin",
-        "Audit Admin",
-        &["AUDIT_ADMIN_TOKEN", "IDENTITY_ADMIN_TOKEN"],
-        "local-dev-admin",
-        "Local Dev Admin",
-        &["api_keys:manage", "audit:read"],
-        Some((
-            "local-dev-admin-token",
-            "local-dev-admin",
-            "Local Dev Admin",
-            &["api_keys:manage", "audit:read"],
-        )),
-    )
+    load_scoped_admin_tokens_from_env(ScopedAdminTokenEnvConfig {
+        bundle_env_names: &["AUDIT_ADMIN_TOKENS_JSON", "IDENTITY_ADMIN_TOKENS_JSON"],
+        bundle_default_actor_id: "audit-admin",
+        bundle_default_actor_label: "Audit Admin",
+        single_env_names: &["AUDIT_ADMIN_TOKEN", "IDENTITY_ADMIN_TOKEN"],
+        single_default_actor_id: "local-dev-admin",
+        single_default_actor_label: "Local Dev Admin",
+        single_default_scopes: &["api_keys:manage", "audit:read"],
+        dev_default: Some(ScopedAdminTokenDevDefault {
+            token: "local-dev-admin-token",
+            actor_id: "local-dev-admin",
+            actor_label: "Local Dev Admin",
+            scopes: &["api_keys:manage", "audit:read"],
+        }),
+    })
 }
 
 pub fn load_execution_scoped_admin_tokens() -> Vec<ScopedAdminToken> {
-    load_scoped_admin_tokens_from_env(
-        &["EXECUTION_ADMIN_TOKENS_JSON", "IDENTITY_ADMIN_TOKENS_JSON"],
-        "execution-admin",
-        "Execution Admin",
-        &["EXECUTION_ADMIN_TOKEN", "IDENTITY_ADMIN_TOKEN"],
-        "local-dev-admin",
-        "Local Dev Admin",
-        &["executions:manage", "executions:read"],
-        Some((
-            "local-dev-admin-token",
-            "local-dev-admin",
-            "Local Dev Admin",
-            &["executions:manage", "executions:read"],
-        )),
-    )
+    load_scoped_admin_tokens_from_env(ScopedAdminTokenEnvConfig {
+        bundle_env_names: &["EXECUTION_ADMIN_TOKENS_JSON", "IDENTITY_ADMIN_TOKENS_JSON"],
+        bundle_default_actor_id: "execution-admin",
+        bundle_default_actor_label: "Execution Admin",
+        single_env_names: &["EXECUTION_ADMIN_TOKEN", "IDENTITY_ADMIN_TOKEN"],
+        single_default_actor_id: "local-dev-admin",
+        single_default_actor_label: "Local Dev Admin",
+        single_default_scopes: &["executions:manage", "executions:read"],
+        dev_default: Some(ScopedAdminTokenDevDefault {
+            token: "local-dev-admin-token",
+            actor_id: "local-dev-admin",
+            actor_label: "Local Dev Admin",
+            scopes: &["executions:manage", "executions:read"],
+        }),
+    })
 }
 
 pub fn load_ledger_scoped_admin_tokens() -> Vec<ScopedAdminToken> {
-    load_scoped_admin_tokens_from_env(
-        &["LEDGER_ADMIN_TOKENS_JSON", "IDENTITY_ADMIN_TOKENS_JSON"],
-        "ledger-admin",
-        "Ledger Admin",
-        &["LEDGER_ADMIN_TOKEN", "IDENTITY_ADMIN_TOKEN"],
-        "local-dev-admin",
-        "Local Dev Admin",
-        &["ledger:manage", "ledger:read"],
-        Some((
-            "local-dev-admin-token",
-            "local-dev-admin",
-            "Local Dev Admin",
-            &["ledger:manage", "ledger:read"],
-        )),
-    )
+    load_scoped_admin_tokens_from_env(ScopedAdminTokenEnvConfig {
+        bundle_env_names: &["LEDGER_ADMIN_TOKENS_JSON", "IDENTITY_ADMIN_TOKENS_JSON"],
+        bundle_default_actor_id: "ledger-admin",
+        bundle_default_actor_label: "Ledger Admin",
+        single_env_names: &["LEDGER_ADMIN_TOKEN", "IDENTITY_ADMIN_TOKEN"],
+        single_default_actor_id: "local-dev-admin",
+        single_default_actor_label: "Local Dev Admin",
+        single_default_scopes: &["ledger:manage", "ledger:read"],
+        dev_default: Some(ScopedAdminTokenDevDefault {
+            token: "local-dev-admin-token",
+            actor_id: "local-dev-admin",
+            actor_label: "Local Dev Admin",
+            scopes: &["ledger:manage", "ledger:read"],
+        }),
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -624,7 +637,7 @@ mod tests {
             &headers,
             &admins,
             &["api_keys:read", "api_keys:manage"],
-            |admin, scope| token_has_scope(admin, scope),
+            token_has_scope,
             "identity admin token not configured",
             Some("set identity admin env"),
         )

@@ -1,0 +1,32 @@
+services:
+  hepta:
+    image: ${HEPTA_IMAGE:?immutable HEPTA_IMAGE digest is required}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid,nodev
+    ports:
+      - "127.0.0.1:7011:7011"
+    environment:
+      HEPTA_BIND_ADDR: 0.0.0.0:7011
+      HEPTA_DATABASE_URL: ${HEPTA_DATABASE_URL:?required}
+      HEPTA_OPERATOR_TOKEN: ${HEPTA_OPERATOR_TOKEN:?required}
+      HEPTA_NAKAMA_TOKEN: ${HEPTA_NAKAMA_TOKEN:?required}
+      HEPTA_NAKAMA_AUTHORIZATION_ISSUER_KEY_ID: ${HEPTA_NAKAMA_AUTHORIZATION_ISSUER_KEY_ID:?trusted issuer key id required}
+      HEPTA_NAKAMA_AUTHORIZATION_ED25519_SEED_BASE64: ${HEPTA_NAKAMA_AUTHORIZATION_ED25519_SEED_BASE64:?secret-manager 32-byte seed required}
+      HEPTA_TRNM_TOKEN: ${HEPTA_TRNM_TOKEN:?required}
+      HEPTA_TRNM_VALIDATOR_SETS_JSON: ${HEPTA_TRNM_VALIDATOR_SETS_JSON:?offline finality trust anchors required}
+      RUST_LOG: hepta_research_league=info
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7011/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"

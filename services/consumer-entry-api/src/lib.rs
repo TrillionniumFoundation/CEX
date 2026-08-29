@@ -1,9 +1,10 @@
-#![recursion_limit = "256"]
+#![recursion_limit = "512"]
+#![allow(clippy::result_large_err, clippy::too_many_arguments)]
 
 use axum::{
-    extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
+    extract::{Form, Path, Query, State},
+    http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode},
+    response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -14,27 +15,82 @@ const DEFAULT_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 const DEFAULT_RATE_LIMIT_MAX_REQUESTS: usize = 30;
 const DEFAULT_REPLAY_WINDOW_SECS: u64 = 600;
 const DEFAULT_REPLAY_CACHE_SIZE: usize = 2048;
+const DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS: u64 = 2500;
+const DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS: u64 = 3600;
 const DEFAULT_SESSION_AUTH_MAX_CLOCK_SKEW_SECS: u64 = 300;
 const DEFAULT_SESSION_AUTH_MAX_TTL_SECS: u64 = 900;
+const DEFAULT_GAME_ACCOUNT_PASSWORD_MIN_CHARS: usize = 8;
+const DEFAULT_GAME_ACCOUNT_AUTH_RATE_LIMIT_MAX_REQUESTS: usize = 5;
+const WORLD_MAP_RUM_RECENT_WINDOW: usize = 512;
 const USER_SESSION_ASSERTION_HEADER: &str = "x-cex-user-session";
 const USER_SESSION_SIGNATURE_HEADER: &str = "x-cex-user-session-signature";
 use chrono::Utc;
 use hmac::{Hmac, Mac};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
+use sqlx::postgres::PgPoolOptions;
 use std::{
-    collections::{HashMap, VecDeque},
-    env,
+    collections::{HashMap, HashSet, VecDeque},
+    env, fs,
+    path::Path as StdPath,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
-        RwLock as StdRwLock,
+        Arc, RwLock as StdRwLock,
     },
-    time::UNIX_EPOCH,
+    time::{Duration, UNIX_EPOCH},
 };
 use tokio::sync::{Mutex, RwLock};
+
+mod world_indexes;
+use world_indexes::{build_world_indexes, indexed_recent, indexed_sorted, WorldIndexes};
+mod world_route_projection;
+use world_route_projection::*;
+mod world_map_optimization;
+use world_map_optimization::*;
+mod real_world_map_shell;
+use real_world_map_shell::*;
+mod openstreetmap_geodata;
+use openstreetmap_geodata::*;
+mod world_tactics;
+use world_tactics::*;
+mod world_movement;
+use world_movement::*;
+mod world_map_projection;
+use world_map_projection::*;
+mod league_core;
+use league_core::*;
+mod league_repository;
+use league_repository::*;
+mod identity_admin_routes;
+use identity_admin_routes::*;
+mod consumer_ingress;
+use consumer_ingress::*;
+mod task_routes;
+use task_routes::*;
+mod health_metrics;
+use health_metrics::*;
+mod world_routes;
+use world_routes::*;
+mod term_exchange_backend;
+use term_exchange_backend::*;
+mod term_exchange_kernel_routes;
+use term_exchange_kernel_routes::*;
+mod world_commerce_routes;
+use world_commerce_routes::*;
+mod trillionnium_world_adapters;
+use trillionnium_world_adapters::*;
+mod world_web_shell;
+use world_web_shell::*;
+mod league_routes;
+use league_routes::*;
+mod account_client_shell;
+use account_client_shell::*;
+mod client_app_shell;
+use client_app_shell::*;
+mod client_surfaces;
+use client_surfaces::*;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -49,9 +105,25 @@ struct AppStateInner {
     identity_binding_store: RwLock<IdentityBindingStore>,
     identity_binding_audit_state: RwLock<IdentityBindingAuditState>,
     session_auth_issuer_registry_state: StdRwLock<SessionAuthIssuerRegistryRuntimeState>,
+    league_state: Mutex<LeagueState>,
+    game_account_registry: Mutex<GameAccountRegistry>,
+    health_world_readiness_cache_generation: AtomicU64,
+    health_world_readiness_cache: Mutex<Option<HealthWorldReadinessBundleCache>>,
     rate_limits: Mutex<RateLimitCache>,
     replay_cache: Mutex<ReplayCache>,
     metrics: ConsumerEntryMetrics,
+}
+
+#[derive(Debug, Clone)]
+struct WorldMapRumObservation {
+    surface_class: String,
+    device_class: String,
+    sample_kind_class: String,
+    first_map_interactive_ms: Option<u64>,
+    viewport_refresh_ms: Option<u64>,
+    focus_to_action_rail_ms: Option<u64>,
+    main_thread_long_task_ms: Option<u64>,
+    tile_error_count: u64,
 }
 
 #[derive(Debug, Default)]
@@ -74,7 +146,32 @@ struct ConsumerEntryMetrics {
     ingress_auth_failures: AtomicU64,
     session_auth_successes: AtomicU64,
     session_auth_failures: AtomicU64,
+    game_account_register_successes: AtomicU64,
+    game_account_login_successes: AtomicU64,
+    game_account_login_failures: AtomicU64,
+    game_account_logout_successes: AtomicU64,
+    game_account_profile_updates: AtomicU64,
+    game_account_password_change_successes: AtomicU64,
+    game_account_password_change_failures: AtomicU64,
+    game_account_session_refresh_successes: AtomicU64,
+    game_account_session_revoke_successes: AtomicU64,
+    game_account_auth_rate_limited: AtomicU64,
     replay_hits: AtomicU64,
+    world_map_rum_samples: AtomicU64,
+    world_map_rum_first_interactive_ms_sum: AtomicU64,
+    world_map_rum_first_interactive_ms_max: AtomicU64,
+    world_map_rum_viewport_refresh_ms_sum: AtomicU64,
+    world_map_rum_viewport_refresh_ms_max: AtomicU64,
+    world_map_rum_focus_to_action_ms_sum: AtomicU64,
+    world_map_rum_focus_to_action_ms_max: AtomicU64,
+    world_map_rum_long_task_ms_sum: AtomicU64,
+    world_map_rum_long_task_ms_max: AtomicU64,
+    world_map_rum_tile_errors: AtomicU64,
+    world_map_rum_recent: std::sync::Mutex<VecDeque<WorldMapRumObservation>>,
+    world_map_delta_requests: AtomicU64,
+    world_map_delta_noop_responses: AtomicU64,
+    world_map_delta_snapshot_fallbacks: AtomicU64,
+    world_map_delta_failures: AtomicU64,
 }
 
 impl ConsumerEntryMetrics {
@@ -162,8 +259,111 @@ impl ConsumerEntryMetrics {
         self.session_auth_failures.fetch_add(1, Ordering::Relaxed);
     }
 
+    fn inc_game_account_register_successes(&self) {
+        self.game_account_register_successes
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_game_account_login_successes(&self) {
+        self.game_account_login_successes
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_game_account_login_failures(&self) {
+        self.game_account_login_failures
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_game_account_logout_successes(&self) {
+        self.game_account_logout_successes
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_game_account_profile_updates(&self) {
+        self.game_account_profile_updates
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_game_account_password_change_successes(&self) {
+        self.game_account_password_change_successes
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_game_account_password_change_failures(&self) {
+        self.game_account_password_change_failures
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_game_account_session_refresh_successes(&self) {
+        self.game_account_session_refresh_successes
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_game_account_session_revoke_successes(&self) {
+        self.game_account_session_revoke_successes
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_game_account_auth_rate_limited(&self) {
+        self.game_account_auth_rate_limited
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     fn inc_replay_hits(&self) {
         self.replay_hits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_world_map_delta_requests(&self) {
+        self.world_map_delta_requests
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_world_map_delta_noop_responses(&self) {
+        self.world_map_delta_noop_responses
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_world_map_delta_snapshot_fallbacks(&self) {
+        self.world_map_delta_snapshot_fallbacks
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_world_map_rum(&self, sample: &WorldMapRumRequest) {
+        self.world_map_rum_samples.fetch_add(1, Ordering::Relaxed);
+        if let Some(value) = sample.first_map_interactive_ms {
+            let value = value.min(60_000);
+            self.world_map_rum_first_interactive_ms_sum
+                .fetch_add(value, Ordering::Relaxed);
+            atomic_max(&self.world_map_rum_first_interactive_ms_max, value);
+        }
+        if let Some(value) = sample.viewport_refresh_ms {
+            let value = value.min(60_000);
+            self.world_map_rum_viewport_refresh_ms_sum
+                .fetch_add(value, Ordering::Relaxed);
+            atomic_max(&self.world_map_rum_viewport_refresh_ms_max, value);
+        }
+        if let Some(value) = sample.focus_to_action_rail_ms {
+            let value = value.min(60_000);
+            self.world_map_rum_focus_to_action_ms_sum
+                .fetch_add(value, Ordering::Relaxed);
+            atomic_max(&self.world_map_rum_focus_to_action_ms_max, value);
+        }
+        if let Some(value) = sample.main_thread_long_task_ms {
+            let value = value.min(60_000);
+            self.world_map_rum_long_task_ms_sum
+                .fetch_add(value, Ordering::Relaxed);
+            atomic_max(&self.world_map_rum_long_task_ms_max, value);
+        }
+        self.world_map_rum_tile_errors.fetch_add(
+            sample.tile_error_count.unwrap_or(0).min(10_000),
+            Ordering::Relaxed,
+        );
+        if let Ok(mut recent) = self.world_map_rum_recent.lock() {
+            recent.push_back(WorldMapRumObservation::from_request(sample));
+            while recent.len() > WORLD_MAP_RUM_RECENT_WINDOW {
+                recent.pop_front();
+            }
+        }
     }
 
     fn snapshot(&self) -> Value {
@@ -186,8 +386,503 @@ impl ConsumerEntryMetrics {
             "ingress_auth_failures": self.ingress_auth_failures.load(Ordering::Relaxed),
             "session_auth_successes": self.session_auth_successes.load(Ordering::Relaxed),
             "session_auth_failures": self.session_auth_failures.load(Ordering::Relaxed),
+            "game_account_auth": self.game_account_auth_snapshot(),
             "replay_hits": self.replay_hits.load(Ordering::Relaxed),
+            "world_map_rum": self.world_map_rum_snapshot(),
+            "world_map_delta": self.world_map_delta_snapshot(),
         })
+    }
+
+    fn game_account_auth_snapshot(&self) -> Value {
+        json!({
+            "contract_version": "trillionnium_game_account_auth_observability_v1",
+            "register_successes": self.game_account_register_successes.load(Ordering::Relaxed),
+            "login_successes": self.game_account_login_successes.load(Ordering::Relaxed),
+            "login_failures": self.game_account_login_failures.load(Ordering::Relaxed),
+            "logout_successes": self.game_account_logout_successes.load(Ordering::Relaxed),
+            "profile_updates": self.game_account_profile_updates.load(Ordering::Relaxed),
+            "password_change_successes": self.game_account_password_change_successes.load(Ordering::Relaxed),
+            "password_change_failures": self.game_account_password_change_failures.load(Ordering::Relaxed),
+            "session_refresh_successes": self.game_account_session_refresh_successes.load(Ordering::Relaxed),
+            "session_revoke_successes": self.game_account_session_revoke_successes.load(Ordering::Relaxed),
+            "auth_rate_limited": self.game_account_auth_rate_limited.load(Ordering::Relaxed),
+            "passwords_tokens_or_cookie_values_logged": false,
+        })
+    }
+
+    fn world_map_delta_snapshot(&self) -> Value {
+        let requests = self.world_map_delta_requests.load(Ordering::Relaxed);
+        let noop_responses = self.world_map_delta_noop_responses.load(Ordering::Relaxed);
+        let snapshot_fallbacks = self
+            .world_map_delta_snapshot_fallbacks
+            .load(Ordering::Relaxed);
+        let failures = self.world_map_delta_failures.load(Ordering::Relaxed);
+        let percent = |value: u64| {
+            if requests == 0 {
+                0
+            } else {
+                ((value as f64 / requests.max(1) as f64) * 100.0).round() as u64
+            }
+        };
+        json!({
+            "contract_version": TRILLIONNIUM_WORLD_MAP_TRANSPORT_DELTA_CONTRACT_VERSION,
+            "requests": requests,
+            "noop_responses": noop_responses,
+            "snapshot_fallbacks": snapshot_fallbacks,
+            "failures": failures,
+            "noop_rate_percent": percent(noop_responses),
+            "snapshot_fallback_rate_percent": percent(snapshot_fallbacks),
+            "failure_rate_percent": percent(failures),
+            "snapshot_fallback_failure_rate_percent": percent(failures),
+            "entity_delta_cache_contract": "entity_group_versioned_delta_v1",
+            "failure_rate_within_target": failures == 0,
+        })
+    }
+
+    fn world_map_rum_snapshot(&self) -> Value {
+        let samples = self.world_map_rum_samples.load(Ordering::Relaxed);
+        let avg = |sum: &AtomicU64| {
+            if samples == 0 {
+                0
+            } else {
+                sum.load(Ordering::Relaxed) / samples.max(1)
+            }
+        };
+        let recent = self
+            .world_map_rum_recent
+            .lock()
+            .map(|samples| samples.iter().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        let distributions = world_map_rum_distribution_json(&recent);
+        let slo_gate = distributions
+            .get("slo_gate")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        json!({
+            "contract_version": TRILLIONNIUM_WORLD_MAP_RUNTIME_PERFORMANCE_BUDGET_CONTRACT_VERSION,
+            "sample_count": samples,
+            "first_map_interactive_avg_ms": avg(&self.world_map_rum_first_interactive_ms_sum),
+            "first_map_interactive_max_ms": self.world_map_rum_first_interactive_ms_max.load(Ordering::Relaxed),
+            "first_map_interactive_p50_ms": distributions.get("global").and_then(|global| global.get("first_map_interactive")).and_then(|metric| metric.get("p50_ms")).and_then(Value::as_u64).unwrap_or(0),
+            "first_map_interactive_p95_ms": distributions.get("global").and_then(|global| global.get("first_map_interactive")).and_then(|metric| metric.get("p95_ms")).and_then(Value::as_u64).unwrap_or(0),
+            "first_map_interactive_p99_ms": distributions.get("global").and_then(|global| global.get("first_map_interactive")).and_then(|metric| metric.get("p99_ms")).and_then(Value::as_u64).unwrap_or(0),
+            "viewport_refresh_avg_ms": avg(&self.world_map_rum_viewport_refresh_ms_sum),
+            "viewport_refresh_max_ms": self.world_map_rum_viewport_refresh_ms_max.load(Ordering::Relaxed),
+            "viewport_refresh_p50_ms": distributions.get("global").and_then(|global| global.get("viewport_refresh")).and_then(|metric| metric.get("p50_ms")).and_then(Value::as_u64).unwrap_or(0),
+            "viewport_refresh_p95_ms": distributions.get("global").and_then(|global| global.get("viewport_refresh")).and_then(|metric| metric.get("p95_ms")).and_then(Value::as_u64).unwrap_or(0),
+            "viewport_refresh_p99_ms": distributions.get("global").and_then(|global| global.get("viewport_refresh")).and_then(|metric| metric.get("p99_ms")).and_then(Value::as_u64).unwrap_or(0),
+            "focus_to_action_rail_avg_ms": avg(&self.world_map_rum_focus_to_action_ms_sum),
+            "focus_to_action_rail_max_ms": self.world_map_rum_focus_to_action_ms_max.load(Ordering::Relaxed),
+            "focus_to_action_rail_p50_ms": distributions.get("global").and_then(|global| global.get("focus_to_action_rail")).and_then(|metric| metric.get("p50_ms")).and_then(Value::as_u64).unwrap_or(0),
+            "focus_to_action_rail_p95_ms": distributions.get("global").and_then(|global| global.get("focus_to_action_rail")).and_then(|metric| metric.get("p95_ms")).and_then(Value::as_u64).unwrap_or(0),
+            "focus_to_action_rail_p99_ms": distributions.get("global").and_then(|global| global.get("focus_to_action_rail")).and_then(|metric| metric.get("p99_ms")).and_then(Value::as_u64).unwrap_or(0),
+            "main_thread_long_task_avg_ms": avg(&self.world_map_rum_long_task_ms_sum),
+            "main_thread_long_task_max_ms": self.world_map_rum_long_task_ms_max.load(Ordering::Relaxed),
+            "tile_error_count": self.world_map_rum_tile_errors.load(Ordering::Relaxed),
+            "distributions": distributions,
+            "slo_gate": slo_gate,
+            "source": "browser_real_user_measurement_endpoint",
+        })
+    }
+}
+
+impl WorldMapRumObservation {
+    fn from_request(sample: &WorldMapRumRequest) -> Self {
+        Self {
+            surface_class: normalize_world_map_rum_surface(sample.surface_id.as_deref()),
+            device_class: normalize_world_map_rum_device(sample.user_agent_class.as_deref()),
+            sample_kind_class: normalize_world_map_rum_sample_kind(sample.sample_kind.as_deref()),
+            first_map_interactive_ms: sample
+                .first_map_interactive_ms
+                .map(|value| value.min(60_000)),
+            viewport_refresh_ms: sample.viewport_refresh_ms.map(|value| value.min(60_000)),
+            focus_to_action_rail_ms: sample
+                .focus_to_action_rail_ms
+                .map(|value| value.min(60_000)),
+            main_thread_long_task_ms: sample
+                .main_thread_long_task_ms
+                .map(|value| value.min(60_000)),
+            tile_error_count: sample.tile_error_count.unwrap_or(0).min(10_000),
+        }
+    }
+}
+
+fn normalize_world_map_rum_sample_kind(sample_kind: Option<&str>) -> String {
+    let normalized = sample_kind
+        .unwrap_or("viewport_refresh")
+        .trim()
+        .to_ascii_lowercase();
+    if normalized.contains("weak")
+        || normalized.contains("offline")
+        || normalized.contains("cached_snapshot")
+        || normalized.contains("network")
+    {
+        "weak_network_cached_snapshot".to_string()
+    } else if normalized.contains("delta")
+        || normalized.contains("304")
+        || normalized.contains("noop")
+        || normalized.contains("viewport_refresh")
+    {
+        "warm_delta_or_304".to_string()
+    } else if normalized.contains("first_map_interactive")
+        || normalized.contains("runtime_ready")
+        || normalized.contains("snapshot_ready")
+    {
+        "cold_cache_interactive".to_string()
+    } else {
+        "warm_delta_or_304".to_string()
+    }
+}
+
+fn normalize_world_map_rum_surface(surface_id: Option<&str>) -> String {
+    let normalized = surface_id.unwrap_or("world").trim().to_ascii_lowercase();
+    if normalized.contains("app") {
+        "app".to_string()
+    } else {
+        "world".to_string()
+    }
+}
+
+fn normalize_world_map_rum_device(user_agent_class: Option<&str>) -> String {
+    let normalized = user_agent_class
+        .unwrap_or("desktop")
+        .trim()
+        .to_ascii_lowercase();
+    if normalized.contains("mobile")
+        || normalized.contains("android")
+        || normalized.contains("iphone")
+        || normalized.contains("ios")
+    {
+        "mobile".to_string()
+    } else {
+        "desktop".to_string()
+    }
+}
+
+fn percentile_from_sorted(values: &[u64], percentile: u64) -> u64 {
+    if values.is_empty() {
+        return 0;
+    }
+    let last = values.len() - 1;
+    let index = (last as u64 * percentile).div_ceil(100);
+    values[index.min(last as u64) as usize]
+}
+
+fn world_map_rum_metric_summary_json<F>(
+    observations: &[WorldMapRumObservation],
+    target_ms: u64,
+    extract: F,
+) -> Value
+where
+    F: Fn(&WorldMapRumObservation) -> Option<u64>,
+{
+    let mut values = observations.iter().filter_map(extract).collect::<Vec<_>>();
+    values.sort_unstable();
+    let sample_count = values.len() as u64;
+    let p50_ms = percentile_from_sorted(&values, 50);
+    let p95_ms = percentile_from_sorted(&values, 95);
+    let p99_ms = percentile_from_sorted(&values, 99);
+    json!({
+        "sample_count": sample_count,
+        "target_ms": target_ms,
+        "p50_ms": p50_ms,
+        "p95_ms": p95_ms,
+        "p99_ms": p99_ms,
+        "p95_within_target": sample_count == 0 || p95_ms <= target_ms,
+    })
+}
+
+fn world_map_rum_dimension_summary_json(
+    observations: &[WorldMapRumObservation],
+    surface_class: &str,
+    device_class: &str,
+) -> Value {
+    let sample_count = observations.len() as u64;
+    let tile_error_count = observations
+        .iter()
+        .map(|sample| sample.tile_error_count)
+        .sum::<u64>();
+    let tile_error_rate_percent = if sample_count == 0 {
+        0
+    } else {
+        ((tile_error_count as f64 / sample_count.max(1) as f64) * 100.0).round() as u64
+    };
+    let first_map_interactive = world_map_rum_metric_summary_json(observations, 2000, |sample| {
+        sample.first_map_interactive_ms
+    });
+    let viewport_refresh =
+        world_map_rum_metric_summary_json(observations, 250, |sample| sample.viewport_refresh_ms);
+    let focus_to_action_rail = world_map_rum_metric_summary_json(observations, 300, |sample| {
+        sample.focus_to_action_rail_ms
+    });
+    let main_thread_long_task = world_map_rum_metric_summary_json(observations, 100, |sample| {
+        sample.main_thread_long_task_ms
+    });
+    let metric_green = |metric: &Value| {
+        metric
+            .get("p95_within_target")
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+    };
+    json!({
+        "surface_class": surface_class,
+        "device_class": device_class,
+        "sample_count": sample_count,
+        "first_map_interactive": first_map_interactive,
+        "viewport_refresh": viewport_refresh,
+        "focus_to_action_rail": focus_to_action_rail,
+        "main_thread_long_task": main_thread_long_task,
+        "tile_error_count": tile_error_count,
+        "tile_error_rate_percent": tile_error_rate_percent,
+        "tile_error_rate_target_percent": 1,
+        "tile_error_rate_within_target": tile_error_rate_percent <= 1,
+        "green": metric_green(&first_map_interactive)
+            && metric_green(&viewport_refresh)
+            && metric_green(&focus_to_action_rail)
+            && metric_green(&main_thread_long_task)
+            && tile_error_rate_percent <= 1,
+    })
+}
+
+fn world_map_rum_filtered_summary_json(
+    observations: &[WorldMapRumObservation],
+    surface_class: &str,
+    device_class: &str,
+) -> Value {
+    let filtered = observations
+        .iter()
+        .filter(|sample| {
+            (surface_class == "all" || sample.surface_class == surface_class)
+                && (device_class == "all" || sample.device_class == device_class)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    world_map_rum_dimension_summary_json(&filtered, surface_class, device_class)
+}
+
+fn world_map_rum_matrix_bucket_json(
+    observations: &[WorldMapRumObservation],
+    surface_class: &str,
+    device_class: &str,
+    sample_kind_class: &str,
+) -> Value {
+    let sample_count = observations
+        .iter()
+        .filter(|sample| {
+            sample.surface_class == surface_class
+                && sample.device_class == device_class
+                && sample.sample_kind_class == sample_kind_class
+        })
+        .count() as u64;
+    json!({
+        "bucket_id": format!("{surface_class}_{device_class}_{sample_kind_class}"),
+        "surface_class": surface_class,
+        "device_class": device_class,
+        "sample_kind_class": sample_kind_class,
+        "sample_count": sample_count,
+        "per_bucket_min_samples": 1,
+        "observed": sample_count >= 1,
+    })
+}
+
+fn world_map_rum_sample_matrix_json(observations: &[WorldMapRumObservation]) -> Value {
+    const SURFACES: [&str; 2] = ["app", "world"];
+    const DEVICES: [&str; 2] = ["mobile", "desktop"];
+    const SAMPLE_KINDS: [&str; 3] = [
+        "cold_cache_interactive",
+        "warm_delta_or_304",
+        "weak_network_cached_snapshot",
+    ];
+    let mut buckets = Vec::new();
+    for surface in SURFACES {
+        for device in DEVICES {
+            for sample_kind in SAMPLE_KINDS {
+                buckets.push(world_map_rum_matrix_bucket_json(
+                    observations,
+                    surface,
+                    device,
+                    sample_kind,
+                ));
+            }
+        }
+    }
+    let coverage_count = buckets
+        .iter()
+        .filter(|bucket| {
+            bucket
+                .get("observed")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
+        .count() as u64;
+    let required_bucket_count = buckets.len() as u64;
+    let raw_matrix_green = coverage_count == required_bucket_count;
+    let warming = observations.len() < 30;
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_MAP_REAL_USER_RUM_MATRIX_CONTRACT_VERSION,
+        "required_surfaces": SURFACES,
+        "required_device_classes": DEVICES,
+        "required_sample_kinds": SAMPLE_KINDS,
+        "per_bucket_min_samples": 1,
+        "global_min_samples_before_enforcement": 30,
+        "required_bucket_count": required_bucket_count,
+        "coverage_count": coverage_count,
+        "missing_bucket_count": required_bucket_count.saturating_sub(coverage_count),
+        "raw_matrix_green": raw_matrix_green,
+        "green": warming || raw_matrix_green,
+        "enforcement_status": if warming { "warming_until_min_samples" } else { "enforced" },
+        "buckets": buckets,
+        "readiness_checks": [
+            "app_world_surface_split_visible",
+            "mobile_desktop_device_split_visible",
+            "cold_warm_weak_sample_kinds_visible",
+            "per_bucket_min_sample_visible",
+            "raw_matrix_verdict_visible"
+        ]
+    })
+}
+
+fn world_map_rum_distribution_json(observations: &[WorldMapRumObservation]) -> Value {
+    const RUM_SLO_MIN_ENFORCEMENT_SAMPLE_COUNT: usize = 30;
+    let global = world_map_rum_filtered_summary_json(observations, "all", "all");
+    let app = world_map_rum_filtered_summary_json(observations, "app", "all");
+    let world = world_map_rum_filtered_summary_json(observations, "world", "all");
+    let mobile = world_map_rum_filtered_summary_json(observations, "all", "mobile");
+    let desktop = world_map_rum_filtered_summary_json(observations, "all", "desktop");
+    let app_mobile = world_map_rum_filtered_summary_json(observations, "app", "mobile");
+    let app_desktop = world_map_rum_filtered_summary_json(observations, "app", "desktop");
+    let world_mobile = world_map_rum_filtered_summary_json(observations, "world", "mobile");
+    let world_desktop = world_map_rum_filtered_summary_json(observations, "world", "desktop");
+    let sample_matrix = world_map_rum_sample_matrix_json(observations);
+    let sample_matrix_green = sample_matrix
+        .get("green")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let sample_matrix_raw_green = sample_matrix
+        .get("raw_matrix_green")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let split_green = [
+        &global,
+        &app,
+        &world,
+        &mobile,
+        &desktop,
+        &app_mobile,
+        &app_desktop,
+        &world_mobile,
+        &world_desktop,
+    ]
+    .iter()
+    .all(|summary| {
+        summary
+            .get("green")
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+    }) && sample_matrix_green;
+    let enforcement_warming = observations.len() < RUM_SLO_MIN_ENFORCEMENT_SAMPLE_COUNT;
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_MAP_RUM_SLO_CONTRACT_VERSION,
+        "global": global,
+        "by_surface": {
+            "app": app,
+            "world": world,
+        },
+        "by_device_class": {
+            "mobile": mobile,
+            "desktop": desktop,
+        },
+        "by_surface_device": {
+            "app_mobile": app_mobile,
+            "app_desktop": app_desktop,
+            "world_mobile": world_mobile,
+            "world_desktop": world_desktop,
+        },
+        "sample_matrix": sample_matrix,
+        "slo_gate": {
+            "contract_version": TRILLIONNIUM_WORLD_MAP_RUM_SLO_CONTRACT_VERSION,
+            "sample_count": observations.len(),
+            "split_by_surface": ["app", "world"],
+            "split_by_device_class": ["mobile", "desktop"],
+            "split_by_sample_kind": ["cold_cache_interactive", "warm_delta_or_304", "weak_network_cached_snapshot"],
+            "first_map_interactive_target_ms": 2000,
+            "viewport_refresh_p95_target_ms": 250,
+            "focus_to_action_rail_target_ms": 300,
+            "main_thread_long_task_budget_ms": 100,
+            "tile_error_rate_target_percent": 1,
+            "green": enforcement_warming || split_green,
+            "raw_split_green": split_green,
+            "sample_matrix_contract_version": TRILLIONNIUM_WORLD_MAP_REAL_USER_RUM_MATRIX_CONTRACT_VERSION,
+            "sample_matrix_raw_green": sample_matrix_raw_green,
+            "sample_matrix_coverage_count": sample_matrix.get("coverage_count").and_then(Value::as_u64).unwrap_or(0),
+            "sample_matrix_required_bucket_count": sample_matrix.get("required_bucket_count").and_then(Value::as_u64).unwrap_or(12),
+            "sample_matrix_missing_bucket_count": sample_matrix.get("missing_bucket_count").and_then(Value::as_u64).unwrap_or(12),
+            "per_bucket_min_samples": 1,
+            "min_enforcement_sample_count": RUM_SLO_MIN_ENFORCEMENT_SAMPLE_COUNT,
+            "enforcement_status": if enforcement_warming { "warming_until_min_samples" } else { "enforced" },
+            "readiness_checks": [
+                "p50_p95_p99_quantiles_visible",
+                "app_world_surface_split_visible",
+                "mobile_desktop_device_split_visible",
+                "tile_error_rate_visible",
+                "slo_targets_bound_to_runtime_budget"
+            ]
+        }
+    })
+}
+
+fn atomic_max(target: &AtomicU64, value: u64) {
+    let mut current = target.load(Ordering::Relaxed);
+    while value > current {
+        match target.compare_exchange(current, value, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(next) => current = next,
+        }
+    }
+}
+
+fn html_resource_response(body: String, resource_contract: &'static str) -> Response {
+    let mut response = Html(body).into_response();
+    apply_resource_headers(
+        &mut response,
+        "private, max-age=30, stale-while-revalidate=120",
+        None,
+    );
+    response.headers_mut().insert(
+        HeaderName::from_static("x-trillionnium-resource-contract"),
+        HeaderValue::from_static(resource_contract),
+    );
+    response
+}
+
+fn json_resource_response(
+    value: Value,
+    cache_control: &'static str,
+    etag: Option<String>,
+) -> Response {
+    let mut response = Json(value).into_response();
+    apply_resource_headers(&mut response, cache_control, etag);
+    response
+}
+
+fn apply_resource_headers(
+    response: &mut Response,
+    cache_control: &'static str,
+    etag: Option<String>,
+) {
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(cache_control),
+    );
+    response
+        .headers_mut()
+        .insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
+    response.headers_mut().insert(
+        HeaderName::from_static("x-trillionnium-cache-contract"),
+        HeaderValue::from_static("trillionnium_world_map_payload_cache_v1"),
+    );
+    if let Some(etag) = etag.and_then(|value| HeaderValue::from_str(&value).ok()) {
+        response.headers_mut().insert(header::ETAG, etag);
     }
 }
 
@@ -532,6 +1227,1072 @@ struct ReplayEntry {
     response: Option<Value>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueMatch {
+    match_id: String,
+    title: String,
+    mode: String,
+    status: String,
+    objective: String,
+    reward: String,
+    recommended_roles: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeaguePlayer {
+    player_id: String,
+    matrix_user_id: String,
+    display_name: String,
+    class_tag: String,
+    rank_tier: String,
+    rating: i64,
+    xp: i64,
+    reputation: i64,
+    battles: i64,
+    submissions: i64,
+    wins: i64,
+    earned_credits: f64,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueMatchEntry {
+    entry_id: String,
+    match_id: String,
+    player_id: String,
+    matrix_user_id: String,
+    status: String,
+    battles_started: i64,
+    submissions: i64,
+    best_score: f64,
+    rewards_earned: f64,
+    joined_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct TermExchangeReceiptState {
+    protocol_version: String,
+    receipt_id: String,
+    intent_id: String,
+    term_id: String,
+    backend_id: String,
+    backend_kind: term_exchange_protocol::SettlementBackendKind,
+    status: term_exchange_protocol::ReceiptStatus,
+    progression_class: term_exchange_protocol::ReceiptProgressionClass,
+    settlement_reference: Option<String>,
+    ledger_entry_id: Option<String>,
+    reason: Option<String>,
+    finalized_at_epoch: i64,
+}
+
+impl From<&term_exchange_protocol::EconomicReceipt> for TermExchangeReceiptState {
+    fn from(receipt: &term_exchange_protocol::EconomicReceipt) -> Self {
+        Self {
+            protocol_version: receipt.protocol_version.clone(),
+            receipt_id: receipt.receipt_id.clone(),
+            intent_id: receipt.intent_id.clone(),
+            term_id: receipt.term_id.clone(),
+            backend_id: receipt.backend_id.clone(),
+            backend_kind: receipt.backend_kind,
+            status: receipt.status.clone(),
+            progression_class: receipt.progression_class,
+            settlement_reference: receipt.settlement_reference.clone(),
+            ledger_entry_id: receipt.ledger_entry_id.clone(),
+            reason: receipt.reason.clone(),
+            finalized_at_epoch: receipt.finalized_at_epoch,
+        }
+    }
+}
+
+fn record_league_term_exchange_receipt(
+    league: &mut LeagueState,
+    receipt: Option<TermExchangeReceiptState>,
+) {
+    if let Some(receipt) = receipt {
+        league
+            .term_exchange_receipts
+            .insert(receipt.receipt_id.clone(), receipt);
+    }
+}
+
+fn record_world_term_exchange_receipt(
+    world: &mut WorldState,
+    receipt: Option<TermExchangeReceiptState>,
+) {
+    if let Some(receipt) = receipt {
+        world
+            .world_term_exchange_receipts
+            .insert(receipt.receipt_id.clone(), receipt);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueBattle {
+    battle_id: String,
+    match_id: String,
+    entry_id: String,
+    player_id: String,
+    matrix_user_id: String,
+    task_id: String,
+    prompt: String,
+    status: String,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueSubmission {
+    submission_id: String,
+    match_id: String,
+    entry_id: String,
+    player_id: String,
+    matrix_user_id: String,
+    task_id: Option<String>,
+    body: String,
+    score: f64,
+    grade: String,
+    reward_amount: f64,
+    #[serde(default)]
+    judge_status: Option<String>,
+    #[serde(default)]
+    payout_status: Option<String>,
+    #[serde(default)]
+    anti_cheat_flags: Vec<String>,
+    #[serde(default)]
+    score_events: Vec<LeagueScoreEvent>,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueScoreEvent {
+    dimension: String,
+    score: f64,
+    weight: f64,
+    judge_kind: String,
+    evidence: Value,
+}
+
+#[derive(Debug, Clone)]
+struct LeagueJudgement {
+    score: f64,
+    grade: String,
+    reward_amount: f64,
+    judge_status: String,
+    payout_status: String,
+    anti_cheat_flags: Vec<String>,
+    score_events: Vec<LeagueScoreEvent>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct LeagueExternalJudgeResponse {
+    score: Option<f64>,
+    grade: Option<String>,
+    verdict: Option<String>,
+    explanation: Option<String>,
+    flags: Option<Vec<String>>,
+    evidence: Option<Value>,
+}
+
+#[derive(Debug, Clone)]
+struct LeagueExternalJudgeOutcome {
+    event: LeagueScoreEvent,
+    flags: Vec<String>,
+    grade_override: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueReward {
+    reward_id: String,
+    match_id: String,
+    entry_id: String,
+    player_id: String,
+    matrix_user_id: String,
+    amount: f64,
+    currency_unit: String,
+    reason: String,
+    #[serde(default)]
+    ledger_status: Option<String>,
+    #[serde(default)]
+    ledger_account_id: Option<String>,
+    #[serde(default)]
+    ledger_entry_id: Option<String>,
+    #[serde(default)]
+    ledger_balance_after: Option<f64>,
+    #[serde(default)]
+    ledger_error: Option<String>,
+    #[serde(default)]
+    review_status: Option<String>,
+    #[serde(default)]
+    reviewed_by: Option<String>,
+    #[serde(default)]
+    review_note: Option<String>,
+    #[serde(default)]
+    reviewed_at_epoch: Option<i64>,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueInventoryItem {
+    item_id: String,
+    player_id: String,
+    matrix_user_id: String,
+    source_submission_id: String,
+    item_kind: String,
+    name: String,
+    rarity: String,
+    power: i64,
+    cosmetic: bool,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueSkill {
+    skill_id: String,
+    name: String,
+    skill_kind: String,
+    school_id: String,
+    description: String,
+    unlock_level: i64,
+    max_rank: i64,
+    status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueTool {
+    tool_id: String,
+    name: String,
+    tool_kind: String,
+    slot: String,
+    description: String,
+    unlock_level: i64,
+    power_bonus: i64,
+    status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueSkin {
+    skin_id: String,
+    name: String,
+    skin_kind: String,
+    description: String,
+    unlock_level: i64,
+    agent_count: i64,
+    multi_agent_capability: String,
+    status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueGuild {
+    guild_id: String,
+    name: String,
+    motto: String,
+    status: String,
+    rating: i64,
+    reputation: i64,
+    treasury_credits: f64,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueGuildMembership {
+    guild_id: String,
+    player_id: String,
+    matrix_user_id: String,
+    role: String,
+    joined_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueRaidContribution {
+    contribution_id: String,
+    match_id: String,
+    guild_id: Option<String>,
+    player_id: String,
+    matrix_user_id: String,
+    room_id: Option<String>,
+    role: String,
+    body: String,
+    contribution_score: f64,
+    progress_delta: f64,
+    #[serde(default)]
+    payout_status: Option<String>,
+    #[serde(default)]
+    anti_cheat_flags: Vec<String>,
+    #[serde(default)]
+    score_events: Vec<LeagueScoreEvent>,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueRaidRosterSlot {
+    slot_id: String,
+    match_id: String,
+    guild_id: Option<String>,
+    player_id: String,
+    matrix_user_id: String,
+    room_id: Option<String>,
+    role: String,
+    hero_id: String,
+    status: String,
+    joined_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldZone {
+    zone_id: String,
+    name: String,
+    status: String,
+    theme: String,
+    mirror_kind: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldLocation {
+    location_id: String,
+    zone_id: String,
+    name: String,
+    location_kind: String,
+    description: String,
+    status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldEntity {
+    entity_id: String,
+    location_id: String,
+    name: String,
+    entity_kind: String,
+    role: String,
+    status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldAsset {
+    asset_id: String,
+    owner_matrix_user_id: String,
+    location_id: String,
+    asset_kind: String,
+    name: String,
+    status: String,
+    value_score: i64,
+    #[serde(default)]
+    upgrade_level: i64,
+    #[serde(default)]
+    upgrade_points: i64,
+    #[serde(default)]
+    last_upgrade_kind: Option<String>,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldAssetUpgrade {
+    upgrade_id: String,
+    asset_id: String,
+    matrix_user_id: String,
+    body: String,
+    upgrade_kind: String,
+    score: f64,
+    grade: String,
+    judge_status: String,
+    status: String,
+    value_delta: i64,
+    level_before: i64,
+    level_after: i64,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldCompany {
+    company_id: String,
+    owner_matrix_user_id: String,
+    asset_id: String,
+    location_id: String,
+    name: String,
+    company_kind: String,
+    status: String,
+    revenue_score: i64,
+    reputation_score: i64,
+    level: i64,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldShop {
+    shop_id: String,
+    company_id: String,
+    owner_matrix_user_id: String,
+    location_id: String,
+    name: String,
+    shop_kind: String,
+    status: String,
+    listing_count: i64,
+    gross_merchandise_score: i64,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldListing {
+    listing_id: String,
+    shop_id: String,
+    company_id: String,
+    owner_matrix_user_id: String,
+    asset_id: String,
+    title: String,
+    listing_kind: String,
+    status: String,
+    price_credits: i64,
+    quality_score: i64,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldEconomyEvent {
+    economy_event_id: String,
+    matrix_user_id: String,
+    event_kind: String,
+    subject_id: String,
+    credits_delta: i64,
+    reputation_delta: i64,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldPurchase {
+    purchase_id: String,
+    listing_id: String,
+    shop_id: String,
+    company_id: String,
+    buyer_matrix_user_id: String,
+    seller_matrix_user_id: String,
+    price_credits: i64,
+    status: String,
+    #[serde(default)]
+    ledger_status: Option<String>,
+    #[serde(default)]
+    ledger_account_id: Option<String>,
+    #[serde(default)]
+    ledger_entry_id: Option<String>,
+    #[serde(default)]
+    ledger_balance_after: Option<f64>,
+    #[serde(default)]
+    ledger_error: Option<String>,
+    #[serde(default)]
+    buyer_ledger_status: Option<String>,
+    #[serde(default)]
+    buyer_ledger_account_id: Option<String>,
+    #[serde(default)]
+    buyer_ledger_entry_id: Option<String>,
+    #[serde(default)]
+    buyer_ledger_balance_after: Option<f64>,
+    #[serde(default)]
+    buyer_ledger_error: Option<String>,
+    #[serde(default)]
+    buyer_consume_status: Option<String>,
+    #[serde(default)]
+    buyer_consume_entry_id: Option<String>,
+    #[serde(default)]
+    buyer_consume_balance_after: Option<f64>,
+    #[serde(default)]
+    buyer_consume_error: Option<String>,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldWorkOrder {
+    work_order_id: String,
+    purchase_id: String,
+    listing_id: String,
+    buyer_matrix_user_id: String,
+    seller_matrix_user_id: String,
+    company_id: String,
+    status: String,
+    brief: String,
+    value_score: i64,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldWorkDelivery {
+    delivery_id: String,
+    work_order_id: String,
+    matrix_user_id: String,
+    body: String,
+    score: f64,
+    judge_status: String,
+    status: String,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldWorkAcceptance {
+    acceptance_id: String,
+    work_order_id: String,
+    matrix_user_id: String,
+    body: String,
+    status: String,
+    reputation_delta: i64,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldWorkRejection {
+    rejection_id: String,
+    work_order_id: String,
+    matrix_user_id: String,
+    body: String,
+    status: String,
+    refund_status: String,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldWorkReopen {
+    reopen_id: String,
+    work_order_id: String,
+    matrix_user_id: String,
+    body: String,
+    status: String,
+    reserve_status: String,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldWorkCancellation {
+    cancellation_id: String,
+    work_order_id: String,
+    matrix_user_id: String,
+    body: String,
+    status: String,
+    refund_status: String,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldMapNode {
+    node_id: String,
+    location_id: String,
+    zone_id: String,
+    name: String,
+    node_kind: String,
+    description: String,
+    x: i64,
+    y: i64,
+    exits: HashMap<String, String>,
+    interaction_tags: Vec<String>,
+    freedom_hooks: Vec<String>,
+    status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldPlayerPosition {
+    matrix_user_id: String,
+    node_id: String,
+    location_id: String,
+    updated_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldFaction {
+    faction_id: String,
+    zone_id: String,
+    name: String,
+    faction_kind: String,
+    status: String,
+    reputation_score: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldFactionStanding {
+    standing_id: String,
+    matrix_user_id: String,
+    faction_id: String,
+    reputation_score: i64,
+    rank: String,
+    updated_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldEvent {
+    event_id: String,
+    actor_matrix_user_id: String,
+    room_id: Option<String>,
+    location_id: String,
+    event_kind: String,
+    body: String,
+    result: String,
+    impact_score: i64,
+    #[serde(default)]
+    cex_task_id: Option<String>,
+    #[serde(default)]
+    cex_status: Option<String>,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldContract {
+    contract_id: String,
+    event_id: String,
+    actor_matrix_user_id: String,
+    location_id: String,
+    task_id: String,
+    title: String,
+    body: String,
+    status: String,
+    cex_status: Option<String>,
+    value_score: i64,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldContractCompletion {
+    completion_id: String,
+    contract_id: String,
+    matrix_user_id: String,
+    body: String,
+    score: f64,
+    grade: String,
+    reward_amount: f64,
+    judge_status: String,
+    payout_status: String,
+    anti_cheat_flags: Vec<String>,
+    score_events: Vec<LeagueScoreEvent>,
+    ledger_status: Option<String>,
+    ledger_account_id: Option<String>,
+    ledger_entry_id: Option<String>,
+    ledger_balance_after: Option<f64>,
+    ledger_error: Option<String>,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldRelationship {
+    relationship_id: String,
+    from_id: String,
+    to_id: String,
+    relation_kind: String,
+    strength: i64,
+    updated_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct WorldState {
+    #[serde(default)]
+    world_zones: HashMap<String, WorldZone>,
+    #[serde(default)]
+    world_locations: HashMap<String, WorldLocation>,
+    #[serde(default)]
+    world_entities: HashMap<String, WorldEntity>,
+    #[serde(default)]
+    world_map_nodes: HashMap<String, WorldMapNode>,
+    #[serde(default)]
+    world_player_positions: HashMap<String, WorldPlayerPosition>,
+    #[serde(default)]
+    world_trillionnium_characters: HashMap<String, WorldTrillionniumCharacter>,
+    #[serde(default)]
+    world_assets: Vec<WorldAsset>,
+    #[serde(default)]
+    world_asset_upgrades: Vec<WorldAssetUpgrade>,
+    #[serde(default)]
+    world_companies: Vec<WorldCompany>,
+    #[serde(default)]
+    world_shops: Vec<WorldShop>,
+    #[serde(default)]
+    world_listings: Vec<WorldListing>,
+    #[serde(default)]
+    world_economy_events: Vec<WorldEconomyEvent>,
+    #[serde(default)]
+    world_purchases: Vec<WorldPurchase>,
+    #[serde(default)]
+    world_work_orders: Vec<WorldWorkOrder>,
+    #[serde(default)]
+    world_work_deliveries: Vec<WorldWorkDelivery>,
+    #[serde(default)]
+    world_work_acceptances: Vec<WorldWorkAcceptance>,
+    #[serde(default)]
+    world_work_rejections: Vec<WorldWorkRejection>,
+    #[serde(default)]
+    world_work_reopens: Vec<WorldWorkReopen>,
+    #[serde(default)]
+    world_work_cancellations: Vec<WorldWorkCancellation>,
+    #[serde(default)]
+    world_factions: HashMap<String, WorldFaction>,
+    #[serde(default)]
+    world_faction_standings: Vec<WorldFactionStanding>,
+    #[serde(default)]
+    world_events: Vec<WorldEvent>,
+    #[serde(default)]
+    world_contracts: Vec<WorldContract>,
+    #[serde(default)]
+    world_contract_completions: Vec<WorldContractCompletion>,
+    #[serde(default)]
+    world_relationships: Vec<WorldRelationship>,
+    #[serde(default)]
+    world_tactics_sessions: HashMap<String, WorldTacticsGameSession>,
+    #[serde(default)]
+    world_tactics_simulation_ticks: Vec<WorldTacticsSimulationTick>,
+    #[serde(default)]
+    world_term_exchange_receipts: HashMap<String, TermExchangeReceiptState>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldActionRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    location_id: Option<String>,
+    body: String,
+    message: Option<String>,
+    event_id: Option<String>,
+    capability_id: Option<String>,
+    account_id: Option<String>,
+    cex_task_id: Option<String>,
+    cex_status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LeagueDraftRequest {
+    matrix_user_id: String,
+    heroes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct LeagueState {
+    #[serde(default)]
+    matches: HashMap<String, LeagueMatch>,
+    #[serde(default)]
+    players_by_matrix_user: HashMap<String, LeaguePlayer>,
+    #[serde(default)]
+    entries: HashMap<String, LeagueMatchEntry>,
+    #[serde(default)]
+    battles: HashMap<String, LeagueBattle>,
+    #[serde(default)]
+    submissions: HashMap<String, LeagueSubmission>,
+    #[serde(default)]
+    rewards: Vec<LeagueReward>,
+    #[serde(default)]
+    player_loadouts: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    guilds: HashMap<String, LeagueGuild>,
+    #[serde(default)]
+    guild_memberships: HashMap<String, LeagueGuildMembership>,
+    #[serde(default)]
+    inventory_items: Vec<LeagueInventoryItem>,
+    #[serde(default)]
+    league_skills: HashMap<String, LeagueSkill>,
+    #[serde(default)]
+    league_tools: HashMap<String, LeagueTool>,
+    #[serde(default)]
+    league_skins: HashMap<String, LeagueSkin>,
+    #[serde(default)]
+    raid_contributions: Vec<LeagueRaidContribution>,
+    #[serde(default)]
+    raid_rosters: Vec<LeagueRaidRosterSlot>,
+    #[serde(default)]
+    term_exchange_receipts: HashMap<String, TermExchangeReceiptState>,
+    #[serde(default, flatten)]
+    world: WorldState,
+}
+
+#[derive(Debug, Deserialize)]
+struct LeagueJoinRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    display_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LeagueBattleRequest {
+    matrix_user_id: String,
+    room_id: String,
+    message: String,
+    event_id: Option<String>,
+    capability_id: Option<String>,
+    account_id: Option<String>,
+    metadata: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LeagueSubmitRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    task_id: Option<String>,
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct LeagueRaidContributionRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    role: Option<String>,
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct LeagueRaidRosterRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    role: Option<String>,
+    hero_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LeagueReviewRequest {
+    reviewer_id: Option<String>,
+    room_id: Option<String>,
+    note: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LeagueWebActionRequest {
+    action: String,
+    matrix_user_id: Option<String>,
+    csrf: Option<String>,
+    match_id: Option<String>,
+    guild_id: Option<String>,
+    role: Option<String>,
+    heroes: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldWebActionRequest {
+    matrix_user_id: Option<String>,
+    csrf: Option<String>,
+    location_id: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldTacticsCommandRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    command: String,
+    unit_id: Option<String>,
+    target_tile: Option<String>,
+    skill_id: Option<String>,
+    item_id: Option<String>,
+    target_slot: Option<String>,
+    npc_id: Option<String>,
+    task_archetype_id: Option<String>,
+    osm_game_overlay_id: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldWebTacticsCommandRequest {
+    matrix_user_id: Option<String>,
+    csrf: Option<String>,
+    command: Option<String>,
+    unit_id: Option<String>,
+    target_tile: Option<String>,
+    skill_id: Option<String>,
+    item_id: Option<String>,
+    target_slot: Option<String>,
+    npc_id: Option<String>,
+    task_archetype_id: Option<String>,
+    osm_game_overlay_id: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldContractCompleteRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldWebContractCompleteRequest {
+    matrix_user_id: Option<String>,
+    csrf: Option<String>,
+    contract_id: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldAssetUpgradeRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldWebAssetUpgradeRequest {
+    matrix_user_id: Option<String>,
+    csrf: Option<String>,
+    asset_id: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldCompanyRequest {
+    matrix_user_id: String,
+    asset_id: Option<String>,
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldWebCompanyRequest {
+    matrix_user_id: Option<String>,
+    csrf: Option<String>,
+    asset_id: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldListingRequest {
+    matrix_user_id: String,
+    company_id: Option<String>,
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldListingBuyRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldWorkDeliverRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldWorkAcceptRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldWorkRejectRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldWorkReopenRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldWorkCancelRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldWebListingRequest {
+    matrix_user_id: Option<String>,
+    csrf: Option<String>,
+    company_id: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldWebListingBuyRequest {
+    matrix_user_id: Option<String>,
+    csrf: Option<String>,
+    listing_id: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldWebWorkDeliverRequest {
+    matrix_user_id: Option<String>,
+    csrf: Option<String>,
+    work_order_id: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldWebWorkAcceptRequest {
+    matrix_user_id: Option<String>,
+    csrf: Option<String>,
+    work_order_id: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldWebWorkRejectRequest {
+    matrix_user_id: Option<String>,
+    csrf: Option<String>,
+    work_order_id: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldWebWorkReopenRequest {
+    matrix_user_id: Option<String>,
+    csrf: Option<String>,
+    work_order_id: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldWebWorkCancelRequest {
+    matrix_user_id: Option<String>,
+    csrf: Option<String>,
+    work_order_id: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LeagueWebSessionRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    session_id: Option<String>,
+    csrf: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueWebSessionClaims {
+    version: u32,
+    matrix_user_id: String,
+    room_id: Option<String>,
+    session_id: Option<String>,
+    csrf: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    game_account_session_generation: Option<u64>,
+    issued_at_epoch: i64,
+    expires_at_epoch: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldMapMoveRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    target: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldWebMapMoveRequest {
+    matrix_user_id: Option<String>,
+    csrf: Option<String>,
+    target: Option<String>,
+    response: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldMapRumRequest {
+    matrix_user_id: Option<String>,
+    surface_id: Option<String>,
+    session_id: Option<String>,
+    viewport_cursor: Option<String>,
+    sample_kind: Option<String>,
+    user_agent_class: Option<String>,
+    first_map_interactive_ms: Option<u64>,
+    viewport_refresh_ms: Option<u64>,
+    focus_to_action_rail_ms: Option<u64>,
+    main_thread_long_task_ms: Option<u64>,
+    tile_error_count: Option<u64>,
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct RateLimitCache {
     seen: HashMap<String, VecDeque<i64>>,
@@ -573,6 +2334,8 @@ pub struct ConsumerEntryConfig {
     pub bind_addr: String,
     pub cex_gateway_base_url: String,
     pub cex_gateway_api_key: String,
+    pub ledger_base_url: String,
+    pub ledger_admin_token: Option<String>,
     pub default_capability_id: Option<String>,
     pub default_account_id: Option<String>,
     pub ingress_token: Option<String>,
@@ -617,29 +2380,58 @@ pub struct ConsumerEntryConfig {
     pub replay_window_secs: u64,
     pub replay_cache_size: usize,
     pub replay_store_path: Option<String>,
+    pub league_state_path: Option<String>,
+    pub league_sql_snapshot_path: Option<String>,
+    pub league_normalized_database_url: Option<String>,
+    pub league_normalized_dual_write_enabled: bool,
+    pub league_normalized_read_switch_enabled: bool,
+    pub league_normalized_final_cutover_enabled: bool,
+    pub league_hidden_tests_enabled: bool,
+    pub league_llm_judge_url: Option<String>,
+    pub league_llm_judge_token: Option<String>,
+    pub league_llm_judge_required: bool,
+    pub league_llm_judge_timeout_ms: u64,
+    pub league_web_session_required: bool,
+    pub league_web_session_secret: Option<String>,
+    pub league_web_session_cookie_name: String,
+    pub league_web_session_ttl_secs: u64,
+    pub game_account_password_auth_enabled: bool,
+    pub game_account_registry_path: Option<String>,
+    pub game_account_password_min_chars: usize,
+    pub game_account_auth_rate_limit_max_requests: usize,
+    pub game_account_local_domain: String,
 }
 
 impl ConsumerEntryConfig {
     pub fn from_env() -> Self {
+        let runtime_profile = RuntimeProfile::from_env();
         let session_auth_issuer_registry_path = first_present_env(&[
             "CONSUMER_ENTRY_SESSION_AUTH_ISSUER_REGISTRY_PATH",
             "CEX_SESSION_AUTH_ISSUER_REGISTRY_PATH",
         ]);
-        let (
-            session_auth_issuer_registry_metadata,
-            session_auth_issuer_registry,
-        ) = load_session_auth_issuer_registry(session_auth_issuer_registry_path.as_deref());
+        let (session_auth_issuer_registry_metadata, session_auth_issuer_registry) =
+            load_session_auth_issuer_registry(session_auth_issuer_registry_path.as_deref());
         let session_auth_issuer_registry_load_error =
             session_auth_issuer_registry_metadata.load_error.clone();
 
         Self {
-            runtime_profile: RuntimeProfile::from_env(),
+            runtime_profile,
             bind_addr: env::var("CONSUMER_ENTRY_BIND_ADDR")
                 .unwrap_or_else(|_| "127.0.0.1:8090".to_string()),
             cex_gateway_base_url: env::var("CEX_GATEWAY_BASE_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string()),
             cex_gateway_api_key: env::var("CEX_GATEWAY_API_KEY")
                 .unwrap_or_else(|_| "local-dev-key".to_string()),
+            ledger_base_url: first_present_env(&[
+                "CONSUMER_ENTRY_LEDGER_BASE_URL",
+                "LEDGER_BASE_URL",
+            ])
+            .unwrap_or_else(|| "http://127.0.0.1:7002".to_string()),
+            ledger_admin_token: first_present_env(&[
+                "CONSUMER_ENTRY_LEDGER_ADMIN_TOKEN",
+                "LEDGER_ADMIN_TOKEN",
+            ])
+            .or_else(parse_first_ledger_admin_token_from_env),
             default_capability_id: env::var("CONSUMER_ENTRY_DEFAULT_CAPABILITY_ID")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
@@ -659,12 +2451,10 @@ impl ConsumerEntryConfig {
             .ok()
             .map(|value| parse_session_auth_issuer_secrets_json(&value))
             .unwrap_or_default(),
-            session_auth_issuer_keys: env::var(
-                "CONSUMER_ENTRY_SESSION_AUTH_ISSUER_KEYS_JSON",
-            )
-            .ok()
-            .map(|value| parse_session_auth_issuer_keys_json(&value))
-            .unwrap_or_default(),
+            session_auth_issuer_keys: env::var("CONSUMER_ENTRY_SESSION_AUTH_ISSUER_KEYS_JSON")
+                .ok()
+                .map(|value| parse_session_auth_issuer_keys_json(&value))
+                .unwrap_or_default(),
             session_auth_issuer_registry_path,
             session_auth_issuer_registry,
             session_auth_issuer_registry_load_error,
@@ -811,6 +2601,85 @@ impl ConsumerEntryConfig {
                 "CONSUMER_ENTRY_REPLAY_STORE_PATH",
                 "CONSUMER_ENTRY_MATRIX_EVENT_STORE_PATH",
             ]),
+            league_state_path: first_present_env(&[
+                "CONSUMER_ENTRY_LEAGUE_STATE_PATH",
+                "CEX_LEAGUE_STATE_PATH",
+            ]),
+            league_sql_snapshot_path: first_present_env(&[
+                "CONSUMER_ENTRY_LEAGUE_SQL_SNAPSHOT_PATH",
+                "CEX_LEAGUE_SQL_SNAPSHOT_PATH",
+            ]),
+            league_normalized_database_url: first_present_env(&[
+                "CONSUMER_ENTRY_LEAGUE_NORMALIZED_DATABASE_URL",
+                "CEX_LEAGUE_NORMALIZED_DATABASE_URL",
+            ]),
+            league_normalized_dual_write_enabled: boolean_env(
+                "CONSUMER_ENTRY_LEAGUE_NORMALIZED_DUAL_WRITE_ENABLED",
+                boolean_env("CEX_LEAGUE_NORMALIZED_DUAL_WRITE_ENABLED", false),
+            ),
+            league_normalized_read_switch_enabled: boolean_env(
+                "CONSUMER_ENTRY_LEAGUE_NORMALIZED_READ_SWITCH_ENABLED",
+                boolean_env("CEX_LEAGUE_NORMALIZED_READ_SWITCH_ENABLED", false),
+            ),
+            league_normalized_final_cutover_enabled: boolean_env(
+                "CONSUMER_ENTRY_LEAGUE_NORMALIZED_FINAL_CUTOVER_ENABLED",
+                boolean_env("CEX_LEAGUE_NORMALIZED_FINAL_CUTOVER_ENABLED", false),
+            ),
+            league_hidden_tests_enabled: boolean_env("CONSUMER_ENTRY_LEAGUE_HIDDEN_TESTS", true),
+            league_llm_judge_url: first_present_env(&[
+                "CONSUMER_ENTRY_LEAGUE_LLM_JUDGE_URL",
+                "CEX_LEAGUE_LLM_JUDGE_URL",
+            ]),
+            league_llm_judge_token: first_present_env(&[
+                "CONSUMER_ENTRY_LEAGUE_LLM_JUDGE_TOKEN",
+                "CEX_LEAGUE_LLM_JUDGE_TOKEN",
+            ]),
+            league_llm_judge_required: boolean_env(
+                "CONSUMER_ENTRY_LEAGUE_LLM_JUDGE_REQUIRED",
+                false,
+            ),
+            league_llm_judge_timeout_ms: positive_u64_env(
+                "CONSUMER_ENTRY_LEAGUE_LLM_JUDGE_TIMEOUT_MS",
+                DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS,
+            ),
+            league_web_session_required: boolean_env(
+                "CONSUMER_ENTRY_LEAGUE_WEB_SESSION_REQUIRED",
+                !matches!(runtime_profile, RuntimeProfile::LocalDev),
+            ),
+            league_web_session_secret: first_present_env(&[
+                "CONSUMER_ENTRY_LEAGUE_WEB_SESSION_SECRET",
+                "CONSUMER_ENTRY_WEB_SESSION_SECRET",
+            ]),
+            league_web_session_cookie_name: env::var("CONSUMER_ENTRY_LEAGUE_WEB_SESSION_COOKIE")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "cex_league_session".to_string()),
+            league_web_session_ttl_secs: positive_u64_env(
+                "CONSUMER_ENTRY_LEAGUE_WEB_SESSION_TTL_SECS",
+                DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS,
+            ),
+            game_account_password_auth_enabled: boolean_env(
+                "CONSUMER_ENTRY_GAME_ACCOUNT_PASSWORD_AUTH_ENABLED",
+                false,
+            ),
+            game_account_registry_path: first_present_env(&[
+                "CONSUMER_ENTRY_GAME_ACCOUNT_REGISTRY_PATH",
+                "CEX_GAME_ACCOUNT_REGISTRY_PATH",
+            ]),
+            game_account_password_min_chars: positive_usize_env(
+                "CONSUMER_ENTRY_GAME_ACCOUNT_PASSWORD_MIN_CHARS",
+                DEFAULT_GAME_ACCOUNT_PASSWORD_MIN_CHARS,
+            ),
+            game_account_auth_rate_limit_max_requests: positive_usize_env(
+                "CONSUMER_ENTRY_GAME_ACCOUNT_AUTH_RATE_LIMIT_MAX_REQUESTS",
+                DEFAULT_GAME_ACCOUNT_AUTH_RATE_LIMIT_MAX_REQUESTS,
+            ),
+            game_account_local_domain: env::var("CONSUMER_ENTRY_GAME_ACCOUNT_LOCAL_DOMAIN")
+                .ok()
+                .map(|value| value.trim().to_ascii_lowercase())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "trillionnium.local".to_string()),
         }
     }
 
@@ -868,6 +2737,19 @@ impl ConsumerEntryConfig {
             if self.session_auth_expected_audience.is_none() {
                 errors.push(
                     "beta/production profile requires CONSUMER_ENTRY_SESSION_AUTH_EXPECTED_AUDIENCE"
+                        .to_string(),
+                );
+            }
+            if self.league_web_session_required && league_web_session_secret(self).is_none() {
+                errors.push(
+                    "beta/production League web actions require CONSUMER_ENTRY_LEAGUE_WEB_SESSION_SECRET or CONSUMER_ENTRY_SESSION_AUTH_SECRET"
+                        .to_string(),
+                );
+            }
+            if self.game_account_password_auth_enabled && self.game_account_registry_path.is_none()
+            {
+                errors.push(
+                    "beta/production game account password auth requires CONSUMER_ENTRY_GAME_ACCOUNT_REGISTRY_PATH"
                         .to_string(),
                 );
             }
@@ -930,6 +2812,57 @@ impl ConsumerEntryConfig {
             if self.cex_gateway_api_key.trim() == "local-dev-key" {
                 errors.push(
                     "beta/production profile requires non-default CEX_GATEWAY_API_KEY".to_string(),
+                );
+            }
+        }
+
+        if self.game_account_password_auth_enabled {
+            if league_web_session_secret(self).is_none() {
+                errors.push(
+                    "game account password auth requires CONSUMER_ENTRY_LEAGUE_WEB_SESSION_SECRET or CONSUMER_ENTRY_SESSION_AUTH_SECRET"
+                        .to_string(),
+                );
+            }
+            if self.game_account_password_min_chars < DEFAULT_GAME_ACCOUNT_PASSWORD_MIN_CHARS {
+                errors.push(format!(
+                    "game account password auth requires password min chars >= {DEFAULT_GAME_ACCOUNT_PASSWORD_MIN_CHARS}"
+                ));
+            }
+            if self.game_account_auth_rate_limit_max_requests == 0 {
+                errors.push(
+                    "game account password auth requires CONSUMER_ENTRY_GAME_ACCOUNT_AUTH_RATE_LIMIT_MAX_REQUESTS > 0"
+                        .to_string(),
+                );
+            }
+        }
+
+        if self.league_normalized_dual_write_enabled
+            && self.league_normalized_database_url.is_none()
+        {
+            errors.push(
+                "CONSUMER_ENTRY_LEAGUE_NORMALIZED_DUAL_WRITE_ENABLED=true requires CONSUMER_ENTRY_LEAGUE_NORMALIZED_DATABASE_URL"
+                    .to_string(),
+            );
+        }
+        if self.league_normalized_read_switch_enabled
+            && self.league_normalized_database_url.is_none()
+        {
+            errors.push(
+                "CONSUMER_ENTRY_LEAGUE_NORMALIZED_READ_SWITCH_ENABLED=true requires CONSUMER_ENTRY_LEAGUE_NORMALIZED_DATABASE_URL"
+                    .to_string(),
+            );
+        }
+        if self.league_normalized_final_cutover_enabled {
+            if self.league_normalized_database_url.is_none() {
+                errors.push(
+                    "CONSUMER_ENTRY_LEAGUE_NORMALIZED_FINAL_CUTOVER_ENABLED=true requires CONSUMER_ENTRY_LEAGUE_NORMALIZED_DATABASE_URL"
+                        .to_string(),
+                );
+            }
+            if !self.league_normalized_dual_write_enabled {
+                errors.push(
+                    "CONSUMER_ENTRY_LEAGUE_NORMALIZED_FINAL_CUTOVER_ENABLED=true requires CONSUMER_ENTRY_LEAGUE_NORMALIZED_DUAL_WRITE_ENABLED=true"
+                        .to_string(),
                 );
             }
         }
@@ -1050,6 +2983,23 @@ fn first_present_env(names: &[&str]) -> Option<String> {
     })
 }
 
+fn parse_first_ledger_admin_token_from_env() -> Option<String> {
+    let value = env::var("LEDGER_ADMIN_TOKENS_JSON").ok()?;
+    let parsed: Value = serde_json::from_str(&value).ok()?;
+
+    match parsed {
+        Value::Array(items) => items.into_iter().find_map(|item| {
+            item.get("token")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|token| !token.is_empty())
+                .map(ToString::to_string)
+        }),
+        Value::Object(map) => map.keys().next().cloned(),
+        _ => None,
+    }
+}
+
 fn positive_usize_env_alias(names: &[&str], default: usize) -> usize {
     names
         .iter()
@@ -1095,8 +3045,7 @@ fn parse_session_auth_issuer_secrets_json(value: &str) -> HashMap<String, String
 }
 
 fn parse_session_auth_issuer_keys_json(value: &str) -> HashMap<String, HashMap<String, String>> {
-    let Ok(parsed) = serde_json::from_str::<HashMap<String, HashMap<String, String>>>(value)
-    else {
+    let Ok(parsed) = serde_json::from_str::<HashMap<String, HashMap<String, String>>>(value) else {
         return HashMap::new();
     };
 
@@ -2027,6 +3976,7 @@ fn max_rate_limit_entries(config: &ConsumerEntryConfig) -> usize {
         config.rate_limit_room_max_requests,
         config.rate_limit_session_max_requests,
         config.rate_limit_org_max_requests,
+        config.game_account_auth_rate_limit_max_requests,
     ]
     .into_iter()
     .max()
@@ -2230,10 +4180,16 @@ impl AppState {
                 errors.join("; ")
             ));
         }
-        Ok(Self::new(config))
+        let league_state = load_league_state_for_startup(&config).await?;
+        Ok(Self::new_with_league_state(config, league_state))
     }
 
     pub fn new(config: ConsumerEntryConfig) -> Self {
+        let league_state = load_league_state(&config);
+        Self::new_with_league_state(config, league_state)
+    }
+
+    fn new_with_league_state(config: ConsumerEntryConfig, league_state: LeagueState) -> Self {
         let identity_binding_store = load_identity_binding_store(&config);
         let identity_binding_audit_state = append_identity_binding_audit_event(
             &config,
@@ -2247,6 +4203,7 @@ impl AppState {
         };
         let rate_limits = load_rate_limit_cache(&config);
         let replay_cache = load_replay_cache(&config);
+        let game_account_registry = load_game_account_registry(&config);
         let metrics = ConsumerEntryMetrics::default();
         if identity_binding_audit_state.last_status != "written"
             && config.identity_binding_audit_log_path.is_some()
@@ -2259,7 +4216,13 @@ impl AppState {
                 config,
                 identity_binding_store: RwLock::new(identity_binding_store),
                 identity_binding_audit_state: RwLock::new(identity_binding_audit_state),
-                session_auth_issuer_registry_state: StdRwLock::new(session_auth_issuer_registry_state),
+                session_auth_issuer_registry_state: StdRwLock::new(
+                    session_auth_issuer_registry_state,
+                ),
+                league_state: Mutex::new(league_state),
+                game_account_registry: Mutex::new(game_account_registry),
+                health_world_readiness_cache_generation: AtomicU64::new(0),
+                health_world_readiness_cache: Mutex::new(None),
                 rate_limits: Mutex::new(rate_limits),
                 replay_cache: Mutex::new(replay_cache),
                 metrics,
@@ -2283,13 +4246,228 @@ fn session_auth_issuer_registry_runtime_state(
         .clone()
 }
 
+async fn get_favicon() -> StatusCode {
+    StatusCode::NO_CONTENT
+}
+
 pub fn build_router(state: AppState) -> Router {
     Router::new()
+        .route("/favicon.ico", get(get_favicon))
         .route("/health", get(health))
         .route("/metrics", get(metrics))
+        .route("/app", get(get_client_app_web_shell_response))
+        .route("/account", get(get_game_account_client_shell_response))
+        .route("/game/account", get(get_game_account_client_shell_response))
+        .route("/account/session", get(get_game_account_session_status))
+        .route(
+            "/account/profile",
+            get(get_game_account_profile).post(post_game_account_profile),
+        )
+        .route(
+            "/account/session/refresh",
+            post(post_game_account_session_refresh),
+        )
+        .route(
+            "/account/session/revoke",
+            post(post_game_account_session_revoke),
+        )
+        .route("/account/register", post(post_game_account_register))
+        .route("/account/login", post(post_game_account_login))
+        .route(
+            "/account/password/change",
+            post(post_game_account_password_change),
+        )
+        .route("/account/logout", post(post_game_account_logout))
+        .route("/league", get(get_league_web_shell))
+        .route("/world", get(get_world_web_shell_response))
+        .route("/league/web/session", post(post_league_web_session))
+        .route("/league/web/action", post(post_league_web_action))
+        .route("/app/web/map-viewport", get(get_world_web_map_viewport))
+        .route("/world/web/map-viewport", get(get_world_web_map_viewport))
+        .route("/world/web/map-delta", get(get_world_web_map_delta))
+        .route("/world/web/map-rum", post(post_world_web_map_rum))
+        .route("/world/web/action", post(post_world_web_action))
+        .route(
+            "/world/web/tactics-command",
+            post(post_world_web_tactics_command),
+        )
+        .route("/world/web/map-move", post(post_world_web_map_move))
+        .route(
+            "/world/web/contract",
+            post(post_world_web_contract_complete),
+        )
+        .route("/world/web/asset", post(post_world_web_asset_upgrade))
+        .route("/world/web/company", post(post_world_web_company))
+        .route("/world/web/listing", post(post_world_web_listing))
+        .route("/world/web/buy", post(post_world_web_listing_buy))
+        .route("/world/web/work-deliver", post(post_world_web_work_deliver))
+        .route("/world/web/work-accept", post(post_world_web_work_accept))
+        .route("/world/web/work-reject", post(post_world_web_work_reject))
+        .route("/world/web/work-reopen", post(post_world_web_work_reopen))
+        .route("/world/web/work-cancel", post(post_world_web_work_cancel))
+        .route("/app/web/feed", get(get_client_web_feed_home))
         .route("/v1/chat/tasks", post(create_chat_task))
         .route("/v1/chat/tasks/:id", get(get_chat_task))
         .route("/v1/matrix/messages", post(create_matrix_message_task))
+        .route(
+            "/v1/trillionnium/term-exchange/kernel/manifest",
+            get(get_term_exchange_kernel_manifest),
+        )
+        .route(
+            "/v1/trillionnium/runtime/cex/manifest",
+            get(get_term_exchange_kernel_manifest),
+        )
+        .route(
+            "/v1/trillionnium/economy/intents",
+            post(post_trnm_economic_intent),
+        )
+        .route(
+            "/v1/trillionnium/economy/wallet",
+            post(post_trnm_wallet_snapshot),
+        )
+        .route(
+            "/v1/trillionnium/economy/projection/rebuild",
+            post(post_trnm_receipt_projection_rebuild),
+        )
+        .route("/v1/league/home", get(get_league_home))
+        .route("/v1/league/world", get(get_league_world))
+        .route("/v1/world/home", get(get_world_home))
+        .route(
+            "/v1/trillionnium/world/adapters/readiness",
+            get(get_trillionnium_world_adapter_readiness),
+        )
+        .route(
+            "/v1/trillionnium/economy/adapters/readiness",
+            get(get_trillionnium_world_adapter_readiness),
+        )
+        .route("/v1/client/app/:matrix_user_id", get(get_client_app_home))
+        .route("/v1/client/feed/:matrix_user_id", get(get_client_feed_home))
+        .route("/v1/world/map/:matrix_user_id", get(get_world_map))
+        .route(
+            "/v1/world/map/:matrix_user_id/viewport",
+            get(get_world_map_viewport),
+        )
+        .route(
+            "/v1/world/map/:matrix_user_id/delta",
+            get(get_world_map_delta),
+        )
+        .route(
+            "/v1/world/map/:matrix_user_id/rum",
+            post(post_world_map_rum),
+        )
+        .route("/v1/world/map/move", post(move_world_map))
+        .route("/v1/world/action", post(post_world_action))
+        .route(
+            "/v1/world/tactics/command",
+            post(post_world_tactics_command),
+        )
+        .route("/v1/world/assets", get(get_world_assets))
+        .route(
+            "/v1/world/assets/:asset_id/upgrade",
+            post(upgrade_world_asset),
+        )
+        .route(
+            "/v1/world/companies",
+            get(get_world_companies).post(create_world_company),
+        )
+        .route("/v1/world/shops", get(get_world_shops))
+        .route("/v1/world/listings", post(create_world_listing))
+        .route("/v1/world/commerce", get(get_world_commerce))
+        .route("/v1/world/factions", get(get_world_factions))
+        .route(
+            "/v1/world/listings/:listing_id/buy",
+            post(buy_world_listing),
+        )
+        .route(
+            "/v1/world/work-orders/:work_order_id/deliver",
+            post(deliver_world_work_order),
+        )
+        .route(
+            "/v1/world/work-orders/:work_order_id/accept",
+            post(accept_world_work_order),
+        )
+        .route(
+            "/v1/world/work-orders/:work_order_id/reject",
+            post(reject_world_work_order),
+        )
+        .route(
+            "/v1/world/work-orders/:work_order_id/reopen",
+            post(reopen_world_work_order),
+        )
+        .route(
+            "/v1/world/work-orders/:work_order_id/cancel",
+            post(cancel_world_work_order),
+        )
+        .route("/v1/world/contracts", get(get_world_contracts))
+        .route(
+            "/v1/world/contracts/:contract_id/complete",
+            post(complete_world_contract),
+        )
+        .route("/v1/league/season", get(get_league_season))
+        .route("/v1/league/matches", get(get_league_matches))
+        .route("/v1/league/state/snapshot", get(get_league_state_snapshot))
+        .route("/v1/league/raids", get(get_league_raids))
+        .route(
+            "/v1/league/raids/:match_id/contribute",
+            post(contribute_league_raid),
+        )
+        .route(
+            "/v1/league/raids/:match_id/roster",
+            get(get_league_raid_roster).post(join_league_raid_roster),
+        )
+        .route("/v1/league/reviews/held", get(get_league_held_reviews))
+        .route(
+            "/v1/league/reviews/:reward_id/approve",
+            post(approve_league_review),
+        )
+        .route(
+            "/v1/league/reviews/:reward_id/reject",
+            post(reject_league_review),
+        )
+        .route("/v1/league/guilds", get(get_league_guilds))
+        .route("/v1/league/guilds/:guild_id/join", post(join_league_guild))
+        .route("/v1/league/matches/:match_id/join", post(join_league_match))
+        .route(
+            "/v1/league/matches/:match_id/battle",
+            post(create_league_battle),
+        )
+        .route(
+            "/v1/league/matches/:match_id/submit",
+            post(submit_league_match),
+        )
+        .route("/v1/league/rankings", get(get_league_rankings))
+        .route(
+            "/v1/league/players/:matrix_user_id/profile",
+            get(get_league_player_profile),
+        )
+        .route(
+            "/v1/league/players/:matrix_user_id/progression",
+            get(get_league_player_progression),
+        )
+        .route(
+            "/v1/league/players/:matrix_user_id/loadout",
+            get(get_league_player_loadout),
+        )
+        .route(
+            "/v1/league/players/:matrix_user_id/draft",
+            post(update_league_player_draft),
+        )
+        .route(
+            "/v1/league/players/:matrix_user_id/rewards",
+            get(get_league_player_rewards),
+        )
+        .route(
+            "/v1/league/players/:matrix_user_id/inventory",
+            get(get_league_player_inventory),
+        )
+        .route(
+            "/v1/league/players/:matrix_user_id/history",
+            get(get_league_player_history),
+        )
+        .route(
+            "/v1/matrix/users/:matrix_user_id/wallet",
+            get(get_matrix_wallet),
+        )
         .route(
             "/v1/admin/identity-bindings/reload",
             post(reload_identity_bindings),
@@ -2373,7972 +4551,5 @@ pub fn build_router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn health(State(state): State<AppState>) -> Json<Value> {
-    let store = state.inner.identity_binding_store.read().await;
-    let audit = state.inner.identity_binding_audit_state.read().await;
-    let rate_limits = state.inner.rate_limits.lock().await;
-    let approval_state = load_identity_binding_revision_approval_state(state.config());
-    let session_auth_registry_state = session_auth_issuer_registry_runtime_state(&state);
-    let session_auth_registry_approval_state =
-        load_session_auth_issuer_registry_revision_approval_state(state.config());
-    let session_auth_registry_actor_checks =
-        session_auth_issuer_registry_actor_checks_json(state.config());
-    let session_auth_registry_approval_checks = session_auth_issuer_registry_approval_checks_json(
-        state.config(),
-        &session_auth_registry_state.metadata,
-        &session_auth_registry_approval_state,
-    );
-    let session_auth_registry_governance_overview =
-        session_auth_issuer_registry_governance_overview_json(
-            state.config(),
-            &session_auth_registry_state.metadata,
-            &session_auth_registry_approval_state,
-            5,
-        );
-    let profile_errors = state.config().profile_validation_errors();
-    let identity_governance_overview =
-        identity_governance_overview_json(state.config(), &store, &approval_state, &audit, 5);
-    let identity_governance_valid = identity_governance_overview
-        .get("valid")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let session_auth_registry_governance_valid = session_auth_registry_governance_overview
-        .get("valid")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    Json(json!({
-        "status": "ok",
-        "service": "consumer-entry-api",
-        "runtime_profile": state.config().runtime_profile.as_str(),
-        "profile_validation": {
-            "ok": profile_errors.is_empty(),
-            "errors": profile_errors,
-            "checks": {
-                "ingress_token_present": state.config().ingress_token.is_some(),
-                "require_session_auth": state.config().require_session_auth,
-                "session_auth_secret_present": state.config().session_auth_secret.is_some(),
-                "session_auth_issuer_secret_count": state.config().session_auth_issuer_secrets.len(),
-                "session_auth_issuer_key_issuer_count": state.config().session_auth_issuer_keys.len(),
-                "session_auth_issuer_key_count": state.config().session_auth_issuer_keys.values().map(|keys| keys.len()).sum::<usize>(),
-                "session_auth_issuer_registry_configured": state.config().session_auth_issuer_registry_path.is_some(),
-                "session_auth_issuer_registry_loaded": session_auth_registry_state.metadata.load_status == "loaded",
-                "session_auth_issuer_registry_revision_present": session_auth_registry_state.metadata.revision.is_some(),
-                "session_auth_issuer_registry_issuer_count": session_auth_registry_state.metadata.issuer_count,
-                "session_auth_issuer_registry_key_count": session_auth_registry_state.metadata.key_count,
-                "session_auth_issuer_registry_approved_revisions_configured": state.config().session_auth_issuer_registry_approved_revisions_path.is_some(),
-                "session_auth_issuer_registry_require_approved_revision": state.config().session_auth_issuer_registry_require_approved_revision,
-                "session_auth_issuer_registry_require_actor": state.config().session_auth_issuer_registry_require_actor,
-                "session_auth_issuer_registry_actor_gate_valid": session_auth_registry_actor_checks.get("valid").and_then(Value::as_bool),
-                "session_auth_issuer_registry_approval_loaded": session_auth_registry_approval_state.load_status == "loaded",
-                "session_auth_issuer_registry_revision_approved": session_auth_registry_approval_checks.get("current_revision_approved").and_then(Value::as_bool),
-                "session_auth_issuer_registry_governance_valid": session_auth_registry_governance_valid,
-                "session_auth_allowed_issuer_count": state.config().session_auth_allowed_issuers.len(),
-                "session_auth_expected_audience_configured": state.config().session_auth_expected_audience.is_some(),
-                "replay_store_configured": state.config().replay_store_path.is_some(),
-                "rate_limit_store_configured": state.config().rate_limit_store_path.is_some(),
-                "identity_bindings_configured": state.config().identity_bindings_path.is_some(),
-                "identity_registry_configured": state.config().identity_registry_path.is_some(),
-                "require_identity_binding": state.config().require_identity_binding,
-                "gateway_api_key_is_non_default": state.config().cex_gateway_api_key.trim() != "local-dev-key",
-                "identity_binding_audit_log_configured": state.config().identity_binding_audit_log_path.is_some(),
-                "identity_binding_approved_revisions_configured": state.config().identity_binding_approved_revisions_path.is_some(),
-                "reload_requires_revision": state.config().identity_binding_reload_require_revision,
-                "reload_requires_approved_revision": state.config().identity_binding_reload_require_approved_revision,
-                "reload_requires_actor": state.config().identity_binding_reload_require_actor,
-                "reload_allowed_actor_count": state.config().identity_binding_reload_allowed_actors.len(),
-                "identity_registry_users": store.product_users.len(),
-                "identity_registry_missing_refs": count_missing_product_user_refs(&store),
-                "identity_governance_valid": identity_governance_valid,
-            }
-        },
-        "cex_gateway_base_url": state.config().cex_gateway_base_url,
-        "default_capability_id": state.config().default_capability_id,
-        "ingress_protected": state.config().ingress_token.is_some(),
-        "require_session_auth": state.config().require_session_auth,
-        "session_auth": {
-            "enabled": state.config().require_session_auth,
-            "secret_present": state.config().session_auth_secret.is_some(),
-            "issuer_secret_count": state.config().session_auth_issuer_secrets.len(),
-            "issuer_secret_issuers": state.config().session_auth_issuer_secrets.keys().cloned().collect::<Vec<_>>(),
-            "issuer_key_issuer_count": state.config().session_auth_issuer_keys.len(),
-            "issuer_key_count": state.config().session_auth_issuer_keys.values().map(|keys| keys.len()).sum::<usize>(),
-            "issuer_key_issuers": state.config().session_auth_issuer_keys.keys().cloned().collect::<Vec<_>>(),
-            "issuer_registry_path": state.config().session_auth_issuer_registry_path,
-            "issuer_registry_loaded": session_auth_registry_state.metadata.load_status == "loaded",
-            "issuer_registry_load_error": session_auth_registry_state.metadata.load_error.clone(),
-            "issuer_registry_issuer_count": session_auth_registry_state.metadata.issuer_count,
-            "issuer_registry_key_count": session_auth_registry_state.metadata.key_count,
-            "issuer_registry_issuers": session_auth_registry_state.registry.keys().cloned().collect::<Vec<_>>(),
-            "issuer_registry_metadata": session_auth_registry_state.metadata.clone(),
-            "issuer_registry_approved_revisions_path": state
-                .config()
-                .session_auth_issuer_registry_approved_revisions_path,
-            "issuer_registry_approval_required": state
-                .config()
-                .session_auth_issuer_registry_require_approved_revision,
-            "issuer_registry_actor_required": state
-                .config()
-                .session_auth_issuer_registry_require_actor,
-            "issuer_registry_actor_checks": session_auth_registry_actor_checks,
-            "issuer_registry_approval_state": session_auth_registry_approval_state,
-            "issuer_registry_approval_checks": session_auth_registry_approval_checks,
-            "allowed_issuers": state.config().session_auth_allowed_issuers,
-            "allowed_issuer_count": state.config().session_auth_allowed_issuers.len(),
-            "expected_audience": state.config().session_auth_expected_audience,
-            "assertion_header": USER_SESSION_ASSERTION_HEADER,
-            "signature_header": USER_SESSION_SIGNATURE_HEADER,
-            "max_clock_skew_secs": state.config().session_auth_max_clock_skew_secs,
-            "max_ttl_secs": state.config().session_auth_max_ttl_secs,
-        },
-        "identity_bindings_path": state.config().identity_bindings_path,
-        "identity_bindings_enabled": state.config().identity_bindings_path.is_some(),
-        "identity_registry_path": state.config().identity_registry_path,
-        "identity_registry_enabled": state.config().identity_registry_path.is_some(),
-        "require_identity_binding": state.config().require_identity_binding,
-        "identity_binding_metadata": {
-            "format": store.metadata.format.clone(),
-            "version": store.metadata.version,
-            "revision": store.metadata.revision.clone(),
-            "source_path": store.metadata.source_path.clone(),
-            "source_modified_epoch": store.metadata.source_modified_epoch,
-            "loaded_at_epoch": store.metadata.loaded_at_epoch,
-            "load_status": store.metadata.load_status.clone(),
-            "load_error": store.metadata.load_error.clone(),
-        },
-        "identity_binding_counts": identity_binding_counts_json(&store),
-        "identity_source_of_truth": {
-            "mode": identity_source_of_truth_mode(&store),
-            "product_users": store.product_users.len(),
-            "missing_product_user_refs": count_missing_product_user_refs(&store),
-        },
-        "identity_registry_metadata": {
-            "format": store.registry_metadata.format.clone(),
-            "version": store.registry_metadata.version,
-            "revision": store.registry_metadata.revision.clone(),
-            "source_path": store.registry_metadata.source_path.clone(),
-            "source_modified_epoch": store.registry_metadata.source_modified_epoch,
-            "loaded_at_epoch": store.registry_metadata.loaded_at_epoch,
-            "load_status": store.registry_metadata.load_status.clone(),
-            "load_error": store.registry_metadata.load_error.clone(),
-        },
-        "identity_binding_audit": {
-            "path": audit.path.clone(),
-            "last_event_kind": audit.last_event_kind.clone(),
-            "last_event_epoch": audit.last_event_epoch,
-            "last_status": audit.last_status.clone(),
-            "last_error": audit.last_error.clone(),
-            "last_policy_decision": audit.last_policy_decision.clone(),
-            "last_policy_reason": audit.last_policy_reason.clone(),
-        },
-        "identity_binding_reload_policy": {
-            "require_revision": state.config().identity_binding_reload_require_revision,
-            "reject_same_revision": state.config().identity_binding_reload_reject_same_revision,
-            "allow_legacy_format": state.config().identity_binding_reload_allow_legacy_format,
-            "require_approved_revision": state.config().identity_binding_reload_require_approved_revision,
-            "allow_rollback": state.config().identity_binding_reload_allow_rollback,
-            "require_actor": state.config().identity_binding_reload_require_actor,
-            "actor_header": state.config().identity_binding_reload_actor_header,
-            "allowed_actors_count": state.config().identity_binding_reload_allowed_actors.len(),
-        },
-        "identity_binding_revision_approval": {
-            "source_path": approval_state.source_path,
-            "source_modified_epoch": approval_state.source_modified_epoch,
-            "loaded_at_epoch": approval_state.loaded_at_epoch,
-            "load_status": approval_state.load_status,
-            "load_error": approval_state.load_error,
-            "version": approval_state.version,
-            "revision": approval_state.revision,
-            "approved_revisions": approval_state.approved_revisions,
-        },
-        "identity_governance_overview": identity_governance_overview,
-        "session_auth_issuer_registry_governance_overview": session_auth_registry_governance_overview,
-        "max_text_chars": state.config().max_text_chars,
-        "rate_limit_window_secs": state.config().rate_limit_window_secs,
-        "rate_limit_max_requests": state.config().rate_limit_max_requests,
-        "rate_limit_user_max_requests": state.config().rate_limit_user_max_requests,
-        "rate_limit_room_max_requests": state.config().rate_limit_room_max_requests,
-        "rate_limit_session_max_requests": state.config().rate_limit_session_max_requests,
-        "rate_limit_org_max_requests": state.config().rate_limit_org_max_requests,
-        "rate_limit_store_path": state.config().rate_limit_store_path,
-        "rate_limit_store_enabled": state.config().rate_limit_store_path.is_some(),
-        "rate_limit_bucket_count": rate_limits.seen.len(),
-        "replay_window_secs": state.config().replay_window_secs,
-        "replay_cache_size": state.config().replay_cache_size,
-        "replay_store_path": state.config().replay_store_path,
-        "replay_store_enabled": state.config().replay_store_path.is_some(),
-        "metrics": state.inner.metrics.snapshot(),
-    }))
-}
-
-async fn metrics(State(state): State<AppState>) -> Response {
-    let profile_ok = if state.config().profile_validation_errors().is_empty() {
-        1
-    } else {
-        0
-    };
-    let rate_limit_bucket_count = {
-        let rate_limits = state.inner.rate_limits.lock().await;
-        rate_limits.seen.len()
-    };
-    let identity_binding_store = state.inner.identity_binding_store.read().await;
-    let audit = {
-        let audit = state.inner.identity_binding_audit_state.read().await;
-        audit.clone()
-    };
-    let approval_state = load_identity_binding_revision_approval_state(state.config());
-    let governance_overview = identity_governance_overview_json(
-        state.config(),
-        &identity_binding_store,
-        &approval_state,
-        &audit,
-        5,
-    );
-    let product_user_count = identity_binding_store.product_users.len();
-    let product_user_ref_count =
-        count_product_user_refs(&identity_binding_store.bindings.chat_users)
-            + count_product_user_refs(&identity_binding_store.bindings.matrix_users);
-    let missing_product_user_ref_count = count_missing_product_user_refs(&identity_binding_store);
-    let governance_valid = governance_overview
-        .get("valid")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let governance_checks = governance_overview
-        .get("checks")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    let session_auth_registry_state = session_auth_issuer_registry_runtime_state(&state);
-    let session_auth_registry_approval_state =
-        load_session_auth_issuer_registry_revision_approval_state(state.config());
-    let session_auth_registry_actor_checks =
-        session_auth_issuer_registry_actor_checks_json(state.config());
-    let session_auth_registry_approval_checks = session_auth_issuer_registry_approval_checks_json(
-        state.config(),
-        &session_auth_registry_state.metadata,
-        &session_auth_registry_approval_state,
-    );
-    let session_auth_registry_governance_overview =
-        session_auth_issuer_registry_governance_overview_json(
-            state.config(),
-            &session_auth_registry_state.metadata,
-            &session_auth_registry_approval_state,
-            5,
-        );
-    let session_auth_registry_governance_checks = session_auth_registry_governance_overview
-        .get("checks")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    let session_auth_registry_governance_valid = session_auth_registry_governance_overview
-        .get("valid")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let body = format!(
-        concat!(
-            "# TYPE cex_consumer_entry_task_create_requests_total counter\n",
-            "cex_consumer_entry_task_create_requests_total {}\n",
-            "# TYPE cex_consumer_entry_task_lookup_requests_total counter\n",
-            "cex_consumer_entry_task_lookup_requests_total {}\n",
-            "# TYPE cex_consumer_entry_rate_limited_requests_total counter\n",
-            "cex_consumer_entry_rate_limited_requests_total {}\n",
-            "# TYPE cex_consumer_entry_rate_limited_source_scope_requests_total counter\n",
-            "cex_consumer_entry_rate_limited_source_scope_requests_total {}\n",
-            "# TYPE cex_consumer_entry_rate_limited_user_requests_total counter\n",
-            "cex_consumer_entry_rate_limited_user_requests_total {}\n",
-            "# TYPE cex_consumer_entry_rate_limited_room_requests_total counter\n",
-            "cex_consumer_entry_rate_limited_room_requests_total {}\n",
-            "# TYPE cex_consumer_entry_rate_limited_session_requests_total counter\n",
-            "cex_consumer_entry_rate_limited_session_requests_total {}\n",
-            "# TYPE cex_consumer_entry_rate_limited_org_requests_total counter\n",
-            "cex_consumer_entry_rate_limited_org_requests_total {}\n",
-            "# TYPE cex_consumer_entry_identity_binding_failures_total counter\n",
-            "cex_consumer_entry_identity_binding_failures_total {}\n",
-            "# TYPE cex_consumer_entry_identity_binding_matches_total counter\n",
-            "cex_consumer_entry_identity_binding_matches_total {}\n",
-            "# TYPE cex_consumer_entry_identity_binding_reload_requests_total counter\n",
-            "cex_consumer_entry_identity_binding_reload_requests_total {}\n",
-            "# TYPE cex_consumer_entry_identity_binding_reload_successes_total counter\n",
-            "cex_consumer_entry_identity_binding_reload_successes_total {}\n",
-            "# TYPE cex_consumer_entry_identity_binding_reload_rejections_total counter\n",
-            "cex_consumer_entry_identity_binding_reload_rejections_total {}\n",
-            "# TYPE cex_consumer_entry_identity_binding_reload_actor_rejections_total counter\n",
-            "cex_consumer_entry_identity_binding_reload_actor_rejections_total {}\n",
-            "# TYPE cex_consumer_entry_identity_binding_audit_failures_total counter\n",
-            "cex_consumer_entry_identity_binding_audit_failures_total {}\n",
-            "# TYPE cex_consumer_entry_ingress_auth_failures_total counter\n",
-            "cex_consumer_entry_ingress_auth_failures_total {}\n",
-            "# TYPE cex_consumer_entry_session_auth_successes_total counter\n",
-            "cex_consumer_entry_session_auth_successes_total {}\n",
-            "# TYPE cex_consumer_entry_session_auth_failures_total counter\n",
-            "cex_consumer_entry_session_auth_failures_total {}\n",
-            "# TYPE cex_consumer_entry_replay_hits_total counter\n",
-            "cex_consumer_entry_replay_hits_total {}\n",
-            "# TYPE cex_consumer_entry_profile_validation_ok gauge\n",
-            "cex_consumer_entry_profile_validation_ok {}\n",
-            "# TYPE cex_consumer_entry_ingress_protected gauge\n",
-            "cex_consumer_entry_ingress_protected {}\n",
-            "# TYPE cex_consumer_entry_require_session_auth gauge\n",
-            "cex_consumer_entry_require_session_auth {}\n",
-            "# TYPE cex_consumer_entry_session_auth_global_secret_present gauge\n",
-            "cex_consumer_entry_session_auth_global_secret_present {}\n",
-            "# TYPE cex_consumer_entry_session_auth_issuer_secrets gauge\n",
-            "cex_consumer_entry_session_auth_issuer_secrets {}\n",
-            "# TYPE cex_consumer_entry_session_auth_issuer_key_issuers gauge\n",
-            "cex_consumer_entry_session_auth_issuer_key_issuers {}\n",
-            "# TYPE cex_consumer_entry_session_auth_issuer_keys gauge\n",
-            "cex_consumer_entry_session_auth_issuer_keys {}\n",
-            "# TYPE cex_consumer_entry_session_auth_issuer_registry_configured gauge\n",
-            "cex_consumer_entry_session_auth_issuer_registry_configured {}\n",
-            "# TYPE cex_consumer_entry_session_auth_issuer_registry_loaded gauge\n",
-            "cex_consumer_entry_session_auth_issuer_registry_loaded {}\n",
-            "# TYPE cex_consumer_entry_session_auth_issuer_registry_revision_present gauge\n",
-            "cex_consumer_entry_session_auth_issuer_registry_revision_present {}\n",
-            "# TYPE cex_consumer_entry_session_auth_issuer_registry_issuers gauge\n",
-            "cex_consumer_entry_session_auth_issuer_registry_issuers {}\n",
-            "# TYPE cex_consumer_entry_session_auth_issuer_registry_keys gauge\n",
-            "cex_consumer_entry_session_auth_issuer_registry_keys {}\n",
-            "# TYPE cex_consumer_entry_session_auth_issuer_registry_approval_configured gauge\n",
-            "cex_consumer_entry_session_auth_issuer_registry_approval_configured {}\n",
-            "# TYPE cex_consumer_entry_session_auth_issuer_registry_approval_required gauge\n",
-            "cex_consumer_entry_session_auth_issuer_registry_approval_required {}\n",
-            "# TYPE cex_consumer_entry_session_auth_issuer_registry_actor_gate_valid gauge\n",
-            "cex_consumer_entry_session_auth_issuer_registry_actor_gate_valid {}\n",
-            "# TYPE cex_consumer_entry_session_auth_issuer_registry_approval_loaded gauge\n",
-            "cex_consumer_entry_session_auth_issuer_registry_approval_loaded {}\n",
-            "# TYPE cex_consumer_entry_session_auth_issuer_registry_revision_approved gauge\n",
-            "cex_consumer_entry_session_auth_issuer_registry_revision_approved {}\n",
-            "# TYPE cex_consumer_entry_session_auth_issuer_registry_governance_valid gauge\n",
-            "cex_consumer_entry_session_auth_issuer_registry_governance_valid {}\n",
-            "# TYPE cex_consumer_entry_session_auth_issuer_registry_approval_source_valid gauge\n",
-            "cex_consumer_entry_session_auth_issuer_registry_approval_source_valid {}\n",
-            "# TYPE cex_consumer_entry_session_auth_issuer_registry_approval_coverage_valid gauge\n",
-            "cex_consumer_entry_session_auth_issuer_registry_approval_coverage_valid {}\n",
-            "# TYPE cex_consumer_entry_session_auth_allowed_issuers gauge\n",
-            "cex_consumer_entry_session_auth_allowed_issuers {}\n",
-            "# TYPE cex_consumer_entry_session_auth_expected_audience_configured gauge\n",
-            "cex_consumer_entry_session_auth_expected_audience_configured {}\n",
-            "# TYPE cex_consumer_entry_require_identity_binding gauge\n",
-            "cex_consumer_entry_require_identity_binding {}\n",
-            "# TYPE cex_consumer_entry_identity_registry_users gauge\n",
-            "cex_consumer_entry_identity_registry_users {}\n",
-            "# TYPE cex_consumer_entry_identity_registry_refs gauge\n",
-            "cex_consumer_entry_identity_registry_refs {}\n",
-            "# TYPE cex_consumer_entry_identity_registry_missing_refs gauge\n",
-            "cex_consumer_entry_identity_registry_missing_refs {}\n",
-            "# TYPE cex_consumer_entry_rate_limit_store_enabled gauge\n",
-            "cex_consumer_entry_rate_limit_store_enabled {}\n",
-            "# TYPE cex_consumer_entry_rate_limit_bucket_count gauge\n",
-            "cex_consumer_entry_rate_limit_bucket_count {}\n",
-            "# TYPE cex_consumer_entry_identity_governance_valid gauge\n",
-            "cex_consumer_entry_identity_governance_valid {}\n",
-            "# TYPE cex_consumer_entry_identity_binding_loaded gauge\n",
-            "cex_consumer_entry_identity_binding_loaded {}\n",
-            "# TYPE cex_consumer_entry_identity_registry_loaded gauge\n",
-            "cex_consumer_entry_identity_registry_loaded {}\n",
-            "# TYPE cex_consumer_entry_identity_ref_integrity_ok gauge\n",
-            "cex_consumer_entry_identity_ref_integrity_ok {}\n",
-            "# TYPE cex_consumer_entry_identity_actor_gate_valid gauge\n",
-            "cex_consumer_entry_identity_actor_gate_valid {}\n",
-            "# TYPE cex_consumer_entry_identity_approval_source_valid gauge\n",
-            "cex_consumer_entry_identity_approval_source_valid {}\n",
-            "# TYPE cex_consumer_entry_identity_approval_coverage_valid gauge\n",
-            "cex_consumer_entry_identity_approval_coverage_valid {}\n"
-        ),
-        state
-            .inner
-            .metrics
-            .task_create_requests
-            .load(Ordering::Relaxed),
-        state
-            .inner
-            .metrics
-            .task_lookup_requests
-            .load(Ordering::Relaxed),
-        state
-            .inner
-            .metrics
-            .rate_limited_requests
-            .load(Ordering::Relaxed),
-        state
-            .inner
-            .metrics
-            .rate_limited_source_scope_requests
-            .load(Ordering::Relaxed),
-        state
-            .inner
-            .metrics
-            .rate_limited_user_requests
-            .load(Ordering::Relaxed),
-        state
-            .inner
-            .metrics
-            .rate_limited_room_requests
-            .load(Ordering::Relaxed),
-        state
-            .inner
-            .metrics
-            .rate_limited_session_requests
-            .load(Ordering::Relaxed),
-        state
-            .inner
-            .metrics
-            .rate_limited_org_requests
-            .load(Ordering::Relaxed),
-        state
-            .inner
-            .metrics
-            .identity_binding_failures
-            .load(Ordering::Relaxed),
-        state
-            .inner
-            .metrics
-            .identity_binding_matches
-            .load(Ordering::Relaxed),
-        state
-            .inner
-            .metrics
-            .identity_binding_reload_requests
-            .load(Ordering::Relaxed),
-        state
-            .inner
-            .metrics
-            .identity_binding_reload_successes
-            .load(Ordering::Relaxed),
-        state
-            .inner
-            .metrics
-            .identity_binding_reload_rejections
-            .load(Ordering::Relaxed),
-        state
-            .inner
-            .metrics
-            .identity_binding_reload_actor_rejections
-            .load(Ordering::Relaxed),
-        state
-            .inner
-            .metrics
-            .identity_binding_audit_failures
-            .load(Ordering::Relaxed),
-        state
-            .inner
-            .metrics
-            .ingress_auth_failures
-            .load(Ordering::Relaxed),
-        state
-            .inner
-            .metrics
-            .session_auth_successes
-            .load(Ordering::Relaxed),
-        state
-            .inner
-            .metrics
-            .session_auth_failures
-            .load(Ordering::Relaxed),
-        state.inner.metrics.replay_hits.load(Ordering::Relaxed),
-        profile_ok,
-        if state.config().ingress_token.is_some() {
-            1
-        } else {
-            0
-        },
-        if state.config().require_session_auth {
-            1
-        } else {
-            0
-        },
-        if state.config().session_auth_secret.is_some() {
-            1
-        } else {
-            0
-        },
-        state.config().session_auth_issuer_secrets.len(),
-        state.config().session_auth_issuer_keys.len(),
-        state.config().session_auth_issuer_keys.values().map(|keys| keys.len()).sum::<usize>(),
-        if state.config().session_auth_issuer_registry_path.is_some() {
-            1
-        } else {
-            0
-        },
-        if session_auth_registry_state.metadata.load_status == "loaded" {
-            1
-        } else {
-            0
-        },
-        if session_auth_registry_state.metadata.revision.is_some() {
-            1
-        } else {
-            0
-        },
-        session_auth_registry_state.metadata.issuer_count,
-        session_auth_registry_state.metadata.key_count,
-        if state
-            .config()
-            .session_auth_issuer_registry_approved_revisions_path
-            .is_some()
-        {
-            1
-        } else {
-            0
-        },
-        if state
-            .config()
-            .session_auth_issuer_registry_require_approved_revision
-        {
-            1
-        } else {
-            0
-        },
-        if session_auth_registry_actor_checks
-            .get("valid")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            1
-        } else {
-            0
-        },
-        if session_auth_registry_approval_state.load_status == "loaded" {
-            1
-        } else {
-            0
-        },
-        if session_auth_registry_approval_checks
-            .get("current_revision_approved")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            1
-        } else {
-            0
-        },
-        if session_auth_registry_governance_valid { 1 } else { 0 },
-        if session_auth_registry_governance_checks
-            .get("approval_source_valid")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            1
-        } else {
-            0
-        },
-        if session_auth_registry_governance_checks
-            .get("approval_coverage_valid")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            1
-        } else {
-            0
-        },
-        state.config().session_auth_allowed_issuers.len(),
-        if state.config().session_auth_expected_audience.is_some() {
-            1
-        } else {
-            0
-        },
-        if state.config().require_identity_binding {
-            1
-        } else {
-            0
-        },
-        product_user_count,
-        product_user_ref_count,
-        missing_product_user_ref_count,
-        if state.config().rate_limit_store_path.is_some() {
-            1
-        } else {
-            0
-        },
-        rate_limit_bucket_count,
-        if governance_valid { 1 } else { 0 },
-        if governance_checks
-            .get("binding_loaded")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            1
-        } else {
-            0
-        },
-        if governance_checks
-            .get("registry_loaded")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            1
-        } else {
-            0
-        },
-        if governance_checks
-            .get("ref_integrity_ok")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            1
-        } else {
-            0
-        },
-        if governance_checks
-            .get("actor_gate_valid")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            1
-        } else {
-            0
-        },
-        if governance_checks
-            .get("approval_source_valid")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            1
-        } else {
-            0
-        },
-        if governance_checks
-            .get("approval_coverage_valid")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            1
-        } else {
-            0
-        },
-    );
-    (
-        StatusCode::OK,
-        [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
-        body,
-    )
-        .into_response()
-}
-
-fn identity_binding_metadata_json(metadata: &IdentityBindingMetadata) -> Value {
-    json!({
-        "format": metadata.format.clone(),
-        "version": metadata.version,
-        "revision": metadata.revision.clone(),
-        "source_path": metadata.source_path.clone(),
-        "source_modified_epoch": metadata.source_modified_epoch,
-        "loaded_at_epoch": metadata.loaded_at_epoch,
-        "load_status": metadata.load_status.clone(),
-        "load_error": metadata.load_error.clone(),
-    })
-}
-
-fn identity_binding_audit_json(audit_state: &IdentityBindingAuditState) -> Value {
-    json!({
-        "path": audit_state.path.clone(),
-        "last_event_kind": audit_state.last_event_kind.clone(),
-        "last_event_epoch": audit_state.last_event_epoch,
-        "last_status": audit_state.last_status.clone(),
-        "last_error": audit_state.last_error.clone(),
-        "last_policy_decision": audit_state.last_policy_decision.clone(),
-        "last_policy_reason": audit_state.last_policy_reason.clone(),
-    })
-}
-
-fn identity_source_of_truth_json(store: &IdentityBindingStore) -> Value {
-    json!({
-        "mode": identity_source_of_truth_mode(store),
-        "product_users": store.product_users.len(),
-        "missing_product_user_refs": count_missing_product_user_refs(store),
-    })
-}
-
-fn identity_reload_policy_json(config: &ConsumerEntryConfig) -> Value {
-    json!({
-        "require_revision": config.identity_binding_reload_require_revision,
-        "reject_same_revision": config.identity_binding_reload_reject_same_revision,
-        "allow_legacy_format": config.identity_binding_reload_allow_legacy_format,
-        "require_approved_revision": config.identity_binding_reload_require_approved_revision,
-        "allow_rollback": config.identity_binding_reload_allow_rollback,
-        "require_actor": config.identity_binding_reload_require_actor,
-        "actor_header": config.identity_binding_reload_actor_header,
-        "allowed_actors_count": config.identity_binding_reload_allowed_actors.len(),
-    })
-}
-
-fn identity_actor_checks_json(config: &ConsumerEntryConfig) -> Value {
-    let actor_header_valid = !config
-        .identity_binding_reload_actor_header
-        .trim()
-        .is_empty();
-    let status = if !config.identity_binding_reload_require_actor {
-        "disabled"
-    } else if !actor_header_valid {
-        "actor_header_missing"
-    } else if config.identity_binding_reload_allowed_actors.is_empty() {
-        "no_allowed_actors_configured"
-    } else {
-        "ok"
-    };
-    let valid = matches!(status, "disabled" | "ok");
-
-    json!({
-        "status": status,
-        "valid": valid,
-        "require_actor": config.identity_binding_reload_require_actor,
-        "actor_header": config.identity_binding_reload_actor_header,
-        "actor_header_valid": actor_header_valid,
-        "allowed_actor_count": config.identity_binding_reload_allowed_actors.len(),
-        "allowed_actors": config.identity_binding_reload_allowed_actors,
-    })
-}
-
-fn current_effective_identity_revision(
-    config: &ConsumerEntryConfig,
-    store: &IdentityBindingStore,
-) -> Option<String> {
-    effective_identity_revision(
-        &store.metadata,
-        &store.registry_metadata,
-        config.identity_registry_path.is_some(),
-    )
-}
-
-fn identity_approval_checks_json(
-    config: &ConsumerEntryConfig,
-    store: &IdentityBindingStore,
-    approval_state: &IdentityBindingRevisionApprovalState,
-) -> Value {
-    let current_effective_revision = current_effective_identity_revision(config, store);
-    let current_effective_revision_index =
-        current_effective_revision.as_ref().and_then(|revision| {
-            approval_state
-                .approved_revisions
-                .iter()
-                .position(|approved| approved == revision)
-        });
-    let latest_approved_revision = approval_state.approved_revisions.last().cloned();
-    let latest_approved_revision_index = approval_state.approved_revisions.len().checked_sub(1);
-    let current_effective_revision_approved = current_effective_revision.as_ref().map(|revision| {
-        approval_state
-            .approved_revisions
-            .iter()
-            .any(|approved| approved == revision)
-    });
-    let current_matches_latest_approved = current_effective_revision
-        .as_ref()
-        .zip(latest_approved_revision.as_ref())
-        .map(|(current, latest)| current == latest);
-    let status = if config.identity_binding_approved_revisions_path.is_none() {
-        "approval_not_configured"
-    } else if approval_state.load_status != "loaded" {
-        "approval_state_not_loaded"
-    } else if current_effective_revision.is_none() {
-        "current_effective_revision_missing"
-    } else if current_effective_revision_approved != Some(true) {
-        "current_effective_revision_not_approved"
-    } else {
-        "ok"
-    };
-
-    json!({
-        "configured": config.identity_binding_approved_revisions_path.is_some(),
-        "status": status,
-        "current_effective_revision": current_effective_revision,
-        "current_effective_revision_approved": current_effective_revision_approved,
-        "current_effective_revision_index": current_effective_revision_index,
-        "latest_approved_revision": latest_approved_revision,
-        "latest_approved_revision_index": latest_approved_revision_index,
-        "current_matches_latest_approved": current_matches_latest_approved,
-        "approved_revision_count": approval_state.approved_revisions.len(),
-        "approval_state_loaded": approval_state.load_status == "loaded",
-        "rollback_order_available": current_effective_revision_index.is_some() && !approval_state.approved_revisions.is_empty(),
-    })
-}
-
-fn identity_approval_source_json(
-    config: &ConsumerEntryConfig,
-    store: &IdentityBindingStore,
-    approval_state: &IdentityBindingRevisionApprovalState,
-    limit: usize,
-) -> Value {
-    let current_effective_revision = current_effective_identity_revision(config, store);
-    let current_effective_revision_index =
-        current_effective_revision.as_ref().and_then(|revision| {
-            approval_state
-                .approved_revisions
-                .iter()
-                .position(|approved| approved == revision)
-        });
-    let latest_approved_revision = approval_state.approved_revisions.last().cloned();
-    let latest_approved_revision_index = approval_state.approved_revisions.len().checked_sub(1);
-    let revisions = approval_state
-        .approved_revisions
-        .iter()
-        .enumerate()
-        .rev()
-        .take(limit)
-        .map(|(index, revision)| {
-            json!({
-                "index": index,
-                "revision": revision,
-                "is_latest": Some(index) == latest_approved_revision_index,
-                "is_current_effective": current_effective_revision
-                    .as_ref()
-                    .map(|current| current == revision)
-                    .unwrap_or(false),
-            })
-        })
-        .collect::<Vec<_>>();
-    let status = if config.identity_binding_approved_revisions_path.is_none() {
-        "approval_not_configured"
-    } else if approval_state.load_status != "loaded" {
-        "approval_state_not_loaded"
-    } else if approval_state.approved_revisions.is_empty() {
-        "approved_revision_set_empty"
-    } else {
-        "ok"
-    };
-
-    json!({
-        "configured": config.identity_binding_approved_revisions_path.is_some(),
-        "status": status,
-        "valid": status == "ok",
-        "source_path": approval_state.source_path,
-        "source_modified_epoch": approval_state.source_modified_epoch,
-        "loaded_at_epoch": approval_state.loaded_at_epoch,
-        "load_status": approval_state.load_status,
-        "load_error": approval_state.load_error,
-        "version": approval_state.version,
-        "revision": approval_state.revision,
-        "limit": limit,
-        "returned_order": "latest_first",
-        "approved_revision_count": approval_state.approved_revisions.len(),
-        "returned_revision_count": revisions.len(),
-        "latest_approved_revision": latest_approved_revision,
-        "latest_approved_revision_index": latest_approved_revision_index,
-        "current_effective_revision": current_effective_revision,
-        "current_effective_revision_index": current_effective_revision_index,
-        "current_effective_revision_approved": current_effective_revision_index.is_some(),
-        "revisions": revisions,
-    })
-}
-
-fn identity_governance_overview_json(
-    config: &ConsumerEntryConfig,
-    store: &IdentityBindingStore,
-    approval_state: &IdentityBindingRevisionApprovalState,
-    audit_state: &IdentityBindingAuditState,
-    approval_limit: usize,
-) -> Value {
-    let binding_loaded = store.metadata.load_status == "loaded";
-    let registry_configured = config.identity_registry_path.is_some();
-    let registry_loaded = !registry_configured || store.registry_metadata.load_status == "loaded";
-    let missing_product_user_refs = count_missing_product_user_refs(store);
-    let actor_checks = identity_actor_checks_json(config);
-    let actor_valid = actor_checks
-        .get("valid")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let approval_checks = identity_approval_checks_json(config, store, approval_state);
-    let approval_coverage_status = approval_checks
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("approval_state_not_loaded");
-    let approval_coverage_valid = approval_coverage_status == "ok";
-    let approval_source =
-        identity_approval_source_json(config, store, approval_state, approval_limit);
-    let approval_source_valid = approval_source
-        .get("valid")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let actor_status = actor_checks
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("actor_header_missing");
-    let approval_source_status = approval_source
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("approval_state_not_loaded");
-    let status = if !binding_loaded {
-        "identity_bindings_not_loaded"
-    } else if !registry_loaded {
-        "identity_registry_not_loaded"
-    } else if missing_product_user_refs > 0 {
-        "missing_product_user_refs"
-    } else if !actor_valid {
-        actor_status
-    } else if !approval_source_valid {
-        approval_source_status
-    } else if !approval_coverage_valid {
-        approval_coverage_status
-    } else {
-        "ok"
-    };
-
-    json!({
-        "status": status,
-        "valid": status == "ok",
-        "effective_revision": current_effective_identity_revision(config, store),
-        "registry_configured": registry_configured,
-        "missing_product_user_refs": missing_product_user_refs,
-        "checks": {
-            "binding_loaded": binding_loaded,
-            "registry_loaded": registry_loaded,
-            "ref_integrity_ok": missing_product_user_refs == 0,
-            "actor_gate_valid": actor_valid,
-            "approval_source_valid": approval_source_valid,
-            "approval_coverage_valid": approval_coverage_valid,
-        },
-        "identity_binding_metadata": identity_binding_metadata_json(&store.metadata),
-        "identity_registry_metadata": identity_binding_metadata_json(&store.registry_metadata),
-        "identity_binding_counts": identity_binding_counts_json(store),
-        "identity_source_of_truth": identity_source_of_truth_json(store),
-        "identity_binding_reload_policy": identity_reload_policy_json(config),
-        "identity_binding_audit": identity_binding_audit_json(audit_state),
-        "identity_actor_checks": actor_checks,
-        "identity_binding_revision_approval": approval_state,
-        "identity_approval_checks": approval_checks,
-        "identity_approval_source": approval_source,
-    })
-}
-
-fn identity_admin_snapshot_json(
-    config: &ConsumerEntryConfig,
-    store: &IdentityBindingStore,
-    approval_state: &IdentityBindingRevisionApprovalState,
-) -> Value {
-    json!({
-        "registry_configured": config.identity_registry_path.is_some(),
-        "effective_revision": current_effective_identity_revision(config, store),
-        "missing_product_user_refs": count_missing_product_user_refs(store),
-        "identity_binding_metadata": identity_binding_metadata_json(&store.metadata),
-        "identity_registry_metadata": identity_binding_metadata_json(&store.registry_metadata),
-        "identity_binding_counts": identity_binding_counts_json(store),
-        "identity_source_of_truth": identity_source_of_truth_json(store),
-        "identity_binding_reload_policy": identity_reload_policy_json(config),
-        "identity_actor_checks": identity_actor_checks_json(config),
-        "identity_binding_revision_approval": approval_state,
-        "identity_approval_checks": identity_approval_checks_json(config, store, approval_state),
-    })
-}
-
-fn session_auth_issuer_registry_active_key_rows(
-    registry: &HashMap<String, SessionAuthIssuerRegistryIssuer>,
-) -> Vec<Value> {
-    let mut rows = registry
-        .iter()
-        .map(|(issuer, entry)| {
-            let mut key_ids = entry.keys.keys().cloned().collect::<Vec<_>>();
-            key_ids.sort();
-            let active_key_id = entry
-                .active_key_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToString::to_string);
-            let active_key_present = active_key_id
-                .as_ref()
-                .map(|key_id| entry.keys.contains_key(key_id))
-                .unwrap_or(false);
-            json!({
-                "issuer": issuer,
-                "active_key_id": active_key_id,
-                "active_key_present": active_key_present,
-                "key_count": key_ids.len(),
-                "key_ids": key_ids,
-            })
-        })
-        .collect::<Vec<_>>();
-    rows.sort_by(|left, right| {
-        left.get("issuer")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .cmp(
-                right
-                    .get("issuer")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
-            )
-    });
-    rows
-}
-
-fn session_auth_issuer_registry_active_key_diff_json(
-    current: &HashMap<String, SessionAuthIssuerRegistryIssuer>,
-    candidate: &HashMap<String, SessionAuthIssuerRegistryIssuer>,
-) -> Value {
-    let mut issuers = current
-        .keys()
-        .chain(candidate.keys())
-        .cloned()
-        .collect::<Vec<_>>();
-    issuers.sort();
-    issuers.dedup();
-
-    let mut changes = Vec::new();
-    for issuer in issuers {
-        let current_active_key_id = current
-            .get(&issuer)
-            .and_then(|entry| entry.active_key_id.as_deref())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string);
-        let candidate_active_key_id = candidate
-            .get(&issuer)
-            .and_then(|entry| entry.active_key_id.as_deref())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string);
-        if current_active_key_id == candidate_active_key_id {
-            continue;
-        }
-        let status = match (current_active_key_id.as_ref(), candidate_active_key_id.as_ref()) {
-            (None, Some(_)) => "added",
-            (Some(_), None) => "removed",
-            (Some(_), Some(_)) => "changed",
-            (None, None) => continue,
-        };
-        changes.push(json!({
-            "issuer": issuer,
-            "status": status,
-            "current_active_key_id": current_active_key_id,
-            "candidate_active_key_id": candidate_active_key_id,
-        }));
-    }
-
-    json!({
-        "changed_active_key_count": changes.len(),
-        "matches": changes.is_empty(),
-        "changes": changes,
-    })
-}
-
-fn session_auth_issuer_registry_status_json(
-    config: &ConsumerEntryConfig,
-    metadata: &SessionAuthIssuerRegistryMetadata,
-    registry: &HashMap<String, SessionAuthIssuerRegistryIssuer>,
-) -> Value {
-    let mut issuers = registry.keys().cloned().collect::<Vec<_>>();
-    issuers.sort();
-
-    let mut issuers_without_active_key = registry
-        .iter()
-        .filter_map(|(issuer, entry)| {
-            entry.active_key_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .is_none()
-                .then_some(issuer.clone())
-        })
-        .collect::<Vec<_>>();
-    issuers_without_active_key.sort();
-
-    let mut allowed_issuers_in_registry = config
-        .session_auth_allowed_issuers
-        .iter()
-        .filter(|issuer| registry.contains_key(issuer.as_str()))
-        .cloned()
-        .collect::<Vec<_>>();
-    allowed_issuers_in_registry.sort();
-
-    let mut allowed_issuers_missing = config
-        .session_auth_allowed_issuers
-        .iter()
-        .filter(|issuer| !registry.contains_key(issuer.as_str()))
-        .cloned()
-        .collect::<Vec<_>>();
-    allowed_issuers_missing.sort();
-
-    let issuer_active_keys = session_auth_issuer_registry_active_key_rows(registry);
-    let status = if config.session_auth_issuer_registry_path.is_none() {
-        "disabled".to_string()
-    } else if metadata.load_status != "loaded" {
-        metadata.load_status.clone()
-    } else if metadata.issuer_count == 0 {
-        "empty".to_string()
-    } else {
-        "ok".to_string()
-    };
-    let valid = status == "ok";
-
-    json!({
-        "status": status,
-        "valid": valid,
-        "configured": config.session_auth_issuer_registry_path.is_some(),
-        "loaded": metadata.load_status == "loaded",
-        "metadata": metadata,
-        "issuer_count": metadata.issuer_count,
-        "key_count": metadata.key_count,
-        "issuers": issuers,
-        "active_key_issuer_count": metadata.issuer_count.saturating_sub(issuers_without_active_key.len()),
-        "issuers_without_active_key": issuers_without_active_key,
-        "issuer_active_keys": issuer_active_keys,
-        "allowed_issuers": config.session_auth_allowed_issuers,
-        "allowed_issuer_count": config.session_auth_allowed_issuers.len(),
-        "allowed_issuers_in_registry": allowed_issuers_in_registry,
-        "allowed_issuers_missing": allowed_issuers_missing,
-        "expected_audience": config.session_auth_expected_audience,
-    })
-}
-
-fn session_auth_issuer_registry_actor_checks_json(config: &ConsumerEntryConfig) -> Value {
-    let actor_header_valid = !config
-        .session_auth_issuer_registry_actor_header
-        .trim()
-        .is_empty();
-    let status = if !config.session_auth_issuer_registry_require_actor {
-        "disabled"
-    } else if !actor_header_valid {
-        "actor_header_missing"
-    } else if config.session_auth_issuer_registry_allowed_actors.is_empty() {
-        "no_allowed_actors_configured"
-    } else {
-        "ok"
-    };
-    let valid = matches!(status, "disabled" | "ok");
-
-    json!({
-        "status": status,
-        "valid": valid,
-        "require_actor": config.session_auth_issuer_registry_require_actor,
-        "actor_header": config.session_auth_issuer_registry_actor_header,
-        "actor_header_valid": actor_header_valid,
-        "allowed_actor_count": config.session_auth_issuer_registry_allowed_actors.len(),
-        "allowed_actors": config.session_auth_issuer_registry_allowed_actors,
-    })
-}
-
-fn session_auth_issuer_registry_actor_request_json(
-    config: &ConsumerEntryConfig,
-    requesting_actor: Option<&str>,
-) -> Value {
-    let actor_checks = session_auth_issuer_registry_actor_checks_json(config);
-    let normalized_actor = requesting_actor
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string);
-    let actor_header = actor_checks
-        .get("actor_header")
-        .and_then(Value::as_str)
-        .unwrap_or(config.session_auth_issuer_registry_actor_header.as_str());
-    let actor_checks_status = actor_checks
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("actor_header_missing");
-
-    let (authorized, status, reason) = if !config.session_auth_issuer_registry_require_actor {
-        (None, "disabled".to_string(), None)
-    } else if actor_checks_status != "ok" {
-        (
-            Some(false),
-            actor_checks_status.to_string(),
-            Some(actor_checks_status.to_string()),
-        )
-    } else if let Some(actor) = normalized_actor.as_deref() {
-        if config
-            .session_auth_issuer_registry_allowed_actors
-            .iter()
-            .any(|allowed| allowed == actor)
-        {
-            (Some(true), "ok".to_string(), None)
-        } else {
-            (
-                Some(false),
-                "actor_not_allowed".to_string(),
-                Some("actor_not_allowed".to_string()),
-            )
-        }
-    } else {
-        (
-            Some(false),
-            "actor_missing".to_string(),
-            Some("actor_missing".to_string()),
-        )
-    };
-
-    json!({
-        "required": config.session_auth_issuer_registry_require_actor,
-        "actor_header": actor_header,
-        "request_actor": normalized_actor,
-        "authorized": authorized,
-        "status": status,
-        "reason": reason,
-    })
-}
-
-fn session_auth_issuer_registry_current_revision(
-    metadata: &SessionAuthIssuerRegistryMetadata,
-) -> Option<String> {
-    metadata
-        .revision
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-}
-
-fn session_auth_issuer_registry_approval_checks_json(
-    config: &ConsumerEntryConfig,
-    metadata: &SessionAuthIssuerRegistryMetadata,
-    approval_state: &SessionAuthIssuerRegistryRevisionApprovalState,
-) -> Value {
-    let current_revision = session_auth_issuer_registry_current_revision(metadata);
-    let current_revision_index = current_revision.as_ref().and_then(|revision| {
-        approval_state
-            .approved_revisions
-            .iter()
-            .position(|approved| approved == revision)
-    });
-    let latest_approved_revision = approval_state.approved_revisions.last().cloned();
-    let latest_approved_revision_index = approval_state.approved_revisions.len().checked_sub(1);
-    let current_revision_approved = current_revision.as_ref().map(|revision| {
-        approval_state
-            .approved_revisions
-            .iter()
-            .any(|approved| approved == revision)
-    });
-    let current_matches_latest_approved = current_revision
-        .as_ref()
-        .zip(latest_approved_revision.as_ref())
-        .map(|(current, latest)| current == latest);
-    let status = if config
-        .session_auth_issuer_registry_approved_revisions_path
-        .is_none()
-    {
-        "approval_not_configured"
-    } else if approval_state.load_status != "loaded" {
-        "approval_state_not_loaded"
-    } else if current_revision.is_none() {
-        "current_revision_missing"
-    } else if current_revision_approved != Some(true) {
-        "current_revision_not_approved"
-    } else {
-        "ok"
-    };
-
-    json!({
-        "configured": config
-            .session_auth_issuer_registry_approved_revisions_path
-            .is_some(),
-        "required": config.session_auth_issuer_registry_require_approved_revision,
-        "status": status,
-        "valid": status == "ok",
-        "current_revision": current_revision,
-        "current_revision_approved": current_revision_approved,
-        "current_revision_index": current_revision_index,
-        "latest_approved_revision": latest_approved_revision,
-        "latest_approved_revision_index": latest_approved_revision_index,
-        "current_matches_latest_approved": current_matches_latest_approved,
-        "approved_revision_count": approval_state.approved_revisions.len(),
-        "approval_state_loaded": approval_state.load_status == "loaded",
-    })
-}
-
-fn session_auth_issuer_registry_approval_source_json(
-    config: &ConsumerEntryConfig,
-    metadata: &SessionAuthIssuerRegistryMetadata,
-    approval_state: &SessionAuthIssuerRegistryRevisionApprovalState,
-    limit: usize,
-) -> Value {
-    let current_revision = session_auth_issuer_registry_current_revision(metadata);
-    let current_revision_index = current_revision.as_ref().and_then(|revision| {
-        approval_state
-            .approved_revisions
-            .iter()
-            .position(|approved| approved == revision)
-    });
-    let latest_approved_revision = approval_state.approved_revisions.last().cloned();
-    let latest_approved_revision_index = approval_state.approved_revisions.len().checked_sub(1);
-    let revisions = approval_state
-        .approved_revisions
-        .iter()
-        .enumerate()
-        .rev()
-        .take(limit)
-        .map(|(index, revision)| {
-            json!({
-                "index": index,
-                "revision": revision,
-                "is_latest": Some(index) == latest_approved_revision_index,
-                "is_current": current_revision
-                    .as_ref()
-                    .map(|current| current == revision)
-                    .unwrap_or(false),
-            })
-        })
-        .collect::<Vec<_>>();
-    let status = if config
-        .session_auth_issuer_registry_approved_revisions_path
-        .is_none()
-    {
-        "approval_not_configured"
-    } else if approval_state.load_status != "loaded" {
-        "approval_state_not_loaded"
-    } else if approval_state.approved_revisions.is_empty() {
-        "approved_revision_set_empty"
-    } else {
-        "ok"
-    };
-
-    json!({
-        "configured": config
-            .session_auth_issuer_registry_approved_revisions_path
-            .is_some(),
-        "required": config.session_auth_issuer_registry_require_approved_revision,
-        "status": status,
-        "valid": status == "ok",
-        "source_path": approval_state.source_path,
-        "source_modified_epoch": approval_state.source_modified_epoch,
-        "loaded_at_epoch": approval_state.loaded_at_epoch,
-        "load_status": approval_state.load_status,
-        "load_error": approval_state.load_error,
-        "version": approval_state.version,
-        "revision": approval_state.revision,
-        "limit": limit,
-        "returned_order": "latest_first",
-        "approved_revision_count": approval_state.approved_revisions.len(),
-        "returned_revision_count": revisions.len(),
-        "latest_approved_revision": latest_approved_revision,
-        "latest_approved_revision_index": latest_approved_revision_index,
-        "current_revision": current_revision,
-        "current_revision_index": current_revision_index,
-        "current_revision_approved": current_revision_index.is_some(),
-        "revisions": revisions,
-    })
-}
-
-fn session_auth_issuer_registry_governance_overview_json(
-    config: &ConsumerEntryConfig,
-    metadata: &SessionAuthIssuerRegistryMetadata,
-    approval_state: &SessionAuthIssuerRegistryRevisionApprovalState,
-    approval_limit: usize,
-) -> Value {
-    let registry_configured = config.session_auth_issuer_registry_path.is_some();
-    let approval_source_configured = config
-        .session_auth_issuer_registry_approved_revisions_path
-        .is_some();
-    let registry_loaded = !registry_configured || metadata.load_status == "loaded";
-    let revision_present = !registry_configured || metadata.revision.is_some();
-    let actor_checks = session_auth_issuer_registry_actor_checks_json(config);
-    let actor_gate_valid = if !registry_configured {
-        true
-    } else {
-        actor_checks
-            .get("valid")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-    };
-    let actor_gate_status = actor_checks
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("actor_header_missing");
-    let approval_checks =
-        session_auth_issuer_registry_approval_checks_json(config, metadata, approval_state);
-    let approval_source = session_auth_issuer_registry_approval_source_json(
-        config,
-        metadata,
-        approval_state,
-        approval_limit,
-    );
-    let approval_source_valid = if !registry_configured {
-        true
-    } else if !approval_source_configured {
-        !config.session_auth_issuer_registry_require_approved_revision
-    } else {
-        approval_source
-            .get("valid")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-    };
-    let approval_coverage_valid = if !registry_configured
-        || !config.session_auth_issuer_registry_require_approved_revision
-    {
-        true
-    } else {
-        approval_checks
-            .get("valid")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-    };
-    let approval_source_status = approval_source
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("approval_state_not_loaded");
-    let approval_coverage_status = approval_checks
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("approval_state_not_loaded");
-    let status = if !config.require_session_auth {
-        "session_auth_disabled"
-    } else if !registry_configured {
-        "issuer_registry_not_configured"
-    } else if !registry_loaded {
-        "issuer_registry_not_loaded"
-    } else if !revision_present {
-        "issuer_registry_revision_missing"
-    } else if !actor_gate_valid {
-        actor_gate_status
-    } else if !approval_source_valid {
-        approval_source_status
-    } else if !approval_coverage_valid {
-        approval_coverage_status
-    } else {
-        "ok"
-    };
-
-    json!({
-        "status": status,
-        "valid": status == "ok" || status == "issuer_registry_not_configured" || status == "session_auth_disabled",
-        "session_auth_required": config.require_session_auth,
-        "configured": registry_configured,
-        "approval_required": config.session_auth_issuer_registry_require_approved_revision,
-        "current_revision": session_auth_issuer_registry_current_revision(metadata),
-        "checks": {
-            "registry_loaded": registry_loaded,
-            "revision_present": revision_present,
-            "actor_gate_valid": actor_gate_valid,
-            "approval_source_valid": approval_source_valid,
-            "approval_coverage_valid": approval_coverage_valid,
-        },
-        "issuer_registry_metadata": metadata,
-        "issuer_registry_actor_checks": actor_checks,
-        "issuer_registry_approval": approval_state,
-        "issuer_registry_approval_checks": approval_checks,
-        "issuer_registry_approval_source": approval_source,
-    })
-}
-
-fn normalize_identity_approval_limit(limit: Option<usize>) -> usize {
-    limit.unwrap_or(20).clamp(1, 100)
-}
-
-fn normalize_identity_audit_limit(limit: Option<usize>) -> usize {
-    limit.unwrap_or(20).clamp(1, 100)
-}
-
-fn is_registry_audit_event_kind(kind: &str) -> bool {
-    matches!(kind, "registry_reload" | "registry_reload_rejected")
-}
-
-fn read_registry_audit_events(path: &str, limit: usize) -> Result<(Vec<Value>, usize), String> {
-    let raw = std::fs::read_to_string(path).map_err(|err| err.to_string())?;
-    let mut events = Vec::new();
-    let mut parse_error_count = 0;
-
-    for line in raw.lines().rev() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let value = match serde_json::from_str::<Value>(trimmed) {
-            Ok(value) => value,
-            Err(_) => {
-                parse_error_count += 1;
-                continue;
-            }
-        };
-        let is_registry_event = value
-            .get("event_kind")
-            .and_then(Value::as_str)
-            .map(is_registry_audit_event_kind)
-            .unwrap_or(false);
-        if !is_registry_event {
-            continue;
-        }
-        events.push(value);
-        if events.len() >= limit {
-            break;
-        }
-    }
-
-    Ok((events, parse_error_count))
-}
-
-fn identity_reload_response_json(
-    ok: bool,
-    reloaded: bool,
-    store: &IdentityBindingStore,
-    audit_state: &IdentityBindingAuditState,
-    governance: &IdentityBindingReloadGovernance,
-    approval_state: &IdentityBindingRevisionApprovalState,
-) -> Value {
-    json!({
-        "ok": ok,
-        "reloaded": reloaded,
-        "identity_binding_metadata": identity_binding_metadata_json(&store.metadata),
-        "identity_registry_metadata": identity_binding_metadata_json(&store.registry_metadata),
-        "identity_binding_counts": identity_binding_counts_json(store),
-        "identity_source_of_truth": identity_source_of_truth_json(store),
-        "identity_binding_audit": identity_binding_audit_json(audit_state),
-        "identity_binding_reload_governance": governance,
-        "identity_binding_revision_approval": approval_state,
-    })
-}
-
-async fn apply_identity_store_reload(
-    state: &AppState,
-    headers: &HeaderMap,
-    reloaded_store: IdentityBindingStore,
-    accepted_event_kind: &str,
-    rejected_event_kind: &str,
-) -> Response {
-    if let Err(response) = authorize_ingress(headers, state.config()) {
-        state.inner.metrics.inc_ingress_auth_failures();
-        return response;
-    }
-
-    state.inner.metrics.inc_identity_binding_reload_requests();
-    let current_store = {
-        let store = state.inner.identity_binding_store.read().await;
-        store.clone()
-    };
-    let requesting_actor = headers
-        .get(state.config().identity_binding_reload_actor_header.as_str())
-        .and_then(|value| value.to_str().ok())
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    let approval_state = load_identity_binding_revision_approval_state(state.config());
-    let governance = evaluate_identity_binding_reload_governance(
-        state.config(),
-        &current_store,
-        &reloaded_store,
-        &approval_state,
-        requesting_actor.as_deref(),
-    );
-    let event_kind = if governance.accepted {
-        accepted_event_kind
-    } else {
-        rejected_event_kind
-    };
-    let audit_state = append_identity_binding_audit_event(
-        state.config(),
-        event_kind,
-        &reloaded_store,
-        Some(&governance),
-    );
-    if audit_state.last_status != "written"
-        && state.config().identity_binding_audit_log_path.is_some()
-    {
-        state.inner.metrics.inc_identity_binding_audit_failures();
-    }
-
-    let response_body = if governance.accepted {
-        identity_reload_response_json(
-            true,
-            true,
-            &reloaded_store,
-            &audit_state,
-            &governance,
-            &approval_state,
-        )
-    } else {
-        identity_reload_response_json(
-            false,
-            false,
-            &reloaded_store,
-            &audit_state,
-            &governance,
-            &approval_state,
-        )
-    };
-
-    {
-        let mut audit_state_guard = state.inner.identity_binding_audit_state.write().await;
-        *audit_state_guard = audit_state;
-    }
-
-    if !governance.accepted {
-        state.inner.metrics.inc_identity_binding_reload_rejections();
-        if governance.actor_authorized == Some(false) {
-            state
-                .inner
-                .metrics
-                .inc_identity_binding_reload_actor_rejections();
-            return (StatusCode::FORBIDDEN, Json(response_body)).into_response();
-        }
-        return (StatusCode::CONFLICT, Json(response_body)).into_response();
-    }
-
-    state.inner.metrics.inc_identity_binding_reload_successes();
-    {
-        let mut store = state.inner.identity_binding_store.write().await;
-        *store = reloaded_store;
-    }
-
-    (StatusCode::OK, Json(response_body)).into_response()
-}
-
-async fn reload_identity_bindings(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let reloaded_store = load_identity_binding_store(state.config());
-    apply_identity_store_reload(
-        &state,
-        &headers,
-        reloaded_store,
-        "reload",
-        "reload_rejected",
-    )
-    .await
-}
-
-async fn reload_identity_registry(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let Some(_) = state.config().identity_registry_path.as_deref() else {
-        if let Err(response) = authorize_ingress(&headers, state.config()) {
-            state.inner.metrics.inc_ingress_auth_failures();
-            return response;
-        }
-        let current_store = {
-            let store = state.inner.identity_binding_store.read().await;
-            store.clone()
-        };
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({
-                "ok": false,
-                "reloaded": false,
-                "error": "identity_registry_not_configured",
-                "identity_binding_metadata": identity_binding_metadata_json(&current_store.metadata),
-                "identity_registry_metadata": identity_binding_metadata_json(&current_store.registry_metadata),
-                "identity_binding_counts": identity_binding_counts_json(&current_store),
-                "identity_source_of_truth": identity_source_of_truth_json(&current_store),
-            })),
-        )
-            .into_response();
-    };
-
-    let current_store = {
-        let store = state.inner.identity_binding_store.read().await;
-        store.clone()
-    };
-    let (registry_metadata, product_users) = load_product_user_registry(
-        state.config().identity_registry_path.as_deref(),
-        current_store.product_users.clone(),
-        &current_store.metadata,
-    );
-    let reloaded_store = IdentityBindingStore {
-        registry_metadata,
-        product_users,
-        ..current_store
-    };
-
-    apply_identity_store_reload(
-        &state,
-        &headers,
-        reloaded_store,
-        "registry_reload",
-        "registry_reload_rejected",
-    )
-    .await
-}
-
-async fn validate_identity_registry(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Err(response) = authorize_ingress(&headers, state.config()) {
-        state.inner.metrics.inc_ingress_auth_failures();
-        return response;
-    }
-
-    let Some(_) = state.config().identity_registry_path.as_deref() else {
-        let current_store = {
-            let store = state.inner.identity_binding_store.read().await;
-            store.clone()
-        };
-        let approval_state = load_identity_binding_revision_approval_state(state.config());
-        let mut body =
-            identity_admin_snapshot_json(state.config(), &current_store, &approval_state);
-        let object = body
-            .as_object_mut()
-            .expect("identity admin snapshot should be json object");
-        object.insert("ok".to_string(), json!(false));
-        object.insert("validated".to_string(), json!(true));
-        object.insert("valid".to_string(), json!(false));
-        object.insert("would_reload".to_string(), json!(false));
-        object.insert(
-            "error".to_string(),
-            json!("identity_registry_not_configured"),
-        );
-        return (StatusCode::CONFLICT, Json(body)).into_response();
-    };
-
-    let current_store = {
-        let store = state.inner.identity_binding_store.read().await;
-        store.clone()
-    };
-    let (registry_metadata, product_users) = load_product_user_registry(
-        state.config().identity_registry_path.as_deref(),
-        current_store.product_users.clone(),
-        &current_store.metadata,
-    );
-    let candidate_store = IdentityBindingStore {
-        registry_metadata,
-        product_users,
-        ..current_store.clone()
-    };
-    let approval_state = load_identity_binding_revision_approval_state(state.config());
-    let requesting_actor = headers
-        .get(state.config().identity_binding_reload_actor_header.as_str())
-        .and_then(|value| value.to_str().ok())
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    let governance = evaluate_identity_binding_reload_governance(
-        state.config(),
-        &current_store,
-        &candidate_store,
-        &approval_state,
-        requesting_actor.as_deref(),
-    );
-    let mut body = identity_admin_snapshot_json(state.config(), &candidate_store, &approval_state);
-    let object = body
-        .as_object_mut()
-        .expect("identity admin snapshot should be json object");
-    object.insert("ok".to_string(), json!(governance.accepted));
-    object.insert("validated".to_string(), json!(true));
-    object.insert("valid".to_string(), json!(governance.accepted));
-    object.insert("would_reload".to_string(), json!(governance.accepted));
-    object.insert("checked_only".to_string(), json!(true));
-    object.insert(
-        "identity_binding_reload_governance".to_string(),
-        serde_json::to_value(&governance).expect("serialize governance"),
-    );
-
-    if !governance.accepted {
-        if governance.actor_authorized == Some(false) {
-            return (StatusCode::FORBIDDEN, Json(body)).into_response();
-        }
-        return (StatusCode::CONFLICT, Json(body)).into_response();
-    }
-
-    (StatusCode::OK, Json(body)).into_response()
-}
-
-async fn get_identity_registry_status(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Response {
-    if let Err(response) = authorize_ingress(&headers, state.config()) {
-        state.inner.metrics.inc_ingress_auth_failures();
-        return response;
-    }
-
-    let store = {
-        let store = state.inner.identity_binding_store.read().await;
-        store.clone()
-    };
-    let audit = {
-        let audit = state.inner.identity_binding_audit_state.read().await;
-        audit.clone()
-    };
-    let approval_state = load_identity_binding_revision_approval_state(state.config());
-    let mut body = identity_admin_snapshot_json(state.config(), &store, &approval_state);
-    let object = body
-        .as_object_mut()
-        .expect("identity admin snapshot should be json object");
-    object.insert("ok".to_string(), json!(true));
-    object.insert("status".to_string(), json!("ok"));
-    object.insert(
-        "identity_binding_audit".to_string(),
-        identity_binding_audit_json(&audit),
-    );
-
-    (StatusCode::OK, Json(body)).into_response()
-}
-
-async fn get_identity_registry_audit(
-    State(state): State<AppState>,
-    Query(query): Query<IdentityAuditQuery>,
-    headers: HeaderMap,
-) -> Response {
-    if let Err(response) = authorize_ingress(&headers, state.config()) {
-        state.inner.metrics.inc_ingress_auth_failures();
-        return response;
-    }
-
-    let store = {
-        let store = state.inner.identity_binding_store.read().await;
-        store.clone()
-    };
-    let audit = {
-        let audit = state.inner.identity_binding_audit_state.read().await;
-        audit.clone()
-    };
-    let approval_state = load_identity_binding_revision_approval_state(state.config());
-    let Some(path) = state.config().identity_binding_audit_log_path.as_deref() else {
-        let mut body = identity_admin_snapshot_json(state.config(), &store, &approval_state);
-        let object = body
-            .as_object_mut()
-            .expect("identity admin snapshot should be json object");
-        object.insert("ok".to_string(), json!(false));
-        object.insert("status".to_string(), json!("error"));
-        object.insert("error".to_string(), json!("identity_audit_not_configured"));
-        object.insert(
-            "identity_binding_audit".to_string(),
-            identity_binding_audit_json(&audit),
-        );
-        return (StatusCode::CONFLICT, Json(body)).into_response();
-    };
-
-    let limit = normalize_identity_audit_limit(query.limit);
-    let (events, parse_error_count) = match read_registry_audit_events(path, limit) {
-        Ok(result) => result,
-        Err(err) => {
-            let mut body = identity_admin_snapshot_json(state.config(), &store, &approval_state);
-            let object = body
-                .as_object_mut()
-                .expect("identity admin snapshot should be json object");
-            object.insert("ok".to_string(), json!(false));
-            object.insert("status".to_string(), json!("error"));
-            object.insert("error".to_string(), json!("identity_audit_read_error"));
-            object.insert("error_detail".to_string(), json!(err));
-            object.insert(
-                "identity_binding_audit".to_string(),
-                identity_binding_audit_json(&audit),
-            );
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response();
-        }
-    };
-
-    let mut body = identity_admin_snapshot_json(state.config(), &store, &approval_state);
-    let object = body
-        .as_object_mut()
-        .expect("identity admin snapshot should be json object");
-    object.insert("ok".to_string(), json!(true));
-    object.insert("status".to_string(), json!("ok"));
-    object.insert("audit_path".to_string(), json!(path));
-    object.insert("limit".to_string(), json!(limit));
-    object.insert("returned_event_count".to_string(), json!(events.len()));
-    object.insert("parse_error_count".to_string(), json!(parse_error_count));
-    object.insert("events".to_string(), json!(events));
-    object.insert(
-        "identity_binding_audit".to_string(),
-        identity_binding_audit_json(&audit),
-    );
-
-    (StatusCode::OK, Json(body)).into_response()
-}
-
-async fn get_session_auth_issuer_registry_status(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Response {
-    if let Err(response) = authorize_ingress(&headers, state.config()) {
-        state.inner.metrics.inc_ingress_auth_failures();
-        return response;
-    }
-
-    let current_state = session_auth_issuer_registry_runtime_state(&state);
-    let status = session_auth_issuer_registry_status_json(
-        state.config(),
-        &current_state.metadata,
-        &current_state.registry,
-    );
-    let approval_state = load_session_auth_issuer_registry_revision_approval_state(state.config());
-    let actor_checks = session_auth_issuer_registry_actor_checks_json(state.config());
-    let approval_checks = session_auth_issuer_registry_approval_checks_json(
-        state.config(),
-        &current_state.metadata,
-        &approval_state,
-    );
-    let approval_source = session_auth_issuer_registry_approval_source_json(
-        state.config(),
-        &current_state.metadata,
-        &approval_state,
-        20,
-    );
-
-    let body = json!({
-        "ok": true,
-        "status": "ok",
-        "require_session_auth": state.config().require_session_auth,
-        "session_auth_issuer_registry": status,
-        "session_auth_issuer_registry_actor_checks": actor_checks,
-        "session_auth_issuer_registry_approval": approval_checks,
-        "session_auth_issuer_registry_approval_source": approval_source,
-    });
-
-    (StatusCode::OK, Json(body)).into_response()
-}
-
-async fn validate_session_auth_issuer_registry(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Response {
-    if let Err(response) = authorize_ingress(&headers, state.config()) {
-        state.inner.metrics.inc_ingress_auth_failures();
-        return response;
-    }
-
-    let current_state = session_auth_issuer_registry_runtime_state(&state);
-    let current_status = session_auth_issuer_registry_status_json(
-        state.config(),
-        &current_state.metadata,
-        &current_state.registry,
-    );
-    let (candidate_metadata, candidate_registry) =
-        load_session_auth_issuer_registry(state.config().session_auth_issuer_registry_path.as_deref());
-    let candidate_status = session_auth_issuer_registry_status_json(
-        state.config(),
-        &candidate_metadata,
-        &candidate_registry,
-    );
-    let approval_state = load_session_auth_issuer_registry_revision_approval_state(state.config());
-    let actor_checks = session_auth_issuer_registry_actor_checks_json(state.config());
-    let requesting_actor = headers
-        .get(state.config().session_auth_issuer_registry_actor_header.as_str())
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let actor_request =
-        session_auth_issuer_registry_actor_request_json(state.config(), requesting_actor);
-    let current_approval_checks = session_auth_issuer_registry_approval_checks_json(
-        state.config(),
-        &current_state.metadata,
-        &approval_state,
-    );
-    let current_approval_source = session_auth_issuer_registry_approval_source_json(
-        state.config(),
-        &current_state.metadata,
-        &approval_state,
-        20,
-    );
-    let candidate_approval_checks = session_auth_issuer_registry_approval_checks_json(
-        state.config(),
-        &candidate_metadata,
-        &approval_state,
-    );
-    let candidate_approval_source = session_auth_issuer_registry_approval_source_json(
-        state.config(),
-        &candidate_metadata,
-        &approval_state,
-        20,
-    );
-    let candidate_registry_valid = candidate_status
-        .get("valid")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let actor_gate_valid = if state.config().session_auth_issuer_registry_require_actor {
-        actor_request
-            .get("authorized")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-    } else {
-        true
-    };
-    let candidate_approval_valid = candidate_approval_checks
-        .get("valid")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let validation_status = if !candidate_registry_valid {
-        candidate_status
-            .get("status")
-            .and_then(Value::as_str)
-            .unwrap_or("error")
-            .to_string()
-    } else if state.config().session_auth_issuer_registry_require_actor && !actor_gate_valid {
-        actor_request
-            .get("status")
-            .and_then(Value::as_str)
-            .unwrap_or("actor_missing")
-            .to_string()
-    } else if state
-        .config()
-        .session_auth_issuer_registry_require_approved_revision
-        && !candidate_approval_valid
-    {
-        candidate_approval_checks
-            .get("status")
-            .and_then(Value::as_str)
-            .unwrap_or("approval_state_not_loaded")
-            .to_string()
-    } else {
-        "ok".to_string()
-    };
-    let is_valid = candidate_registry_valid
-        && (!state.config().session_auth_issuer_registry_require_actor || actor_gate_valid)
-        && (!state
-            .config()
-            .session_auth_issuer_registry_require_approved_revision
-            || candidate_approval_valid);
-    let active_key_diff = session_auth_issuer_registry_active_key_diff_json(
-        &current_state.registry,
-        &candidate_registry,
-    );
-    let matches_loaded_revision = candidate_metadata.revision == current_state.metadata.revision;
-    let matches_loaded_key_count = candidate_metadata.key_count == current_state.metadata.key_count;
-    let matches_loaded_issuer_count =
-        candidate_metadata.issuer_count == current_state.metadata.issuer_count;
-    let matches_loaded_status = candidate_metadata.load_status == current_state.metadata.load_status;
-    let matches_loaded_active_keys = active_key_diff
-        .get("matches")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-
-    let body = json!({
-        "ok": is_valid,
-        "validated": true,
-        "valid": is_valid,
-        "status": validation_status,
-        "require_session_auth": state.config().require_session_auth,
-        "session_auth_issuer_registry": current_status,
-        "session_auth_issuer_registry_source": candidate_status,
-        "session_auth_issuer_registry_actor_checks": actor_checks,
-        "session_auth_issuer_registry_actor_request": actor_request,
-        "session_auth_issuer_registry_approval": current_approval_checks,
-        "session_auth_issuer_registry_approval_source": current_approval_source,
-        "session_auth_issuer_registry_source_approval": candidate_approval_checks,
-        "session_auth_issuer_registry_source_approval_source": candidate_approval_source,
-        "session_auth_issuer_registry_active_key_diff": active_key_diff,
-        "matches_loaded_status": matches_loaded_status,
-        "matches_loaded_revision": matches_loaded_revision,
-        "matches_loaded_issuer_count": matches_loaded_issuer_count,
-        "matches_loaded_key_count": matches_loaded_key_count,
-        "matches_loaded_active_keys": matches_loaded_active_keys,
-    });
-
-    if is_valid {
-        return (StatusCode::OK, Json(body)).into_response();
-    }
-
-    (StatusCode::CONFLICT, Json(body)).into_response()
-}
-
-async fn reload_session_auth_issuer_registry(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Response {
-    if let Err(response) = authorize_ingress(&headers, state.config()) {
-        state.inner.metrics.inc_ingress_auth_failures();
-        return response;
-    }
-
-    let current_state = session_auth_issuer_registry_runtime_state(&state);
-    let current_status = session_auth_issuer_registry_status_json(
-        state.config(),
-        &current_state.metadata,
-        &current_state.registry,
-    );
-    let actor_checks = session_auth_issuer_registry_actor_checks_json(state.config());
-
-    if state.config().session_auth_issuer_registry_path.is_none() {
-        let approval_state =
-            load_session_auth_issuer_registry_revision_approval_state(state.config());
-        let approval_checks = session_auth_issuer_registry_approval_checks_json(
-            state.config(),
-            &current_state.metadata,
-            &approval_state,
-        );
-        let approval_source = session_auth_issuer_registry_approval_source_json(
-            state.config(),
-            &current_state.metadata,
-            &approval_state,
-            20,
-        );
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({
-                "ok": false,
-                "reloaded": false,
-                "error": "session_auth_issuer_registry_not_configured",
-                "require_session_auth": state.config().require_session_auth,
-                "session_auth_issuer_registry": current_status,
-                "session_auth_issuer_registry_actor_checks": actor_checks,
-                "session_auth_issuer_registry_approval": approval_checks,
-                "session_auth_issuer_registry_approval_source": approval_source,
-            })),
-        )
-            .into_response();
-    }
-
-    let (candidate_metadata, candidate_registry) = load_session_auth_issuer_registry(
-        state.config().session_auth_issuer_registry_path.as_deref(),
-    );
-    let candidate_status = session_auth_issuer_registry_status_json(
-        state.config(),
-        &candidate_metadata,
-        &candidate_registry,
-    );
-    let approval_state = load_session_auth_issuer_registry_revision_approval_state(state.config());
-    let requesting_actor = headers
-        .get(state.config().session_auth_issuer_registry_actor_header.as_str())
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let actor_request =
-        session_auth_issuer_registry_actor_request_json(state.config(), requesting_actor);
-    let current_approval_checks = session_auth_issuer_registry_approval_checks_json(
-        state.config(),
-        &current_state.metadata,
-        &approval_state,
-    );
-    let current_approval_source = session_auth_issuer_registry_approval_source_json(
-        state.config(),
-        &current_state.metadata,
-        &approval_state,
-        20,
-    );
-    let candidate_approval_checks = session_auth_issuer_registry_approval_checks_json(
-        state.config(),
-        &candidate_metadata,
-        &approval_state,
-    );
-    let candidate_approval_source = session_auth_issuer_registry_approval_source_json(
-        state.config(),
-        &candidate_metadata,
-        &approval_state,
-        20,
-    );
-    let candidate_registry_valid = candidate_status
-        .get("valid")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let actor_authorized = if state.config().session_auth_issuer_registry_require_actor {
-        actor_request
-            .get("authorized")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-    } else {
-        true
-    };
-    let candidate_approval_valid = candidate_approval_checks
-        .get("valid")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let (accepted, reason) = if !candidate_registry_valid {
-        (
-            false,
-            candidate_status
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or("error")
-                .to_string(),
-        )
-    } else if state.config().session_auth_issuer_registry_require_actor && !actor_authorized {
-        (
-            false,
-            actor_request
-                .get("reason")
-                .and_then(Value::as_str)
-                .unwrap_or("actor_missing")
-                .to_string(),
-        )
-    } else if state
-        .config()
-        .session_auth_issuer_registry_require_approved_revision
-        && !candidate_approval_valid
-    {
-        (
-            false,
-            candidate_approval_checks
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or("approval_state_not_loaded")
-                .to_string(),
-        )
-    } else {
-        (true, "ok".to_string())
-    };
-    let active_key_diff = session_auth_issuer_registry_active_key_diff_json(
-        &current_state.registry,
-        &candidate_registry,
-    );
-    let matches_loaded_active_keys = active_key_diff
-        .get("matches")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-
-    if accepted {
-        let mut live_state = state
-            .inner
-            .session_auth_issuer_registry_state
-            .write()
-            .expect("session auth issuer registry state lock poisoned");
-        *live_state = SessionAuthIssuerRegistryRuntimeState {
-            metadata: candidate_metadata.clone(),
-            registry: candidate_registry.clone(),
-        };
-    }
-
-    let live_state = session_auth_issuer_registry_runtime_state(&state);
-    let live_status = session_auth_issuer_registry_status_json(
-        state.config(),
-        &live_state.metadata,
-        &live_state.registry,
-    );
-    let governance = json!({
-        "accepted": accepted,
-        "status": if accepted { "accepted" } else { "rejected" },
-        "reason": reason,
-        "actor_authorized": actor_request.get("authorized").cloned().unwrap_or(Value::Null),
-        "actor_reason": actor_request.get("reason").cloned().unwrap_or(Value::Null),
-        "current_revision": session_auth_issuer_registry_current_revision(&current_state.metadata),
-        "candidate_revision": session_auth_issuer_registry_current_revision(&candidate_metadata),
-        "candidate_loaded": candidate_metadata.load_status == "loaded",
-        "candidate_revision_approved": candidate_approval_checks
-            .get("current_revision_approved")
-            .cloned()
-            .unwrap_or(Value::Null),
-        "matches_loaded_active_keys": matches_loaded_active_keys,
-    });
-
-    let body = json!({
-        "ok": accepted,
-        "reloaded": accepted,
-        "status": if accepted { "ok" } else { "rejected" },
-        "require_session_auth": state.config().require_session_auth,
-        "session_auth_issuer_registry": live_status,
-        "session_auth_issuer_registry_previous": current_status,
-        "session_auth_issuer_registry_source": candidate_status,
-        "session_auth_issuer_registry_actor_checks": actor_checks,
-        "session_auth_issuer_registry_actor_request": actor_request,
-        "session_auth_issuer_registry_approval": current_approval_checks,
-        "session_auth_issuer_registry_approval_source": current_approval_source,
-        "session_auth_issuer_registry_source_approval": candidate_approval_checks,
-        "session_auth_issuer_registry_source_approval_source": candidate_approval_source,
-        "session_auth_issuer_registry_active_key_diff": active_key_diff,
-        "session_auth_issuer_registry_reload_governance": governance,
-    });
-
-    if accepted {
-        return (StatusCode::OK, Json(body)).into_response();
-    }
-
-    if state.config().session_auth_issuer_registry_require_actor && !actor_authorized {
-        return (StatusCode::FORBIDDEN, Json(body)).into_response();
-    }
-
-    (StatusCode::CONFLICT, Json(body)).into_response()
-}
-
-async fn get_session_auth_issuer_registry_actor_status(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Response {
-    if let Err(response) = authorize_ingress(&headers, state.config()) {
-        state.inner.metrics.inc_ingress_auth_failures();
-        return response;
-    }
-
-    let checks = session_auth_issuer_registry_actor_checks_json(state.config());
-    let is_valid = checks
-        .get("valid")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let current_state = session_auth_issuer_registry_runtime_state(&state);
-
-    let body = json!({
-        "ok": true,
-        "status": "ok",
-        "require_session_auth": state.config().require_session_auth,
-        "session_auth_issuer_registry": session_auth_issuer_registry_status_json(
-            state.config(),
-            &current_state.metadata,
-            &current_state.registry,
-        ),
-        "session_auth_issuer_registry_actor_checks": checks,
-        "actor_valid": is_valid,
-    });
-
-    (StatusCode::OK, Json(body)).into_response()
-}
-
-async fn validate_session_auth_issuer_registry_actors(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Response {
-    if let Err(response) = authorize_ingress(&headers, state.config()) {
-        state.inner.metrics.inc_ingress_auth_failures();
-        return response;
-    }
-
-    let checks = session_auth_issuer_registry_actor_checks_json(state.config());
-    let status = checks
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("actor_header_missing");
-    let is_valid = checks
-        .get("valid")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let current_state = session_auth_issuer_registry_runtime_state(&state);
-
-    let body = json!({
-        "ok": is_valid,
-        "validated": true,
-        "valid": is_valid,
-        "status": status,
-        "require_session_auth": state.config().require_session_auth,
-        "session_auth_issuer_registry": session_auth_issuer_registry_status_json(
-            state.config(),
-            &current_state.metadata,
-            &current_state.registry,
-        ),
-        "session_auth_issuer_registry_actor_checks": checks,
-    });
-
-    if is_valid {
-        return (StatusCode::OK, Json(body)).into_response();
-    }
-
-    (StatusCode::CONFLICT, Json(body)).into_response()
-}
-
-async fn get_session_auth_issuer_registry_approval_status(
-    State(state): State<AppState>,
-    Query(query): Query<IdentityApprovalQuery>,
-    headers: HeaderMap,
-) -> Response {
-    if let Err(response) = authorize_ingress(&headers, state.config()) {
-        state.inner.metrics.inc_ingress_auth_failures();
-        return response;
-    }
-
-    let current_state = session_auth_issuer_registry_runtime_state(&state);
-    let approval_state = load_session_auth_issuer_registry_revision_approval_state(state.config());
-    let checks = session_auth_issuer_registry_approval_checks_json(
-        state.config(),
-        &current_state.metadata,
-        &approval_state,
-    );
-    let source = session_auth_issuer_registry_approval_source_json(
-        state.config(),
-        &current_state.metadata,
-        &approval_state,
-        normalize_identity_approval_limit(query.limit),
-    );
-
-    let body = json!({
-        "ok": true,
-        "status": "ok",
-        "require_session_auth": state.config().require_session_auth,
-        "session_auth_issuer_registry": session_auth_issuer_registry_status_json(
-            state.config(),
-            &current_state.metadata,
-            &current_state.registry,
-        ),
-        "session_auth_issuer_registry_approval": checks,
-        "session_auth_issuer_registry_approval_source": source,
-    });
-
-    (StatusCode::OK, Json(body)).into_response()
-}
-
-async fn validate_session_auth_issuer_registry_approval(
-    State(state): State<AppState>,
-    Query(query): Query<IdentityApprovalQuery>,
-    headers: HeaderMap,
-) -> Response {
-    if let Err(response) = authorize_ingress(&headers, state.config()) {
-        state.inner.metrics.inc_ingress_auth_failures();
-        return response;
-    }
-
-    let current_state = session_auth_issuer_registry_runtime_state(&state);
-    let approval_state = load_session_auth_issuer_registry_revision_approval_state(state.config());
-    let checks = session_auth_issuer_registry_approval_checks_json(
-        state.config(),
-        &current_state.metadata,
-        &approval_state,
-    );
-    let source = session_auth_issuer_registry_approval_source_json(
-        state.config(),
-        &current_state.metadata,
-        &approval_state,
-        normalize_identity_approval_limit(query.limit),
-    );
-    let status = checks
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("approval_state_not_loaded");
-    let is_valid = checks
-        .get("valid")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-
-    let body = json!({
-        "ok": is_valid,
-        "validated": true,
-        "valid": is_valid,
-        "status": status,
-        "require_session_auth": state.config().require_session_auth,
-        "session_auth_issuer_registry": session_auth_issuer_registry_status_json(
-            state.config(),
-            &current_state.metadata,
-            &current_state.registry,
-        ),
-        "session_auth_issuer_registry_approval": checks,
-        "session_auth_issuer_registry_approval_source": source,
-    });
-
-    if is_valid {
-        return (StatusCode::OK, Json(body)).into_response();
-    }
-
-    (StatusCode::CONFLICT, Json(body)).into_response()
-}
-
-async fn get_identity_approval_status(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Response {
-    if let Err(response) = authorize_ingress(&headers, state.config()) {
-        state.inner.metrics.inc_ingress_auth_failures();
-        return response;
-    }
-
-    let store = {
-        let store = state.inner.identity_binding_store.read().await;
-        store.clone()
-    };
-    let approval_state = load_identity_binding_revision_approval_state(state.config());
-    let mut body = identity_admin_snapshot_json(state.config(), &store, &approval_state);
-    let checks = identity_approval_checks_json(state.config(), &store, &approval_state);
-    let is_valid = checks
-        .get("status")
-        .and_then(Value::as_str)
-        .map(|status| status == "ok")
-        .unwrap_or(false);
-    let object = body
-        .as_object_mut()
-        .expect("identity admin snapshot should be json object");
-    object.insert("ok".to_string(), json!(true));
-    object.insert("status".to_string(), json!("ok"));
-    object.insert("approval_valid".to_string(), json!(is_valid));
-
-    (StatusCode::OK, Json(body)).into_response()
-}
-
-async fn validate_identity_approval(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Err(response) = authorize_ingress(&headers, state.config()) {
-        state.inner.metrics.inc_ingress_auth_failures();
-        return response;
-    }
-
-    let store = {
-        let store = state.inner.identity_binding_store.read().await;
-        store.clone()
-    };
-    let approval_state = load_identity_binding_revision_approval_state(state.config());
-    let checks = identity_approval_checks_json(state.config(), &store, &approval_state);
-    let status = checks
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("approval_state_not_loaded");
-    let is_valid = status == "ok";
-    let mut body = identity_admin_snapshot_json(state.config(), &store, &approval_state);
-    let object = body
-        .as_object_mut()
-        .expect("identity admin snapshot should be json object");
-    object.insert("ok".to_string(), json!(is_valid));
-    object.insert("validated".to_string(), json!(true));
-    object.insert("valid".to_string(), json!(is_valid));
-    object.insert("status".to_string(), json!(status));
-
-    if is_valid {
-        return (StatusCode::OK, Json(body)).into_response();
-    }
-
-    (StatusCode::CONFLICT, Json(body)).into_response()
-}
-
-async fn get_identity_approval_source(
-    State(state): State<AppState>,
-    Query(query): Query<IdentityApprovalQuery>,
-    headers: HeaderMap,
-) -> Response {
-    if let Err(response) = authorize_ingress(&headers, state.config()) {
-        state.inner.metrics.inc_ingress_auth_failures();
-        return response;
-    }
-
-    let store = {
-        let store = state.inner.identity_binding_store.read().await;
-        store.clone()
-    };
-    let approval_state = load_identity_binding_revision_approval_state(state.config());
-    let limit = normalize_identity_approval_limit(query.limit);
-    let source = identity_approval_source_json(state.config(), &store, &approval_state, limit);
-    let is_valid = source
-        .get("valid")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let mut body = identity_admin_snapshot_json(state.config(), &store, &approval_state);
-    let object = body
-        .as_object_mut()
-        .expect("identity admin snapshot should be json object");
-    object.insert("ok".to_string(), json!(true));
-    object.insert("status".to_string(), json!("ok"));
-    object.insert("source_valid".to_string(), json!(is_valid));
-    object.insert("identity_approval_source".to_string(), source);
-
-    (StatusCode::OK, Json(body)).into_response()
-}
-
-async fn validate_identity_approval_source(
-    State(state): State<AppState>,
-    Query(query): Query<IdentityApprovalQuery>,
-    headers: HeaderMap,
-) -> Response {
-    if let Err(response) = authorize_ingress(&headers, state.config()) {
-        state.inner.metrics.inc_ingress_auth_failures();
-        return response;
-    }
-
-    let store = {
-        let store = state.inner.identity_binding_store.read().await;
-        store.clone()
-    };
-    let approval_state = load_identity_binding_revision_approval_state(state.config());
-    let limit = normalize_identity_approval_limit(query.limit);
-    let source = identity_approval_source_json(state.config(), &store, &approval_state, limit);
-    let status = source
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("approval_state_not_loaded");
-    let is_valid = source
-        .get("valid")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let mut body = identity_admin_snapshot_json(state.config(), &store, &approval_state);
-    let object = body
-        .as_object_mut()
-        .expect("identity admin snapshot should be json object");
-    object.insert("ok".to_string(), json!(is_valid));
-    object.insert("validated".to_string(), json!(true));
-    object.insert("valid".to_string(), json!(is_valid));
-    object.insert("status".to_string(), json!(status));
-    object.insert("identity_approval_source".to_string(), source);
-
-    if is_valid {
-        return (StatusCode::OK, Json(body)).into_response();
-    }
-
-    (StatusCode::CONFLICT, Json(body)).into_response()
-}
-
-async fn get_identity_governance_status(
-    State(state): State<AppState>,
-    Query(query): Query<IdentityApprovalQuery>,
-    headers: HeaderMap,
-) -> Response {
-    if let Err(response) = authorize_ingress(&headers, state.config()) {
-        state.inner.metrics.inc_ingress_auth_failures();
-        return response;
-    }
-
-    let store = {
-        let store = state.inner.identity_binding_store.read().await;
-        store.clone()
-    };
-    let audit = {
-        let audit = state.inner.identity_binding_audit_state.read().await;
-        audit.clone()
-    };
-    let approval_state = load_identity_binding_revision_approval_state(state.config());
-    let limit = normalize_identity_approval_limit(query.limit);
-    let overview =
-        identity_governance_overview_json(state.config(), &store, &approval_state, &audit, limit);
-    let is_valid = overview
-        .get("valid")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let mut body = identity_admin_snapshot_json(state.config(), &store, &approval_state);
-    let object = body
-        .as_object_mut()
-        .expect("identity admin snapshot should be json object");
-    object.insert("ok".to_string(), json!(true));
-    object.insert("status".to_string(), json!("ok"));
-    object.insert("governance_valid".to_string(), json!(is_valid));
-    object.insert(
-        "identity_binding_audit".to_string(),
-        identity_binding_audit_json(&audit),
-    );
-    object.insert("identity_governance_overview".to_string(), overview);
-
-    (StatusCode::OK, Json(body)).into_response()
-}
-
-async fn validate_identity_governance(
-    State(state): State<AppState>,
-    Query(query): Query<IdentityApprovalQuery>,
-    headers: HeaderMap,
-) -> Response {
-    if let Err(response) = authorize_ingress(&headers, state.config()) {
-        state.inner.metrics.inc_ingress_auth_failures();
-        return response;
-    }
-
-    let store = {
-        let store = state.inner.identity_binding_store.read().await;
-        store.clone()
-    };
-    let audit = {
-        let audit = state.inner.identity_binding_audit_state.read().await;
-        audit.clone()
-    };
-    let approval_state = load_identity_binding_revision_approval_state(state.config());
-    let limit = normalize_identity_approval_limit(query.limit);
-    let overview =
-        identity_governance_overview_json(state.config(), &store, &approval_state, &audit, limit);
-    let status = overview
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("approval_state_not_loaded");
-    let is_valid = overview
-        .get("valid")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let mut body = identity_admin_snapshot_json(state.config(), &store, &approval_state);
-    let object = body
-        .as_object_mut()
-        .expect("identity admin snapshot should be json object");
-    object.insert("ok".to_string(), json!(is_valid));
-    object.insert("validated".to_string(), json!(true));
-    object.insert("valid".to_string(), json!(is_valid));
-    object.insert("status".to_string(), json!(status));
-    object.insert(
-        "identity_binding_audit".to_string(),
-        identity_binding_audit_json(&audit),
-    );
-    object.insert("identity_governance_overview".to_string(), overview);
-
-    if is_valid {
-        return (StatusCode::OK, Json(body)).into_response();
-    }
-
-    (StatusCode::CONFLICT, Json(body)).into_response()
-}
-
-async fn get_identity_actor_status(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Err(response) = authorize_ingress(&headers, state.config()) {
-        state.inner.metrics.inc_ingress_auth_failures();
-        return response;
-    }
-
-    let store = {
-        let store = state.inner.identity_binding_store.read().await;
-        store.clone()
-    };
-    let approval_state = load_identity_binding_revision_approval_state(state.config());
-    let checks = identity_actor_checks_json(state.config());
-    let is_valid = checks
-        .get("valid")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let mut body = identity_admin_snapshot_json(state.config(), &store, &approval_state);
-    let object = body
-        .as_object_mut()
-        .expect("identity admin snapshot should be json object");
-    object.insert("ok".to_string(), json!(true));
-    object.insert("status".to_string(), json!("ok"));
-    object.insert("actor_valid".to_string(), json!(is_valid));
-
-    (StatusCode::OK, Json(body)).into_response()
-}
-
-async fn validate_identity_actors(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Err(response) = authorize_ingress(&headers, state.config()) {
-        state.inner.metrics.inc_ingress_auth_failures();
-        return response;
-    }
-
-    let store = {
-        let store = state.inner.identity_binding_store.read().await;
-        store.clone()
-    };
-    let approval_state = load_identity_binding_revision_approval_state(state.config());
-    let checks = identity_actor_checks_json(state.config());
-    let status = checks
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("actor_header_missing");
-    let is_valid = checks
-        .get("valid")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let mut body = identity_admin_snapshot_json(state.config(), &store, &approval_state);
-    let object = body
-        .as_object_mut()
-        .expect("identity admin snapshot should be json object");
-    object.insert("ok".to_string(), json!(is_valid));
-    object.insert("validated".to_string(), json!(true));
-    object.insert("valid".to_string(), json!(is_valid));
-    object.insert("status".to_string(), json!(status));
-
-    if is_valid {
-        return (StatusCode::OK, Json(body)).into_response();
-    }
-
-    (StatusCode::CONFLICT, Json(body)).into_response()
-}
-
-#[derive(Debug, Deserialize)]
-pub struct CreateChatTaskRequest {
-    pub user_id: Option<String>,
-    pub room_id: Option<String>,
-    pub session_id: Option<String>,
-    pub org_id: Option<String>,
-    pub text: String,
-    pub capability_id: Option<String>,
-    pub account_id: Option<String>,
-    pub idempotency_key: Option<String>,
-    pub metadata: Option<Value>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct MatrixMessageRequest {
-    pub matrix_user_id: String,
-    pub room_id: String,
-    pub session_id: Option<String>,
-    pub org_id: Option<String>,
-    pub message: String,
-    pub capability_id: Option<String>,
-    pub account_id: Option<String>,
-    pub event_id: Option<String>,
-    pub idempotency_key: Option<String>,
-    pub metadata: Option<Value>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ConsumerTaskResponse {
-    pub task_id: String,
-    pub consumer_status: String,
-    pub invocation_status: Option<String>,
-    pub execution: Option<Value>,
-    pub trace: Option<Value>,
-    pub request: Option<Value>,
-    pub source: Value,
-    pub raw: Value,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ErrorBody {
-    pub error: String,
-}
-
-async fn create_chat_task(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(payload): Json<CreateChatTaskRequest>,
-) -> Response {
-    state.inner.metrics.inc_task_create_requests();
-
-    if let Err(response) = authorize_ingress(&headers, state.config()) {
-        state.inner.metrics.inc_ingress_auth_failures();
-        return response;
-    }
-
-    let resolved_identity = match resolve_chat_identity(&state, &payload).await {
-        Ok(identity) => identity,
-        Err(response) => return response,
-    };
-    let request_fingerprint = build_chat_request_fingerprint(&payload);
-    let authorized_session = match authorize_user_session(
-        &state,
-        &headers,
-        &resolved_identity.scope,
-        request_fingerprint.as_str(),
-    ) {
-        Ok(session) => session,
-        Err(response) => return response,
-    };
-
-    let replay_key = build_chat_replay_key(&payload);
-    if let Some(response) = replay_cached_response(&state, replay_key.as_deref()).await {
-        return response;
-    }
-
-    if let Err(response) = enforce_rate_limit(
-        &state,
-        build_chat_rate_limit_key(&payload),
-        state.config().rate_limit_max_requests,
-        "consumer_entry_chat_task_rate_limited",
-        RateLimitBucketKind::SourceScope,
-    )
-    .await
-    {
-        return response;
-    }
-
-    if let Err(response) = enforce_optional_rate_limit(
-        &state,
-        build_chat_user_rate_limit_key(&payload),
-        state.config().rate_limit_user_max_requests,
-        "consumer_entry_chat_user_rate_limited",
-        RateLimitBucketKind::User,
-    )
-    .await
-    {
-        return response;
-    }
-
-    if let Err(response) = enforce_optional_rate_limit(
-        &state,
-        build_chat_room_rate_limit_key(&payload),
-        state.config().rate_limit_room_max_requests,
-        "consumer_entry_chat_room_rate_limited",
-        RateLimitBucketKind::Room,
-    )
-    .await
-    {
-        return response;
-    }
-
-    if let Err(response) = enforce_optional_rate_limit(
-        &state,
-        build_chat_session_rate_limit_key(&payload),
-        state.config().rate_limit_session_max_requests,
-        "consumer_entry_chat_session_rate_limited",
-        RateLimitBucketKind::Session,
-    )
-    .await
-    {
-        return response;
-    }
-
-    if let Err(response) = enforce_optional_rate_limit(
-        &state,
-        build_chat_org_rate_limit_key(&payload),
-        state.config().rate_limit_org_max_requests,
-        "consumer_entry_chat_org_rate_limited",
-        RateLimitBucketKind::Org,
-    )
-    .await
-    {
-        return response;
-    }
-
-    let prompt = match validate_text_payload(&payload.text, state.config().max_text_chars) {
-        Ok(prompt) => prompt,
-        Err(response) => return response,
-    };
-
-    let resolved_account_id = resolved_identity.scope.account_id.clone();
-    let source = json!({
-        "kind": "chat_task",
-        "identity_scope": resolved_identity.scope,
-        "identity_resolution": resolved_identity.resolution,
-        "user_id": payload.user_id,
-        "room_id": payload.room_id,
-        "session_id": payload.session_id,
-        "org_id": payload.org_id,
-        "text": prompt,
-        "idempotency_key": payload.idempotency_key,
-        "metadata": payload.metadata,
-        "session_auth": authorized_session,
-    });
-
-    let response = match forward_to_cex_task(
-        state.clone(),
-        payload.capability_id,
-        resolved_account_id,
-        source,
-        prompt,
-    )
-    .await
-    {
-        Ok(response) => response,
-        Err(response) => return response,
-    };
-
-    remember_replay_response(&state, replay_key.as_deref(), &response).await;
-    (StatusCode::ACCEPTED, Json(response)).into_response()
-}
-
-async fn create_matrix_message_task(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(payload): Json<MatrixMessageRequest>,
-) -> Response {
-    state.inner.metrics.inc_task_create_requests();
-
-    if let Err(response) = authorize_ingress(&headers, state.config()) {
-        state.inner.metrics.inc_ingress_auth_failures();
-        return response;
-    }
-
-    let resolved_identity = match resolve_matrix_identity(&state, &payload).await {
-        Ok(identity) => identity,
-        Err(response) => return response,
-    };
-    let request_fingerprint = build_matrix_request_fingerprint(&payload);
-    let authorized_session = match authorize_user_session(
-        &state,
-        &headers,
-        &resolved_identity.scope,
-        request_fingerprint.as_str(),
-    ) {
-        Ok(session) => session,
-        Err(response) => return response,
-    };
-
-    let replay_key = build_matrix_replay_key(&payload);
-    if let Some(response) = replay_cached_response(&state, replay_key.as_deref()).await {
-        return response;
-    }
-
-    if let Err(response) = enforce_rate_limit(
-        &state,
-        build_matrix_rate_limit_key(&payload),
-        state.config().rate_limit_max_requests,
-        "consumer_entry_matrix_message_rate_limited",
-        RateLimitBucketKind::SourceScope,
-    )
-    .await
-    {
-        return response;
-    }
-
-    if let Err(response) = enforce_optional_rate_limit(
-        &state,
-        Some(build_matrix_user_rate_limit_key(&payload)),
-        state.config().rate_limit_user_max_requests,
-        "consumer_entry_matrix_user_rate_limited",
-        RateLimitBucketKind::User,
-    )
-    .await
-    {
-        return response;
-    }
-
-    if let Err(response) = enforce_optional_rate_limit(
-        &state,
-        Some(build_matrix_room_rate_limit_key(&payload)),
-        state.config().rate_limit_room_max_requests,
-        "consumer_entry_matrix_room_rate_limited",
-        RateLimitBucketKind::Room,
-    )
-    .await
-    {
-        return response;
-    }
-
-    if let Err(response) = enforce_optional_rate_limit(
-        &state,
-        build_matrix_session_rate_limit_key(&payload),
-        state.config().rate_limit_session_max_requests,
-        "consumer_entry_matrix_session_rate_limited",
-        RateLimitBucketKind::Session,
-    )
-    .await
-    {
-        return response;
-    }
-
-    if let Err(response) = enforce_optional_rate_limit(
-        &state,
-        build_matrix_org_rate_limit_key(&payload),
-        state.config().rate_limit_org_max_requests,
-        "consumer_entry_matrix_org_rate_limited",
-        RateLimitBucketKind::Org,
-    )
-    .await
-    {
-        return response;
-    }
-
-    let prompt = match validate_text_payload(&payload.message, state.config().max_text_chars) {
-        Ok(prompt) => prompt,
-        Err(response) => return response,
-    };
-
-    let resolved_account_id = resolved_identity.scope.account_id.clone();
-    let source = json!({
-        "kind": "matrix_message",
-        "identity_scope": resolved_identity.scope,
-        "identity_resolution": resolved_identity.resolution,
-        "matrix_user_id": payload.matrix_user_id,
-        "room_id": payload.room_id,
-        "session_id": payload.session_id,
-        "org_id": payload.org_id,
-        "event_id": payload.event_id,
-        "idempotency_key": payload.idempotency_key,
-        "metadata": payload.metadata,
-        "session_auth": authorized_session,
-    });
-
-    let response = match forward_to_cex_task(
-        state.clone(),
-        payload.capability_id,
-        resolved_account_id,
-        source,
-        prompt,
-    )
-    .await
-    {
-        Ok(response) => response,
-        Err(response) => return response,
-    };
-
-    remember_replay_response(&state, replay_key.as_deref(), &response).await;
-    (StatusCode::ACCEPTED, Json(response)).into_response()
-}
-
-async fn forward_to_cex_task(
-    state: AppState,
-    capability_id: Option<String>,
-    account_id: Option<String>,
-    source: Value,
-    prompt: String,
-) -> Result<ConsumerTaskResponse, Response> {
-    let capability_id = capability_id
-        .or_else(|| state.config().default_capability_id.clone())
-        .filter(|v| !v.trim().is_empty());
-
-    let account_id = account_id
-        .or_else(|| state.config().default_account_id.clone())
-        .filter(|v| !v.trim().is_empty());
-
-    let mut body = json!({
-        "prompt": prompt,
-    });
-
-    if let Some(capability_id) = capability_id {
-        body["capability_id"] = Value::String(capability_id);
-    }
-    if let Some(account_id) = account_id {
-        body["account_id"] = Value::String(account_id);
-    }
-
-    let url = format!(
-        "{}/v1/invocations",
-        state.config().cex_gateway_base_url.trim_end_matches('/')
-    );
-
-    let response = match state
-        .inner
-        .http
-        .post(url)
-        .header("x-api-key", state.config().cex_gateway_api_key.clone())
-        .json(&body)
-        .send()
-        .await
-    {
-        Ok(response) => response,
-        Err(err) => {
-            return Err((
-                StatusCode::BAD_GATEWAY,
-                Json(ErrorBody {
-                    error: format!("failed to reach cex gateway: {err}"),
-                }),
-            )
-                .into_response())
-        }
-    };
-
-    let status = response.status();
-    let value = match response.json::<Value>().await {
-        Ok(value) => value,
-        Err(err) => {
-            return Err((
-                StatusCode::BAD_GATEWAY,
-                Json(ErrorBody {
-                    error: format!("cex gateway returned non-json response: {err}"),
-                }),
-            )
-                .into_response())
-        }
-    };
-
-    if !status.is_success() {
-        return Err((status, Json(value)).into_response());
-    }
-
-    let task_id = value
-        .get("invocation_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let invocation_status = value
-        .get("status")
-        .and_then(Value::as_str)
-        .map(ToString::to_string);
-    let consumer_status = invocation_status
-        .as_deref()
-        .map(project_consumer_status)
-        .unwrap_or("received")
-        .to_string();
-
-    Ok(ConsumerTaskResponse {
-        task_id,
-        consumer_status,
-        invocation_status,
-        execution: value.get("execution").cloned(),
-        trace: value.get("trace").cloned(),
-        request: value.get("request").cloned(),
-        source,
-        raw: value,
-    })
-}
-
-async fn get_chat_task(
-    Path(id): Path<String>,
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Response {
-    state.inner.metrics.inc_task_lookup_requests();
-
-    if let Err(response) = authorize_ingress(&headers, state.config()) {
-        state.inner.metrics.inc_ingress_auth_failures();
-        return response;
-    }
-
-    let url = format!(
-        "{}/v1/invocations/{}",
-        state.config().cex_gateway_base_url.trim_end_matches('/'),
-        id
-    );
-
-    let api_key = headers
-        .get("x-api-key")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string)
-        .unwrap_or_else(|| state.config().cex_gateway_api_key.clone());
-
-    let response = match state
-        .inner
-        .http
-        .get(url)
-        .header("x-api-key", api_key)
-        .send()
-        .await
-    {
-        Ok(response) => response,
-        Err(err) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(ErrorBody {
-                    error: format!("failed to reach cex gateway: {err}"),
-                }),
-            )
-                .into_response()
-        }
-    };
-
-    let status = response.status();
-    let value = match response.json::<Value>().await {
-        Ok(value) => value,
-        Err(err) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(ErrorBody {
-                    error: format!("cex gateway returned non-json response: {err}"),
-                }),
-            )
-                .into_response()
-        }
-    };
-
-    if !status.is_success() {
-        return (status, Json(value)).into_response();
-    }
-
-    let invocation_status = value
-        .get("status")
-        .and_then(Value::as_str)
-        .map(ToString::to_string);
-
-    (
-        StatusCode::OK,
-        Json(ConsumerTaskResponse {
-            task_id: id,
-            consumer_status: invocation_status
-                .as_deref()
-                .map(project_consumer_status)
-                .unwrap_or("received")
-                .to_string(),
-            invocation_status,
-            execution: value.get("execution").cloned(),
-            trace: value.get("trace").cloned(),
-            request: value.get("request").cloned(),
-            source: json!({ "kind": "task_lookup" }),
-            raw: value,
-        }),
-    )
-        .into_response()
-}
-
-fn authorize_ingress(headers: &HeaderMap, config: &ConsumerEntryConfig) -> Result<(), Response> {
-    let Some(expected) = config.ingress_token.as_deref() else {
-        return Ok(());
-    };
-
-    let provided = headers
-        .get("x-entry-token")
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .filter(|v| !v.is_empty());
-
-    match provided {
-        Some(token) if token == expected => Ok(()),
-        _ => Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "missing or invalid entry token" })),
-        )
-            .into_response()),
-    }
-}
-
-fn normalize_identity_value(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-}
-
-fn normalize_request_fingerprint_value(value: Option<&str>) -> String {
-    normalize_identity_value(value).unwrap_or_default()
-}
-
-fn normalize_request_fingerprint_text(value: &str) -> String {
-    value.trim().to_string()
-}
-
-fn build_request_fingerprint(parts: &[String]) -> String {
-    let mut hasher = Sha256::new();
-    for part in parts {
-        hasher.update(part.as_bytes());
-        hasher.update([0x1f]);
-    }
-    URL_SAFE_NO_PAD.encode(hasher.finalize())
-}
-
-fn build_chat_request_fingerprint(payload: &CreateChatTaskRequest) -> String {
-    build_request_fingerprint(&[
-        "chat_task".to_string(),
-        normalize_request_fingerprint_value(payload.user_id.as_deref()),
-        normalize_request_fingerprint_value(payload.room_id.as_deref()),
-        normalize_request_fingerprint_value(payload.session_id.as_deref()),
-        normalize_request_fingerprint_value(payload.org_id.as_deref()),
-        normalize_request_fingerprint_value(payload.account_id.as_deref()),
-        normalize_request_fingerprint_value(payload.capability_id.as_deref()),
-        normalize_request_fingerprint_value(payload.idempotency_key.as_deref()),
-        normalize_request_fingerprint_text(&payload.text),
-    ])
-}
-
-fn build_matrix_request_fingerprint(payload: &MatrixMessageRequest) -> String {
-    build_request_fingerprint(&[
-        "matrix_message".to_string(),
-        normalize_request_fingerprint_value(Some(payload.matrix_user_id.as_str())),
-        normalize_request_fingerprint_value(Some(payload.room_id.as_str())),
-        normalize_request_fingerprint_value(payload.session_id.as_deref()),
-        normalize_request_fingerprint_value(payload.org_id.as_deref()),
-        normalize_request_fingerprint_value(payload.account_id.as_deref()),
-        normalize_request_fingerprint_value(payload.capability_id.as_deref()),
-        normalize_request_fingerprint_value(payload.event_id.as_deref()),
-        normalize_request_fingerprint_value(payload.idempotency_key.as_deref()),
-        normalize_request_fingerprint_text(&payload.message),
-    ])
-}
-
-fn verify_session_auth_claim_field(
-    field_name: &str,
-    claimed: Option<&str>,
-    actual: Option<&str>,
-) -> Result<(), Response> {
-    let claimed = normalize_identity_value(claimed);
-    if claimed.is_none() {
-        return Ok(());
-    }
-
-    let actual = normalize_identity_value(actual);
-    if claimed == actual {
-        return Ok(());
-    }
-
-    Err((
-        StatusCode::FORBIDDEN,
-        Json(json!({
-            "error": "signed session claim mismatch",
-            "field": field_name,
-            "claimed": claimed,
-            "actual": actual,
-        })),
-    )
-        .into_response())
-}
-
-fn sign_user_session_assertion(assertion_b64: &str, secret: &str) -> Result<String, Response> {
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "error": "invalid session auth secret configuration"
-            })),
-        )
-            .into_response()
-    })?;
-    mac.update(assertion_b64.as_bytes());
-    Ok(URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()))
-}
-
-fn authorize_user_session(
-    state: &AppState,
-    headers: &HeaderMap,
-    scope: &IdentityScope,
-    expected_request_fingerprint: &str,
-) -> Result<Option<AuthorizedUserSession>, Response> {
-    let assertion = headers
-        .get(USER_SESSION_ASSERTION_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let signature = headers
-        .get(USER_SESSION_SIGNATURE_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let provided = assertion.is_some() || signature.is_some();
-
-    if !state.config().require_session_auth && !provided {
-        return Ok(None);
-    }
-
-    let assertion = assertion.ok_or_else(|| {
-        state.inner.metrics.inc_session_auth_failures();
-        (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({
-                "error": "missing signed user session assertion",
-                "assertion_header": USER_SESSION_ASSERTION_HEADER,
-                "signature_header": USER_SESSION_SIGNATURE_HEADER,
-            })),
-        )
-            .into_response()
-    })?;
-    let signature = signature.ok_or_else(|| {
-        state.inner.metrics.inc_session_auth_failures();
-        (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({
-                "error": "missing signed user session signature",
-                "assertion_header": USER_SESSION_ASSERTION_HEADER,
-                "signature_header": USER_SESSION_SIGNATURE_HEADER,
-            })),
-        )
-            .into_response()
-    })?;
-
-    let assertion_bytes = match URL_SAFE_NO_PAD.decode(assertion) {
-        Ok(value) => value,
-        Err(_) => {
-            state.inner.metrics.inc_session_auth_failures();
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "error": "session assertion must be base64url encoded JSON"
-                })),
-            )
-                .into_response());
-        }
-    };
-    let claims = match serde_json::from_slice::<UserSessionAuthClaims>(&assertion_bytes) {
-        Ok(value) => value,
-        Err(err) => {
-            state.inner.metrics.inc_session_auth_failures();
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "error": format!("invalid session assertion payload: {err}")
-                })),
-            )
-                .into_response());
-        }
-    };
-
-    let issuer = normalize_identity_value(Some(claims.issuer.as_str())).ok_or_else(|| {
-        state.inner.metrics.inc_session_auth_failures();
-        (
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "error": "signed session assertion is missing issuer"
-            })),
-        )
-            .into_response()
-    })?;
-
-    let key_id = normalize_identity_value(claims.key_id.as_deref());
-    let session_auth_registry_state = session_auth_issuer_registry_runtime_state(state);
-
-    let secret = if let Some(registry_entry) = session_auth_registry_state.registry.get(&issuer) {
-        let key_id = key_id.clone().ok_or_else(|| {
-            state.inner.metrics.inc_session_auth_failures();
-            (
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "error": "signed session assertion is missing key_id for issuer registry verification",
-                    "issuer": issuer,
-                })),
-            )
-                .into_response()
-        })?;
-
-        registry_entry
-            .keys
-            .get(&key_id)
-            .map(|value| value.as_str())
-            .ok_or_else(|| {
-                state.inner.metrics.inc_session_auth_failures();
-                (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({
-                        "error": "unknown signed session key_id for issuer registry verification",
-                        "issuer": issuer,
-                        "key_id": key_id,
-                    })),
-                )
-                    .into_response()
-            })?
-    } else if let Some(issuer_keys) = state.config().session_auth_issuer_keys.get(&issuer) {
-        let key_id = key_id.clone().ok_or_else(|| {
-            state.inner.metrics.inc_session_auth_failures();
-            (
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "error": "signed session assertion is missing key_id for issuer-managed keys",
-                    "issuer": issuer,
-                })),
-            )
-                .into_response()
-        })?;
-
-        issuer_keys.get(&key_id).map(|value| value.as_str()).ok_or_else(|| {
-            state.inner.metrics.inc_session_auth_failures();
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({
-                    "error": "unknown signed session key_id for issuer-managed keys",
-                    "issuer": issuer,
-                    "key_id": key_id,
-                })),
-            )
-                .into_response()
-        })?
-    } else {
-        state
-            .config()
-            .session_auth_issuer_secrets
-            .get(&issuer)
-            .map(|value| value.as_str())
-            .or_else(|| {
-                state
-                    .config()
-                    .session_auth_secret
-                    .as_deref()
-                    .filter(|value| !value.trim().is_empty())
-            })
-            .ok_or_else(|| {
-                state.inner.metrics.inc_session_auth_failures();
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({
-                        "error": "session auth is required but no matching issuer secret is configured",
-                        "issuer": issuer,
-                    })),
-                )
-                    .into_response()
-            })?
-    };
-
-    let expected_signature = match sign_user_session_assertion(assertion, secret) {
-        Ok(value) => value,
-        Err(response) => {
-            state.inner.metrics.inc_session_auth_failures();
-            return Err(response);
-        }
-    };
-    if expected_signature != signature {
-        state.inner.metrics.inc_session_auth_failures();
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({
-                "error": "invalid signed user session signature",
-                "assertion_header": USER_SESSION_ASSERTION_HEADER,
-                "signature_header": USER_SESSION_SIGNATURE_HEADER,
-            })),
-        )
-            .into_response());
-    }
-
-    if !state.config().session_auth_allowed_issuers.is_empty()
-        && !state
-            .config()
-            .session_auth_allowed_issuers
-            .iter()
-            .any(|allowed| allowed == &issuer)
-    {
-        state.inner.metrics.inc_session_auth_failures();
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "error": "signed session issuer is not allowed",
-                "issuer": issuer,
-                "allowed_issuers": state.config().session_auth_allowed_issuers,
-            })),
-        )
-            .into_response());
-    }
-
-    if let Some(expected_audience) = state.config().session_auth_expected_audience.as_deref() {
-        let actual_audience = normalize_identity_value(claims.audience.as_deref());
-        if actual_audience.as_deref() != Some(expected_audience) {
-            state.inner.metrics.inc_session_auth_failures();
-            return Err((
-                StatusCode::FORBIDDEN,
-                Json(json!({
-                    "error": "signed session audience mismatch",
-                    "claimed": actual_audience,
-                    "expected": expected_audience,
-                })),
-            )
-                .into_response());
-        }
-    }
-
-    let claimed_request_fingerprint = normalize_identity_value(claims.request_fingerprint.as_deref())
-        .ok_or_else(|| {
-            state.inner.metrics.inc_session_auth_failures();
-            (
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "error": "signed session assertion is missing request_fingerprint"
-                })),
-            )
-                .into_response()
-        })?;
-    if claimed_request_fingerprint != expected_request_fingerprint {
-        state.inner.metrics.inc_session_auth_failures();
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "error": "signed session request_fingerprint mismatch",
-                "claimed": claimed_request_fingerprint,
-                "expected": expected_request_fingerprint,
-            })),
-        )
-            .into_response());
-    }
-
-    let now_epoch = Utc::now().timestamp();
-    let max_skew = state.config().session_auth_max_clock_skew_secs as i64;
-    if claims.issued_at_epoch > now_epoch + max_skew {
-        state.inner.metrics.inc_session_auth_failures();
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({
-                "error": "signed session assertion is not valid yet",
-                "issued_at_epoch": claims.issued_at_epoch,
-                "now_epoch": now_epoch,
-            })),
-        )
-            .into_response());
-    }
-    if claims.expires_at_epoch < now_epoch - max_skew {
-        state.inner.metrics.inc_session_auth_failures();
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({
-                "error": "signed session assertion has expired",
-                "expires_at_epoch": claims.expires_at_epoch,
-                "now_epoch": now_epoch,
-            })),
-        )
-            .into_response());
-    }
-    if claims.expires_at_epoch < claims.issued_at_epoch {
-        state.inner.metrics.inc_session_auth_failures();
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "error": "signed session assertion has invalid lifetime",
-                "issued_at_epoch": claims.issued_at_epoch,
-                "expires_at_epoch": claims.expires_at_epoch,
-            })),
-        )
-            .into_response());
-    }
-    if claims
-        .expires_at_epoch
-        .saturating_sub(claims.issued_at_epoch)
-        > state.config().session_auth_max_ttl_secs as i64
-    {
-        state.inner.metrics.inc_session_auth_failures();
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "error": "signed session assertion ttl exceeds configured maximum",
-                "issued_at_epoch": claims.issued_at_epoch,
-                "expires_at_epoch": claims.expires_at_epoch,
-                "max_ttl_secs": state.config().session_auth_max_ttl_secs,
-            })),
-        )
-            .into_response());
-    }
-
-    if normalize_identity_value(Some(claims.source_kind.as_str()))
-        != normalize_identity_value(Some(scope.source_kind))
-    {
-        state.inner.metrics.inc_session_auth_failures();
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "error": "signed session source_kind mismatch",
-                "claimed": claims.source_kind,
-                "actual": scope.source_kind,
-            })),
-        )
-            .into_response());
-    }
-
-    if let Err(response) = verify_session_auth_claim_field(
-        "subject",
-        Some(claims.subject.as_str()),
-        scope.user_id.as_deref(),
-    ) {
-        state.inner.metrics.inc_session_auth_failures();
-        return Err(response);
-    }
-    if let Err(response) = verify_session_auth_claim_field(
-        "room_id",
-        claims.room_id.as_deref(),
-        scope.room_id.as_deref(),
-    ) {
-        state.inner.metrics.inc_session_auth_failures();
-        return Err(response);
-    }
-    if let Err(response) = verify_session_auth_claim_field(
-        "session_id",
-        claims.session_id.as_deref(),
-        scope.session_id.as_deref(),
-    ) {
-        state.inner.metrics.inc_session_auth_failures();
-        return Err(response);
-    }
-    if let Err(response) = verify_session_auth_claim_field(
-        "org_id",
-        claims.org_id.as_deref(),
-        scope.org_id.as_deref(),
-    ) {
-        state.inner.metrics.inc_session_auth_failures();
-        return Err(response);
-    }
-    if let Err(response) = verify_session_auth_claim_field(
-        "account_id",
-        claims.account_id.as_deref(),
-        scope.account_id.as_deref(),
-    ) {
-        state.inner.metrics.inc_session_auth_failures();
-        return Err(response);
-    }
-
-    state.inner.metrics.inc_session_auth_successes();
-    Ok(Some(AuthorizedUserSession {
-        claims,
-        assertion_header: USER_SESSION_ASSERTION_HEADER,
-        signature_header: USER_SESSION_SIGNATURE_HEADER,
-    }))
-}
-
-async fn resolve_chat_identity(
-    state: &AppState,
-    payload: &CreateChatTaskRequest,
-) -> Result<ResolvedIdentity, Response> {
-    let requested = build_chat_identity_scope(payload);
-    let store = state.inner.identity_binding_store.read().await;
-    let binding = store
-        .bindings
-        .chat_users
-        .get(
-            payload
-                .user_id
-                .as_deref()
-                .map(str::trim)
-                .unwrap_or_default(),
-        )
-        .cloned();
-    let metadata = store.metadata.clone();
-    let product_users = store.product_users.clone();
-    drop(store);
-
-    resolve_identity_scope(
-        state,
-        requested,
-        payload.user_id.as_deref(),
-        binding.as_ref(),
-        &metadata,
-        &product_users,
-    )
-}
-
-async fn resolve_matrix_identity(
-    state: &AppState,
-    payload: &MatrixMessageRequest,
-) -> Result<ResolvedIdentity, Response> {
-    let requested = build_matrix_identity_scope(payload);
-    let store = state.inner.identity_binding_store.read().await;
-    let binding = store
-        .bindings
-        .matrix_users
-        .get(payload.matrix_user_id.trim())
-        .cloned();
-    let metadata = store.metadata.clone();
-    let product_users = store.product_users.clone();
-    drop(store);
-
-    resolve_identity_scope(
-        state,
-        requested,
-        Some(payload.matrix_user_id.as_str()),
-        binding.as_ref(),
-        &metadata,
-        &product_users,
-    )
-}
-
-fn resolve_identity_scope(
-    state: &AppState,
-    mut requested: IdentityScope,
-    binding_subject: Option<&str>,
-    binding: Option<&IdentityBindingEntry>,
-    metadata: &IdentityBindingMetadata,
-    product_users: &HashMap<String, ProductUserIdentity>,
-) -> Result<ResolvedIdentity, Response> {
-    let binding_subject = binding_subject
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(ToString::to_string);
-    let base_resolution = IdentityResolution {
-        matched: false,
-        required: state.config().require_identity_binding,
-        binding_subject: binding_subject.clone(),
-        binding_source_format: metadata.format.clone(),
-        binding_version: metadata.version,
-        binding_revision: metadata.revision.clone(),
-        product_user_id: None,
-        binding_source_kind: "none".to_string(),
-    };
-
-    if let Some(binding) = binding {
-        let product_user_id = binding
-            .product_user_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string);
-        let product_user = match product_user_id.as_deref() {
-            Some(product_user_id) => match product_users.get(product_user_id) {
-                Some(product_user) => Some(product_user),
-                None => {
-                    state.inner.metrics.inc_identity_binding_failures();
-                    return Err((
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({
-                            "error": "identity binding references unknown product_user_id",
-                            "subject": binding_subject,
-                            "product_user_id": product_user_id,
-                            "binding_source_format": metadata.format.clone(),
-                            "binding_version": metadata.version,
-                            "binding_revision": metadata.revision.clone(),
-                        })),
-                    )
-                        .into_response());
-                }
-            },
-            None => None,
-        };
-
-        let bound_org_id = match merge_bound_identity_source(
-            binding.org_id.clone(),
-            product_user.and_then(|value| value.org_id.clone()),
-            "org_id",
-            product_user_id.as_deref(),
-        ) {
-            Ok(value) => value,
-            Err(response) => {
-                state.inner.metrics.inc_identity_binding_failures();
-                return Err(response);
-            }
-        };
-        let bound_account_id = match merge_bound_identity_source(
-            binding.account_id.clone(),
-            product_user.and_then(|value| value.account_id.clone()),
-            "account_id",
-            product_user_id.as_deref(),
-        ) {
-            Ok(value) => value,
-            Err(response) => {
-                state.inner.metrics.inc_identity_binding_failures();
-                return Err(response);
-            }
-        };
-
-        requested.org_id = match merge_identity_field(requested.org_id, bound_org_id, "org_id") {
-            Ok(value) => value,
-            Err(response) => {
-                state.inner.metrics.inc_identity_binding_failures();
-                return Err(response);
-            }
-        };
-        requested.account_id =
-            match merge_identity_field(requested.account_id, bound_account_id, "account_id") {
-                Ok(value) => value,
-                Err(response) => {
-                    state.inner.metrics.inc_identity_binding_failures();
-                    return Err(response);
-                }
-            };
-        state.inner.metrics.inc_identity_binding_matches();
-        return Ok(ResolvedIdentity {
-            scope: requested,
-            resolution: IdentityResolution {
-                matched: true,
-                product_user_id: product_user_id.clone(),
-                binding_source_kind: if product_user_id.is_some() {
-                    "product_user_registry".to_string()
-                } else {
-                    "inline_binding".to_string()
-                },
-                ..base_resolution
-            },
-        });
-    }
-
-    if state.config().require_identity_binding {
-        state.inner.metrics.inc_identity_binding_failures();
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "error": "identity binding required",
-                "subject": binding_subject,
-                "source_kind": requested.source_kind,
-                "binding_source_format": metadata.format.clone(),
-                "binding_version": metadata.version,
-                "binding_revision": metadata.revision.clone(),
-            })),
-        )
-            .into_response());
-    }
-
-    Ok(ResolvedIdentity {
-        scope: requested,
-        resolution: base_resolution,
-    })
-}
-
-fn merge_bound_identity_source(
-    inline: Option<String>,
-    registry: Option<String>,
-    field_name: &str,
-    product_user_id: Option<&str>,
-) -> Result<Option<String>, Response> {
-    match (
-        inline
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty()),
-        registry
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty()),
-    ) {
-        (Some(inline), Some(registry)) if inline != registry => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "error": "identity source-of-truth conflict",
-                "field": field_name,
-                "product_user_id": product_user_id,
-                "inline_value": inline,
-                "registry_value": registry,
-            })),
-        )
-            .into_response()),
-        (Some(inline), Some(_)) => Ok(Some(inline)),
-        (None, Some(registry)) => Ok(Some(registry)),
-        (Some(inline), None) => Ok(Some(inline)),
-        (None, None) => Ok(None),
-    }
-}
-
-fn merge_identity_field(
-    requested: Option<String>,
-    bound: Option<String>,
-    field_name: &str,
-) -> Result<Option<String>, Response> {
-    match (
-        requested
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty()),
-        bound
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty()),
-    ) {
-        (Some(requested), Some(bound)) if requested != bound => Err((
-            StatusCode::FORBIDDEN,
-            Json(json!({
-                "error": "identity binding mismatch",
-                "field": field_name,
-                "requested": requested,
-                "bound": bound,
-            })),
-        )
-            .into_response()),
-        (Some(requested), _) => Ok(Some(requested)),
-        (None, Some(bound)) => Ok(Some(bound)),
-        (None, None) => Ok(None),
-    }
-}
-
-async fn replay_cached_response(state: &AppState, replay_key: Option<&str>) -> Option<Response> {
-    let Some(replay_key) = replay_key.map(str::trim).filter(|v| !v.is_empty()) else {
-        return None;
-    };
-
-    let now_epoch = Utc::now().timestamp();
-    let ttl_secs = state.config().replay_window_secs;
-    let max_size = state.config().replay_cache_size;
-    let mut cache = state.inner.replay_cache.lock().await;
-    prune_replay_cache(&mut cache, now_epoch, ttl_secs, max_size);
-
-    let existing = cache.seen.get(replay_key).cloned();
-    let Some(existing) = existing else {
-        return None;
-    };
-
-    state.inner.metrics.inc_replay_hits();
-    if let Some(response) = existing.response {
-        return Some((StatusCode::ACCEPTED, Json(response)).into_response());
-    }
-
-    Some(
-        (
-            StatusCode::OK,
-            Json(json!({
-                "accepted": false,
-                "action": "duplicate_request",
-                "replay_key": replay_key,
-                "consumer_status": "duplicate_ignored"
-            })),
-        )
-            .into_response(),
-    )
-}
-
-async fn remember_replay_response(
-    state: &AppState,
-    replay_key: Option<&str>,
-    response: &ConsumerTaskResponse,
-) {
-    let Some(replay_key) = replay_key.map(str::trim).filter(|v| !v.is_empty()) else {
-        return;
-    };
-
-    let now_epoch = Utc::now().timestamp();
-    let ttl_secs = state.config().replay_window_secs;
-    let max_size = state.config().replay_cache_size;
-    let mut cache = state.inner.replay_cache.lock().await;
-    prune_replay_cache(&mut cache, now_epoch, ttl_secs, max_size);
-    cache.seen.insert(
-        replay_key.to_string(),
-        ReplayEntry {
-            seen_at_epoch: now_epoch,
-            response: serde_json::to_value(response).ok(),
-        },
-    );
-    cache.order.push_back(replay_key.to_string());
-    prune_replay_cache(&mut cache, now_epoch, ttl_secs, max_size);
-    persist_replay_cache(&cache, state.config());
-}
-
-fn prune_replay_cache(cache: &mut ReplayCache, now_epoch: i64, ttl_secs: u64, max_size: usize) {
-    loop {
-        let Some(front) = cache.order.front().cloned() else {
-            break;
-        };
-
-        let should_drop = cache
-            .seen
-            .get(&front)
-            .map(|entry| now_epoch.saturating_sub(entry.seen_at_epoch) >= ttl_secs as i64)
-            .unwrap_or(true)
-            || cache.seen.len() > max_size;
-
-        if !should_drop {
-            break;
-        }
-
-        cache.order.pop_front();
-        cache.seen.remove(&front);
-    }
-}
-
-fn build_chat_replay_key(payload: &CreateChatTaskRequest) -> Option<String> {
-    let key = payload.idempotency_key.as_deref()?.trim();
-    if key.is_empty() {
-        return None;
-    }
-
-    Some(format!(
-        "chat:{}:{}:{}",
-        payload.user_id.as_deref().unwrap_or("anonymous"),
-        payload.room_id.as_deref().unwrap_or("global"),
-        key
-    ))
-}
-
-fn build_matrix_replay_key(payload: &MatrixMessageRequest) -> Option<String> {
-    if let Some(event_id) = payload
-        .event_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-    {
-        return Some(format!("matrix-event:{}", event_id));
-    }
-
-    let key = payload.idempotency_key.as_deref()?.trim();
-    if key.is_empty() {
-        return None;
-    }
-
-    Some(format!(
-        "matrix:{}:{}:{}",
-        payload.matrix_user_id, payload.room_id, key
-    ))
-}
-
-async fn enforce_optional_rate_limit(
-    state: &AppState,
-    key: Option<String>,
-    max_requests: usize,
-    error_code: &str,
-    bucket_kind: RateLimitBucketKind,
-) -> Result<(), Response> {
-    let Some(key) = key else {
-        return Ok(());
-    };
-    if max_requests == 0 {
-        return Ok(());
-    }
-
-    enforce_rate_limit(state, key, max_requests, error_code, bucket_kind).await
-}
-
-async fn enforce_rate_limit(
-    state: &AppState,
-    key: String,
-    max_requests: usize,
-    error_code: &str,
-    bucket_kind: RateLimitBucketKind,
-) -> Result<(), Response> {
-    let now_epoch = Utc::now().timestamp();
-    let max_entries = max_rate_limit_entries(state.config());
-
-    let mut rate_limits = state.inner.rate_limits.lock().await;
-    let entries = rate_limits.seen.entry(key).or_default();
-    let modified = prune_rate_limit_entries(
-        entries,
-        now_epoch,
-        state.config().rate_limit_window_secs,
-        max_entries,
-    );
-
-    if entries.len() >= max_requests {
-        if modified {
-            persist_rate_limit_cache(&rate_limits, state.config());
-        }
-        state.inner.metrics.inc_rate_limited_requests();
-        match bucket_kind {
-            RateLimitBucketKind::SourceScope => {
-                state.inner.metrics.inc_rate_limited_source_scope_requests()
-            }
-            RateLimitBucketKind::User => state.inner.metrics.inc_rate_limited_user_requests(),
-            RateLimitBucketKind::Room => state.inner.metrics.inc_rate_limited_room_requests(),
-            RateLimitBucketKind::Session => state.inner.metrics.inc_rate_limited_session_requests(),
-            RateLimitBucketKind::Org => state.inner.metrics.inc_rate_limited_org_requests(),
-        }
-        return Err((
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(json!({
-                "error": error_code,
-                "rate_limit_window_secs": state.config().rate_limit_window_secs,
-                "rate_limit_max_requests": max_requests,
-                "rate_limit_bucket": rate_limit_bucket_name(bucket_kind),
-            })),
-        )
-            .into_response());
-    }
-
-    entries.push_back(now_epoch);
-    prune_rate_limit_entries(
-        entries,
-        now_epoch,
-        state.config().rate_limit_window_secs,
-        max_entries,
-    );
-    persist_rate_limit_cache(&rate_limits, state.config());
-    Ok(())
-}
-
-fn rate_limit_bucket_name(bucket_kind: RateLimitBucketKind) -> &'static str {
-    match bucket_kind {
-        RateLimitBucketKind::SourceScope => "source_scope",
-        RateLimitBucketKind::User => "user",
-        RateLimitBucketKind::Room => "room",
-        RateLimitBucketKind::Session => "session",
-        RateLimitBucketKind::Org => "org",
-    }
-}
-
-fn build_chat_identity_scope(payload: &CreateChatTaskRequest) -> IdentityScope {
-    IdentityScope {
-        source_kind: "chat_task",
-        user_id: payload.user_id.clone(),
-        room_id: payload.room_id.clone(),
-        session_id: payload.session_id.clone(),
-        org_id: payload.org_id.clone(),
-        account_id: payload.account_id.clone(),
-    }
-}
-
-fn build_matrix_identity_scope(payload: &MatrixMessageRequest) -> IdentityScope {
-    IdentityScope {
-        source_kind: "matrix_message",
-        user_id: Some(payload.matrix_user_id.clone()),
-        room_id: Some(payload.room_id.clone()),
-        session_id: payload.session_id.clone(),
-        org_id: payload.org_id.clone(),
-        account_id: payload.account_id.clone(),
-    }
-}
-
-fn build_chat_rate_limit_key(payload: &CreateChatTaskRequest) -> String {
-    format!(
-        "chat:{}:{}",
-        payload.user_id.as_deref().unwrap_or("anonymous"),
-        payload.room_id.as_deref().unwrap_or("global")
-    )
-}
-
-fn build_chat_user_rate_limit_key(payload: &CreateChatTaskRequest) -> Option<String> {
-    payload
-        .user_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(|user_id| format!("chat-user:{}", user_id))
-}
-
-fn build_chat_room_rate_limit_key(payload: &CreateChatTaskRequest) -> Option<String> {
-    payload
-        .room_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(|room_id| format!("chat-room:{}", room_id))
-}
-
-fn build_chat_session_rate_limit_key(payload: &CreateChatTaskRequest) -> Option<String> {
-    payload
-        .session_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(|session_id| format!("chat-session:{}", session_id))
-}
-
-fn build_chat_org_rate_limit_key(payload: &CreateChatTaskRequest) -> Option<String> {
-    payload
-        .org_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(|org_id| format!("chat-org:{}", org_id))
-}
-
-fn build_matrix_rate_limit_key(payload: &MatrixMessageRequest) -> String {
-    format!("matrix:{}:{}", payload.matrix_user_id, payload.room_id)
-}
-
-fn build_matrix_user_rate_limit_key(payload: &MatrixMessageRequest) -> String {
-    format!("matrix-user:{}", payload.matrix_user_id)
-}
-
-fn build_matrix_room_rate_limit_key(payload: &MatrixMessageRequest) -> String {
-    format!("matrix-room:{}", payload.room_id)
-}
-
-fn build_matrix_session_rate_limit_key(payload: &MatrixMessageRequest) -> Option<String> {
-    payload
-        .session_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(|session_id| format!("matrix-session:{}", session_id))
-}
-
-fn build_matrix_org_rate_limit_key(payload: &MatrixMessageRequest) -> Option<String> {
-    payload
-        .org_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(|org_id| format!("matrix-org:{}", org_id))
-}
-
-fn validate_text_payload(raw: &str, max_text_chars: usize) -> Result<String, Response> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "text payload must not be empty" })),
-        )
-            .into_response());
-    }
-
-    let length = trimmed.chars().count();
-    if length > max_text_chars {
-        return Err((
-            StatusCode::PAYLOAD_TOO_LARGE,
-            Json(json!({
-                "error": "text payload too large",
-                "max_text_chars": max_text_chars,
-                "received_text_chars": length,
-            })),
-        )
-            .into_response());
-    }
-
-    Ok(trimmed.to_string())
-}
-
-fn project_consumer_status(status: &str) -> &'static str {
-    match status {
-        "Created" => "received",
-        "Queued" => "queued",
-        "AwaitingApproval" => "waiting_for_confirmation",
-        "Approved" | "Dispatching" | "Running" => "processing",
-        "Succeeded" => "done",
-        "Failed" => "failed",
-        "Refunded" => "refunded",
-        _ => "received",
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use super::{
-        authorize_user_session, build_chat_identity_scope, build_chat_org_rate_limit_key,
-        build_chat_rate_limit_key, build_chat_replay_key, build_chat_request_fingerprint,
-        build_chat_room_rate_limit_key,
-        build_chat_session_rate_limit_key, build_chat_user_rate_limit_key,
-        build_matrix_identity_scope, build_matrix_org_rate_limit_key,
-        build_matrix_rate_limit_key, build_matrix_replay_key, build_matrix_room_rate_limit_key,
-        build_matrix_session_rate_limit_key, build_matrix_user_rate_limit_key, build_router,
-        evaluate_identity_binding_reload_governance, load_identity_binding_revision_approval_state,
-        load_identity_binding_store, load_rate_limit_cache,
-        load_session_auth_issuer_registry, load_session_auth_issuer_registry_revision_approval_state,
-        parse_csv_list, project_consumer_status, prune_rate_limit_cache, resolve_chat_identity,
-        session_auth_issuer_registry_active_key_diff_json,
-        sign_user_session_assertion, validate_text_payload, AppState, AppStateInner,
-        ConsumerEntryConfig, ConsumerEntryMetrics, CreateChatTaskRequest,
-        IdentityBindingAuditState, IdentityBindingEntry, IdentityBindingMetadata,
-        IdentityBindingRevisionApprovalState, IdentityBindingStore, IdentityBindings,
-        MatrixMessageRequest, ProductUserIdentity, RateLimitCache, ReplayCache, RuntimeProfile,
-        SessionAuthIssuerRegistryIssuer, SessionAuthIssuerRegistryMetadata,
-        SessionAuthIssuerRegistryRuntimeState, UserSessionAuthClaims, DEFAULT_MAX_TEXT_CHARS,
-        USER_SESSION_ASSERTION_HEADER, USER_SESSION_SIGNATURE_HEADER,
-    };
-    use axum::{
-        body::{to_bytes, Body},
-        http::{HeaderMap, Request, StatusCode},
-    };
-    use base64::Engine as _;
-    use chrono::Utc;
-    use reqwest::Client;
-    use serde_json::Value;
-    use std::{
-        collections::{HashMap, VecDeque},
-        sync::{Arc, RwLock as StdRwLock},
-        time::{SystemTime, UNIX_EPOCH},
-    };
-    use tokio::sync::{Mutex, RwLock};
-    use tower::ServiceExt;
-
-    #[test]
-    fn projects_core_runtime_states() {
-        assert_eq!(project_consumer_status("Created"), "received");
-        assert_eq!(project_consumer_status("Queued"), "queued");
-        assert_eq!(
-            project_consumer_status("AwaitingApproval"),
-            "waiting_for_confirmation"
-        );
-        assert_eq!(project_consumer_status("Running"), "processing");
-        assert_eq!(project_consumer_status("Succeeded"), "done");
-        assert_eq!(project_consumer_status("Failed"), "failed");
-        assert_eq!(project_consumer_status("Refunded"), "refunded");
-    }
-
-    #[test]
-    fn validate_text_payload_rejects_empty_and_large_input() {
-        assert!(validate_text_payload("   ", DEFAULT_MAX_TEXT_CHARS).is_err());
-        assert!(validate_text_payload(
-            &"x".repeat(DEFAULT_MAX_TEXT_CHARS + 1),
-            DEFAULT_MAX_TEXT_CHARS
-        )
-        .is_err());
-        assert_eq!(
-            validate_text_payload("  hello  ", DEFAULT_MAX_TEXT_CHARS).unwrap(),
-            "hello"
-        );
-    }
-
-    #[test]
-    fn builds_stable_rate_limit_keys() {
-        let chat = CreateChatTaskRequest {
-            user_id: Some("user-1".to_string()),
-            room_id: Some("room-1".to_string()),
-            session_id: Some("session-1".to_string()),
-            org_id: Some("org-1".to_string()),
-            text: "hello".to_string(),
-            capability_id: None,
-            account_id: None,
-            idempotency_key: Some("req-1".to_string()),
-            metadata: None,
-        };
-        assert_eq!(build_chat_rate_limit_key(&chat), "chat:user-1:room-1");
-
-        let matrix = MatrixMessageRequest {
-            matrix_user_id: "@alice:local.dev".to_string(),
-            room_id: "!room:local.dev".to_string(),
-            session_id: Some("session-1".to_string()),
-            org_id: Some("org-1".to_string()),
-            message: "hello".to_string(),
-            capability_id: None,
-            account_id: None,
-            event_id: None,
-            idempotency_key: Some("msg-1".to_string()),
-            metadata: None,
-        };
-        assert_eq!(
-            build_matrix_rate_limit_key(&matrix),
-            "matrix:@alice:local.dev:!room:local.dev"
-        );
-        assert_eq!(
-            build_chat_replay_key(&chat).as_deref(),
-            Some("chat:user-1:room-1:req-1")
-        );
-        assert_eq!(
-            build_chat_user_rate_limit_key(&chat).as_deref(),
-            Some("chat-user:user-1")
-        );
-        assert_eq!(
-            build_chat_room_rate_limit_key(&chat).as_deref(),
-            Some("chat-room:room-1")
-        );
-        assert_eq!(
-            build_chat_session_rate_limit_key(&chat).as_deref(),
-            Some("chat-session:session-1")
-        );
-        assert_eq!(
-            build_chat_org_rate_limit_key(&chat).as_deref(),
-            Some("chat-org:org-1")
-        );
-        assert_eq!(
-            build_matrix_replay_key(&matrix).as_deref(),
-            Some("matrix:@alice:local.dev:!room:local.dev:msg-1")
-        );
-        assert_eq!(
-            build_matrix_user_rate_limit_key(&matrix),
-            "matrix-user:@alice:local.dev"
-        );
-        assert_eq!(
-            build_matrix_room_rate_limit_key(&matrix),
-            "matrix-room:!room:local.dev"
-        );
-        assert_eq!(
-            build_matrix_session_rate_limit_key(&matrix).as_deref(),
-            Some("matrix-session:session-1")
-        );
-        assert_eq!(
-            build_matrix_org_rate_limit_key(&matrix).as_deref(),
-            Some("matrix-org:org-1")
-        );
-
-        let chat_scope = build_chat_identity_scope(&chat);
-        assert_eq!(chat_scope.source_kind, "chat_task");
-        assert_eq!(chat_scope.org_id.as_deref(), Some("org-1"));
-
-        let matrix_scope = build_matrix_identity_scope(&matrix);
-        assert_eq!(matrix_scope.source_kind, "matrix_message");
-        assert_eq!(matrix_scope.user_id.as_deref(), Some("@alice:local.dev"));
-        assert_eq!(matrix_scope.org_id.as_deref(), Some("org-1"));
-    }
-
-    #[test]
-    fn matrix_event_id_wins_over_generic_idempotency_key() {
-        let matrix = MatrixMessageRequest {
-            matrix_user_id: "@alice:local.dev".to_string(),
-            room_id: "!room:local.dev".to_string(),
-            session_id: None,
-            org_id: None,
-            message: "hello".to_string(),
-            capability_id: None,
-            account_id: None,
-            event_id: Some("$event-123".to_string()),
-            idempotency_key: Some("msg-1".to_string()),
-            metadata: None,
-        };
-
-        assert_eq!(
-            build_matrix_replay_key(&matrix).as_deref(),
-            Some("matrix-event:$event-123")
-        );
-    }
-
-    fn test_config() -> ConsumerEntryConfig {
-        ConsumerEntryConfig {
-            runtime_profile: RuntimeProfile::LocalDev,
-            bind_addr: "127.0.0.1:8090".to_string(),
-            cex_gateway_base_url: "http://127.0.0.1:8080".to_string(),
-            cex_gateway_api_key: "local-dev-key".to_string(),
-            default_capability_id: None,
-            default_account_id: None,
-            ingress_token: None,
-            require_session_auth: false,
-            session_auth_secret: None,
-            session_auth_issuer_secrets: HashMap::new(),
-            session_auth_issuer_keys: HashMap::new(),
-            session_auth_issuer_registry_path: None,
-            session_auth_issuer_registry: HashMap::new(),
-            session_auth_issuer_registry_load_error: None,
-            session_auth_issuer_registry_metadata: SessionAuthIssuerRegistryMetadata::default(),
-            session_auth_allowed_issuers: Vec::new(),
-            session_auth_expected_audience: None,
-            session_auth_issuer_registry_approved_revisions_path: None,
-            session_auth_issuer_registry_require_approved_revision: false,
-            session_auth_issuer_registry_require_actor: false,
-            session_auth_issuer_registry_actor_header: "x-session-auth-issuer-registry-actor".to_string(),
-            session_auth_issuer_registry_allowed_actors: Vec::new(),
-            session_auth_max_clock_skew_secs: 300,
-            session_auth_max_ttl_secs: 900,
-            identity_bindings_path: None,
-            identity_registry_path: None,
-            identity_binding_audit_log_path: None,
-            identity_binding_approved_revisions_path: None,
-            identity_binding_reload_require_revision: false,
-            identity_binding_reload_reject_same_revision: false,
-            identity_binding_reload_allow_legacy_format: true,
-            identity_binding_reload_require_approved_revision: false,
-            identity_binding_reload_allow_rollback: true,
-            identity_binding_reload_require_actor: false,
-            identity_binding_reload_actor_header: "x-identity-binding-actor".to_string(),
-            identity_binding_reload_allowed_actors: Vec::new(),
-            require_identity_binding: false,
-            max_text_chars: DEFAULT_MAX_TEXT_CHARS,
-            rate_limit_window_secs: 60,
-            rate_limit_max_requests: 30,
-            rate_limit_user_max_requests: 0,
-            rate_limit_room_max_requests: 0,
-            rate_limit_session_max_requests: 0,
-            rate_limit_org_max_requests: 0,
-            rate_limit_store_path: None,
-            replay_window_secs: 600,
-            replay_cache_size: 2048,
-            replay_store_path: None,
-        }
-    }
-
-    fn test_state(
-        config: ConsumerEntryConfig,
-        identity_bindings: IdentityBindings,
-        product_users: HashMap<String, ProductUserIdentity>,
-    ) -> AppState {
-        let session_auth_issuer_registry_state = SessionAuthIssuerRegistryRuntimeState {
-            metadata: config.session_auth_issuer_registry_metadata.clone(),
-            registry: config.session_auth_issuer_registry.clone(),
-        };
-        AppState {
-            inner: Arc::new(AppStateInner {
-                http: Client::new(),
-                config,
-                identity_binding_store: RwLock::new(IdentityBindingStore {
-                    metadata: IdentityBindingMetadata {
-                        format: "test".to_string(),
-                        version: 1,
-                        revision: Some("rev-test".to_string()),
-                        source_path: None,
-                        source_modified_epoch: None,
-                        loaded_at_epoch: Some(1_760_000_000),
-                        load_status: "loaded".to_string(),
-                        load_error: None,
-                    },
-                    registry_metadata: IdentityBindingMetadata::default(),
-                    bindings: identity_bindings,
-                    product_users,
-                }),
-                identity_binding_audit_state: RwLock::new(IdentityBindingAuditState::default()),
-                session_auth_issuer_registry_state: StdRwLock::new(session_auth_issuer_registry_state),
-                rate_limits: Mutex::new(RateLimitCache::default()),
-                replay_cache: Mutex::new(ReplayCache::default()),
-                metrics: ConsumerEntryMetrics::default(),
-            }),
-        }
-    }
-
-    #[test]
-    fn local_dev_profile_allows_default_consumer_config() {
-        let config = test_config();
-        assert!(config.validate_runtime_profile().is_ok());
-    }
-
-    #[test]
-    fn beta_profile_requires_auth_replay_and_identity_binding() {
-        let mut config = test_config();
-        config.runtime_profile = RuntimeProfile::Beta;
-
-        let errors = config.validate_runtime_profile().unwrap_err();
-        assert!(errors
-            .iter()
-            .any(|item| item.contains("CONSUMER_ENTRY_INGRESS_TOKEN")));
-        assert!(errors
-            .iter()
-            .any(|item| item.contains("CONSUMER_ENTRY_REQUIRE_SESSION_AUTH=true")));
-        assert!(errors
-            .iter()
-            .any(|item| item.contains("CONSUMER_ENTRY_SESSION_AUTH_SECRET")));
-        assert!(errors
-            .iter()
-            .any(|item| item.contains("CONSUMER_ENTRY_SESSION_AUTH_ALLOWED_ISSUERS")));
-        assert!(errors
-            .iter()
-            .any(|item| item.contains("CONSUMER_ENTRY_SESSION_AUTH_EXPECTED_AUDIENCE")));
-        assert!(errors
-            .iter()
-            .any(|item| item.contains("CONSUMER_ENTRY_REPLAY_STORE_PATH")));
-        assert!(errors
-            .iter()
-            .any(|item| item.contains("CONSUMER_ENTRY_RATE_LIMIT_STORE_PATH")));
-        assert!(errors
-            .iter()
-            .any(|item| item.contains("CONSUMER_ENTRY_IDENTITY_BINDINGS_PATH")));
-        assert!(errors
-            .iter()
-            .any(|item| item.contains("CONSUMER_ENTRY_REQUIRE_IDENTITY_BINDING=true")));
-        assert!(errors
-            .iter()
-            .any(|item| item.contains("non-default CEX_GATEWAY_API_KEY")));
-    }
-
-    #[test]
-    fn authorizes_matching_signed_user_session() {
-        let mut config = test_config();
-        config.require_session_auth = true;
-        config.session_auth_secret = Some("test-session-secret".to_string());
-        config.session_auth_allowed_issuers = vec!["test-suite".to_string()];
-        config.session_auth_expected_audience = Some("consumer-entry-api".to_string());
-        let state = test_state(config, IdentityBindings::default(), HashMap::new());
-        let payload = CreateChatTaskRequest {
-            user_id: Some("user-1".to_string()),
-            room_id: Some("room-1".to_string()),
-            session_id: Some("session-1".to_string()),
-            org_id: Some("org-1".to_string()),
-            text: "hello".to_string(),
-            capability_id: None,
-            account_id: None,
-            idempotency_key: None,
-            metadata: None,
-        };
-        let scope = build_chat_identity_scope(&payload);
-        let now_epoch = Utc::now().timestamp();
-        let claims = UserSessionAuthClaims {
-            version: 1,
-            issuer: "test-suite".to_string(),
-            key_id: None,
-            subject: "user-1".to_string(),
-            source_kind: "chat_task".to_string(),
-            audience: Some("consumer-entry-api".to_string()),
-            request_fingerprint: Some(build_chat_request_fingerprint(&payload)),
-            room_id: Some("room-1".to_string()),
-            session_id: Some("session-1".to_string()),
-            org_id: Some("org-1".to_string()),
-            account_id: None,
-            issued_at_epoch: now_epoch,
-            expires_at_epoch: now_epoch + 60,
-        };
-        let assertion = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(serde_json::to_vec(&claims).unwrap());
-        let signature = sign_user_session_assertion(&assertion, "test-session-secret").unwrap();
-        let mut headers = HeaderMap::new();
-        headers.insert(USER_SESSION_ASSERTION_HEADER, assertion.parse().unwrap());
-        headers.insert(USER_SESSION_SIGNATURE_HEADER, signature.parse().unwrap());
-
-        let authorized = authorize_user_session(
-            &state,
-            &headers,
-            &scope,
-            build_chat_request_fingerprint(&payload).as_str(),
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(authorized.claims.subject, "user-1");
-        assert_eq!(authorized.claims.source_kind, "chat_task");
-        assert_eq!(authorized.claims.audience.as_deref(), Some("consumer-entry-api"));
-    }
-
-    #[test]
-    fn authorizes_matching_signed_user_session_with_issuer_specific_secret() {
-        let mut config = test_config();
-        config.require_session_auth = true;
-        config.session_auth_secret = None;
-        config
-            .session_auth_issuer_secrets
-            .insert("issuer-specific".to_string(), "issuer-secret".to_string());
-        config.session_auth_allowed_issuers = vec!["issuer-specific".to_string()];
-        config.session_auth_expected_audience = Some("consumer-entry-api".to_string());
-        let state = test_state(config, IdentityBindings::default(), HashMap::new());
-        let payload = CreateChatTaskRequest {
-            user_id: Some("user-1".to_string()),
-            room_id: Some("room-1".to_string()),
-            session_id: Some("session-1".to_string()),
-            org_id: Some("org-1".to_string()),
-            text: "hello".to_string(),
-            capability_id: None,
-            account_id: None,
-            idempotency_key: None,
-            metadata: None,
-        };
-        let scope = build_chat_identity_scope(&payload);
-        let now_epoch = Utc::now().timestamp();
-        let claims = UserSessionAuthClaims {
-            version: 1,
-            issuer: "issuer-specific".to_string(),
-            key_id: None,
-            subject: "user-1".to_string(),
-            source_kind: "chat_task".to_string(),
-            audience: Some("consumer-entry-api".to_string()),
-            request_fingerprint: Some(build_chat_request_fingerprint(&payload)),
-            room_id: Some("room-1".to_string()),
-            session_id: Some("session-1".to_string()),
-            org_id: Some("org-1".to_string()),
-            account_id: None,
-            issued_at_epoch: now_epoch,
-            expires_at_epoch: now_epoch + 60,
-        };
-        let assertion = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(serde_json::to_vec(&claims).unwrap());
-        let signature = sign_user_session_assertion(&assertion, "issuer-secret").unwrap();
-        let mut headers = HeaderMap::new();
-        headers.insert(USER_SESSION_ASSERTION_HEADER, assertion.parse().unwrap());
-        headers.insert(USER_SESSION_SIGNATURE_HEADER, signature.parse().unwrap());
-
-        let authorized = authorize_user_session(
-            &state,
-            &headers,
-            &scope,
-            build_chat_request_fingerprint(&payload).as_str(),
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(authorized.claims.issuer, "issuer-specific");
-    }
-
-    #[test]
-    fn authorizes_matching_signed_user_session_with_issuer_key_registry() {
-        let mut config = test_config();
-        config.require_session_auth = true;
-        config.session_auth_secret = None;
-        config.session_auth_issuer_keys.insert(
-            "issuer-keys".to_string(),
-            HashMap::from([("v1".to_string(), "issuer-key-secret".to_string())]),
-        );
-        config.session_auth_allowed_issuers = vec!["issuer-keys".to_string()];
-        config.session_auth_expected_audience = Some("consumer-entry-api".to_string());
-        let state = test_state(config, IdentityBindings::default(), HashMap::new());
-        let payload = CreateChatTaskRequest {
-            user_id: Some("user-1".to_string()),
-            room_id: Some("room-1".to_string()),
-            session_id: Some("session-1".to_string()),
-            org_id: Some("org-1".to_string()),
-            text: "hello".to_string(),
-            capability_id: None,
-            account_id: None,
-            idempotency_key: None,
-            metadata: None,
-        };
-        let scope = build_chat_identity_scope(&payload);
-        let now_epoch = Utc::now().timestamp();
-        let claims = UserSessionAuthClaims {
-            version: 1,
-            issuer: "issuer-keys".to_string(),
-            key_id: Some("v1".to_string()),
-            subject: "user-1".to_string(),
-            source_kind: "chat_task".to_string(),
-            audience: Some("consumer-entry-api".to_string()),
-            request_fingerprint: Some(build_chat_request_fingerprint(&payload)),
-            room_id: Some("room-1".to_string()),
-            session_id: Some("session-1".to_string()),
-            org_id: Some("org-1".to_string()),
-            account_id: None,
-            issued_at_epoch: now_epoch,
-            expires_at_epoch: now_epoch + 60,
-        };
-        let assertion = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(serde_json::to_vec(&claims).unwrap());
-        let signature =
-            sign_user_session_assertion(&assertion, "issuer-key-secret").unwrap();
-        let mut headers = HeaderMap::new();
-        headers.insert(USER_SESSION_ASSERTION_HEADER, assertion.parse().unwrap());
-        headers.insert(USER_SESSION_SIGNATURE_HEADER, signature.parse().unwrap());
-
-        let authorized = authorize_user_session(
-            &state,
-            &headers,
-            &scope,
-            build_chat_request_fingerprint(&payload).as_str(),
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(authorized.claims.issuer, "issuer-keys");
-        assert_eq!(authorized.claims.key_id.as_deref(), Some("v1"));
-    }
-
-    #[test]
-    fn authorizes_matching_signed_user_session_with_shared_issuer_registry() {
-        let mut config = test_config();
-        config.require_session_auth = true;
-        config.session_auth_secret = None;
-        config.session_auth_issuer_registry.insert(
-            "issuer-registry".to_string(),
-            SessionAuthIssuerRegistryIssuer {
-                active_key_id: Some("v1".to_string()),
-                keys: HashMap::from([("v1".to_string(), "issuer-registry-secret".to_string())]),
-            },
-        );
-        config.session_auth_allowed_issuers = vec!["issuer-registry".to_string()];
-        config.session_auth_expected_audience = Some("consumer-entry-api".to_string());
-        let state = test_state(config, IdentityBindings::default(), HashMap::new());
-        let payload = CreateChatTaskRequest {
-            user_id: Some("user-1".to_string()),
-            room_id: Some("room-1".to_string()),
-            session_id: Some("session-1".to_string()),
-            org_id: Some("org-1".to_string()),
-            text: "hello".to_string(),
-            capability_id: None,
-            account_id: None,
-            idempotency_key: None,
-            metadata: None,
-        };
-        let scope = build_chat_identity_scope(&payload);
-        let now_epoch = Utc::now().timestamp();
-        let claims = UserSessionAuthClaims {
-            version: 1,
-            issuer: "issuer-registry".to_string(),
-            key_id: Some("v1".to_string()),
-            subject: "user-1".to_string(),
-            source_kind: "chat_task".to_string(),
-            audience: Some("consumer-entry-api".to_string()),
-            request_fingerprint: Some(build_chat_request_fingerprint(&payload)),
-            room_id: Some("room-1".to_string()),
-            session_id: Some("session-1".to_string()),
-            org_id: Some("org-1".to_string()),
-            account_id: None,
-            issued_at_epoch: now_epoch,
-            expires_at_epoch: now_epoch + 60,
-        };
-        let assertion = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(serde_json::to_vec(&claims).unwrap());
-        let signature =
-            sign_user_session_assertion(&assertion, "issuer-registry-secret").unwrap();
-        let mut headers = HeaderMap::new();
-        headers.insert(USER_SESSION_ASSERTION_HEADER, assertion.parse().unwrap());
-        headers.insert(USER_SESSION_SIGNATURE_HEADER, signature.parse().unwrap());
-
-        let authorized = authorize_user_session(
-            &state,
-            &headers,
-            &scope,
-            build_chat_request_fingerprint(&payload).as_str(),
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(authorized.claims.issuer, "issuer-registry");
-        assert_eq!(authorized.claims.key_id.as_deref(), Some("v1"));
-    }
-
-    #[test]
-    fn session_auth_issuer_registry_active_key_diff_reports_changes() {
-        let current = HashMap::from([
-            (
-                "matrix-entry-adapter".to_string(),
-                SessionAuthIssuerRegistryIssuer {
-                    active_key_id: Some("v1".to_string()),
-                    keys: HashMap::from([
-                        ("v1".to_string(), "secret-a".to_string()),
-                        ("v2".to_string(), "secret-b".to_string()),
-                    ]),
-                },
-            ),
-            (
-                "worker".to_string(),
-                SessionAuthIssuerRegistryIssuer {
-                    active_key_id: None,
-                    keys: HashMap::from([("w1".to_string(), "secret-c".to_string())]),
-                },
-            ),
-        ]);
-        let candidate = HashMap::from([
-            (
-                "matrix-entry-adapter".to_string(),
-                SessionAuthIssuerRegistryIssuer {
-                    active_key_id: Some("v2".to_string()),
-                    keys: HashMap::from([
-                        ("v1".to_string(), "secret-a".to_string()),
-                        ("v2".to_string(), "secret-b".to_string()),
-                    ]),
-                },
-            ),
-            (
-                "worker".to_string(),
-                SessionAuthIssuerRegistryIssuer {
-                    active_key_id: Some("w1".to_string()),
-                    keys: HashMap::from([("w1".to_string(), "secret-c".to_string())]),
-                },
-            ),
-        ]);
-
-        let diff = session_auth_issuer_registry_active_key_diff_json(&current, &candidate);
-        assert_eq!(diff["matches"], Value::Bool(false));
-        assert_eq!(diff["changed_active_key_count"], Value::from(2));
-        assert_eq!(
-            diff.get("changes")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(2)
-        );
-    }
-
-    #[test]
-    fn load_session_auth_issuer_registry_rejects_invalid_active_key() {
-        let temp_path = std::env::temp_dir().join(format!(
-            "cex-session-auth-issuer-registry-invalid-{}-{}.json",
-            std::process::id(),
-            Utc::now().timestamp_millis()
-        ));
-        std::fs::write(
-            &temp_path,
-            r#"{"version":1,"revision":"rev-a","issuers":{"matrix-entry-adapter":{"activeKeyId":"missing","keys":{"v1":"secret-a"}}}}"#,
-        )
-        .expect("write issuer registry");
-
-        let (metadata, registry) =
-            load_session_auth_issuer_registry(temp_path.to_str());
-        assert_eq!(metadata.load_status, "invalid_active_key");
-        assert_eq!(metadata.revision.as_deref(), Some("rev-a"));
-        assert!(metadata
-            .load_error
-            .as_deref()
-            .unwrap_or_default()
-            .contains("active key missing"));
-        assert!(registry.is_empty());
-
-        let _ = std::fs::remove_file(&temp_path);
-    }
-
-    #[test]
-    fn rejects_signed_user_session_with_unexpected_issuer() {
-        let mut config = test_config();
-        config.require_session_auth = true;
-        config.session_auth_secret = Some("test-session-secret".to_string());
-        config.session_auth_allowed_issuers = vec!["trusted-issuer".to_string()];
-        config.session_auth_expected_audience = Some("consumer-entry-api".to_string());
-        let state = test_state(config, IdentityBindings::default(), HashMap::new());
-        let payload = CreateChatTaskRequest {
-            user_id: Some("user-1".to_string()),
-            room_id: Some("room-1".to_string()),
-            session_id: Some("session-1".to_string()),
-            org_id: Some("org-1".to_string()),
-            text: "hello".to_string(),
-            capability_id: None,
-            account_id: None,
-            idempotency_key: None,
-            metadata: None,
-        };
-        let scope = build_chat_identity_scope(&payload);
-        let now_epoch = Utc::now().timestamp();
-        let claims = UserSessionAuthClaims {
-            version: 1,
-            issuer: "unexpected-issuer".to_string(),
-            key_id: None,
-            subject: "user-1".to_string(),
-            source_kind: "chat_task".to_string(),
-            audience: Some("consumer-entry-api".to_string()),
-            request_fingerprint: Some(build_chat_request_fingerprint(&payload)),
-            room_id: Some("room-1".to_string()),
-            session_id: Some("session-1".to_string()),
-            org_id: Some("org-1".to_string()),
-            account_id: None,
-            issued_at_epoch: now_epoch,
-            expires_at_epoch: now_epoch + 60,
-        };
-        let assertion = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(serde_json::to_vec(&claims).unwrap());
-        let signature = sign_user_session_assertion(&assertion, "test-session-secret").unwrap();
-        let mut headers = HeaderMap::new();
-        headers.insert(USER_SESSION_ASSERTION_HEADER, assertion.parse().unwrap());
-        headers.insert(USER_SESSION_SIGNATURE_HEADER, signature.parse().unwrap());
-
-        let response = authorize_user_session(
-            &state,
-            &headers,
-            &scope,
-            build_chat_request_fingerprint(&payload).as_str(),
-        )
-        .unwrap_err();
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    }
-
-    #[test]
-    fn rejects_signed_user_session_with_mismatched_request_fingerprint() {
-        let mut config = test_config();
-        config.require_session_auth = true;
-        config.session_auth_secret = Some("test-session-secret".to_string());
-        config.session_auth_allowed_issuers = vec!["test-suite".to_string()];
-        config.session_auth_expected_audience = Some("consumer-entry-api".to_string());
-        let state = test_state(config, IdentityBindings::default(), HashMap::new());
-        let payload = CreateChatTaskRequest {
-            user_id: Some("user-1".to_string()),
-            room_id: Some("room-1".to_string()),
-            session_id: Some("session-1".to_string()),
-            org_id: Some("org-1".to_string()),
-            text: "hello".to_string(),
-            capability_id: None,
-            account_id: None,
-            idempotency_key: None,
-            metadata: None,
-        };
-        let scope = build_chat_identity_scope(&payload);
-        let now_epoch = Utc::now().timestamp();
-        let claims = UserSessionAuthClaims {
-            version: 1,
-            issuer: "test-suite".to_string(),
-            key_id: None,
-            subject: "user-1".to_string(),
-            source_kind: "chat_task".to_string(),
-            audience: Some("consumer-entry-api".to_string()),
-            request_fingerprint: Some("wrong-fingerprint".to_string()),
-            room_id: Some("room-1".to_string()),
-            session_id: Some("session-1".to_string()),
-            org_id: Some("org-1".to_string()),
-            account_id: None,
-            issued_at_epoch: now_epoch,
-            expires_at_epoch: now_epoch + 60,
-        };
-        let assertion = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(serde_json::to_vec(&claims).unwrap());
-        let signature = sign_user_session_assertion(&assertion, "test-session-secret").unwrap();
-        let mut headers = HeaderMap::new();
-        headers.insert(USER_SESSION_ASSERTION_HEADER, assertion.parse().unwrap());
-        headers.insert(USER_SESSION_SIGNATURE_HEADER, signature.parse().unwrap());
-
-        let response = authorize_user_session(
-            &state,
-            &headers,
-            &scope,
-            build_chat_request_fingerprint(&payload).as_str(),
-        )
-        .unwrap_err();
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    }
-
-    #[test]
-    fn production_profile_requires_strict_identity_reload_governance() {
-        let mut config = test_config();
-        config.runtime_profile = RuntimeProfile::Production;
-        config.ingress_token = Some("entry-secret".to_string());
-        config.replay_store_path = Some("/tmp/consumer-entry-replay.json".to_string());
-        config.rate_limit_store_path = Some("/tmp/consumer-entry-rate-limits.json".to_string());
-        config.identity_bindings_path = Some("/tmp/identity-bindings.json".to_string());
-        config.require_identity_binding = true;
-        config.cex_gateway_api_key = "prod-gateway-key".to_string();
-
-        let errors = config.validate_runtime_profile().unwrap_err();
-        assert!(errors
-            .iter()
-            .any(|item| item.contains("IDENTITY_BINDING_AUDIT_LOG_PATH")));
-        assert!(errors
-            .iter()
-            .any(|item| item.contains("APPROVED_REVISIONS_PATH")));
-        assert!(errors
-            .iter()
-            .any(|item| item.contains("RELOAD_REQUIRE_REVISION=true")));
-        assert!(errors
-            .iter()
-            .any(|item| item.contains("RELOAD_REQUIRE_APPROVED_REVISION=true")));
-        assert!(errors
-            .iter()
-            .any(|item| item.contains("RELOAD_REQUIRE_ACTOR=true")));
-        assert!(errors
-            .iter()
-            .any(|item| item.contains("RELOAD_ALLOWED_ACTORS")));
-    }
-
-    #[test]
-    fn prune_rate_limit_cache_drops_expired_and_oversized_entries() {
-        let now = 1_760_000_100;
-        let mut cache = RateLimitCache {
-            seen: HashMap::from([(
-                "chat:user-1:room-1".to_string(),
-                VecDeque::from([now - 120, now - 30, now - 20, now - 10]),
-            )]),
-        };
-
-        prune_rate_limit_cache(&mut cache, now, 60, 2);
-        assert_eq!(
-            cache.seen.get("chat:user-1:room-1").cloned(),
-            Some(VecDeque::from([now - 20, now - 10]))
-        );
-    }
-
-    #[test]
-    fn load_rate_limit_cache_prunes_persisted_entries() {
-        let path = std::env::temp_dir().join(format!(
-            "consumer-entry-rate-limit-{}.json",
-            std::process::id()
-        ));
-        let now = chrono::Utc::now().timestamp();
-        std::fs::write(
-            &path,
-            serde_json::to_vec(&RateLimitCache {
-                seen: HashMap::from([(
-                    "chat:user-1:room-1".to_string(),
-                    VecDeque::from([now - 120, now - 5]),
-                )]),
-            })
-            .unwrap(),
-        )
-        .unwrap();
-
-        let mut config = test_config();
-        config.rate_limit_store_path = Some(path.display().to_string());
-        let cache = load_rate_limit_cache(&config);
-        assert_eq!(
-            cache.seen.get("chat:user-1:room-1").cloned(),
-            Some(VecDeque::from([now - 5]))
-        );
-
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
-    fn load_identity_binding_store_prefers_separate_registry_file_when_configured() {
-        let binding_path = std::env::temp_dir().join(format!(
-            "consumer-entry-bindings-{}.json",
-            std::process::id()
-        ));
-        let registry_path = std::env::temp_dir().join(format!(
-            "consumer-entry-registry-{}.json",
-            std::process::id()
-        ));
-
-        std::fs::write(
-            &binding_path,
-            r#"{
-                "version": 1,
-                "revision": "bindings-a",
-                "product_users": {
-                    "pu-1": { "org_id": "org-embedded", "account_id": "acct-embedded" }
-                },
-                "chat_users": {
-                    "user-1": { "product_user_id": "pu-1" }
-                }
-            }"#,
-        )
-        .unwrap();
-        std::fs::write(
-            &registry_path,
-            r#"{
-                "version": 1,
-                "revision": "registry-a",
-                "product_users": {
-                    "pu-1": { "org_id": "org-registry", "account_id": "acct-registry", "status": "active" }
-                }
-            }"#,
-        )
-        .unwrap();
-
-        let mut config = test_config();
-        config.identity_bindings_path = Some(binding_path.display().to_string());
-        config.identity_registry_path = Some(registry_path.display().to_string());
-
-        let store = load_identity_binding_store(&config);
-        assert_eq!(store.metadata.revision.as_deref(), Some("bindings-a"));
-        assert_eq!(
-            store.registry_metadata.revision.as_deref(),
-            Some("registry-a")
-        );
-        assert_eq!(store.registry_metadata.format, "separate-registry-document");
-        assert_eq!(
-            store
-                .product_users
-                .get("pu-1")
-                .and_then(|user| user.org_id.as_deref()),
-            Some("org-registry")
-        );
-
-        let _ = std::fs::remove_file(binding_path);
-        let _ = std::fs::remove_file(registry_path);
-    }
-
-    #[test]
-    fn load_identity_binding_revision_approval_state_reads_ordered_revisions() {
-        let path = std::env::temp_dir().join(format!(
-            "consumer-entry-approval-{}.json",
-            std::process::id()
-        ));
-        std::fs::write(
-            &path,
-            r#"{
-                "version": 1,
-                "revision": "approval-doc-a",
-                "approved_revisions": ["rev-a", "rev-b", "rev-a", "  "]
-            }"#,
-        )
-        .unwrap();
-
-        let mut config = test_config();
-        config.identity_binding_approved_revisions_path = Some(path.display().to_string());
-
-        let approval_state = load_identity_binding_revision_approval_state(&config);
-        assert_eq!(approval_state.load_status, "loaded");
-        assert_eq!(approval_state.revision.as_deref(), Some("approval-doc-a"));
-        assert_eq!(approval_state.approved_revisions, vec!["rev-a", "rev-b"]);
-
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
-    fn load_session_auth_issuer_registry_revision_approval_state_reads_ordered_revisions() {
-        let path = std::env::temp_dir().join(format!(
-            "consumer-entry-session-auth-approval-{}.json",
-            std::process::id()
-        ));
-        std::fs::write(
-            &path,
-            r#"{
-                "version": 1,
-                "revision": "session-approval-a",
-                "approved_revisions": ["sess-reg-a", "sess-reg-b", "sess-reg-a", "  "]
-            }"#,
-        )
-        .unwrap();
-
-        let mut config = test_config();
-        config.session_auth_issuer_registry_approved_revisions_path =
-            Some(path.display().to_string());
-
-        let approval_state = load_session_auth_issuer_registry_revision_approval_state(&config);
-        assert_eq!(approval_state.load_status, "loaded");
-        assert_eq!(approval_state.revision.as_deref(), Some("session-approval-a"));
-        assert_eq!(approval_state.approved_revisions, vec!["sess-reg-a", "sess-reg-b"]);
-
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
-    fn reload_governance_can_require_revision() {
-        let mut config = test_config();
-        config.identity_binding_reload_require_revision = true;
-
-        let current = IdentityBindingStore {
-            metadata: IdentityBindingMetadata {
-                format: "versioned-document".to_string(),
-                version: 1,
-                revision: Some("rev-a".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(1),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            registry_metadata: IdentityBindingMetadata::default(),
-            bindings: IdentityBindings::default(),
-            product_users: HashMap::new(),
-        };
-        let candidate = IdentityBindingStore {
-            metadata: IdentityBindingMetadata {
-                format: "legacy-flat-map".to_string(),
-                version: 1,
-                revision: None,
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(2),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            registry_metadata: IdentityBindingMetadata::default(),
-            bindings: IdentityBindings::default(),
-            product_users: HashMap::new(),
-        };
-
-        let decision = evaluate_identity_binding_reload_governance(
-            &config,
-            &current,
-            &candidate,
-            &IdentityBindingRevisionApprovalState::default(),
-            None,
-        );
-        assert!(!decision.accepted);
-        assert_eq!(decision.reason, "revision_required");
-    }
-
-    #[test]
-    fn reload_governance_rejects_missing_product_user_refs() {
-        let mut config = test_config();
-        config.identity_registry_path = Some("/tmp/registry.json".to_string());
-
-        let current = IdentityBindingStore {
-            metadata: IdentityBindingMetadata {
-                format: "versioned-document".to_string(),
-                version: 1,
-                revision: Some("bind-a".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(1),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            registry_metadata: IdentityBindingMetadata {
-                format: "separate-registry-document".to_string(),
-                version: 1,
-                revision: Some("reg-a".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(1),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            bindings: IdentityBindings {
-                chat_users: HashMap::from([(
-                    "chat-1".to_string(),
-                    IdentityBindingEntry {
-                        org_id: None,
-                        account_id: None,
-                        product_user_id: Some("pu-1".to_string()),
-                    },
-                )]),
-                matrix_users: HashMap::new(),
-            },
-            product_users: HashMap::from([(
-                "pu-1".to_string(),
-                ProductUserIdentity {
-                    org_id: Some("org-a".to_string()),
-                    account_id: Some("acct-a".to_string()),
-                    status: None,
-                },
-            )]),
-        };
-        let candidate = IdentityBindingStore {
-            metadata: IdentityBindingMetadata {
-                format: "versioned-document".to_string(),
-                version: 1,
-                revision: Some("bind-a".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(2),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            registry_metadata: IdentityBindingMetadata {
-                format: "separate-registry-document".to_string(),
-                version: 1,
-                revision: Some("reg-b".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(2),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            bindings: current.bindings.clone(),
-            product_users: HashMap::new(),
-        };
-
-        let decision = evaluate_identity_binding_reload_governance(
-            &config,
-            &current,
-            &candidate,
-            &IdentityBindingRevisionApprovalState::default(),
-            None,
-        );
-        assert!(!decision.accepted);
-        assert_eq!(decision.reason, "missing_product_user_refs");
-        assert_eq!(decision.current_missing_product_user_refs, 0);
-        assert_eq!(decision.candidate_missing_product_user_refs, 1);
-    }
-
-    #[test]
-    fn reload_governance_with_separate_registry_requires_effective_revision() {
-        let mut config = test_config();
-        config.identity_registry_path = Some("/tmp/registry.json".to_string());
-        config.identity_binding_reload_require_revision = true;
-
-        let current = IdentityBindingStore {
-            metadata: IdentityBindingMetadata {
-                format: "versioned-document".to_string(),
-                version: 1,
-                revision: Some("bind-a".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(1),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            registry_metadata: IdentityBindingMetadata {
-                format: "separate-registry-document".to_string(),
-                version: 1,
-                revision: Some("reg-a".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(1),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            bindings: IdentityBindings::default(),
-            product_users: HashMap::new(),
-        };
-        let candidate = IdentityBindingStore {
-            metadata: IdentityBindingMetadata {
-                format: "versioned-document".to_string(),
-                version: 1,
-                revision: Some("bind-b".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(2),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            registry_metadata: IdentityBindingMetadata {
-                format: "separate-registry-document".to_string(),
-                version: 1,
-                revision: None,
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(2),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            bindings: IdentityBindings::default(),
-            product_users: HashMap::new(),
-        };
-
-        let decision = evaluate_identity_binding_reload_governance(
-            &config,
-            &current,
-            &candidate,
-            &IdentityBindingRevisionApprovalState::default(),
-            None,
-        );
-        assert!(!decision.accepted);
-        assert_eq!(decision.reason, "effective_revision_required");
-    }
-
-    #[test]
-    fn reload_governance_can_reject_same_revision() {
-        let mut config = test_config();
-        config.identity_binding_reload_reject_same_revision = true;
-
-        let current = IdentityBindingStore {
-            metadata: IdentityBindingMetadata {
-                format: "versioned-document".to_string(),
-                version: 1,
-                revision: Some("rev-a".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(1),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            registry_metadata: IdentityBindingMetadata::default(),
-            bindings: IdentityBindings::default(),
-            product_users: HashMap::new(),
-        };
-        let candidate = IdentityBindingStore {
-            metadata: IdentityBindingMetadata {
-                format: "versioned-document".to_string(),
-                version: 1,
-                revision: Some("rev-a".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(2),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            registry_metadata: IdentityBindingMetadata::default(),
-            bindings: IdentityBindings::default(),
-            product_users: HashMap::new(),
-        };
-
-        let decision = evaluate_identity_binding_reload_governance(
-            &config,
-            &current,
-            &candidate,
-            &IdentityBindingRevisionApprovalState::default(),
-            None,
-        );
-        assert!(!decision.accepted);
-        assert_eq!(decision.reason, "same_revision_rejected");
-    }
-
-    #[test]
-    fn reload_governance_with_separate_registry_uses_effective_revision_for_approval() {
-        let mut config = test_config();
-        config.identity_registry_path = Some("/tmp/registry.json".to_string());
-        config.identity_binding_reload_require_approved_revision = true;
-
-        let current = IdentityBindingStore {
-            metadata: IdentityBindingMetadata {
-                format: "versioned-document".to_string(),
-                version: 1,
-                revision: Some("bind-a".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(1),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            registry_metadata: IdentityBindingMetadata {
-                format: "separate-registry-document".to_string(),
-                version: 1,
-                revision: Some("reg-a".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(1),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            bindings: IdentityBindings::default(),
-            product_users: HashMap::new(),
-        };
-        let candidate = IdentityBindingStore {
-            metadata: IdentityBindingMetadata {
-                format: "versioned-document".to_string(),
-                version: 1,
-                revision: Some("bind-b".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(2),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            registry_metadata: IdentityBindingMetadata {
-                format: "separate-registry-document".to_string(),
-                version: 1,
-                revision: Some("reg-b".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(2),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            bindings: IdentityBindings::default(),
-            product_users: HashMap::new(),
-        };
-        let approval_state = IdentityBindingRevisionApprovalState {
-            source_path: None,
-            source_modified_epoch: None,
-            loaded_at_epoch: Some(2),
-            load_status: "loaded".to_string(),
-            load_error: None,
-            version: 1,
-            revision: Some("approval-1".to_string()),
-            approved_revisions: vec!["binding:bind-b|registry:reg-b".to_string()],
-        };
-
-        let decision = evaluate_identity_binding_reload_governance(
-            &config,
-            &current,
-            &candidate,
-            &approval_state,
-            None,
-        );
-        assert!(decision.accepted);
-        assert_eq!(
-            decision.candidate_effective_revision.as_deref(),
-            Some("binding:bind-b|registry:reg-b")
-        );
-        assert_eq!(decision.candidate_revision_approved, Some(true));
-    }
-
-    #[test]
-    fn reload_governance_can_require_approved_revision() {
-        let mut config = test_config();
-        config.identity_binding_reload_require_approved_revision = true;
-
-        let current = IdentityBindingStore {
-            metadata: IdentityBindingMetadata {
-                format: "versioned-document".to_string(),
-                version: 1,
-                revision: Some("rev-a".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(1),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            registry_metadata: IdentityBindingMetadata::default(),
-            bindings: IdentityBindings::default(),
-            product_users: HashMap::new(),
-        };
-        let candidate = IdentityBindingStore {
-            metadata: IdentityBindingMetadata {
-                format: "versioned-document".to_string(),
-                version: 1,
-                revision: Some("rev-c".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(2),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            registry_metadata: IdentityBindingMetadata::default(),
-            bindings: IdentityBindings::default(),
-            product_users: HashMap::new(),
-        };
-        let approval_state = IdentityBindingRevisionApprovalState {
-            source_path: None,
-            source_modified_epoch: None,
-            loaded_at_epoch: Some(3),
-            load_status: "loaded".to_string(),
-            load_error: None,
-            version: 1,
-            revision: Some("approval-rev-1".to_string()),
-            approved_revisions: vec!["rev-a".to_string(), "rev-b".to_string()],
-        };
-
-        let decision = evaluate_identity_binding_reload_governance(
-            &config,
-            &current,
-            &candidate,
-            &approval_state,
-            None,
-        );
-        assert!(!decision.accepted);
-        assert_eq!(decision.reason, "candidate_revision_not_approved");
-        assert_eq!(decision.candidate_revision_approved, Some(false));
-    }
-
-    #[test]
-    fn reload_governance_can_reject_rollback_revision() {
-        let mut config = test_config();
-        config.identity_binding_reload_allow_rollback = false;
-
-        let current = IdentityBindingStore {
-            metadata: IdentityBindingMetadata {
-                format: "versioned-document".to_string(),
-                version: 1,
-                revision: Some("rev-b".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(1),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            registry_metadata: IdentityBindingMetadata::default(),
-            bindings: IdentityBindings::default(),
-            product_users: HashMap::new(),
-        };
-        let candidate = IdentityBindingStore {
-            metadata: IdentityBindingMetadata {
-                format: "versioned-document".to_string(),
-                version: 1,
-                revision: Some("rev-a".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(2),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            registry_metadata: IdentityBindingMetadata::default(),
-            bindings: IdentityBindings::default(),
-            product_users: HashMap::new(),
-        };
-        let approval_state = IdentityBindingRevisionApprovalState {
-            source_path: None,
-            source_modified_epoch: None,
-            loaded_at_epoch: Some(3),
-            load_status: "loaded".to_string(),
-            load_error: None,
-            version: 1,
-            revision: Some("approval-rev-1".to_string()),
-            approved_revisions: vec!["rev-a".to_string(), "rev-b".to_string()],
-        };
-
-        let decision = evaluate_identity_binding_reload_governance(
-            &config,
-            &current,
-            &candidate,
-            &approval_state,
-            None,
-        );
-        assert!(!decision.accepted);
-        assert_eq!(decision.reason, "rollback_revision_rejected");
-        assert!(decision.rollback_blocked);
-    }
-
-    #[test]
-    fn parse_csv_list_trims_empties_and_deduplicates() {
-        assert_eq!(
-            parse_csv_list(" alice , bob ,,alice, ,carol, bob ,,"),
-            vec!["alice", "bob", "carol"]
-        );
-    }
-
-    #[test]
-    fn reload_governance_can_require_actor_allow_list_non_empty() {
-        let mut config = test_config();
-        config.identity_binding_reload_require_actor = true;
-        config.identity_binding_reload_allowed_actors =
-            vec!["alice".to_string(), "bob".to_string()];
-
-        let current = IdentityBindingStore {
-            metadata: IdentityBindingMetadata {
-                format: "versioned-document".to_string(),
-                version: 1,
-                revision: Some("rev-a".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(1),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            registry_metadata: IdentityBindingMetadata::default(),
-            bindings: IdentityBindings::default(),
-            product_users: HashMap::new(),
-        };
-        let candidate = IdentityBindingStore {
-            metadata: IdentityBindingMetadata {
-                format: "versioned-document".to_string(),
-                version: 1,
-                revision: Some("rev-a".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(2),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            registry_metadata: IdentityBindingMetadata::default(),
-            bindings: IdentityBindings::default(),
-            product_users: HashMap::new(),
-        };
-
-        let denied = evaluate_identity_binding_reload_governance(
-            &config,
-            &current,
-            &candidate,
-            &IdentityBindingRevisionApprovalState::default(),
-            Some("mallory"),
-        );
-        assert!(!denied.accepted);
-        assert_eq!(denied.reason, "actor_not_authorized");
-        assert_eq!(denied.actor_authorized, Some(false));
-        assert_eq!(denied.actor_reason.as_deref(), Some("actor_not_allowed"));
-    }
-
-    #[test]
-    fn reload_governance_can_require_actor_with_empty_allowlist() {
-        let mut config = test_config();
-        config.identity_binding_reload_require_actor = true;
-
-        let current = IdentityBindingStore {
-            metadata: IdentityBindingMetadata {
-                format: "versioned-document".to_string(),
-                version: 1,
-                revision: Some("rev-a".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(1),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            registry_metadata: IdentityBindingMetadata::default(),
-            bindings: IdentityBindings::default(),
-            product_users: HashMap::new(),
-        };
-        let candidate = IdentityBindingStore {
-            metadata: IdentityBindingMetadata {
-                format: "versioned-document".to_string(),
-                version: 1,
-                revision: Some("rev-a".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(2),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            registry_metadata: IdentityBindingMetadata::default(),
-            bindings: IdentityBindings::default(),
-            product_users: HashMap::new(),
-        };
-
-        let denied = evaluate_identity_binding_reload_governance(
-            &config,
-            &current,
-            &candidate,
-            &IdentityBindingRevisionApprovalState::default(),
-            Some("mallory"),
-        );
-        assert!(!denied.accepted);
-        assert_eq!(denied.reason, "actor_not_authorized");
-        assert_eq!(denied.actor_authorized, Some(false));
-        assert_eq!(
-            denied.actor_reason.as_deref(),
-            Some("no_allowed_actors_configured")
-        );
-    }
-
-    #[test]
-    fn reload_governance_can_require_actor_header_missing() {
-        let mut config = test_config();
-        config.identity_binding_reload_require_actor = true;
-        config.identity_binding_reload_allowed_actors = vec!["alice".to_string()];
-
-        let current = IdentityBindingStore {
-            metadata: IdentityBindingMetadata {
-                format: "versioned-document".to_string(),
-                version: 1,
-                revision: Some("rev-a".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(1),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            registry_metadata: IdentityBindingMetadata::default(),
-            bindings: IdentityBindings::default(),
-            product_users: HashMap::new(),
-        };
-        let candidate = IdentityBindingStore {
-            metadata: IdentityBindingMetadata {
-                format: "versioned-document".to_string(),
-                version: 1,
-                revision: Some("rev-a".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(2),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            registry_metadata: IdentityBindingMetadata::default(),
-            bindings: IdentityBindings::default(),
-            product_users: HashMap::new(),
-        };
-
-        let denied = evaluate_identity_binding_reload_governance(
-            &config,
-            &current,
-            &candidate,
-            &IdentityBindingRevisionApprovalState::default(),
-            None,
-        );
-        assert!(!denied.accepted);
-        assert_eq!(denied.reason, "actor_not_authorized");
-        assert_eq!(denied.actor_authorized, Some(false));
-        assert_eq!(denied.actor_reason.as_deref(), Some("actor_missing"));
-    }
-
-    #[test]
-    fn reload_governance_can_require_allowed_actor() {
-        let mut config = test_config();
-        config.identity_binding_reload_require_actor = true;
-        config.identity_binding_reload_reject_same_revision = true;
-        config.identity_binding_reload_allowed_actors =
-            vec!["alice".to_string(), "bob".to_string()];
-
-        let current = IdentityBindingStore {
-            metadata: IdentityBindingMetadata {
-                format: "versioned-document".to_string(),
-                version: 1,
-                revision: Some("rev-a".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(1),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            registry_metadata: IdentityBindingMetadata::default(),
-            bindings: IdentityBindings::default(),
-            product_users: HashMap::new(),
-        };
-        let candidate = IdentityBindingStore {
-            metadata: IdentityBindingMetadata {
-                format: "versioned-document".to_string(),
-                version: 1,
-                revision: Some("rev-a".to_string()),
-                source_path: None,
-                source_modified_epoch: None,
-                loaded_at_epoch: Some(2),
-                load_status: "loaded".to_string(),
-                load_error: None,
-            },
-            registry_metadata: IdentityBindingMetadata::default(),
-            bindings: IdentityBindings::default(),
-            product_users: HashMap::new(),
-        };
-
-        let denied = evaluate_identity_binding_reload_governance(
-            &config,
-            &current,
-            &candidate,
-            &IdentityBindingRevisionApprovalState::default(),
-            Some("mallory"),
-        );
-        assert!(!denied.accepted);
-        assert_eq!(denied.reason, "actor_not_authorized");
-        assert_eq!(denied.actor_authorized, Some(false));
-        assert_eq!(denied.actor_reason.as_deref(), Some("actor_not_allowed"));
-
-        let allowed = evaluate_identity_binding_reload_governance(
-            &config,
-            &current,
-            &candidate,
-            &IdentityBindingRevisionApprovalState::default(),
-            Some("alice"),
-        );
-        assert!(!allowed.accepted);
-        assert_eq!(allowed.reason, "same_revision_rejected");
-        assert_eq!(allowed.actor_authorized, Some(true));
-        assert_eq!(allowed.actor_reason, None);
-    }
-
-    #[tokio::test]
-    async fn chat_identity_binding_can_fill_org_and_account() {
-        let mut bindings = IdentityBindings::default();
-        bindings.chat_users.insert(
-            "user-1".to_string(),
-            IdentityBindingEntry {
-                product_user_id: None,
-                org_id: Some("org-bound".to_string()),
-                account_id: Some("acct-bound".to_string()),
-            },
-        );
-        let state = test_state(test_config(), bindings, HashMap::new());
-        let payload = CreateChatTaskRequest {
-            user_id: Some("user-1".to_string()),
-            room_id: Some("room-1".to_string()),
-            session_id: None,
-            org_id: None,
-            text: "hello".to_string(),
-            capability_id: None,
-            account_id: None,
-            idempotency_key: None,
-            metadata: None,
-        };
-
-        let resolved = resolve_chat_identity(&state, &payload).await.unwrap();
-        assert_eq!(resolved.scope.org_id.as_deref(), Some("org-bound"));
-        assert_eq!(resolved.scope.account_id.as_deref(), Some("acct-bound"));
-        assert!(resolved.resolution.matched);
-        assert_eq!(resolved.resolution.binding_version, 1);
-    }
-
-    #[tokio::test]
-    async fn chat_identity_binding_rejects_org_mismatch() {
-        let mut bindings = IdentityBindings::default();
-        bindings.chat_users.insert(
-            "user-1".to_string(),
-            IdentityBindingEntry {
-                product_user_id: None,
-                org_id: Some("org-bound".to_string()),
-                account_id: Some("acct-bound".to_string()),
-            },
-        );
-        let state = test_state(test_config(), bindings, HashMap::new());
-        let payload = CreateChatTaskRequest {
-            user_id: Some("user-1".to_string()),
-            room_id: Some("room-1".to_string()),
-            session_id: None,
-            org_id: Some("org-other".to_string()),
-            text: "hello".to_string(),
-            capability_id: None,
-            account_id: None,
-            idempotency_key: None,
-            metadata: None,
-        };
-
-        assert!(resolve_chat_identity(&state, &payload).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn chat_identity_binding_can_resolve_via_product_user_registry() {
-        let mut bindings = IdentityBindings::default();
-        bindings.chat_users.insert(
-            "user-1".to_string(),
-            IdentityBindingEntry {
-                product_user_id: Some("pu-1".to_string()),
-                org_id: None,
-                account_id: None,
-            },
-        );
-        let product_users = HashMap::from([(
-            "pu-1".to_string(),
-            ProductUserIdentity {
-                org_id: Some("org-registry".to_string()),
-                account_id: Some("acct-registry".to_string()),
-                status: Some("active".to_string()),
-            },
-        )]);
-        let state = test_state(test_config(), bindings, product_users);
-        let payload = CreateChatTaskRequest {
-            user_id: Some("user-1".to_string()),
-            room_id: Some("room-1".to_string()),
-            session_id: None,
-            org_id: None,
-            text: "hello".to_string(),
-            capability_id: None,
-            account_id: None,
-            idempotency_key: None,
-            metadata: None,
-        };
-
-        let resolved = resolve_chat_identity(&state, &payload).await.unwrap();
-        assert_eq!(resolved.scope.org_id.as_deref(), Some("org-registry"));
-        assert_eq!(resolved.scope.account_id.as_deref(), Some("acct-registry"));
-        assert_eq!(resolved.resolution.product_user_id.as_deref(), Some("pu-1"));
-        assert_eq!(
-            resolved.resolution.binding_source_kind,
-            "product_user_registry".to_string()
-        );
-    }
-
-    #[tokio::test]
-    async fn chat_identity_binding_rejects_unknown_product_user_registry_ref() {
-        let mut bindings = IdentityBindings::default();
-        bindings.chat_users.insert(
-            "user-1".to_string(),
-            IdentityBindingEntry {
-                product_user_id: Some("pu-missing".to_string()),
-                org_id: None,
-                account_id: None,
-            },
-        );
-        let state = test_state(test_config(), bindings, HashMap::new());
-        let payload = CreateChatTaskRequest {
-            user_id: Some("user-1".to_string()),
-            room_id: Some("room-1".to_string()),
-            session_id: None,
-            org_id: None,
-            text: "hello".to_string(),
-            capability_id: None,
-            account_id: None,
-            idempotency_key: None,
-            metadata: None,
-        };
-
-        assert!(resolve_chat_identity(&state, &payload).await.is_err());
-    }
-
-    async fn send_text_request(
-        app: &axum::Router,
-        method: &str,
-        uri: &str,
-        headers: &[(&str, &str)],
-    ) -> (StatusCode, String) {
-        let mut request = Request::builder().method(method).uri(uri);
-
-        for (name, value) in headers {
-            request = request.header(*name, *value);
-        }
-
-        let request = request.body(Body::empty()).expect("build request body");
-        let response = app
-            .clone()
-            .oneshot(request)
-            .await
-            .expect("request response");
-        let status = response.status();
-        let bytes = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("read response body bytes");
-        let body = String::from_utf8(bytes.to_vec()).expect("decode response body as utf8");
-
-        (status, body)
-    }
-
-    async fn send_identity_request(
-        app: &axum::Router,
-        method: &str,
-        uri: &str,
-        headers: &[(&str, &str)],
-    ) -> (StatusCode, Value) {
-        let (status, body) = send_text_request(app, method, uri, headers).await;
-        let body: Value = serde_json::from_str(&body).expect("decode reload response body");
-
-        (status, body)
-    }
-
-    async fn send_health_request(app: &axum::Router) -> (StatusCode, Value) {
-        send_identity_request(app, "GET", "/health", &[]).await
-    }
-
-    async fn send_metrics_request(app: &axum::Router) -> (StatusCode, String) {
-        send_text_request(app, "GET", "/metrics", &[]).await
-    }
-
-    async fn send_identity_binding_reload_request(
-        app: &axum::Router,
-        headers: &[(&str, &str)],
-    ) -> (StatusCode, Value) {
-        send_identity_request(app, "POST", "/v1/admin/identity-bindings/reload", headers).await
-    }
-
-    async fn send_identity_registry_reload_request(
-        app: &axum::Router,
-        headers: &[(&str, &str)],
-    ) -> (StatusCode, Value) {
-        send_identity_request(app, "POST", "/v1/admin/identity-registry/reload", headers).await
-    }
-
-    async fn send_identity_registry_validate_request(
-        app: &axum::Router,
-        headers: &[(&str, &str)],
-    ) -> (StatusCode, Value) {
-        send_identity_request(app, "POST", "/v1/admin/identity-registry/validate", headers).await
-    }
-
-    async fn send_identity_registry_status_request(
-        app: &axum::Router,
-        headers: &[(&str, &str)],
-    ) -> (StatusCode, Value) {
-        send_identity_request(app, "GET", "/v1/admin/identity-registry/status", headers).await
-    }
-
-    async fn send_identity_registry_audit_request(
-        app: &axum::Router,
-        uri: &str,
-        headers: &[(&str, &str)],
-    ) -> (StatusCode, Value) {
-        send_identity_request(app, "GET", uri, headers).await
-    }
-
-    async fn send_session_auth_issuer_registry_status_request(
-        app: &axum::Router,
-        headers: &[(&str, &str)],
-    ) -> (StatusCode, Value) {
-        send_identity_request(
-            app,
-            "GET",
-            "/v1/admin/session-auth/issuer-registry/status",
-            headers,
-        )
-        .await
-    }
-
-    async fn send_session_auth_issuer_registry_reload_request(
-        app: &axum::Router,
-        headers: &[(&str, &str)],
-    ) -> (StatusCode, Value) {
-        send_identity_request(
-            app,
-            "POST",
-            "/v1/admin/session-auth/issuer-registry/reload",
-            headers,
-        )
-        .await
-    }
-
-    async fn send_session_auth_issuer_registry_validate_request(
-        app: &axum::Router,
-        headers: &[(&str, &str)],
-    ) -> (StatusCode, Value) {
-        send_identity_request(
-            app,
-            "POST",
-            "/v1/admin/session-auth/issuer-registry/validate",
-            headers,
-        )
-        .await
-    }
-
-    async fn send_session_auth_issuer_registry_approval_status_request(
-        app: &axum::Router,
-        uri: &str,
-        headers: &[(&str, &str)],
-    ) -> (StatusCode, Value) {
-        send_identity_request(app, "GET", uri, headers).await
-    }
-
-    async fn send_session_auth_issuer_registry_approval_validate_request(
-        app: &axum::Router,
-        uri: &str,
-        headers: &[(&str, &str)],
-    ) -> (StatusCode, Value) {
-        send_identity_request(app, "POST", uri, headers).await
-    }
-
-    async fn send_session_auth_issuer_registry_actor_status_request(
-        app: &axum::Router,
-        headers: &[(&str, &str)],
-    ) -> (StatusCode, Value) {
-        send_identity_request(
-            app,
-            "GET",
-            "/v1/admin/session-auth/issuer-registry/actors/status",
-            headers,
-        )
-        .await
-    }
-
-    async fn send_session_auth_issuer_registry_actor_validate_request(
-        app: &axum::Router,
-        headers: &[(&str, &str)],
-    ) -> (StatusCode, Value) {
-        send_identity_request(
-            app,
-            "POST",
-            "/v1/admin/session-auth/issuer-registry/actors/validate",
-            headers,
-        )
-        .await
-    }
-
-    async fn send_identity_approval_status_request(
-        app: &axum::Router,
-        headers: &[(&str, &str)],
-    ) -> (StatusCode, Value) {
-        send_identity_request(app, "GET", "/v1/admin/identity-approval/status", headers).await
-    }
-
-    async fn send_identity_approval_validate_request(
-        app: &axum::Router,
-        headers: &[(&str, &str)],
-    ) -> (StatusCode, Value) {
-        send_identity_request(app, "POST", "/v1/admin/identity-approval/validate", headers).await
-    }
-
-    async fn send_identity_approval_source_request(
-        app: &axum::Router,
-        uri: &str,
-        headers: &[(&str, &str)],
-    ) -> (StatusCode, Value) {
-        send_identity_request(app, "GET", uri, headers).await
-    }
-
-    async fn send_identity_approval_source_validate_request(
-        app: &axum::Router,
-        uri: &str,
-        headers: &[(&str, &str)],
-    ) -> (StatusCode, Value) {
-        send_identity_request(app, "POST", uri, headers).await
-    }
-
-    async fn send_identity_governance_status_request(
-        app: &axum::Router,
-        uri: &str,
-        headers: &[(&str, &str)],
-    ) -> (StatusCode, Value) {
-        send_identity_request(app, "GET", uri, headers).await
-    }
-
-    async fn send_identity_governance_validate_request(
-        app: &axum::Router,
-        uri: &str,
-        headers: &[(&str, &str)],
-    ) -> (StatusCode, Value) {
-        send_identity_request(app, "POST", uri, headers).await
-    }
-
-    async fn send_identity_actor_status_request(
-        app: &axum::Router,
-        headers: &[(&str, &str)],
-    ) -> (StatusCode, Value) {
-        send_identity_request(app, "GET", "/v1/admin/identity-actors/status", headers).await
-    }
-
-    async fn send_identity_actor_validate_request(
-        app: &axum::Router,
-        headers: &[(&str, &str)],
-    ) -> (StatusCode, Value) {
-        send_identity_request(app, "POST", "/v1/admin/identity-actors/validate", headers).await
-    }
-
-    fn temp_identity_bindings_path(suffix: &str) -> std::path::PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time")
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "consumer-entry-identity-bindings-{suffix}-{pid}-{nanos}.json",
-            suffix = suffix,
-            pid = std::process::id(),
-            nanos = nanos
-        ))
-    }
-
-    #[tokio::test]
-    async fn session_auth_issuer_registry_status_endpoint_reports_live_metadata() {
-        let temp_registry_path = temp_identity_bindings_path("session-auth-registry-status");
-        let temp_approval_path =
-            temp_identity_bindings_path("session-auth-registry-status-approval");
-        std::fs::write(
-            &temp_registry_path,
-            r#"{"version":1,"revision":"sess-reg-a","issuers":{"matrix-entry-adapter":{"activeKeyId":"v2","keys":{"v1":"secret-a","v2":"secret-b"}},"worker":{"keys":{"w1":"secret-c"}}}}"#,
-        )
-        .expect("write session auth issuer registry");
-        std::fs::write(
-            &temp_approval_path,
-            r#"{"version":1,"revision":"sess-approval-a","approved_revisions":["sess-reg-a","sess-reg-b"]}"#,
-        )
-        .expect("write session auth issuer registry approval");
-
-        let (metadata, registry) =
-            load_session_auth_issuer_registry(temp_registry_path.to_str());
-        let mut config = test_config();
-        config.ingress_token = Some("admin-token".to_string());
-        config.require_session_auth = true;
-        config.session_auth_expected_audience = Some("consumer-entry-api".to_string());
-        config.session_auth_allowed_issuers = vec![
-            "matrix-entry-adapter".to_string(),
-            "missing-issuer".to_string(),
-        ];
-        config.session_auth_issuer_registry_path =
-            Some(temp_registry_path.to_string_lossy().to_string());
-        config.session_auth_issuer_registry_approved_revisions_path =
-            Some(temp_approval_path.to_string_lossy().to_string());
-        config.session_auth_issuer_registry = registry;
-        config.session_auth_issuer_registry_load_error = metadata.load_error.clone();
-        config.session_auth_issuer_registry_metadata = metadata;
-
-        let app = build_router(AppState::new(config));
-        let (status, body) = send_session_auth_issuer_registry_status_request(
-            &app,
-            &[("x-entry-token", "admin-token")],
-        )
-        .await;
-
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body.get("status").and_then(Value::as_str), Some("ok"));
-        let registry = body
-            .get("session_auth_issuer_registry")
-            .expect("session auth issuer registry object");
-        assert_eq!(registry.get("status").and_then(Value::as_str), Some("ok"));
-        assert_eq!(
-            registry
-                .get("metadata")
-                .and_then(|value| value.get("revision"))
-                .and_then(Value::as_str),
-            Some("sess-reg-a")
-        );
-        assert_eq!(registry.get("issuer_count").and_then(Value::as_u64), Some(2));
-        assert_eq!(registry.get("key_count").and_then(Value::as_u64), Some(3));
-        assert_eq!(
-            registry
-                .get("allowed_issuers_missing")
-                .and_then(Value::as_array)
-                .map(|items| items.len()),
-            Some(1)
-        );
-        assert_eq!(
-            registry
-                .get("issuers_without_active_key")
-                .and_then(Value::as_array)
-                .map(|items| items.len()),
-            Some(1)
-        );
-        assert_eq!(
-            registry
-                .get("issuer_active_keys")
-                .and_then(Value::as_array)
-                .map(|items| items.len()),
-            Some(2)
-        );
-        assert_eq!(
-            registry
-                .get("issuer_active_keys")
-                .and_then(Value::as_array)
-                .and_then(|items| items.first())
-                .and_then(|value| value.get("active_key_id"))
-                .and_then(Value::as_str),
-            Some("v2")
-        );
-        assert_eq!(
-            body.get("session_auth_issuer_registry_approval")
-                .and_then(|value| value.get("current_revision_approved"))
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-
-        let _ = std::fs::remove_file(&temp_registry_path);
-        let _ = std::fs::remove_file(&temp_approval_path);
-    }
-
-    #[tokio::test]
-    async fn session_auth_issuer_registry_validate_endpoint_reloads_source_file() {
-        let temp_registry_path = temp_identity_bindings_path("session-auth-registry-validate");
-        let temp_approval_path =
-            temp_identity_bindings_path("session-auth-registry-validate-approval");
-        std::fs::write(
-            &temp_registry_path,
-            r#"{"version":1,"revision":"sess-reg-b","issuers":{"matrix-entry-adapter":{"activeKeyId":"v1","keys":{"v1":"secret-a"}}}}"#,
-        )
-        .expect("write session auth issuer registry");
-        std::fs::write(
-            &temp_approval_path,
-            r#"{"version":1,"revision":"sess-approval-b","approved_revisions":["sess-reg-b"]}"#,
-        )
-        .expect("write session auth approval state");
-
-        let (metadata, registry) =
-            load_session_auth_issuer_registry(temp_registry_path.to_str());
-        let mut config = test_config();
-        config.ingress_token = Some("admin-token".to_string());
-        config.require_session_auth = true;
-        config.session_auth_expected_audience = Some("consumer-entry-api".to_string());
-        config.session_auth_allowed_issuers = vec!["matrix-entry-adapter".to_string()];
-        config.session_auth_issuer_registry_path =
-            Some(temp_registry_path.to_string_lossy().to_string());
-        config.session_auth_issuer_registry_approved_revisions_path =
-            Some(temp_approval_path.to_string_lossy().to_string());
-        config.session_auth_issuer_registry_require_approved_revision = true;
-        config.session_auth_issuer_registry = registry;
-        config.session_auth_issuer_registry_load_error = metadata.load_error.clone();
-        config.session_auth_issuer_registry_metadata = metadata;
-
-        let app = build_router(AppState::new(config));
-        let (status, body) = send_session_auth_issuer_registry_validate_request(
-            &app,
-            &[("x-entry-token", "admin-token")],
-        )
-        .await;
-
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body.get("valid").and_then(Value::as_bool), Some(true));
-        assert_eq!(body.get("status").and_then(Value::as_str), Some("ok"));
-        assert_eq!(
-            body.get("matches_loaded_revision").and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            body.get("session_auth_issuer_registry_source")
-                .and_then(|value| value.get("metadata"))
-                .and_then(|value| value.get("revision"))
-                .and_then(Value::as_str),
-            Some("sess-reg-b")
-        );
-        assert_eq!(
-            body.get("session_auth_issuer_registry_source_approval")
-                .and_then(|value| value.get("current_revision_approved"))
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            body.get("matches_loaded_active_keys")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            body.get("session_auth_issuer_registry_active_key_diff")
-                .and_then(|value| value.get("changed_active_key_count"))
-                .and_then(Value::as_u64),
-            Some(0)
-        );
-
-        let _ = std::fs::remove_file(&temp_registry_path);
-        let _ = std::fs::remove_file(&temp_approval_path);
-    }
-
-    #[tokio::test]
-    async fn session_auth_issuer_registry_validate_endpoint_reports_active_key_diff() {
-        let temp_registry_path = temp_identity_bindings_path("session-auth-registry-active-key-diff");
-        std::fs::write(
-            &temp_registry_path,
-            r#"{"version":1,"revision":"sess-reg-diff-a","issuers":{"matrix-entry-adapter":{"activeKeyId":"v2","keys":{"v1":"secret-a","v2":"secret-b"}}}}"#,
-        )
-        .expect("write session auth issuer registry");
-
-        let mut config = test_config();
-        config.ingress_token = Some("admin-token".to_string());
-        config.require_session_auth = true;
-        config.session_auth_expected_audience = Some("consumer-entry-api".to_string());
-        config.session_auth_allowed_issuers = vec!["matrix-entry-adapter".to_string()];
-        config.session_auth_issuer_registry_path =
-            Some(temp_registry_path.to_string_lossy().to_string());
-        config.session_auth_issuer_registry = HashMap::from([(
-            "matrix-entry-adapter".to_string(),
-            SessionAuthIssuerRegistryIssuer {
-                active_key_id: Some("v1".to_string()),
-                keys: HashMap::from([
-                    ("v1".to_string(), "secret-a".to_string()),
-                    ("v2".to_string(), "secret-b".to_string()),
-                ]),
-            },
-        )]);
-        config.session_auth_issuer_registry_metadata = SessionAuthIssuerRegistryMetadata {
-            version: 1,
-            revision: Some("sess-reg-diff-a".to_string()),
-            source_path: Some(temp_registry_path.to_string_lossy().to_string()),
-            source_modified_epoch: None,
-            loaded_at_epoch: Some(Utc::now().timestamp()),
-            load_status: "loaded".to_string(),
-            load_error: None,
-            issuer_count: 1,
-            key_count: 2,
-        };
-
-        let app = build_router(AppState::new(config));
-        let (status, body) = send_session_auth_issuer_registry_validate_request(
-            &app,
-            &[("x-entry-token", "admin-token")],
-        )
-        .await;
-
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(
-            body.get("matches_loaded_active_keys")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            body.get("session_auth_issuer_registry_active_key_diff")
-                .and_then(|value| value.get("changed_active_key_count"))
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            body.get("session_auth_issuer_registry_active_key_diff")
-                .and_then(|value| value.get("changes"))
-                .and_then(Value::as_array)
-                .and_then(|items| items.first())
-                .and_then(|value| value.get("candidate_active_key_id"))
-                .and_then(Value::as_str),
-            Some("v2")
-        );
-
-        let _ = std::fs::remove_file(&temp_registry_path);
-    }
-
-    #[tokio::test]
-    async fn session_auth_issuer_registry_validate_endpoint_requires_authorized_actor() {
-        let temp_registry_path = temp_identity_bindings_path("session-auth-registry-validate-actor");
-        std::fs::write(
-            &temp_registry_path,
-            r#"{"version":1,"revision":"sess-reg-actor-a","issuers":{"matrix-entry-adapter":{"activeKeyId":"v1","keys":{"v1":"secret-a"}}}}"#,
-        )
-        .expect("write session auth issuer registry");
-
-        let (metadata, registry) =
-            load_session_auth_issuer_registry(temp_registry_path.to_str());
-        let mut config = test_config();
-        config.ingress_token = Some("admin-token".to_string());
-        config.require_session_auth = true;
-        config.session_auth_expected_audience = Some("consumer-entry-api".to_string());
-        config.session_auth_allowed_issuers = vec!["matrix-entry-adapter".to_string()];
-        config.session_auth_issuer_registry_path =
-            Some(temp_registry_path.to_string_lossy().to_string());
-        config.session_auth_issuer_registry_require_actor = true;
-        config.session_auth_issuer_registry_actor_header =
-            "x-session-auth-registry-actor".to_string();
-        config.session_auth_issuer_registry_allowed_actors = vec!["alice".to_string()];
-        config.session_auth_issuer_registry = registry;
-        config.session_auth_issuer_registry_load_error = metadata.load_error.clone();
-        config.session_auth_issuer_registry_metadata = metadata;
-
-        let app = build_router(AppState::new(config));
-        let (status_missing, body_missing) = send_session_auth_issuer_registry_validate_request(
-            &app,
-            &[("x-entry-token", "admin-token")],
-        )
-        .await;
-
-        assert_eq!(status_missing, StatusCode::CONFLICT);
-        assert_eq!(body_missing.get("status").and_then(Value::as_str), Some("actor_missing"));
-        assert_eq!(
-            body_missing
-                .get("session_auth_issuer_registry_actor_request")
-                .and_then(|value| value.get("authorized"))
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-
-        let (status_ok, body_ok) = send_session_auth_issuer_registry_validate_request(
-            &app,
-            &[
-                ("x-entry-token", "admin-token"),
-                ("x-session-auth-registry-actor", "alice"),
-            ],
-        )
-        .await;
-
-        assert_eq!(status_ok, StatusCode::OK);
-        assert_eq!(body_ok.get("status").and_then(Value::as_str), Some("ok"));
-        assert_eq!(
-            body_ok
-                .get("session_auth_issuer_registry_actor_request")
-                .and_then(|value| value.get("authorized"))
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-
-        let _ = std::fs::remove_file(&temp_registry_path);
-    }
-
-    #[tokio::test]
-    async fn session_auth_issuer_registry_reload_endpoint_updates_live_runtime_state() {
-        let temp_registry_path = temp_identity_bindings_path("session-auth-registry-reload-live");
-        let temp_approval_path =
-            temp_identity_bindings_path("session-auth-registry-reload-live-approval");
-        std::fs::write(
-            &temp_registry_path,
-            r#"{"version":1,"revision":"sess-reg-live-a","issuers":{"matrix-entry-adapter":{"activeKeyId":"v1","keys":{"v1":"secret-a"}}}}"#,
-        )
-        .expect("write live session auth issuer registry");
-        std::fs::write(
-            &temp_approval_path,
-            r#"{"version":1,"revision":"sess-approval-live","approved_revisions":["sess-reg-live-a","sess-reg-live-b"]}"#,
-        )
-        .expect("write session auth approval state");
-
-        let (metadata, registry) =
-            load_session_auth_issuer_registry(temp_registry_path.to_str());
-        let mut config = test_config();
-        config.ingress_token = Some("admin-token".to_string());
-        config.require_session_auth = true;
-        config.session_auth_expected_audience = Some("consumer-entry-api".to_string());
-        config.session_auth_allowed_issuers = vec!["matrix-entry-adapter".to_string()];
-        config.session_auth_issuer_registry_path =
-            Some(temp_registry_path.to_string_lossy().to_string());
-        config.session_auth_issuer_registry_approved_revisions_path =
-            Some(temp_approval_path.to_string_lossy().to_string());
-        config.session_auth_issuer_registry_require_approved_revision = true;
-        config.session_auth_issuer_registry_require_actor = true;
-        config.session_auth_issuer_registry_actor_header =
-            "x-session-auth-registry-actor".to_string();
-        config.session_auth_issuer_registry_allowed_actors = vec!["alice".to_string()];
-        config.session_auth_issuer_registry = registry;
-        config.session_auth_issuer_registry_load_error = metadata.load_error.clone();
-        config.session_auth_issuer_registry_metadata = metadata;
-
-        let state = AppState::new(config);
-        let app = build_router(state.clone());
-
-        std::fs::write(
-            &temp_registry_path,
-            r#"{"version":1,"revision":"sess-reg-live-b","issuers":{"matrix-entry-adapter":{"activeKeyId":"v2","keys":{"v1":"secret-a","v2":"secret-b"}}}}"#,
-        )
-        .expect("rewrite live session auth issuer registry");
-
-        let (status_missing, body_missing) = send_session_auth_issuer_registry_reload_request(
-            &app,
-            &[("x-entry-token", "admin-token")],
-        )
-        .await;
-        assert_eq!(status_missing, StatusCode::FORBIDDEN);
-        assert_eq!(
-            body_missing
-                .get("session_auth_issuer_registry_reload_governance")
-                .and_then(|value| value.get("actor_reason"))
-                .and_then(Value::as_str),
-            Some("actor_missing")
-        );
-
-        let (status_before, body_before) = send_session_auth_issuer_registry_status_request(
-            &app,
-            &[("x-entry-token", "admin-token")],
-        )
-        .await;
-        assert_eq!(status_before, StatusCode::OK);
-        assert_eq!(
-            body_before
-                .get("session_auth_issuer_registry")
-                .and_then(|value| value.get("metadata"))
-                .and_then(|value| value.get("revision"))
-                .and_then(Value::as_str),
-            Some("sess-reg-live-a")
-        );
-
-        let (status_ok, body_ok) = send_session_auth_issuer_registry_reload_request(
-            &app,
-            &[
-                ("x-entry-token", "admin-token"),
-                ("x-session-auth-registry-actor", "alice"),
-            ],
-        )
-        .await;
-        assert_eq!(status_ok, StatusCode::OK);
-        assert_eq!(body_ok.get("reloaded").and_then(Value::as_bool), Some(true));
-        assert_eq!(
-            body_ok
-                .get("session_auth_issuer_registry")
-                .and_then(|value| value.get("metadata"))
-                .and_then(|value| value.get("revision"))
-                .and_then(Value::as_str),
-            Some("sess-reg-live-b")
-        );
-
-        let (status_after, body_after) = send_session_auth_issuer_registry_status_request(
-            &app,
-            &[("x-entry-token", "admin-token")],
-        )
-        .await;
-        assert_eq!(status_after, StatusCode::OK);
-        assert_eq!(
-            body_after
-                .get("session_auth_issuer_registry")
-                .and_then(|value| value.get("metadata"))
-                .and_then(|value| value.get("revision"))
-                .and_then(Value::as_str),
-            Some("sess-reg-live-b")
-        );
-
-        let payload = CreateChatTaskRequest {
-            user_id: Some("user-1".to_string()),
-            room_id: Some("room-1".to_string()),
-            session_id: Some("session-1".to_string()),
-            org_id: Some("org-1".to_string()),
-            text: "hello".to_string(),
-            capability_id: None,
-            account_id: None,
-            idempotency_key: None,
-            metadata: None,
-        };
-        let scope = build_chat_identity_scope(&payload);
-        let now_epoch = Utc::now().timestamp();
-        let claims = UserSessionAuthClaims {
-            version: 1,
-            issuer: "matrix-entry-adapter".to_string(),
-            key_id: Some("v2".to_string()),
-            subject: "user-1".to_string(),
-            source_kind: "chat_task".to_string(),
-            audience: Some("consumer-entry-api".to_string()),
-            request_fingerprint: Some(build_chat_request_fingerprint(&payload)),
-            room_id: Some("room-1".to_string()),
-            session_id: Some("session-1".to_string()),
-            org_id: Some("org-1".to_string()),
-            account_id: None,
-            issued_at_epoch: now_epoch,
-            expires_at_epoch: now_epoch + 60,
-        };
-        let assertion = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(serde_json::to_vec(&claims).unwrap());
-        let signature = sign_user_session_assertion(&assertion, "secret-b").unwrap();
-        let mut headers = HeaderMap::new();
-        headers.insert(USER_SESSION_ASSERTION_HEADER, assertion.parse().unwrap());
-        headers.insert(USER_SESSION_SIGNATURE_HEADER, signature.parse().unwrap());
-
-        let authorized = authorize_user_session(
-            &state,
-            &headers,
-            &scope,
-            build_chat_request_fingerprint(&payload).as_str(),
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(authorized.claims.key_id.as_deref(), Some("v2"));
-
-        let _ = std::fs::remove_file(&temp_registry_path);
-        let _ = std::fs::remove_file(&temp_approval_path);
-    }
-
-    #[tokio::test]
-    async fn session_auth_issuer_registry_actor_status_endpoint_reports_configuration() {
-        let mut config = test_config();
-        config.ingress_token = Some("admin-token".to_string());
-        config.require_session_auth = true;
-        config.session_auth_issuer_registry_path =
-            Some("./run/local-runtime/session-auth-issuer-registry.json".to_string());
-        config.session_auth_issuer_registry_require_actor = true;
-        config.session_auth_issuer_registry_actor_header =
-            "x-session-auth-registry-actor".to_string();
-        config.session_auth_issuer_registry_allowed_actors =
-            vec!["alice".to_string(), "bob".to_string()];
-
-        let app = build_router(AppState::new(config));
-        let (status, body) = send_session_auth_issuer_registry_actor_status_request(
-            &app,
-            &[("x-entry-token", "admin-token")],
-        )
-        .await;
-
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body.get("actor_valid").and_then(Value::as_bool), Some(true));
-        assert_eq!(
-            body.get("session_auth_issuer_registry_actor_checks")
-                .and_then(|value| value.get("actor_header"))
-                .and_then(Value::as_str),
-            Some("x-session-auth-registry-actor")
-        );
-        assert_eq!(
-            body.get("session_auth_issuer_registry_actor_checks")
-                .and_then(|value| value.get("allowed_actor_count"))
-                .and_then(Value::as_u64),
-            Some(2)
-        );
-    }
-
-    #[tokio::test]
-    async fn session_auth_issuer_registry_actor_validate_endpoint_rejects_missing_allowed_actors() {
-        let mut config = test_config();
-        config.ingress_token = Some("admin-token".to_string());
-        config.require_session_auth = true;
-        config.session_auth_issuer_registry_path =
-            Some("./run/local-runtime/session-auth-issuer-registry.json".to_string());
-        config.session_auth_issuer_registry_require_actor = true;
-        config.session_auth_issuer_registry_actor_header =
-            "x-session-auth-registry-actor".to_string();
-
-        let app = build_router(AppState::new(config));
-        let (status, body) = send_session_auth_issuer_registry_actor_validate_request(
-            &app,
-            &[("x-entry-token", "admin-token")],
-        )
-        .await;
-
-        assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(body.get("valid").and_then(Value::as_bool), Some(false));
-        assert_eq!(body.get("status").and_then(Value::as_str), Some("no_allowed_actors_configured"));
-    }
-
-    #[tokio::test]
-    async fn session_auth_issuer_registry_approval_validate_endpoint_rejects_unapproved_revision() {
-        let temp_registry_path = temp_identity_bindings_path("session-auth-registry-approval-validate");
-        let temp_approval_path = temp_identity_bindings_path(
-            "session-auth-registry-approval-validate-source",
-        );
-        std::fs::write(
-            &temp_registry_path,
-            r#"{"version":1,"revision":"sess-reg-c","issuers":{"matrix-entry-adapter":{"activeKeyId":"v1","keys":{"v1":"secret-a"}}}}"#,
-        )
-        .expect("write session auth issuer registry");
-        std::fs::write(
-            &temp_approval_path,
-            r#"{"version":1,"revision":"sess-approval-c","approved_revisions":["sess-reg-a","sess-reg-b"]}"#,
-        )
-        .expect("write session auth approval state");
-
-        let (metadata, registry) =
-            load_session_auth_issuer_registry(temp_registry_path.to_str());
-        let mut config = test_config();
-        config.ingress_token = Some("admin-token".to_string());
-        config.require_session_auth = true;
-        config.session_auth_expected_audience = Some("consumer-entry-api".to_string());
-        config.session_auth_allowed_issuers = vec!["matrix-entry-adapter".to_string()];
-        config.session_auth_issuer_registry_path =
-            Some(temp_registry_path.to_string_lossy().to_string());
-        config.session_auth_issuer_registry_approved_revisions_path =
-            Some(temp_approval_path.to_string_lossy().to_string());
-        config.session_auth_issuer_registry_require_approved_revision = true;
-        config.session_auth_issuer_registry = registry;
-        config.session_auth_issuer_registry_load_error = metadata.load_error.clone();
-        config.session_auth_issuer_registry_metadata = metadata;
-
-        let app = build_router(AppState::new(config));
-        let (status, body) = send_session_auth_issuer_registry_approval_validate_request(
-            &app,
-            "/v1/admin/session-auth/issuer-registry/approval/validate?limit=1",
-            &[("x-entry-token", "admin-token")],
-        )
-        .await;
-
-        assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(body.get("status").and_then(Value::as_str), Some("current_revision_not_approved"));
-        assert_eq!(
-            body.get("session_auth_issuer_registry_approval")
-                .and_then(|value| value.get("current_revision_approved"))
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            body.get("session_auth_issuer_registry_approval_source")
-                .and_then(|value| value.get("returned_revision_count"))
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-
-        let _ = std::fs::remove_file(&temp_registry_path);
-        let _ = std::fs::remove_file(&temp_approval_path);
-    }
-
-    #[tokio::test]
-    async fn session_auth_issuer_registry_approval_status_endpoint_reports_source() {
-        let temp_registry_path = temp_identity_bindings_path("session-auth-registry-approval-status");
-        let temp_approval_path = temp_identity_bindings_path(
-            "session-auth-registry-approval-status-source",
-        );
-        std::fs::write(
-            &temp_registry_path,
-            r#"{"version":1,"revision":"sess-reg-d","issuers":{"matrix-entry-adapter":{"activeKeyId":"v1","keys":{"v1":"secret-a"}}}}"#,
-        )
-        .expect("write session auth issuer registry");
-        std::fs::write(
-            &temp_approval_path,
-            r#"{"version":1,"revision":"sess-approval-d","approved_revisions":["sess-reg-c","sess-reg-d"]}"#,
-        )
-        .expect("write session auth approval state");
-
-        let (metadata, registry) =
-            load_session_auth_issuer_registry(temp_registry_path.to_str());
-        let mut config = test_config();
-        config.ingress_token = Some("admin-token".to_string());
-        config.require_session_auth = true;
-        config.session_auth_expected_audience = Some("consumer-entry-api".to_string());
-        config.session_auth_allowed_issuers = vec!["matrix-entry-adapter".to_string()];
-        config.session_auth_issuer_registry_path =
-            Some(temp_registry_path.to_string_lossy().to_string());
-        config.session_auth_issuer_registry_approved_revisions_path =
-            Some(temp_approval_path.to_string_lossy().to_string());
-        config.session_auth_issuer_registry = registry;
-        config.session_auth_issuer_registry_load_error = metadata.load_error.clone();
-        config.session_auth_issuer_registry_metadata = metadata;
-
-        let app = build_router(AppState::new(config));
-        let (status, body) = send_session_auth_issuer_registry_approval_status_request(
-            &app,
-            "/v1/admin/session-auth/issuer-registry/approval/status?limit=1",
-            &[("x-entry-token", "admin-token")],
-        )
-        .await;
-
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body.get("status").and_then(Value::as_str), Some("ok"));
-        assert_eq!(
-            body.get("session_auth_issuer_registry_approval")
-                .and_then(|value| value.get("current_revision_approved"))
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            body.get("session_auth_issuer_registry_approval_source")
-                .and_then(|value| value.get("returned_revision_count"))
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-
-        let _ = std::fs::remove_file(&temp_registry_path);
-        let _ = std::fs::remove_file(&temp_approval_path);
-    }
-
-    #[tokio::test]
-    async fn reload_identity_bindings_endpoint_rejects_actor_gate_miss_and_denied_with_403() {
-        let temp_path = temp_identity_bindings_path("actor-gate");
-        std::fs::write(
-            &temp_path,
-            r#"{"version":1,"revision":"rev-a","chat_users":{},"matrix_users":{}}"#,
-        )
-        .expect("write initial identity bindings");
-
-        let mut config = test_config();
-        config.identity_bindings_path = Some(temp_path.to_string_lossy().to_string());
-        config.identity_binding_reload_require_actor = true;
-        config.identity_binding_reload_allowed_actors = vec!["alice".to_string()];
-        config.identity_binding_reload_reject_same_revision = true;
-
-        let app = build_router(AppState::new(config));
-
-        let (status_missing, body_missing) = send_identity_binding_reload_request(&app, &[]).await;
-        assert_eq!(status_missing, StatusCode::FORBIDDEN);
-        assert_eq!(
-            body_missing["identity_binding_reload_governance"]["actor_authorized"],
-            false,
-        );
-        assert_eq!(
-            body_missing["identity_binding_reload_governance"]["actor_reason"],
-            "actor_missing",
-        );
-
-        let (status_denied, body_denied) =
-            send_identity_binding_reload_request(&app, &[("x-identity-binding-actor", "mallory")])
-                .await;
-        assert_eq!(status_denied, StatusCode::FORBIDDEN);
-        assert_eq!(
-            body_denied["identity_binding_reload_governance"]["actor_authorized"],
-            false,
-        );
-        assert_eq!(
-            body_denied["identity_binding_reload_governance"]["actor_reason"],
-            "actor_not_allowed",
-        );
-
-        let _ = std::fs::remove_file(&temp_path);
-    }
-
-    #[tokio::test]
-    async fn reload_identity_bindings_endpoint_returns_409_when_actor_allowed_but_governance_rejects(
-    ) {
-        let temp_path = temp_identity_bindings_path("actor-allowed-409");
-        std::fs::write(
-            &temp_path,
-            r#"{"version":1,"revision":"rev-a","chat_users":{},"matrix_users":{}}"#,
-        )
-        .expect("write initial identity bindings");
-
-        let mut config = test_config();
-        config.identity_bindings_path = Some(temp_path.to_string_lossy().to_string());
-        config.identity_binding_reload_require_actor = true;
-        config.identity_binding_reload_allowed_actors = vec!["alice".to_string()];
-        config.identity_binding_reload_reject_same_revision = true;
-
-        let app = build_router(AppState::new(config));
-
-        let (status_rejected, body_rejected) =
-            send_identity_binding_reload_request(&app, &[("x-identity-binding-actor", "alice")])
-                .await;
-        assert_eq!(status_rejected, StatusCode::CONFLICT);
-        assert_eq!(
-            body_rejected["identity_binding_reload_governance"]["actor_authorized"],
-            true,
-        );
-        assert!(body_rejected["identity_binding_reload_governance"]["actor_reason"].is_null());
-        assert_eq!(
-            body_rejected["identity_binding_reload_governance"]["reason"],
-            "same_revision_rejected",
-        );
-
-        let _ = std::fs::remove_file(&temp_path);
-    }
-
-    #[tokio::test]
-    async fn reload_identity_bindings_endpoint_supports_custom_actor_header() {
-        let temp_path = temp_identity_bindings_path("actor-custom-header");
-        std::fs::write(
-            &temp_path,
-            r#"{"version":1,"revision":"rev-a","chat_users":{},"matrix_users":{}}"#,
-        )
-        .expect("write initial identity bindings");
-
-        let mut config = test_config();
-        config.identity_bindings_path = Some(temp_path.to_string_lossy().to_string());
-        config.identity_binding_reload_require_actor = true;
-        config.identity_binding_reload_actor_header = "x-deploy-actor".to_string();
-        config.identity_binding_reload_allowed_actors = vec!["alice".to_string()];
-        config.identity_binding_reload_reject_same_revision = true;
-
-        let app = build_router(AppState::new(config));
-
-        let (status_missing, body_missing) = send_identity_binding_reload_request(&app, &[]).await;
-        assert_eq!(status_missing, StatusCode::FORBIDDEN);
-        assert_eq!(
-            body_missing["identity_binding_reload_governance"]["actor_authorized"],
-            false,
-        );
-        assert_eq!(
-            body_missing["identity_binding_reload_governance"]["actor_reason"],
-            "actor_missing",
-        );
-
-        let (status_wrong_header, body_wrong_header) =
-            send_identity_binding_reload_request(&app, &[("x-deploy-actor", "mallory")]).await;
-        assert_eq!(status_wrong_header, StatusCode::FORBIDDEN);
-        assert_eq!(
-            body_wrong_header["identity_binding_reload_governance"]["actor_authorized"],
-            false,
-        );
-        assert_eq!(
-            body_wrong_header["identity_binding_reload_governance"]["actor_reason"],
-            "actor_not_allowed",
-        );
-
-        let (status_ok, body_ok) =
-            send_identity_binding_reload_request(&app, &[("x-deploy-actor", "alice")]).await;
-        assert_eq!(status_ok, StatusCode::CONFLICT);
-        assert_eq!(
-            body_ok["identity_binding_reload_governance"]["actor_authorized"],
-            true,
-        );
-        assert!(body_ok["identity_binding_reload_governance"]["actor_reason"].is_null());
-        assert_eq!(
-            body_ok["identity_binding_reload_governance"]["reason"],
-            "same_revision_rejected",
-        );
-
-        let _ = std::fs::remove_file(&temp_path);
-    }
-
-    #[tokio::test]
-    async fn reload_identity_bindings_endpoint_returns_success_after_revision_bump() {
-        let temp_path = temp_identity_bindings_path("actor-success");
-        std::fs::write(
-            &temp_path,
-            r#"{"version":1,"revision":"rev-a","chat_users":{"chat-1":{"org_id":"org-old","account_id":"acct-old"}},"matrix_users":{}}"#,
-        )
-        .expect("write initial identity bindings");
-
-        let mut config = test_config();
-        config.identity_bindings_path = Some(temp_path.to_string_lossy().to_string());
-        config.identity_binding_reload_reject_same_revision = false;
-
-        let app = build_router(AppState::new(config));
-
-        std::fs::write(
-            &temp_path,
-            r#"{"version":1,"revision":"rev-b","chat_users":{"chat-1":{"org_id":"org-new","account_id":"acct-new"},"chat-2":{"org_id":"org-new2"}},"matrix_users":{"mx-9":{"org_id":"org-mx"}}}"#,
-        )
-        .expect("write revised identity bindings");
-
-        let (status_ok, body_ok) = send_identity_binding_reload_request(&app, &[]).await;
-        assert_eq!(status_ok, StatusCode::OK);
-        assert_eq!(body_ok["ok"], true);
-        assert_eq!(body_ok["reloaded"], true);
-        assert_eq!(
-            body_ok["identity_binding_reload_governance"]["accepted"],
-            true,
-        );
-        assert!(body_ok["identity_binding_reload_governance"]["actor_authorized"].is_null());
-        assert!(body_ok["identity_binding_reload_governance"]["actor_reason"].is_null());
-        assert_eq!(
-            body_ok["identity_binding_reload_governance"]["reason"],
-            "policy_ok",
-        );
-        assert_eq!(
-            body_ok["identity_binding_reload_governance"]["current_revision"],
-            "rev-a",
-        );
-        assert_eq!(
-            body_ok["identity_binding_reload_governance"]["candidate_revision"],
-            "rev-b",
-        );
-        assert_eq!(
-            body_ok["identity_binding_reload_governance"]["candidate_revision_approved"],
-            false,
-        );
-        assert_eq!(body_ok["identity_binding_counts"]["chat_users"], 2,);
-        assert_eq!(body_ok["identity_binding_counts"]["matrix_users"], 1,);
-        assert_eq!(body_ok["identity_binding_metadata"]["revision"], "rev-b",);
-
-        let _ = std::fs::remove_file(&temp_path);
-    }
-
-    #[tokio::test]
-    async fn reload_identity_registry_endpoint_returns_conflict_when_registry_not_configured() {
-        let temp_path = temp_identity_bindings_path("registry-not-configured");
-        std::fs::write(
-            &temp_path,
-            r#"{"version":1,"revision":"bind-a","chat_users":{},"matrix_users":{}}"#,
-        )
-        .expect("write initial identity bindings");
-
-        let mut config = test_config();
-        config.identity_bindings_path = Some(temp_path.to_string_lossy().to_string());
-
-        let app = build_router(AppState::new(config));
-
-        let (status, body) = send_identity_registry_reload_request(&app, &[]).await;
-        assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(body["ok"], false);
-        assert_eq!(body["reloaded"], false);
-        assert_eq!(body["error"], "identity_registry_not_configured");
-
-        let _ = std::fs::remove_file(&temp_path);
-    }
-
-    #[tokio::test]
-    async fn reload_identity_registry_endpoint_rejects_missing_product_user_refs() {
-        let temp_bindings_path = temp_identity_bindings_path("registry-missing-ref-bindings");
-        let temp_registry_path = temp_identity_bindings_path("registry-missing-ref-file");
-        std::fs::write(
-            &temp_bindings_path,
-            r#"{"version":1,"revision":"bind-a","chat_users":{"chat-1":{"product_user_id":"pu-1"}},"matrix_users":{}}"#,
-        )
-        .expect("write initial identity bindings");
-        std::fs::write(
-            &temp_registry_path,
-            r#"{"version":1,"revision":"reg-a","product_users":{"pu-1":{"org_id":"org-old","account_id":"acct-old"}}}"#,
-        )
-        .expect("write initial identity registry");
-
-        let mut config = test_config();
-        config.identity_bindings_path = Some(temp_bindings_path.to_string_lossy().to_string());
-        config.identity_registry_path = Some(temp_registry_path.to_string_lossy().to_string());
-        config.identity_binding_reload_require_revision = true;
-        config.identity_binding_reload_reject_same_revision = true;
-
-        let app = build_router(AppState::new(config));
-
-        std::fs::write(
-            &temp_registry_path,
-            r#"{"version":1,"revision":"reg-b","product_users":{}}"#,
-        )
-        .expect("write broken identity registry");
-
-        let (status, body) = send_identity_registry_reload_request(&app, &[]).await;
-        assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(body["ok"], false);
-        assert_eq!(body["reloaded"], false);
-        assert_eq!(
-            body["identity_binding_reload_governance"]["reason"],
-            "missing_product_user_refs",
-        );
-        assert_eq!(
-            body["identity_binding_reload_governance"]["candidate_missing_product_user_refs"],
-            1,
-        );
-        assert_eq!(
-            body["identity_binding_counts"]["missing_product_user_refs"],
-            1
-        );
-
-        let _ = std::fs::remove_file(&temp_bindings_path);
-        let _ = std::fs::remove_file(&temp_registry_path);
-    }
-
-    #[tokio::test]
-    async fn reload_identity_registry_endpoint_returns_success_after_registry_revision_bump() {
-        let temp_bindings_path = temp_identity_bindings_path("registry-reload-bindings");
-        let temp_registry_path = temp_identity_bindings_path("registry-reload-file");
-        let temp_audit_path = temp_identity_bindings_path("registry-reload-audit");
-        std::fs::write(
-            &temp_bindings_path,
-            r#"{"version":1,"revision":"bind-a","chat_users":{"chat-1":{"product_user_id":"pu-1"}},"matrix_users":{}}"#,
-        )
-        .expect("write initial identity bindings");
-        std::fs::write(
-            &temp_registry_path,
-            r#"{"version":1,"revision":"reg-a","product_users":{"pu-1":{"org_id":"org-old","account_id":"acct-old"}}}"#,
-        )
-        .expect("write initial identity registry");
-
-        let mut config = test_config();
-        config.identity_bindings_path = Some(temp_bindings_path.to_string_lossy().to_string());
-        config.identity_registry_path = Some(temp_registry_path.to_string_lossy().to_string());
-        config.identity_binding_audit_log_path =
-            Some(temp_audit_path.to_string_lossy().to_string());
-        config.identity_binding_reload_require_revision = true;
-        config.identity_binding_reload_reject_same_revision = true;
-
-        let app = build_router(AppState::new(config));
-
-        std::fs::write(
-            &temp_registry_path,
-            r#"{"version":1,"revision":"reg-b","product_users":{"pu-1":{"org_id":"org-new","account_id":"acct-new"},"pu-2":{"org_id":"org-extra"}}}"#,
-        )
-        .expect("write revised identity registry");
-
-        let (status, body) = send_identity_registry_reload_request(&app, &[]).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["ok"], true);
-        assert_eq!(body["reloaded"], true);
-        assert_eq!(body["identity_binding_reload_governance"]["accepted"], true,);
-        assert_eq!(
-            body["identity_binding_reload_governance"]["reason"],
-            "policy_ok",
-        );
-        assert_eq!(
-            body["identity_binding_reload_governance"]["current_revision"],
-            "bind-a",
-        );
-        assert_eq!(
-            body["identity_binding_reload_governance"]["candidate_revision"],
-            "bind-a",
-        );
-        assert_eq!(
-            body["identity_binding_reload_governance"]["current_registry_revision"],
-            "reg-a",
-        );
-        assert_eq!(
-            body["identity_binding_reload_governance"]["candidate_registry_revision"],
-            "reg-b",
-        );
-        assert_eq!(
-            body["identity_binding_reload_governance"]["current_effective_revision"],
-            "binding:bind-a|registry:reg-a",
-        );
-        assert_eq!(
-            body["identity_binding_reload_governance"]["candidate_effective_revision"],
-            "binding:bind-a|registry:reg-b",
-        );
-        assert_eq!(
-            body["identity_binding_reload_governance"]["candidate_registry_load_status"],
-            "loaded",
-        );
-        assert_eq!(body["identity_registry_metadata"]["revision"], "reg-b");
-        assert_eq!(body["identity_binding_counts"]["product_users"], 2);
-        assert_eq!(
-            body["identity_binding_audit"]["last_event_kind"],
-            "registry_reload"
-        );
-
-        let _ = std::fs::remove_file(&temp_bindings_path);
-        let _ = std::fs::remove_file(&temp_registry_path);
-        let _ = std::fs::remove_file(&temp_audit_path);
-    }
-
-    #[tokio::test]
-    async fn validate_identity_registry_endpoint_previews_candidate_without_applying_it() {
-        let temp_bindings_path = temp_identity_bindings_path("registry-validate-bindings");
-        let temp_registry_path = temp_identity_bindings_path("registry-validate-file");
-        std::fs::write(
-            &temp_bindings_path,
-            r#"{"version":1,"revision":"bind-a","chat_users":{"chat-1":{"product_user_id":"pu-1"}},"matrix_users":{}}"#,
-        )
-        .expect("write initial identity bindings");
-        std::fs::write(
-            &temp_registry_path,
-            r#"{"version":1,"revision":"reg-a","product_users":{"pu-1":{"org_id":"org-old","account_id":"acct-old"}}}"#,
-        )
-        .expect("write initial identity registry");
-
-        let mut config = test_config();
-        config.identity_bindings_path = Some(temp_bindings_path.to_string_lossy().to_string());
-        config.identity_registry_path = Some(temp_registry_path.to_string_lossy().to_string());
-        config.identity_binding_reload_require_revision = true;
-        config.identity_binding_reload_reject_same_revision = true;
-
-        let app = build_router(AppState::new(config));
-
-        std::fs::write(
-            &temp_registry_path,
-            r#"{"version":1,"revision":"reg-b","product_users":{"pu-1":{"org_id":"org-new","account_id":"acct-new"}}}"#,
-        )
-        .expect("write candidate identity registry");
-
-        let (validate_status, validate_body) =
-            send_identity_registry_validate_request(&app, &[]).await;
-        assert_eq!(validate_status, StatusCode::OK);
-        assert_eq!(validate_body["ok"], true);
-        assert_eq!(validate_body["validated"], true);
-        assert_eq!(validate_body["valid"], true);
-        assert_eq!(validate_body["checked_only"], true);
-        assert_eq!(validate_body["would_reload"], true);
-        assert_eq!(
-            validate_body["identity_registry_metadata"]["revision"],
-            "reg-b"
-        );
-        assert_eq!(
-            validate_body["identity_binding_reload_governance"]["current_effective_revision"],
-            "binding:bind-a|registry:reg-a",
-        );
-        assert_eq!(
-            validate_body["identity_binding_reload_governance"]["candidate_effective_revision"],
-            "binding:bind-a|registry:reg-b",
-        );
-        assert_eq!(
-            validate_body["effective_revision"],
-            "binding:bind-a|registry:reg-b"
-        );
-
-        let (status_status, status_body) = send_identity_registry_status_request(&app, &[]).await;
-        assert_eq!(status_status, StatusCode::OK);
-        assert_eq!(status_body["ok"], true);
-        assert_eq!(
-            status_body["effective_revision"],
-            "binding:bind-a|registry:reg-a"
-        );
-        assert_eq!(
-            status_body["identity_registry_metadata"]["revision"],
-            "reg-a"
-        );
-
-        let _ = std::fs::remove_file(&temp_bindings_path);
-        let _ = std::fs::remove_file(&temp_registry_path);
-    }
-
-    #[tokio::test]
-    async fn validate_identity_registry_endpoint_rejects_missing_product_user_refs() {
-        let temp_bindings_path = temp_identity_bindings_path("registry-validate-missing-bindings");
-        let temp_registry_path = temp_identity_bindings_path("registry-validate-missing-file");
-        std::fs::write(
-            &temp_bindings_path,
-            r#"{"version":1,"revision":"bind-a","chat_users":{"chat-1":{"product_user_id":"pu-1"}},"matrix_users":{}}"#,
-        )
-        .expect("write initial identity bindings");
-        std::fs::write(
-            &temp_registry_path,
-            r#"{"version":1,"revision":"reg-a","product_users":{"pu-1":{"org_id":"org-old","account_id":"acct-old"}}}"#,
-        )
-        .expect("write initial identity registry");
-
-        let mut config = test_config();
-        config.identity_bindings_path = Some(temp_bindings_path.to_string_lossy().to_string());
-        config.identity_registry_path = Some(temp_registry_path.to_string_lossy().to_string());
-        config.identity_binding_reload_require_revision = true;
-        config.identity_binding_reload_reject_same_revision = true;
-
-        let app = build_router(AppState::new(config));
-
-        std::fs::write(
-            &temp_registry_path,
-            r#"{"version":1,"revision":"reg-b","product_users":{}}"#,
-        )
-        .expect("write broken candidate identity registry");
-
-        let (status, body) = send_identity_registry_validate_request(&app, &[]).await;
-        assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(body["ok"], false);
-        assert_eq!(body["validated"], true);
-        assert_eq!(body["valid"], false);
-        assert_eq!(body["would_reload"], false);
-        assert_eq!(body["missing_product_user_refs"], 1);
-        assert_eq!(
-            body["identity_binding_reload_governance"]["reason"],
-            "missing_product_user_refs",
-        );
-
-        let _ = std::fs::remove_file(&temp_bindings_path);
-        let _ = std::fs::remove_file(&temp_registry_path);
-    }
-
-    #[tokio::test]
-    async fn identity_approval_status_endpoint_reports_current_effective_revision_state() {
-        let temp_bindings_path = temp_identity_bindings_path("approval-status-bindings");
-        let temp_registry_path = temp_identity_bindings_path("approval-status-registry");
-        let temp_approval_path = temp_identity_bindings_path("approval-status-file");
-        std::fs::write(
-            &temp_bindings_path,
-            r#"{"version":1,"revision":"bind-a","chat_users":{"chat-1":{"product_user_id":"pu-1"}},"matrix_users":{}}"#,
-        )
-        .expect("write initial identity bindings");
-        std::fs::write(
-            &temp_registry_path,
-            r#"{"version":1,"revision":"reg-a","product_users":{"pu-1":{"org_id":"org-a","account_id":"acct-a"}}}"#,
-        )
-        .expect("write initial identity registry");
-        std::fs::write(
-            &temp_approval_path,
-            r#"{"version":1,"revision":"approval-a","approved_revisions":["binding:bind-a|registry:reg-a","binding:bind-b|registry:reg-b"]}"#,
-        )
-        .expect("write approval state");
-
-        let mut config = test_config();
-        config.identity_bindings_path = Some(temp_bindings_path.to_string_lossy().to_string());
-        config.identity_registry_path = Some(temp_registry_path.to_string_lossy().to_string());
-        config.identity_binding_approved_revisions_path =
-            Some(temp_approval_path.to_string_lossy().to_string());
-
-        let app = build_router(AppState::new(config));
-        let (status, body) = send_identity_approval_status_request(&app, &[]).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["ok"], true);
-        assert_eq!(body["approval_valid"], true);
-        assert_eq!(body["identity_approval_checks"]["status"], "ok");
-        assert_eq!(
-            body["identity_approval_checks"]["current_effective_revision"],
-            "binding:bind-a|registry:reg-a",
-        );
-        assert_eq!(
-            body["identity_approval_checks"]["current_effective_revision_approved"],
-            true,
-        );
-        assert_eq!(
-            body["identity_approval_checks"]["current_effective_revision_index"],
-            0
-        );
-        assert_eq!(
-            body["identity_approval_checks"]["latest_approved_revision"],
-            "binding:bind-b|registry:reg-b",
-        );
-        assert_eq!(
-            body["identity_approval_checks"]["current_matches_latest_approved"],
-            false
-        );
-
-        let _ = std::fs::remove_file(&temp_bindings_path);
-        let _ = std::fs::remove_file(&temp_registry_path);
-        let _ = std::fs::remove_file(&temp_approval_path);
-    }
-
-    #[tokio::test]
-    async fn identity_approval_validate_endpoint_rejects_unapproved_current_effective_revision() {
-        let temp_bindings_path = temp_identity_bindings_path("approval-validate-bindings");
-        let temp_registry_path = temp_identity_bindings_path("approval-validate-registry");
-        let temp_approval_path = temp_identity_bindings_path("approval-validate-file");
-        std::fs::write(
-            &temp_bindings_path,
-            r#"{"version":1,"revision":"bind-a","chat_users":{"chat-1":{"product_user_id":"pu-1"}},"matrix_users":{}}"#,
-        )
-        .expect("write initial identity bindings");
-        std::fs::write(
-            &temp_registry_path,
-            r#"{"version":1,"revision":"reg-a","product_users":{"pu-1":{"org_id":"org-a","account_id":"acct-a"}}}"#,
-        )
-        .expect("write initial identity registry");
-        std::fs::write(
-            &temp_approval_path,
-            r#"{"version":1,"revision":"approval-a","approved_revisions":["binding:bind-b|registry:reg-b"]}"#,
-        )
-        .expect("write approval state");
-
-        let mut config = test_config();
-        config.identity_bindings_path = Some(temp_bindings_path.to_string_lossy().to_string());
-        config.identity_registry_path = Some(temp_registry_path.to_string_lossy().to_string());
-        config.identity_binding_approved_revisions_path =
-            Some(temp_approval_path.to_string_lossy().to_string());
-
-        let app = build_router(AppState::new(config));
-        let (status, body) = send_identity_approval_validate_request(&app, &[]).await;
-        assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(body["ok"], false);
-        assert_eq!(body["validated"], true);
-        assert_eq!(body["valid"], false);
-        assert_eq!(body["status"], "current_effective_revision_not_approved");
-        assert_eq!(
-            body["identity_approval_checks"]["current_effective_revision_approved"],
-            false,
-        );
-
-        let _ = std::fs::remove_file(&temp_bindings_path);
-        let _ = std::fs::remove_file(&temp_registry_path);
-        let _ = std::fs::remove_file(&temp_approval_path);
-    }
-
-    #[tokio::test]
-    async fn identity_approval_source_endpoint_returns_latest_revisions_preview() {
-        let temp_bindings_path = temp_identity_bindings_path("approval-source-bindings");
-        let temp_approval_path = temp_identity_bindings_path("approval-source-file");
-        std::fs::write(
-            &temp_bindings_path,
-            r#"{"version":1,"revision":"rev-b","chat_users":{},"matrix_users":{}}"#,
-        )
-        .expect("write initial identity bindings");
-        std::fs::write(
-            &temp_approval_path,
-            r#"{"version":1,"revision":"approval-a","approved_revisions":["rev-a","rev-b","rev-c"]}"#,
-        )
-        .expect("write approval state");
-
-        let mut config = test_config();
-        config.identity_bindings_path = Some(temp_bindings_path.to_string_lossy().to_string());
-        config.identity_binding_approved_revisions_path =
-            Some(temp_approval_path.to_string_lossy().to_string());
-
-        let app = build_router(AppState::new(config));
-        let (status, body) = send_identity_approval_source_request(
-            &app,
-            "/v1/admin/identity-approval/source?limit=2",
-            &[],
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["ok"], true);
-        assert_eq!(body["source_valid"], true);
-        assert_eq!(body["identity_approval_source"]["status"], "ok");
-        assert_eq!(
-            body["identity_approval_source"]["approved_revision_count"],
-            3
-        );
-        assert_eq!(
-            body["identity_approval_source"]["returned_revision_count"],
-            2
-        );
-        assert_eq!(
-            body["identity_approval_source"]["latest_approved_revision"],
-            "rev-c"
-        );
-        assert_eq!(
-            body["identity_approval_source"]["current_effective_revision"],
-            "rev-b"
-        );
-        assert_eq!(
-            body["identity_approval_source"]["revisions"][0]["revision"],
-            "rev-c"
-        );
-        assert_eq!(
-            body["identity_approval_source"]["revisions"][0]["is_latest"],
-            true
-        );
-        assert_eq!(
-            body["identity_approval_source"]["revisions"][1]["revision"],
-            "rev-b"
-        );
-        assert_eq!(
-            body["identity_approval_source"]["revisions"][1]["is_current_effective"],
-            true
-        );
-
-        let _ = std::fs::remove_file(&temp_bindings_path);
-        let _ = std::fs::remove_file(&temp_approval_path);
-    }
-
-    #[tokio::test]
-    async fn identity_approval_source_validate_endpoint_rejects_empty_revision_set() {
-        let temp_approval_path = temp_identity_bindings_path("approval-source-empty");
-        std::fs::write(
-            &temp_approval_path,
-            r#"{"version":1,"revision":"approval-a","approved_revisions":[]}"#,
-        )
-        .expect("write empty approval state");
-
-        let mut config = test_config();
-        config.identity_binding_approved_revisions_path =
-            Some(temp_approval_path.to_string_lossy().to_string());
-
-        let app = build_router(AppState::new(config));
-        let (status, body) = send_identity_approval_source_validate_request(
-            &app,
-            "/v1/admin/identity-approval/source/validate",
-            &[],
-        )
-        .await;
-        assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(body["ok"], false);
-        assert_eq!(body["validated"], true);
-        assert_eq!(body["valid"], false);
-        assert_eq!(body["status"], "approved_revision_set_empty");
-        assert_eq!(
-            body["identity_approval_source"]["approved_revision_count"],
-            0
-        );
-        assert_eq!(
-            body["identity_approval_source"]["returned_revision_count"],
-            0
-        );
-
-        let _ = std::fs::remove_file(&temp_approval_path);
-    }
-
-    #[tokio::test]
-    async fn health_endpoint_exposes_identity_governance_overview() {
-        let temp_bindings_path = temp_identity_bindings_path("health-governance-bindings");
-        let temp_approval_path = temp_identity_bindings_path("health-governance-approval");
-        std::fs::write(
-            &temp_bindings_path,
-            r#"{"version":1,"revision":"rev-b","chat_users":{},"matrix_users":{}}"#,
-        )
-        .expect("write initial identity bindings");
-        std::fs::write(
-            &temp_approval_path,
-            r#"{"version":1,"revision":"approval-a","approved_revisions":["rev-b"]}"#,
-        )
-        .expect("write approval state");
-
-        let mut config = test_config();
-        config.identity_bindings_path = Some(temp_bindings_path.to_string_lossy().to_string());
-        config.identity_binding_approved_revisions_path =
-            Some(temp_approval_path.to_string_lossy().to_string());
-        config.identity_binding_reload_require_actor = true;
-        config.identity_binding_reload_allowed_actors = Vec::new();
-
-        let app = build_router(AppState::new(config));
-        let (status, body) = send_health_request(&app).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["status"], "ok");
-        assert_eq!(
-            body["identity_governance_overview"]["status"],
-            "no_allowed_actors_configured"
-        );
-        assert_eq!(body["identity_governance_overview"]["valid"], false);
-        assert_eq!(
-            body["profile_validation"]["checks"]["identity_governance_valid"],
-            false
-        );
-
-        let _ = std::fs::remove_file(&temp_bindings_path);
-        let _ = std::fs::remove_file(&temp_approval_path);
-    }
-
-    #[tokio::test]
-    async fn metrics_endpoint_exposes_identity_governance_gauges() {
-        let temp_bindings_path = temp_identity_bindings_path("metrics-governance-bindings");
-        let temp_approval_path = temp_identity_bindings_path("metrics-governance-approval");
-        std::fs::write(
-            &temp_bindings_path,
-            r#"{"version":1,"revision":"rev-b","chat_users":{},"matrix_users":{}}"#,
-        )
-        .expect("write initial identity bindings");
-        std::fs::write(
-            &temp_approval_path,
-            r#"{"version":1,"revision":"approval-a","approved_revisions":["rev-b"]}"#,
-        )
-        .expect("write approval state");
-
-        let mut config = test_config();
-        config.identity_bindings_path = Some(temp_bindings_path.to_string_lossy().to_string());
-        config.identity_binding_approved_revisions_path =
-            Some(temp_approval_path.to_string_lossy().to_string());
-        config.identity_binding_reload_require_actor = true;
-        config.identity_binding_reload_allowed_actors = Vec::new();
-
-        let app = build_router(AppState::new(config));
-        let (status, body) = send_metrics_request(&app).await;
-        assert_eq!(status, StatusCode::OK);
-        assert!(body.contains("cex_consumer_entry_identity_governance_valid 0"));
-        assert!(body.contains("cex_consumer_entry_identity_binding_loaded 1"));
-        assert!(body.contains("cex_consumer_entry_identity_registry_loaded 1"));
-        assert!(body.contains("cex_consumer_entry_identity_ref_integrity_ok 1"));
-        assert!(body.contains("cex_consumer_entry_identity_actor_gate_valid 0"));
-        assert!(body.contains("cex_consumer_entry_identity_approval_source_valid 1"));
-        assert!(body.contains("cex_consumer_entry_identity_approval_coverage_valid 1"));
-
-        let _ = std::fs::remove_file(&temp_bindings_path);
-        let _ = std::fs::remove_file(&temp_approval_path);
-    }
-
-    #[tokio::test]
-    async fn health_endpoint_exposes_session_auth_registry_governance_overview() {
-        let temp_registry_path = temp_identity_bindings_path("health-session-auth-registry");
-        let temp_approval_path = temp_identity_bindings_path("health-session-auth-approval");
-        std::fs::write(
-            &temp_registry_path,
-            r#"{"version":1,"revision":"sess-reg-health-a","issuers":{"matrix-entry-adapter":{"activeKeyId":"v1","keys":{"v1":"secret-a"}}}}"#,
-        )
-        .expect("write session auth issuer registry");
-        std::fs::write(
-            &temp_approval_path,
-            r#"{"version":1,"revision":"sess-approval-health-a","approved_revisions":["sess-reg-other"]}"#,
-        )
-        .expect("write session auth approval state");
-
-        let (metadata, registry) =
-            load_session_auth_issuer_registry(temp_registry_path.to_str());
-        let mut config = test_config();
-        config.require_session_auth = true;
-        config.session_auth_allowed_issuers = vec!["matrix-entry-adapter".to_string()];
-        config.session_auth_expected_audience = Some("consumer-entry-api".to_string());
-        config.session_auth_issuer_registry_path =
-            Some(temp_registry_path.to_string_lossy().to_string());
-        config.session_auth_issuer_registry = registry;
-        config.session_auth_issuer_registry_load_error = metadata.load_error.clone();
-        config.session_auth_issuer_registry_metadata = metadata;
-        config.session_auth_issuer_registry_approved_revisions_path =
-            Some(temp_approval_path.to_string_lossy().to_string());
-        config.session_auth_issuer_registry_require_approved_revision = true;
-
-        let app = build_router(AppState::new(config));
-        let (status, body) = send_health_request(&app).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(
-            body["session_auth_issuer_registry_governance_overview"]["status"],
-            "current_revision_not_approved"
-        );
-        assert_eq!(
-            body["session_auth_issuer_registry_governance_overview"]["valid"],
-            false
-        );
-        assert_eq!(
-            body["profile_validation"]["checks"]["session_auth_issuer_registry_governance_valid"],
-            false
-        );
-
-        let _ = std::fs::remove_file(&temp_registry_path);
-        let _ = std::fs::remove_file(&temp_approval_path);
-    }
-
-    #[tokio::test]
-    async fn metrics_endpoint_exposes_session_auth_registry_governance_gauges() {
-        let temp_registry_path = temp_identity_bindings_path("metrics-session-auth-registry");
-        let temp_approval_path = temp_identity_bindings_path("metrics-session-auth-approval");
-        std::fs::write(
-            &temp_registry_path,
-            r#"{"version":1,"revision":"sess-reg-metrics-a","issuers":{"matrix-entry-adapter":{"activeKeyId":"v1","keys":{"v1":"secret-a"}}}}"#,
-        )
-        .expect("write session auth issuer registry");
-        std::fs::write(
-            &temp_approval_path,
-            r#"{"version":1,"revision":"sess-approval-metrics-a","approved_revisions":[]}"#,
-        )
-        .expect("write session auth approval state");
-
-        let (metadata, registry) =
-            load_session_auth_issuer_registry(temp_registry_path.to_str());
-        let mut config = test_config();
-        config.require_session_auth = true;
-        config.session_auth_allowed_issuers = vec!["matrix-entry-adapter".to_string()];
-        config.session_auth_expected_audience = Some("consumer-entry-api".to_string());
-        config.session_auth_issuer_registry_path =
-            Some(temp_registry_path.to_string_lossy().to_string());
-        config.session_auth_issuer_registry = registry;
-        config.session_auth_issuer_registry_load_error = metadata.load_error.clone();
-        config.session_auth_issuer_registry_metadata = metadata;
-        config.session_auth_issuer_registry_approved_revisions_path =
-            Some(temp_approval_path.to_string_lossy().to_string());
-        config.session_auth_issuer_registry_require_approved_revision = true;
-
-        let app = build_router(AppState::new(config));
-        let (status, body) = send_metrics_request(&app).await;
-        assert_eq!(status, StatusCode::OK);
-        assert!(body.contains("cex_consumer_entry_session_auth_issuer_registry_governance_valid 0"));
-        assert!(body.contains("cex_consumer_entry_session_auth_issuer_registry_approval_source_valid 0"));
-        assert!(body.contains("cex_consumer_entry_session_auth_issuer_registry_approval_coverage_valid 0"));
-
-        let _ = std::fs::remove_file(&temp_registry_path);
-        let _ = std::fs::remove_file(&temp_approval_path);
-    }
-
-    #[tokio::test]
-    async fn identity_governance_status_endpoint_returns_combined_overview() {
-        let temp_bindings_path = temp_identity_bindings_path("governance-status-bindings");
-        let temp_approval_path = temp_identity_bindings_path("governance-status-approval");
-        std::fs::write(
-            &temp_bindings_path,
-            r#"{"version":1,"revision":"rev-b","chat_users":{},"matrix_users":{}}"#,
-        )
-        .expect("write initial identity bindings");
-        std::fs::write(
-            &temp_approval_path,
-            r#"{"version":1,"revision":"approval-a","approved_revisions":["rev-a","rev-b"]}"#,
-        )
-        .expect("write approval state");
-
-        let mut config = test_config();
-        config.identity_bindings_path = Some(temp_bindings_path.to_string_lossy().to_string());
-        config.identity_binding_approved_revisions_path =
-            Some(temp_approval_path.to_string_lossy().to_string());
-        config.identity_binding_reload_require_actor = true;
-        config.identity_binding_reload_allowed_actors = vec!["alice".to_string()];
-
-        let app = build_router(AppState::new(config));
-        let (status, body) = send_identity_governance_status_request(
-            &app,
-            "/v1/admin/identity-governance/status?limit=1",
-            &[],
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["ok"], true);
-        assert_eq!(body["governance_valid"], true);
-        assert_eq!(body["identity_governance_overview"]["status"], "ok");
-        assert_eq!(body["identity_governance_overview"]["valid"], true);
-        assert_eq!(
-            body["identity_governance_overview"]["checks"]["binding_loaded"],
-            true
-        );
-        assert_eq!(
-            body["identity_governance_overview"]["checks"]["actor_gate_valid"],
-            true
-        );
-        assert_eq!(
-            body["identity_governance_overview"]["checks"]["approval_source_valid"],
-            true
-        );
-        assert_eq!(
-            body["identity_governance_overview"]["checks"]["approval_coverage_valid"],
-            true
-        );
-        assert_eq!(
-            body["identity_governance_overview"]["identity_approval_source"]
-                ["returned_revision_count"],
-            1
-        );
-        assert_eq!(
-            body["identity_governance_overview"]["identity_actor_checks"]["allowed_actor_count"],
-            1
-        );
-
-        let _ = std::fs::remove_file(&temp_bindings_path);
-        let _ = std::fs::remove_file(&temp_approval_path);
-    }
-
-    #[tokio::test]
-    async fn identity_governance_validate_endpoint_rejects_invalid_actor_gate() {
-        let temp_bindings_path = temp_identity_bindings_path("governance-validate-bindings");
-        let temp_approval_path = temp_identity_bindings_path("governance-validate-approval");
-        std::fs::write(
-            &temp_bindings_path,
-            r#"{"version":1,"revision":"rev-b","chat_users":{},"matrix_users":{}}"#,
-        )
-        .expect("write initial identity bindings");
-        std::fs::write(
-            &temp_approval_path,
-            r#"{"version":1,"revision":"approval-a","approved_revisions":["rev-b"]}"#,
-        )
-        .expect("write approval state");
-
-        let mut config = test_config();
-        config.identity_bindings_path = Some(temp_bindings_path.to_string_lossy().to_string());
-        config.identity_binding_approved_revisions_path =
-            Some(temp_approval_path.to_string_lossy().to_string());
-        config.identity_binding_reload_require_actor = true;
-        config.identity_binding_reload_allowed_actors = Vec::new();
-
-        let app = build_router(AppState::new(config));
-        let (status, body) = send_identity_governance_validate_request(
-            &app,
-            "/v1/admin/identity-governance/validate",
-            &[],
-        )
-        .await;
-        assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(body["ok"], false);
-        assert_eq!(body["validated"], true);
-        assert_eq!(body["valid"], false);
-        assert_eq!(body["status"], "no_allowed_actors_configured");
-        assert_eq!(
-            body["identity_governance_overview"]["checks"]["actor_gate_valid"],
-            false
-        );
-        assert_eq!(
-            body["identity_governance_overview"]["identity_actor_checks"]["status"],
-            "no_allowed_actors_configured"
-        );
-
-        let _ = std::fs::remove_file(&temp_bindings_path);
-        let _ = std::fs::remove_file(&temp_approval_path);
-    }
-
-    #[tokio::test]
-    async fn identity_actor_status_endpoint_reports_current_actor_gate_configuration() {
-        let mut config = test_config();
-        config.identity_binding_reload_require_actor = true;
-        config.identity_binding_reload_actor_header = "x-deploy-actor".to_string();
-        config.identity_binding_reload_allowed_actors =
-            vec!["alice".to_string(), "bob".to_string()];
-
-        let app = build_router(AppState::new(config));
-        let (status, body) = send_identity_actor_status_request(&app, &[]).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["ok"], true);
-        assert_eq!(body["actor_valid"], true);
-        assert_eq!(body["identity_actor_checks"]["status"], "ok");
-        assert_eq!(body["identity_actor_checks"]["require_actor"], true);
-        assert_eq!(
-            body["identity_actor_checks"]["actor_header"],
-            "x-deploy-actor"
-        );
-        assert_eq!(body["identity_actor_checks"]["allowed_actor_count"], 2);
-        assert_eq!(body["identity_actor_checks"]["allowed_actors"][0], "alice");
-        assert_eq!(body["identity_actor_checks"]["allowed_actors"][1], "bob");
-    }
-
-    #[tokio::test]
-    async fn identity_actor_validate_endpoint_rejects_missing_allowed_actors() {
-        let mut config = test_config();
-        config.identity_binding_reload_require_actor = true;
-        config.identity_binding_reload_allowed_actors = Vec::new();
-
-        let app = build_router(AppState::new(config));
-        let (status, body) = send_identity_actor_validate_request(&app, &[]).await;
-        assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(body["ok"], false);
-        assert_eq!(body["validated"], true);
-        assert_eq!(body["valid"], false);
-        assert_eq!(body["status"], "no_allowed_actors_configured");
-        assert_eq!(body["identity_actor_checks"]["valid"], false);
-        assert_eq!(body["identity_actor_checks"]["allowed_actor_count"], 0);
-    }
-
-    #[tokio::test]
-    async fn identity_registry_audit_endpoint_returns_conflict_when_audit_not_configured() {
-        let app = build_router(AppState::new(test_config()));
-
-        let (status, body) =
-            send_identity_registry_audit_request(&app, "/v1/admin/identity-registry/audit", &[])
-                .await;
-        assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(body["ok"], false);
-        assert_eq!(body["error"], "identity_audit_not_configured");
-    }
-
-    #[tokio::test]
-    async fn identity_registry_audit_endpoint_returns_latest_registry_events_only() {
-        let temp_audit_path = temp_identity_bindings_path("registry-audit-read");
-        let mut config = test_config();
-        config.identity_binding_audit_log_path =
-            Some(temp_audit_path.to_string_lossy().to_string());
-
-        let app = build_router(AppState::new(config));
-        std::fs::write(
-            &temp_audit_path,
-            concat!(
-                "{\"event_kind\":\"reload\",\"event_epoch\":1}\n",
-                "{\"event_kind\":\"registry_reload_rejected\",\"event_epoch\":2}\n",
-                "not-json\n",
-                "{\"event_kind\":\"registry_reload\",\"event_epoch\":3}\n"
-            ),
-        )
-        .expect("write audit fixture");
-
-        let (status_one, body_one) = send_identity_registry_audit_request(
-            &app,
-            "/v1/admin/identity-registry/audit?limit=1",
-            &[],
-        )
-        .await;
-        assert_eq!(status_one, StatusCode::OK);
-        assert_eq!(body_one["ok"], true);
-        assert_eq!(body_one["returned_event_count"], 1);
-        assert_eq!(body_one["parse_error_count"], 0);
-        assert_eq!(body_one["events"][0]["event_kind"], "registry_reload");
-
-        let (status_all, body_all) = send_identity_registry_audit_request(
-            &app,
-            "/v1/admin/identity-registry/audit?limit=5",
-            &[],
-        )
-        .await;
-        assert_eq!(status_all, StatusCode::OK);
-        assert_eq!(body_all["returned_event_count"], 2);
-        assert_eq!(body_all["parse_error_count"], 1);
-        assert_eq!(body_all["events"][0]["event_kind"], "registry_reload");
-        assert_eq!(
-            body_all["events"][1]["event_kind"],
-            "registry_reload_rejected"
-        );
-
-        let _ = std::fs::remove_file(&temp_audit_path);
-    }
-
-    #[tokio::test]
-    async fn reload_identity_bindings_endpoint_appends_audit_event_when_path_configured() {
-        let temp_bindings_path = temp_identity_bindings_path("audit-path");
-        std::fs::write(
-            &temp_bindings_path,
-            r#"{"version":1,"revision":"rev-a","chat_users":{"chat-1":{"org_id":"org-old"}},"matrix_users":{}}"#,
-        )
-        .expect("write initial identity bindings");
-
-        let temp_audit_path = temp_identity_bindings_path("audit-log");
-        let mut config = test_config();
-        config.identity_bindings_path = Some(temp_bindings_path.to_string_lossy().to_string());
-        config.identity_binding_audit_log_path =
-            Some(temp_audit_path.to_string_lossy().to_string());
-        config.identity_binding_reload_reject_same_revision = false;
-
-        let app = build_router(AppState::new(config));
-
-        std::fs::write(
-            &temp_bindings_path,
-            r#"{"version":1,"revision":"rev-b","chat_users":{"chat-1":{"org_id":"org-new"},"chat-2":{"org_id":"org-new2"}},"matrix_users":{}}"#,
-        )
-        .expect("write revised identity bindings");
-
-        let (status_ok, body_ok) = send_identity_binding_reload_request(&app, &[]).await;
-        assert_eq!(status_ok, StatusCode::OK);
-        assert_eq!(
-            body_ok["identity_binding_audit"]["path"],
-            temp_audit_path.to_string_lossy().to_string()
-        );
-        assert_eq!(body_ok["identity_binding_audit"]["last_status"], "written");
-        assert_eq!(
-            body_ok["identity_binding_audit"]["last_event_kind"],
-            "reload"
-        );
-        assert_eq!(
-            body_ok["identity_binding_audit"]["last_policy_decision"],
-            "accepted"
-        );
-
-        let raw_audit = std::fs::read_to_string(&temp_audit_path).expect("read audit log");
-        let lines: Vec<&str> = raw_audit
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .collect();
-        assert!(!lines.is_empty(), "expected at least one audit event");
-        let event: Value = serde_json::from_str(lines.last().expect("latest audit event exists"))
-            .expect("decode audit event jsonl");
-        assert_eq!(event["event_kind"], "reload");
-        assert_eq!(event["identity_binding_metadata"]["revision"], "rev-b");
-        assert_eq!(event["identity_binding_metadata"]["load_status"], "loaded");
-        assert_eq!(event["identity_binding_counts"]["chat_users"], 2);
-        assert_eq!(event["identity_binding_counts"]["matrix_users"], 0);
-        assert_eq!(event["governance"]["accepted"], true);
-
-        let _ = std::fs::remove_file(&temp_bindings_path);
-        let _ = std::fs::remove_file(&temp_audit_path);
-    }
-
-    #[tokio::test]
-    async fn reload_identity_bindings_endpoint_shows_disabled_audit_when_path_not_configured() {
-        let temp_path = temp_identity_bindings_path("audit-path-missing");
-        std::fs::write(
-            &temp_path,
-            r#"{"version":1,"revision":"rev-a","chat_users":{"chat-1":{"org_id":"org-old"}},"matrix_users":{}}"#,
-        )
-        .expect("write initial identity bindings");
-
-        let mut config = test_config();
-        config.identity_bindings_path = Some(temp_path.to_string_lossy().to_string());
-        config.identity_binding_reload_reject_same_revision = false;
-
-        let app = build_router(AppState::new(config));
-
-        std::fs::write(
-            &temp_path,
-            r#"{"version":1,"revision":"rev-b","chat_users":{"chat-1":{"org_id":"org-new"},"chat-2":{"org_id":"org-new2"}},"matrix_users":{"mx-1":{"org_id":"org-mx"}}}"#,
-        )
-        .expect("write revised identity bindings");
-
-        let (status_ok, body_ok) = send_identity_binding_reload_request(&app, &[]).await;
-        assert_eq!(status_ok, StatusCode::OK);
-        assert!(body_ok["identity_binding_audit"]["path"].is_null());
-        assert_eq!(body_ok["identity_binding_audit"]["last_status"], "disabled");
-        assert!(body_ok["identity_binding_audit"]["last_policy_decision"].is_null());
-
-        let _ = std::fs::remove_file(&temp_path);
-    }
-}
+mod tests;

@@ -10,6 +10,7 @@ use state::AppState;
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(api::health))
+        .route("/metrics", get(api::metrics))
         .route("/v1/audit/events", post(api::create_event))
         .route(
             "/v1/audit/events/trace/:trace_id",

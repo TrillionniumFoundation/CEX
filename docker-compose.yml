@@ -1,26 +1,78 @@
-version: "3.9"
-
 services:
+  postgres-archive-init:
+    image: postgres:16
+    user: root
+    command: ["bash", "-ceu", "chown postgres:postgres /archive && chmod 700 /archive"]
+    volumes:
+      - postgres_wal_archive:/archive
+    restart: "no"
+
+  postgres-backup-init:
+    image: postgres:16
+    user: root
+    command: ["bash", "-ceu", "chown postgres:postgres /backups && chmod 700 /backups"]
+    volumes:
+      - postgres_base_backups:/backups
+    restart: "no"
+
   postgres:
     image: postgres:16
+    restart: unless-stopped
+    cpus: 2.0
+    mem_reservation: 512m
+    mem_limit: 1536m
+    memswap_limit: 2048m
+    pids_limit: 256
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: cex_ai
     ports:
       - "5432:5432"
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=/usr/local/bin/cex-postgres-archive-wal %p %f
+      - -c
+      - archive_timeout=60s
+      - -c
+      - max_wal_senders=10
+      - -c
+      - hot_standby=on
+      - -c
+      - max_connections=50
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - postgres_wal_archive:/var/lib/postgresql/wal-archive
+      - ./scripts/postgres-archive-wal.sh:/usr/local/bin/cex-postgres-archive-wal:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d cex_ai"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      postgres-archive-init:
+        condition: service_completed_successfully
+      postgres-backup-init:
+        condition: service_completed_successfully
 
   redis:
     image: redis:7
+    restart: unless-stopped
     ports:
       - "6379:6379"
 
   nats:
     image: nats:2
+    restart: unless-stopped
     ports:
       - "4222:4222"
 
 volumes:
   postgres_data:
+  postgres_wal_archive:
+  postgres_base_backups:

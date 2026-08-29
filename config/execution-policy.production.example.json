@@ -1,0 +1,23 @@
+{
+  "approval_reserve_threshold": 10.0,
+  "hard_reject_reserve_threshold": 500.0,
+  "approval_sensitive_keywords": [
+    "delete",
+    "wire",
+    "transfer",
+    "publish",
+    "deploy",
+    "email"
+  ],
+  "block_keywords": [
+    "exfiltrate private data",
+    "disable safeguards"
+  ],
+  "approval_capability_prefixes": [
+    "cap.openclaw.model."
+  ],
+  "block_capability_prefixes": [
+    "cap.openclaw.model.minimax.",
+    "cap.openclaw.model.openai-codex."
+  ]
+}

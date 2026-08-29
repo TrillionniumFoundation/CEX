@@ -4,7 +4,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use shared_config::{
@@ -172,6 +172,9 @@ struct RefundingOutcome {
 
 #[derive(Serialize)]
 pub struct ExecutionPolicyInfo {
+    pub policy_bundle_path: Option<String>,
+    pub policy_bundle_load_status: String,
+    pub policy_bundle_load_error: Option<String>,
     pub approval_reserve_threshold: f64,
     pub hard_reject_reserve_threshold: Option<f64>,
     pub approval_sensitive_keywords: Vec<String>,
@@ -192,8 +195,28 @@ pub struct ExecutionOperatorSignals {
     pub approval_backlog: ExecutionAlertSignal,
     pub queued_worker_lease_expired: ExecutionAlertSignal,
     pub queued_worker_retry_budget_exhausted: ExecutionAlertSignal,
+    pub provider_failures: ExecutionAlertSignal,
+    pub provider_billing_failures: ExecutionAlertSignal,
+    pub provider_timeout_failures: ExecutionAlertSignal,
+    pub provider_dead_letters: ExecutionAlertSignal,
+    pub provider_retry_budget_exhausted: ExecutionAlertSignal,
     pub audit_failures: ExecutionAlertSignal,
     pub refund_failures: ExecutionAlertSignal,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ProviderFailureSummary {
+    pub total: usize,
+    pub billing: usize,
+    pub timeout: usize,
+    pub auth: usize,
+    pub rate_limited: usize,
+    pub unavailable: usize,
+    pub unknown: usize,
+    pub dead_letter: usize,
+    pub acknowledged_dead_letter: usize,
+    pub retry_budget_exhausted: usize,
+    pub non_retryable_terminal: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -212,6 +235,7 @@ pub struct ExecutionRuntimeOverview {
     pub timed_out: usize,
     pub refunded: usize,
     pub queued_worker: WorkerQueueSummary,
+    pub provider_failures: ProviderFailureSummary,
 }
 
 #[derive(Serialize)]
@@ -257,6 +281,57 @@ pub struct WorkerQueueExecutionView {
     pub claimable: bool,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ProviderDeadLetterQuery {
+    pub limit: Option<usize>,
+    pub kind: Option<String>,
+    pub retry_budget_exhausted_only: Option<bool>,
+    pub non_retryable_only: Option<bool>,
+    pub include_acknowledged: Option<bool>,
+    pub acknowledged_only: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProviderDeadLetterAckRequest {
+    pub acknowledged_by: String,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ProviderFailureQuery {
+    pub limit: Option<usize>,
+    pub kind: Option<String>,
+    pub include_acknowledged: Option<bool>,
+    pub acknowledged_only: Option<bool>,
+    pub dead_letter_only: Option<bool>,
+    pub retryable_only: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProviderDeadLetterExecutionView {
+    pub execution_id: Uuid,
+    pub invocation_id: Uuid,
+    pub org_id: Option<String>,
+    pub status: ExecutionStatus,
+    pub provider_target: Option<String>,
+    pub provider_failure_kind: &'static str,
+    pub dead_letter: bool,
+    pub dead_letter_reason: &'static str,
+    pub retry_budget_exhausted: bool,
+    pub non_retryable_terminal: bool,
+    pub acknowledged: bool,
+    pub acknowledged_by: Option<String>,
+    pub acknowledged_at: Option<chrono::DateTime<Utc>>,
+    pub acknowledgement_note: Option<String>,
+    pub attempt_count: i32,
+    pub max_attempts: i32,
+    pub attempts_remaining: i32,
+    pub error: Option<String>,
+    pub created_at: chrono::DateTime<Utc>,
+    pub updated_at: chrono::DateTime<Utc>,
+    pub ended_at: Option<chrono::DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkerQueueSummary {
     pub total: usize,
@@ -274,6 +349,32 @@ pub async fn health() -> &'static str {
     "execution-service ok"
 }
 
+pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
+    let snapshot = state.metrics.snapshot();
+    let runtime_summary = load_execution_runtime_overview(&state).await;
+    let mut body = render_execution_metrics_header();
+    append_execution_runtime_metrics(&mut body, &snapshot);
+
+    match runtime_summary {
+        Ok(runtime) => {
+            let signals = build_execution_operator_signals(&state, &runtime);
+            append_metric(&mut body, "cex_execution_runtime_up", 1);
+            append_execution_runtime_overview_metrics(&mut body, &runtime);
+            append_execution_operator_signal_metrics(&mut body, &signals);
+        }
+        Err(_) => {
+            append_metric(&mut body, "cex_execution_runtime_up", 0);
+        }
+    }
+
+    (
+        StatusCode::OK,
+        [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
+        body,
+    )
+        .into_response()
+}
+
 pub async fn execution_info(State(state): State<AppState>) -> Json<ExecutionInfo> {
     let runtime_summary = load_execution_runtime_overview(&state).await;
     let (runtime, operator_signals, runtime_error) = match runtime_summary {
@@ -288,6 +389,9 @@ pub async fn execution_info(State(state): State<AppState>) -> Json<ExecutionInfo
         service: "execution-service",
         state_machine: "created -> policy_check_pending -> awaiting_approval|queued -> dispatching -> running -> succeeded|failed|timed_out|cancelled with durable ledger settlement/refund",
         policy: ExecutionPolicyInfo {
+            policy_bundle_path: state.policy_bundle_path.clone(),
+            policy_bundle_load_status: state.policy_bundle_load_status.clone(),
+            policy_bundle_load_error: state.policy_bundle_load_error.clone(),
             approval_reserve_threshold: state.approval_reserve_threshold,
             hard_reject_reserve_threshold: state.hard_reject_reserve_threshold,
             approval_sensitive_keywords: state.approval_sensitive_keywords.as_ref().clone(),
@@ -742,6 +846,164 @@ pub async fn worker_queue_summary(
         )
             .into_response(),
     }
+}
+
+pub async fn provider_dead_letters(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ProviderDeadLetterQuery>,
+) -> impl IntoResponse {
+    let admin = match authorize_execution_admin(
+        &state,
+        &headers,
+        &["executions:read", "executions:manage"],
+    ) {
+        Ok(admin) => admin,
+        Err(response) => return response.into_response(),
+    };
+
+    match load_provider_dead_letters(&state, &admin, &query).await {
+        Ok(items) => (StatusCode::OK, Json(items)).into_response(),
+        Err(message) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": message })),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn provider_failures(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ProviderFailureQuery>,
+) -> impl IntoResponse {
+    let admin = match authorize_execution_admin(
+        &state,
+        &headers,
+        &["executions:read", "executions:manage"],
+    ) {
+        Ok(admin) => admin,
+        Err(response) => return response.into_response(),
+    };
+
+    match load_provider_failures(&state, &admin, &query).await {
+        Ok(items) => (StatusCode::OK, Json(items)).into_response(),
+        Err(message) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": message })),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn acknowledge_provider_dead_letter(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(req): Json<ProviderDeadLetterAckRequest>,
+) -> impl IntoResponse {
+    acknowledge_provider_failure_inner(state, headers, id, req, true).await
+}
+
+pub async fn acknowledge_provider_failure(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(req): Json<ProviderDeadLetterAckRequest>,
+) -> impl IntoResponse {
+    acknowledge_provider_failure_inner(state, headers, id, req, false).await
+}
+
+async fn acknowledge_provider_failure_inner(
+    state: AppState,
+    headers: HeaderMap,
+    id: Uuid,
+    req: ProviderDeadLetterAckRequest,
+    require_dead_letter: bool,
+) -> axum::response::Response {
+    let mut record =
+        match require_execution_access(&state, &headers, id, &["executions:manage"]).await {
+            Ok(record) => record,
+            Err(response) => return response.into_response(),
+        };
+
+    let acknowledged_by = req.acknowledged_by.trim().to_string();
+    if acknowledged_by.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "acknowledged_by is required" })),
+        )
+            .into_response();
+    }
+    if acknowledged_by.chars().count() > 128 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "acknowledged_by is too long" })),
+        )
+            .into_response();
+    }
+    let note = req
+        .note
+        .map(|note| note.trim().to_string())
+        .filter(|note| !note.is_empty());
+    if note
+        .as_deref()
+        .map(|note| note.chars().count() > 1000)
+        .unwrap_or(false)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "note is too long" })),
+        )
+            .into_response();
+    }
+
+    let Some(kind) = classify_provider_failure(&record) else {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "execution is not a provider failure" })),
+        )
+            .into_response();
+    };
+    if require_dead_letter && !provider_failure_dead_letter(&record, kind) {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "execution is not a provider dead letter" })),
+        )
+            .into_response();
+    }
+
+    let now = Utc::now();
+    let mut payload = record.result_payload.take().unwrap_or_else(|| json!({}));
+    if !payload.is_object() {
+        payload = json!({ "provider_result": payload });
+    }
+    let ack_payload = json!({
+        "acknowledged": true,
+        "acknowledged_by": acknowledged_by,
+        "acknowledged_at": now.to_rfc3339(),
+        "note": note,
+    });
+    payload["provider_failure_ack"] = ack_payload.clone();
+    if provider_failure_dead_letter(&record, kind) {
+        payload["provider_dead_letter_ack"] = ack_payload;
+    }
+    record.result_payload = Some(payload);
+    record.updated_at = now;
+
+    if let Err(message) = store_execution(&state, &record).await {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": message })),
+        )
+            .into_response();
+    }
+
+    (
+        StatusCode::OK,
+        Json(provider_dead_letter_view(record, kind)),
+    )
+        .into_response()
 }
 
 pub async fn claim_next_execution(
@@ -1606,7 +1868,7 @@ fn authorize_execution_admin(
         headers,
         &state.admin_tokens,
         required_scopes,
-        |admin, scope| admin_principal_has_scope(admin, scope),
+        admin_principal_has_scope,
         "execution admin token not configured",
         Some(
             "set EXECUTION_ADMIN_TOKENS_JSON, EXECUTION_ADMIN_TOKEN, or the shared identity admin token env to enable execution admin access",
@@ -1696,6 +1958,15 @@ async fn load_all_execution_records(state: &AppState) -> Result<Vec<ExecutionRec
     }
 }
 
+async fn load_visible_execution_records(
+    state: &AppState,
+    admin: &AdminPrincipal,
+) -> Result<Vec<ExecutionRecord>, String> {
+    let mut records = load_all_execution_records(state).await?;
+    records.retain(|record| worker_queue_visible_to_admin(admin, record));
+    Ok(records)
+}
+
 async fn load_execution_runtime_overview(
     state: &AppState,
 ) -> Result<ExecutionRuntimeOverview, String> {
@@ -1729,6 +2000,26 @@ fn build_execution_operator_signals(
             overview.queued_worker.retry_budget_exhausted,
             state.alert_retry_budget_exhausted_threshold,
         ),
+        provider_failures: build_execution_alert_signal(
+            overview.provider_failures.total,
+            state.alert_provider_failure_threshold,
+        ),
+        provider_billing_failures: build_execution_alert_signal(
+            overview.provider_failures.billing,
+            state.alert_provider_billing_failure_threshold,
+        ),
+        provider_timeout_failures: build_execution_alert_signal(
+            overview.provider_failures.timeout,
+            state.alert_provider_timeout_failure_threshold,
+        ),
+        provider_dead_letters: build_execution_alert_signal(
+            overview.provider_failures.dead_letter,
+            state.alert_provider_dead_letter_threshold,
+        ),
+        provider_retry_budget_exhausted: build_execution_alert_signal(
+            overview.provider_failures.retry_budget_exhausted,
+            state.alert_provider_retry_budget_exhausted_threshold,
+        ),
         audit_failures: build_execution_alert_signal(
             metrics.audit_failures as usize,
             state.alert_audit_failure_threshold,
@@ -1738,6 +2029,231 @@ fn build_execution_operator_signals(
             state.alert_refund_failure_threshold,
         ),
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderFailureKind {
+    Billing,
+    Timeout,
+    Auth,
+    RateLimited,
+    Unavailable,
+    Unknown,
+}
+
+fn classify_provider_failure(record: &ExecutionRecord) -> Option<ProviderFailureKind> {
+    if record.provider_target.is_none()
+        || !matches!(
+            record.status,
+            ExecutionStatus::Failed | ExecutionStatus::Refunded | ExecutionStatus::TimedOut
+        )
+    {
+        return None;
+    }
+
+    let error = provider_error_text(record).unwrap_or("");
+    Some(classify_provider_error_text(error))
+}
+
+fn provider_error_text(record: &ExecutionRecord) -> Option<&str> {
+    record
+        .result_payload
+        .as_ref()
+        .and_then(|payload| {
+            payload
+                .get("error")
+                .or_else(|| payload.get("last_provider_error"))
+        })
+        .and_then(|value| value.as_str())
+}
+
+fn provider_failure_kind_label(kind: ProviderFailureKind) -> &'static str {
+    match kind {
+        ProviderFailureKind::Billing => "billing",
+        ProviderFailureKind::Timeout => "timeout",
+        ProviderFailureKind::Auth => "auth",
+        ProviderFailureKind::RateLimited => "rate_limited",
+        ProviderFailureKind::Unavailable => "unavailable",
+        ProviderFailureKind::Unknown => "unknown",
+    }
+}
+
+fn parse_provider_failure_kind_filter(raw: &str) -> Result<ProviderFailureKind, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "billing" => Ok(ProviderFailureKind::Billing),
+        "timeout" => Ok(ProviderFailureKind::Timeout),
+        "auth" => Ok(ProviderFailureKind::Auth),
+        "rate_limited" | "rate-limited" | "ratelimited" => Ok(ProviderFailureKind::RateLimited),
+        "unavailable" => Ok(ProviderFailureKind::Unavailable),
+        "unknown" => Ok(ProviderFailureKind::Unknown),
+        other => Err(format!("invalid provider failure kind filter: {other}")),
+    }
+}
+
+fn provider_dead_letter_reason(
+    kind: ProviderFailureKind,
+    retry_budget_exhausted: bool,
+) -> &'static str {
+    if !provider_failure_retryable_kind(kind) {
+        "non_retryable_terminal"
+    } else if retry_budget_exhausted {
+        "retry_budget_exhausted"
+    } else {
+        "terminal_provider_failure"
+    }
+}
+
+fn truncate_provider_error_text(error: &str) -> String {
+    const MAX_CHARS: usize = 512;
+    let mut out = String::new();
+    for (idx, ch) in error.chars().enumerate() {
+        if idx >= MAX_CHARS {
+            out.push('…');
+            return out;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn provider_failure_retryable_kind(kind: ProviderFailureKind) -> bool {
+    matches!(
+        kind,
+        ProviderFailureKind::Timeout
+            | ProviderFailureKind::RateLimited
+            | ProviderFailureKind::Unavailable
+    )
+}
+
+fn provider_failure_retry_budget_exhausted(record: &ExecutionRecord) -> bool {
+    record.max_attempts > 1 && remaining_attempts(record) == 0
+}
+
+fn provider_failure_dead_letter(record: &ExecutionRecord, kind: ProviderFailureKind) -> bool {
+    !provider_failure_retryable_kind(kind) || provider_failure_retry_budget_exhausted(record)
+}
+
+fn provider_dead_letter_ack_payload(record: &ExecutionRecord) -> Option<&Value> {
+    record.result_payload.as_ref().and_then(|payload| {
+        payload
+            .get("provider_failure_ack")
+            .or_else(|| payload.get("provider_dead_letter_ack"))
+    })
+}
+
+fn provider_dead_letter_acknowledged(record: &ExecutionRecord) -> bool {
+    provider_dead_letter_ack_payload(record)
+        .and_then(|ack| ack.get("acknowledged"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn provider_dead_letter_acknowledged_by(record: &ExecutionRecord) -> Option<String> {
+    provider_dead_letter_ack_payload(record)
+        .and_then(|ack| ack.get("acknowledged_by"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn provider_dead_letter_acknowledged_at(record: &ExecutionRecord) -> Option<DateTime<Utc>> {
+    provider_dead_letter_ack_payload(record)
+        .and_then(|ack| ack.get("acknowledged_at"))
+        .and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc))
+}
+
+fn provider_dead_letter_acknowledgement_note(record: &ExecutionRecord) -> Option<String> {
+    provider_dead_letter_ack_payload(record)
+        .and_then(|ack| ack.get("note"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn provider_failure_active_dead_letter(
+    record: &ExecutionRecord,
+    kind: ProviderFailureKind,
+) -> bool {
+    provider_failure_dead_letter(record, kind) && !provider_dead_letter_acknowledged(record)
+}
+
+fn classify_provider_error_text(error: &str) -> ProviderFailureKind {
+    let lowered = error.to_ascii_lowercase();
+    if lowered.contains("insufficient balance")
+        || lowered.contains("billing error")
+        || lowered.contains("run out of credits")
+        || lowered.contains("quota")
+        || lowered.contains("chatgpt usage limit")
+        || (lowered.contains("usage limit") && lowered.contains("free plan"))
+    {
+        ProviderFailureKind::Billing
+    } else if lowered.contains("timed out") || lowered.contains("timeout") {
+        ProviderFailureKind::Timeout
+    } else if lowered.contains("unauthorized")
+        || lowered.contains("forbidden")
+        || lowered.contains("invalid api key")
+        || lowered.contains("auth error")
+        || lowered.contains("authentication")
+    {
+        ProviderFailureKind::Auth
+    } else if lowered.contains("rate limit")
+        || lowered.contains("too many requests")
+        || lowered.contains("429")
+    {
+        ProviderFailureKind::RateLimited
+    } else if lowered.contains("unavailable")
+        || lowered.contains("connection refused")
+        || lowered.contains("connection reset")
+        || lowered.contains("503")
+        || lowered.contains("502")
+        || lowered.contains("500")
+    {
+        ProviderFailureKind::Unavailable
+    } else {
+        ProviderFailureKind::Unknown
+    }
+}
+
+fn should_auto_retry_provider_failure(record: &ExecutionRecord, error: &str) -> bool {
+    matches!(record.dispatch_mode, ExecutionDispatchMode::QueuedWorker)
+        && has_worker_attempt_budget_remaining(record)
+        && provider_failure_retryable_kind(classify_provider_error_text(error))
+}
+
+fn provider_retry_backoff_seconds(state: &AppState, record: &ExecutionRecord) -> i64 {
+    let base = state.execution_retry_backoff_seconds.max(1);
+    let max = state.execution_retry_backoff_max_seconds.max(base);
+    let exponent = record.attempt_count.saturating_sub(1).clamp(0, 10) as u32;
+    let multiplier = 2_i64.saturating_pow(exponent);
+    base.saturating_mul(multiplier).min(max)
+}
+
+fn prepare_provider_failure_retry(
+    record: &mut ExecutionRecord,
+    provider_target: &str,
+    error: &str,
+    backoff_seconds: i64,
+) {
+    let now = Utc::now();
+    clear_worker_claim(record);
+    record.status = ExecutionStatus::Queued;
+    record.started_at = None;
+    record.ended_at = None;
+    record.lease_expires_at = Some(now + Duration::seconds(backoff_seconds));
+    record.result_payload = Some(json!({
+        "provider_target": provider_target,
+        "last_provider_error": error,
+        "retry_after_seconds": backoff_seconds,
+        "attempt_count": record.attempt_count,
+        "attempts_remaining": remaining_attempts(record),
+        "retry_policy": "auto_backoff"
+    }));
+    record.updated_at = now;
+    record.dispatch_mode = dispatch_mode_for_execution(record);
 }
 
 fn build_execution_runtime_overview(records: Vec<ExecutionRecord>) -> ExecutionRuntimeOverview {
@@ -1779,6 +2295,7 @@ fn build_execution_runtime_overview(records: Vec<ExecutionRecord>) -> ExecutionR
             retry_budget_exhausted: 0,
             active_workers: 0,
         },
+        provider_failures: ProviderFailureSummary::default(),
     };
 
     for record in records {
@@ -1828,6 +2345,34 @@ fn build_execution_runtime_overview(records: Vec<ExecutionRecord>) -> ExecutionR
                     }
                 }
                 _ => {}
+            }
+        }
+
+        if let Some(kind) = classify_provider_failure(&record) {
+            if provider_dead_letter_acknowledged(&record) {
+                if provider_failure_dead_letter(&record, kind) {
+                    overview.provider_failures.acknowledged_dead_letter += 1;
+                }
+                continue;
+            }
+
+            overview.provider_failures.total += 1;
+            match kind {
+                ProviderFailureKind::Billing => overview.provider_failures.billing += 1,
+                ProviderFailureKind::Timeout => overview.provider_failures.timeout += 1,
+                ProviderFailureKind::Auth => overview.provider_failures.auth += 1,
+                ProviderFailureKind::RateLimited => overview.provider_failures.rate_limited += 1,
+                ProviderFailureKind::Unavailable => overview.provider_failures.unavailable += 1,
+                ProviderFailureKind::Unknown => overview.provider_failures.unknown += 1,
+            }
+            if provider_failure_retry_budget_exhausted(&record) {
+                overview.provider_failures.retry_budget_exhausted += 1;
+            }
+            if !provider_failure_retryable_kind(kind) {
+                overview.provider_failures.non_retryable_terminal += 1;
+            }
+            if provider_failure_active_dead_letter(&record, kind) {
+                overview.provider_failures.dead_letter += 1;
             }
         }
     }
@@ -1952,6 +2497,496 @@ async fn load_worker_queue(
         .collect())
 }
 
+async fn load_provider_dead_letters(
+    state: &AppState,
+    admin: &AdminPrincipal,
+    query: &ProviderDeadLetterQuery,
+) -> Result<Vec<ProviderDeadLetterExecutionView>, String> {
+    let limit = normalize_worker_queue_limit(query.limit);
+    let kind_filter = match query
+        .kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|kind| !kind.is_empty())
+    {
+        Some(kind) => Some(parse_provider_failure_kind_filter(kind)?),
+        None => None,
+    };
+    let retry_budget_exhausted_only = query.retry_budget_exhausted_only.unwrap_or(false);
+    let non_retryable_only = query.non_retryable_only.unwrap_or(false);
+    let include_acknowledged = query.include_acknowledged.unwrap_or(false);
+    let acknowledged_only = query.acknowledged_only.unwrap_or(false);
+
+    let records = load_visible_execution_records(state, admin).await?;
+    Ok(records
+        .into_iter()
+        .filter_map(|record| {
+            let kind = classify_provider_failure(&record)?;
+            if !provider_failure_dead_letter(&record, kind) {
+                return None;
+            }
+            let acknowledged = provider_dead_letter_acknowledged(&record);
+            if acknowledged_only && !acknowledged {
+                return None;
+            }
+            if !include_acknowledged && !acknowledged_only && acknowledged {
+                return None;
+            }
+            if let Some(kind_filter) = kind_filter {
+                if kind != kind_filter {
+                    return None;
+                }
+            }
+
+            let retry_budget_exhausted = provider_failure_retry_budget_exhausted(&record);
+            let non_retryable_terminal = !provider_failure_retryable_kind(kind);
+            if retry_budget_exhausted_only && !retry_budget_exhausted {
+                return None;
+            }
+            if non_retryable_only && !non_retryable_terminal {
+                return None;
+            }
+
+            Some(provider_dead_letter_view(record, kind))
+        })
+        .take(limit)
+        .collect())
+}
+
+async fn load_provider_failures(
+    state: &AppState,
+    admin: &AdminPrincipal,
+    query: &ProviderFailureQuery,
+) -> Result<Vec<ProviderDeadLetterExecutionView>, String> {
+    let limit = normalize_worker_queue_limit(query.limit);
+    let kind_filter = match query
+        .kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|kind| !kind.is_empty())
+    {
+        Some(kind) => Some(parse_provider_failure_kind_filter(kind)?),
+        None => None,
+    };
+    let include_acknowledged = query.include_acknowledged.unwrap_or(false);
+    let acknowledged_only = query.acknowledged_only.unwrap_or(false);
+    let dead_letter_only = query.dead_letter_only.unwrap_or(false);
+    let retryable_only = query.retryable_only.unwrap_or(false);
+
+    let records = load_visible_execution_records(state, admin).await?;
+    Ok(records
+        .into_iter()
+        .filter_map(|record| {
+            let kind = classify_provider_failure(&record)?;
+            let dead_letter = provider_failure_dead_letter(&record, kind);
+            let acknowledged = provider_dead_letter_acknowledged(&record);
+            if acknowledged_only && !acknowledged {
+                return None;
+            }
+            if !include_acknowledged && !acknowledged_only && acknowledged {
+                return None;
+            }
+            if dead_letter_only && !dead_letter {
+                return None;
+            }
+            if retryable_only && (dead_letter || !provider_failure_retryable_kind(kind)) {
+                return None;
+            }
+            if let Some(kind_filter) = kind_filter {
+                if kind != kind_filter {
+                    return None;
+                }
+            }
+            Some(provider_dead_letter_view(record, kind))
+        })
+        .take(limit)
+        .collect())
+}
+
+fn provider_dead_letter_view(
+    record: ExecutionRecord,
+    kind: ProviderFailureKind,
+) -> ProviderDeadLetterExecutionView {
+    let retry_budget_exhausted = provider_failure_retry_budget_exhausted(&record);
+    let non_retryable_terminal = !provider_failure_retryable_kind(kind);
+    let dead_letter = provider_failure_dead_letter(&record, kind);
+    let attempts_remaining = remaining_attempts(&record);
+    let dead_letter_reason = provider_dead_letter_reason(kind, retry_budget_exhausted);
+    let acknowledged = provider_dead_letter_acknowledged(&record);
+    let acknowledged_by = provider_dead_letter_acknowledged_by(&record);
+    let acknowledged_at = provider_dead_letter_acknowledged_at(&record);
+    let acknowledgement_note = provider_dead_letter_acknowledgement_note(&record);
+    let error = provider_error_text(&record).map(truncate_provider_error_text);
+
+    ProviderDeadLetterExecutionView {
+        execution_id: record.execution_id,
+        invocation_id: record.invocation_id,
+        org_id: record.org_id,
+        status: record.status,
+        provider_target: record.provider_target,
+        provider_failure_kind: provider_failure_kind_label(kind),
+        dead_letter,
+        dead_letter_reason,
+        retry_budget_exhausted,
+        non_retryable_terminal,
+        acknowledged,
+        acknowledged_by,
+        acknowledged_at,
+        acknowledgement_note,
+        attempt_count: record.attempt_count,
+        max_attempts: record.max_attempts,
+        attempts_remaining,
+        error,
+        created_at: record.created_at,
+        updated_at: record.updated_at,
+        ended_at: record.ended_at,
+    }
+}
+
+fn render_execution_metrics_header() -> String {
+    concat!(
+        "# HELP cex_execution_runtime_up Whether execution runtime overview could be loaded.\n",
+        "# TYPE cex_execution_runtime_up gauge\n",
+        "# HELP cex_execution_runtime_counter_total Execution-service in-process counters.\n",
+        "# TYPE cex_execution_runtime_counter_total counter\n",
+        "# HELP cex_execution_status_total Execution records grouped by lifecycle status.\n",
+        "# TYPE cex_execution_status_total gauge\n",
+        "# HELP cex_execution_queued_worker_total Queued-worker execution gauges.\n",
+        "# TYPE cex_execution_queued_worker_total gauge\n",
+        "# HELP cex_execution_provider_failures_total Provider-backed terminal failures grouped by kind.\n",
+        "# TYPE cex_execution_provider_failures_total gauge\n",
+        "# HELP cex_execution_operator_signal_active Execution operator signal active flag.\n",
+        "# TYPE cex_execution_operator_signal_active gauge\n",
+        "# HELP cex_execution_operator_signal_value Execution operator signal value.\n",
+        "# TYPE cex_execution_operator_signal_value gauge\n",
+        "# HELP cex_execution_operator_signal_threshold Execution operator signal threshold.\n",
+        "# TYPE cex_execution_operator_signal_threshold gauge\n",
+    )
+    .to_string()
+}
+
+fn append_execution_runtime_metrics(body: &mut String, metrics: &ExecutionRuntimeMetricsSnapshot) {
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "create_requests")],
+        metrics.create_requests,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "create_blocked_policy")],
+        metrics.create_blocked_policy,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "create_awaiting_approval")],
+        metrics.create_awaiting_approval,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "create_auto_approved")],
+        metrics.create_auto_approved,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "approve_requests")],
+        metrics.approve_requests,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "approve_successes")],
+        metrics.approve_successes,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "reject_requests")],
+        metrics.reject_requests,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "reject_successes")],
+        metrics.reject_successes,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "retry_requests")],
+        metrics.retry_requests,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "cancel_requests")],
+        metrics.cancel_requests,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "claim_requests")],
+        metrics.claim_requests,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "claim_successes")],
+        metrics.claim_successes,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "audit_failures")],
+        metrics.audit_failures,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "refund_failures")],
+        metrics.refund_failures,
+    );
+}
+
+fn append_execution_runtime_overview_metrics(
+    body: &mut String,
+    runtime: &ExecutionRuntimeOverview,
+) {
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "total")],
+        runtime.total,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "created")],
+        runtime.created,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "policy_check_pending")],
+        runtime.policy_check_pending,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "awaiting_approval")],
+        runtime.awaiting_approval,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "approved")],
+        runtime.approved,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "queued")],
+        runtime.queued,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "dispatching")],
+        runtime.dispatching,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "running")],
+        runtime.running,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "succeeded")],
+        runtime.succeeded,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "failed")],
+        runtime.failed,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "cancelled")],
+        runtime.cancelled,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "timed_out")],
+        runtime.timed_out,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "refunded")],
+        runtime.refunded,
+    );
+
+    append_worker_queue_metric(body, "total", runtime.queued_worker.total);
+    append_worker_queue_metric(body, "queued", runtime.queued_worker.queued);
+    append_worker_queue_metric(body, "dispatching", runtime.queued_worker.dispatching);
+    append_worker_queue_metric(body, "claimable", runtime.queued_worker.claimable);
+    append_worker_queue_metric(body, "lease_expired", runtime.queued_worker.lease_expired);
+    append_worker_queue_metric(body, "claimed_active", runtime.queued_worker.claimed_active);
+    append_worker_queue_metric(body, "retryable", runtime.queued_worker.retryable);
+    append_worker_queue_metric(
+        body,
+        "retry_budget_exhausted",
+        runtime.queued_worker.retry_budget_exhausted,
+    );
+    append_worker_queue_metric(body, "active_workers", runtime.queued_worker.active_workers);
+
+    append_provider_failure_metric(body, "total", runtime.provider_failures.total);
+    append_provider_failure_metric(body, "billing", runtime.provider_failures.billing);
+    append_provider_failure_metric(body, "timeout", runtime.provider_failures.timeout);
+    append_provider_failure_metric(body, "auth", runtime.provider_failures.auth);
+    append_provider_failure_metric(body, "rate_limited", runtime.provider_failures.rate_limited);
+    append_provider_failure_metric(body, "unavailable", runtime.provider_failures.unavailable);
+    append_provider_failure_metric(body, "unknown", runtime.provider_failures.unknown);
+    append_provider_failure_metric(body, "dead_letter", runtime.provider_failures.dead_letter);
+    append_provider_failure_metric(
+        body,
+        "acknowledged_dead_letter",
+        runtime.provider_failures.acknowledged_dead_letter,
+    );
+    append_provider_failure_metric(
+        body,
+        "retry_budget_exhausted",
+        runtime.provider_failures.retry_budget_exhausted,
+    );
+    append_provider_failure_metric(
+        body,
+        "non_retryable_terminal",
+        runtime.provider_failures.non_retryable_terminal,
+    );
+}
+
+fn append_execution_operator_signal_metrics(body: &mut String, signals: &ExecutionOperatorSignals) {
+    append_operator_signal_metric(body, "approval_backlog", &signals.approval_backlog);
+    append_operator_signal_metric(
+        body,
+        "queued_worker_lease_expired",
+        &signals.queued_worker_lease_expired,
+    );
+    append_operator_signal_metric(
+        body,
+        "queued_worker_retry_budget_exhausted",
+        &signals.queued_worker_retry_budget_exhausted,
+    );
+    append_operator_signal_metric(body, "provider_failures", &signals.provider_failures);
+    append_operator_signal_metric(
+        body,
+        "provider_billing_failures",
+        &signals.provider_billing_failures,
+    );
+    append_operator_signal_metric(
+        body,
+        "provider_timeout_failures",
+        &signals.provider_timeout_failures,
+    );
+    append_operator_signal_metric(
+        body,
+        "provider_dead_letters",
+        &signals.provider_dead_letters,
+    );
+    append_operator_signal_metric(
+        body,
+        "provider_retry_budget_exhausted",
+        &signals.provider_retry_budget_exhausted,
+    );
+    append_operator_signal_metric(body, "audit_failures", &signals.audit_failures);
+    append_operator_signal_metric(body, "refund_failures", &signals.refund_failures);
+}
+
+fn append_worker_queue_metric(body: &mut String, name: &'static str, value: usize) {
+    append_labeled_metric(
+        body,
+        "cex_execution_queued_worker_total",
+        &[("state", name)],
+        value,
+    );
+}
+
+fn append_provider_failure_metric(body: &mut String, kind: &'static str, value: usize) {
+    append_labeled_metric(
+        body,
+        "cex_execution_provider_failures_total",
+        &[("kind", kind)],
+        value,
+    );
+}
+
+fn append_operator_signal_metric(
+    body: &mut String,
+    name: &'static str,
+    signal: &ExecutionAlertSignal,
+) {
+    let labels = [("name", name)];
+    append_labeled_metric(
+        body,
+        "cex_execution_operator_signal_active",
+        &labels,
+        if signal.alert { 1 } else { 0 },
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_operator_signal_value",
+        &labels,
+        signal.value,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_operator_signal_threshold",
+        &labels,
+        signal.threshold,
+    );
+}
+
+fn append_metric(body: &mut String, name: &'static str, value: impl std::fmt::Display) {
+    body.push_str(name);
+    body.push(' ');
+    body.push_str(&value.to_string());
+    body.push('\n');
+}
+
+fn append_labeled_metric(
+    body: &mut String,
+    name: &'static str,
+    labels: &[(&'static str, &'static str)],
+    value: impl std::fmt::Display,
+) {
+    body.push_str(name);
+    if !labels.is_empty() {
+        body.push('{');
+        for (idx, (label, value)) in labels.iter().enumerate() {
+            if idx > 0 {
+                body.push(',');
+            }
+            body.push_str(label);
+            body.push_str("=\"");
+            body.push_str(value);
+            body.push('"');
+        }
+        body.push('}');
+    }
+    body.push(' ');
+    body.push_str(&value.to_string());
+    body.push('\n');
+}
+
 async fn load_execution(state: &AppState, id: Uuid) -> Result<Option<ExecutionRecord>, String> {
     if let Some(pool) = &state.pool {
         return load_execution_from_db(pool, id).await;
@@ -2028,11 +3063,9 @@ async fn claim_queued_worker_executions_in_db(
         .map_err(|e| ApiError::Unavailable(format!("begin claim tx failed: {e}")))?;
 
     let now = Utc::now();
-    let query_limit = (limit.max(1) * 10).min(200) as i64;
     let rows = sqlx::query(
-        "select execution_id, invocation_id, trace_id, org_id::text as org_id, status, provider_target, attempt_count, max_attempts, worker_id, lease_expires_at, started_at, ended_at, result_payload, approval_required, policy_reason, approved_by, created_at, updated_at from executions where status in ('Queued', 'Dispatching') order by created_at asc limit $1 for update skip locked"
+        "select execution_id, invocation_id, trace_id, org_id::text as org_id, status, provider_target, attempt_count, max_attempts, worker_id, lease_expires_at, started_at, ended_at, result_payload, approval_required, policy_reason, approved_by, created_at, updated_at from executions where status in ('Queued', 'Dispatching') order by created_at asc for update skip locked"
     )
-    .bind(query_limit)
     .fetch_all(&mut *tx)
     .await
     .map_err(|e| ApiError::Unavailable(format!("load queued executions for claim failed: {e}")))?;
@@ -2292,11 +3325,9 @@ async fn reclaim_expired_executions_in_db(
         .map_err(|e| ApiError::Unavailable(format!("begin reclaim expired tx failed: {e}")))?;
 
     let now = Utc::now();
-    let query_limit = (limit.max(1) * 10).min(200) as i64;
     let rows = sqlx::query(
-        "select execution_id, invocation_id, trace_id, org_id::text as org_id, status, provider_target, attempt_count, max_attempts, worker_id, lease_expires_at, started_at, ended_at, result_payload, approval_required, policy_reason, approved_by, created_at, updated_at from executions where status = 'Dispatching' order by created_at asc limit $1 for update skip locked"
+        "select execution_id, invocation_id, trace_id, org_id::text as org_id, status, provider_target, attempt_count, max_attempts, worker_id, lease_expires_at, started_at, ended_at, result_payload, approval_required, policy_reason, approved_by, created_at, updated_at from executions where status = 'Dispatching' order by created_at asc for update skip locked"
     )
-    .bind(query_limit)
     .fetch_all(&mut *tx)
     .await
     .map_err(|e| ApiError::Unavailable(format!("load expired executions for reclaim failed: {e}")))?;
@@ -2685,6 +3716,13 @@ async fn start_execution_inner(state: &AppState, id: Uuid) -> Result<ExecutionRe
             let dispatch_result = dispatch_via_provider(
                 &state.http,
                 &state.ollama_base_url,
+                &state.openclaw_cli_bin,
+                &crate::providers::OpenClawCliEnvScope {
+                    config_path: state.openclaw_config_path.clone(),
+                    state_dir: state.openclaw_state_dir.clone(),
+                    agent_dir: state.openclaw_agent_dir.clone(),
+                },
+                state.execution_provider_dispatch_timeout_seconds,
                 &provider_target,
                 &input,
             )
@@ -2708,12 +3746,22 @@ async fn start_execution_inner(state: &AppState, id: Uuid) -> Result<ExecutionRe
                 }
                 Err(err) => {
                     clear_worker_claim(record);
-                    record.status = ExecutionStatus::Failed;
-                    record.result_payload = Some(json!({
-                        "provider_target": provider_target,
-                        "error": err.message,
-                    }));
-                    record.dispatch_mode = dispatch_mode_for_execution(record);
+                    if should_auto_retry_provider_failure(record, &err.message) {
+                        let backoff_seconds = provider_retry_backoff_seconds(state, record);
+                        prepare_provider_failure_retry(
+                            record,
+                            &provider_target,
+                            &err.message,
+                            backoff_seconds,
+                        );
+                    } else {
+                        record.status = ExecutionStatus::Failed;
+                        record.result_payload = Some(json!({
+                            "provider_target": provider_target,
+                            "error": err.message,
+                        }));
+                        record.dispatch_mode = dispatch_mode_for_execution(record);
+                    }
                 }
             }
 
@@ -3136,6 +4184,13 @@ async fn start_execution_in_db(
         let dispatch_result = dispatch_via_provider(
             &state.http,
             &state.ollama_base_url,
+            &state.openclaw_cli_bin,
+            &crate::providers::OpenClawCliEnvScope {
+                config_path: state.openclaw_config_path.clone(),
+                state_dir: state.openclaw_state_dir.clone(),
+                agent_dir: state.openclaw_agent_dir.clone(),
+            },
+            state.execution_provider_dispatch_timeout_seconds,
             &provider_target,
             &input,
         )
@@ -3184,6 +4239,43 @@ async fn start_execution_in_db(
                     .map_err(|e| ApiError::Unavailable(format!("update invocation after provider success failed: {e}")))?;
             }
             Err(err) => {
+                if should_auto_retry_provider_failure(&record, &err.message) {
+                    let backoff_seconds = provider_retry_backoff_seconds(state, &record);
+                    prepare_provider_failure_retry(
+                        &mut record,
+                        &provider_target,
+                        &err.message,
+                        backoff_seconds,
+                    );
+
+                    sqlx::query("update executions set status = $2, worker_id = $3, lease_expires_at = $4, started_at = $5, ended_at = $6, result_payload = $7::jsonb, updated_at = $8 where execution_id = $1")
+                        .bind(record.execution_id)
+                        .bind(status_to_db(&record.status))
+                        .bind(&record.worker_id)
+                        .bind(record.lease_expires_at)
+                        .bind(record.started_at)
+                        .bind(record.ended_at)
+                        .bind(serde_json::to_string(record.result_payload.as_ref().expect("provider retry payload")).map_err(|e| ApiError::Unavailable(format!("serialize provider retry payload failed: {e}")))?)
+                        .bind(record.updated_at)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| ApiError::Unavailable(format!("update provider execution retry failed: {e}")))?;
+
+                    sqlx::query("update invocations set status = 'Queued', updated_at = $2, execution_id = $3, failure_reason = null where invocation_id = $1")
+                        .bind(record.invocation_id)
+                        .bind(record.updated_at)
+                        .bind(record.execution_id)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| ApiError::Unavailable(format!("update invocation after provider retry failed: {e}")))?;
+
+                    tx.commit().await.map_err(|e| {
+                        ApiError::Unavailable(format!("commit provider retry tx failed: {e}"))
+                    })?;
+
+                    return Ok(record);
+                }
+
                 let refunded =
                     if invocation_state.ledger_reserved && !invocation_state.ledger_refunded {
                         release_reserved_credits(
@@ -3825,6 +4917,7 @@ async fn load_locked_invocation_state(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn update_invocation_after_refunding_action(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     invocation_id: Uuid,
@@ -4026,6 +5119,7 @@ fn execution_from_row(row: &sqlx::postgres::PgRow) -> Result<ExecutionRecord, Ap
 
 fn execution_transition_event_types(status: &ExecutionStatus) -> (&'static str, &'static str) {
     match status {
+        ExecutionStatus::Queued => ("execution.requeued", "invocation.queued"),
         ExecutionStatus::Succeeded => ("execution.succeeded", "invocation.succeeded"),
         ExecutionStatus::Failed => ("execution.failed", "invocation.failed"),
         ExecutionStatus::Refunded => ("execution.refunded", "invocation.refunded"),
@@ -4073,6 +5167,7 @@ async fn emit_simple_transition_audits(
     .await;
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn emit_refundish_invocation_audit(
     state: &AppState,
     trace_id: Uuid,
@@ -4233,7 +5328,9 @@ fn is_claimable_queued_worker(record: &ExecutionRecord, now: chrono::DateTime<Ut
     }
 
     match record.status {
-        ExecutionStatus::Queued => true,
+        ExecutionStatus::Queued => record
+            .lease_expires_at
+            .is_none_or(|retry_after| retry_after <= now),
         ExecutionStatus::Dispatching => is_expired_worker_lease(record, now),
         _ => false,
     }
@@ -4296,13 +5393,25 @@ fn prepare_execution_for_retry(record: &mut ExecutionRecord) {
 }
 
 fn validate_worker_lease_holder(record: &ExecutionRecord, worker_id: &str) -> Result<(), ApiError> {
-    if let Some(current_worker_id) = record.worker_id.as_deref() {
-        if current_worker_id != worker_id {
-            return Err(conflict_error(
-                "execution claimed by another worker",
-                &record.status,
-            ));
-        }
+    if !matches!(record.status, ExecutionStatus::Dispatching) {
+        return Err(conflict_error(
+            "execution is not currently claimed",
+            &record.status,
+        ));
+    }
+
+    let Some(current_worker_id) = record.worker_id.as_deref() else {
+        return Err(conflict_error(
+            "execution is not currently claimed",
+            &record.status,
+        ));
+    };
+
+    if current_worker_id != worker_id {
+        return Err(conflict_error(
+            "execution claimed by another worker",
+            &record.status,
+        ));
     }
 
     if let Some(lease_expires_at) = record.lease_expires_at {
@@ -4808,23 +5917,91 @@ mod tests {
         let mut running = sample_record(ExecutionStatus::Running);
         running.execution_id = Uuid::new_v4();
 
+        let mut provider_failure = sample_record(ExecutionStatus::Refunded);
+        provider_failure.execution_id = Uuid::new_v4();
+        provider_failure.provider_target = Some("minimax://MiniMax-M2.5".to_string());
+        provider_failure.attempt_count = 1;
+        provider_failure.max_attempts = 3;
+        provider_failure.result_payload = Some(json!({
+            "error": "⚠️ minimax returned a billing error — insufficient balance (1008)"
+        }));
+
         let overview = build_execution_runtime_overview(vec![
             awaiting,
             queued_worker,
             dispatching_worker,
             running,
+            provider_failure,
         ]);
 
-        assert_eq!(overview.total, 4);
+        assert_eq!(overview.total, 5);
         assert_eq!(overview.awaiting_approval, 1);
         assert_eq!(overview.queued, 1);
         assert_eq!(overview.dispatching, 1);
         assert_eq!(overview.running, 1);
+        assert_eq!(overview.refunded, 1);
         assert_eq!(overview.queued_worker.total, 2);
         assert_eq!(overview.queued_worker.queued, 1);
         assert_eq!(overview.queued_worker.dispatching, 1);
         assert_eq!(overview.queued_worker.claimed_active, 1);
         assert_eq!(overview.queued_worker.active_workers, 1);
+        assert_eq!(overview.provider_failures.total, 1);
+        assert_eq!(overview.provider_failures.billing, 1);
+        assert_eq!(overview.provider_failures.dead_letter, 1);
+        assert_eq!(overview.provider_failures.non_retryable_terminal, 1);
+        assert_eq!(overview.provider_failures.retry_budget_exhausted, 0);
+    }
+
+    #[test]
+    fn build_execution_runtime_overview_counts_retry_budget_exhausted_dead_letters() {
+        let mut timeout_exhausted = sample_record(ExecutionStatus::Failed);
+        timeout_exhausted.provider_target = Some("codex://gpt-5.4".to_string());
+        timeout_exhausted.attempt_count = 3;
+        timeout_exhausted.max_attempts = 3;
+        timeout_exhausted.result_payload = Some(json!({
+            "error": "provider dispatch timed out after 60s"
+        }));
+
+        let overview = build_execution_runtime_overview(vec![timeout_exhausted]);
+        assert_eq!(overview.provider_failures.total, 1);
+        assert_eq!(overview.provider_failures.timeout, 1);
+        assert_eq!(overview.provider_failures.dead_letter, 1);
+        assert_eq!(overview.provider_failures.retry_budget_exhausted, 1);
+        assert_eq!(overview.provider_failures.non_retryable_terminal, 0);
+    }
+
+    #[test]
+    fn classify_provider_error_text_covers_operator_categories() {
+        assert_eq!(
+            classify_provider_error_text("insufficient balance (1008)"),
+            ProviderFailureKind::Billing
+        );
+        assert_eq!(
+            classify_provider_error_text(
+                "You have hit your ChatGPT usage limit (free plan). Try again later"
+            ),
+            ProviderFailureKind::Billing
+        );
+        assert_eq!(
+            classify_provider_error_text("provider dispatch timed out after 60s"),
+            ProviderFailureKind::Timeout
+        );
+        assert_eq!(
+            classify_provider_error_text("invalid api key"),
+            ProviderFailureKind::Auth
+        );
+        assert_eq!(
+            classify_provider_error_text("rate limit exceeded 429"),
+            ProviderFailureKind::RateLimited
+        );
+        assert_eq!(
+            classify_provider_error_text("provider upstream returned status 503"),
+            ProviderFailureKind::Unavailable
+        );
+        assert_eq!(
+            classify_provider_error_text("unexpected provider shape"),
+            ProviderFailureKind::Unknown
+        );
     }
 
     #[test]
@@ -4833,6 +6010,11 @@ mod tests {
         state.alert_approval_backlog_threshold = 2;
         state.alert_lease_expired_threshold = 1;
         state.alert_retry_budget_exhausted_threshold = 1;
+        state.alert_provider_failure_threshold = 1;
+        state.alert_provider_billing_failure_threshold = 1;
+        state.alert_provider_timeout_failure_threshold = 1;
+        state.alert_provider_dead_letter_threshold = 1;
+        state.alert_provider_retry_budget_exhausted_threshold = 1;
         state.alert_audit_failure_threshold = 1;
         state.alert_refund_failure_threshold = 1;
         state
@@ -4869,12 +6051,30 @@ mod tests {
                 retry_budget_exhausted: 1,
                 active_workers: 0,
             },
+            provider_failures: ProviderFailureSummary {
+                total: 2,
+                billing: 1,
+                timeout: 1,
+                auth: 0,
+                rate_limited: 0,
+                unavailable: 0,
+                unknown: 0,
+                dead_letter: 2,
+                acknowledged_dead_letter: 0,
+                retry_budget_exhausted: 1,
+                non_retryable_terminal: 1,
+            },
         };
 
         let signals = build_execution_operator_signals(&state, &overview);
         assert!(signals.approval_backlog.alert);
         assert!(signals.queued_worker_lease_expired.alert);
         assert!(signals.queued_worker_retry_budget_exhausted.alert);
+        assert!(signals.provider_failures.alert);
+        assert!(signals.provider_billing_failures.alert);
+        assert!(signals.provider_timeout_failures.alert);
+        assert!(signals.provider_dead_letters.alert);
+        assert!(signals.provider_retry_budget_exhausted.alert);
         assert!(signals.audit_failures.alert);
         assert!(signals.refund_failures.alert);
         assert_eq!(signals.approval_backlog.value, 2);

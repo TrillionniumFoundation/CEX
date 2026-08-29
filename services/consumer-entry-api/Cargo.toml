@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 axum.workspace = true
+async-trait.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -15,7 +16,11 @@ tracing.workspace = true
 base64 = "0.22"
 hmac = "0.12"
 sha2 = "0.10"
+argon2 = "0.5"
+sqlx.workspace = true
 shared-tracing = { path = "../../crates/shared-tracing" }
+term-exchange-protocol.workspace = true
 
 [dev-dependencies]
+ledger-service = { path = "../ledger-service" }
 tower = { version = "0.5", features = ["util"] }

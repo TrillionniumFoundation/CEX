@@ -11,6 +11,7 @@ members = [
   "services/audit-service",
   "services/capability-service",
   "services/consumer-entry-api",
+  "services/hepta-research-league",
   "services/matrix-entry-adapter",
   "apps/matrix-bot-relay",
   "apps/matrix-bot-poller"
@@ -37,3 +38,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono"] }
+term-exchange-protocol = { package = "trnm-economy-protocol", version = "=2.4.0", path = "vendor/trnm-economy-protocol" }
+trnm-research-protocol = { version = "=0.1.0", git = "https://github.com/TrillionniumFoundation/Trillionnium-Chain.git", rev = "e73d1a930991f0e308bf72854b334b6191c7fcc3" }
+trnm-finality-types = { version = "=0.1.0", git = "https://github.com/TrillionniumFoundation/Trillionnium-Chain.git", rev = "e73d1a930991f0e308bf72854b334b6191c7fcc3" }
+trnm-finality-verifier = { version = "=0.1.0", git = "https://github.com/TrillionniumFoundation/Trillionnium-Chain.git", rev = "e73d1a930991f0e308bf72854b334b6191c7fcc3" }

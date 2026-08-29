@@ -4,6 +4,7 @@ This folder now contains three layers of repo-local monitoring examples:
 
 1. **Focused direct metrics rules**
    - `prometheus/consumer-entry-identity-governance-alerts.example.yml`
+   - `prometheus/consumer-entry-trillionnium-route-runner-handoff-alerts.example.yml`
    - `alertmanager/consumer-entry-identity-governance-routing.example.yml`
 2. **Focused wrapper-derived rules**
    - `prometheus/core-runtime-operator-signals-from-wrapper.example.yml`
@@ -16,10 +17,13 @@ This folder now contains three layers of repo-local monitoring examples:
    - `prometheus/minimal-wrapper-monitoring-bundle.example.yml`
    - `alertmanager/minimal-wrapper-monitoring-bundle.example.yml`
    - `monitoring-bundle-manifest.example.yml`
+4. **Dashboard examples**
+   - `grafana/trillionnium-route-runner-handoff-dashboard.example.json`
 
 ## How to read this layout
 
 - **consumer-entry identity governance** uses direct service metrics from `consumer-entry-api /metrics`
+- **Trillionnium route-runner handoff** uses direct service metrics from `consumer-entry-api /metrics`
 - **core runtime** and **product-edge** currently rely on the wrapper bridge:
   - `scripts/check-operator-signals.sh`
   - `scripts/render-operator-signals-prometheus.sh`
@@ -34,6 +38,30 @@ If you just want one Prometheus file and one Alertmanager file to start from, us
 If you want the machine-readable inventory of which focused files feed that bundle, use:
 
 - `monitoring-bundle-manifest.example.yml`
+
+If you want a starter Grafana view for the route-runner reward/next-route handoff posture, import:
+
+- `grafana/trillionnium-route-runner-handoff-dashboard.example.json`
+
+It tracks the same direct gauges used by the `CexTrillionniumRouteRunnerHandoff*` Prometheus alerts:
+
+- all-gates-green
+- playability / closed-beta / real-user beta / public-commercial gates
+- feed source count
+- runner count
+- reward-claim and next-route action counts
+- route mastery contract visibility, mastery runner count, first-runner XP, tier visibility, and evidence-anchored next-goal visibility
+- Trillionnium World Map readability, runtime safety, RUM SLO warmup/enforcement/raw split, 12-bucket RUM matrix coverage, delta-cache, weak-network, offline action queue, density scalability, location-privacy, MapLibre shadow parity/canary rollback, gameplay accessibility/i18n, route recommendation quality, and future-engine readiness gauges
+
+Those alerts also carry `component=trillionnium-route-runner-handoff` and `owner=product-ops`, and the example Alertmanager product-edge routing file matches that component before the generic product-edge route.
+
+If you want to validate just this focused handoff monitoring contract without running full production readiness/signoff, use:
+
+- `scripts/check-trillionnium-route-runner-handoff-monitoring.sh`
+- `scripts/check-trillionnium-route-runner-handoff-monitoring.sh --summary-file run/monitoring-route-runner-handoff-summary.json`
+- `scripts/test-trillionnium-route-runner-handoff-monitoring.sh`
+
+The check validates live-target metadata freshness, Prometheus alert expression/metric/label/annotation coverage, Alertmanager route order, and the dashboard UID/title/tags/panel metrics/thresholds, including the `trillionnium_route_mastery_v1` handoff metrics plus the P0-next/P1/P1.5/P2 map contract gauges (RUM matrix, density, offline queue, route recommendation quality, MapLibre shadow parity/canary rollback, and gameplay accessibility/i18n). Production readiness and production signoff also call this script so the standalone contract cannot drift from launch gates. The test script runs a positive fixture plus negative fixtures for alert label drift, alert expression drift, route-order regression, dashboard metric loss, dashboard threshold drift, and stale deploy metadata.
 
 If you want to regenerate the combined bundles from the manifest, use:
 
@@ -85,5 +113,16 @@ They do not yet provide:
 
 - full native `/metrics` coverage for gateway/execution
 - full matrix/product policy coverage
-- silence policy / ownership / escalation tree
+- silence policy / ownership / escalation tree beyond the focused route-runner component labels/routing example
 - a single blessed production deployment layout
+- a complete dashboard pack beyond the focused route-runner handoff starter
+
+
+## Trillionnium route recommendation quality hard gate
+
+The route-runner handoff bundle now treats route recommendation quality as an actual score gate, not only a visibility check. `cex_consumer_entry_trillionnium_world_route_recommendation_quality_gate_green` requires the `trillionnium_world_route_recommendation_quality_v1` status to be `quality_gate_ready`, the quality score to meet its 60% target, raw counts to be preserved, denominator policy to remain consistent, and risk controls to stay visible. Alert `CexTrillionniumWorldRouteRecommendationQualityBelowTarget` fires when the score drops below target even if the broader commercial dashboard is still present.
+
+
+## MapLibre shadow canary safety
+
+MapLibre remains a shadow/candidate renderer only. The route-runner handoff monitoring bundle now exports `cex_consumer_entry_trillionnium_world_map_maplibre_canary_percent`, `*_shadow_only`, `*_canary_starts_at_zero`, and `*_rollback_drill_evidence_required`; `CexTrillionniumWorldMapMapLibreCanaryNotZero` pages if the canary percent moves above zero before a fresh explicit signoff.

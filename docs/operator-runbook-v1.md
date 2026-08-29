@@ -178,6 +178,47 @@
 2. 若 `lease_expired` 高，优先看 worker 稳定性与 provider latency
 3. 若 `retry_budget_exhausted` 高，优先抽样失败 execution，而不是盲目 requeue
 
+### 3.3.1 Symptom: provider dead-letter / retry budget exhausted
+
+先看：
+
+- `GET http://127.0.0.1:7003/v1/info`
+- `GET http://127.0.0.1:7003/v1/executions/provider-failures`
+- `GET http://127.0.0.1:7003/v1/executions/provider-dead-letters`
+
+常用 drill：
+
+```bash
+curl -s -H 'x-admin-token: <admin-token>' http://127.0.0.1:7003/v1/executions/provider-failures | jq
+curl -s -H 'x-admin-token: <admin-token>' 'http://127.0.0.1:7003/v1/executions/provider-failures?retryable_only=true' | jq
+curl -s -H 'x-admin-token: <admin-token>' http://127.0.0.1:7003/v1/executions/provider-dead-letters | jq
+curl -s -H 'x-admin-token: <admin-token>' 'http://127.0.0.1:7003/v1/executions/provider-dead-letters?kind=billing' | jq
+curl -s -H 'x-admin-token: <admin-token>' 'http://127.0.0.1:7003/v1/executions/provider-dead-letters?retry_budget_exhausted_only=true' | jq
+curl -s -H 'x-admin-token: <admin-token>' 'http://127.0.0.1:7003/v1/executions/provider-dead-letters?non_retryable_only=true' | jq
+curl -s -H 'x-admin-token: <admin-token>' 'http://127.0.0.1:7003/v1/executions/provider-dead-letters?acknowledged_only=true' | jq
+```
+
+处理完根因或确认已转入外部 incident 后，可对单条 provider failure / dead-letter 做 ack（ack 后默认清单与 operator signal 不再把它计为 active blocker；`include_acknowledged=true` / `acknowledged_only=true` 仍可追溯）：
+
+```bash
+curl -s -X POST -H 'x-admin-token: <admin-token>' -H 'content-type: application/json' \
+  http://127.0.0.1:7003/v1/executions/<execution-id>/provider-failure/ack \
+  -d '{"acknowledged_by":"operator","note":"provider incident linked externally"}' | jq
+```
+
+判断：
+
+- `dead_letter_reason=non_retryable_terminal`：先处理 billing/auth/unknown 根因，不要批量 retry
+- `dead_letter_reason=retry_budget_exhausted`：说明 timeout/rate-limit/unavailable 已跑穿 retry budget，先看 provider/bridge 健康和是否需要切 provider
+- `acknowledged=true`：只表示值班已确认并转出 active blocker，不代表 provider 根因已经恢复；恢复仍要靠 retry/live provider probe 验证
+
+建议动作：
+
+1. 先按 `provider_failure_kind` 分组，不要把 billing 与 timeout 混在一起处理
+2. billing/auth 先修 key/余额/权限，再手动挑样本 retry
+3. timeout/unavailable 先查 OpenClaw bridge 和 provider 状态；确认恢复后再小批量 retry
+4. 对已记录到外部 incident 或已人工关闭的历史 dead-letter 做 ack，避免旧事件长期污染 active readiness
+
 ### 3.4 Symptom: refund 失败
 
 先看：
@@ -377,6 +418,114 @@
    - `./read-session-auth-runtime-activation-status.sh --compact`
    - `./read-session-auth-runtime-activation-status.sh --require-converged`
 
+### 3.9 Symptom: Trillionnium route-runner handoff alert firing
+
+相关 Prometheus alerts：
+
+- `CexTrillionniumRouteRunnerHandoffAllGatesNotGreen`
+- `CexTrillionniumRouteRunnerHandoffFeedSourceMissing`
+- `CexTrillionniumRouteRunnerHandoffRunnerCountZero`
+- `CexTrillionniumRouteRunnerHandoffActionsMissing`
+- `CexTrillionniumRouteRunnerHandoffRouteMasteryMissing`
+- `CexTrillionniumWorldMapReadabilityLodNotGreen`
+- `CexTrillionniumRouteRunnerFunnelTelemetryMissing`
+- `CexTrillionniumWorldFutureEngineReadinessNotGreen`
+
+这些 alerts 带统一标签：`service=consumer-entry-api`、`family=product-edge`、`component=trillionnium-route-runner-handoff`、`owner=product-ops`。Alertmanager 示例配置会先匹配这个 component，再回退到普通 `product-edge` route。
+
+先看：
+
+- `GET http://127.0.0.1:8090/health`
+- `GET http://127.0.0.1:8090/metrics`
+- 最新 production signoff summary：`run/signoff/production-signoff-*.summary.json`
+- 最新 handoff evidence：`run/signoff/production-signoff-*.route-runner-handoff.json`（同时记录 `/health` gate 与 `/metrics` live gauge values / thresholds）
+- live monitoring deploy metadata：`run/monitoring-live-target/metadata/monitoring-deploy-metadata.yml`
+
+重点字段：
+
+- `/health.trillionnium_world_playability_scorecard.route_runner_handoff_gate`
+- `/health.trillionnium_world_closed_beta_prototype.route_runner_handoff_gate`
+- `/health.trillionnium_world_real_user_beta.route_runner_handoff_gate`
+- `/health.trillionnium_world_public_commercial_product.route_runner_handoff_gate`
+- `/health.trillionnium_world_playability_scorecard.map_readability_lod_gate`
+- `/health.trillionnium_world_playability_scorecard.route_runner_funnel_telemetry_gate`
+- `/health.trillionnium_world_playability_scorecard.future_engine_readiness_gate`
+- `/metrics` 下的：
+  - `cex_consumer_entry_trillionnium_route_runner_handoff_all_gates_green`
+  - `cex_consumer_entry_trillionnium_route_runner_handoff_feed_source_count`
+  - `cex_consumer_entry_trillionnium_route_runner_handoff_runner_count`
+  - `cex_consumer_entry_trillionnium_route_runner_handoff_reward_claim_action_count`
+  - `cex_consumer_entry_trillionnium_route_runner_handoff_next_route_action_count`
+  - `cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_contract_visible`
+  - `cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_runner_count`
+  - `cex_consumer_entry_trillionnium_route_runner_handoff_first_route_mastery_xp`
+  - `cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_tier_visible`
+  - `cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_next_goal_evidence_visible`
+  - `cex_consumer_entry_trillionnium_world_map_readability_lod_gate_green`
+  - `cex_consumer_entry_trillionnium_world_map_readability_lod_visible_marker_budget`
+  - `cex_consumer_entry_trillionnium_world_map_readability_lod_visible_markers`
+  - `cex_consumer_entry_trillionnium_world_map_readability_lod_avatar_runner_budget`
+  - `cex_consumer_entry_trillionnium_world_map_readability_lod_avatar_runners`
+  - `cex_consumer_entry_trillionnium_route_runner_funnel_telemetry_contract_visible`
+  - `cex_consumer_entry_trillionnium_route_runner_funnel_route_started_count`
+  - `cex_consumer_entry_trillionnium_route_runner_funnel_evidence_submitted_count`
+  - `cex_consumer_entry_trillionnium_route_runner_funnel_reward_claimed_count`
+  - `cex_consumer_entry_trillionnium_route_runner_funnel_next_route_opened_count`
+  - `cex_consumer_entry_trillionnium_route_runner_funnel_abandoned_or_recovery_count`
+  - `cex_consumer_entry_trillionnium_route_runner_funnel_time_to_reward_seconds`
+  - `cex_consumer_entry_trillionnium_route_runner_funnel_daily_return_resume_count`
+  - `cex_consumer_entry_trillionnium_world_future_engine_readiness_gate_green`
+
+判断：
+
+- `all_gates_green=0`：至少 playability / closed-beta / real-user beta / public-commercial 其中一个 gate 不绿；这不是单纯 UI warning，而是 production signoff 质量的 handoff posture 破了
+- `feed_source_count<7`：通常说明 `/feed` 或 `/app` feed hydration 里的 `route_runner_handoff` source 丢了，先查 feed aggregation / client feed JSON，而不是先查地图渲染
+- `runner_count=0`：说明 handoff gate 本身还能算出结果，但没有 active route runners；优先查 world route projection、seeded first-session routes、map hub payload
+- `reward_claim_action_count=0` 或 `next_route_action_count=0`：玩家可能看得到 runner，但没有清晰的 claim reward / next route 操作路径；优先查 route-runner action hydration、button dataset、Matrix/web card projection
+- `route_mastery_contract_visible=0`、`route_mastery_runner_count=0`、`first_route_mastery_xp=0`、`route_mastery_tier_visible=0` 或 `route_mastery_next_goal_evidence_visible=0`：route runners 还在，但 XP/tier/streak/next-goal progression 没有完整进入 gate；优先查 `trillionnium_route_mastery_v1` projection、feed handoff aggregation、Matrix/Web card field passthrough，尤其确认 next-goal 是否仍绑定 evidence / reward claim / next route
+- `world_map_readability_lod_gate_green=0`：移动首屏地图可读性 / LOD 预算破了；优先查 `app-map-readability-lod` DOM、viewport `map_readability_lod`、visible marker / avatar runner budget、one-primary-CTA 与 collapsed dense-copy 约束
+- `route_runner_funnel_telemetry_contract_visible=0`：route-runner funnel telemetry contract 丢了；优先查 `route_started`、`evidence_submitted`、`reward_claimed`、`next_route_opened`、`abandoned_or_recovery`、`daily_return_resume`、`time_to_reward_seconds` 是否仍在 health 与 metrics 里可见（默认稀疏 fixture 允许计数为 0，但字段必须存在且 typed）
+- `world_future_engine_readiness_gate_green=0`：future-engine readiness contract 破了；保持 `leaflet_openstreetmap_v1` live，不要把 MapLibre 提成 active，先查 adapter id、`mapRuntime` handle、MapLibre shadow-only candidate、rollback plan、LOD/telemetry preconditions
+- `first_next_route_status` 不是 `next_route_preview_locked_until_reward_claim` 或 `next_route_ready_after_reward_claim`：先确认 reward-before-next-route 的产品约束是否被破坏，不要只按普通 copy 回归处理
+
+建议动作：
+
+1. 先抓当前 health 与 metrics，不要先重启：
+
+   ```bash
+   curl -s http://127.0.0.1:8090/health | jq '{playability: .trillionnium_world_playability_scorecard.route_runner_handoff_gate, closed_beta: .trillionnium_world_closed_beta_prototype.route_runner_handoff_gate, real_user_beta: .trillionnium_world_real_user_beta.route_runner_handoff_gate, public_commercial: .trillionnium_world_public_commercial_product.route_runner_handoff_gate, map_lod: .trillionnium_world_playability_scorecard.map_readability_lod_gate, funnel: .trillionnium_world_playability_scorecard.route_runner_funnel_telemetry_gate, future_engine: .trillionnium_world_playability_scorecard.future_engine_readiness_gate}'
+   curl -s http://127.0.0.1:8090/metrics | grep -E 'cex_consumer_entry_trillionnium_route_runner_handoff|cex_consumer_entry_trillionnium_world_map_readability_lod|cex_consumer_entry_trillionnium_route_runner_funnel|cex_consumer_entry_trillionnium_world_future_engine_readiness'
+   ```
+
+2. 如果 health/metrics 已恢复，但 Prometheus 仍报警，先检查 live bundle 与 deploy metadata：
+
+   ```bash
+   scripts/check-trillionnium-route-runner-handoff-monitoring.sh --summary-file run/route-runner-handoff-monitoring-check.json
+   grep -R "CexTrillionnium\(RouteRunnerHandoff\|WorldMapReadability\|RouteRunnerFunnel\|WorldFutureEngine\)" -n run/monitoring-live-target/prometheus/rules.d/cex-monitoring-bundle.rules.yml
+   sed -n '1,160p' run/monitoring-live-target/metadata/monitoring-deploy-metadata.yml
+   ```
+
+3. 代码修复后，至少跑相应 gate；如果改了 product surface，优先跑完整链：
+
+   ```bash
+   cargo fmt --all -- --check
+   cargo test -p consumer-entry-api -- --nocapture
+   CEX_ENV_FILE=run/local-production/.env scripts/check-production-signoff.sh
+   ```
+
+4. 如果只改 monitoring rules，重新 assembly + deploy 全 bundle，并要求 verify 成功：
+
+   ```bash
+   scripts/assemble-monitoring-bundles.sh --check --bundle prometheus
+   scripts/test-trillionnium-route-runner-handoff-monitoring.sh
+   scripts/deploy-monitoring-bundles.sh --bundle all --mode copy --force --verify --verify-mode command \
+     --verify-prometheus-command 'test -f run/monitoring-live-target/prometheus/rules.d/cex-monitoring-bundle.rules.yml && grep -q CexTrillionniumRouteRunnerHandoffRouteMasteryMissing run/monitoring-live-target/prometheus/rules.d/cex-monitoring-bundle.rules.yml' \
+     --verify-alertmanager-command 'test -f run/monitoring-live-target/alertmanager/conf.d/cex-monitoring-bundle.yml'
+   scripts/check-trillionnium-route-runner-handoff-monitoring.sh --summary-file run/route-runner-handoff-monitoring-check.json
+   ```
+
+5. 不要把这些 alerts 只当“监控噪声”静音。它们对应的是 first-session route-runner reward → next-route handoff 是否还能闭环，直接影响 playability、closed-beta、real-user beta、public-commercial 与 final signoff。
+
 ---
 
 ## 4. Restart guidance
@@ -461,18 +610,30 @@
 ```bash
 curl -s http://127.0.0.1:8080/health
 curl -s http://127.0.0.1:8080/v1/info | jq
+curl -s http://127.0.0.1:8080/metrics | grep -E 'cex_gateway_runtime_counter_total|cex_gateway_operator_signal_active'
 curl -s http://127.0.0.1:7003/health
 curl -s http://127.0.0.1:7003/v1/info | jq
+curl -s http://127.0.0.1:7003/metrics | grep -E 'cex_execution_runtime_up|cex_execution_provider_failures_total|cex_execution_operator_signal_active'
 curl -s http://127.0.0.1:7003/v1/executions/worker-queue/summary | jq
+curl -s -H 'x-admin-token: <admin-token>' http://127.0.0.1:7003/v1/executions/provider-failures | jq
+curl -s -H 'x-admin-token: <admin-token>' 'http://127.0.0.1:7003/v1/executions/provider-failures?retryable_only=true' | jq
+curl -s -H 'x-admin-token: <admin-token>' http://127.0.0.1:7003/v1/executions/provider-dead-letters | jq
 curl -s http://127.0.0.1:7004/health
+curl -s http://127.0.0.1:7004/metrics | grep cex_audit_service_up
 curl -s http://127.0.0.1:7002/health
+curl -s http://127.0.0.1:7002/metrics | grep cex_ledger_service_up
+curl -s http://127.0.0.1:7001/metrics | grep cex_identity_service_up
+curl -s http://127.0.0.1:7005/metrics | grep cex_capability_service_up
 curl -s http://127.0.0.1:8090/health
 curl -s http://127.0.0.1:8090/health | jq '.identity_governance_overview'
+curl -s http://127.0.0.1:8090/health | jq '{playability: .trillionnium_world_playability_scorecard.route_runner_handoff_gate, closed_beta: .trillionnium_world_closed_beta_prototype.route_runner_handoff_gate, real_user_beta: .trillionnium_world_real_user_beta.route_runner_handoff_gate, public_commercial: .trillionnium_world_public_commercial_product.route_runner_handoff_gate}'
+curl -s http://127.0.0.1:8090/metrics | grep cex_consumer_entry_trillionnium_route_runner_handoff
 curl -s -H 'x-entry-token: <token>' http://127.0.0.1:8090/v1/admin/identity-governance/status?limit=20 | jq
 curl -s -H 'x-entry-token: <token>' http://127.0.0.1:8090/v1/admin/identity-approval/source?limit=20 | jq
 curl -s -H 'x-entry-token: <token>' http://127.0.0.1:8090/v1/admin/identity-actors/status | jq
 ./scripts/check-operator-signals.sh
 ./scripts/run-operator-signal-check.sh
+./scripts/check-trillionnium-route-runner-handoff-monitoring.sh --summary-file run/route-runner-handoff-monitoring-check.json
 ```
 
 其中 `./scripts/check-operator-signals.sh` 会直接输出 machine-readable JSON，并返回：`0=ok`、`1=warn`、`2=critical`。当前它除 `gateway /v1/info`、`execution /v1/info` 外，也会把 `consumer-entry-api /health` 与 `matrix-entry-adapter /health` 的 supporting surface 一并纳入结果；若这两条入口侧 `/health` 不可达，会以 `warn` 形式反映在 alerts 里。
@@ -519,7 +680,7 @@ powershell -ExecutionPolicy Bypass -File scripts/start-local-runtime-detached.ps
 这份 runbook 还是最小版，当前明确还没覆盖：
 
 - Prometheus / OTel exporter
-- 自动告警规则
+- 自动告警规则仍只覆盖当前最小运行面；Trillionnium route-runner handoff 已有 Prometheus rules，但 dashboard/incident lifecycle 还没完整产品化
 - dashboard
 - 真正的 on-call / incident lifecycle
 - rollback / DR drill

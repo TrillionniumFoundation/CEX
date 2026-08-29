@@ -5,9 +5,17 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use execution_service::{build_router, state::AppState};
+use execution_service::{
+    build_router,
+    state::{AppState, ExecutionRecord},
+};
 use serde_json::{json, Value};
 use shared_types::{ExecutionDispatchMode, ExecutionStatus};
+use std::{
+    env, fs,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tokio::{net::TcpListener, task::JoinHandle};
 use tower::util::ServiceExt;
 
@@ -23,9 +31,43 @@ fn test_state() -> AppState {
     )
 }
 
+fn test_execution_record(
+    status: ExecutionStatus,
+    provider_target: Option<&str>,
+    error: Option<&str>,
+) -> ExecutionRecord {
+    let now = Utc::now();
+    ExecutionRecord {
+        execution_id: uuid::Uuid::new_v4(),
+        invocation_id: uuid::Uuid::new_v4(),
+        trace_id: uuid::Uuid::new_v4(),
+        org_id: Some("00000000-0000-0000-0000-00000000ce01".to_string()),
+        status,
+        provider_target: provider_target.map(str::to_string),
+        dispatch_mode: ExecutionDispatchMode::Manual,
+        attempt_count: 0,
+        max_attempts: 3,
+        worker_id: None,
+        lease_expires_at: None,
+        started_at: Some(now - chrono::Duration::seconds(20)),
+        ended_at: Some(now - chrono::Duration::seconds(10)),
+        result_payload: error.map(|error| json!({ "error": error })),
+        approval_required: false,
+        policy_reason: Some("auto-approved by configured policy".to_string()),
+        approved_by: None,
+        created_at: now - chrono::Duration::seconds(30),
+        updated_at: now - chrono::Duration::seconds(10),
+    }
+}
+
 struct MockProviderServer {
     base_url: String,
     _handle: JoinHandle<()>,
+}
+
+struct MockOpenClawCliScript {
+    command: String,
+    capture_path: PathBuf,
 }
 
 async fn mock_ollama_generate(Json(_body): Json<Value>) -> Json<Value> {
@@ -53,6 +95,255 @@ async fn start_mock_provider_server() -> MockProviderServer {
         base_url: format!("http://{addr}"),
         _handle: handle,
     }
+}
+
+fn create_mock_openclaw_cli_script() -> MockOpenClawCliScript {
+    let base = env::temp_dir().join(format!(
+        "cex-openclaw-mock-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos()
+    ));
+    fs::create_dir_all(&base).expect("create mock openclaw dir");
+
+    #[cfg(windows)]
+    let script_path = base.join("openclaw.cmd");
+    #[cfg(not(windows))]
+    let script_path = base.join("openclaw.sh");
+
+    let capture_path = base.join("env-capture.json");
+    let capture_path_string = path_to_command_string(capture_path.clone());
+
+    #[cfg(windows)]
+    let script_body = format!(
+        r#"@echo off
+set CAPTURE_PATH={capture_path}
+if "%1"=="infer" goto ok
+exit /b 1
+:ok
+> "%CAPTURE_PATH%" (
+  echo {{"OPENCLAW_CONFIG_PATH":"%OPENCLAW_CONFIG_PATH%","OPENCLAW_STATE_DIR":"%OPENCLAW_STATE_DIR%","OPENCLAW_AGENT_DIR":"%OPENCLAW_AGENT_DIR%"}}
+)
+echo {{"ok":true,"capability":"model.run","transport":"local","provider":"openai-codex","model":"gpt-5.4","attempts":[],"outputs":[{{"text":"hello from openclaw bridge","mediaUrl":null}}]}}
+"#,
+        capture_path = capture_path_string
+    );
+
+    #[cfg(not(windows))]
+    let script_body = format!(
+        r#"#!/usr/bin/env sh
+printf '%s\n' "{{\"OPENCLAW_CONFIG_PATH\":\"${{OPENCLAW_CONFIG_PATH:-}}\",\"OPENCLAW_STATE_DIR\":\"${{OPENCLAW_STATE_DIR:-}}\",\"OPENCLAW_AGENT_DIR\":\"${{OPENCLAW_AGENT_DIR:-}}\"}}" > '{capture_path}'
+printf '%s\n' '{{"ok":true,"capability":"model.run","transport":"local","provider":"openai-codex","model":"gpt-5.4","attempts":[],"outputs":[{{"text":"hello from openclaw bridge","mediaUrl":null}}]}}'
+"#,
+        capture_path = capture_path_string
+    );
+
+    fs::write(&script_path, script_body).expect("write mock openclaw script");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&script_path)
+            .expect("mock openclaw metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script_path, perms).expect("chmod mock openclaw script");
+    }
+
+    MockOpenClawCliScript {
+        command: path_to_command_string(script_path),
+        capture_path,
+    }
+}
+
+fn create_sleeping_mock_openclaw_cli_script(sleep_seconds: u64) -> MockOpenClawCliScript {
+    let base = env::temp_dir().join(format!(
+        "cex-openclaw-timeout-mock-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos()
+    ));
+    fs::create_dir_all(&base).expect("create timeout mock openclaw dir");
+
+    #[cfg(windows)]
+    let script_path = base.join("openclaw.cmd");
+    #[cfg(not(windows))]
+    let script_path = base.join("openclaw.sh");
+
+    let capture_path = base.join("env-capture.json");
+    let capture_path_string = path_to_command_string(capture_path.clone());
+
+    #[cfg(windows)]
+    let script_body = format!(
+        r#"@echo off
+set CAPTURE_PATH={capture_path}
+> "%CAPTURE_PATH%" (
+  echo {{"OPENCLAW_CONFIG_PATH":"%OPENCLAW_CONFIG_PATH%","OPENCLAW_STATE_DIR":"%OPENCLAW_STATE_DIR%","OPENCLAW_AGENT_DIR":"%OPENCLAW_AGENT_DIR%"}}
+)
+ping 127.0.0.1 -n {sleep_plus_one} > nul
+echo {{"ok":true,"capability":"model.run","transport":"local","provider":"openai-codex","model":"gpt-5.4","attempts":[],"outputs":[{{"text":"late response","mediaUrl":null}}]}}
+"#,
+        capture_path = capture_path_string,
+        sleep_plus_one = sleep_seconds + 1
+    );
+
+    #[cfg(not(windows))]
+    let script_body = format!(
+        r#"#!/usr/bin/env sh
+printf '%s\n' "{{\"OPENCLAW_CONFIG_PATH\":\"${{OPENCLAW_CONFIG_PATH:-}}\",\"OPENCLAW_STATE_DIR\":\"${{OPENCLAW_STATE_DIR:-}}\",\"OPENCLAW_AGENT_DIR\":\"${{OPENCLAW_AGENT_DIR:-}}\"}}" > '{capture_path}'
+sleep {sleep_seconds}
+printf '%s\n' '{{"ok":true,"capability":"model.run","transport":"local","provider":"openai-codex","model":"gpt-5.4","attempts":[],"outputs":[{{"text":"late response","mediaUrl":null}}]}}'
+"#,
+        capture_path = capture_path_string,
+        sleep_seconds = sleep_seconds
+    );
+
+    fs::write(&script_path, script_body).expect("write timeout mock openclaw script");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&script_path)
+            .expect("timeout mock openclaw metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script_path, perms).expect("chmod timeout mock openclaw script");
+    }
+
+    MockOpenClawCliScript {
+        command: path_to_command_string(script_path),
+        capture_path,
+    }
+}
+
+fn create_output_then_sleep_mock_openclaw_cli_script(sleep_seconds: u64) -> MockOpenClawCliScript {
+    let base = env::temp_dir().join(format!(
+        "cex-openclaw-lingering-mock-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos()
+    ));
+    fs::create_dir_all(&base).expect("create lingering mock openclaw dir");
+
+    #[cfg(windows)]
+    let script_path = base.join("openclaw.cmd");
+    #[cfg(not(windows))]
+    let script_path = base.join("openclaw.sh");
+
+    let capture_path = base.join("env-capture.json");
+    let capture_path_string = path_to_command_string(capture_path.clone());
+
+    #[cfg(windows)]
+    let script_body = format!(
+        r#"@echo off
+set CAPTURE_PATH={capture_path}
+> "%CAPTURE_PATH%" (
+  echo {{"OPENCLAW_CONFIG_PATH":"%OPENCLAW_CONFIG_PATH%","OPENCLAW_STATE_DIR":"%OPENCLAW_STATE_DIR%","OPENCLAW_AGENT_DIR":"%OPENCLAW_AGENT_DIR%"}}
+)
+echo {{"ok":true,"capability":"model.run","transport":"local","provider":"openai-codex","model":"gpt-5.4","attempts":[],"outputs":[{{"text":"bridge output before exit","mediaUrl":null}}]}}
+ping 127.0.0.1 -n {sleep_plus_one} > nul
+"#,
+        capture_path = capture_path_string,
+        sleep_plus_one = sleep_seconds + 1
+    );
+
+    #[cfg(not(windows))]
+    let script_body = format!(
+        r#"#!/usr/bin/env sh
+printf '%s\n' "{{\"OPENCLAW_CONFIG_PATH\":\"${{OPENCLAW_CONFIG_PATH:-}}\",\"OPENCLAW_STATE_DIR\":\"${{OPENCLAW_STATE_DIR:-}}\",\"OPENCLAW_AGENT_DIR\":\"${{OPENCLAW_AGENT_DIR:-}}\"}}" > '{capture_path}'
+printf '%s\n' '{{"ok":true,"capability":"model.run","transport":"local","provider":"openai-codex","model":"gpt-5.4","attempts":[],"outputs":[{{"text":"bridge output before exit","mediaUrl":null}}]}}'
+sleep {sleep_seconds}
+"#,
+        capture_path = capture_path_string,
+        sleep_seconds = sleep_seconds
+    );
+
+    fs::write(&script_path, script_body).expect("write lingering mock openclaw script");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&script_path)
+            .expect("lingering mock openclaw metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script_path, perms).expect("chmod lingering mock openclaw script");
+    }
+
+    MockOpenClawCliScript {
+        command: path_to_command_string(script_path),
+        capture_path,
+    }
+}
+
+fn create_output_then_fail_mock_openclaw_cli_script(exit_code: u32) -> MockOpenClawCliScript {
+    let base = env::temp_dir().join(format!(
+        "cex-openclaw-fail-mock-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos()
+    ));
+    fs::create_dir_all(&base).expect("create fail mock openclaw dir");
+
+    #[cfg(windows)]
+    let script_path = base.join("openclaw.cmd");
+    #[cfg(not(windows))]
+    let script_path = base.join("openclaw.sh");
+
+    let capture_path = base.join("env-capture.json");
+    let capture_path_string = path_to_command_string(capture_path.clone());
+
+    #[cfg(windows)]
+    let script_body = format!(
+        r#"@echo off
+set CAPTURE_PATH={capture_path}
+> "%CAPTURE_PATH%" (
+  echo {{"OPENCLAW_CONFIG_PATH":"%OPENCLAW_CONFIG_PATH%","OPENCLAW_STATE_DIR":"%OPENCLAW_STATE_DIR%","OPENCLAW_AGENT_DIR":"%OPENCLAW_AGENT_DIR%"}}
+)
+echo {"ok":true,"capability":"model.run","transport":"local","provider":"openai-codex","model":"gpt-5.4","attempts":[],"outputs":[{"text":"⚠️ provider returned a billing error — exhausted credits","mediaUrl":null}]}
+echo raw stderr detail 1>&2
+exit /b {exit_code}
+"#,
+        capture_path = capture_path_string,
+        exit_code = exit_code
+    );
+
+    #[cfg(not(windows))]
+    let script_body = format!(
+        r#"#!/usr/bin/env sh
+printf '%s\n' "{{\"OPENCLAW_CONFIG_PATH\":\"${{OPENCLAW_CONFIG_PATH:-}}\",\"OPENCLAW_STATE_DIR\":\"${{OPENCLAW_STATE_DIR:-}}\",\"OPENCLAW_AGENT_DIR\":\"${{OPENCLAW_AGENT_DIR:-}}\"}}" > '{capture_path}'
+printf '%s\n' '{{"ok":true,"capability":"model.run","transport":"local","provider":"openai-codex","model":"gpt-5.4","attempts":[],"outputs":[{{"text":"⚠️ provider returned a billing error — exhausted credits","mediaUrl":null}}]}}'
+printf '%s\n' 'raw stderr detail' >&2
+exit {exit_code}
+"#,
+        capture_path = capture_path_string,
+        exit_code = exit_code
+    );
+
+    fs::write(&script_path, script_body).expect("write failing mock openclaw script");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&script_path)
+            .expect("failing mock openclaw metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script_path, perms).expect("chmod failing mock openclaw script");
+    }
+
+    MockOpenClawCliScript {
+        command: path_to_command_string(script_path),
+        capture_path,
+    }
+}
+
+fn path_to_command_string(path: PathBuf) -> String {
+    path.to_string_lossy().to_string()
 }
 
 async fn send_json_with_headers(
@@ -123,6 +414,28 @@ async fn get_json(app: axum::Router, uri: &str) -> (StatusCode, Value) {
     get_json_with_headers(app, uri, &[("x-admin-token", "local-dev-admin-token")]).await
 }
 
+async fn get_text(app: axum::Router, uri: &str) -> (StatusCode, String, String) {
+    let request = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(Body::empty())
+        .expect("build get request");
+
+    let response = app.oneshot(request).await.expect("router response");
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body bytes");
+    let text = String::from_utf8(bytes.to_vec()).expect("decode text body");
+    (status, content_type, text)
+}
+
 #[tokio::test]
 async fn create_execution_exposes_auto_approved_http_flow() {
     let app = build_router(test_state());
@@ -145,6 +458,31 @@ async fn create_execution_exposes_auto_approved_http_flow() {
     assert_eq!(get_status, StatusCode::OK);
     assert_eq!(fetched["execution_id"], created["execution_id"]);
     assert_eq!(fetched["status"], "Queued");
+}
+
+#[tokio::test]
+async fn metrics_endpoint_exports_runtime_and_operator_gauges() {
+    let state = test_state();
+    let billing = test_execution_record(
+        ExecutionStatus::Refunded,
+        Some("minimax://MiniMax-M2.5"),
+        Some("billing error: insufficient balance"),
+    );
+    {
+        let mut map = state.executions.write().await;
+        map.insert(billing.execution_id, billing);
+    }
+
+    let app = build_router(state);
+    let (status, content_type, body) = get_text(app, "/metrics").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(content_type.starts_with("text/plain; version=0.0.4"));
+    assert!(body.contains("cex_execution_runtime_up 1\n"));
+    assert!(body.contains("cex_execution_provider_failures_total{kind=\"billing\"} 1\n"));
+    assert!(body.contains("cex_execution_provider_failures_total{kind=\"dead_letter\"} 1\n"));
+    assert!(
+        body.contains("cex_execution_operator_signal_active{name=\"provider_dead_letters\"} 1\n")
+    );
 }
 
 #[tokio::test]
@@ -679,6 +1017,148 @@ async fn worker_queue_summary_reports_visible_queue_counts() {
     assert_eq!(summary["retryable"], 3);
     assert_eq!(summary["retry_budget_exhausted"], 0);
     assert_eq!(summary["active_workers"], 1);
+}
+
+#[tokio::test]
+async fn provider_dead_letters_lists_terminal_provider_failures_with_filters() {
+    let state = test_state();
+    let billing = test_execution_record(
+        ExecutionStatus::Refunded,
+        Some("minimax://MiniMax-M2.5"),
+        Some("⚠️ minimax returned a billing error — insufficient balance (1008)"),
+    );
+    let billing_id = billing.execution_id;
+    let mut timeout_exhausted = test_execution_record(
+        ExecutionStatus::Failed,
+        Some("codex://gpt-5.4"),
+        Some("provider dispatch timed out after 60s"),
+    );
+    timeout_exhausted.attempt_count = 3;
+    timeout_exhausted.max_attempts = 3;
+    let timeout_id = timeout_exhausted.execution_id;
+    let mut timeout_still_retryable = test_execution_record(
+        ExecutionStatus::Failed,
+        Some("codex://gpt-5.4"),
+        Some("provider dispatch timed out after 60s"),
+    );
+    timeout_still_retryable.attempt_count = 1;
+    timeout_still_retryable.max_attempts = 3;
+    let retryable_id = timeout_still_retryable.execution_id;
+
+    {
+        let mut map = state.executions.write().await;
+        map.insert(billing.execution_id, billing);
+        map.insert(timeout_exhausted.execution_id, timeout_exhausted);
+        map.insert(
+            timeout_still_retryable.execution_id,
+            timeout_still_retryable,
+        );
+    }
+
+    let app = build_router(state);
+    let (status, items) = get_json(app.clone(), "/v1/executions/provider-dead-letters").await;
+    assert_eq!(status, StatusCode::OK);
+    let items = items.as_array().expect("dead-letter array");
+    assert_eq!(items.len(), 2);
+    assert!(items.iter().any(|item| {
+        item["execution_id"] == billing_id.to_string()
+            && item["provider_failure_kind"] == "billing"
+            && item["dead_letter_reason"] == "non_retryable_terminal"
+            && item["non_retryable_terminal"] == true
+    }));
+    assert!(items.iter().any(|item| {
+        item["execution_id"] == timeout_id.to_string()
+            && item["provider_failure_kind"] == "timeout"
+            && item["dead_letter_reason"] == "retry_budget_exhausted"
+            && item["retry_budget_exhausted"] == true
+    }));
+
+    let (status, timeout_items) = get_json(
+        app.clone(),
+        "/v1/executions/provider-dead-letters?kind=timeout",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let timeout_items = timeout_items.as_array().expect("timeout array");
+    assert_eq!(timeout_items.len(), 1);
+    assert_eq!(timeout_items[0]["execution_id"], timeout_id.to_string());
+
+    let (ack_status, acked) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/v1/executions/{billing_id}/provider-dead-letter/ack"),
+        json!({"acknowledged_by":"operator-1","note":"billing tracked externally"}),
+    )
+    .await;
+    assert_eq!(ack_status, StatusCode::OK);
+    assert_eq!(acked["execution_id"], billing_id.to_string());
+    assert_eq!(acked["acknowledged"], true);
+    assert_eq!(acked["acknowledged_by"], "operator-1");
+
+    let (status, active_items) =
+        get_json(app.clone(), "/v1/executions/provider-dead-letters").await;
+    assert_eq!(status, StatusCode::OK);
+    let active_items = active_items.as_array().expect("active dead-letter array");
+    assert_eq!(active_items.len(), 1);
+    assert_eq!(active_items[0]["execution_id"], timeout_id.to_string());
+
+    let (status, acknowledged_items) = get_json(
+        app.clone(),
+        "/v1/executions/provider-dead-letters?acknowledged_only=true",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let acknowledged_items = acknowledged_items
+        .as_array()
+        .expect("acknowledged dead-letter array");
+    assert_eq!(acknowledged_items.len(), 1);
+    assert_eq!(
+        acknowledged_items[0]["execution_id"],
+        billing_id.to_string()
+    );
+
+    let (status, info) = get_json(app.clone(), "/v1/info").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(info["runtime"]["provider_failures"]["total"], 2);
+    assert_eq!(info["runtime"]["provider_failures"]["billing"], 0);
+    assert_eq!(info["runtime"]["provider_failures"]["dead_letter"], 1);
+    assert_eq!(
+        info["runtime"]["provider_failures"]["acknowledged_dead_letter"],
+        1
+    );
+
+    let (status, retryable_failures) = get_json(
+        app.clone(),
+        "/v1/executions/provider-failures?retryable_only=true",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let retryable_failures = retryable_failures
+        .as_array()
+        .expect("retryable provider failures");
+    assert_eq!(retryable_failures.len(), 1);
+    assert_eq!(
+        retryable_failures[0]["execution_id"],
+        retryable_id.to_string()
+    );
+    assert_eq!(retryable_failures[0]["dead_letter"], false);
+
+    let (ack_status, acked_retryable) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/v1/executions/{retryable_id}/provider-failure/ack"),
+        json!({"acknowledged_by":"operator-1","note":"retryable timeout tracked externally"}),
+    )
+    .await;
+    assert_eq!(ack_status, StatusCode::OK);
+    assert_eq!(acked_retryable["execution_id"], retryable_id.to_string());
+    assert_eq!(acked_retryable["dead_letter"], false);
+    assert_eq!(acked_retryable["acknowledged"], true);
+
+    let (status, info) = get_json(app, "/v1/info").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(info["runtime"]["provider_failures"]["total"], 1);
+    assert_eq!(info["runtime"]["provider_failures"]["timeout"], 1);
 }
 
 #[tokio::test]
@@ -1843,6 +2323,310 @@ async fn process_execution_runs_claimed_queued_worker_and_surfaces_provider_fail
     let (get_status, fetched) = get_json(app, &format!("/v1/executions/{execution_id}")).await;
     assert_eq!(get_status, StatusCode::OK);
     assert_eq!(fetched["status"], "Failed");
+}
+
+#[tokio::test]
+async fn process_execution_requires_active_claim_for_queued_worker() {
+    let app = build_router(test_state());
+    let create_body = json!({
+        "invocation_id": "00000000-0000-0000-0000-000000000118",
+        "trace_id": "00000000-0000-0000-0000-000000000218",
+        "org_id": "00000000-0000-0000-0000-00000000ce01",
+        "capability_id": "cap.openai.test",
+        "capability_provider": "openai",
+        "capability_provider_ref": "gpt-4.1-mini",
+        "prompt": "say hi",
+        "reserve_amount": 1.0
+    });
+
+    let (_, created) = send_json(app.clone(), "POST", "/v1/executions", create_body).await;
+    let execution_id = created["execution_id"].as_str().expect("execution id");
+
+    let (process_status, body) = send_json(
+        app,
+        "POST",
+        &format!("/v1/executions/{execution_id}/process"),
+        json!({ "processed_by": "worker-1", "note": "dequeue without claim" }),
+    )
+    .await;
+    assert_eq!(process_status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "execution is not currently claimed");
+    assert_eq!(body["status"], "Queued");
+}
+
+#[tokio::test]
+async fn process_execution_uses_openclaw_cli_bridge_for_queued_worker() {
+    let mut state = test_state();
+    let mock_cli = create_mock_openclaw_cli_script();
+    state.openclaw_cli_bin = mock_cli.command.clone();
+    state.openclaw_config_path = Some("/tmp/openclaw-cex/openclaw.json".to_string());
+    state.openclaw_state_dir = Some("/tmp/openclaw-cex".to_string());
+    state.openclaw_agent_dir = Some("/tmp/openclaw-cex/agents/cex/agent".to_string());
+    let app = build_router(state);
+    let create_body = json!({
+        "invocation_id": "00000000-0000-0000-0000-000000000109",
+        "trace_id": "00000000-0000-0000-0000-000000000209",
+        "org_id": "00000000-0000-0000-0000-00000000ce01",
+        "capability_id": "cap.openclaw.gpt54",
+        "capability_provider": "codex",
+        "capability_provider_ref": "gpt-5.4",
+        "prompt": "say hi",
+        "reserve_amount": 1.0
+    });
+
+    let (_, created) = send_json(app.clone(), "POST", "/v1/executions", create_body).await;
+    let execution_id = created["execution_id"].as_str().expect("execution id");
+    assert_eq!(created["dispatch_mode"], "queued_worker");
+    assert_eq!(created["provider_target"], "codex://gpt-5.4");
+
+    let (claim_status, _) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/executions/claim-next",
+        json!({ "claimed_by": "worker-bridge", "note": "claim next" }),
+    )
+    .await;
+    assert_eq!(claim_status, StatusCode::OK);
+
+    let (process_status, processed) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/v1/executions/{execution_id}/process"),
+        json!({ "processed_by": "worker-bridge", "note": "dequeue" }),
+    )
+    .await;
+    assert_eq!(process_status, StatusCode::OK);
+    assert_eq!(processed["status"], "Succeeded");
+    assert_eq!(processed["provider_target"], "openai-codex://gpt-5.4");
+    assert_eq!(processed["result_payload"]["bridge"], "openclaw-cli");
+    assert_eq!(
+        processed["result_payload"]["output_text"],
+        "hello from openclaw bridge"
+    );
+
+    let captured_env: Value = serde_json::from_slice(
+        &fs::read(&mock_cli.capture_path).expect("read openclaw env capture"),
+    )
+    .expect("decode openclaw env capture");
+    assert_eq!(
+        captured_env["OPENCLAW_CONFIG_PATH"],
+        "/tmp/openclaw-cex/openclaw.json"
+    );
+    assert_eq!(captured_env["OPENCLAW_STATE_DIR"], "/tmp/openclaw-cex");
+    assert_eq!(
+        captured_env["OPENCLAW_AGENT_DIR"],
+        "/tmp/openclaw-cex/agents/cex/agent"
+    );
+
+    let (get_status, fetched) = get_json(app, &format!("/v1/executions/{execution_id}")).await;
+    assert_eq!(get_status, StatusCode::OK);
+    assert_eq!(fetched["status"], "Succeeded");
+}
+
+#[tokio::test]
+async fn process_execution_fails_when_openclaw_cli_bridge_times_out() {
+    let mut state = AppState::new_for_tests_with_attempt_limits(
+        false,
+        Some("local-dev-admin-token".to_string()),
+        vec![
+            "executions:manage".to_string(),
+            "executions:read".to_string(),
+        ],
+        Vec::new(),
+        1,
+        1,
+    );
+    let mock_cli = create_sleeping_mock_openclaw_cli_script(2);
+    state.openclaw_cli_bin = mock_cli.command.clone();
+    state.execution_provider_dispatch_timeout_seconds = 1;
+    let app = build_router(state);
+    let create_body = json!({
+        "invocation_id": "00000000-0000-0000-0000-00000000011a",
+        "trace_id": "00000000-0000-0000-0000-00000000021a",
+        "org_id": "00000000-0000-0000-0000-00000000ce01",
+        "capability_id": "cap.openclaw.timeout",
+        "capability_provider": "codex",
+        "capability_provider_ref": "gpt-5.4",
+        "prompt": "say hi slowly",
+        "reserve_amount": 1.0
+    });
+
+    let (_, created) = send_json(app.clone(), "POST", "/v1/executions", create_body).await;
+    let execution_id = created["execution_id"].as_str().expect("execution id");
+
+    let (claim_status, _) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/executions/claim-next",
+        json!({ "claimed_by": "worker-timeout", "note": "claim next" }),
+    )
+    .await;
+    assert_eq!(claim_status, StatusCode::OK);
+
+    let (process_status, processed) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/v1/executions/{execution_id}/process"),
+        json!({ "processed_by": "worker-timeout", "note": "dequeue" }),
+    )
+    .await;
+    assert_eq!(process_status, StatusCode::OK);
+    assert_eq!(processed["status"], "Failed");
+    assert!(processed["result_payload"]["error"]
+        .as_str()
+        .expect("timeout error text")
+        .contains("timed out"));
+}
+
+#[tokio::test]
+async fn process_execution_auto_requeues_retryable_provider_timeout_with_backoff() {
+    let mut state = test_state();
+    let mock_cli = create_sleeping_mock_openclaw_cli_script(2);
+    state.openclaw_cli_bin = mock_cli.command.clone();
+    state.execution_provider_dispatch_timeout_seconds = 1;
+    state.execution_retry_backoff_seconds = 7;
+    state.execution_retry_backoff_max_seconds = 7;
+    let app = build_router(state);
+    let create_body = json!({
+        "invocation_id": "00000000-0000-0000-0000-00000000011d",
+        "trace_id": "00000000-0000-0000-0000-00000000021d",
+        "org_id": "00000000-0000-0000-0000-00000000ce01",
+        "capability_id": "cap.openclaw.timeout-retry",
+        "capability_provider": "codex",
+        "capability_provider_ref": "gpt-5.4",
+        "prompt": "say hi slowly then retry",
+        "reserve_amount": 1.0
+    });
+
+    let (_, created) = send_json(app.clone(), "POST", "/v1/executions", create_body).await;
+    let execution_id = created["execution_id"].as_str().expect("execution id");
+
+    let (claim_status, _) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/executions/claim-next",
+        json!({ "claimed_by": "worker-timeout-retry", "note": "claim next" }),
+    )
+    .await;
+    assert_eq!(claim_status, StatusCode::OK);
+
+    let (process_status, processed) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/v1/executions/{execution_id}/process"),
+        json!({ "processed_by": "worker-timeout-retry", "note": "dequeue" }),
+    )
+    .await;
+    assert_eq!(process_status, StatusCode::OK);
+    assert_eq!(processed["status"], "Queued");
+    assert_eq!(processed["attempt_count"], 1);
+    assert!(processed["lease_expires_at"].is_string());
+    assert_eq!(processed["result_payload"]["retry_policy"], "auto_backoff");
+    assert_eq!(processed["result_payload"]["retry_after_seconds"], 7);
+    assert!(processed["result_payload"]["last_provider_error"]
+        .as_str()
+        .expect("last provider error")
+        .contains("timed out"));
+
+    let (claim_again_status, body) = send_json(
+        app,
+        "POST",
+        "/v1/executions/claim-next",
+        json!({ "claimed_by": "worker-timeout-retry", "note": "too early" }),
+    )
+    .await;
+    assert_eq!(claim_again_status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "no queued worker execution available");
+}
+
+#[tokio::test]
+async fn process_execution_uses_openclaw_cli_json_even_if_cli_lingers() {
+    let mut state = test_state();
+    let mock_cli = create_output_then_sleep_mock_openclaw_cli_script(2);
+    state.openclaw_cli_bin = mock_cli.command.clone();
+    state.execution_provider_dispatch_timeout_seconds = 1;
+    let app = build_router(state);
+    let create_body = json!({
+        "invocation_id": "00000000-0000-0000-0000-00000000011b",
+        "trace_id": "00000000-0000-0000-0000-00000000021b",
+        "org_id": "00000000-0000-0000-0000-00000000ce01",
+        "capability_id": "cap.openclaw.output-before-exit",
+        "capability_provider": "codex",
+        "capability_provider_ref": "gpt-5.4",
+        "prompt": "say hi and linger",
+        "reserve_amount": 1.0
+    });
+
+    let (_, created) = send_json(app.clone(), "POST", "/v1/executions", create_body).await;
+    let execution_id = created["execution_id"].as_str().expect("execution id");
+
+    let (claim_status, _) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/executions/claim-next",
+        json!({ "claimed_by": "worker-linger", "note": "claim next" }),
+    )
+    .await;
+    assert_eq!(claim_status, StatusCode::OK);
+
+    let (process_status, processed) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/v1/executions/{execution_id}/process"),
+        json!({ "processed_by": "worker-linger", "note": "dequeue" }),
+    )
+    .await;
+    assert_eq!(process_status, StatusCode::OK);
+    assert_eq!(processed["status"], "Succeeded");
+    assert_eq!(
+        processed["result_payload"]["output_text"],
+        "bridge output before exit"
+    );
+}
+
+#[tokio::test]
+async fn process_execution_prefers_surfaced_openclaw_error_text_over_stderr_noise() {
+    let mut state = test_state();
+    let mock_cli = create_output_then_fail_mock_openclaw_cli_script(1);
+    state.openclaw_cli_bin = mock_cli.command.clone();
+    let app = build_router(state);
+    let create_body = json!({
+        "invocation_id": "00000000-0000-0000-0000-00000000011c",
+        "trace_id": "00000000-0000-0000-0000-00000000021c",
+        "org_id": "00000000-0000-0000-0000-00000000ce01",
+        "capability_id": "cap.openclaw.stdout-error",
+        "capability_provider": "codex",
+        "capability_provider_ref": "gpt-5.4",
+        "prompt": "say billing exhausted",
+        "reserve_amount": 1.0
+    });
+
+    let (_, created) = send_json(app.clone(), "POST", "/v1/executions", create_body).await;
+    let execution_id = created["execution_id"].as_str().expect("execution id");
+
+    let (claim_status, _) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/executions/claim-next",
+        json!({ "claimed_by": "worker-surfaced-error", "note": "claim next" }),
+    )
+    .await;
+    assert_eq!(claim_status, StatusCode::OK);
+
+    let (process_status, processed) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/v1/executions/{execution_id}/process"),
+        json!({ "processed_by": "worker-surfaced-error", "note": "dequeue" }),
+    )
+    .await;
+    assert_eq!(process_status, StatusCode::OK);
+    assert_eq!(processed["status"], "Failed");
+    let error_text = processed["result_payload"]["error"]
+        .as_str()
+        .expect("surfaced error text");
+    assert!(error_text.contains("billing error"));
+    assert!(!error_text.contains("raw stderr detail"));
 }
 
 #[tokio::test]

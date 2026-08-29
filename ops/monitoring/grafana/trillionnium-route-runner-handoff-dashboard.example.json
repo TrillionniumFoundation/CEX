@@ -1,0 +1,924 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "target": {
+          "limit": 100,
+          "matchAny": false,
+          "tags": [],
+          "type": "dashboard"
+        },
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Repo-local example dashboard for Trillionnium route-runner reward/next-route handoff readiness, including route mastery progression. It consumes consumer-entry-api /metrics gauges and pairs with the CexTrillionniumRouteRunnerHandoff* Prometheus alerts.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "doc",
+      "includeVars": false,
+      "keepTime": false,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Operator runbook",
+      "tooltip": "docs/operator-runbook-v1.md#39-symptom-trillionnium-route-runner-handoff-alert-firing",
+      "type": "link",
+      "url": "docs/operator-runbook-v1.md"
+    }
+  ],
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "red",
+                  "index": 0,
+                  "text": "NOT GREEN"
+                },
+                "1": {
+                  "color": "green",
+                  "index": 1,
+                  "text": "GREEN"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.4.0",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_all_gates_green",
+          "legendFormat": "all gates",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "All handoff gates",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "red",
+                  "index": 0,
+                  "text": "BAD"
+                },
+                "1": {
+                  "color": "green",
+                  "index": 1,
+                  "text": "OK"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 18,
+        "x": 6,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "pluginVersion": "10.4.0",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_playability_gate_green",
+          "legendFormat": "playability",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_closed_beta_gate_green",
+          "legendFormat": "closed beta",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_real_user_beta_gate_green",
+          "legendFormat": "real-user beta",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_public_commercial_gate_green",
+          "legendFormat": "public commercial",
+          "range": true,
+          "refId": "D"
+        }
+      ],
+      "title": "Gate family",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "green",
+                "value": 7
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 5
+      },
+      "id": 3,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_feed_source_count",
+          "legendFormat": "feed sources",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Feed source count (expected >= 7)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 5
+      },
+      "id": 4,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_runner_count",
+          "legendFormat": "runners",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_reward_claim_action_count",
+          "legendFormat": "reward claim actions",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_next_route_action_count",
+          "legendFormat": "next route actions",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "Runner / reward / next-route action counts",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_contract_visible",
+          "legendFormat": "mastery contract visible",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_runner_count",
+          "legendFormat": "mastery runners",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_first_route_mastery_xp",
+          "legendFormat": "first runner XP",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_tier_visible",
+          "legendFormat": "mastery tier visible",
+          "range": true,
+          "refId": "D"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_next_goal_evidence_visible",
+          "legendFormat": "next goal evidence visible",
+          "range": true,
+          "refId": "E"
+        }
+      ],
+      "title": "Route mastery progression",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 19
+      },
+      "id": 6,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_readability_lod_gate_green",
+          "legendFormat": "map readability gate",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_readability_lod_visible_marker_budget",
+          "legendFormat": "marker budget",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_readability_lod_visible_markers",
+          "legendFormat": "visible markers",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_readability_lod_avatar_runner_budget",
+          "legendFormat": "runner budget",
+          "range": true,
+          "refId": "D"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_readability_lod_avatar_runners",
+          "legendFormat": "avatar runners",
+          "range": true,
+          "refId": "E"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_telemetry_contract_visible",
+          "legendFormat": "funnel contract visible",
+          "range": true,
+          "refId": "F"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_route_started_count",
+          "legendFormat": "route started",
+          "range": true,
+          "refId": "G"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_evidence_submitted_count",
+          "legendFormat": "evidence submitted",
+          "range": true,
+          "refId": "H"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_reward_claimed_count",
+          "legendFormat": "reward claimed",
+          "range": true,
+          "refId": "I"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_next_route_opened_count",
+          "legendFormat": "next route opened",
+          "range": true,
+          "refId": "J"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_abandoned_or_recovery_count",
+          "legendFormat": "abandoned/recovery",
+          "range": true,
+          "refId": "K"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_time_to_reward_seconds",
+          "legendFormat": "time to reward seconds",
+          "range": true,
+          "refId": "L"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_daily_return_resume_count",
+          "legendFormat": "daily return resume",
+          "range": true,
+          "refId": "M"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_future_engine_readiness_gate_green",
+          "legendFormat": "future engine gate",
+          "range": true,
+          "refId": "N"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_rum_slo_gate_green",
+          "legendFormat": "map RUM SLO gate",
+          "range": true,
+          "refId": "O"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_rum_slo_raw_split_green",
+          "legendFormat": "map RUM raw split green",
+          "range": true,
+          "refId": "P"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_rum_slo_sample_count",
+          "legendFormat": "map RUM samples",
+          "range": true,
+          "refId": "Q"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_rum_slo_enforcement_active",
+          "legendFormat": "map RUM enforcement active",
+          "range": true,
+          "refId": "R"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_rum_slo_warming",
+          "legendFormat": "map RUM warming",
+          "range": true,
+          "refId": "S"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_delta_cache_gate_green",
+          "legendFormat": "map delta cache gate",
+          "range": true,
+          "refId": "T"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_delta_failure_rate_percent",
+          "legendFormat": "map delta failure %",
+          "range": true,
+          "refId": "U"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_runtime_safety_gate_green",
+          "legendFormat": "map runtime safety gate",
+          "range": true,
+          "refId": "V"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_weak_network_resilience_gate_green",
+          "legendFormat": "map weak-network gate",
+          "range": true,
+          "refId": "W"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_location_privacy_gate_green",
+          "legendFormat": "map location privacy gate",
+          "range": true,
+          "refId": "X"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_gate_green",
+          "legendFormat": "RUM matrix gate",
+          "range": true,
+          "refId": "Y"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_raw_green",
+          "legendFormat": "RUM matrix raw green",
+          "range": true,
+          "refId": "Z"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_coverage_count",
+          "legendFormat": "RUM matrix buckets",
+          "range": true,
+          "refId": "R27"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_missing_bucket_count",
+          "legendFormat": "RUM matrix missing buckets",
+          "range": true,
+          "refId": "R28"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_density_scalability_gate_green",
+          "legendFormat": "density scalability",
+          "range": true,
+          "refId": "R29"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_offline_action_queue_gate_green",
+          "legendFormat": "offline action queue",
+          "range": true,
+          "refId": "R30"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_gameplay_accessibility_i18n_gate_green",
+          "legendFormat": "gameplay a11y/i18n",
+          "range": true,
+          "refId": "R31"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_maplibre_shadow_parity_gate_green",
+          "legendFormat": "MapLibre shadow parity",
+          "range": true,
+          "refId": "R32"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_maplibre_canary_rollback_ready",
+          "legendFormat": "MapLibre rollback ready",
+          "range": true,
+          "refId": "R33"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_map_maplibre_shadow_only",
+          "legendFormat": "map_maplibre_shadow_only",
+          "refId": "b"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_map_maplibre_canary_percent",
+          "legendFormat": "map_maplibre_canary_percent",
+          "refId": "c"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_map_maplibre_max_canary_percent_without_new_signoff",
+          "legendFormat": "map_maplibre_max_canary_percent_without_new_signoff",
+          "refId": "d"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_map_maplibre_canary_starts_at_zero",
+          "legendFormat": "map_maplibre_canary_starts_at_zero",
+          "refId": "e"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_map_maplibre_rollback_drill_evidence_required",
+          "legendFormat": "map_maplibre_rollback_drill_evidence_required",
+          "refId": "f"
+        }
+      ],
+      "title": "Mobile map runtime / funnel / future engine",
+      "type": "timeseries"
+    },
+    {
+      "id": 7,
+      "title": "Retention cohort / commercial operating dashboard",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_reward_to_next_route_percent",
+          "legendFormat": "route_runner_funnel_reward_to_next_route_percent",
+          "refId": "A"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_d1_resume_percent",
+          "legendFormat": "route_runner_funnel_d1_resume_percent",
+          "refId": "B"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_route_abandon_or_recovery_percent",
+          "legendFormat": "route_runner_funnel_route_abandon_or_recovery_percent",
+          "refId": "C"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_time_to_first_proof_seconds",
+          "legendFormat": "route_runner_funnel_time_to_first_proof_seconds",
+          "refId": "D"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_time_to_next_route_seconds",
+          "legendFormat": "route_runner_funnel_time_to_next_route_seconds",
+          "refId": "E"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_commercial_operating_dashboard_gate_green",
+          "legendFormat": "world_commercial_operating_dashboard_gate_green",
+          "refId": "F"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_commercial_route_start_to_paid_task_percent",
+          "legendFormat": "world_commercial_route_start_to_paid_task_percent",
+          "refId": "G"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_commercial_reward_claim_to_next_commission_percent",
+          "legendFormat": "world_commercial_reward_claim_to_next_commission_percent",
+          "refId": "H"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_commercial_seller_completion_quality_percent",
+          "legendFormat": "world_commercial_seller_completion_quality_percent",
+          "refId": "I"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_commercial_buyer_repeat_order_count",
+          "legendFormat": "world_commercial_buyer_repeat_order_count",
+          "refId": "J"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_commercial_dispute_refund_reopen_count",
+          "legendFormat": "world_commercial_dispute_refund_reopen_count",
+          "refId": "K"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_route_recommendation_quality_gate_green",
+          "legendFormat": "route rec quality gate",
+          "range": true,
+          "refId": "L"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_percent",
+          "legendFormat": "route rec quality %",
+          "range": true,
+          "refId": "M"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_route_recommendation_reward_lift_visible",
+          "legendFormat": "route rec reward lift visible",
+          "range": true,
+          "refId": "N"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_route_recommendation_abandon_risk_visible",
+          "legendFormat": "route rec abandon risk visible",
+          "range": true,
+          "refId": "O"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_route_recommendation_denominator_consistent",
+          "legendFormat": "route rec denominator consistent",
+          "range": true,
+          "refId": "P"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_target_percent",
+          "legendFormat": "world_route_recommendation_quality_score_target_percent",
+          "refId": "Q"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_ready",
+          "legendFormat": "world_route_recommendation_quality_score_ready",
+          "refId": "R"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_route_recommendation_raw_counts_preserved",
+          "legendFormat": "world_route_recommendation_raw_counts_preserved",
+          "refId": "S"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_route_recommendation_risk_controls_visible",
+          "legendFormat": "world_route_recommendation_risk_controls_visible",
+          "refId": "T"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      }
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "cex",
+    "trillionnium",
+    "route-runner",
+    "handoff"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "Prometheus",
+          "value": "Prometheus"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Prometheus datasource",
+        "multi": false,
+        "name": "DS_PROMETHEUS",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "CEX / Trillionnium Route-Runner Handoff",
+  "uid": "cex-trillionnium-route-runner-handoff",
+  "version": 1,
+  "weekStart": ""
+}

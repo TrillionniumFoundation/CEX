@@ -11,6 +11,6 @@
 - `0002_add_policy_tables.sql`
 - `0003_add_provider_configs.sql`
 
-当前下一步：
-1. 先将 schema-v1 拆成第一条初始化 migration
-2. 后续变更只通过 migration 增量追加
+当前原生 TRNM 经济迁移已推进到
+`0029_add_trnm_value_entitlements_and_player_sessions.sql`。后续变更只通过
+排序后的增量 migration 追加；不得回写已部署迁移的历史语义。

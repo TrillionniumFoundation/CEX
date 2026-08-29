@@ -36,6 +36,44 @@ async fn get_json(app: axum::Router, uri: &str) -> (StatusCode, Value) {
     (status, json)
 }
 
+async fn get_text(app: axum::Router, uri: &str) -> (StatusCode, String, String) {
+    let request = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(Body::empty())
+        .expect("build request");
+
+    let response = app.oneshot(request).await.expect("router response");
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read response body");
+    let text = String::from_utf8(bytes.to_vec()).expect("decode response text");
+    (status, content_type, text)
+}
+
+#[tokio::test]
+async fn metrics_endpoint_exports_registry_counts() {
+    let app = build_router(AppState::new_for_tests(vec![
+        sample_capability("cap.a", true),
+        sample_capability("cap.b", false),
+    ]));
+
+    let (status, content_type, body) = get_text(app, "/metrics").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(content_type.starts_with("text/plain; version=0.0.4"));
+    assert!(body.contains("cex_capability_service_up 1\n"));
+    assert!(body.contains("cex_capability_records_total{state=\"total\"} 2\n"));
+    assert!(body.contains("cex_capability_records_total{state=\"enabled\"} 1\n"));
+    assert!(body.contains("cex_capability_records_total{state=\"disabled\"} 1\n"));
+}
+
 #[tokio::test]
 async fn list_capabilities_returns_sorted_records() {
     let app = build_router(AppState::new_for_tests(vec![
