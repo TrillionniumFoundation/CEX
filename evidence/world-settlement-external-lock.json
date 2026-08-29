@@ -3,8 +3,8 @@
   "world": {
     "repository": "TrillionniumFoundation/Trillionnium-World",
     "branch": "fix/world-settlement-gap-closure-v1",
-    "commit": "f604d14fbacbd53c3faf09045aaec192879a3f1e",
-    "tree": "4a1fc4b2b60d807af2aefe59a7047d6779e4cc43"
+    "commit": "ad0fd6378242992cea4e035efe90174f5f2bc138",
+    "tree": "25d540f93f2a83133f4f6d1b94d3916b1d7498ee"
   },
   "cex_owner": {
     "repository": "TrillionniumFoundation/CEX",
@@ -14,8 +14,8 @@
   },
   "manual_rearm": {
     "actor": "Tomasrgbsf",
-    "generation": 5,
-    "reason": "bind fault-model compile repair and rerun full unit, PostgreSQL and Clippy gates"
+    "generation": 6,
+    "reason": "bind exact PostgreSQL operator replay migration repair and rerun the complete unit, database and strict lint matrix"
   },
   "promotion_effect": "none",
   "native_world_actions_run": false,
