@@ -45,6 +45,13 @@ def require_text(relative_path: str, *needles: str) -> None:
             PROBLEMS.append(f"{relative_path} lacks required marker: {needle}")
 
 
+def forbid_text(relative_path: str, *needles: str) -> None:
+    content = read_text(relative_path)
+    for needle in needles:
+        if needle in content:
+            PROBLEMS.append(f"{relative_path} contains forbidden marker: {needle}")
+
+
 def forbid_path(relative_path: str) -> None:
     if (ROOT / relative_path).exists():
         PROBLEMS.append(f"obsolete/conflicting path must not exist: {relative_path}")
@@ -135,6 +142,47 @@ def verify_core() -> None:
         "cex_invocation_ledger_effect_request_v1",
         "cex_bind_invocation_ledger_effect_v1",
         "missing_effect_evidence",
+    )
+
+    require_text(
+        "services/gateway-service/src/infrastructure/state.rs",
+        '"trnm-economy"',
+        '"trnm_economy"',
+        "legacy reserve remains fail-closed",
+    )
+
+    trnm_launcher = "scripts/run-trnm-economy-service.sh"
+    require_text(
+        trnm_launcher,
+        "TRNM_SECRET_ENV_NAMES=(",
+        "require_distinct_secrets",
+        "TRNM_ENTITLEMENT_ISSUER_REGISTRY_PATH is required",
+        "must be an absolute mounted path",
+        "LEDGER_ADMIN_TOKEN",
+        "TRNM_VALUE_ENTITLEMENT_SIGNING_SECRET",
+        "TRNM_GAME_AUTHORITY_TOKEN",
+        "TRNM_PLAYER_SESSION_SIGNING_SECRET",
+        "CONSUMER_ENTRY_INGRESS_TOKEN",
+        "CONSUMER_ENTRY_SESSION_AUTH_SECRET",
+        "CEX_GATEWAY_API_KEY",
+        "CONSUMER_ENTRY_LEAGUE_WEB_SESSION_SECRET",
+    )
+    forbid_text(
+        trnm_launcher,
+        "trnm-economy-local-production-key",
+        ":-$IDENTITY_ADMIN_TOKEN",
+        "trnm-entitlement-signing-v1:$IDENTITY_ADMIN_TOKEN",
+        "../trillionnium-world/run/online-authority/issuer-registry.json",
+    )
+
+    require_text(
+        "deploy/systemd/cex-trnm-economy-maintenance.service",
+        "WorkingDirectory=%h/.openclaw/workspace/CEX",
+        "ExecStart=%h/.openclaw/workspace/CEX/scripts/run-trnm-economy-maintenance.sh",
+    )
+    forbid_text(
+        "deploy/systemd/cex-trnm-economy-maintenance.service",
+        "/home/alex/",
     )
 
 
