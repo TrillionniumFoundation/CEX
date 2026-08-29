@@ -14,7 +14,7 @@
     "cargo_lock_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   },
   "database": {
-    "migration_head": "0083_fix_audit_baseline_uuid_cursor.sql",
+    "migration_head": "0084_make_provider_reconciliation_replay_terminal_safe.sql",
     "migration_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   },
   "build": {
@@ -55,6 +55,13 @@
     },
     {
       "name": "0083_audit-baseline-uuid-cursor",
+      "status": "pending",
+      "uri": null,
+      "sha256": null,
+      "waiver": null
+    },
+    {
+      "name": "0084_provider-reconciliation-terminal-replay",
       "status": "pending",
       "uri": null,
       "sha256": null,
