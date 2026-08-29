@@ -1,2 +1,0 @@
-closure_head=a37ea93ce2178efbf2f760860e53c00ca1fa79ac
-purpose=trigger user-token GitHub Actions after reviewed self-patch commit
