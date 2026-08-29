@@ -4,10 +4,15 @@ on:
   workflow_dispatch:
   push:
     paths:
+      - 'migrations/**'
       - 'migrations/0078_add_durable_provider_dispatch.sql'
       - 'migrations/0081_close_exact_authority_and_evidence_guards.sql'
       - 'migrations/0082_close_provider_unknown_outcome_reconciliation.sql'
       - 'migrations/0084_make_provider_reconciliation_replay_terminal_safe.sql'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/**'
+      - 'services/execution-service/**'
       - 'scripts/check-provider-reconciliation-postgres.sh'
       - 'docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md'
       - 'docs/templates/cex-release-baseline-manifest-v1.json'

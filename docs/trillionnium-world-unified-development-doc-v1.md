@@ -2,7 +2,7 @@
 
 **项目**：Trillionnium World
 **目标仓库**：<https://github.com/TrillionniumFoundation/Trillionnium>
-**当前孵化实现**：`/home/qian/.openclaw/workspace/CEX`
+**当前孵化实现**：`/home/alex/projects/hepta-control-plane`
 **合并来源**：Dropbox `rust_geo_mmo_development_doc_v0_4_execution_ready.md`、CEX 已落地代码、CEX 现有 Trillionnium/World 文档与运行证据
 **当前代码基线**：CEX `a8508df fix: gate health metrics on typed receipts`
 **文档状态**：统一执行版；CEX incubator/source-of-evidence 已同步到 Term Exchange typed receipt runtime closeout，后续用于拆票、验收、迁移到 Trillionnium 主仓、Alpha/公开测试准入评审

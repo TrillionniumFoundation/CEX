@@ -1,10 +1,8 @@
-#[path = "../../../../crates/shared-config/src/runtime_guard.rs"]
-mod runtime_guard;
 #[path = "../../../../crates/shared-config/src/service_client.rs"]
 mod service_client;
 
 use audit_service::outbox_dispatcher::{dispatch_once, DispatcherConfig, DISPATCHER_SERVICE_ID};
-use runtime_guard::ServiceKind;
+use shared_config::runtime_guard::{self, ServiceKind};
 use shared_tracing::init_tracing;
 use sqlx::postgres::PgPoolOptions;
 use std::{env, process, time::Duration};

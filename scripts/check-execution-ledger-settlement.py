@@ -23,7 +23,7 @@ adapter = read("services/execution-service/src/ledger_settlement.rs")
 lib = read("services/execution-service/src/lib.rs")
 api = read("services/execution-service/src/api.rs")
 doc = read("docs/execution-ledger-settlement-v1.md")
-plan = read("docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v10.md")
+plan = read("docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md")
 
 for marker in (
     "ExecutionLedgerMode",
@@ -51,8 +51,10 @@ for forbidden in (
     if re.search(forbidden, adapter):
         problems.append(f"Execution exact adapter contains forbidden legacy-money bridge: {forbidden}")
 
-# The adapter is intentionally not authoritative while provider/Ledger network calls remain
-# inside the monolithic SQL transaction in api.rs.
+# The adapter is authoritative only from the durable settlement worker. The
+# public API must not retain a provider/Ledger network call inside its status
+# transaction; provider-backed requests enter through provider_dispatch and the
+# 0074 trigger owns exact terminal command creation.
 if "settle_invocation(" in api:
     problems.append(
         "Execution api.rs activates the exact adapter before command/receipt transaction separation"
@@ -60,6 +62,7 @@ if "settle_invocation(" in api:
 
 for marker in (
     "not yet called by api.rs",
+    "durable settlement worker",
     "unknown remote outcome",
     "legacy_v1",
     "require_v2",
@@ -67,8 +70,18 @@ for marker in (
     if marker not in doc:
         problems.append(f"Execution settlement documentation lacks {marker}")
 
-if "P0-N5 transaction separation" not in plan:
-    problems.append("active plan does not preserve P0-N5 transaction separation blocker")
+for marker in (
+    "P0-N5 durable Execution settlement",
+    "P0-N6 delivered by this candidate",
+    "not production-ready",
+    "Definition of repository closure",
+):
+    if marker not in plan:
+        problems.append(f"active v12 plan lacks required settlement marker: {marker}")
+
+for forbidden in ("/v1/ledger/", "call_ledger_action(", "consume_reserved_credits(", "release_reserved_credits("):
+    if forbidden in api:
+        problems.append(f"Execution API retains retired settlement marker: {forbidden}")
 
 print(json.dumps({
     "status": "failed" if problems else "ok",

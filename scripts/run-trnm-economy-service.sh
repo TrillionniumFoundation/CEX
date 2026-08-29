@@ -6,16 +6,23 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_dev-helpers.sh"
 cex_load_env
 
+# This lane is production-like by contract.  The repository .env commonly
+# carries APP_ENV=dev for the general local stack; leaving that value in the
+# environment would make the shared startup guard reject the explicit TRNM
+# profile as a conflict.  Set the compatibility alias before selecting the
+# canonical profile and launching either service.
+export APP_ENV=production
 export DATABASE_URL="$(cex_effective_database_url)"
 export LEDGER_FAIL_FAST=true
 export LEDGER_DATABASE_MAX_CONNECTIONS="${LEDGER_DATABASE_MAX_CONNECTIONS:-8}"
 export CEX_RUNTIME_PROFILE=trnm-economy
+cex_select_runtime_profile
 export CONSUMER_ENTRY_RUNTIME_PROFILE=production
 export LEDGER_BASE_URL="${LEDGER_BASE_URL:-http://127.0.0.1:7002}"
 export CONSUMER_ENTRY_BIND_ADDR="${CONSUMER_ENTRY_BIND_ADDR:-127.0.0.1:8090}"
 export LEDGER_ADMIN_TOKEN="${LEDGER_ADMIN_TOKEN:-${IDENTITY_ADMIN_TOKEN:?IDENTITY_ADMIN_TOKEN is required}}"
 export TRNM_VALUE_ENTITLEMENT_SIGNING_SECRET="${TRNM_VALUE_ENTITLEMENT_SIGNING_SECRET:-trnm-entitlement-signing-v1:$IDENTITY_ADMIN_TOKEN}"
-export TRNM_ENTITLEMENT_ISSUER_REGISTRY_PATH="${TRNM_ENTITLEMENT_ISSUER_REGISTRY_PATH:-$CEX_PROJECT_ROOT/../Trillionnium/run/online-authority/issuer-registry.json}"
+export TRNM_ENTITLEMENT_ISSUER_REGISTRY_PATH="${TRNM_ENTITLEMENT_ISSUER_REGISTRY_PATH:-$CEX_PROJECT_ROOT/../trillionnium-world/run/online-authority/issuer-registry.json}"
 export TRNM_GAME_AUTHORITY_TOKEN="${TRNM_GAME_AUTHORITY_TOKEN:-trnm-game-authority-v1:$IDENTITY_ADMIN_TOKEN}"
 export TRNM_PLAYER_SESSION_SIGNING_SECRET="${TRNM_PLAYER_SESSION_SIGNING_SECRET:-trnm-player-session-signing-v1:$IDENTITY_ADMIN_TOKEN}"
 export TRNM_REQUIRE_PLAYER_SESSION=true

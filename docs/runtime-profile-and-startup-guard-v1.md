@@ -23,6 +23,10 @@
 - `staging`
 - `production`（兼容 `prod`）
 
+`trnm-economy`（以及下划线形式 `trnm_economy`）是运行管理器的 lane 名称，
+解析时等价于 `production`，因此仍强制执行 production-like 的数据库、凭据和
+fail-fast 启动护栏；它不会形成一个可绕过护栏的独立 profile。
+
 解析顺序：
 
 1. `CEX_RUNTIME_PROFILE`

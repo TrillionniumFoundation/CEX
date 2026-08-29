@@ -1,5 +1,3 @@
-#[path = "../../../crates/shared-config/src/runtime_guard.rs"]
-mod runtime_guard;
 #[path = "../../../crates/shared-config/src/service_client.rs"]
 mod service_client;
 
@@ -8,8 +6,10 @@ use gateway_service::{
     build_router,
     infrastructure::{clients::ServiceClients, state::AppState},
 };
-use runtime_guard::ServiceKind;
-use shared_config::GatewayConfig;
+use shared_config::{
+    runtime_guard::{self, ServiceKind},
+    GatewayConfig,
+};
 use shared_tracing::init_tracing;
 
 const SHARED_RUNTIME_GUARD_SERVICE_KINDS: [ServiceKind; 5] = [

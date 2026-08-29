@@ -11,7 +11,7 @@ Record before execution:
 - repository, branch, commit SHA and tree SHA;
 - active plan and addendum digests;
 - `Cargo.lock` digest;
-- migration head and full migration-chain digest;
+- numbered migration head and full numbered migration-chain digest;
 - workflow and canonical-document digests;
 - container image or runner identity;
 - PostgreSQL major version.
@@ -38,12 +38,13 @@ Failure is terminal for that candidate; no later successful test may override it
 Against fresh PostgreSQL 16:
 
 1. apply the complete numbered migration chain through `0084_make_provider_reconciliation_replay_terminal_safe.sql`;
-2. execute representative existing-row upgrade paths;
-3. verify exact account opening, append-only effects, replay/collision and insufficient-funds recovery;
-4. verify Invocation contract lifecycle and terminal mutual exclusion;
-5. verify Gateway reserve, Execution settlement and provider reconciliation fault matrices;
-6. verify authenticated Audit baseline/delivery and TRNM response-loss receipt recovery;
-7. run the bounded exact Ledger soak and CI dump/restore comparison.
+2. when the TRNM economy settlement lane is in scope, apply the service-owned bootstrap at `services/trnm-economy-service/migrations/settlement_v1.sql`; this migration is intentionally outside the numbered chain;
+3. execute representative existing-row upgrade paths;
+4. verify exact account opening, append-only effects, replay/collision and insufficient-funds recovery;
+5. verify Invocation contract lifecycle and terminal mutual exclusion;
+6. verify Gateway reserve, Execution settlement and provider reconciliation fault matrices;
+7. verify authenticated Audit baseline/delivery and TRNM response-loss receipt recovery;
+8. run the bounded exact Ledger soak and CI dump/restore comparison.
 
 The five authoritative workflows are the hosted implementation of these steps.
 

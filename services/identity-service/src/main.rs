@@ -1,14 +1,12 @@
-#[path = "../../../crates/shared-config/src/runtime_guard.rs"]
-mod runtime_guard;
-#[path = "../../../crates/shared-config/src/service_auth.rs"]
-mod service_auth;
 #[path = "../../../crates/shared-config/src/service_client.rs"]
 mod service_client;
 
 use axum::middleware;
 use identity_service::{build_router, harden_runtime_state, AppState};
-use runtime_guard::ServiceKind;
-use service_auth::ServiceAuthConfig;
+use shared_config::{
+    runtime_guard::{self, ServiceKind},
+    service_auth::{self, ServiceAuthConfig},
+};
 use shared_tracing::init_tracing;
 use std::sync::Arc;
 

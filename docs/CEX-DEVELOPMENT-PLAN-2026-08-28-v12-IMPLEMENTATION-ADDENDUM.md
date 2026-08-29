@@ -49,15 +49,15 @@ Closure evidence:
 
 ### Block J — complete-suite lint ownership and fail-closed source identity
 
-The complete Hepta package suite is authoritative. A recovery-only test cannot substitute for package tests plus all-target Clippy. Where a child module inherits the Base64 engine trait from `paper_raid_v2` and also carries the same local trait import, the repository may use only a module-local lint expectation bound to an immutable source-body Git blob. A crate-wide warning allowance, `-A warnings`, or unguarded source split is forbidden.
+The complete Hepta package suite is authoritative. A recovery-only test cannot substitute for package tests plus all-target Clippy. The Paper Raid child modules inherit the Base64 engine trait from `paper_raid_v2`; their extracted bodies must therefore remove redundant local `Engine as _` imports and their wrappers must remain thin, attribute-free `include!` modules. Each cleaned body is bound to an immutable source-body Git blob. A crate-wide warning allowance, `-A warnings`, module-level lint suppression, or unguarded source split is forbidden.
 
 Required behavior:
 
 - all unit and integration tests execute before strict Clippy in the full hosted lane;
 - Clippy runs with `-D warnings` over every Hepta target;
-- the four source bodies and four thin wrappers are validated by `scripts/check-hepta-lint-ownership.py`;
-- each body has an exact Git blob SHA and exactly one known inherited `Engine` import;
-- each wrapper uses `expect(unused_imports)`, never `allow(unused_imports)`;
+- the four cleaned source bodies and four thin wrappers are validated by `scripts/check-hepta-lint-ownership.py`;
+- each body has an exact Git blob SHA, exactly one canonical Base64 value import, and no redundant local `Engine as _` import;
+- each wrapper is an attribute-free `include!` with no lint suppression;
 - any body or wrapper drift fails before Cargo execution and requires direct source cleanup or an explicitly reviewed new contract;
 - the exact lint contract is included in retained Hepta evidence.
 

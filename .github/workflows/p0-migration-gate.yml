@@ -5,6 +5,9 @@ on:
   push:
     paths:
       - 'migrations/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/**'
       - 'services/ledger-service/src/lib.rs'
       - 'services/ledger-service/src/receipt_lookup.rs'
       - 'scripts/check-p0-migrations.py'
@@ -16,6 +19,12 @@ on:
       - 'scripts/check-invocation-ledger-terminal-postgres.sh'
       - 'scripts/check-trnm-settlement-receipt-lookup.py'
       - 'scripts/check-trnm-settlement-receipt-lookup-http.sh'
+      - 'scripts/check-trnm-economy-settlement-contract.py'
+      - 'scripts/test-trnm-economy-settlement-status-negative.py'
+      - 'services/trnm-economy-service/migrations/settlement_v1.sql'
+      - 'services/trnm-economy-service/**'
+      - 'docs/status/trnm-economy-settlement-v1.json'
+      - 'docs/trnm-economy-settlement-receipt-lookup-v1.md'
       - 'scripts/backfill-audit-source-baselines.sh'
       - 'docs/templates/cex-release-baseline-manifest-v1.json'
       - 'docs/audit-source-baseline-backfill-v1.md'
@@ -70,6 +79,12 @@ jobs:
 
       - name: TRNM receipt recovery static wiring
         run: python3 scripts/check-trnm-settlement-receipt-lookup.py
+
+      - name: TRNM economy owner settlement contract
+        run: |
+          python3 scripts/check-trnm-economy-settlement-contract.py
+          python3 scripts/test-trnm-economy-settlement-status-negative.py
+          bash scripts/test-runtime-profile-wiring.sh
 
       - name: Fresh apply and P0 database assertions
         run: bash scripts/check-p0-migrations-postgres.sh

@@ -4,6 +4,16 @@ use axum::{
 };
 use std::{collections::HashMap, env};
 
+pub mod runtime_guard;
+/// Shared internal service-auth middleware and configuration.
+///
+/// Keeping this module in the shared-config crate (rather than including the
+/// source file independently in each service) gives every binary the same
+/// implementation and lets the compiler see the complete public capability
+/// surface.  Service crates still choose which operation-specific constructor
+/// and middleware they install.
+pub mod service_auth;
+
 #[derive(Debug, Clone)]
 pub struct GatewayConfig {
     pub host: String,

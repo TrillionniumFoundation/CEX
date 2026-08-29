@@ -1,8 +1,5 @@
-#[path = "../../../../crates/shared-config/src/runtime_guard.rs"]
-mod runtime_guard;
-
 use execution_service::{provider_dispatch, validate_internal_service_auth};
-use runtime_guard::ServiceKind;
+use shared_config::runtime_guard::{self, ServiceKind};
 use shared_tracing::init_tracing;
 
 #[tokio::main]

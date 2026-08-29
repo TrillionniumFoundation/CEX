@@ -97,6 +97,13 @@ def main() -> int:
         "schema": "cex.repository-integrity.v1",
         "status": "ok",
         "ok": True,
+        # Keep the generic evidence identity names alongside the historical
+        # repository_* fields.  The release collector consumes every local
+        # attestation through one exact commit/tree contract; without these
+        # aliases this otherwise valid integrity record could not be admitted
+        # as a first-class manifest evidence item.
+        "commit_sha": commit_sha,
+        "tree_sha": tree_sha,
         "repository_commit_sha": commit_sha,
         "repository_tree_sha": tree_sha,
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),

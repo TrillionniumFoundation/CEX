@@ -15135,7 +15135,11 @@ async fn world_contract_completion_cannot_release_twice() {
     let first_body = json!({
         "matrix_user_id": matrix_user_id,
         "room_id": room_id,
-        "body": "Final customer deliverable with evidence package, risk controls, next action, self-review, settlement proof, measurable acceptance checklist, and remediation notes."
+        // Keep this duplicate-release fixture on the protocol's whole-credit path. The rubric
+        // still exercises every eligible signal, while the compact 67-character body yields an
+        // exact four-credit reward; fractional rewards are covered by the fail-closed adapter
+        // tests instead of being silently rounded here.
+        "body": "customer deliverable evidence risk next review scout builder closer"
     });
     let (status, first_completion) = send_json_request(
         &app,

@@ -2189,7 +2189,10 @@ async fn record_world_tactics_command(
             &completion,
         )
         .await;
-        let settlement_completed = settlement.progression_allowed(&["settled", "duplicate"]);
+        let exact_reward_credits =
+            whole_credits_from_compatibility_amount(completion.reward_amount);
+        let settlement_completed = settlement.progression_allowed(&["settled", "duplicate"])
+            && exact_reward_credits.is_ok();
         completion.ledger_status = Some(settlement.status.clone());
         completion.ledger_account_id = settlement.account_id;
         completion.ledger_entry_id = settlement.entry_id;
@@ -2219,7 +2222,8 @@ async fn record_world_tactics_command(
                     matrix_user_id: matrix_user_id.clone(),
                     event_kind: "trillionnium_task_reward".to_string(),
                     subject_id: contract.contract_id.clone(),
-                    credits_delta: completion.reward_amount.round() as i64,
+                    credits_delta: exact_reward_credits
+                        .expect("successful settlement must carry an exact whole-credit reward"),
                     reputation_delta: (completion.score / 12.0).round() as i64,
                     created_at_epoch: completion.created_at_epoch,
                 });

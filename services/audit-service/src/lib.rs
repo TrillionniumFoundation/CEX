@@ -1,5 +1,4 @@
-#[path = "../../../crates/shared-config/src/service_auth.rs"]
-pub(crate) mod service_auth;
+pub(crate) use shared_config::service_auth;
 
 pub mod api;
 pub mod outbox_dispatcher;

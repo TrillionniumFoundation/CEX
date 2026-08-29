@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Fail closed around the exact Hepta inherited-trait lint ownership boundary."""
+"""Fail closed around the exact Hepta inherited-trait lint ownership boundary.
+
+The large Paper Raid modules are included below ``paper_raid_v2``.  The parent
+module already imports the Base64 engine, so keeping a second ``Engine as _``
+import in each extracted body is both redundant and compiler-version
+dependent: newer Clippy versions report the module-level ``expect`` as
+*unfulfilled*.  The ownership contract therefore freezes the cleaned bodies
+and requires thin, attribute-free wrappers.
+"""
 
 from __future__ import annotations
 
@@ -9,27 +17,24 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-IMPORT = "use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};"
-REASON = (
-    "the exact source body imports base64::Engine locally while paper_raid_v2 "
-    "already supplies the trait; body identity is machine-locked"
-)
+BASE64_IMPORT = "use base64::engine::general_purpose::STANDARD as BASE64;"
+REDUNDANT_ENGINE_IMPORT = "use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};"
 MODULES = {
     "services/hepta-research-league/src/paper_collaboration_v3.rs": (
         "paper_collaboration_v3_body.rs",
-        "736724a738e5bd8f314918f936ddda19aa648ab1",
+        "aed0cfd6d591009bce65e268330f5557f70a5cc5",
     ),
     "services/hepta-research-league/src/paper_review_v4.rs": (
         "paper_review_v4_body.rs",
-        "a9e8b8d342711677ef93ec87bb06dd4b52f06ea2",
+        "691d1a98fa416f22b7e4516f1072d13179b02215",
     ),
     "services/hepta-research-league/src/paper_rework_v1.rs": (
         "paper_rework_v1_body.rs",
-        "ac027a1ed06b92bd337c822fc09c8f544fd33a83",
+        "3e03d686a1855a8fc8911a2d35cfbfe1122ee362",
     ),
     "services/hepta-research-league/src/paper_raid_v2_tests.rs": (
         "paper_raid_v2_tests_body.rs",
-        "53ee14684b2df5e4e65f984436356a4f1c2f69a2",
+        "e5a39b1f269e82c110cb367734f73d073b16e02d",
     ),
 }
 PROBLEMS: list[str] = []
@@ -41,13 +46,7 @@ def git_blob_sha(data: bytes) -> str:
 
 
 def expected_wrapper(body_name: str) -> str:
-    return (
-        "#![expect(\n"
-        "    unused_imports,\n"
-        f'    reason = "{REASON}"\n'
-        ")]\n\n"
-        f'include!("{body_name}");\n'
-    )
+    return f'include!("{body_name}");\n'
 
 
 def main() -> int:
@@ -63,8 +62,8 @@ def main() -> int:
         wrapper_text = wrapper.read_text(encoding="utf-8")
         if wrapper_text != expected_wrapper(body_name):
             PROBLEMS.append(f"lint-ownership wrapper drifted: {wrapper_relative}")
-        if "allow(unused_imports" in wrapper_text or "allow(warnings" in wrapper_text:
-            PROBLEMS.append(f"broad lint allowance forbidden: {wrapper_relative}")
+        if "allow(" in wrapper_text or "expect(" in wrapper_text:
+            PROBLEMS.append(f"wrapper lint suppression forbidden: {wrapper_relative}")
         body_bytes = body.read_bytes()
         actual_sha = git_blob_sha(body_bytes)
         if actual_sha != expected_sha:
@@ -77,9 +76,14 @@ def main() -> int:
         except UnicodeDecodeError as error:
             PROBLEMS.append(f"source body is not UTF-8: {body}: {error}")
             continue
-        if body_text.count(IMPORT) != 1:
+        if body_text.count(BASE64_IMPORT) != 1:
             PROBLEMS.append(
-                f"source body must contain exactly one inherited Engine import: "
+                f"source body must contain exactly one Base64 value import: "
+                f"{body.relative_to(ROOT).as_posix()}"
+            )
+        if REDUNDANT_ENGINE_IMPORT in body_text:
+            PROBLEMS.append(
+                f"source body retains a redundant inherited Engine import: "
                 f"{body.relative_to(ROOT).as_posix()}"
             )
         if "#![allow(unused_imports" in body_text or "#![allow(warnings" in body_text:
@@ -92,7 +96,7 @@ def main() -> int:
         "status": "failed" if PROBLEMS else "ok",
         "ok": not PROBLEMS,
         "modules": len(MODULES),
-        "policy": "exact_body_hash_plus_module_local_expectation",
+        "policy": "exact_body_hash_plus_inherited_trait_cleanup",
         "broad_lint_allowance": False,
         "problems": PROBLEMS,
     }

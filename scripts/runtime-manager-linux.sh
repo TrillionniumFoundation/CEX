@@ -6,6 +6,9 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_dev-helpers.sh"
 cex_load_env
 
+export APP_ENV="${APP_ENV:-dev}"
+cex_select_runtime_profile
+
 PROJECT_ROOT="$CEX_PROJECT_ROOT"
 OPENCLAW_SCOPE_ROOT_DEFAULT="$PROJECT_ROOT/run/openclaw-cex"
 OPENCLAW_SCOPE_CONFIG_DEFAULT="$OPENCLAW_SCOPE_ROOT_DEFAULT/openclaw.json"
@@ -60,7 +63,6 @@ if [[ -z "${LEDGER_ADMIN_TOKEN:-}" ]]; then
 fi
 
 export RUST_LOG="${RUST_LOG:-info}"
-export APP_ENV="${APP_ENV:-dev}"
 export GATEWAY_HOST="${GATEWAY_HOST:-127.0.0.1}"
 export GATEWAY_PORT="${GATEWAY_PORT:-8080}"
 export LEDGER_BASE_URL="${LEDGER_BASE_URL:-http://127.0.0.1:7002}"
@@ -84,7 +86,6 @@ export EXECUTION_PROVIDER_DISPATCH_TIMEOUT_SECONDS="${EXECUTION_PROVIDER_DISPATC
 export CEX_ENABLE_QUEUED_WORKER="${CEX_ENABLE_QUEUED_WORKER:-1}"
 export CEX_ENABLE_ENTRY_SERVICES="${CEX_ENABLE_ENTRY_SERVICES:-1}"
 export CEX_RUNTIME_SKIP_BUILD="${CEX_RUNTIME_SKIP_BUILD:-0}"
-export CEX_RUNTIME_PROFILE="${CEX_RUNTIME_PROFILE:-full}"
 export EXECUTION_WORKER_ID="${EXECUTION_WORKER_ID:-cex-linux-worker}"
 export EXECUTION_WORKER_IDLE_SECS="${EXECUTION_WORKER_IDLE_SECS:-2}"
 export IDENTITY_ADMIN_TOKEN="${IDENTITY_ADMIN_TOKEN:-local-dev-admin-token}"
@@ -94,7 +95,7 @@ export DATABASE_URL="$(cex_effective_database_url)"
 export REDIS_URL="${REDIS_URL:-redis://127.0.0.1:6379}"
 export NATS_URL="${NATS_URL:-nats://127.0.0.1:4222}"
 
-if [[ "$CEX_RUNTIME_PROFILE" == "trnm-economy" ]]; then
+if [[ "$CEX_RUNTIME_LANE" == "trnm-economy" ]]; then
   export CEX_ENABLE_QUEUED_WORKER=0
   export CEX_ENABLE_ENTRY_SERVICES=1
   export LEDGER_FAIL_FAST=true
@@ -111,7 +112,7 @@ PID_DIR="$RUNTIME_DIR/pids"
 ENTRY_CONFIG_DIR="$RUNTIME_DIR/entry-config"
 mkdir -p "$LOG_DIR" "$PID_DIR"
 
-if [[ "$CEX_RUNTIME_PROFILE" == "trnm-economy" ]]; then
+if [[ "$CEX_RUNTIME_LANE" == "trnm-economy" ]]; then
   SERVICES=(ledger-service consumer-entry-api)
 else
   SERVICES=(ledger-service execution-service identity-service audit-service capability-service gateway-service)
@@ -121,7 +122,7 @@ else
 fi
 WORKER_NAME="execution-queued-worker"
 WORKER_SCRIPT="$SCRIPT_DIR/execution-queued-worker.sh"
-if [[ "$CEX_RUNTIME_PROFILE" == "trnm-economy" ]]; then
+if [[ "$CEX_RUNTIME_LANE" == "trnm-economy" ]]; then
   HEALTH_URLS=(
     "http://127.0.0.1:7002/health"
     "http://127.0.0.1:8090/health"

@@ -64,7 +64,7 @@ Path(sys.argv[1]).write_text(json.dumps({
     "commit_sha": sys.argv[2],
     "mode": sys.argv[3],
     "postgres_required": True,
-    "lint_policy": "exact_body_hash_plus_module_local_expectation",
+    "lint_policy": "exact_body_hash_plus_inherited_trait_cleanup",
     "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     "checks": [
         "exact-lint-ownership",

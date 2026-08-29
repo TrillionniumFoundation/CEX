@@ -4,7 +4,7 @@ Generated: 2026-05-08 18:11 CST
 Last audited: 2026-05-11 22:4x CST
 Current code checkpoint: `feat: gate rust-owned trillionnium world ui` (this commit)
 Previous checkpoint: `93f3c0d feat: prioritize trillionnium world game shell`
-Repo: `/home/qian/.openclaw/workspace/CEX`
+Repo: `/home/alex/projects/hepta-control-plane`
 
 This document is the handoff spine for continuing Trillionnium World development without losing state after chat compaction, runtime restarts, or long task chains.
 
@@ -1311,7 +1311,7 @@ Append this block under the relevant tree item after each slice:
   - ...
 ```
 
-Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YYYY-MM-DD.md`.
+Also append a one-paragraph summary to `memory/YYYY-MM-DD.md`.
 
 ---
 

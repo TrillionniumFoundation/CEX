@@ -4,12 +4,16 @@ on:
   workflow_dispatch:
   push:
     paths:
+      - 'migrations/**'
       - 'migrations/0067_add_execution_ledger_settlement_schema.sql'
       - 'migrations/0068_add_execution_ledger_settlement_guards.sql'
       - 'migrations/0069_add_execution_ledger_settlement_enqueue.sql'
       - 'migrations/0070_add_execution_ledger_settlement_claim.sql'
       - 'migrations/0071_add_execution_ledger_settlement_finish.sql'
       - 'migrations/0072_add_execution_ledger_settlement_operator.sql'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/**'
       - 'services/execution-service/**'
       - 'scripts/check-execution-settlement-commands.py'
       - 'scripts/check-execution-settlement-commands-postgres.sh'

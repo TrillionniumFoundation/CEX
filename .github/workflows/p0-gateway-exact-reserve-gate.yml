@@ -4,7 +4,11 @@ on:
   workflow_dispatch:
   push:
     paths:
+      - 'migrations/**'
       - 'migrations/0073_add_gateway_exact_reserve_commands.sql'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/**'
       - 'services/gateway-service/**'
       - 'crates/shared-config/src/runtime_guard.rs'
       - 'scripts/check-gateway-exact-reserve.py'

@@ -1282,18 +1282,14 @@ pub(super) async fn settle_world_purchase_ledger_action(
             ..Default::default()
         };
     }
-    let ledger_amount = ledger_amount_credits as f64;
     let mut extra_ledger_body = Map::new();
-    extra_ledger_body.insert(
-        "gross_amount".to_string(),
-        json!(purchase.price_credits as f64),
-    );
+    extra_ledger_body.insert("gross_amount".to_string(), json!(purchase.price_credits));
     extra_ledger_body.insert(
         "market_tax_amount".to_string(),
         json!(if action == "grant" {
-            (purchase.price_credits - ledger_amount_credits) as f64
+            purchase.price_credits - ledger_amount_credits
         } else {
-            0.0
+            0
         }),
     );
     CexTermExchangeBackend
@@ -1321,8 +1317,8 @@ pub(super) async fn settle_world_purchase_ledger_action(
                 idempotency_key,
                 idempotency_scope: format!("world_purchase_{action}"),
                 reference_id: Some(reference_id),
-                amount: ledger_amount,
                 amount_credits: ledger_amount_credits,
+                amount_validation_error: None,
                 currency: "credits".to_string(),
                 metadata: json!({
                     "purchase_id": purchase.purchase_id,
@@ -3836,6 +3832,11 @@ pub(super) async fn settle_world_contract_completion_with_ledger(
             ..Default::default()
         };
     }
+    let (amount_credits, amount_validation_error) =
+        match whole_credits_from_compatibility_amount(completion.reward_amount) {
+            Ok(value) => (value, None),
+            Err(error) => (0, Some(error)),
+        };
     CexTermExchangeBackend
         .execute_ledger_action(
             state,
@@ -3857,8 +3858,8 @@ pub(super) async fn settle_world_contract_completion_with_ledger(
                 idempotency_key: format!("world_contract_completion:{}", completion.completion_id),
                 idempotency_scope: "world_contract_completion".to_string(),
                 reference_id: Some(contract.task_id.clone()),
-                amount: completion.reward_amount,
-                amount_credits: completion.reward_amount.round() as i64,
+                amount_credits,
+                amount_validation_error,
                 currency: "credits".to_string(),
                 metadata: json!({
                     "contract_id": contract.contract_id,

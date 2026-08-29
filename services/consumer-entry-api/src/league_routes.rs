@@ -2151,6 +2151,11 @@ pub(super) async fn settle_league_reward_with_ledger(
         };
     }
 
+    let (amount_credits, amount_validation_error) =
+        match whole_credits_from_compatibility_amount(reward.amount) {
+            Ok(value) => (value, None),
+            Err(error) => (0, Some(error)),
+        };
     let mut extra_ledger_body = Map::new();
     if let Some(task_id) = submission
         .task_id
@@ -2179,8 +2184,8 @@ pub(super) async fn settle_league_reward_with_ledger(
                 idempotency_key: format!("league_reward:{}", reward.reward_id),
                 idempotency_scope: "league_reward".to_string(),
                 reference_id: submission.task_id.clone(),
-                amount: reward.amount,
-                amount_credits: reward.amount.round() as i64,
+                amount_credits,
+                amount_validation_error,
                 currency: "credits".to_string(),
                 metadata: json!({
                     "submission_id": submission.submission_id,

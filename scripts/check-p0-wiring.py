@@ -171,6 +171,7 @@ def verify_exact_contracts() -> None:
         "scripts/check-ledger-caller-cutover.py",
         "scripts/check-invocation-ledger-contract-static.py",
         "scripts/check-execution-ledger-settlement.py",
+        "scripts/check-consumer-exact-money.py",
     ):
         try:
             result = subprocess.run(
@@ -186,6 +187,25 @@ def verify_exact_contracts() -> None:
         else:
             if result.returncode != 0:
                 PROBLEMS.append(f"{script} failed: {result.stdout.strip()}")
+
+    runtime_profile_test = ROOT / "scripts/test-runtime-profile-wiring.sh"
+    try:
+        result = subprocess.run(
+            ["bash", str(runtime_profile_test)],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+    except OSError as error:
+        PROBLEMS.append(f"cannot execute scripts/test-runtime-profile-wiring.sh: {error}")
+    else:
+        if result.returncode != 0:
+            PROBLEMS.append(
+                "scripts/test-runtime-profile-wiring.sh failed: "
+                + result.stdout.strip()
+            )
 
 
 def verify_development_documents() -> None:
@@ -203,11 +223,17 @@ def verify_development_documents() -> None:
 
 def verify_gates_and_plan() -> None:
     require_text(
+        "scripts/check-repository-integrity.py",
+        '"commit_sha": commit_sha',
+        '"tree_sha": tree_sha',
+    )
+    require_text(
         ".github/workflows/rust-service-gate.yml",
         "scripts/check-p0-wiring.py",
         "scripts/check-development-docs.py",
         "scripts/check-repository-integrity.py",
         "scripts/check-hepta-postgres-integration.sh",
+        "scripts/test-runtime-profile-wiring.sh",
         "repository-integrity:",
         "hepta-postgres-integration:",
         "cargo fmt --all --check",
@@ -218,6 +244,9 @@ def verify_gates_and_plan() -> None:
         ".github/workflows/p0-migration-gate.yml",
         "scripts/check-invocation-ledger-terminal-postgres.sh",
         "scripts/check-ledger-operation-identity-postgres.sh",
+        "scripts/check-trnm-economy-settlement-contract.py",
+        "scripts/test-trnm-economy-settlement-status-negative.py",
+        "scripts/test-runtime-profile-wiring.sh",
         SHARED_TRIGGER,
     )
     require_text(
@@ -243,6 +272,9 @@ def verify_gates_and_plan() -> None:
         "scripts/check-development-docs.py",
         "scripts/check-repository-integrity.py",
         "scripts/check-hepta-postgres-integration.sh --mode recovery-only",
+        "scripts/check-trnm-economy-settlement-contract.py",
+        "scripts/test-trnm-economy-settlement-status-negative.py",
+        "scripts/test-runtime-profile-wiring.sh",
         SHARED_TRIGGER,
     )
     require_text(

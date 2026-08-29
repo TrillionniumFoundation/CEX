@@ -8,21 +8,25 @@
 
 ## Purpose
 
-Execution needs to settle an Invocation reservation without reading or converting the legacy
-`StoredInvocationRequest.reserve_amount: f64`. The adapter loads the exact consume/refund
-request from the durable Invocation Ledger contract introduced by migration 0066.
+Execution settles an Invocation reservation without reading or converting the legacy
+`reserve_amount: f64`. The adapter loads the exact consume/refund request from the durable
+Invocation Ledger contract introduced by migration 0066. Terminal API transitions now leave the
+legacy side-effect path disabled and rely on the 0074 database trigger to enqueue a durable v2
+command; the settlement worker invokes this adapter only after its claim transaction commits.
 
 ## Modes
 
 `CEX_EXECUTION_LEDGER_MODE` supports:
 
-- `legacy_v1` — default and rollback mode; return a legacy decision without querying v2;
-- `dual` — use the exact contract when present, otherwise explicitly return a legacy decision;
-- `require_v2` — reject a missing exact contract.
+- `legacy_v1` — retained as a compatibility parser value, but the durable worker rejects it at
+  startup and no API terminal path calls Ledger v1;
+- `dual` — use the exact contract when present and fail closed for a missing contract;
+- `require_v2` — reject a missing exact contract (the production-like default).
 
-The module is exported for compilation and tests but is not yet called by api.rs. This is
-intentional: current provider and Ledger network calls still execute while a database
-transaction is open.
+The module is exported for compilation and tests and is called by the durable settlement worker;
+it is **not yet called by api.rs** because the API owns only the short status transaction. This is
+intentional: the old API-side provider/Ledger network path has been removed, and provider-backed
+requests must enter through `provider_dispatch` before the settlement worker is eligible.
 
 ## Flow
 
@@ -64,8 +68,8 @@ persist verified receipt or unknown outcome
 advance Execution in a short transaction
 ```
 
-Until this exists, wiring the adapter into the current monolithic `start/process` path would
-repeat the architecture defect the P0 plan is intended to remove.
+The repository implementation now follows this sequence. Production activation still requires the
+hosted exact-SHA gates and the independent external controls listed in the v12 plan.
 
 ## Required next evidence
 
@@ -76,4 +80,5 @@ repeat the architecture defect the P0 plan is intended to remove.
 - Execution restart after remote success/local receipt failure;
 - concurrent settlement workers;
 - durable `reconcile_required` operator surface;
-- transaction separation and crash injection.
+- transaction separation and crash injection;
+- hosted exact-SHA worker evidence and production-like credential/lease review.

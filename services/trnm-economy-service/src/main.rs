@@ -27,7 +27,7 @@ async fn main() -> Result<(), String> {
     }
     if !repository.schema_ready().await {
         return Err(
-            "TRNM economy schema is missing; apply migrations/0010_trnm_economy_settlement_v1.sql"
+            "TRNM economy schema is missing; apply services/trnm-economy-service/migrations/settlement_v1.sql (after the numbered CEX migration chain)"
                 .to_string(),
         );
     }

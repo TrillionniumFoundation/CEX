@@ -3,7 +3,7 @@ use axum::{
     http::{Request, StatusCode},
     Router,
 };
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use base64::engine::general_purpose::STANDARD as BASE64;
 use chrono::Utc;
 use ed25519_dalek::{Signer, SigningKey};
 use serde_json::{json, Value};

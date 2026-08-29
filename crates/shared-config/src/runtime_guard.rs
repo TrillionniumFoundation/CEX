@@ -112,11 +112,15 @@ impl RuntimeProfile {
             "dev" | "development" => Ok(Self::Dev),
             "beta" => Ok(Self::Beta),
             "staging" | "stage" => Ok(Self::Staging),
-            "production" | "prod" => Ok(Self::Production),
+            // The native TRNM economy launcher uses a lane-specific profile
+            // name so the runtime manager can select the ledger + consumer
+            // topology.  It still has to receive the same production-like
+            // startup posture as the canonical production profile.
+            "production" | "prod" | "trnm-economy" | "trnm_economy" => Ok(Self::Production),
             other => Err(StartupError::new(
                 "invalid_runtime_profile",
                 format!(
-                    "unsupported runtime profile '{other}'; expected test, local, dev, beta, staging, or production"
+                    "unsupported runtime profile '{other}'; expected test, local, dev, beta, staging, production, or trnm-economy"
                 ),
             )),
         }
@@ -492,6 +496,10 @@ mod tests {
         assert_eq!(
             RuntimeProfile::parse("stage").unwrap(),
             RuntimeProfile::Staging
+        );
+        assert_eq!(
+            RuntimeProfile::parse("trnm-economy").unwrap(),
+            RuntimeProfile::Production
         );
     }
 

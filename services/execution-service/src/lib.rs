@@ -1,6 +1,3 @@
-#[path = "../../../crates/shared-config/src/service_auth.rs"]
-mod service_auth;
-
 pub mod api;
 pub mod dispatch_policy;
 pub mod ledger_settlement;
@@ -15,6 +12,7 @@ use axum::{
     Router,
 };
 use service_auth::ServiceAuthConfig;
+pub(crate) use shared_config::service_auth;
 use state::AppState;
 use std::sync::Arc;
 

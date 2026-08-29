@@ -1,0 +1,35 @@
+# Keep source and evidence bytes identical on every checkout.  The Hepta lint
+# ownership gate hashes these files as Git blobs, so Windows CRLF conversion
+# must never change the worktree bytes used by the checker.
+* text=auto
+
+# Rust and repository source/configuration files are LF-only.
+*.rs text eol=lf
+*.py text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.sql text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
+*.bash text eol=lf
+*.zsh text eol=lf
+*.ps1 text eol=lf
+*.toml text eol=lf
+*.conf text eol=lf
+*.ini text eol=lf
+*.env.example text eol=lf
+
+# Binary artifacts must remain byte-for-byte unchanged.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.tar binary
+*.woff binary
+*.woff2 binary

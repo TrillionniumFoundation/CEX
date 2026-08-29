@@ -78,6 +78,29 @@ def require_file(path: str) -> str:
     return full.read_text(encoding="utf-8")
 
 
+def git_identity() -> tuple[str | None, str | None]:
+    """Return the checked-out commit/tree used by this hygiene record.
+
+    The release collector consumes this JSON as local evidence.  Stamping the
+    identity here means the packet cannot silently fall back to an unbound
+    ``unknown`` record when the checker is run in the hosted checkout.
+    """
+
+    values: list[str | None] = []
+    for revision in ("HEAD", "HEAD^{tree}"):
+        try:
+            value = subprocess.run(
+                ["git", "-C", str(ROOT), "rev-parse", revision],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        except (OSError, subprocess.CalledProcessError):
+            value = None
+        values.append(value or None)
+    return values[0], values[1]
+
+
 for pattern in (
     ".github/workflows/closure-*.yml",
     ".github/workflows/closure-*.yaml",
@@ -144,6 +167,17 @@ for workflow_path in (*AUTHORITATIVE_WORKFLOWS, RELEASE_WORKFLOW):
             f"{workflow_path} contains an unpinned third-party action: {match.group(0).strip()}"
         )
 
+release_content = require_file(RELEASE_WORKFLOW)
+if release_content:
+    if "GITHUB_REF_TYPE" not in release_content:
+        PROBLEMS.append(
+            f"{RELEASE_WORKFLOW} must reject tag refs before collecting evidence"
+        )
+    if "release evidence requires a branch ref" not in release_content:
+        PROBLEMS.append(
+            f"{RELEASE_WORKFLOW} lacks the explicit branch-ref fail-closed guard"
+        )
+
 numbered: list[tuple[int, str]] = []
 for path in (ROOT / "migrations").glob("*.sql"):
     match = MIGRATION_RE.fullmatch(path.name)
@@ -184,6 +218,10 @@ documentation = subprocess.run(
 if documentation.returncode != 0:
     PROBLEMS.append("development-document contract failed: " + documentation.stdout.strip())
 
+commit_sha, tree_sha = git_identity()
+if commit_sha is None or tree_sha is None:
+    PROBLEMS.append("cannot resolve exact git commit/tree identity")
+
 result = {
     "status": "failed" if PROBLEMS else "ok",
     "plan": Path(ACTIVE_PLAN).name,
@@ -191,6 +229,8 @@ result = {
     "authoritative_workflows": list(AUTHORITATIVE_WORKFLOWS),
     "release_workflow": RELEASE_WORKFLOW,
     "shared_trigger": TRIGGER_PATH,
+    "commit_sha": commit_sha,
+    "tree_sha": tree_sha,
     "migration_head": numbered[-1][1] if numbered else None,
     "documentation_contract": "ok" if documentation.returncode == 0 else "failed",
     "problems": PROBLEMS,

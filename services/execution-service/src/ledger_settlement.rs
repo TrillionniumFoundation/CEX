@@ -504,10 +504,7 @@ mod tests {
     #[test]
     fn verified_receipt_accepts_exact_replay_and_rejects_operation_drift() {
         let request = request();
-        assert_eq!(
-            validate_success_receipt(&request, &receipt(&request)).unwrap(),
-            true
-        );
+        assert!(validate_success_receipt(&request, &receipt(&request)).unwrap());
 
         let mut drifted = receipt(&request);
         drifted["effect"]["operation_id"] = Value::String(Uuid::new_v4().to_string());

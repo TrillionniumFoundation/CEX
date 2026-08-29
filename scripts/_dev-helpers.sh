@@ -32,6 +32,33 @@ cex_load_env() {
   done < "$env_file"
 }
 
+# Resolve the runtime-manager orchestration lane into the canonical profile
+# consumed by service startup guards.  `full` is a launcher mode, not a
+# RuntimeProfile value; forwarding it to a service makes every child reject
+# startup.  The native TRNM lane is production-like even when the repository's
+# .env file was written for local development, so force APP_ENV to the same
+# production posture and avoid a profile conflict.
+cex_select_runtime_profile() {
+  local requested="${CEX_RUNTIME_PROFILE:-full}"
+  case "$requested" in
+    trnm_economy)
+      requested="trnm-economy"
+      ;;
+  esac
+
+  export CEX_RUNTIME_LANE="$requested"
+  if [[ "$requested" == "trnm-economy" ]]; then
+    export APP_ENV=production
+    export CEX_RUNTIME_PROFILE=trnm-economy
+  elif [[ "$requested" == "full" ]]; then
+    # Full is the default service topology.  Let an explicit APP_ENV (or the
+    # optional service-profile override) select the actual startup posture.
+    export CEX_RUNTIME_PROFILE="${CEX_RUNTIME_SERVICE_PROFILE:-${APP_ENV:-dev}}"
+  else
+    export CEX_RUNTIME_PROFILE="$requested"
+  fi
+}
+
 cex_require_cmd() {
   local cmd
   for cmd in "$@"; do

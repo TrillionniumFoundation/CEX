@@ -8,15 +8,15 @@ on:
       - 'Cargo.lock'
       - 'deny.toml'
       - 'docker-compose.yml'
+      - 'crates/shared-tracing/**'
       - 'services/ledger-service/**'
       - 'services/consumer-entry-api/**'
+      - 'services/trnm-economy-service/migrations/settlement_v1.sql'
       - 'vendor/trnm-economy-protocol/**'
-      - 'migrations/0027*'
-      - 'migrations/0028*'
-      - 'migrations/0029*'
-      - 'migrations/0030*'
+      - 'migrations/**'
       - 'deploy/systemd/cex-trnm-*'
       - 'scripts/check-trnm-*'
+      - 'scripts/check-consumer-exact-money.py'
       - 'scripts/postgres-archive-wal.sh'
       - 'docs/release-evidence/p0-candidate-trigger.json'
       - '.github/workflows/trnm-economy-ci.yml'
@@ -26,15 +26,15 @@ on:
       - 'Cargo.lock'
       - 'deny.toml'
       - 'docker-compose.yml'
+      - 'crates/shared-tracing/**'
       - 'services/ledger-service/**'
       - 'services/consumer-entry-api/**'
+      - 'services/trnm-economy-service/migrations/settlement_v1.sql'
       - 'vendor/trnm-economy-protocol/**'
-      - 'migrations/0027*'
-      - 'migrations/0028*'
-      - 'migrations/0029*'
-      - 'migrations/0030*'
+      - 'migrations/**'
       - 'deploy/systemd/cex-trnm-*'
       - 'scripts/check-trnm-*'
+      - 'scripts/check-consumer-exact-money.py'
       - 'scripts/postgres-archive-wal.sh'
       - 'docs/release-evidence/p0-candidate-trigger.json'
       - '.github/workflows/trnm-economy-ci.yml'
@@ -73,6 +73,11 @@ jobs:
 
       - name: Format
         run: cargo fmt --all -- --check
+
+      - name: Consumer exact-money static contract
+        run: |
+          python3 scripts/check-consumer-exact-money.py
+          bash scripts/test-runtime-profile-wiring.sh
 
       - name: Test
         run: cargo test --workspace --all-targets --locked

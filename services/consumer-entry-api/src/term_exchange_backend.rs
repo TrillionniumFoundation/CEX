@@ -11,6 +11,7 @@ use uuid::Uuid;
 pub(super) const TERM_EXCHANGE_BACKEND_ADAPTER_CONTRACT_VERSION: &str =
     "trillionnium_term_exchange_backend_adapter_v2";
 const TERM_EXCHANGE_EXACT_CURRENCY_SCALE: u8 = 6;
+const LEDGER_EFFECT_SCHEMA_V1: &str = "cex.ledger.effect.v1";
 
 #[derive(Debug, Clone)]
 pub(super) struct TermExchangeLedgerActionRequest {
@@ -29,9 +30,11 @@ pub(super) struct TermExchangeLedgerActionRequest {
     pub(super) idempotency_key: String,
     pub(super) idempotency_scope: String,
     pub(super) reference_id: Option<String>,
-    /// Compatibility/display value only. Exact settlement authority is `amount_credits`.
-    pub(super) amount: f64,
+    /// Exact whole-credit settlement authority. A value of zero is used with
+    /// `amount_validation_error` when a legacy display amount cannot be resolved exactly; the
+    /// adapter defers that failure until room/account preconditions have been evaluated.
     pub(super) amount_credits: i64,
+    pub(super) amount_validation_error: Option<String>,
     pub(super) currency: String,
     pub(super) metadata: Value,
     /// Compatibility metadata retained as evidence; never forwarded as value authority.
@@ -130,25 +133,10 @@ async fn execute_cex_ledger_action(
     state: &AppState,
     request: TermExchangeLedgerActionRequest,
 ) -> TermExchangeBackendReceipt {
-    let amount_minor = match exact_minor_from_compatibility_amount(
-        request.amount,
-        TERM_EXCHANGE_EXACT_CURRENCY_SCALE,
-    ) {
-        Ok(value) => value,
-        Err(error) => {
-            return backend_receipt(
-                request,
-                "failed_ledger",
-                None,
-                None,
-                None,
-                Some(error),
-                None,
-                json!({"amount_conversion": "rejected"}),
-            )
-        }
-    };
-    if amount_minor <= 0 {
+    // Preserve the adapter's established precondition precedence: a missing room/account is
+    // reported before a rejected legacy display amount. The request still carries no f64 value;
+    // callers put any failed compatibility resolution in `amount_validation_error`.
+    if request.amount_validation_error.is_none() && request.amount_credits <= 0 {
         let raw_status = if request.term_id.contains("purchase") {
             "skipped_zero_price"
         } else {
@@ -235,6 +223,42 @@ async fn execute_cex_ledger_action(
             )
         }
     };
+    if let Some(error) = request.amount_validation_error.clone() {
+        return backend_receipt(
+            request,
+            "failed_ledger",
+            Some(account_uuid.to_string()),
+            None,
+            None,
+            Some(error),
+            None,
+            json!({
+                "amount_authority": "amount_credits",
+                "amount_conversion": "rejected",
+            }),
+        );
+    }
+    let amount_minor = match whole_credits_to_minor_units(
+        request.amount_credits,
+        TERM_EXCHANGE_EXACT_CURRENCY_SCALE,
+    ) {
+        Ok(value) => value,
+        Err(error) => {
+            return backend_receipt(
+                request,
+                "failed_ledger",
+                Some(account_uuid.to_string()),
+                None,
+                None,
+                Some(error),
+                None,
+                json!({
+                    "amount_authority": "amount_credits",
+                    "amount_conversion": "rejected",
+                }),
+            )
+        }
+    };
     let Some(ledger_admin_token) = state.config().ledger_admin_token.clone() else {
         return backend_receipt(
             request,
@@ -303,7 +327,22 @@ async fn execute_cex_ledger_action(
             return match lookup_exact_effect(state, base_url, &ledger_admin_token, operation_id)
                 .await
             {
-                Ok(Some(value)) => exact_success_receipt(request, value, body_value, true),
+                Ok(Some(value)) => match exact_success_receipt(
+                    request.clone(),
+                    value.clone(),
+                    body_value.clone(),
+                    true,
+                ) {
+                    Ok(receipt) => receipt,
+                    Err(validation_error) => malformed_exact_response_receipt(
+                        request,
+                        account_uuid,
+                        value,
+                        body_value,
+                        validation_error,
+                        true,
+                    ),
+                },
                 Ok(None) => backend_receipt(
                     request,
                     "failed_network",
@@ -400,7 +439,22 @@ async fn execute_cex_ledger_action(
         );
     }
 
-    exact_success_receipt(request, value, body_value, false)
+    match exact_success_receipt(request.clone(), value.clone(), body_value.clone(), false) {
+        Ok(receipt) => receipt,
+        Err(validation_error) => {
+            recover_after_bad_response(
+                state,
+                request,
+                base_url,
+                &ledger_admin_token,
+                operation_id,
+                account_uuid,
+                body_value,
+                format!("exact ledger response failed contract validation: {validation_error}"),
+            )
+            .await
+        }
+    }
 }
 
 async fn recover_after_bad_response(
@@ -414,7 +468,19 @@ async fn recover_after_bad_response(
     response_error: String,
 ) -> TermExchangeBackendReceipt {
     match lookup_exact_effect(state, base_url, ledger_admin_token, operation_id).await {
-        Ok(Some(value)) => exact_success_receipt(request, value, body_value, true),
+        Ok(Some(value)) => {
+            match exact_success_receipt(request.clone(), value.clone(), body_value.clone(), true) {
+                Ok(receipt) => receipt,
+                Err(validation_error) => malformed_exact_response_receipt(
+                    request,
+                    account_id,
+                    value,
+                    body_value,
+                    validation_error,
+                    true,
+                ),
+            }
+        }
         Ok(None) => backend_receipt(
             request,
             "failed_bad_response",
@@ -481,39 +547,179 @@ async fn lookup_exact_effect(
         .map_err(|error| format!("decode effect lookup response failed: {error}"))
 }
 
+#[derive(Debug, Clone)]
+struct ExactLedgerResponseFields {
+    replayed: bool,
+    account_id: Uuid,
+    entry_id: Uuid,
+    balance_minor: i64,
+    currency_scale: u8,
+}
+
+/// Decode and authenticate the exact Ledger v2 response against the request we sent.
+///
+/// The consumer still stores a legacy floating-point display field for compatibility, but that
+/// field is derived only after every exact response invariant has been checked. A malformed or
+/// cross-account response must never be treated as a successful settlement.
+fn validate_exact_ledger_response(
+    value: &Value,
+    ledger_request: &Value,
+) -> Result<ExactLedgerResponseFields, String> {
+    let replayed = value
+        .get("replayed")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| "exact ledger response replayed must be a boolean".to_string())?;
+    let expected_account_id = required_uuid(ledger_request, "account_id")?;
+    let expected_trace_id = required_uuid(ledger_request, "trace_id")?;
+    let expected_operation_id = required_uuid(ledger_request, "operation_id")?;
+    let expected_reference_id = required_uuid(ledger_request, "reference_id")?;
+    let expected_operation_kind = required_text(ledger_request, "operation_kind")?;
+    let expected_currency_unit = required_text(ledger_request, "currency_unit")?;
+    let expected_currency_scale = required_u8(ledger_request, "currency_scale")?;
+    if expected_currency_scale > TERM_EXCHANGE_EXACT_CURRENCY_SCALE {
+        return Err(format!(
+            "request currency_scale {} exceeds exact contract maximum {}",
+            expected_currency_scale, TERM_EXCHANGE_EXACT_CURRENCY_SCALE
+        ));
+    }
+    let expected_amount_minor = required_i64(ledger_request, "amount_minor")?;
+    let expected_scope = required_text(ledger_request, "idempotency_scope")?;
+    let expected_key = required_text(ledger_request, "idempotency_key")?;
+    let expected_reference_type = required_text(ledger_request, "reference_type")?;
+
+    let account = value
+        .get("account")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "exact ledger response account object is missing".to_string())?;
+    let account_id = required_uuid_from_object(account, "account_id")?;
+    if account_id != expected_account_id {
+        return Err(format!(
+            "exact ledger response account_id {} does not match request {}",
+            account_id, expected_account_id
+        ));
+    }
+    let currency_unit = required_text_from_object(account, "currency_unit")?;
+    if currency_unit != expected_currency_unit {
+        return Err(format!(
+            "exact ledger response currency_unit {currency_unit:?} does not match request {expected_currency_unit:?}"
+        ));
+    }
+    let currency_scale = required_u8_from_object(account, "currency_scale")?;
+    if currency_scale > TERM_EXCHANGE_EXACT_CURRENCY_SCALE
+        || currency_scale != expected_currency_scale
+    {
+        return Err(format!(
+            "exact ledger response currency_scale {currency_scale} does not match request {expected_currency_scale}"
+        ));
+    }
+    let balance_minor = required_i64_from_object(account, "balance_minor")?;
+    let reserved_minor = required_i64_from_object(account, "reserved_minor")?;
+    if balance_minor < 0 || reserved_minor < 0 || reserved_minor > balance_minor {
+        return Err(
+            "exact ledger response account balances violate non-negative invariant".to_string(),
+        );
+    }
+
+    let effect = value
+        .get("effect")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "exact ledger response effect object is missing".to_string())?;
+    let entry_id = required_uuid_from_object(effect, "entry_id")?;
+    let effect_account_id = required_uuid_from_object(effect, "account_id")?;
+    if effect_account_id != expected_account_id {
+        return Err(format!(
+            "exact ledger response effect account_id {} does not match request {}",
+            effect_account_id, expected_account_id
+        ));
+    }
+    let effect_trace_id = required_uuid_from_object(effect, "trace_id")?;
+    if effect_trace_id != expected_trace_id {
+        return Err("exact ledger response effect trace_id does not match request".to_string());
+    }
+    let effect_operation_id = required_uuid_from_object(effect, "operation_id")?;
+    if effect_operation_id != expected_operation_id {
+        return Err("exact ledger response effect operation_id does not match request".to_string());
+    }
+    let effect_operation_kind = required_text_from_object(effect, "operation_kind")?;
+    if effect_operation_kind != expected_operation_kind {
+        return Err(
+            "exact ledger response effect operation_kind does not match request".to_string(),
+        );
+    }
+    let effect_scope = required_text_from_object(effect, "idempotency_scope")?;
+    if effect_scope != expected_scope {
+        return Err(
+            "exact ledger response effect idempotency_scope does not match request".to_string(),
+        );
+    }
+    let effect_key = required_text_from_object(effect, "idempotency_key")?;
+    if effect_key != expected_key {
+        return Err(
+            "exact ledger response effect idempotency_key does not match request".to_string(),
+        );
+    }
+    let effect_amount_minor = required_i64_from_object(effect, "amount_minor")?;
+    if effect_amount_minor != expected_amount_minor {
+        return Err("exact ledger response effect amount_minor does not match request".to_string());
+    }
+    let effect_scale = required_u8_from_object(effect, "currency_scale")?;
+    if effect_scale != expected_currency_scale {
+        return Err(
+            "exact ledger response effect currency_scale does not match request".to_string(),
+        );
+    }
+    let effect_reference_type = required_text_from_object(effect, "reference_type")?;
+    if effect_reference_type != expected_reference_type {
+        return Err(
+            "exact ledger response effect reference_type does not match request".to_string(),
+        );
+    }
+    let effect_reference_id = required_uuid_from_object(effect, "reference_id")?;
+    if effect_reference_id != expected_reference_id {
+        return Err("exact ledger response effect reference_id does not match request".to_string());
+    }
+    if required_text_from_object(effect, "source_service")? != "ledger-service"
+        || required_text_from_object(effect, "schema_version")? != LEDGER_EFFECT_SCHEMA_V1
+        || required_text_from_object(effect, "provenance_mode")? != "explicit"
+    {
+        return Err("exact ledger response effect provenance is not canonical".to_string());
+    }
+    let expected_direction = match expected_operation_kind.as_str() {
+        "reserve" | "consume" => "debit",
+        "refund" | "grant" => "credit",
+        other => return Err(format!("unsupported exact operation_kind {other:?}")),
+    };
+    if required_text_from_object(effect, "direction")? != expected_direction {
+        return Err("exact ledger response effect direction does not match operation".to_string());
+    }
+
+    Ok(ExactLedgerResponseFields {
+        replayed,
+        account_id,
+        entry_id,
+        balance_minor,
+        currency_scale,
+    })
+}
+
 fn exact_success_receipt(
     request: TermExchangeLedgerActionRequest,
     value: Value,
     ledger_request: Value,
     recovered_by_lookup: bool,
-) -> TermExchangeBackendReceipt {
-    let replayed = value
-        .get("replayed")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let account = value.get("account");
-    let effect = value.get("effect");
-    let scale = account
-        .and_then(|account| account.get("currency_scale"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0) as u8;
-    let balance_after = account
-        .and_then(|account| account.get("balance_minor"))
-        .and_then(value_as_i64)
-        .map(|minor| minor_to_f64(minor, scale));
+) -> Result<TermExchangeBackendReceipt, String> {
+    let fields = validate_exact_ledger_response(&value, &ledger_request)?;
     let compatibility_metadata = request.extra_ledger_body.clone();
-    backend_receipt(
+    Ok(backend_receipt(
         request,
-        if replayed { "duplicate" } else { "__success__" },
-        account
-            .and_then(|account| account.get("account_id"))
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        effect
-            .and_then(|effect| effect.get("entry_id"))
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        balance_after,
+        if fields.replayed {
+            "duplicate"
+        } else {
+            "__success__"
+        },
+        Some(fields.account_id.to_string()),
+        Some(fields.entry_id.to_string()),
+        Some(minor_to_f64(fields.balance_minor, fields.currency_scale)),
         None,
         Some(value),
         json!({
@@ -521,7 +727,115 @@ fn exact_success_receipt(
             "recovered_by_operation_lookup": recovered_by_lookup,
             "legacy_display_metadata": compatibility_metadata,
         }),
+    ))
+}
+
+fn malformed_exact_response_receipt(
+    request: TermExchangeLedgerActionRequest,
+    account_id: Uuid,
+    value: Value,
+    ledger_request: Value,
+    validation_error: String,
+    recovered_by_lookup: bool,
+) -> TermExchangeBackendReceipt {
+    backend_receipt(
+        request,
+        "failed_bad_response",
+        Some(account_id.to_string()),
+        None,
+        None,
+        Some(format!(
+            "exact ledger response failed contract validation: {validation_error}"
+        )),
+        Some(value),
+        json!({
+            "ledger_request": ledger_request,
+            "recovered_by_operation_lookup": recovered_by_lookup,
+            "response_validation": "failed",
+        }),
     )
+}
+
+fn required_uuid(value: &Value, field: &str) -> Result<Uuid, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "exact ledger request must be an object".to_string())?;
+    required_uuid_from_object(object, field)
+}
+
+fn required_uuid_from_object(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+) -> Result<Uuid, String> {
+    let raw = object
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("exact ledger response field {field} must be a UUID string"))?;
+    let parsed = Uuid::parse_str(raw)
+        .map_err(|_| format!("exact ledger response field {field} is not a UUID"))?;
+    if parsed.is_nil() {
+        return Err(format!(
+            "exact ledger response field {field} must be non-nil"
+        ));
+    }
+    Ok(parsed)
+}
+
+fn required_text(value: &Value, field: &str) -> Result<String, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "exact ledger request must be an object".to_string())?;
+    required_text_from_object(object, field)
+}
+
+fn required_text_from_object(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+) -> Result<String, String> {
+    let raw = object
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("exact ledger response field {field} must be a string"))?;
+    if raw.is_empty() {
+        return Err(format!(
+            "exact ledger response field {field} must not be empty"
+        ));
+    }
+    Ok(raw.to_string())
+}
+
+fn required_u8(value: &Value, field: &str) -> Result<u8, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "exact ledger request must be an object".to_string())?;
+    required_u8_from_object(object, field)
+}
+
+fn required_u8_from_object(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+) -> Result<u8, String> {
+    let raw = object.get(field).and_then(Value::as_u64).ok_or_else(|| {
+        format!("exact ledger response field {field} must be an unsigned integer")
+    })?;
+    u8::try_from(raw).map_err(|_| format!("exact ledger response field {field} is out of range"))
+}
+
+fn required_i64(value: &Value, field: &str) -> Result<i64, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "exact ledger request must be an object".to_string())?;
+    required_i64_from_object(object, field)
+}
+
+fn required_i64_from_object(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+) -> Result<i64, String> {
+    object
+        .get(field)
+        .and_then(value_as_i64)
+        .ok_or_else(|| format!("exact ledger response field {field} must be an integer"))
 }
 
 fn value_as_i64(value: &Value) -> Option<i64> {
@@ -531,28 +845,45 @@ fn value_as_i64(value: &Value) -> Option<i64> {
 }
 
 fn minor_to_f64(value: i64, scale: u8) -> f64 {
-    value as f64 / 10_i64.pow(u32::from(scale)) as f64
+    value as f64 / 10_f64.powi(i32::from(scale))
 }
 
-fn exact_minor_from_compatibility_amount(value: f64, scale: u8) -> Result<i64, String> {
+/// Resolve a legacy display amount to an exact whole-credit compatibility value.
+///
+/// This helper is deliberately a narrow ingress shim, not a Ledger amount conversion. The v2
+/// term protocol represents value as whole credits, so a fractional or non-finite legacy value is
+/// rejected instead of rounded/truncated. Parsing the canonical decimal text avoids a lossy
+/// float-to-integer cast; the returned integer is then the sole authority carried by the request.
+pub(super) fn whole_credits_from_compatibility_amount(value: f64) -> Result<i64, String> {
     if !value.is_finite() || value < 0.0 {
-        return Err("settlement amount must be a finite non-negative value".to_string());
+        return Err("compatibility settlement amount must be finite and non-negative".to_string());
+    }
+    if value.fract() != 0.0 {
+        return Err(
+            "fractional compatibility settlement amount requires an exact minor-unit contract"
+                .to_string(),
+        );
+    }
+    value
+        .to_string()
+        .parse::<i64>()
+        .map_err(|_| "compatibility settlement amount is outside whole-credit range".to_string())
+}
+
+/// Convert an exact whole-credit intent into the account's exact minor-unit scale.
+///
+/// This is the sole value conversion used by the term-exchange Ledger v2 caller. It performs
+/// checked integer arithmetic only; overflow and non-positive intents fail closed.
+fn whole_credits_to_minor_units(amount_credits: i64, scale: u8) -> Result<i64, String> {
+    if amount_credits < 0 {
+        return Err("settlement amount_credits must be non-negative".to_string());
     }
     let factor = 10_i64
         .checked_pow(u32::from(scale))
         .ok_or_else(|| "settlement currency scale is unsupported".to_string())?;
-    let scaled = value * factor as f64;
-    let rounded = scaled.round();
-    let tolerance = f64::EPSILON * scaled.abs().max(1.0) * 16.0;
-    if (scaled - rounded).abs() > tolerance {
-        return Err(format!(
-            "settlement amount {value} exceeds configured scale {scale}"
-        ));
-    }
-    if rounded > i64::MAX as f64 {
-        return Err("settlement amount exceeds signed minor-unit range".to_string());
-    }
-    Ok(rounded as i64)
+    amount_credits
+        .checked_mul(factor)
+        .ok_or_else(|| "settlement amount_credits exceeds signed minor-unit range".to_string())
 }
 
 fn deterministic_uuid(namespace: &str) -> Uuid {
@@ -691,8 +1022,8 @@ mod tests {
             idempotency_key: "league_reward:reward-1".to_string(),
             idempotency_scope: "league_reward".to_string(),
             reference_id: Some("task-1".to_string()),
-            amount: 42.0,
             amount_credits: 42,
+            amount_validation_error: None,
             currency: "credits".to_string(),
             metadata: json!({"source": "test"}),
             extra_ledger_body: Map::new(),
@@ -707,22 +1038,126 @@ mod tests {
     }
 
     #[test]
-    fn compatibility_amount_is_converted_to_exact_minor_units() {
-        assert_eq!(
-            exact_minor_from_compatibility_amount(4.24, 6).unwrap(),
-            4_240_000
-        );
-        assert_eq!(
-            exact_minor_from_compatibility_amount(0.000_001, 6).unwrap(),
-            1
-        );
-        assert!(exact_minor_from_compatibility_amount(0.000_000_1, 6).is_err());
-        assert!(exact_minor_from_compatibility_amount(f64::NAN, 6).is_err());
+    fn exact_whole_credit_authority_uses_checked_scale_multiplication() {
+        assert_eq!(whole_credits_to_minor_units(42, 6).unwrap(), 42_000_000);
+        assert_eq!(whole_credits_to_minor_units(0, 6).unwrap(), 0);
+        assert!(whole_credits_to_minor_units(i64::MAX, 6).is_err());
+    }
+
+    #[test]
+    fn fractional_compatibility_amount_fails_closed() {
+        assert_eq!(whole_credits_from_compatibility_amount(42.0).unwrap(), 42);
+        assert!(whole_credits_from_compatibility_amount(4.24).is_err());
+        assert!(whole_credits_from_compatibility_amount(0.000_001).is_err());
+        assert!(whole_credits_from_compatibility_amount(f64::NAN).is_err());
     }
 
     #[test]
     fn exact_operation_and_reference_ids_are_stable() {
         assert_eq!(deterministic_uuid("same"), deterministic_uuid("same"));
         assert_ne!(deterministic_uuid("same"), deterministic_uuid("other"));
+    }
+
+    fn exact_response_fixture() -> (TermExchangeLedgerActionRequest, Value, Value) {
+        let account_id = Uuid::new_v4();
+        let trace_id = Uuid::new_v4();
+        let operation_id = Uuid::new_v4();
+        let reference_id = Uuid::new_v4();
+        let entry_id = Uuid::new_v4();
+        let request = TermExchangeLedgerActionRequest {
+            term_id: "league_reward_settlement".to_string(),
+            term_version: "v1".to_string(),
+            domain: "trillionnium_league".to_string(),
+            intent_id: "intent:exact-response".to_string(),
+            intent_kind: EconomicIntentKind::ReleaseReward,
+            room_id: Some("!room:local.dev".to_string()),
+            matrix_user_id: "@alice:local.dev".to_string(),
+            account_id_override: Some(account_id.to_string()),
+            message: "test".to_string(),
+            failure_context: "test failure".to_string(),
+            ledger_action: "grant".to_string(),
+            success_status: "settled".to_string(),
+            idempotency_key: "league_reward:exact-response".to_string(),
+            idempotency_scope: "league_reward".to_string(),
+            reference_id: Some("task-exact-response".to_string()),
+            amount_credits: 42,
+            amount_validation_error: None,
+            currency: "credits".to_string(),
+            metadata: json!({}),
+            extra_ledger_body: Map::new(),
+        };
+        let ledger_request = json!({
+            "account_id": account_id,
+            "trace_id": trace_id,
+            "operation_id": operation_id,
+            "operation_kind": "grant",
+            "currency_unit": "credits",
+            "currency_scale": 6,
+            "amount_minor": "42000000",
+            "reference_type": "term_exchange",
+            "reference_id": reference_id,
+            "idempotency_scope": "league_reward",
+            "idempotency_key": "league_reward:exact-response"
+        });
+        let response = json!({
+            "replayed": false,
+            "account": {
+                "account_id": account_id,
+                "org_id": Uuid::new_v4(),
+                "currency_unit": "credits",
+                "currency_scale": 6,
+                "balance_minor": "42000000",
+                "reserved_minor": "0"
+            },
+            "effect": {
+                "entry_id": entry_id,
+                "account_id": account_id,
+                "trace_id": trace_id,
+                "operation_id": operation_id,
+                "operation_kind": "grant",
+                "idempotency_scope": "league_reward",
+                "idempotency_key": "league_reward:exact-response",
+                "direction": "credit",
+                "amount_minor": 42000000,
+                "currency_scale": 6,
+                "reference_type": "term_exchange",
+                "reference_id": reference_id,
+                "source_service": "ledger-service",
+                "schema_version": LEDGER_EFFECT_SCHEMA_V1,
+                "provenance_mode": "explicit"
+            }
+        });
+        (request, ledger_request, response)
+    }
+
+    #[test]
+    fn exact_response_is_bound_to_request_identity_and_money_contract() {
+        let (request, ledger_request, response) = exact_response_fixture();
+        let fields = validate_exact_ledger_response(&response, &ledger_request).unwrap();
+        assert!(!fields.replayed);
+        assert_eq!(fields.currency_scale, 6);
+        assert_eq!(fields.balance_minor, 42_000_000);
+        let receipt = exact_success_receipt(request, response, ledger_request, false).unwrap();
+        assert_eq!(receipt.raw_status, "settled");
+        assert!(receipt.entry_id.is_some());
+        assert_eq!(receipt.balance_after, Some(42.0));
+    }
+
+    #[test]
+    fn malformed_exact_response_fails_closed_before_display_conversion() {
+        let (request, ledger_request, mut response) = exact_response_fixture();
+        response["account"]["currency_scale"] = json!(255);
+        let error = exact_success_receipt(request, response, ledger_request, false)
+            .expect_err("unsupported response scale must not be accepted");
+        assert!(error.contains("currency_scale"));
+    }
+
+    #[test]
+    fn exact_response_rejects_cross_account_effects() {
+        let (request, ledger_request, mut response) = exact_response_fixture();
+        response["effect"]["account_id"] = json!(Uuid::new_v4());
+        let error = exact_success_receipt(request, response, ledger_request, false)
+            .expect_err("cross-account response must not be accepted");
+        assert!(error.contains("effect account_id"));
     }
 }

@@ -325,6 +325,11 @@ fn decode_record(row: PgRow) -> Result<AuditEventRecordV2, String> {
     })
 }
 
+// Axum's concrete `Response` carries a boxed body plus extensions and is
+// intentionally returned as the transport error for this small authorization
+// helper.  Keep the allowance local; changing the public handler contract to
+// a boxed `Result` would only add conversions at every call site.
+#[allow(clippy::result_large_err)]
 fn authorize_audit_read(
     state: &AppState,
     headers: &HeaderMap,

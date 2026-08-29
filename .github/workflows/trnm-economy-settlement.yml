@@ -9,25 +9,29 @@ on:
       - '.github/workflows/trnm-economy-settlement.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - 'migrations/0010_trnm_economy_settlement_v1.sql'
+      - 'migrations/**'
+      - 'crates/shared-tracing/**'
+      - 'services/trnm-economy-service/migrations/settlement_v1.sql'
       - 'services/trnm-economy-service/**'
       - 'docs/trnm-economy-settlement-receipt-lookup-v1.md'
       - 'docs/status/trnm-economy-settlement-v1.json'
       - 'scripts/check-trnm-economy-settlement-contract.py'
       - 'scripts/test-trnm-economy-settlement-status-negative.py'
+      - 'docs/release-evidence/p0-candidate-trigger.json'
   push:
-    branches:
-      - fix/cex-settlement-receipt-lookup-v1
     paths:
       - '.github/workflows/trnm-economy-settlement.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
-      - 'migrations/0010_trnm_economy_settlement_v1.sql'
+      - 'migrations/**'
+      - 'crates/shared-tracing/**'
+      - 'services/trnm-economy-service/migrations/settlement_v1.sql'
       - 'services/trnm-economy-service/**'
       - 'docs/trnm-economy-settlement-receipt-lookup-v1.md'
       - 'docs/status/trnm-economy-settlement-v1.json'
       - 'scripts/check-trnm-economy-settlement-contract.py'
       - 'scripts/test-trnm-economy-settlement-status-negative.py'
+      - 'docs/release-evidence/p0-candidate-trigger.json'
 
 permissions:
   contents: read
@@ -138,7 +142,7 @@ jobs:
           mkdir -p evidence
           cp Cargo.lock evidence/Cargo.lock
           cp target/release/trnm-economy-service evidence/trnm-economy-service
-          cp migrations/0010_trnm_economy_settlement_v1.sql evidence/0010_trnm_economy_settlement_v1.sql
+          cp services/trnm-economy-service/migrations/settlement_v1.sql evidence/settlement_v1.sql
           cp docs/status/trnm-economy-settlement-v1.json evidence/source-status.json
           python3 - <<'PY'
           import hashlib
@@ -152,7 +156,7 @@ jobs:
           files = [
               evidence / 'Cargo.lock',
               evidence / 'trnm-economy-service',
-              evidence / '0010_trnm_economy_settlement_v1.sql',
+              evidence / 'settlement_v1.sql',
               evidence / 'source-status.json',
           ]
           hashes = {
@@ -199,7 +203,7 @@ jobs:
             sha256sum \
               Cargo.lock \
               trnm-economy-service \
-              0010_trnm_economy_settlement_v1.sql \
+              settlement_v1.sql \
               source-status.json \
               manifest.json \
               | sort > SHA256SUMS

@@ -1,11 +1,12 @@
-#[path = "../../../crates/shared-config/src/runtime_guard.rs"]
-mod runtime_guard;
 #[path = "../../../crates/shared-config/src/service_client.rs"]
 mod service_client;
 
 use execution_service::{build_router, state::AppState, validate_internal_service_auth};
-use runtime_guard::ServiceKind;
-use shared_config::{load_ledger_scoped_admin_tokens, select_ledger_manage_token};
+use shared_config::{
+    load_ledger_scoped_admin_tokens,
+    runtime_guard::{self, ServiceKind},
+    select_ledger_manage_token,
+};
 use shared_tracing::init_tracing;
 
 #[tokio::main]

@@ -4,7 +4,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use base64::engine::general_purpose::STANDARD as BASE64;
 use chrono::{DateTime, TimeZone, Utc};
 use ed25519_dalek::{Signature, Verifier};
 use serde::{Deserialize, Serialize};

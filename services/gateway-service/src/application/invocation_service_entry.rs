@@ -290,7 +290,7 @@ mod tests {
     #[test]
     fn canonical_legacy_reserve_rejection_has_no_side_effects() {
         let rejected = rejected_legacy_reserve_record(record(Some(1.25)).request);
-        assert_eq!(rejected.status, ExecutionStatus::Failed);
+        assert!(matches!(rejected.status, ExecutionStatus::Failed));
         assert!(!rejected.ledger_reserved);
         assert!(!rejected.ledger_refunded);
         assert!(rejected.execution_id.is_none());
