@@ -132,7 +132,12 @@ jobs:
           """
           if text.count(old) != 1:
               raise SystemExit(f"policy truncate assertion marker count was {text.count(old)}, expected 1")
-          operator_test.write_text(text.replace(old, new, 1), encoding="utf-8")
+          text = text.replace(old, new, 1)
+          helper = "async fn authorize_replay("
+          annotated = "#[allow(clippy::too_many_arguments)]\nasync fn authorize_replay("
+          if text.count(helper) != 1:
+              raise SystemExit(f"replay helper marker count was {text.count(helper)}, expected 1")
+          operator_test.write_text(text.replace(helper, annotated, 1), encoding="utf-8")
 
           build_script = Path("world/trillionnium/crates/trnm-game-server/build.rs")
           text = build_script.read_text(encoding="utf-8")
