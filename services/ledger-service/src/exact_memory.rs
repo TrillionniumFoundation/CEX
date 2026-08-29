@@ -153,8 +153,7 @@ pub async fn open_account(
         .get(&opening_key)
         .copied();
     if let (Some(existing), Some(key_account)) = (&by_account, by_key) {
-        if key_account != request.account_id
-            || existing.get("request") != Some(&canonical_request)
+        if key_account != request.account_id || existing.get("request") != Some(&canonical_request)
         {
             return account_error(
                 StatusCode::CONFLICT,
@@ -162,11 +161,7 @@ pub async fn open_account(
                 "account opening identity collides with different immutable content",
             );
         }
-        return (
-            StatusCode::OK,
-            Json(opening_response(existing, true)),
-        )
-            .into_response();
+        return (StatusCode::OK, Json(opening_response(existing, true))).into_response();
     }
     if let Some(existing) = by_account {
         if existing.get("request") != Some(&canonical_request) {
@@ -176,11 +171,7 @@ pub async fn open_account(
                 "account exists with a different exact opening contract",
             );
         }
-        return (
-            StatusCode::OK,
-            Json(opening_response(&existing, true)),
-        )
-            .into_response();
+        return (StatusCode::OK, Json(opening_response(&existing, true))).into_response();
     }
     if let Some(key_account) = by_key {
         let Some(existing) = exact.account_openings_by_account.get(&key_account) else {
@@ -198,13 +189,14 @@ pub async fn open_account(
                 "scoped opening key collides with different immutable content",
             );
         }
-        return (
-            StatusCode::OK,
-            Json(opening_response(existing, true)),
-        )
-            .into_response();
+        return (StatusCode::OK, Json(opening_response(existing, true))).into_response();
     }
-    if state.accounts.read().await.contains_key(&request.account_id) {
+    if state
+        .accounts
+        .read()
+        .await
+        .contains_key(&request.account_id)
+    {
         return account_error(
             StatusCode::CONFLICT,
             "ledger_account_control_collision",
@@ -214,7 +206,7 @@ pub async fn open_account(
 
     let now = Utc::now().to_rfc3339();
     let record = json!({
-        "request": canonical_request,
+        "request": canonical_request.clone(),
         "account_state": {
             "account_id": request.account_id,
             "org_id": request.org_id,
@@ -282,11 +274,7 @@ pub async fn open_account(
         });
     }
 
-    (
-        StatusCode::CREATED,
-        Json(opening_response(&record, false)),
-    )
-        .into_response()
+    (StatusCode::CREATED, Json(opening_response(&record, false))).into_response()
 }
 
 pub async fn get_account(
@@ -363,7 +351,7 @@ pub async fn apply_effect(
         "trace_id": trace_id,
         "operation_id": operation_id,
         "operation_kind": request.operation_kind.as_str(),
-        "currency_unit": money.currency,
+        "currency_unit": money.currency.clone(),
         "currency_scale": money.scale,
         "amount_minor": money.minor_units.to_string(),
         "reference_type": request.reference_type.as_deref().map(str::trim),
@@ -376,13 +364,11 @@ pub async fn apply_effect(
         "provenance_mode": provenance_mode,
     });
     let scoped_key = exact_key(
-        canonical_request["account_id"].as_str().unwrap_or_default(),
+        "ledger-effect",
         canonical_request["idempotency_scope"]
             .as_str()
             .expect("scope"),
-        canonical_request["idempotency_key"]
-            .as_str()
-            .expect("key"),
+        canonical_request["idempotency_key"].as_str().expect("key"),
     );
     let request_fingerprint = sha256_json(&canonical_request);
 
@@ -457,7 +443,10 @@ pub async fn apply_effect(
         .get("currency_scale")
         .and_then(Value::as_u64)
         .expect("exact-memory scale") as u8;
-    if currency_unit != canonical_request["currency_unit"].as_str().expect("request currency")
+    if currency_unit
+        != canonical_request["currency_unit"]
+            .as_str()
+            .expect("request currency")
         || currency_scale != money.scale
     {
         return ledger_error(
@@ -477,7 +466,9 @@ pub async fn apply_effect(
     let amount_minor = money.minor_units;
     let (next_balance, next_reserved, direction) = match request.operation_kind {
         LedgerOperationKind::Reserve => {
-            let available = balance_minor.checked_sub(reserved_minor).unwrap_or(i64::MIN);
+            let available = balance_minor
+                .checked_sub(reserved_minor)
+                .unwrap_or(i64::MIN);
             if available < amount_minor {
                 return ledger_error(
                     StatusCode::UNPROCESSABLE_ENTITY,
@@ -571,11 +562,13 @@ pub async fn apply_effect(
     });
     let stored = json!({
         "request": canonical_request,
-        "response": response,
+        "response": response.clone(),
         "org_id": org_id,
         "trace_id": trace_id,
     });
-    exact.effect_operation_by_key.insert(scoped_key, operation_id);
+    exact
+        .effect_operation_by_key
+        .insert(scoped_key, operation_id);
     exact.effects_by_operation.insert(operation_id, stored);
 
     if let Some(account_mirror) = state.accounts.write().await.get_mut(&request.account_id) {
@@ -588,12 +581,7 @@ pub async fn apply_effect(
         action: request.operation_kind.as_str().to_string(),
         amount: minor_to_f64(amount_minor, currency_scale),
         reference_id: request.reference_id.map(|value| value.to_string()),
-        idempotency_key: Some(
-            request
-                .idempotency_key
-                .trim()
-                .to_string(),
-        ),
+        idempotency_key: Some(request.idempotency_key.trim().to_string()),
     });
 
     (StatusCode::CREATED, Json(response)).into_response()

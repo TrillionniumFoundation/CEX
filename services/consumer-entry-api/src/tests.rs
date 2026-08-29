@@ -15357,31 +15357,56 @@ async fn start_real_ledger_service_for_world_e2e() -> (String, String) {
     (format!("http://{addr}"), admin_token)
 }
 
+fn exact_test_uuid(namespace: &str) -> uuid::Uuid {
+    let digest = <sha2::Sha256 as sha2::Digest>::digest(namespace.as_bytes());
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    uuid::Uuid::from_bytes(bytes)
+}
+
+fn exact_test_minor(value: f64) -> i64 {
+    assert!(value.is_finite() && value >= 0.0 && value.fract() == 0.0);
+    assert!(value <= i64::MAX as f64);
+    value as i64
+}
+
 async fn create_real_ledger_account(
     http: &Client,
     ledger_base_url: &str,
     admin_token: &str,
     initial_balance: f64,
 ) -> String {
+    let account_id = uuid::Uuid::new_v4();
+    let trace_id = exact_test_uuid(&format!("consumer-entry-account:{account_id}"));
+    let opening_minor = exact_test_minor(initial_balance);
     let response = http
-        .post(format!("{}/v1/accounts", ledger_base_url))
+        .post(format!("{}/v2/accounts", ledger_base_url))
         .header("x-admin-token", admin_token)
         .json(&json!({
-            "org_id": "world-commerce-org",
+            "account_id": account_id,
+            "org_id": "00000000-0000-0000-0000-00000000ce01",
+            "trace_id": trace_id,
             "account_type": "world_player",
-            "currency_unit": "credit",
-            "initial_balance": initial_balance,
+            "currency_unit": "credits",
+            "currency_scale": 0,
+            "opening_minor": opening_minor.to_string(),
+            "idempotency_scope": "consumer_entry_e2e_account",
+            "idempotency_key": format!("open:{account_id}"),
         }))
         .send()
         .await
-        .expect("create real ledger account");
-    assert_eq!(response.status(), reqwest::StatusCode::CREATED);
-    response
+        .expect("create exact ledger account");
+    let status = response.status();
+    let value = response
         .json::<Value>()
         .await
-        .expect("decode created ledger account")["account_id"]
+        .expect("decode created exact ledger account");
+    assert_eq!(status, reqwest::StatusCode::CREATED, "{value}");
+    value["account"]["account_id"]
         .as_str()
-        .expect("created ledger account id")
+        .expect("created exact ledger account id")
         .to_string()
 }
 
@@ -15426,27 +15451,61 @@ async fn apply_real_ledger_action(
     amount: f64,
     idempotency_key: &str,
 ) -> Value {
+    let amount_minor = exact_test_minor(amount);
+    assert!(amount_minor > 0);
+    let scope = format!("consumer_entry_test_{action}");
+    let trace_id = exact_test_uuid(&format!("trace:{scope}:{idempotency_key}"));
+    let reference_id = exact_test_uuid(&format!("reference:{idempotency_key}"));
     let response = http
-        .post(format!("{}/v1/ledger/{action}", ledger_base_url))
+        .post(format!("{}/v2/ledger/effects", ledger_base_url))
         .header("x-admin-token", admin_token)
         .json(&json!({
             "account_id": account_id,
-            "amount": amount,
+            "trace_id": trace_id,
+            "operation_kind": action,
+            "currency_unit": "credits",
+            "currency_scale": 0,
+            "amount_minor": amount_minor.to_string(),
+            "reference_type": "consumer_entry_test",
+            "reference_id": reference_id,
+            "idempotency_scope": scope,
             "idempotency_key": idempotency_key,
-            "reference_id": idempotency_key,
         }))
         .send()
         .await
-        .expect("apply real ledger action");
-    assert!(
-        response.status().is_success(),
-        "ledger action {action} failed with {}",
-        response.status()
-    );
-    response
+        .expect("apply exact ledger action");
+    let status = response.status();
+    let mut value = response
         .json::<Value>()
         .await
-        .expect("decode ledger action response")
+        .expect("decode exact ledger action response");
+    assert!(
+        status.is_success(),
+        "ledger action {action} failed with {status}: {value}"
+    );
+    let effect = value.get("effect").cloned().unwrap_or(Value::Null);
+    value["entry"] = effect;
+    if let Some(account) = value.get_mut("account").and_then(Value::as_object_mut) {
+        let scale = account
+            .get("currency_scale")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u32;
+        let divisor = 10_i64.pow(scale) as f64;
+        let balance_minor = account
+            .get("balance_minor")
+            .and_then(|value| value.as_i64().or_else(|| value.as_str()?.parse().ok()))
+            .expect("exact balance_minor");
+        let reserved_minor = account
+            .get("reserved_minor")
+            .and_then(|value| value.as_i64().or_else(|| value.as_str()?.parse().ok()))
+            .expect("exact reserved_minor");
+        account.insert("balance".to_string(), json!(balance_minor as f64 / divisor));
+        account.insert(
+            "reserved".to_string(),
+            json!(reserved_minor as f64 / divisor),
+        );
+    }
+    value
 }
 
 async fn get_real_ledger_account(
@@ -15456,16 +15515,32 @@ async fn get_real_ledger_account(
     account_id: &str,
 ) -> Value {
     let response = http
-        .get(format!("{}/v1/accounts/{account_id}", ledger_base_url))
+        .get(format!("{}/v2/accounts/{account_id}", ledger_base_url))
         .header("x-admin-token", admin_token)
         .send()
         .await
-        .expect("get real ledger account");
-    assert_eq!(response.status(), reqwest::StatusCode::OK);
-    response
+        .expect("get exact ledger account");
+    let status = response.status();
+    let mut value = response
         .json::<Value>()
         .await
-        .expect("decode real ledger account")
+        .expect("decode exact ledger account");
+    assert_eq!(status, reqwest::StatusCode::OK, "{value}");
+    let scale = value["currency_scale"].as_u64().unwrap_or(0) as u32;
+    let divisor = 10_i64.pow(scale) as f64;
+    let balance_minor = value["balance_minor"]
+        .as_str()
+        .and_then(|raw| raw.parse::<i64>().ok())
+        .or_else(|| value["balance_minor"].as_i64())
+        .expect("exact balance_minor");
+    let reserved_minor = value["reserved_minor"]
+        .as_str()
+        .and_then(|raw| raw.parse::<i64>().ok())
+        .or_else(|| value["reserved_minor"].as_i64())
+        .expect("exact reserved_minor");
+    value["balance"] = json!(balance_minor as f64 / divisor);
+    value["reserved"] = json!(reserved_minor as f64 / divisor);
+    value
 }
 
 async fn send_identity_request(

@@ -47,10 +47,7 @@ pub fn build_router(state: AppState) -> Router {
             "/v2/ledger/effects/:operation_id",
             get(exact_memory::get_effect),
         )
-        .route(
-            "/v2/ledger/traces/:trace_id",
-            get(exact_memory::list_trace),
-        )
+        .route("/v2/ledger/traces/:trace_id", get(exact_memory::list_trace))
         .route(
             "/v1/trnm/economy/readiness",
             get(api::trnm_economy_readiness),

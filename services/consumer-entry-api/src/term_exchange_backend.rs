@@ -245,20 +245,14 @@ async fn execute_cex_ledger_action(
     };
     let scope = request.idempotency_scope.trim().to_string();
     let key = request.idempotency_key.trim().to_string();
-    let operation_id = deterministic_uuid(&format!(
-        "cex:term-exchange-effect:{scope}:{key}"
-    ));
-    let trace_id = deterministic_uuid(&format!(
-        "cex:term-exchange-trace:{}",
-        request.intent_id
-    ));
+    let operation_id = deterministic_uuid(&format!("cex:term-exchange-effect:{scope}:{key}"));
+    let trace_id = deterministic_uuid(&format!("cex:term-exchange-trace:{}", request.intent_id));
     let reference_source = request
         .reference_id
         .as_deref()
         .unwrap_or(request.intent_id.as_str());
-    let reference_id = deterministic_uuid(&format!(
-        "cex:term-exchange-reference:{reference_source}"
-    ));
+    let reference_id =
+        deterministic_uuid(&format!("cex:term-exchange-reference:{reference_source}"));
     let currency = request.currency.trim().to_ascii_lowercase();
     let body_value = json!({
         "account_id": account_uuid,
@@ -287,20 +281,10 @@ async fn execute_cex_ledger_action(
     let response = match response {
         Ok(response) => response,
         Err(error) => {
-            return match lookup_exact_effect(
-                state,
-                base_url,
-                &ledger_admin_token,
-                operation_id,
-            )
-            .await
+            return match lookup_exact_effect(state, base_url, &ledger_admin_token, operation_id)
+                .await
             {
-                Ok(Some(value)) => exact_success_receipt(
-                    request,
-                    value,
-                    body_value,
-                    true,
-                ),
+                Ok(Some(value)) => exact_success_receipt(request, value, body_value, true),
                 Ok(None) => backend_receipt(
                     request,
                     "failed_network",
@@ -432,7 +416,9 @@ async fn recover_after_bad_response(
             Some(account_id.to_string()),
             None,
             None,
-            Some(format!("{response_error}; exact lookup failed: {lookup_error}")),
+            Some(format!(
+                "{response_error}; exact lookup failed: {lookup_error}"
+            )),
             None,
             json!({
                 "ledger_request": body_value,
@@ -466,7 +452,10 @@ async fn lookup_exact_effect(
         .await
         .map_err(|error| format!("read effect lookup response failed: {error}"))?;
     if !status.is_success() {
-        return Err(format!("effect lookup returned {}: {text}", status.as_u16()));
+        return Err(format!(
+            "effect lookup returned {}: {text}",
+            status.as_u16()
+        ));
     }
     serde_json::from_str(&text)
         .map(Some)
