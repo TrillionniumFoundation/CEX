@@ -14,11 +14,11 @@ jobs:
         with:
           ref: feature/settlement-all-blockers-closure-v1
           fetch-depth: 0
-      - run: python3 scripts/patch-0082-provider-view.py
+      - run: python3 scripts/patch-p0-migration-account-fixture.py
       - run: git diff --check
       - run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add migrations/0082_close_provider_unknown_outcome_reconciliation.sql
-          git commit -m "fix(migrations): preserve provider status view order"
+          git add scripts/check-p0-migrations-postgres.sh
+          git commit -m "fix(ci): use exact account opening in migration fixture"
           git push origin HEAD:feature/settlement-all-blockers-closure-v1
