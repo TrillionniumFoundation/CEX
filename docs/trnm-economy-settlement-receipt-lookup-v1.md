@@ -187,6 +187,22 @@ Candidate online battle rewards require:
 Invalid signatures, retired keys, wrong accounts, wrong currencies, expired
 entitlements and policy-limit violations produce no ledger mutation.
 
+### Exact Ledger v2 authority
+
+`release_reward` does not update `accounts.balance` or insert a legacy
+`ledger_entries` row itself. After the account and reward-budget locks are
+held, the repository invokes `public.cex_apply_ledger_effect_v1` with an
+explicit `grant`, integer `amount_minor`, account `currency_scale`, stable
+trace/operation/reference UUIDs, scoped idempotency identity, source service
+and authority principal. The database function owns the exact balance update,
+append-only ledger provenance, replay/collision checks and audit hooks.
+
+The complete numbered CEX migration chain (through `0084`) must be applied
+before the service-owned `settlement_v1.sql` bootstrap. The latter owns only
+TRNM receipt and reward-budget tables; it is not a substitute for the exact
+Ledger v2 authority. Readiness fails closed when the Ledger v2 function or its
+exact money/provenance columns are absent.
+
 ## Stable error semantics
 
 All errors use `trnm_cex_settlement_error_v1` and include stable `code` and

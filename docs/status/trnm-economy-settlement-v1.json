@@ -25,6 +25,8 @@
     "exact_duplicate_reuses_the_durable_receipt",
     "mismatched_hash_returns_immutable_conflict",
     "release_reward_ledger_and_receipt_commit_atomically",
+    "release_reward_uses_exact_ledger_v2_grant_with_explicit_provenance",
+    "settlement_owner_tests_apply_numbered_chain_before_service_bootstrap",
     "per_event_and_daily_reward_caps",
     "active_ed25519_entitlement_key_verification",
     "game_authority_audience_binding",

@@ -60,12 +60,38 @@ impl SettlementRepository {
     }
 
     pub async fn schema_ready(&self) -> bool {
-        let result = sqlx::query_scalar::<_, Option<String>>(
-            "select to_regclass('public.trnm_economy_settlement_receipts_v1')::text",
+        let result = sqlx::query_scalar::<_, bool>(
+            "select
+                pg_catalog.to_regclass('public.trnm_economy_settlement_receipts_v1') is not null
+                and pg_catalog.to_regclass('public.trnm_economy_reward_budget_v1') is not null
+                and pg_catalog.to_regprocedure(
+                    'public.cex_apply_ledger_effect_v1(uuid,uuid,uuid,text,bigint,smallint,text,uuid,text,text,text,text,text)'
+                ) is not null
+                and exists (
+                    select 1
+                      from pg_catalog.pg_attribute
+                     where attrelid = pg_catalog.to_regclass('public.accounts')
+                       and attname in ('currency_scale', 'balance_minor', 'reserved_minor')
+                       and not attisdropped
+                     having count(*) = 3
+                )
+                and exists (
+                    select 1
+                      from pg_catalog.pg_attribute
+                     where attrelid = pg_catalog.to_regclass('public.ledger_entries')
+                       and attname in (
+                           'currency_scale', 'amount_minor', 'trace_id',
+                           'operation_id', 'operation_kind', 'idempotency_scope',
+                           'source_service', 'source_principal', 'schema_version',
+                           'provenance_mode', 'request_fingerprint'
+                       )
+                       and not attisdropped
+                     having count(*) = 11
+                )",
         )
         .fetch_one(&self.pool)
         .await;
-        matches!(result, Ok(Some(_)))
+        matches!(result, Ok(true))
     }
 
     pub async fn postgres_ready(&self) -> bool {
@@ -137,7 +163,9 @@ impl SettlementRepository {
                     account_id,
                     amount_credits,
                     budget_day,
-                    &intent.intent_id,
+                    intent,
+                    intent_hash,
+                    authority_id,
                 )
                 .await?;
                 (
@@ -306,13 +334,23 @@ async fn apply_release_reward(
     account_id: Uuid,
     amount_credits: i64,
     budget_day: i32,
-    intent_id: &str,
+    intent: &EconomicIntent,
+    intent_hash: &str,
+    authority_id: &str,
 ) -> Result<Uuid, RepositoryError> {
+    if amount_credits <= 0 {
+        return Err(RepositoryError::Database(
+            "reward amount must be positive".to_string(),
+        ));
+    }
+    // Read policy/scale before touching the budget.  The exact Ledger v2
+    // function below acquires the authoritative account row lock after its
+    // operation/idempotency locks; taking an account lock here would invert
+    // that order and permit a replay deadlock with another Ledger caller.
     let account = sqlx::query(
-        "select status, currency_unit
+        "select status, currency_unit, currency_scale
            from public.accounts
-          where account_id = $1
-          for update",
+          where account_id = $1",
     )
     .bind(account_id)
     .fetch_optional(&mut **transaction)
@@ -331,6 +369,14 @@ async fn apply_release_reward(
     }
     if currency != "wallet_credits" {
         return Err(RepositoryError::AccountCurrencyMismatch);
+    }
+    let currency_scale = account
+        .try_get::<i16, _>("currency_scale")
+        .map_err(|error| RepositoryError::Database(error.to_string()))?;
+    if !(0..=6).contains(&currency_scale) {
+        return Err(RepositoryError::Database(format!(
+            "wallet account has unsupported currency_scale {currency_scale}"
+        )));
     }
 
     sqlx::query(
@@ -374,37 +420,55 @@ async fn apply_release_reward(
     .await
     .map_err(database_error)?;
 
-    sqlx::query(
-        "update public.accounts
-            set balance = balance + $2::numeric
-          where account_id = $1",
+    // All value mutation is delegated to the exact Ledger v2 command.  The
+    // function owns the account lock, integer-unit arithmetic, immutable
+    // operation identity and append-only ledger row.  Keeping this call in
+    // the same transaction as the reward budget and receipt prevents a
+    // response-loss retry from creating a second effect.
+    let scale_factor = 10_i64
+        .checked_pow(currency_scale as u32)
+        .ok_or_else(|| RepositoryError::Database("currency scale overflow".to_string()))?;
+    let amount_minor = amount_credits.checked_mul(scale_factor).ok_or_else(|| {
+        RepositoryError::Database("reward amount exceeds minor-unit range".to_string())
+    })?;
+    let trace_id = deterministic_uuid(&format!("trnm-economy-trace:{intent_hash}"));
+    let operation_id = deterministic_uuid(&format!("trnm-economy-operation:{intent_hash}"));
+    let reference_id = deterministic_uuid(&format!("trnm-economy-reference:{intent_hash}"));
+
+    sqlx::query_scalar::<_, Uuid>(
+        "select (
+            public.cex_apply_ledger_effect_v1(
+                $1, $2, $3, 'grant', $4, $5,
+                'trnm_economy_intent', $6, $7, $8,
+                'trnm-economy-service', $9, 'explicit'
+            ) #>> '{effect,entry_id}'
+         )::uuid",
     )
     .bind(account_id)
-    .bind(amount_credits)
-    .execute(&mut **transaction)
+    .bind(trace_id)
+    .bind(operation_id)
+    .bind(amount_minor)
+    .bind(currency_scale)
+    .bind(reference_id)
+    .bind(&intent.idempotency_key.scope)
+    .bind(&intent.idempotency_key.key)
+    .bind(authority_id)
+    .fetch_one(&mut **transaction)
     .await
-    .map_err(database_error)?;
+    .map_err(database_error)
+}
 
-    let ledger_entry_id = Uuid::new_v4();
-    let idempotency_key = format!("trnm-economy-intent:{intent_id}");
-    sqlx::query(
-        "insert into public.ledger_entries (
-            entry_id, account_id, direction, amount, reason,
-            reference_type, reference_id, idempotency_key
-         ) values (
-            $1, $2, 'credit', $3::numeric, 'release_reward',
-            'trnm_economy_intent', null, $4
-         )",
-    )
-    .bind(ledger_entry_id)
-    .bind(account_id)
-    .bind(amount_credits)
-    .bind(idempotency_key)
-    .execute(&mut **transaction)
-    .await
-    .map_err(database_error)?;
-
-    Ok(ledger_entry_id)
+/// Match the database `cex_deterministic_uuid_v1` shaping exactly.  Stable
+/// operation/trace/reference IDs are derived from the immutable intent hash,
+/// so retries can only replay the same Ledger v2 effect.
+fn deterministic_uuid(material: &str) -> Uuid {
+    let digest = Sha256::digest(material.as_bytes());
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    // PostgreSQL's helper overlays hexadecimal positions 13 and 17 with 4/8.
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x0f) | 0x80;
+    Uuid::from_bytes(bytes)
 }
 
 fn database_error(error: sqlx::Error) -> RepositoryError {

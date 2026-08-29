@@ -262,10 +262,33 @@ fn validate_intent(
     }
 }
 
+fn valid_ledger_idempotency_scope(value: &str) -> bool {
+    let bytes = value.trim().as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 160
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes[1..]
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+}
+
+fn valid_ledger_idempotency_key(value: &str) -> bool {
+    let trimmed = value.trim();
+    (1..=256).contains(&trimmed.len()) && trimmed.chars().all(|character| !character.is_control())
+}
+
 fn validate_release_reward(
     intent: &EconomicIntent,
     issuer_keys: &IssuerKeyRegistry,
 ) -> Result<SettlementPlan, ApiError> {
+    if !valid_ledger_idempotency_scope(&intent.idempotency_key.scope)
+        || !valid_ledger_idempotency_key(&intent.idempotency_key.key)
+    {
+        return Err(ApiError::unprocessable(
+            "invalid_reward_idempotency",
+            "release_reward idempotency identity violates the exact Ledger v2 contract",
+        ));
+    }
     let amount = intent.amount_credits.ok_or_else(|| {
         ApiError::unprocessable("missing_reward_amount", "reward amount is required")
     })?;
@@ -524,7 +547,9 @@ impl IntoResponse for ApiError {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_identifier;
+    use super::{
+        valid_ledger_idempotency_key, valid_ledger_idempotency_scope, validate_identifier,
+    };
 
     #[test]
     fn identifiers_are_bounded_ascii() {
@@ -532,5 +557,17 @@ mod tests {
         assert!(validate_identifier("", "intent_id").is_err());
         assert!(validate_identifier("contains space", "intent_id").is_err());
         assert!(validate_identifier(&"a".repeat(257), "intent_id").is_err());
+    }
+
+    #[test]
+    fn ledger_idempotency_scope_matches_exact_v2_contract() {
+        assert!(valid_ledger_idempotency_scope("campaign:account-1"));
+        assert!(valid_ledger_idempotency_scope("a"));
+        assert!(!valid_ledger_idempotency_scope(":leading-punctuation"));
+        assert!(!valid_ledger_idempotency_scope(&"a".repeat(161)));
+        assert!(!valid_ledger_idempotency_scope("scope with spaces"));
+        assert!(valid_ledger_idempotency_key("reward:one"));
+        assert!(!valid_ledger_idempotency_key("reward\nline"));
+        assert!(!valid_ledger_idempotency_key(&"a".repeat(257)));
     }
 }

@@ -9,6 +9,10 @@ use ed25519_dalek::{Signer, SigningKey};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, Executor, PgPool, Row};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 use tower::util::ServiceExt;
 use trnm_economy_service::{
     build_router,
@@ -23,9 +27,6 @@ use trnm_economy_service::{
 };
 use uuid::Uuid;
 
-const CORE_MIGRATION: &str = include_str!("../../../migrations/0001_init_core_tables.sql");
-const SUMMARY_MIGRATION: &str =
-    include_str!("../../../migrations/0002_add_account_summary_columns.sql");
 const SETTLEMENT_MIGRATION: &str = include_str!("../migrations/settlement_v1.sql");
 const AUTHORITY_TOKEN: &str = "world-authority-token-for-contract-tests";
 const ORG_ID: &str = "00000000-0000-0000-0000-00000000ce01";
@@ -45,15 +46,59 @@ async fn reset_schema(pool: &PgPool) {
     pool.execute("drop schema if exists public cascade; create schema public")
         .await
         .expect("reset public schema");
-    pool.execute(CORE_MIGRATION)
-        .await
-        .expect("apply core CEX schema");
-    pool.execute(SUMMARY_MIGRATION)
-        .await
-        .expect("apply account summary schema");
+
+    // Exercise the same authority surface as an integrated CEX deployment:
+    // every numbered migration is applied in numeric order before the
+    // service-owned settlement bootstrap.  Keeping discovery runtime-based
+    // means adding a new migration cannot silently leave this owner suite on
+    // an obsolete schema while still working in standalone PostgreSQL CI.
+    let migration_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../migrations");
+    let mut migrations: Vec<PathBuf> = fs::read_dir(&migration_dir)
+        .expect("read numbered CEX migration directory")
+        .map(|entry| entry.expect("read migration directory entry").path())
+        .filter(|path| {
+            path.extension().and_then(|value| value.to_str()) == Some("sql")
+                && path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|name| {
+                        name.len() >= 5 && name.as_bytes()[..4].iter().all(u8::is_ascii_digit)
+                    })
+        })
+        .collect();
+    migrations.sort_by_key(|path| {
+        path.file_name()
+            .and_then(|value| value.to_str())
+            .and_then(|name| name.get(..4))
+            .and_then(|number| number.parse::<u16>().ok())
+            .expect("numbered migration filename")
+    });
+    assert!(
+        !migrations.is_empty(),
+        "numbered CEX migration chain is empty"
+    );
+    for path in migrations {
+        let migration = fs::read_to_string(&path).expect("read numbered CEX migration");
+        pool.execute(migration.as_str())
+            .await
+            .unwrap_or_else(|error| panic!("apply {}: {error}", path.display()));
+    }
     pool.execute(SETTLEMENT_MIGRATION)
         .await
         .expect("apply settlement schema");
+
+    let exact_ready = sqlx::query_scalar::<_, bool>(
+        "select to_regprocedure(
+            'public.cex_apply_ledger_effect_v1(uuid,uuid,uuid,text,bigint,smallint,text,uuid,text,text,text,text,text)'
+         ) is not null",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("verify exact Ledger v2 function");
+    assert!(
+        exact_ready,
+        "integrated CEX migration chain must expose Ledger v2"
+    );
     sqlx::query(
         "insert into public.organizations (org_id, name)
          values ($1::uuid, 'TRNM settlement tests')",
@@ -281,6 +326,31 @@ async fn wallet_balance_and_counts(pool: &PgPool, account_id: Uuid) -> (i64, i64
     )
 }
 
+async fn wallet_effect_provenance(
+    pool: &PgPool,
+    account_id: Uuid,
+) -> (i64, i16, String, String, String) {
+    let row = sqlx::query(
+        "select amount_minor, currency_scale, operation_kind,
+                provenance_mode, source_service
+           from public.ledger_entries
+          where account_id = $1
+          order by created_at asc, entry_id asc
+          limit 1",
+    )
+    .bind(account_id)
+    .fetch_one(pool)
+    .await
+    .expect("load exact Ledger v2 reward effect");
+    (
+        row.get("amount_minor"),
+        row.get("currency_scale"),
+        row.get("operation_kind"),
+        row.get("provenance_mode"),
+        row.get("source_service"),
+    )
+}
+
 #[tokio::test]
 async fn durable_receipt_lookup_owner_contract_matrix() {
     let Some(database_url) = require_database_url() else {
@@ -360,6 +430,16 @@ async fn durable_receipt_lookup_owner_contract_matrix() {
     assert_eq!(
         wallet_balance_and_counts(&pool, account_id).await,
         (25, 1, 1)
+    );
+    assert_eq!(
+        wallet_effect_provenance(&pool, account_id).await,
+        (
+            25_000_000,
+            6,
+            "grant".to_string(),
+            "explicit".to_string(),
+            "trnm-economy-service".to_string(),
+        )
     );
 
     let mut conflict = signed_reward_intent(&signing_key, account_id, "reward-response-loss", 30);

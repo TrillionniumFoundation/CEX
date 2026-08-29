@@ -1,6 +1,10 @@
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, Executor, PgPool, Row};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 use trnm_economy_service::{
     contract::{
         serialized_intent_hash, stable_receipt_id, ActorRef, EconomicIntent, EconomicIntentKind,
@@ -10,9 +14,6 @@ use trnm_economy_service::{
     SettlementRepository,
 };
 
-const CORE_MIGRATION: &str = include_str!("../../../migrations/0001_init_core_tables.sql");
-const SUMMARY_MIGRATION: &str =
-    include_str!("../../../migrations/0002_add_account_summary_columns.sql");
 const SETTLEMENT_MIGRATION: &str = include_str!("../migrations/settlement_v1.sql");
 
 fn require_database_url() -> Option<String> {
@@ -29,15 +30,57 @@ async fn reset_schema(pool: &PgPool) {
     pool.execute("drop schema if exists public cascade; create schema public")
         .await
         .expect("reset public schema");
-    pool.execute(CORE_MIGRATION)
-        .await
-        .expect("apply core CEX schema");
-    pool.execute(SUMMARY_MIGRATION)
-        .await
-        .expect("apply account summary schema");
+
+    // Keep the byte-immutability lane on the same integrated schema as the
+    // reward lane. Discover and apply every numbered migration in order at
+    // runtime, then layer the service-owned receipt bootstrap on top.
+    let migration_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../migrations");
+    let mut migrations: Vec<PathBuf> = fs::read_dir(&migration_dir)
+        .expect("read numbered CEX migration directory")
+        .map(|entry| entry.expect("read migration directory entry").path())
+        .filter(|path| {
+            path.extension().and_then(|value| value.to_str()) == Some("sql")
+                && path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|name| {
+                        name.len() >= 5 && name.as_bytes()[..4].iter().all(u8::is_ascii_digit)
+                    })
+        })
+        .collect();
+    migrations.sort_by_key(|path| {
+        path.file_name()
+            .and_then(|value| value.to_str())
+            .and_then(|name| name.get(..4))
+            .and_then(|number| number.parse::<u16>().ok())
+            .expect("numbered migration filename")
+    });
+    assert!(
+        !migrations.is_empty(),
+        "numbered CEX migration chain is empty"
+    );
+    for path in migrations {
+        let migration = fs::read_to_string(&path).expect("read numbered CEX migration");
+        pool.execute(migration.as_str())
+            .await
+            .unwrap_or_else(|error| panic!("apply {}: {error}", path.display()));
+    }
     pool.execute(SETTLEMENT_MIGRATION)
         .await
         .expect("apply settlement schema");
+
+    let exact_ready = sqlx::query_scalar::<_, bool>(
+        "select to_regprocedure(
+            'public.cex_apply_ledger_effect_v1(uuid,uuid,uuid,text,bigint,smallint,text,uuid,text,text,text,text,text)'
+         ) is not null",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("verify exact Ledger v2 function");
+    assert!(
+        exact_ready,
+        "integrated CEX migration chain must expose Ledger v2"
+    );
 }
 
 fn complete_contract_intent(intent_id: &str) -> EconomicIntent {

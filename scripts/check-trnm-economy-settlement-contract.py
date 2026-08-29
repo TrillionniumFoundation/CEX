@@ -13,7 +13,10 @@ STATUS = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else (
     ROOT / "docs/status/trnm-economy-settlement-v1.json"
 )
 
-MIGRATION = ROOT / "migrations/0010_trnm_economy_settlement_v1.sql"
+# The TRNM receipt service owns an isolated bootstrap migration. It is
+# intentionally outside the repository-wide numbered CEX chain (which already
+# has a different 0010), so never synthesize or restore a colliding root path.
+MIGRATION = ROOT / "services/trnm-economy-service/migrations/settlement_v1.sql"
 API = ROOT / "services/trnm-economy-service/src/api.rs"
 CONFIG = ROOT / "services/trnm-economy-service/src/config.rs"
 CONTRACT = ROOT / "services/trnm-economy-service/src/contract.rs"
@@ -69,6 +72,7 @@ migration = MIGRATION.read_text(encoding="utf-8")
 api = API.read_text(encoding="utf-8")
 config = CONFIG.read_text(encoding="utf-8")
 repository = REPOSITORY.read_text(encoding="utf-8")
+doc = DOC.read_text(encoding="utf-8").lower()
 tests = "\n".join(
     path.read_text(encoding="utf-8") for path in (OWNER_TEST, DURABLE_BYTES_TEST)
 )
@@ -96,6 +100,14 @@ for token in (
     require(token in api, f"HTTP contract token missing: {token}")
 
 for token in (
+    "cex_apply_ledger_effect_v1",
+    "amount_minor",
+    "numbered cex migration chain",
+    "readiness fails closed",
+):
+    require(token in doc, f"exact Ledger v2 documentation token missing: {token}")
+
+for token in (
     "pg_advisory_xact_lock",
     "serde_json::to_vec(intent)",
     "sha256::digest(&intent_bytes)",
@@ -104,6 +116,31 @@ for token in (
     "stored receipt is not bound to exact durable intent bytes",
 ):
     require(token in repository.lower(), f"durable repository invariant missing: {token}")
+
+# Release rewards must use the integrated exact Ledger v2 authority.  A direct
+# numeric account update or legacy ledger insert would either be rejected by
+# migration 0081 or create a value effect with no immutable operation
+# provenance.  Keep this gate source-oriented so a standalone CI database
+# cannot accidentally make the retired path look green.
+for token in (
+    "cex_apply_ledger_effect_v1",
+    "amount_minor",
+    "currency_scale",
+    "operation_id",
+    "provenance",
+    "'explicit'",
+):
+    require(token in repository.lower(), f"exact Ledger v2 reward invariant missing: {token}")
+for retired_write in (
+    "update public.accounts",
+    "insert into public.ledger_entries",
+    "balance = balance +",
+    "uuid::new_v4",
+):
+    require(
+        retired_write not in repository.lower(),
+        f"retired direct monetary write remains in settlement repository: {retired_write}",
+    )
 
 require("for update" in repository.lower(), "account/budget row lock missing")
 require(
@@ -126,6 +163,10 @@ for token in (
     "append-only receipt row must reject update",
     "append-only receipt row must reject delete",
     "append-only receipt table must reject truncate",
+    "numbered CEX migration chain",
+    "cex_apply_ledger_effect_v1",
+    "amount_minor",
+    "provenance_mode",
 ):
     require(token in tests, f"mandatory PostgreSQL fixture missing: {token}")
 
@@ -134,6 +175,8 @@ for control in (
     "database_recomputes_intent_sha256",
     "receipt_rows_reject_update_delete_and_truncate",
     "runtime_revalidates_durable_bytes_hash_and_json",
+    "release_reward_uses_exact_ledger_v2_grant_with_explicit_provenance",
+    "settlement_owner_tests_apply_numbered_chain_before_service_bootstrap",
 ):
     require(control in status["implemented_controls"], f"status control missing: {control}")
 
