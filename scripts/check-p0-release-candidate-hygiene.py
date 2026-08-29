@@ -54,6 +54,7 @@ TEMPORARY_WORKFLOW_PATTERNS = (
 UNPINNED_ACTION = re.compile(
     r"^\s*uses:\s*[^#\s]+@(v\d+|stable|main|master)\s*(?:#.*)?$", re.MULTILINE
 )
+PULL_REQUEST_EVENT = re.compile(r"(?m)^\s{2}pull_request:\s*$")
 MIGRATION_RE = re.compile(r"^(\d{4})_[a-z0-9][a-z0-9._-]*\.sql$")
 
 
@@ -116,6 +117,10 @@ for workflow_path in (*AUTHORITATIVE_WORKFLOWS, RELEASE_WORKFLOW):
         PROBLEMS.append(f"{workflow_path} does not listen to the shared candidate trigger")
     if "workflow_dispatch:" not in content:
         PROBLEMS.append(f"{workflow_path} lacks a manual recovery dispatch")
+    if PULL_REQUEST_EVENT.search(content):
+        PROBLEMS.append(
+            f"{workflow_path} must not accept pull_request merge trees as release evidence"
+        )
     for match in UNPINNED_ACTION.finditer(content):
         PROBLEMS.append(
             f"{workflow_path} contains an unpinned third-party action: {match.group(0).strip()}"
