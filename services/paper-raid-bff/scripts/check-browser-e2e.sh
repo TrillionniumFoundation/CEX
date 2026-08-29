@@ -15,8 +15,8 @@ image_name=paper-raid-bff-browser-e2e:gate-$$
 buildx_version=v0.36.1
 buildx_url=https://github.com/docker/buildx/releases/download/v0.36.1/buildx-v0.36.1.linux-amd64
 buildx_sha256=48af8a397ebd60178778bf63611dbcebe5f5e7a9be90eb9147b24b9587455778
-playwright_version=1.49.1
-playwright_base_digest=sha256:ad57c625d284e8d287abcd40d18434582b2e354de71c8428cb080112b0c45960
+playwright_version=1.55.1
+playwright_base_digest=sha256:2f29369043d81d6d69a815ceb80760f55e85f5020371ad06a4d996f18503ad1c
 
 cleanup() {
   sudo -n docker image rm -f "$image_name" >/dev/null 2>&1 || true

@@ -399,6 +399,26 @@ async fn execute_cex_ledger_action(
     let value = match serde_json::from_str::<Value>(&text) {
         Ok(value) => value,
         Err(error) => {
+            let response_error = format!(
+                "exact ledger returned non-json response ({}): {error}",
+                status.as_u16()
+            );
+            if !status.is_success() && !ambiguous_ledger_status(status) {
+                return backend_receipt(
+                    request,
+                    "failed_ledger",
+                    Some(account_uuid.to_string()),
+                    None,
+                    None,
+                    Some(response_error),
+                    None,
+                    json!({
+                        "ledger_request": body_value,
+                        "operation_id": operation_id,
+                        "http_status": status.as_u16(),
+                    }),
+                );
+            }
             return recover_after_bad_response(
                 state,
                 request,
@@ -407,7 +427,7 @@ async fn execute_cex_ledger_action(
                 operation_id,
                 account_uuid,
                 body_value,
-                format!("exact ledger returned non-json response: {error}"),
+                response_error,
             )
             .await;
         }
@@ -423,13 +443,31 @@ async fn execute_cex_ledger_action(
             .or_else(|| value.get("error"))
             .and_then(Value::as_str)
             .unwrap_or("exact ledger action failed");
+        let response_error = format!("{} {code}: {message}", status.as_u16());
+        // A 5xx, timeout, or rate-limit response is not proof that the Ledger transaction did
+        // not commit. The exact operation id is the recovery authority, so always reconcile
+        // these statuses before reporting a terminal failure. Deterministic client rejections
+        // (the remaining 4xx responses) stay fail-closed and are surfaced directly.
+        if ambiguous_ledger_status(status) {
+            return recover_after_bad_response(
+                state,
+                request,
+                base_url,
+                &ledger_admin_token,
+                operation_id,
+                account_uuid,
+                body_value,
+                format!("exact ledger returned ambiguous status {response_error}"),
+            )
+            .await;
+        }
         return backend_receipt(
             request,
             "failed_ledger",
             Some(account_uuid.to_string()),
             None,
             None,
-            Some(format!("{} {code}: {message}", status.as_u16())),
+            Some(response_error),
             Some(value),
             json!({
                 "ledger_request": body_value,
@@ -455,6 +493,18 @@ async fn execute_cex_ledger_action(
             .await
         }
     }
+}
+
+/// Return whether an HTTP response leaves the exact Ledger operation outcome ambiguous.
+///
+/// The Ledger may have committed an idempotent effect immediately before a proxy, timeout, or
+/// rate-limit response was observed. These statuses therefore require an operation-id lookup;
+/// treating them as definitive failures could cause a caller to retry while money is already
+/// committed. Explicit client rejections remain deterministic and are not included here.
+fn ambiguous_ledger_status(status: StatusCode) -> bool {
+    status == StatusCode::REQUEST_TIMEOUT
+        || status == StatusCode::TOO_MANY_REQUESTS
+        || status.is_server_error()
 }
 
 async fn recover_after_bad_response(
@@ -1056,6 +1106,17 @@ mod tests {
     fn exact_operation_and_reference_ids_are_stable() {
         assert_eq!(deterministic_uuid("same"), deterministic_uuid("same"));
         assert_ne!(deterministic_uuid("same"), deterministic_uuid("other"));
+    }
+
+    #[test]
+    fn ambiguous_ledger_http_statuses_require_operation_lookup() {
+        assert!(ambiguous_ledger_status(StatusCode::REQUEST_TIMEOUT));
+        assert!(ambiguous_ledger_status(StatusCode::TOO_MANY_REQUESTS));
+        assert!(ambiguous_ledger_status(StatusCode::BAD_GATEWAY));
+        assert!(ambiguous_ledger_status(StatusCode::INTERNAL_SERVER_ERROR));
+        assert!(!ambiguous_ledger_status(StatusCode::BAD_REQUEST));
+        assert!(!ambiguous_ledger_status(StatusCode::CONFLICT));
+        assert!(!ambiguous_ledger_status(StatusCode::UNAUTHORIZED));
     }
 
     fn exact_response_fixture() -> (TermExchangeLedgerActionRequest, Value, Value) {

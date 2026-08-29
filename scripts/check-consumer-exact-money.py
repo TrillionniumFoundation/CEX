@@ -46,6 +46,7 @@ require(term, '"amount_minor": amount_minor.to_string()', "term exchange Ledger 
 require(term, '"amount_authority": "amount_credits"', "term exchange failure evidence")
 require(term, "validate_exact_ledger_response", "exact Ledger response validator")
 require(term, "malformed_exact_response_receipt", "malformed Ledger response fail-closed path")
+require(term, "ambiguous_ledger_status", "ambiguous Ledger status recovery")
 require(term, "10_f64.powi", "bounded exact-to-display conversion")
 require(term, "exact ledger response effect account_id", "exact response identity binding")
 require(

@@ -19,7 +19,7 @@ bff_name="$run_id-bff"
 runner_name="$run_id-chromium"
 runner_image="$run_id-runner:gate"
 postgres_image=postgres@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
-playwright_base=mcr.microsoft.com/playwright@sha256:ad57c625d284e8d287abcd40d18434582b2e354de71c8428cb080112b0c45960
+playwright_base=mcr.microsoft.com/playwright@sha256:2f29369043d81d6d69a815ceb80760f55e85f5020371ad06a4d996f18503ad1c
 rust_builder_image=docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb
 buildx_version=v0.36.1
 buildx_url=https://github.com/docker/buildx/releases/download/v0.36.1/buildx-v0.36.1.linux-amd64
@@ -322,7 +322,7 @@ docker_cli=(sudo -n env "DOCKER_CONFIG=$docker_config" docker)
 echo "browser accessibility stage: runner-built" >&2
 
 actual_base=$(sudo -n docker image inspect "$runner_image" --format '{{index .Config.Labels "org.trillionnium.playwright.base.digest"}}')
-[[ "$actual_base" == sha256:ad57c625d284e8d287abcd40d18434582b2e354de71c8428cb080112b0c45960 ]] || {
+[[ "$actual_base" == sha256:2f29369043d81d6d69a815ceb80760f55e85f5020371ad06a4d996f18503ad1c ]] || {
   echo "browser accessibility runner provenance label mismatch" >&2
   exit 1
 }

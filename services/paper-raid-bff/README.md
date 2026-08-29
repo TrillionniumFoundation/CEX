@@ -855,8 +855,8 @@ regular non-symlink file. The gate copies it into the same disposable
 use; the cache path is never mounted or copied into the product image.
 
 The release browser gate is also disposable. `scripts/check-browser-e2e.sh`
-builds its runner from Playwright `1.49.1` at the immutable amd64 base digest
-`sha256:ad57c625d284e8d287abcd40d18434582b2e354de71c8428cb080112b0c45960`
+builds its runner from Playwright `1.55.1` at the immutable multi-architecture base digest
+`sha256:2f29369043d81d6d69a815ceb80760f55e85f5020371ad06a4d996f18503ad1c`
 and installs the exact npm graph from `browser-e2e/package-lock.json`; it uses
 the same checksum-locked temporary Buildx above and never installs a host
 browser or npm package. By default it reaches the X230 deployment through an

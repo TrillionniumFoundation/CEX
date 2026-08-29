@@ -21,7 +21,7 @@ export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 export TRILLIONNIUM_BROWSER_E2E_OUT_DIR="${TRILLIONNIUM_BROWSER_E2E_OUT_DIR:-$ROOT_DIR/run/league-browser}"
 export TRILLIONNIUM_BROWSER_E2E_SCRIPT="$SCRIPT_PATH"
 
-npm exec --yes --package=playwright@1.49.1 -- bash -lc '
+npm exec --yes --package=playwright@1.55.1 -- bash -lc '
   set -euo pipefail
   export NODE_PATH="$(dirname "$(dirname "$(command -v playwright)")")"
   node "$TRILLIONNIUM_BROWSER_E2E_SCRIPT"

@@ -29,7 +29,7 @@ export TRILLIONNIUM_BROWSER_E2E_MODE="first-human-session"
 cex_wait_postgres 60 1 >/dev/null
 cex_apply_migrations >/dev/null 2>&1
 
-npm exec --yes --package=playwright@1.49.1 -- bash -lc '
+npm exec --yes --package=playwright@1.55.1 -- bash -lc '
   set -euo pipefail
   export NODE_PATH="$(dirname "$(dirname "$(command -v playwright)")")"
   node "$TRILLIONNIUM_BROWSER_E2E_SCRIPT"
