@@ -447,14 +447,14 @@ select
     count(*) filter (where command.attempt_count>=command.max_attempts)::bigint as exhausted_count,
     count(*) filter (
         where command.status in ('reconcile_required','dead_letter')
-          and evidence.evidence_id is null
-    )::bigint as missing_reconciliation_evidence_count,
-    count(*) filter (
-        where command.status in ('reconcile_required','dead_letter')
           and command.acknowledged_at is null
     )::bigint as unacknowledged_count,
     min(command.available_at) filter (where command.status in ('pending','retry_wait')) as oldest_available_at,
-    min(command.lease_expires_at) filter (where command.status='claimed') as oldest_lease_expiry
+    min(command.lease_expires_at) filter (where command.status='claimed') as oldest_lease_expiry,
+    count(*) filter (
+        where command.status in ('reconcile_required','dead_letter')
+          and evidence.evidence_id is null
+    )::bigint as missing_reconciliation_evidence_count
 from public.cex_provider_dispatch_commands_v1 command
 left join public.cex_provider_reconciliation_evidence_v1 evidence
   on evidence.command_id=command.command_id
