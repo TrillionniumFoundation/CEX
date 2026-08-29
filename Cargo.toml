@@ -7,6 +7,7 @@ members = [
   "crates/hepta-paper-raid-contracts",
   "services/identity-service",
   "services/ledger-service",
+  "services/trnm-economy-service",
   "services/gateway-service",
   "services/execution-service",
   "services/audit-service",

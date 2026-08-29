@@ -1,0 +1,58 @@
+{
+  "schema": "trnm_cex_settlement_runtime_status_v1",
+  "claim_id": "CEX-6-intent-hash-bound-receipt-lookup-v1",
+  "work_item": "WORLD-P0-001",
+  "owner_repository": "TrillionniumFoundation/CEX",
+  "issue": 6,
+  "status": "implemented_pending_exact_commit_ci",
+  "as_of": "2026-08-28",
+  "branch": "fix/cex-settlement-receipt-lookup-v1",
+  "base_commit": "6edbe27bfb65594c40549fb67b42c0ebca997185",
+  "verified_commit": null,
+  "contract_version": "trnm_cex_settlement_receipt_lookup_v1",
+  "release_effect": "none",
+  "trusted_settlement": false,
+  "public_online": false,
+  "public_player_market": false,
+  "implemented_controls": [
+    "owner_repository_receipt_lookup_endpoint",
+    "lookup_and_submit_share_one_postgresql_authority",
+    "intent_id_and_sha256_are_immutable",
+    "exact_serialized_intent_bytes_are_durable",
+    "database_recomputes_intent_sha256",
+    "runtime_revalidates_durable_bytes_hash_and_json",
+    "receipt_rows_reject_update_delete_and_truncate",
+    "exact_duplicate_reuses_the_durable_receipt",
+    "mismatched_hash_returns_immutable_conflict",
+    "release_reward_ledger_and_receipt_commit_atomically",
+    "per_event_and_daily_reward_caps",
+    "active_ed25519_entitlement_key_verification",
+    "game_authority_audience_binding",
+    "restrictive_receipt_foreign_keys",
+    "postgresql_response_loss_concurrency_exact_bytes_and_immutability_contract_tests"
+  ],
+  "open_gates": [
+    "obtain_exact_commit_github_actions_evidence",
+    "obtain_reviewer_signoff",
+    "merge_owner_repository_pull_request",
+    "produce_immutable_deployment_artifact",
+    "prove_deployed_response_loss_and_process_kill_matrix",
+    "approve_receipt_retention_and_restore_policy",
+    "bind_exact_cex_revision_in_trillionnium_integration"
+  ],
+  "required_checks": [
+    "trnm-economy-settlement/static-contracts",
+    "trnm-economy-settlement/rust-postgresql-contracts"
+  ],
+  "evidence": {
+    "remote_workflow_runs": [],
+    "artifacts": [],
+    "reviewers": [],
+    "limitations": [
+      "source implementation is not deployment evidence",
+      "an empty, skipped, cancelled or failed workflow is a blocker",
+      "no trusted settlement promotion",
+      "no public online or public player market credit"
+    ]
+  }
+}

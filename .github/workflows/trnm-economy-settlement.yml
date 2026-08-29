@@ -1,0 +1,215 @@
+name: trnm-economy-settlement
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/trnm-economy-settlement.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'migrations/0010_trnm_economy_settlement_v1.sql'
+      - 'services/trnm-economy-service/**'
+      - 'docs/trnm-economy-settlement-receipt-lookup-v1.md'
+      - 'docs/status/trnm-economy-settlement-v1.json'
+      - 'scripts/check-trnm-economy-settlement-contract.py'
+      - 'scripts/test-trnm-economy-settlement-status-negative.py'
+  push:
+    branches:
+      - fix/cex-settlement-receipt-lookup-v1
+    paths:
+      - '.github/workflows/trnm-economy-settlement.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'migrations/0010_trnm_economy_settlement_v1.sql'
+      - 'services/trnm-economy-service/**'
+      - 'docs/trnm-economy-settlement-receipt-lookup-v1.md'
+      - 'docs/status/trnm-economy-settlement-v1.json'
+      - 'scripts/check-trnm-economy-settlement-contract.py'
+      - 'scripts/test-trnm-economy-settlement-status-negative.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trnm-economy-settlement-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: '0'
+  RUST_BACKTRACE: '1'
+  RUST_TEST_THREADS: '1'
+  EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  static-contracts:
+    name: trnm-economy-settlement/static-contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ env.EXPECTED_HEAD_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify exact commit and tree
+        run: |
+          test "$(git rev-parse HEAD)" = "${EXPECTED_HEAD_SHA}"
+          git rev-parse HEAD
+          git rev-parse 'HEAD^{tree}'
+      - name: Parse configuration artifacts
+        run: |
+          python3 -m py_compile \
+            scripts/check-trnm-economy-settlement-contract.py \
+            scripts/test-trnm-economy-settlement-status-negative.py
+          python3 - <<'PY'
+          import json
+          import tomllib
+          from pathlib import Path
+          json.loads(Path('docs/status/trnm-economy-settlement-v1.json').read_text())
+          tomllib.loads(Path('Cargo.toml').read_text())
+          tomllib.loads(Path('services/trnm-economy-service/Cargo.toml').read_text())
+          PY
+      - name: Enforce source and status boundaries
+        run: python3 scripts/check-trnm-economy-settlement-contract.py
+      - name: Reject promotion overclaims
+        run: python3 scripts/test-trnm-economy-settlement-status-negative.py
+
+  rust-postgresql-contracts:
+    name: trnm-economy-settlement/rust-postgresql-contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cex_settlement
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d cex_settlement"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      TRNM_CEX_SETTLEMENT_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cex_settlement
+      TRNM_REQUIRE_CEX_SETTLEMENT_DATABASE_TEST: '1'
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ env.EXPECTED_HEAD_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify exact commit and tree
+        run: |
+          test "$(git rev-parse HEAD)" = "${EXPECTED_HEAD_SHA}"
+          git rev-parse HEAD
+          git rev-parse 'HEAD^{tree}'
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
+          rustup default 1.98.0
+          rustc --version --verbose
+          cargo --version --verbose
+      - name: Bootstrap deterministic dependency lock
+        run: cargo generate-lockfile
+      - name: Resolve workspace
+        run: cargo metadata --locked --no-deps --format-version 1 > /dev/null
+      - name: Format settlement package only
+        run: cargo fmt -p trnm-economy-service -- --check
+      - name: Unit and PostgreSQL owner contract
+        run: cargo test -p trnm-economy-service --all-targets --locked
+      - name: Strict lint
+        run: cargo clippy -p trnm-economy-service --all-targets --locked -- -D warnings
+      - name: Build immutable candidate binary
+        run: cargo build -p trnm-economy-service --release --locked
+      - name: Assemble exact-head evidence packet
+        env:
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+          WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+          WORKFLOW_REPOSITORY: ${{ github.repository }}
+        run: |
+          mkdir -p evidence
+          cp Cargo.lock evidence/Cargo.lock
+          cp target/release/trnm-economy-service evidence/trnm-economy-service
+          cp migrations/0010_trnm_economy_settlement_v1.sql evidence/0010_trnm_economy_settlement_v1.sql
+          cp docs/status/trnm-economy-settlement-v1.json evidence/source-status.json
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import subprocess
+
+          root = pathlib.Path('.')
+          evidence = root / 'evidence'
+          files = [
+              evidence / 'Cargo.lock',
+              evidence / 'trnm-economy-service',
+              evidence / '0010_trnm_economy_settlement_v1.sql',
+              evidence / 'source-status.json',
+          ]
+          hashes = {
+              path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+              for path in files
+          }
+          payload = {
+              'schema': 'trnm_cex_settlement_build_evidence_v1',
+              'repository': os.environ['WORKFLOW_REPOSITORY'],
+              'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+              'tree': subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip(),
+              'workflow_run_id': int(os.environ['WORKFLOW_RUN_ID']),
+              'workflow_run_attempt': int(os.environ['WORKFLOW_RUN_ATTEMPT']),
+              'rust_toolchain': '1.98.0',
+              'postgres_image': 'postgres:16.4-alpine',
+              'contract': 'trnm_cex_settlement_receipt_lookup_v1',
+              'checks': [
+                  'exact-head-checkout',
+                  'static-contracts',
+                  'negative-overclaim-fixtures',
+                  'rust-format',
+                  'postgresql-owner-contract',
+                  'exact-intent-byte-immutability',
+                  'strict-clippy',
+                  'release-build',
+                  'extracted-artifact-checksum-verification',
+              ],
+              'sha256': hashes,
+              'limitations': [
+                  'candidate build artifact is not deployment evidence',
+                  'no trusted-settlement or public-online promotion',
+                  'human reviewer and cross-repository lock remain required',
+              ],
+          }
+          canonical = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()
+          payload['payload_sha256'] = hashlib.sha256(canonical).hexdigest()
+          (evidence / 'manifest.json').write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          PY
+          (
+            cd evidence
+            sha256sum \
+              Cargo.lock \
+              trnm-economy-service \
+              0010_trnm_economy_settlement_v1.sql \
+              source-status.json \
+              manifest.json \
+              | sort > SHA256SUMS
+            sha256sum --check SHA256SUMS
+          )
+      - name: Upload exact-head candidate and evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: trnm-cex-settlement-${{ env.EXPECTED_HEAD_SHA }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 9
