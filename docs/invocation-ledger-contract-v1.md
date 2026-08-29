@@ -9,9 +9,14 @@
 ## Problem
 
 Gateway cannot safely switch reserve/refund to the canonical exact Ledger API while Execution
-still settles from the legacy `reserve_amount: f64` request. Doing so can create a reserved-value
-leak: reserve succeeds with an exact amount, Execution sees no equivalent exact contract, and
-the terminal consume/refund is skipped or uses a different value.
+still settles from the legacy `reserve_amount: f64` request. Doing so creates a **reserved-value leak**
+risk: reserve succeeds with an exact amount, Execution sees no equivalent exact contract, and the
+terminal consume/refund is skipped or uses a different value.
+
+The fail-closed rule is therefore explicit: no value-bearing provider execution may start until an
+active exact reserve command has a verified Ledger receipt and the durable Invocation contract is
+in `reserved` state. Exact Invocations must never reuse the legacy `ledger_reserved` or
+`ledger_refunded` booleans as settlement authority.
 
 ## Authority
 
