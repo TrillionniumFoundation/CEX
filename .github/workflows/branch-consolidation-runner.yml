@@ -82,6 +82,16 @@ jobs:
           rm -rf "$REPORT_DIR"
           mkdir -p "$REPORT_DIR"
           bash /tmp/merge.sh
+
+          # The isolated TRNM economy service owns this schema. Retarget every
+          # merged source/test include away from the repository-wide migration chain.
+          if [[ -d services/trnm-economy-service ]]; then
+            grep -RIlZ 'migrations/0010_trnm_economy_settlement_v1.sql' \
+              services/trnm-economy-service \
+              | xargs -0r sed -i \
+                  's#../../../migrations/0010_trnm_economy_settlement_v1.sql#../migrations/settlement_v1.sql#g'
+          fi
+
           git rm -f --ignore-unmatch .github/workflows/branch-consolidation-runner.yml
           bash /tmp/canonicalize.sh
           bash /tmp/validate.sh
