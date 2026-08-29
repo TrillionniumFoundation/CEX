@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "shared-types"
 version.workspace = true
 edition.workspace = true
