@@ -223,9 +223,8 @@ request = (
     f"Connection: close\r\n\r\n"
 ).encode() + body
 with socket.create_connection((host, int(port)), timeout=5) as connection:
-    connection.sendall(request)
-    connection.shutdown(socket.SHUT_WR)
     connection.settimeout(15)
+    connection.sendall(request)
     if not connection.recv(1):
         raise SystemExit("ledger-service closed before producing a response")
     # Deliberately discard the status, headers and body. The caller receives no
