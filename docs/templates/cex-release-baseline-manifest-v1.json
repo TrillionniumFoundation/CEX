@@ -3,7 +3,7 @@
   "status": "draft",
   "project_id": "hepta-control-plane",
   "release_id": "cex-p0-template",
-  "generated_at": "2026-08-28T00:00:00Z",
+  "generated_at": "2026-08-29T00:00:00Z",
   "source": {
     "repository": "TrillionniumFoundation/CEX",
     "branch": "REPLACE_BRANCH",
@@ -14,7 +14,7 @@
     "cargo_lock_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   },
   "database": {
-    "migration_head": "0072_add_execution_ledger_settlement_operator.sql",
+    "migration_head": "0084_make_provider_reconciliation_replay_terminal_safe.sql",
     "migration_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   },
   "build": {
@@ -27,6 +27,48 @@
   "evidence": [
     {
       "name": "hosted-ci",
+      "status": "pending",
+      "uri": null,
+      "sha256": null,
+      "waiver": null
+    },
+    {
+      "name": "0066_add_invocation_ledger_contract.sql-contract",
+      "status": "pending",
+      "uri": null,
+      "sha256": null,
+      "waiver": null
+    },
+    {
+      "name": "0081_exact-authority-and-role-guards",
+      "status": "pending",
+      "uri": null,
+      "sha256": null,
+      "waiver": null
+    },
+    {
+      "name": "0082_provider-unknown-outcome-reconciliation",
+      "status": "pending",
+      "uri": null,
+      "sha256": null,
+      "waiver": null
+    },
+    {
+      "name": "0083_audit-baseline-uuid-cursor",
+      "status": "pending",
+      "uri": null,
+      "sha256": null,
+      "waiver": null
+    },
+    {
+      "name": "0084_provider-reconciliation-terminal-replay",
+      "status": "pending",
+      "uri": null,
+      "sha256": null,
+      "waiver": null
+    },
+    {
+      "name": "p0-audit-outbox-lifecycle-fixture",
       "status": "pending",
       "uri": null,
       "sha256": null,

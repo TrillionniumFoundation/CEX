@@ -1,10 +1,4 @@
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-    routing::get,
-    Json, Router,
-};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::get, Json, Router};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::json;
@@ -298,7 +292,10 @@ fn render_metrics(summary: &SagaOperationalSummary) -> String {
     }
 
     for (kind, value) in [
-        ("orphaned_workflows", summary.reconciliation.orphaned_workflows),
+        (
+            "orphaned_workflows",
+            summary.reconciliation.orphaned_workflows,
+        ),
         (
             "observed_status",
             summary.reconciliation.observed_status_mismatches,

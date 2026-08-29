@@ -1,13 +1,16 @@
 use super::*;
 use async_trait::async_trait;
+use sha2::{Digest, Sha256};
 use term_exchange_protocol::{
     ActorRef, AssetRef, EconomicIntent, EconomicIntentKind, EconomicReceipt, IdempotencyKey,
     ReceiptStatus, SettlementBackendKind, CEX_SETTLEMENT_BACKEND_ID,
     TERM_EXCHANGE_PROTOCOL_VERSION,
 };
+use uuid::Uuid;
 
 pub(super) const TERM_EXCHANGE_BACKEND_ADAPTER_CONTRACT_VERSION: &str =
-    "trillionnium_term_exchange_backend_adapter_v1";
+    "trillionnium_term_exchange_backend_adapter_v2";
+const TERM_EXCHANGE_EXACT_CURRENCY_SCALE: u8 = 6;
 
 #[derive(Debug, Clone)]
 pub(super) struct TermExchangeLedgerActionRequest {
@@ -26,10 +29,12 @@ pub(super) struct TermExchangeLedgerActionRequest {
     pub(super) idempotency_key: String,
     pub(super) idempotency_scope: String,
     pub(super) reference_id: Option<String>,
+    /// Compatibility/display value only. Exact settlement authority is `amount_credits`.
     pub(super) amount: f64,
     pub(super) amount_credits: i64,
     pub(super) currency: String,
     pub(super) metadata: Value,
+    /// Compatibility metadata retained as evidence; never forwarded as value authority.
     pub(super) extra_ledger_body: Map<String, Value>,
 }
 
@@ -125,7 +130,25 @@ async fn execute_cex_ledger_action(
     state: &AppState,
     request: TermExchangeLedgerActionRequest,
 ) -> TermExchangeBackendReceipt {
-    if request.amount_credits <= 0 || request.amount <= 0.0 {
+    let amount_minor = match exact_minor_from_compatibility_amount(
+        request.amount,
+        TERM_EXCHANGE_EXACT_CURRENCY_SCALE,
+    ) {
+        Ok(value) => value,
+        Err(error) => {
+            return backend_receipt(
+                request,
+                "failed_ledger",
+                None,
+                None,
+                None,
+                Some(error),
+                None,
+                json!({"amount_conversion": "rejected"}),
+            )
+        }
+    };
+    if amount_minor <= 0 {
         let raw_status = if request.term_id.contains("purchase") {
             "skipped_zero_price"
         } else {
@@ -197,11 +220,26 @@ async fn execute_cex_ledger_action(
         };
         account_id
     };
+    let account_uuid = match Uuid::parse_str(&account_id) {
+        Ok(account_id) if !account_id.is_nil() => account_id,
+        _ => {
+            return backend_receipt(
+                request,
+                "failed_ledger",
+                Some(account_id),
+                None,
+                None,
+                Some("resolved ledger account_id is not a non-nil UUID".to_string()),
+                None,
+                json!({}),
+            )
+        }
+    };
     let Some(ledger_admin_token) = state.config().ledger_admin_token.clone() else {
         return backend_receipt(
             request,
             "skipped_missing_ledger_token",
-            Some(account_id),
+            Some(account_uuid.to_string()),
             None,
             None,
             Some("consumer-entry ledger admin token is not configured".to_string()),
@@ -209,117 +247,321 @@ async fn execute_cex_ledger_action(
             json!({}),
         );
     };
-
-    let url = format!(
-        "{}/v1/ledger/{}",
-        state.config().ledger_base_url.trim_end_matches('/'),
-        request.ledger_action
-    );
-    let mut body = Map::new();
-    body.insert("account_id".to_string(), json!(account_id));
-    body.insert("amount".to_string(), json!(request.amount));
-    body.insert(
-        "idempotency_key".to_string(),
-        json!(request.idempotency_key),
-    );
-    if let Some(reference_id) = request.reference_id.as_deref() {
-        body.insert("reference_id".to_string(), json!(reference_id));
-    }
-    for (key, value) in request.extra_ledger_body.clone() {
-        body.insert(key, value);
-    }
-    let body_value = Value::Object(body.clone());
-
-    let response = match state
-        .inner
-        .http
-        .post(url)
-        .header("x-admin-token", ledger_admin_token)
-        .json(&body_value)
-        .send()
-        .await
-    {
-        Ok(response) => response,
-        Err(err) => {
+    let operation_kind = match request.ledger_action.as_str() {
+        "reserve" | "consume" | "refund" | "grant" => request.ledger_action.as_str(),
+        _ => {
             return backend_receipt(
                 request,
-                "failed_network",
-                body.get("account_id")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string),
+                "failed_ledger",
+                Some(account_uuid.to_string()),
                 None,
                 None,
-                Some(format!("failed to reach ledger-service: {err}")),
+                Some("unsupported exact ledger operation".to_string()),
                 None,
-                json!({ "ledger_request": body_value }),
-            );
+                json!({}),
+            )
+        }
+    };
+    let scope = request.idempotency_scope.trim().to_string();
+    let key = request.idempotency_key.trim().to_string();
+    let operation_id = deterministic_uuid(&format!("cex:term-exchange-effect:{scope}:{key}"));
+    let trace_id = deterministic_uuid(&format!("cex:term-exchange-trace:{}", request.intent_id));
+    let reference_source = request
+        .reference_id
+        .as_deref()
+        .unwrap_or(request.intent_id.as_str());
+    let reference_id =
+        deterministic_uuid(&format!("cex:term-exchange-reference:{reference_source}"));
+    let currency = request.currency.trim().to_ascii_lowercase();
+    let body_value = json!({
+        "account_id": account_uuid,
+        "trace_id": trace_id,
+        "operation_id": operation_id,
+        "operation_kind": operation_kind,
+        "currency_unit": currency,
+        "currency_scale": TERM_EXCHANGE_EXACT_CURRENCY_SCALE,
+        "amount_minor": amount_minor.to_string(),
+        "reference_type": "term_exchange",
+        "reference_id": reference_id,
+        "idempotency_scope": scope,
+        "idempotency_key": key,
+    });
+    let base_url = state.config().ledger_base_url.trim_end_matches('/');
+    let url = format!("{base_url}/v2/ledger/effects");
+
+    let response = state
+        .inner
+        .http
+        .post(&url)
+        .header("x-admin-token", &ledger_admin_token)
+        .json(&body_value)
+        .send()
+        .await;
+    let response = match response {
+        Ok(response) => response,
+        Err(error) => {
+            return match lookup_exact_effect(state, base_url, &ledger_admin_token, operation_id)
+                .await
+            {
+                Ok(Some(value)) => exact_success_receipt(request, value, body_value, true),
+                Ok(None) => backend_receipt(
+                    request,
+                    "failed_network",
+                    Some(account_uuid.to_string()),
+                    None,
+                    None,
+                    Some(format!(
+                        "exact ledger request failed and lookup found no effect: {error}"
+                    )),
+                    None,
+                    json!({
+                        "ledger_request": body_value,
+                        "operation_id": operation_id,
+                        "lookup_result": "not_found",
+                    }),
+                ),
+                Err(lookup_error) => backend_receipt(
+                    request,
+                    "failed_network",
+                    Some(account_uuid.to_string()),
+                    None,
+                    None,
+                    Some(format!(
+                        "exact ledger outcome is unknown: request={error}; lookup={lookup_error}"
+                    )),
+                    None,
+                    json!({
+                        "ledger_request": body_value,
+                        "operation_id": operation_id,
+                        "lookup_result": "unknown",
+                    }),
+                ),
+            };
         }
     };
 
     let status = response.status();
-    let value = match response.json::<Value>().await {
-        Ok(value) => value,
-        Err(err) => {
-            return backend_receipt(
+    let text = match response.text().await {
+        Ok(text) => text,
+        Err(error) => {
+            return recover_after_bad_response(
+                state,
                 request,
-                "failed_bad_response",
-                body.get("account_id")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string),
-                None,
-                None,
-                Some(format!("ledger-service returned non-json response: {err}")),
-                None,
-                json!({ "ledger_request": body_value }),
-            );
+                base_url,
+                &ledger_admin_token,
+                operation_id,
+                account_uuid,
+                body_value,
+                format!("read exact ledger response failed: {error}"),
+            )
+            .await;
+        }
+    };
+    let value = match serde_json::from_str::<Value>(&text) {
+        Ok(value) => value,
+        Err(error) => {
+            return recover_after_bad_response(
+                state,
+                request,
+                base_url,
+                &ledger_admin_token,
+                operation_id,
+                account_uuid,
+                body_value,
+                format!("exact ledger returned non-json response: {error}"),
+            )
+            .await;
         }
     };
 
     if !status.is_success() {
-        let error = value
-            .get("error")
+        let code = value
+            .get("code")
             .and_then(Value::as_str)
-            .unwrap_or("ledger action failed");
+            .unwrap_or("ledger_effect_rejected");
+        let message = value
+            .get("message")
+            .or_else(|| value.get("error"))
+            .and_then(Value::as_str)
+            .unwrap_or("exact ledger action failed");
         return backend_receipt(
             request,
-            if status.as_u16() == 409 {
-                "duplicate"
-            } else {
-                "failed_ledger"
-            },
-            body.get("account_id")
-                .and_then(Value::as_str)
-                .map(ToString::to_string),
+            "failed_ledger",
+            Some(account_uuid.to_string()),
             None,
             None,
-            Some(format!("{}: {error}", status.as_u16())),
+            Some(format!("{} {code}: {message}", status.as_u16())),
             Some(value),
-            json!({ "ledger_request": body_value }),
+            json!({
+                "ledger_request": body_value,
+                "operation_id": operation_id,
+                "collision": status == StatusCode::CONFLICT,
+            }),
         );
     }
 
+    exact_success_receipt(request, value, body_value, false)
+}
+
+async fn recover_after_bad_response(
+    state: &AppState,
+    request: TermExchangeLedgerActionRequest,
+    base_url: &str,
+    ledger_admin_token: &str,
+    operation_id: Uuid,
+    account_id: Uuid,
+    body_value: Value,
+    response_error: String,
+) -> TermExchangeBackendReceipt {
+    match lookup_exact_effect(state, base_url, ledger_admin_token, operation_id).await {
+        Ok(Some(value)) => exact_success_receipt(request, value, body_value, true),
+        Ok(None) => backend_receipt(
+            request,
+            "failed_bad_response",
+            Some(account_id.to_string()),
+            None,
+            None,
+            Some(format!("{response_error}; exact lookup returned not found")),
+            None,
+            json!({
+                "ledger_request": body_value,
+                "operation_id": operation_id,
+                "lookup_result": "not_found",
+            }),
+        ),
+        Err(lookup_error) => backend_receipt(
+            request,
+            "failed_bad_response",
+            Some(account_id.to_string()),
+            None,
+            None,
+            Some(format!(
+                "{response_error}; exact lookup failed: {lookup_error}"
+            )),
+            None,
+            json!({
+                "ledger_request": body_value,
+                "operation_id": operation_id,
+                "lookup_result": "unknown",
+            }),
+        ),
+    }
+}
+
+async fn lookup_exact_effect(
+    state: &AppState,
+    base_url: &str,
+    ledger_admin_token: &str,
+    operation_id: Uuid,
+) -> Result<Option<Value>, String> {
+    let response = state
+        .inner
+        .http
+        .get(format!("{base_url}/v2/ledger/effects/{operation_id}"))
+        .header("x-admin-token", ledger_admin_token)
+        .send()
+        .await
+        .map_err(|error| format!("effect lookup request failed: {error}"))?;
+    if response.status() == StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|error| format!("read effect lookup response failed: {error}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "effect lookup returned {}: {text}",
+            status.as_u16()
+        ));
+    }
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|error| format!("decode effect lookup response failed: {error}"))
+}
+
+fn exact_success_receipt(
+    request: TermExchangeLedgerActionRequest,
+    value: Value,
+    ledger_request: Value,
+    recovered_by_lookup: bool,
+) -> TermExchangeBackendReceipt {
+    let replayed = value
+        .get("replayed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let account = value.get("account");
+    let effect = value.get("effect");
+    let scale = account
+        .and_then(|account| account.get("currency_scale"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as u8;
+    let balance_after = account
+        .and_then(|account| account.get("balance_minor"))
+        .and_then(value_as_i64)
+        .map(|minor| minor_to_f64(minor, scale));
+    let compatibility_metadata = request.extra_ledger_body.clone();
     backend_receipt(
         request,
-        "__success__",
-        value
-            .get("account")
+        if replayed { "duplicate" } else { "__success__" },
+        account
             .and_then(|account| account.get("account_id"))
             .and_then(Value::as_str)
-            .or_else(|| body.get("account_id").and_then(Value::as_str))
             .map(ToString::to_string),
-        value
-            .get("entry")
-            .and_then(|entry| entry.get("entry_id"))
+        effect
+            .and_then(|effect| effect.get("entry_id"))
             .and_then(Value::as_str)
             .map(ToString::to_string),
-        value
-            .get("account")
-            .and_then(|account| account.get("balance"))
-            .and_then(Value::as_f64),
+        balance_after,
         None,
         Some(value),
-        json!({ "ledger_request": body_value }),
+        json!({
+            "ledger_request": ledger_request,
+            "recovered_by_operation_lookup": recovered_by_lookup,
+            "legacy_display_metadata": compatibility_metadata,
+        }),
     )
+}
+
+fn value_as_i64(value: &Value) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_str().and_then(|raw| raw.parse::<i64>().ok()))
+}
+
+fn minor_to_f64(value: i64, scale: u8) -> f64 {
+    value as f64 / 10_i64.pow(u32::from(scale)) as f64
+}
+
+fn exact_minor_from_compatibility_amount(value: f64, scale: u8) -> Result<i64, String> {
+    if !value.is_finite() || value < 0.0 {
+        return Err("settlement amount must be a finite non-negative value".to_string());
+    }
+    let factor = 10_i64
+        .checked_pow(u32::from(scale))
+        .ok_or_else(|| "settlement currency scale is unsupported".to_string())?;
+    let scaled = value * factor as f64;
+    let rounded = scaled.round();
+    let tolerance = f64::EPSILON * scaled.abs().max(1.0) * 16.0;
+    if (scaled - rounded).abs() > tolerance {
+        return Err(format!(
+            "settlement amount {value} exceeds configured scale {scale}"
+        ));
+    }
+    if rounded > i64::MAX as f64 {
+        return Err("settlement amount exceeds signed minor-unit range".to_string());
+    }
+    Ok(rounded as i64)
+}
+
+fn deterministic_uuid(namespace: &str) -> Uuid {
+    let digest = Sha256::digest(namespace.as_bytes());
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(bytes)
 }
 
 fn backend_receipt(
@@ -462,5 +704,25 @@ mod tests {
         assert_eq!(intent.idempotency_key.key, "league_reward:reward-1");
         assert_eq!(intent.actors[0].account_id.as_deref(), Some("acct-1"));
         assert_eq!(intent.assets[0].quantity, 42);
+    }
+
+    #[test]
+    fn compatibility_amount_is_converted_to_exact_minor_units() {
+        assert_eq!(
+            exact_minor_from_compatibility_amount(4.24, 6).unwrap(),
+            4_240_000
+        );
+        assert_eq!(
+            exact_minor_from_compatibility_amount(0.000_001, 6).unwrap(),
+            1
+        );
+        assert!(exact_minor_from_compatibility_amount(0.000_000_1, 6).is_err());
+        assert!(exact_minor_from_compatibility_amount(f64::NAN, 6).is_err());
+    }
+
+    #[test]
+    fn exact_operation_and_reference_ids_are_stable() {
+        assert_eq!(deterministic_uuid("same"), deterministic_uuid("same"));
+        assert_ne!(deterministic_uuid("same"), deterministic_uuid("other"));
     }
 }

@@ -190,26 +190,28 @@ impl fmt::Display for SagaContractError {
                 write!(formatter, "invalid saga {field} component '{value}'")
             }
             Self::InvalidAttemptBudget(value) => {
-                write!(formatter, "saga max_attempts must be between 1 and 100, got {value}")
+                write!(
+                    formatter,
+                    "saga max_attempts must be between 1 and 100, got {value}"
+                )
             }
             Self::PayloadMustBeObject => formatter.write_str("saga payload must be a JSON object"),
-            Self::OperationKeyTooLong => formatter.write_str("saga operation key exceeds 256 bytes"),
+            Self::OperationKeyTooLong => {
+                formatter.write_str("saga operation key exceeds 256 bytes")
+            }
         }
     }
 }
 
 impl Error for SagaContractError {}
 
-fn normalize_component(
-    field: &'static str,
-    value: String,
-) -> Result<String, SagaContractError> {
+fn normalize_component(field: &'static str, value: String) -> Result<String, SagaContractError> {
     let value = value.trim().to_ascii_lowercase();
     if value.is_empty()
         || value.len() > 128
-        || !value
-            .chars()
-            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '.' | '_' | '-'))
+        || !value.chars().all(|ch| {
+            ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '.' | '_' | '-')
+        })
     {
         return Err(SagaContractError::InvalidComponent { field, value });
     }

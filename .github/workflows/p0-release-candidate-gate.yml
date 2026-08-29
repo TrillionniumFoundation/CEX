@@ -1,0 +1,231 @@
+name: p0-release-candidate-gate
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'docs/release-evidence/p0-candidate-trigger.json'
+      - '.github/workflows/p0-release-candidate-gate.yml'
+  pull_request:
+    paths:
+      - 'docs/release-evidence/p0-candidate-trigger.json'
+      - '.github/workflows/p0-release-candidate-gate.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/cex_ci
+  CEX_P0_EVIDENCE_DIR: run/p0-release-evidence
+
+jobs:
+  repository-candidate-qualification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cex
+          POSTGRES_PASSWORD: cex_ci_password
+          POSTGRES_DB: cex_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cex -d cex_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout exact candidate tree
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve immutable source identity
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "tree=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
+          echo "branch=${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Candidate tree hygiene
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$CEX_P0_EVIDENCE_DIR"
+          python3 scripts/check-p0-release-candidate-hygiene.py \
+            | tee "$CEX_P0_EVIDENCE_DIR/candidate-hygiene.json"
+
+      - name: Migration and manifest governance
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check-p0-migrations.py
+          python3 scripts/check-release-baseline-manifest.py \
+            docs/templates/cex-release-baseline-manifest-v1.json --allow-template
+          python3 scripts/check-invocation-ledger-contract-static.py
+          python3 scripts/check-gateway-exact-reserve.py
+          python3 scripts/check-execution-settlement-commands.py
+          python3 scripts/check-trnm-settlement-receipt-lookup.py
+
+      - name: Fresh migration and P0 assertions
+        run: bash scripts/check-p0-migrations-postgres.sh
+
+      - name: Existing-row Audit baseline lifecycle
+        run: bash scripts/check-audit-source-baseline-postgres.sh
+
+      - name: Ledger operation identity and exact replay
+        run: bash scripts/check-ledger-operation-identity-postgres.sh
+
+      - name: Invocation exact contract lifecycle
+        run: bash scripts/check-invocation-ledger-contract-postgres.sh
+
+      - name: Invocation terminal mutual exclusion
+        run: bash scripts/check-invocation-ledger-terminal-postgres.sh
+
+      - name: Gateway exact reserve fault matrix
+        run: bash scripts/check-gateway-exact-reserve-postgres.sh
+
+      - name: Execution settlement fault matrix
+        run: bash scripts/check-execution-settlement-commands-postgres.sh
+
+      - name: Provider unknown-outcome reconciliation matrix
+        run: bash scripts/check-provider-reconciliation-postgres.sh
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Build Ledger receipt recovery target
+        run: cargo build --locked -p ledger-service --bin ledger-service
+
+      - name: TRNM response-loss receipt recovery
+        run: bash scripts/check-trnm-settlement-receipt-lookup-http.sh
+
+      - name: Record database lifecycle matrix
+        shell: bash
+        run: |
+          python3 - "$CEX_P0_EVIDENCE_DIR/database-lifecycle.json" "$GITHUB_SHA" <<'PY'
+          import json
+          from datetime import datetime, timezone
+          from pathlib import Path
+          import sys
+
+          Path(sys.argv[1]).write_text(json.dumps({
+              "schema": "cex.p0-database-lifecycle.v1",
+              "ok": True,
+              "commit_sha": sys.argv[2],
+              "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+              "checks": [
+                  "fresh-migration-and-p0-assertions",
+                  "existing-row-audit-baseline",
+                  "ledger-operation-identity-and-replay",
+                  "invocation-contract-lifecycle",
+                  "invocation-terminal-mutual-exclusion",
+                  "gateway-exact-reserve-fault-matrix",
+                  "execution-settlement-fault-matrix",
+                  "provider-unknown-outcome-reconciliation",
+                  "trnm-settlement-receipt-response-loss-recovery",
+              ],
+          }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+
+      - name: Bounded exact Ledger soak
+        env:
+          CEX_P0_SOAK_ITERATIONS: '250'
+        run: bash scripts/check-p0-exact-ledger-soak-postgres.sh
+
+      - name: Exact-state backup and restore drill
+        run: bash scripts/check-p0-backup-restore-postgres.sh
+
+      - name: Observe actual repository governance
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/observe-repository-governance.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --commit-sha "$GITHUB_SHA" \
+            --output "$CEX_P0_EVIDENCE_DIR/repository-governance.json"
+
+      - name: Bind exact-tree hosted gate evidence
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/p0-release-evidence.py collect \
+            --evidence-dir "$CEX_P0_EVIDENCE_DIR" \
+            --context run/p0-release-context.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --branch '${{ steps.source.outputs.branch }}' \
+            --sha "$GITHUB_SHA" \
+            --tree '${{ steps.source.outputs.tree }}' \
+            --run-id "$GITHUB_RUN_ID" \
+            --server-url "$GITHUB_SERVER_URL"
+
+      - name: Upload immutable evidence payload
+        id: payload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cex-p0-evidence-${{ github.sha }}
+          path: run/p0-release-evidence
+          if-no-files-found: error
+          compression-level: 6
+          retention-days: 90
+
+      - name: Generate and validate candidate manifest
+        shell: bash
+        env:
+          PAYLOAD_DIGEST: ${{ steps.payload.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p run/p0-release-manifest
+          python3 scripts/p0-release-evidence.py manifest \
+            --context run/p0-release-context.json \
+            --output run/p0-release-manifest/cex-p0-candidate-manifest.json \
+            --release-id "cex-p0-${GITHUB_SHA}" \
+            --payload-name "cex-p0-evidence-${GITHUB_SHA}" \
+            --payload-digest "$PAYLOAD_DIGEST"
+          python3 scripts/check-release-baseline-manifest.py \
+            run/p0-release-manifest/cex-p0-candidate-manifest.json
+
+      - name: Upload candidate manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cex-p0-candidate-manifest-${{ github.sha }}
+          path: run/p0-release-manifest/cex-p0-candidate-manifest.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
+
+      - name: Publish qualification summary
+        shell: bash
+        run: |
+          {
+            echo '## P0 repository candidate qualified'
+            echo
+            echo "- Commit: \`$GITHUB_SHA\`"
+            echo "- Tree: \`${{ steps.source.outputs.tree }}\`"
+            echo "- Migration head: \`0084_make_provider_reconciliation_replay_terminal_safe.sql\`"
+            echo '- Scope: repository exact-money control plane + TRNM receipt recovery v1'
+            echo '- TRNM receipt lookup: response-loss, concurrent duplicate, restart, conflict, auth and database-outage qualified'
+            echo '- GitHub branch/ruleset state: recorded in repository-governance.json; no enforcement is inferred from source code'
+            echo '- Production authorization: not granted; independent external gates remain mandatory'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cex-p0-candidate-failure-${{ github.sha }}-${{ github.run_attempt }}
+          path: run/p0-release-evidence
+          if-no-files-found: ignore
+          retention-days: 14

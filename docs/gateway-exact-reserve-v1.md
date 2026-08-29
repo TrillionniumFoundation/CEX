@@ -105,7 +105,8 @@ Immutable fields cannot change and commands cannot be deleted. Transition eviden
 ## 5. Worker boundary
 
 The worker calls `cex_claim_gateway_exact_reserves_v1` through an autocommit query. The claim
-transaction commits before any HTTP request. It then sends the stored request to
+transaction commits before any HTTP request; in other words, the claim transaction commits before
+the remote Ledger side effect begins. It then sends the stored request to
 `POST /v2/ledger/effects` with redirects disabled, a bounded timeout and a bounded response body.
 The final state is persisted through a separate autocommit function.
 

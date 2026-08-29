@@ -5,6 +5,8 @@ on:
   push:
     paths:
       - 'migrations/**'
+      - 'services/ledger-service/src/lib.rs'
+      - 'services/ledger-service/src/receipt_lookup.rs'
       - 'scripts/check-p0-migrations.py'
       - 'scripts/check-p0-migrations-postgres.sh'
       - 'scripts/check-audit-source-baseline-postgres.sh'
@@ -12,15 +14,22 @@ on:
       - 'scripts/check-invocation-ledger-contract-static.py'
       - 'scripts/check-invocation-ledger-contract-postgres.sh'
       - 'scripts/check-invocation-ledger-terminal-postgres.sh'
+      - 'scripts/check-trnm-settlement-receipt-lookup.py'
+      - 'scripts/check-trnm-settlement-receipt-lookup-http.sh'
       - 'scripts/backfill-audit-source-baselines.sh'
       - 'docs/templates/cex-release-baseline-manifest-v1.json'
       - 'docs/audit-source-baseline-backfill-v1.md'
       - 'docs/ledger-operation-identity-v1.md'
       - 'docs/invocation-ledger-contract-v1.md'
+      - 'docs/protocol/trnm-settlement-receipt-recovery-v1.md'
+      - 'docs/release-evidence/p0-candidate-trigger.json'
       - '.github/workflows/p0-migration-gate.yml'
+      - '.github/workflows/p0-release-candidate-gate.yml'
   pull_request:
     paths:
       - 'migrations/**'
+      - 'services/ledger-service/src/lib.rs'
+      - 'services/ledger-service/src/receipt_lookup.rs'
       - 'scripts/check-p0-migrations.py'
       - 'scripts/check-p0-migrations-postgres.sh'
       - 'scripts/check-audit-source-baseline-postgres.sh'
@@ -28,12 +37,17 @@ on:
       - 'scripts/check-invocation-ledger-contract-static.py'
       - 'scripts/check-invocation-ledger-contract-postgres.sh'
       - 'scripts/check-invocation-ledger-terminal-postgres.sh'
+      - 'scripts/check-trnm-settlement-receipt-lookup.py'
+      - 'scripts/check-trnm-settlement-receipt-lookup-http.sh'
       - 'scripts/backfill-audit-source-baselines.sh'
       - 'docs/templates/cex-release-baseline-manifest-v1.json'
       - 'docs/audit-source-baseline-backfill-v1.md'
       - 'docs/ledger-operation-identity-v1.md'
       - 'docs/invocation-ledger-contract-v1.md'
+      - 'docs/protocol/trnm-settlement-receipt-recovery-v1.md'
+      - 'docs/release-evidence/p0-candidate-trigger.json'
       - '.github/workflows/p0-migration-gate.yml'
+      - '.github/workflows/p0-release-candidate-gate.yml'
 
 permissions:
   contents: read
@@ -62,13 +76,19 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Candidate tree hygiene
+        run: python3 scripts/check-p0-release-candidate-hygiene.py
 
       - name: Static migration contract
         run: python3 scripts/check-p0-migrations.py
 
       - name: Invocation Ledger contract static wiring
         run: python3 scripts/check-invocation-ledger-contract-static.py
+
+      - name: TRNM receipt recovery static wiring
+        run: python3 scripts/check-trnm-settlement-receipt-lookup.py
 
       - name: Fresh apply and P0 database assertions
         run: bash scripts/check-p0-migrations-postgres.sh

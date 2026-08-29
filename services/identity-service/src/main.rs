@@ -33,15 +33,14 @@ async fn main() {
             std::process::exit(runtime_guard::CONFIG_ERROR_EXIT_CODE);
         }
     };
-    let resolve_auth = match ServiceAuthConfig::identity_resolve_from_env(
-        startup.profile.is_production_like(),
-    ) {
-        Ok(config) => Arc::new(config),
-        Err(error) => {
-            eprintln!("identity-service startup rejected: {error}");
-            std::process::exit(runtime_guard::CONFIG_ERROR_EXIT_CODE);
-        }
-    };
+    let resolve_auth =
+        match ServiceAuthConfig::identity_resolve_from_env(startup.profile.is_production_like()) {
+            Ok(config) => Arc::new(config),
+            Err(error) => {
+                eprintln!("identity-service startup rejected: {error}");
+                std::process::exit(runtime_guard::CONFIG_ERROR_EXIT_CODE);
+            }
+        };
     eprintln!(
         "identity-service startup guard accepted profile={} db_preflight={} static_fallback_disabled={}",
         startup.profile,

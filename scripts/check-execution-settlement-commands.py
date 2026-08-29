@@ -6,7 +6,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,6 +32,11 @@ def require(relative: str, *markers: str) -> str:
     return content
 
 
+def migration_number(filename: str) -> int | None:
+    match = re.match(r"^(\d{4})_", Path(filename).name)
+    return int(match.group(1)) if match else None
+
+
 MIGRATION_PATHS = [
     "migrations/0067_add_execution_ledger_settlement_schema.sql",
     "migrations/0068_add_execution_ledger_settlement_guards.sql",
@@ -41,6 +45,7 @@ MIGRATION_PATHS = [
     "migrations/0071_add_execution_ledger_settlement_finish.sql",
     "migrations/0072_add_execution_ledger_settlement_operator.sql",
 ]
+SETTLEMENT_SLICE_HEAD = Path(MIGRATION_PATHS[-1]).name
 migration_parts = [read(relative) for relative in MIGRATION_PATHS]
 migration = "\n".join(migration_parts)
 for relative, content in zip(MIGRATION_PATHS, migration_parts):
@@ -159,14 +164,15 @@ require(
 )
 require(
     "docs/execution-ledger-settlement-commands-v1.md",
-    "claim transaction commits",
+    "short worker claim transaction",
+    "Ledger HTTP outside every business transaction",
     "reconcile_required",
     "fresh explicit acknowledgement",
 )
 require(
-    "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v11.md",
-    "P0-N5 delivered by this candidate",
-    "Gateway exact registration and reserve",
+    "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
+    "P0-N5 durable Execution settlement",
+    "P0-N6 delivered by this candidate",
     "not production-ready",
 )
 require(
@@ -181,21 +187,35 @@ require(
     "ProtectSystem=strict",
 )
 
+canonical_migration_head: str | None = None
 manifest_raw = read("docs/templates/cex-release-baseline-manifest-v1.json")
 if manifest_raw:
     try:
         manifest = json.loads(manifest_raw)
-        actual = manifest["database"]["migration_head"]
+        canonical_migration_head = str(manifest["database"]["migration_head"])
     except (json.JSONDecodeError, KeyError, TypeError) as error:
         PROBLEMS.append(f"cannot decode release manifest template: {error}")
     else:
-        expected = "0072_add_execution_ledger_settlement_operator.sql"
-        if actual != expected:
-            PROBLEMS.append(f"release manifest migration_head={actual!r}, expected {expected!r}")
+        actual_number = migration_number(canonical_migration_head)
+        slice_number = migration_number(SETTLEMENT_SLICE_HEAD)
+        if actual_number is None:
+            PROBLEMS.append(
+                f"release manifest migration_head={canonical_migration_head!r} is not a numbered migration"
+            )
+        elif slice_number is None or actual_number < slice_number:
+            PROBLEMS.append(
+                "release manifest canonical migration head predates the complete settlement slice: "
+                f"{canonical_migration_head!r} < {SETTLEMENT_SLICE_HEAD!r}"
+            )
+        elif not (ROOT / "migrations" / Path(canonical_migration_head).name).is_file():
+            PROBLEMS.append(
+                f"release manifest canonical migration file does not exist: {canonical_migration_head}"
+            )
 
 result = {
     "status": "failed" if PROBLEMS else "ok",
-    "migration_head": "0072_add_execution_ledger_settlement_operator.sql",
+    "settlement_slice_head": SETTLEMENT_SLICE_HEAD,
+    "canonical_migration_head": canonical_migration_head,
     "api_adapter_activated": "settle_invocation(" in api if api else None,
     "problems": PROBLEMS,
 }

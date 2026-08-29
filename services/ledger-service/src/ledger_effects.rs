@@ -10,9 +10,7 @@ use shared_config::{
     admin_principal_allows_org, admin_principal_has_scope, authorize_scoped_admin_from_map,
     AdminAuthorizationFailure, AdminPrincipal,
 };
-use shared_types::ledger_v2::{
-    LedgerEffectRequestV1, LEDGER_EFFECT_SCHEMA_V1,
-};
+use shared_types::ledger_v2::{LedgerEffectRequestV1, LEDGER_EFFECT_SCHEMA_V1};
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -87,9 +85,7 @@ pub async fn apply_effect(
     if let Err(response) = enforce_org_boundary(&admin, &account_org_id) {
         return response;
     }
-    if money.currency != account_currency_unit
-        || i16::from(money.scale) != account_currency_scale
-    {
+    if money.currency != account_currency_unit || i16::from(money.scale) != account_currency_scale {
         return error_response(
             StatusCode::BAD_REQUEST,
             "ledger_currency_mismatch",
@@ -180,11 +176,7 @@ pub async fn get_effect(
             "operation_id must not be the nil UUID",
         );
     }
-    let admin = match authorize_ledger_admin(
-        &state,
-        &headers,
-        &["ledger:read", "ledger:manage"],
-    ) {
+    let admin = match authorize_ledger_admin(&state, &headers, &["ledger:read", "ledger:manage"]) {
         Ok(admin) => admin,
         Err(response) => return response,
     };
@@ -248,11 +240,7 @@ pub async fn list_trace(
             "trace_id must not be the nil UUID",
         );
     }
-    let admin = match authorize_ledger_admin(
-        &state,
-        &headers,
-        &["ledger:read", "ledger:manage"],
-    ) {
+    let admin = match authorize_ledger_admin(&state, &headers, &["ledger:read", "ledger:manage"]) {
         Ok(admin) => admin,
         Err(response) => return response,
     };
@@ -312,11 +300,14 @@ pub async fn list_trace(
         }
     }
 
-    (StatusCode::OK, Json(json!({
-        "trace_id": trace_id,
-        "limit": TRACE_RESULT_LIMIT,
-        "effects": results,
-    })))
+    (
+        StatusCode::OK,
+        Json(json!({
+            "trace_id": trace_id,
+            "limit": TRACE_RESULT_LIMIT,
+            "effects": results,
+        })),
+    )
         .into_response()
 }
 
@@ -367,8 +358,7 @@ fn database_error_response(context: &str, error: sqlx::Error) -> Response {
         if database_error.code().as_deref() == Some("23505") || message.contains("collision") {
             status = StatusCode::CONFLICT;
             code = "ledger_operation_collision";
-        } else if database_error.code().as_deref() == Some("P0002")
-            || message.contains("not found")
+        } else if database_error.code().as_deref() == Some("P0002") || message.contains("not found")
         {
             status = StatusCode::NOT_FOUND;
             code = "ledger_account_not_found";

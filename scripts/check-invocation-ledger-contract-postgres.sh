@@ -13,22 +13,17 @@ begin;
 insert into public.organizations (org_id, name)
 values ('d0000000-0000-4000-8000-000000000001', 'Invocation Ledger contract org');
 
-insert into public.accounts (
-    account_id,
-    org_id,
-    account_type,
-    currency_unit,
-    balance,
-    reserved,
-    status
-) values (
-    'd1000000-0000-4000-8000-000000000001',
-    'd0000000-0000-4000-8000-000000000001',
+select public.cex_open_account_v2(
+    'd1000000-0000-4000-8000-000000000001'::uuid,
+    'd0000000-0000-4000-8000-000000000001'::uuid,
+    'd1100000-0000-4000-8000-000000000001'::uuid,
     'test',
     'credit',
-    100.000000,
-    0.000000,
-    'active'
+    6::smallint,
+    100000000::bigint,
+    'org:d0000000:opening',
+    'invocation-ledger-account-opening',
+    'p0-invocation-ledger-test'
 );
 
 insert into public.invocations (
@@ -76,24 +71,24 @@ declare
     registration_intents bigint;
 begin
     first_result := public.cex_register_invocation_ledger_contract_v1(
-        'd2000000-0000-4000-8000-000000000001',
-        'd1000000-0000-4000-8000-000000000001',
-        'd0000000-0000-4000-8000-000000000001',
-        'd3000000-0000-4000-8000-000000000001',
+        'd2000000-0000-4000-8000-000000000001'::uuid,
+        'd1000000-0000-4000-8000-000000000001'::uuid,
+        'd0000000-0000-4000-8000-000000000001'::uuid,
+        'd3000000-0000-4000-8000-000000000001'::uuid,
         'credit',
-        6,
-        10000000,
+        6::smallint,
+        10000000::bigint,
         'gateway-service',
         'p0-gateway-principal'
     );
     replay_result := public.cex_register_invocation_ledger_contract_v1(
-        'd2000000-0000-4000-8000-000000000001',
-        'd1000000-0000-4000-8000-000000000001',
-        'd0000000-0000-4000-8000-000000000001',
-        'd3000000-0000-4000-8000-000000000001',
+        'd2000000-0000-4000-8000-000000000001'::uuid,
+        'd1000000-0000-4000-8000-000000000001'::uuid,
+        'd0000000-0000-4000-8000-000000000001'::uuid,
+        'd3000000-0000-4000-8000-000000000001'::uuid,
         'credit',
-        6,
-        10000000,
+        6::smallint,
+        10000000::bigint,
         'gateway-service',
         'p0-gateway-principal'
     );
@@ -107,13 +102,13 @@ begin
 
     begin
         perform public.cex_register_invocation_ledger_contract_v1(
-            'd2000000-0000-4000-8000-000000000001',
-            'd1000000-0000-4000-8000-000000000001',
-            'd0000000-0000-4000-8000-000000000001',
-            'd3000000-0000-4000-8000-000000000001',
+            'd2000000-0000-4000-8000-000000000001'::uuid,
+            'd1000000-0000-4000-8000-000000000001'::uuid,
+            'd0000000-0000-4000-8000-000000000001'::uuid,
+            'd3000000-0000-4000-8000-000000000001'::uuid,
             'credit',
-            6,
-            11000000,
+            6::smallint,
+            11000000::bigint,
             'gateway-service',
             'p0-gateway-principal'
         );
@@ -145,7 +140,7 @@ declare
     reserved_minor_value bigint;
 begin
     request := public.cex_invocation_ledger_effect_request_v1(
-        'd2000000-0000-4000-8000-000000000001',
+        'd2000000-0000-4000-8000-000000000001'::uuid,
         'reserve'
     );
     if jsonb_typeof(request -> 'amount_minor') <> 'string'
@@ -183,7 +178,7 @@ begin
     end if;
 
     request := public.cex_invocation_ledger_effect_request_v1(
-        'd2000000-0000-4000-8000-000000000001',
+        'd2000000-0000-4000-8000-000000000001'::uuid,
         'consume'
     );
     perform public.cex_apply_ledger_effect_v1(
@@ -211,7 +206,7 @@ begin
 
     begin
         perform public.cex_invocation_ledger_effect_request_v1(
-            'd2000000-0000-4000-8000-000000000001',
+            'd2000000-0000-4000-8000-000000000001'::uuid,
             'refund'
         );
         raise exception 'refund request was allowed after consume';
@@ -228,19 +223,19 @@ declare
     reserved_minor_value bigint;
 begin
     perform public.cex_register_invocation_ledger_contract_v1(
-        'd2000000-0000-4000-8000-000000000002',
-        'd1000000-0000-4000-8000-000000000001',
-        'd0000000-0000-4000-8000-000000000001',
-        'd3000000-0000-4000-8000-000000000002',
+        'd2000000-0000-4000-8000-000000000002'::uuid,
+        'd1000000-0000-4000-8000-000000000001'::uuid,
+        'd0000000-0000-4000-8000-000000000001'::uuid,
+        'd3000000-0000-4000-8000-000000000002'::uuid,
         'credit',
-        6,
-        5000000,
+        6::smallint,
+        5000000::bigint,
         'gateway-service',
         'p0-gateway-principal'
     );
 
     request := public.cex_invocation_ledger_effect_request_v1(
-        'd2000000-0000-4000-8000-000000000002',
+        'd2000000-0000-4000-8000-000000000002'::uuid,
         'reserve'
     );
     perform public.cex_apply_ledger_effect_v1(
@@ -249,18 +244,18 @@ begin
         (request ->> 'operation_id')::uuid,
         'reserve',
         (request ->> 'amount_minor')::bigint,
-        6,
+        (request ->> 'currency_scale')::smallint,
         'invocation',
-        'd2000000-0000-4000-8000-000000000002',
+        'd2000000-0000-4000-8000-000000000002'::uuid,
         request ->> 'idempotency_scope',
-        'reserve',
+        request ->> 'idempotency_key',
         'ledger-service',
         'execution-settlement-test',
         'explicit'
     );
 
     request := public.cex_invocation_ledger_effect_request_v1(
-        'd2000000-0000-4000-8000-000000000002',
+        'd2000000-0000-4000-8000-000000000002'::uuid,
         'refund'
     );
     perform public.cex_apply_ledger_effect_v1(
@@ -269,11 +264,11 @@ begin
         (request ->> 'operation_id')::uuid,
         'refund',
         (request ->> 'amount_minor')::bigint,
-        6,
+        (request ->> 'currency_scale')::smallint,
         'invocation',
-        'd2000000-0000-4000-8000-000000000002',
+        'd2000000-0000-4000-8000-000000000002'::uuid,
         request ->> 'idempotency_scope',
-        'refund',
+        request ->> 'idempotency_key',
         'ledger-service',
         'execution-settlement-test',
         'explicit'
@@ -299,18 +294,18 @@ declare
     entry_count bigint;
 begin
     perform public.cex_register_invocation_ledger_contract_v1(
-        'd2000000-0000-4000-8000-000000000003',
-        'd1000000-0000-4000-8000-000000000001',
-        'd0000000-0000-4000-8000-000000000001',
-        'd3000000-0000-4000-8000-000000000003',
+        'd2000000-0000-4000-8000-000000000003'::uuid,
+        'd1000000-0000-4000-8000-000000000001'::uuid,
+        'd0000000-0000-4000-8000-000000000001'::uuid,
+        'd3000000-0000-4000-8000-000000000003'::uuid,
         'credit',
-        6,
-        1000000,
+        6::smallint,
+        1000000::bigint,
         'gateway-service',
         'p0-gateway-principal'
     );
     request := public.cex_invocation_ledger_effect_request_v1(
-        'd2000000-0000-4000-8000-000000000003',
+        'd2000000-0000-4000-8000-000000000003'::uuid,
         'reserve'
     );
 
@@ -320,12 +315,12 @@ begin
             (request ->> 'trace_id')::uuid,
             wrong_operation_id,
             'reserve',
-            1000000,
-            6,
+            1000000::bigint,
+            6::smallint,
             'invocation',
-            'd2000000-0000-4000-8000-000000000003',
+            'd2000000-0000-4000-8000-000000000003'::uuid,
             request ->> 'idempotency_scope',
-            'reserve',
+            request ->> 'idempotency_key',
             'ledger-service',
             'execution-settlement-test',
             'explicit'

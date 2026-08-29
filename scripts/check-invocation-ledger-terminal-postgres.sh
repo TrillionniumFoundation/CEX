@@ -13,22 +13,17 @@ begin;
 insert into public.organizations (org_id, name)
 values ('e0000000-0000-4000-8000-000000000001', 'Invocation Ledger terminal test org');
 
-insert into public.accounts (
-    account_id,
-    org_id,
-    account_type,
-    currency_unit,
-    balance,
-    reserved,
-    status
-) values (
-    'e1000000-0000-4000-8000-000000000001',
-    'e0000000-0000-4000-8000-000000000001',
+select public.cex_open_account_v2(
+    'e1000000-0000-4000-8000-000000000001'::uuid,
+    'e0000000-0000-4000-8000-000000000001'::uuid,
+    'e1100000-0000-4000-8000-000000000001'::uuid,
     'test',
     'credit',
-    100.000000,
-    0.000000,
-    'active'
+    6::smallint,
+    100000000::bigint,
+    'org:e0000000:opening',
+    'terminal-exclusivity-account-opening',
+    'p0-terminal-exclusivity-test'
 );
 
 insert into public.invocations (
@@ -60,25 +55,25 @@ insert into public.invocations (
 );
 
 select public.cex_register_invocation_ledger_contract_v1(
-    'e2000000-0000-4000-8000-000000000001',
-    'e1000000-0000-4000-8000-000000000001',
-    'e0000000-0000-4000-8000-000000000001',
-    'e3000000-0000-4000-8000-000000000001',
+    'e2000000-0000-4000-8000-000000000001'::uuid,
+    'e1000000-0000-4000-8000-000000000001'::uuid,
+    'e0000000-0000-4000-8000-000000000001'::uuid,
+    'e3000000-0000-4000-8000-000000000001'::uuid,
     'credit',
-    6,
-    10000000,
+    6::smallint,
+    10000000::bigint,
     'gateway-service',
     'terminal-test-gateway'
 );
 
 select public.cex_register_invocation_ledger_contract_v1(
-    'e2000000-0000-4000-8000-000000000002',
-    'e1000000-0000-4000-8000-000000000001',
-    'e0000000-0000-4000-8000-000000000001',
-    'e3000000-0000-4000-8000-000000000002',
+    'e2000000-0000-4000-8000-000000000002'::uuid,
+    'e1000000-0000-4000-8000-000000000001'::uuid,
+    'e0000000-0000-4000-8000-000000000001'::uuid,
+    'e3000000-0000-4000-8000-000000000002'::uuid,
     'credit',
-    6,
-    5000000,
+    6::smallint,
+    5000000::bigint,
     'gateway-service',
     'terminal-test-gateway'
 );
@@ -88,7 +83,7 @@ declare
     request jsonb;
 begin
     request := public.cex_invocation_ledger_effect_request_v1(
-        'e2000000-0000-4000-8000-000000000001',
+        'e2000000-0000-4000-8000-000000000001'::uuid,
         'reserve'
     );
     perform public.cex_apply_ledger_effect_v1(
@@ -108,7 +103,7 @@ begin
     );
 
     request := public.cex_invocation_ledger_effect_request_v1(
-        'e2000000-0000-4000-8000-000000000001',
+        'e2000000-0000-4000-8000-000000000001'::uuid,
         'consume'
     );
     perform public.cex_apply_ledger_effect_v1(
@@ -151,7 +146,7 @@ begin
 
     begin
         perform public.cex_invocation_ledger_effect_request_v1(
-            'e2000000-0000-4000-8000-000000000001',
+            'e2000000-0000-4000-8000-000000000001'::uuid,
             'refund'
         );
     exception
@@ -191,7 +186,7 @@ declare
     request jsonb;
 begin
     request := public.cex_invocation_ledger_effect_request_v1(
-        'e2000000-0000-4000-8000-000000000002',
+        'e2000000-0000-4000-8000-000000000002'::uuid,
         'reserve'
     );
     perform public.cex_apply_ledger_effect_v1(
@@ -211,7 +206,7 @@ begin
     );
 
     request := public.cex_invocation_ledger_effect_request_v1(
-        'e2000000-0000-4000-8000-000000000002',
+        'e2000000-0000-4000-8000-000000000002'::uuid,
         'refund'
     );
     perform public.cex_apply_ledger_effect_v1(
@@ -254,7 +249,7 @@ begin
 
     begin
         perform public.cex_invocation_ledger_effect_request_v1(
-            'e2000000-0000-4000-8000-000000000002',
+            'e2000000-0000-4000-8000-000000000002'::uuid,
             'consume'
         );
     exception

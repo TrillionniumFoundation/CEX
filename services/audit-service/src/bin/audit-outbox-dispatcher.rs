@@ -3,9 +3,7 @@ mod runtime_guard;
 #[path = "../../../../crates/shared-config/src/service_client.rs"]
 mod service_client;
 
-use audit_service::outbox_dispatcher::{
-    dispatch_once, DispatcherConfig, DISPATCHER_SERVICE_ID,
-};
+use audit_service::outbox_dispatcher::{dispatch_once, DispatcherConfig, DISPATCHER_SERVICE_ID};
 use runtime_guard::ServiceKind;
 use shared_tracing::init_tracing;
 use sqlx::postgres::PgPoolOptions;

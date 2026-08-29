@@ -5,6 +5,7 @@ mod service_client;
 
 use execution_service::{build_router, state::AppState, validate_internal_service_auth};
 use runtime_guard::ServiceKind;
+use shared_config::{load_ledger_scoped_admin_tokens, select_ledger_manage_token};
 use shared_tracing::init_tracing;
 
 #[tokio::main]
@@ -21,6 +22,15 @@ async fn main() {
     if let Err(error) = validate_internal_service_auth(startup.profile.is_production_like()) {
         eprintln!("execution-service startup rejected: {error}");
         std::process::exit(runtime_guard::CONFIG_ERROR_EXIT_CODE);
+    }
+    if startup.profile.is_production_like() {
+        let ledger_tokens = load_ledger_scoped_admin_tokens();
+        if select_ledger_manage_token(&ledger_tokens).is_none() {
+            eprintln!(
+                "execution-service startup rejected: production-like execution requires an explicit ledger:manage downstream principal"
+            );
+            std::process::exit(runtime_guard::CONFIG_ERROR_EXIT_CODE);
+        }
     }
     let internal_http = match service_client::build_internal_http_client(
         "execution-service",

@@ -857,7 +857,11 @@ async fn execute_trnm_intent_in_memory(
         }
         _ => ReceiptStatus::FailedLedger,
     };
+    let account_balance = account.balance;
+    let account_reserved = account.reserved;
     drop(accounts);
+    sync_exact_memory_account_from_legacy(state, account_id, account_balance, account_reserved)
+        .await?;
     state
         .idempotency_keys
         .write()
@@ -873,6 +877,86 @@ async fn execute_trnm_intent_in_memory(
     );
     receipt.evidence = json!({"persistent": false, "local_dev_fallback": true});
     Ok(receipt)
+}
+
+async fn sync_exact_memory_account_from_legacy(
+    state: &AppState,
+    account_id: Uuid,
+    balance: f64,
+    reserved: f64,
+) -> Result<(), Response> {
+    let mut exact = state.exact_memory.write().await;
+    let Some(opening) = exact.account_openings_by_account.get_mut(&account_id) else {
+        return Ok(());
+    };
+    let Some(account) = opening
+        .get_mut("account_state")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: "exact_memory_projection_sync_failed".to_string(),
+                message: Some("exact account state is malformed".to_string()),
+            }),
+        )
+            .into_response());
+    };
+    let scale = account
+        .get("currency_scale")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u8::try_from(value).ok())
+        .ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: "exact_memory_projection_sync_failed".to_string(),
+                    message: Some("exact account currency scale is missing".to_string()),
+                }),
+            )
+                .into_response()
+        })?;
+    let balance_minor = exact_minor_from_legacy_value(balance, scale).map_err(|message| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: "exact_memory_projection_sync_failed".to_string(),
+                message: Some(message),
+            }),
+        )
+            .into_response()
+    })?;
+    let reserved_minor = exact_minor_from_legacy_value(reserved, scale).map_err(|message| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: "exact_memory_projection_sync_failed".to_string(),
+                message: Some(message),
+            }),
+        )
+            .into_response()
+    })?;
+    account.insert("balance_minor".to_string(), json!(balance_minor));
+    account.insert("reserved_minor".to_string(), json!(reserved_minor));
+    Ok(())
+}
+
+fn exact_minor_from_legacy_value(value: f64, scale: u8) -> Result<i64, String> {
+    if !value.is_finite() || value < 0.0 {
+        return Err("legacy mirror value must be finite and non-negative".to_string());
+    }
+    let factor = 10_i64
+        .checked_pow(u32::from(scale))
+        .ok_or_else(|| "exact account currency scale is unsupported".to_string())?;
+    let scaled = value * factor as f64;
+    let rounded = scaled.round();
+    let tolerance = f64::EPSILON * scaled.abs().max(1.0) * 16.0;
+    if (scaled - rounded).abs() > tolerance || rounded > i64::MAX as f64 {
+        return Err(format!(
+            "legacy mirror value {value} cannot be represented at scale {scale}"
+        ));
+    }
+    Ok(rounded as i64)
 }
 
 pub async fn post_trnm_wallet_snapshot(

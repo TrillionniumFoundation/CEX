@@ -66,10 +66,7 @@ pub async fn create_event(
     }
 }
 
-fn bind_authenticated_writer(
-    request: &mut AuditEventCreateRequest,
-    writer: &AuthenticatedService,
-) {
+fn bind_authenticated_writer(request: &mut AuditEventCreateRequest, writer: &AuthenticatedService) {
     if !writer.authenticated {
         return;
     }

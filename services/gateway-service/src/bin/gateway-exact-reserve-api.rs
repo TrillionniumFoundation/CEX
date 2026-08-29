@@ -1,7 +1,7 @@
 use axum::{
     extract::{DefaultBodyLimit, Path, State},
     http::{header::AUTHORIZATION, HeaderMap, StatusCode},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -46,6 +46,29 @@ struct ExactReserveRequest {
     execution_mode: String,
     #[serde(default = "default_max_attempts")]
     max_attempts: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthenticationError {
+    Unauthorized,
+    InvalidServiceId,
+}
+
+impl AuthenticationError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Unauthorized => error_response(
+                StatusCode::UNAUTHORIZED,
+                "unauthorized",
+                "a valid exact-ingress bearer token is required",
+            ),
+            Self::InvalidServiceId => error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_service_id",
+                "x-cex-service-id must use 1..128 characters from [A-Za-z0-9._:-]",
+            ),
+        }
+    }
 }
 
 fn default_execution_mode() -> String {
@@ -125,7 +148,7 @@ async fn prepare_exact_reserve(
 ) -> impl IntoResponse {
     let principal = match authenticate(&headers, &state.ingress_token) {
         Ok(principal) => principal,
-        Err(response) => return response,
+        Err(error) => return error.into_response(),
     };
     if invocation_id.is_nil()
         || request.account_id.is_nil()
@@ -211,21 +234,14 @@ async fn prepare_exact_reserve(
     }
 }
 
-fn authenticate(
-    headers: &HeaderMap,
-    expected_token: &str,
-) -> Result<String, axum::response::Response> {
+fn authenticate(headers: &HeaderMap, expected_token: &str) -> Result<String, AuthenticationError> {
     let authorization = headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
     let supplied = authorization.strip_prefix("Bearer ").unwrap_or_default();
     if !constant_time_eq(supplied.as_bytes(), expected_token.as_bytes()) {
-        return Err(error_response(
-            StatusCode::UNAUTHORIZED,
-            "unauthorized",
-            "a valid exact-ingress bearer token is required",
-        ));
+        return Err(AuthenticationError::Unauthorized);
     }
 
     let principal = headers
@@ -240,11 +256,7 @@ fn authenticate(
             character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-' | ':')
         })
     {
-        return Err(error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_service_id",
-            "x-cex-service-id must use 1..128 characters from [A-Za-z0-9._:-]",
-        ));
+        return Err(AuthenticationError::InvalidServiceId);
     }
     Ok(principal)
 }
@@ -275,7 +287,11 @@ fn map_database_error(error: sqlx::Error) -> axum::response::Response {
 }
 
 fn error_response(status: StatusCode, code: &str, message: &str) -> axum::response::Response {
-    (status, Json(json!({"error": {"code": code, "message": message}}))).into_response()
+    (
+        status,
+        Json(json!({"error": {"code": code, "message": message}})),
+    )
+        .into_response()
 }
 
 fn parse_positive_minor_units(raw: &str) -> Result<i64, &'static str> {
@@ -446,7 +462,10 @@ mod tests {
     #[test]
     fn exact_minor_units_reject_float_sign_and_noncanonical_zero_prefix() {
         assert_eq!(parse_positive_minor_units("1").unwrap(), 1);
-        assert_eq!(parse_positive_minor_units("9007199254740991").unwrap(), 9_007_199_254_740_991);
+        assert_eq!(
+            parse_positive_minor_units("9007199254740991").unwrap(),
+            9_007_199_254_740_991
+        );
         for invalid in ["", "0", "01", "+1", "-1", "1.0", " 1", "1 "] {
             assert!(parse_positive_minor_units(invalid).is_err(), "{invalid}");
         }

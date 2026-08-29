@@ -53,10 +53,7 @@ pub async fn create_invocation(state: AppState, req: InvocationRequest) -> Invoc
     record
 }
 
-pub async fn get_invocation(
-    state: AppState,
-    id: Uuid,
-) -> Result<Option<InvocationRecord>, String> {
+pub async fn get_invocation(state: AppState, id: Uuid) -> Result<Option<InvocationRecord>, String> {
     legacy::get_invocation(state, id).await
 }
 
@@ -213,18 +210,15 @@ mod tests {
                 capability_id: Some("capability-1".to_string()),
                 capability_provider: Some("ollama".to_string()),
                 capability_provider_ref: Some("model-1".to_string()),
-                account_id: reserve_amount.map(|_| {
-                    Uuid::parse_str("33333333-3333-4333-8333-333333333333").unwrap()
-                }),
+                account_id: reserve_amount
+                    .map(|_| Uuid::parse_str("33333333-3333-4333-8333-333333333333").unwrap()),
                 prompt: "do not duplicate prompt content into shadow payload".to_string(),
                 reserve_amount,
             },
             ledger_reserved: reserve_amount.is_some(),
             ledger_refunded: false,
             approval_required: false,
-            execution_id: Some(
-                Uuid::parse_str("44444444-4444-4444-8444-444444444444").unwrap(),
-            ),
+            execution_id: Some(Uuid::parse_str("44444444-4444-4444-8444-444444444444").unwrap()),
             execution: Some(InvocationExecutionState {
                 dispatch_mode: ExecutionDispatchMode::QueuedWorker,
                 attempt_count: 0,

@@ -20,10 +20,31 @@ set name = excluded.name,
     plan = excluded.plan,
     updated_at = now();
 
+-- Keep the synthetic command attached to a real tenant-bound Invocation. The
+-- command insert itself still bypasses the exact-contract INSERT trigger so the
+-- remainder of this probe isolates claim ownership, lease expiry, retry budget
+-- and operator recovery rather than duplicating the dedicated 0066 lifecycle.
+insert into public.invocations (
+    invocation_id,
+    org_id,
+    status,
+    request_payload,
+    trace_id,
+    created_at,
+    updated_at
+) values (
+    '73000000-0000-4000-8000-000000000020',
+    '73000000-0000-4000-8000-000000000001',
+    'Created',
+    '{"purpose":"gateway-exact-reserve-lifecycle"}'::jsonb,
+    '73000000-0000-4000-8000-000000000050',
+    clock_timestamp(),
+    clock_timestamp()
+);
+
 -- The lifecycle probe intentionally inserts a synthetic command while all
--- INSERT/FK triggers are disabled. Registration/binding correctness is covered
--- by the fresh migration chain and the dedicated 0066 contract gate; this block
--- isolates claim ownership, leases, retry exhaustion and operator recovery.
+-- INSERT triggers are disabled. Registration/binding correctness is covered by
+-- the fresh migration chain and the dedicated 0066 contract gate.
 set local session_replication_role = replica;
 insert into public.cex_gateway_ledger_reserve_commands_v1 (
     command_id,

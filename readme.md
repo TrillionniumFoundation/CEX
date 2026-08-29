@@ -1,3 +1,4 @@
+# CEX -> Rust AI-Native Platform
 
 本项目不是传统加密货币交易所，而是一个借鉴开源中心化交易所工程能力的 **Rust AI 原生平台**。
 

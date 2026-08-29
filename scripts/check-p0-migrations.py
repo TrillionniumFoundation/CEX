@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 MIGRATION_RE = re.compile(r"^(?P<number>\d{4})_[a-z0-9][a-z0-9._-]*\.sql$")
+SQL_COMMENT_RE = re.compile(r"--[^\n]*(?:\n|\Z)|/\*.*?\*/", re.DOTALL)
 FUNCTION_RE = re.compile(
     r"create\s+or\s+replace\s+function\s+.*?(?=create\s+or\s+replace\s+function|\Z)",
     re.IGNORECASE | re.DOTALL,
@@ -19,6 +20,12 @@ DESTRUCTIVE_PATTERNS = {
     "delete": re.compile(r"\bdelete\s+from\b", re.IGNORECASE),
     "drop column": re.compile(r"\balter\s+table\b.*?\bdrop\s+column\b", re.IGNORECASE | re.DOTALL),
 }
+
+
+def without_sql_comments(content: str) -> str:
+    """Remove comments before token-oriented checks to avoid comment false positives."""
+
+    return SQL_COMMENT_RE.sub("\n", content)
 
 
 def main() -> int:
@@ -53,7 +60,8 @@ def main() -> int:
 
     for number, path in migrations:
         content = path.read_text(encoding="utf-8")
-        lowered = content.lower()
+        executable_content = without_sql_comments(content)
+        lowered = executable_content.lower()
         stripped = content.strip()
         if not stripped:
             errors.append(f"{path.name}: migration is empty")
@@ -69,16 +77,16 @@ def main() -> int:
             if not stripped.lower().endswith("commit;"):
                 errors.append(f"{path.name}: P0 migration must end with commit;")
 
-            allow_destructive = "migration-check: allow-destructive" in lowered
+            allow_destructive = "migration-check: allow-destructive" in content.lower()
             if not allow_destructive:
                 for label, pattern in DESTRUCTIVE_PATTERNS.items():
-                    if pattern.search(content):
+                    if pattern.search(executable_content):
                         errors.append(
                             f"{path.name}: destructive operation '{label}' requires an explicit "
                             "-- migration-check: allow-destructive marker and reviewed rollback plan"
                         )
 
-            for function in FUNCTION_RE.findall(content):
+            for function in FUNCTION_RE.findall(executable_content):
                 if "set search_path" not in function.lower():
                     first_line = function.strip().splitlines()[0]
                     errors.append(

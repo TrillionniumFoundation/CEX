@@ -440,9 +440,7 @@ fn parse_mode(raw: Option<&str>) -> Result<ExecutionLedgerMode, String> {
             "legacy_v1" | "legacy" => Ok(ExecutionLedgerMode::LegacyV1),
             "dual" | "prefer_v2" => Ok(ExecutionLedgerMode::Dual),
             "require_v2" | "v2_only" => Ok(ExecutionLedgerMode::RequireV2),
-            _ => Err(format!(
-                "{MODE_ENV} must be legacy_v1, dual, or require_v2"
-            )),
+            _ => Err(format!("{MODE_ENV} must be legacy_v1, dual, or require_v2")),
         },
     }
 }
@@ -495,10 +493,7 @@ mod tests {
     #[test]
     fn mode_defaults_to_legacy_and_supports_staged_cutover() {
         assert_eq!(parse_mode(None).unwrap(), ExecutionLedgerMode::LegacyV1);
-        assert_eq!(
-            parse_mode(Some("dual")).unwrap(),
-            ExecutionLedgerMode::Dual
-        );
+        assert_eq!(parse_mode(Some("dual")).unwrap(), ExecutionLedgerMode::Dual);
         assert_eq!(
             parse_mode(Some("v2_only")).unwrap(),
             ExecutionLedgerMode::RequireV2

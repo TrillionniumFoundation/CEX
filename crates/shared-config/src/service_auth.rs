@@ -112,9 +112,7 @@ impl ServiceAuthConfig {
                 .map(|value| value.trim())
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| {
-                    format!(
-                        "{TOKEN_MAP_ENV} must contain a non-empty token for caller {caller}"
-                    )
+                    format!("{TOKEN_MAP_ENV} must contain a non-empty token for caller {caller}")
                 })?;
             validate_token(caller, token)?;
             allowed_tokens.insert((*caller).to_string(), token.to_string());
@@ -127,10 +125,7 @@ impl ServiceAuthConfig {
         })
     }
 
-    fn authenticate(
-        &self,
-        headers: &HeaderMap,
-    ) -> Result<AuthenticatedService, &'static str> {
+    fn authenticate(&self, headers: &HeaderMap) -> Result<AuthenticatedService, &'static str> {
         if matches!(self.mode, ServiceAuthMode::Off) {
             return Ok(AuthenticatedService {
                 service_id: "compatibility-unauthenticated".to_string(),
@@ -263,10 +258,8 @@ fn constant_time_eq(expected: &[u8], supplied: &[u8]) -> bool {
 mod tests {
     use super::*;
 
-    const GATEWAY_TOKEN: &str =
-        "9f2d37f86cf447a6b78015f4307d05f91dd2dbd65ad94faca1d8aa03c67dff45";
-    const IDENTITY_TOKEN: &str =
-        "a34eec99e9034dcc94ef660136ebdd3719978e3dd9874312ab7b7c2b9b14ea81";
+    const GATEWAY_TOKEN: &str = "9f2d37f86cf447a6b78015f4307d05f91dd2dbd65ad94faca1d8aa03c67dff45";
+    const IDENTITY_TOKEN: &str = "a34eec99e9034dcc94ef660136ebdd3719978e3dd9874312ab7b7c2b9b14ea81";
     const EXECUTION_TOKEN: &str =
         "ed34683df2c7423d81a5e8db2267463fa0246fd2970741f0b104c21f9f32f4fb";
     const DISPATCHER_TOKEN: &str =
