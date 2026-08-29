@@ -130,6 +130,17 @@ jobs:
       - name: Exact-state backup and restore drill
         run: bash scripts/check-p0-backup-restore-postgres.sh
 
+      - name: Observe actual repository governance
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/observe-repository-governance.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --commit-sha "$GITHUB_SHA" \
+            --output "$CEX_P0_EVIDENCE_DIR/repository-governance.json"
+
       - name: Bind exact-tree hosted gate evidence
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -191,6 +202,7 @@ jobs:
             echo "- Tree: \`${{ steps.source.outputs.tree }}\`"
             echo "- Migration head: \`0084_make_provider_reconciliation_replay_terminal_safe.sql\`"
             echo '- Scope: repository exact-money control plane'
+            echo '- GitHub branch/ruleset state: recorded in repository-governance.json; no enforcement is inferred from source code'
             echo '- Production authorization: not granted; independent external gates remain mandatory'
           } >> "$GITHUB_STEP_SUMMARY"
 
