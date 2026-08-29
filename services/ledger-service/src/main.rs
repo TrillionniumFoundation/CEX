@@ -1,6 +1,10 @@
+#[path = "../../../crates/shared-config/src/runtime_guard.rs"]
+mod runtime_guard;
+
 use ledger_service::{
     build_router, repository::postgres::PostgresLedgerRepository, state::AppState,
 };
+use runtime_guard::ServiceKind;
 use shared_tracing::init_tracing;
 
 fn env_flag(name: &str, default: bool) -> bool {
@@ -12,6 +16,18 @@ fn env_flag(name: &str, default: bool) -> bool {
 #[tokio::main]
 async fn main() {
     init_tracing();
+
+    let startup = match runtime_guard::enforce(ServiceKind::Ledger).await {
+        Ok(startup) => startup,
+        Err(error) => {
+            eprintln!("ledger-service startup rejected: {error}");
+            std::process::exit(runtime_guard::CONFIG_ERROR_EXIT_CODE);
+        }
+    };
+    eprintln!(
+        "ledger-service startup guard accepted profile={} db_preflight={}",
+        startup.profile, startup.database_preflight
+    );
 
     let fail_fast = env_flag("LEDGER_FAIL_FAST", false);
 

@@ -25,6 +25,9 @@ pub struct GatewayRuntimeMetrics {
     pub execution_approve_requests: AtomicU64,
     pub execution_retry_requests: AtomicU64,
     pub execution_cancel_requests: AtomicU64,
+    pub saga_shadow_write_attempts: AtomicU64,
+    pub saga_shadow_write_successes: AtomicU64,
+    pub saga_shadow_write_failures: AtomicU64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -38,6 +41,9 @@ pub struct GatewayRuntimeMetricsSnapshot {
     pub execution_approve_requests: u64,
     pub execution_retry_requests: u64,
     pub execution_cancel_requests: u64,
+    pub saga_shadow_write_attempts: u64,
+    pub saga_shadow_write_successes: u64,
+    pub saga_shadow_write_failures: u64,
 }
 
 impl GatewayRuntimeMetrics {
@@ -58,6 +64,15 @@ impl GatewayRuntimeMetrics {
             execution_approve_requests: self.execution_approve_requests.load(Ordering::Relaxed),
             execution_retry_requests: self.execution_retry_requests.load(Ordering::Relaxed),
             execution_cancel_requests: self.execution_cancel_requests.load(Ordering::Relaxed),
+            saga_shadow_write_attempts: self
+                .saga_shadow_write_attempts
+                .load(Ordering::Relaxed),
+            saga_shadow_write_successes: self
+                .saga_shadow_write_successes
+                .load(Ordering::Relaxed),
+            saga_shadow_write_failures: self
+                .saga_shadow_write_failures
+                .load(Ordering::Relaxed),
         }
     }
 }

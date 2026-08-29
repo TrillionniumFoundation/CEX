@@ -6,20 +6,36 @@ on:
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'deny.toml'
       - 'gate-local.ps1'
       - 'scripts/**'
       - 'services/**'
       - 'crates/**'
-      - '.github/workflows/rust-service-gate.yml'
+      - 'migrations/**'
+      - 'config/**'
+      - 'architecture/**'
+      - 'docs/**'
+      - 'ops/**'
+      - '.env.example'
+      - '.env.production.example'
+      - '.github/workflows/**'
   pull_request:
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'deny.toml'
       - 'gate-local.ps1'
       - 'scripts/**'
       - 'services/**'
       - 'crates/**'
-      - '.github/workflows/rust-service-gate.yml'
+      - 'migrations/**'
+      - 'config/**'
+      - 'architecture/**'
+      - 'docs/**'
+      - 'ops/**'
+      - '.env.example'
+      - '.env.production.example'
+      - '.github/workflows/**'
 
 jobs:
   service-local-gate-windows:
@@ -31,11 +47,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Verify P0 static wiring
+        run: python scripts/check-p0-wiring.py
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
+
+      - name: Verify release manifest contract
+        run: python scripts/check-release-baseline-manifest.py docs/templates/cex-release-baseline-manifest-v1.json --allow-template
+
+      - name: Verify formatting
+        run: cargo fmt --all --check
 
       - name: Run service-local gate (Windows)
         run: ./gate-local.ps1 -ServiceLocalOnly
@@ -49,11 +76,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Verify P0 static wiring
+        run: python3 scripts/check-p0-wiring.py
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
+
+      - name: Verify release manifest contract
+        run: python3 scripts/check-release-baseline-manifest.py docs/templates/cex-release-baseline-manifest-v1.json --allow-template
+
+      - name: Verify formatting
+        run: cargo fmt --all --check
 
       - name: Run service-local gate (Linux)
         run: bash ./scripts/gate-local-linux.sh --service-local-only --skip-db-bootstrap

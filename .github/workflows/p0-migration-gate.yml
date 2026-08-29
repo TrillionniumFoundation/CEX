@@ -1,0 +1,53 @@
+name: p0-migration-gate
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'migrations/**'
+      - 'scripts/check-p0-migrations.py'
+      - 'scripts/check-p0-migrations-postgres.sh'
+      - 'docs/templates/cex-release-baseline-manifest-v1.json'
+      - '.github/workflows/p0-migration-gate.yml'
+  pull_request:
+    paths:
+      - 'migrations/**'
+      - 'scripts/check-p0-migrations.py'
+      - 'scripts/check-p0-migrations-postgres.sh'
+      - 'docs/templates/cex-release-baseline-manifest-v1.json'
+      - '.github/workflows/p0-migration-gate.yml'
+
+permissions:
+  contents: read
+
+env:
+  DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/cex_ci
+
+jobs:
+  fresh-postgres-migrations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cex
+          POSTGRES_PASSWORD: cex_ci_password
+          POSTGRES_DB: cex_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cex -d cex_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Static migration contract
+        run: python3 scripts/check-p0-migrations.py
+
+      - name: Fresh apply and P0 database assertions
+        run: bash scripts/check-p0-migrations-postgres.sh
