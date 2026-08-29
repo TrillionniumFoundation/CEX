@@ -234,12 +234,32 @@ function renderPlayerErrorDisclosure(output, presentation) {
   output.dataset.playerMessage = "friendly";
 }
 
+function renderPlayerMessage(output, value) {
+  if (!output) return;
+  const rendered = String(value);
+  const separator = rendered.indexOf(" / ");
+  const chinese = separator >= 0 ? rendered.slice(separator + 3) : "";
+  if (!/[\u3400-\u9fff]/u.test(chinese)) {
+    output.textContent = rendered;
+    return;
+  }
+  const english = document.createElement("span");
+  english.textContent = rendered.slice(0, separator);
+  const divider = document.createElement("span");
+  divider.setAttribute("aria-hidden", "true");
+  divider.textContent = " / ";
+  const translation = document.createElement("span");
+  translation.setAttribute("lang", "zh-Hans");
+  translation.textContent = chinese;
+  output.replaceChildren(english, divider, translation);
+}
+
 function show(output, value, ok = true) {
   const presentation = ok ? null : playerErrorPresentation(value);
   const rendered = presentation ? presentation.message : rawPlayerResult(value);
   if (output) {
-    output.textContent = rendered;
     if (typeof output.setAttribute === "function") output.setAttribute("aria-live", "polite");
+    renderPlayerMessage(output, rendered);
     output.classList.toggle("result-ok", ok);
     output.classList.toggle("result-error", !ok);
     renderPlayerErrorDisclosure(output, presentation);
@@ -291,6 +311,8 @@ const PLAYER_FOCUS_DATA_KEYS = Object.freeze([
   "command",
   "queueAction",
   "paperRoomReveal",
+  "practiceAction",
+  "practiceVersion",
 ]);
 
 function safeFocusText(value) {
@@ -4682,6 +4704,15 @@ function bindProductTelemetry() {
   }
 }
 
+function paperRoomFocusTarget(action) {
+  if (!action) return null;
+  return action.querySelector(
+    "input:not([type=hidden]):not([disabled]), select:not([disabled]), textarea:not([disabled])"
+  ) || action.querySelector(
+    "button[type=submit]:not([disabled]), a.button[href], button:not([disabled])"
+  ) || (action.matches("[tabindex]") ? action : null);
+}
+
 function bindPaperRoomProgressiveDisclosure() {
   for (const button of document.querySelectorAll("[data-paper-room-reveal]")) {
     const controlledId = button.getAttribute("aria-controls");
@@ -4701,13 +4732,8 @@ function bindPaperRoomProgressiveDisclosure() {
       const targetSelector = button.dataset.paperRoomPrimaryTarget;
       const matchingAction = targetSelector ? advanced.querySelector(targetSelector) : null;
       const primaryControls = Array.from(advanced.querySelectorAll(".primary-action"));
-      const focusTarget = action => action && (action.querySelector(
-          "button[type=submit]:not([disabled]), a.button[href], button:not([disabled])"
-        ) || action.querySelector(
-          "input:not([disabled]), select:not([disabled]), textarea:not([disabled])"
-        ) || (action.matches("[tabindex]") ? action : null));
-      const target = focusTarget(matchingAction)
-        || primaryControls.map(focusTarget).find(Boolean)
+      const target = paperRoomFocusTarget(matchingAction)
+        || primaryControls.map(paperRoomFocusTarget).find(Boolean)
         || advanced.querySelector("summary");
       window.requestAnimationFrame(() => {
         if (!(target instanceof HTMLElement)) return;
