@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +22,8 @@ AUTHORITATIVE_WORKFLOWS = (
 RELEASE_WORKFLOW = ".github/workflows/p0-release-candidate-gate.yml"
 TRIGGER_PATH = "docs/release-evidence/p0-candidate-trigger.json"
 ACTIVE_PLAN = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"
+ACTIVE_ADDENDUM = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md"
+DOC_CHECKER = "scripts/check-development-docs.py"
 EXPECTED_MIGRATION_HEAD = "0084_make_provider_reconciliation_replay_terminal_safe.sql"
 TEMPORARY_EXACT_PATHS = (
     "scripts/apply-closure-fixes.py",
@@ -97,6 +101,16 @@ for marker in (
     if marker not in plan:
         PROBLEMS.append(f"v12 plan lacks required marker: {marker}")
 
+addendum = require_file(ACTIVE_ADDENDUM)
+for marker in (
+    "Block H",
+    "Block I",
+    "REPOSITORY_CLOSED_CANDIDATE",
+    "External production gates remain upstream blockers",
+):
+    if marker not in addendum:
+        PROBLEMS.append(f"v12 addendum lacks required marker: {marker}")
+
 trigger_raw = require_file(TRIGGER_PATH)
 if trigger_raw:
     try:
@@ -159,13 +173,26 @@ else:
                     f"template migration head {manifest_head!r} != repository head {numbered[-1][1]!r}"
                 )
 
+documentation = subprocess.run(
+    [sys.executable, str(ROOT / DOC_CHECKER)],
+    cwd=ROOT,
+    text=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    check=False,
+)
+if documentation.returncode != 0:
+    PROBLEMS.append("development-document contract failed: " + documentation.stdout.strip())
+
 result = {
     "status": "failed" if PROBLEMS else "ok",
     "plan": Path(ACTIVE_PLAN).name,
+    "addendum": Path(ACTIVE_ADDENDUM).name,
     "authoritative_workflows": list(AUTHORITATIVE_WORKFLOWS),
     "release_workflow": RELEASE_WORKFLOW,
     "shared_trigger": TRIGGER_PATH,
     "migration_head": numbered[-1][1] if numbered else None,
+    "documentation_contract": "ok" if documentation.returncode == 0 else "failed",
     "problems": PROBLEMS,
 }
 print(json.dumps(result, indent=2, ensure_ascii=False))
