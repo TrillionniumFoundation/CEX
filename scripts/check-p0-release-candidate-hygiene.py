@@ -28,6 +28,10 @@ TEMPORARY_EXACT_PATHS = (
     "scripts/patch-ledger-http-flow-v2.py",
     "scripts/patch-p0-audit-outbox-fixture.py",
     "scripts/patch-p0-migration-account-fixture.py",
+    "scripts/p0-v12-trnm-exact-cutover-extract.py",
+    ".github/workflows/p0-v12-trnm-exact-cutover.yml",
+    ".github/workflows/p0-v12-trnm-exact-cutover-runner.yml",
+    ".github/workflows/p0-v12-trnm-receipt-smoke.yml",
 )
 TEMPORARY_WORKFLOW_PATTERNS = (
     ".github/workflows/*self-repair*.yml",
