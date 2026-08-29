@@ -19,6 +19,8 @@ AUTHORITATIVE_WORKFLOWS = (
 )
 RELEASE_WORKFLOW = ".github/workflows/p0-release-candidate-gate.yml"
 TRIGGER_PATH = "docs/release-evidence/p0-candidate-trigger.json"
+ACTIVE_PLAN = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"
+EXPECTED_MIGRATION_HEAD = "0084_make_provider_reconciliation_replay_terminal_safe.sql"
 TEMPORARY_EXACT_PATHS = (
     "scripts/apply-closure-fixes.py",
     "scripts/patch-0082-provider-view.py",
@@ -27,7 +29,31 @@ TEMPORARY_EXACT_PATHS = (
     "scripts/patch-p0-audit-outbox-fixture.py",
     "scripts/patch-p0-migration-account-fixture.py",
 )
-UNPINNED_ACTION = re.compile(r"^\s*uses:\s*[^#\s]+@(v\d+|stable|main|master)\s*(?:#.*)?$", re.MULTILINE)
+TEMPORARY_WORKFLOW_PATTERNS = (
+    ".github/workflows/*self-repair*.yml",
+    ".github/workflows/*self-repair*.yaml",
+    ".github/workflows/*source-export*.yml",
+    ".github/workflows/*source-export*.yaml",
+    ".github/workflows/*source-snapshot*.yml",
+    ".github/workflows/*source-snapshot*.yaml",
+    ".github/workflows/*rustfmt-patch*.yml",
+    ".github/workflows/*rustfmt-patch*.yaml",
+    ".github/workflows/*gofmt-remediation*.yml",
+    ".github/workflows/*gofmt-remediation*.yaml",
+    ".github/workflows/*lock-refresh*.yml",
+    ".github/workflows/*lock-refresh*.yaml",
+    ".github/workflows/*remediation-publish*.yml",
+    ".github/workflows/*remediation-publish*.yaml",
+    ".github/workflows/*source-remediation*.yml",
+    ".github/workflows/*source-remediation*.yaml",
+    ".github/workflows/*unit-diagnostics*.yml",
+    ".github/workflows/*unit-diagnostics*.yaml",
+    ".github/workflows/*gap-closure-validate*.yml",
+    ".github/workflows/*gap-closure-validate*.yaml",
+)
+UNPINNED_ACTION = re.compile(
+    r"^\s*uses:\s*[^#\s]+@(v\d+|stable|main|master)\s*(?:#.*)?$", re.MULTILINE
+)
 MIGRATION_RE = re.compile(r"^(\d{4})_[a-z0-9][a-z0-9._-]*\.sql$")
 
 
@@ -48,6 +74,7 @@ for pattern in (
     ".github/workflows/closure-*.yaml",
     "scripts/closure-ci-trigger-*",
     "migrations/closure-ci-trigger-*",
+    *TEMPORARY_WORKFLOW_PATTERNS,
 ):
     for path in sorted(ROOT.glob(pattern)):
         PROBLEMS.append(f"temporary closure artifact remains: {relative(path)}")
@@ -55,11 +82,12 @@ for path in TEMPORARY_EXACT_PATHS:
     if (ROOT / path).exists():
         PROBLEMS.append(f"temporary patcher remains: {path}")
 
-plan = require_file("docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md")
+plan = require_file(ACTIVE_PLAN)
 for marker in (
     "Definition of repository closure",
     "External gates that repository edits cannot self-certify",
     "not production-ready",
+    f"Candidate migration head: `{EXPECTED_MIGRATION_HEAD}`.",
 ):
     if marker not in plan:
         PROBLEMS.append(f"v12 plan lacks required marker: {marker}")
@@ -73,10 +101,12 @@ if trigger_raw:
     else:
         if trigger.get("schema") != "cex.p0-candidate-trigger.v1":
             PROBLEMS.append("candidate trigger schema is invalid")
-        if trigger.get("plan") != "CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md":
+        if trigger.get("plan") != Path(ACTIVE_PLAN).name:
             PROBLEMS.append("candidate trigger is not bound to plan v12")
         if not isinstance(trigger.get("sequence"), int) or trigger["sequence"] < 1:
             PROBLEMS.append("candidate trigger sequence must be a positive integer")
+        if trigger.get("production_authorization") != "not_granted":
+            PROBLEMS.append("candidate trigger must explicitly deny production authorization")
 
 for workflow_path in (*AUTHORITATIVE_WORKFLOWS, RELEASE_WORKFLOW):
     content = require_file(workflow_path)
@@ -84,6 +114,8 @@ for workflow_path in (*AUTHORITATIVE_WORKFLOWS, RELEASE_WORKFLOW):
         continue
     if TRIGGER_PATH not in content:
         PROBLEMS.append(f"{workflow_path} does not listen to the shared candidate trigger")
+    if "workflow_dispatch:" not in content:
+        PROBLEMS.append(f"{workflow_path} lacks a manual recovery dispatch")
     for match in UNPINNED_ACTION.finditer(content):
         PROBLEMS.append(
             f"{workflow_path} contains an unpinned third-party action: {match.group(0).strip()}"
@@ -102,6 +134,10 @@ else:
     actual = [number for number, _ in numbered]
     if actual != expected:
         PROBLEMS.append("numbered migration sequence is not contiguous")
+    if numbered[-1][1] != EXPECTED_MIGRATION_HEAD:
+        PROBLEMS.append(
+            f"repository migration head {numbered[-1][1]!r} != active v12 head {EXPECTED_MIGRATION_HEAD!r}"
+        )
     manifest_raw = require_file("docs/templates/cex-release-baseline-manifest-v1.json")
     if manifest_raw:
         try:
@@ -116,7 +152,7 @@ else:
 
 result = {
     "status": "failed" if PROBLEMS else "ok",
-    "plan": "CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
+    "plan": Path(ACTIVE_PLAN).name,
     "authoritative_workflows": list(AUTHORITATIVE_WORKFLOWS),
     "release_workflow": RELEASE_WORKFLOW,
     "shared_trigger": TRIGGER_PATH,
