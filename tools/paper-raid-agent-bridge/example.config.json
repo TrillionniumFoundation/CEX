@@ -1,0 +1,25 @@
+{
+  "schema": "hepta.paper_raid.agent_bridge.config.v2",
+  "bff_url": "http://127.0.0.1:8088",
+  "identity_file": "./local/agent.identity.json",
+  "state_file": "./local/agent.state.json",
+  "author_executor": {
+    "schema": "hepta.paper_raid.agent_bridge.author_executor.v1",
+    "executable": "./local/author-executor",
+    "timeout_ms": 900000
+  },
+  "capabilities": [
+    "artifact_analysis",
+    "evidence_search",
+    "section_drafting"
+  ],
+  "resource_classes": [
+    "artifact_io",
+    "cpu",
+    "sandbox"
+  ],
+  "max_parallel_tasks": 2,
+  "paper_ids": [],
+  "poll_interval_ms": 2500,
+  "request_timeout_ms": 8000
+}

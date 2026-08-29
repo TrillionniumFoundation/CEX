@@ -1,5 +1,9 @@
 //! Minimal, node-independent verification for TRNM finality receipts.
 
+pub mod cometbft;
+
+pub use cometbft::*;
+
 use anyhow::{anyhow, ensure, Result};
 use trnm_finality_types::{
     decode_hash32, hash_domain, FinalityReceiptV1, Hash32, MerkleProofV1, ValidatorSetV1,

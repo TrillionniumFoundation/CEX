@@ -714,6 +714,12 @@ async fn evaluation_nakama_and_trnm_flow_is_deterministic_and_finality_gated() {
     assert!(metrics["text"]
         .as_str()
         .is_some_and(|text| text.contains("hepta_trnm_pending_finality")));
+    assert!(metrics["text"]
+        .as_str()
+        .is_some_and(|text| text.contains("hepta_paper_raid_pending_control_commands")));
+    assert!(metrics["text"]
+        .as_str()
+        .is_some_and(|text| text.contains("backend=\"memory\"")));
     let (status, openapi) = request(router, "GET", "/v1/hepta/openapi.yaml", json!({})).await;
     assert_eq!(status, StatusCode::OK);
     assert!(openapi["text"]

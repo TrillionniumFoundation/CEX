@@ -1,5 +1,5 @@
 use axum::{
-    http::StatusCode,
+    http::{header, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -18,6 +18,8 @@ pub enum AppError {
     Invalid(String),
     #[error("dependency unavailable: {0}")]
     Unavailable(&'static str),
+    #[error("request rate limited")]
+    RateLimited { retry_after_secs: u64 },
     #[error("upstream rejected the request")]
     Upstream,
     #[error("not found")]
@@ -36,9 +38,16 @@ impl IntoResponse for AppError {
         let (status, public) = match &self {
             Self::Unauthorized => (StatusCode::UNAUTHORIZED, "authentication_required"),
             Self::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
+            // This one transport conflict is intentionally machine-readable:
+            // local clients may refresh CSRF and replay the same idempotent
+            // command. All domain conflicts remain opaque at this boundary.
+            Self::Conflict(code) if code == "csrf_replayed" => {
+                (StatusCode::CONFLICT, "csrf_replayed")
+            }
             Self::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
             Self::Invalid(_) => (StatusCode::BAD_REQUEST, "invalid_request"),
             Self::Unavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "dependency_unavailable"),
+            Self::RateLimited { .. } => (StatusCode::TOO_MANY_REQUESTS, "rate_limited"),
             Self::Upstream => (StatusCode::BAD_GATEWAY, "upstream_rejected"),
             Self::NotFound => (StatusCode::NOT_FOUND, "not_found"),
             Self::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
@@ -46,7 +55,13 @@ impl IntoResponse for AppError {
         if status.is_server_error() {
             tracing::error!(error = %self, "paper raid BFF request failed");
         }
-        (status, Json(ErrorBody { error: public })).into_response()
+        let mut response = (status, Json(ErrorBody { error: public })).into_response();
+        if let Self::RateLimited { retry_after_secs } = self {
+            if let Ok(value) = HeaderValue::from_str(&retry_after_secs.max(1).to_string()) {
+                response.headers_mut().insert(header::RETRY_AFTER, value);
+            }
+        }
+        response
     }
 }
 

@@ -46,7 +46,10 @@ async fn main() {
         .await
         .expect("bind Paper Raid BFF listener");
     info!(%bind, "Paper Raid BFF listening");
-    axum::serve(listener, app::router(state))
-        .await
-        .expect("serve Paper Raid BFF");
+    axum::serve(
+        listener,
+        app::router(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .expect("serve Paper Raid BFF");
 }

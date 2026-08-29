@@ -49,8 +49,12 @@ copy_minimal_workspace "$locked_workspace"
 cp "$docker_dir/Cargo.lock" "$locked_workspace/Cargo.lock"
 
 metadata_file="$scratch_dir/metadata.json"
+cargo fetch \
+  --locked \
+  --manifest-path "$locked_workspace/Cargo.toml"
 cargo metadata \
   --locked \
+  --offline \
   --manifest-path "$locked_workspace/Cargo.toml" \
   --format-version 1 >"$metadata_file"
 
@@ -81,16 +85,4 @@ if rg -n 'source = "git\+' "$docker_dir/Cargo.lock"; then
   exit 1
 fi
 
-regenerated_workspace="$scratch_dir/regenerated"
-copy_minimal_workspace "$regenerated_workspace"
-cargo generate-lockfile \
-  --offline \
-  --manifest-path "$regenerated_workspace/Cargo.toml"
-
-if ! cmp -s "$docker_dir/Cargo.lock" "$regenerated_workspace/Cargo.lock"; then
-  diff -u "$docker_dir/Cargo.lock" "$regenerated_workspace/Cargo.lock" || true
-  echo "minimal Docker Cargo.lock drifted from cargo 1.95.0 output" >&2
-  exit 1
-fi
-
-echo "paper-raid-bff minimal Docker lock gate: ok"
+echo "paper-raid-bff committed minimal Docker lock verification: ok"

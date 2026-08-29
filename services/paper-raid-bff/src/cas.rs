@@ -65,7 +65,7 @@ impl CasClient {
     ) -> Result<StoredObject, AppError> {
         validate_digest(expected_digest)?;
         validate_media_type(media_type)?;
-        if bytes.is_empty() || bytes.len() > self.config.max_object_bytes {
+        if bytes.len() > self.config.max_object_bytes {
             return Err(AppError::Invalid(
                 "artifact size is outside the allowed range".into(),
             ));
@@ -546,7 +546,9 @@ mod tests {
             .put_if_absent(&digest, "application/json", bytes)
             .await
             .expect("same bytes are idempotent");
-        assert!(!replay.created);
+        let mut expected_replay = created.clone();
+        expected_replay.created = false;
+        assert_eq!(replay, expected_replay);
         assert!(client.ready().await);
         assert_eq!(
             client.get(&digest, "application/json").await.unwrap(),
@@ -563,6 +565,64 @@ mod tests {
             client.get(&digest, "application/json").await,
             Err(AppError::Conflict(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn append_only_zero_byte_create_and_exact_replay() {
+        const EMPTY_SHA256: &str =
+            "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        const MEDIA_TYPE: &str = "text/plain; charset=utf-8";
+
+        let bytes = b"";
+        assert_eq!(digest_label(bytes), EMPTY_SHA256);
+        let store = Arc::new(Mutex::new(MockObjectStore::default()));
+        let endpoint = spawn_store(store.clone()).await;
+        let client =
+            CasClient::new(mock_config(endpoint, EMPTY_SHA256.into())).expect("CAS client");
+
+        assert!(matches!(
+            client
+                .put_if_absent(&digest_label(b"not empty"), MEDIA_TYPE, bytes)
+                .await,
+            Err(AppError::Invalid(_))
+        ));
+        assert!(matches!(
+            client.put_if_absent(EMPTY_SHA256, "text/html", bytes).await,
+            Err(AppError::Invalid(_))
+        ));
+        assert_eq!(store.lock().await.put_calls, 0);
+
+        let created = client
+            .put_if_absent(EMPTY_SHA256, MEDIA_TYPE, bytes)
+            .await
+            .expect("zero-byte append");
+        assert_eq!(
+            created,
+            StoredObject {
+                digest: EMPTY_SHA256.into(),
+                artifact_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                    .into(),
+                uri:
+                    "cas://sha256/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                        .into(),
+                media_type: MEDIA_TYPE.into(),
+                size: 0,
+                created: true,
+            }
+        );
+
+        let replay = client
+            .put_if_absent(EMPTY_SHA256, MEDIA_TYPE, bytes)
+            .await
+            .expect("zero-byte exact replay");
+        let mut expected_replay = created.clone();
+        expected_replay.created = false;
+        assert_eq!(replay, expected_replay);
+        assert_eq!(
+            client.get(EMPTY_SHA256, MEDIA_TYPE).await.unwrap(),
+            Vec::<u8>::new()
+        );
+        assert_eq!(store.lock().await.put_calls, 1);
     }
 
     async fn redirect_get() -> axum::response::Redirect {

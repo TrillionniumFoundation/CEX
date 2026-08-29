@@ -15,6 +15,12 @@ use uuid::Uuid;
 const HASH_A: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const HASH_B: &str = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const HASH_C: &str = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+const EVIDENCE_RULESET_HASH: &str =
+    "sha256:54a740273a82d56938a20db1669b236e8b3724defffe32fb91768632f7994453";
+const EVIDENCE_DATASET_HASH: &str =
+    "sha256:1363088a76b2dd5c77b04b2620a4806100f1125c482a3e6413691d1a8c372a75";
+const EVIDENCE_EVALUATOR_HASH: &str =
+    "sha256:7d7f0096261132ceda30e66586e49129aaa99bb979772ceec9b2940eda21261e";
 
 async fn request_json(
     app: axum::Router,
@@ -85,6 +91,348 @@ async fn request_json_without_service_tokens(
         .expect("read response body");
     let body = serde_json::from_slice(&bytes).expect("response is json");
     (status, body)
+}
+
+async fn request_status_with_operator_token(
+    app: axum::Router,
+    method: &str,
+    uri: &str,
+    body: Value,
+) -> StatusCode {
+    app.oneshot(
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json")
+            .header(OPERATOR_TOKEN_HEADER, "hepta-test-operator-token")
+            .body(Body::from(body.to_string()))
+            .expect("build request"),
+    )
+    .await
+    .expect("request succeeds")
+    .status()
+}
+
+fn evidence_audit_ruleset() -> Value {
+    json!({
+        "schema": "hepta.challenge.ruleset.v1",
+        "template": "evidence-audit",
+        "duration_seconds": 2700,
+        "grace_seconds": 900,
+        "phase_gates": [
+            {"transition":"preregistering_to_researching","requirements":[
+                {"kind":"work_items","minimum":1},
+                {"kind":"artifact_manifests","minimum":1}
+            ]},
+            {"transition":"researching_to_experimenting","requirements":[
+                {"kind":"evidence_cards","minimum":2},
+                {"kind":"citations","minimum":2},
+                {"kind":"claims","minimum":2}
+            ]},
+            {"transition":"experimenting_to_drafting","requirements":[
+                {"kind":"artifact_manifests","minimum":1}
+            ]},
+            {"transition":"drafting_to_integrity_review","requirements":[
+                {"kind":"all_work_items_terminal","minimum":1},
+                {"kind":"section_revisions","minimum":1},
+                {"kind":"paper_revisions","minimum":1}
+            ]},
+            {"transition":"integrity_review_to_reproducing","requirements":[
+                {"kind":"approving_section_reviews","minimum":1},
+                {"kind":"section_merges","minimum":1}
+            ]},
+            {"transition":"reproducing_to_author_approval","requirements":[
+                {"kind":"paper_revision_covers_section_merges","minimum":1}
+            ]}
+        ],
+        "victory_requirements": [
+            {"kind":"accepted_work_items","minimum":1},
+            {"kind":"evidence_cards","minimum":2},
+            {"kind":"citations","minimum":2},
+            {"kind":"claims","minimum":2},
+            {"kind":"release_candidate","minimum":1},
+            {"kind":"all_author_consents","minimum":1},
+            {"kind":"paper_revision_covers_section_merges","minimum":1}
+        ],
+        "gameplay": {
+            "difficulty": "introductory",
+            "objective": "Audit core claims, citations, licenses, and artifact provenance.",
+            "risk": "Citation mismatch and unsupported core claims.",
+            "modifiers": ["core-claim-coverage","license-audit","provenance-chain"],
+            "victory_summary": "Every core claim is evidence-bound and every citation and provenance hard gate passes.",
+            "role_resources": {
+                "captain_focus": 2,
+                "evidence_focus": 4,
+                "experiment_focus": 2,
+                "run_budget": 2,
+                "retained_failure_focus_refund": 1
+            }
+        }
+    })
+}
+
+fn evidence_audit_challenge(status: &str) -> Value {
+    json!({
+        "title": "Paper Raid: Evidence and Citation Audit",
+        "description": "template=evidence-audit; paper-raid-alpha-template-evidence-audit-v1",
+        "ruleset_version": "paper-raid-evidence-audit-v1",
+        "ruleset_hash": EVIDENCE_RULESET_HASH,
+        "dataset_manifest_hash": EVIDENCE_DATASET_HASH,
+        "evaluator_manifest_hash": EVIDENCE_EVALUATOR_HASH,
+        "ruleset": evidence_audit_ruleset(),
+        "status": status
+    })
+}
+
+fn evidence_audit_activation_request() -> Value {
+    json!({
+        "schema": "hepta.challenge_pack.activation_request.v1",
+        "template": "evidence-audit",
+        "pack_id": "paper-raid-evidence-audit-seeded-v1",
+        "expected_status": "draft",
+        "requested_status": "open",
+        "ruleset_version": "paper-raid-evidence-audit-v1",
+        "ruleset_hash": EVIDENCE_RULESET_HASH,
+        "dataset_manifest_hash": EVIDENCE_DATASET_HASH,
+        "evaluator_manifest_hash": EVIDENCE_EVALUATOR_HASH,
+        "candidate": {
+            "schema": "trnm.paper-raid.current-candidate-binding.v2",
+            "state": "immutable_candidate_pending_evidence",
+            "integration_base_revision": "1111111111111111111111111111111111111111",
+            "integration_source_tree": "2222222222222222222222222222222222222222",
+            "hepta_base_revision": "3333333333333333333333333333333333333333",
+            "hepta_source_tree": "4444444444444444444444444444444444444444",
+            "component_pins_authoritative": true,
+            "working_tree_clean": true,
+            "tracked_image_lock_status": "unbound",
+            "source_fileset_sha256": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+            "release_image_lock_status": "locked",
+            "release_id": "paper-raid-test-candidate-v1",
+            "release_image_lock_sha256": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+            "release_provenance_sha256": "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+        },
+        "evidence": {
+            "schema": "hepta.challenge_pack.activation_evidence.v1",
+            "source_catalog_sha256": "sha256:fc649c1f55ef484bc2f8baf279dec1c668eaa610691ac4234a74df1d90aaa6bb",
+            "pack_manifest_sha256": "sha256:69a695a6a75dd71e2c53c7a832298ab2ecbcd4086fa4ef653914dd2e5770b37c",
+            "cas_activation_receipt_schema": "hepta.challenge_pack.cas_activation_receipt.v1",
+            "cas_activation_receipt_sha256": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+            "cas_activation_catalog_patch_schema": "hepta.challenge_pack.activation_catalog_patch.v2",
+            "cas_activation_catalog_patch_sha256": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+            "cas_all_packs_verified": true,
+            "cas_scoped_readback": true,
+            "cas_pack_count": 3,
+            "cas_object_count": 26,
+            "strict_review_evidence_schema": "trnm.paper-raid.strict-review-evidence.v1",
+            "strict_review_evidence_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "strict_review_chain_proof_manifest_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "strict_review_chain_proof_fileset_sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "strict_review_terminal_bundle_schema": "trnm.paper-raid.strict-review-terminal-bundle-binding.v1",
+            "strict_review_terminal_bundle_sha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "cross_paper_denial_receipt_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+    })
+}
+
+#[tokio::test]
+async fn evidence_audit_pack_activation_is_authenticated_atomic_and_exactly_idempotent() {
+    let app = app(AppState::default());
+    let (status, challenge) = request_json(
+        app.clone(),
+        "POST",
+        "/v1/hepta/challenges",
+        evidence_audit_challenge("draft"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let challenge_id = challenge["challenge_id"].as_str().expect("challenge id");
+    let path = format!("/v1/hepta/operator/challenges/{challenge_id}/pack-activation");
+    let request = evidence_audit_activation_request();
+
+    let (status, unauthorized) =
+        request_json_without_service_tokens(app.clone(), "POST", &path, request.clone()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(unauthorized["code"], "operator_auth_failed");
+
+    let mut unknown = request.clone();
+    unknown["unexpected"] = json!(true);
+    assert_eq!(
+        request_status_with_operator_token(app.clone(), "POST", &path, unknown).await,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+
+    let (status, activated) = request_json(app.clone(), "POST", &path, request.clone()).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(
+        activated["schema"],
+        "hepta.challenge_pack.activation_record.v1"
+    );
+    assert_eq!(activated["challenge_id"], challenge_id);
+    assert_eq!(activated["previous_status"], "draft");
+    assert_eq!(activated["activated_status"], "open");
+    assert_eq!(activated["request"], request);
+
+    let (status, exact) = request_json(app.clone(), "GET", &path, json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(exact, activated);
+    let (status, unauthorized) =
+        request_json_without_service_tokens(app.clone(), "GET", &path, json!({})).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(unauthorized["code"], "operator_auth_failed");
+
+    let (status, replayed) = request_json(app.clone(), "POST", &path, request.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(replayed, activated);
+
+    let (status, opened) = request_json(
+        app.clone(),
+        "GET",
+        &format!("/v1/hepta/challenges/{challenge_id}"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(opened["status"], "open");
+
+    let (status, events) = request_json(app.clone(), "GET", "/v1/hepta/events", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        events
+            .as_array()
+            .expect("events")
+            .iter()
+            .filter(|event| event["event_type"] == "hepta.challenge_pack.activated.v1")
+            .count(),
+        1
+    );
+
+    let mut conflicting = request;
+    conflicting["evidence"]["cross_paper_denial_receipt_sha256"] =
+        json!("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
+    let (status, conflict) = request_json(app, "POST", &path, conflicting).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        conflict["code"],
+        "challenge_pack_activation_replay_conflict"
+    );
+}
+
+#[tokio::test]
+async fn pack_activation_rejects_non_evidence_challenges_and_status_drift() {
+    let app = app(AppState::default());
+    let (status, benchmark) = request_json(
+        app.clone(),
+        "POST",
+        "/v1/hepta/challenges",
+        json!({
+            "title": "Paper Raid: Benchmark and Ablation",
+            "description": "template=benchmark-ablation",
+            "ruleset_version": "paper-raid-benchmark-ablation-v1",
+            "ruleset_hash": HASH_A,
+            "dataset_manifest_hash": HASH_B,
+            "evaluator_manifest_hash": HASH_C,
+            "status": "draft"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let benchmark_id = benchmark["challenge_id"].as_str().expect("challenge id");
+    let benchmark_path = format!("/v1/hepta/operator/challenges/{benchmark_id}/pack-activation");
+    let (status, mismatch) = request_json(
+        app.clone(),
+        "POST",
+        &benchmark_path,
+        evidence_audit_activation_request(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        mismatch["code"],
+        "challenge_pack_activation_binding_mismatch"
+    );
+    let (status, unchanged) = request_json(
+        app.clone(),
+        "GET",
+        &format!("/v1/hepta/challenges/{benchmark_id}"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(unchanged["status"], "draft");
+
+    let (status, replication) = request_json(
+        app.clone(),
+        "POST",
+        "/v1/hepta/challenges",
+        json!({
+            "title": "Paper Raid: Independent Replication",
+            "description": "template=replication",
+            "ruleset_version": "paper-raid-replication-v1",
+            "ruleset_hash": HASH_A,
+            "dataset_manifest_hash": HASH_B,
+            "evaluator_manifest_hash": HASH_C,
+            "status": "draft"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let replication_id = replication["challenge_id"].as_str().expect("challenge id");
+    let (status, mismatch) = request_json(
+        app.clone(),
+        "POST",
+        &format!("/v1/hepta/operator/challenges/{replication_id}/pack-activation"),
+        evidence_audit_activation_request(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        mismatch["code"],
+        "challenge_pack_activation_binding_mismatch"
+    );
+    let (status, unchanged) = request_json(
+        app.clone(),
+        "GET",
+        &format!("/v1/hepta/challenges/{replication_id}"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(unchanged["status"], "draft");
+
+    let (status, already_open) = request_json(
+        app.clone(),
+        "POST",
+        "/v1/hepta/challenges",
+        evidence_audit_challenge("open"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let open_id = already_open["challenge_id"].as_str().expect("challenge id");
+    let (status, drift) = request_json(
+        app.clone(),
+        "POST",
+        &format!("/v1/hepta/operator/challenges/{open_id}/pack-activation"),
+        evidence_audit_activation_request(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(drift["code"], "challenge_pack_activation_status_drift");
+
+    let mut wrong_pack = evidence_audit_activation_request();
+    wrong_pack["template"] = json!("replication");
+    wrong_pack["pack_id"] = json!("paper-raid-replication-seeded-v1");
+    let (status, invalid) = request_json(
+        app,
+        "POST",
+        &format!("/v1/hepta/operator/challenges/{open_id}/pack-activation"),
+        wrong_pack,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        invalid["code"],
+        "challenge_pack_activation_contract_invalid"
+    );
 }
 
 #[tokio::test]

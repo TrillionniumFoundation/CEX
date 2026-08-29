@@ -4,6 +4,7 @@ members = [
   "services/hepta-research-league",
   "vendor/trnm-finality-types",
   "vendor/trnm-finality-verifier",
+  "vendor/trnm-protocol",
   "vendor/trnm-research-protocol",
 ]
 resolver = "2"
@@ -27,5 +28,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 trnm-finality-types = { version = "=0.1.0", path = "vendor/trnm-finality-types" }
 trnm-finality-verifier = { version = "=0.1.0", path = "vendor/trnm-finality-verifier" }
+trnm-protocol = { version = "=0.1.0", path = "vendor/trnm-protocol" }
 trnm-research-protocol = { version = "=0.1.0", path = "vendor/trnm-research-protocol" }
 uuid = { version = "1", features = ["v4", "serde"] }

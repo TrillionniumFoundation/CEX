@@ -151,6 +151,10 @@ pub struct TrnmCommand {
     pub aggregate_id: String,
     pub idempotency_key: String,
     pub command_fingerprint: String,
+    #[serde(default)]
+    pub paper_binding: Option<crate::PaperTrnmCommandBindingV1>,
+    #[serde(default)]
+    pub paper_binding_fingerprint: Option<String>,
     pub signed_command: SignedResearchCommandV1,
     pub status: TrnmProjectionStatus,
     pub created_at: DateTime<Utc>,
@@ -160,6 +164,7 @@ pub struct TrnmCommand {
 #[serde(rename_all = "snake_case")]
 pub enum TrnmProjectionStatus {
     PendingFinality,
+    VerifiedFinality,
     Provisional,
     Finalized,
     Challenged,
@@ -167,8 +172,11 @@ pub enum TrnmProjectionStatus {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreateTrnmCommandRequest {
     signed_command: SignedResearchCommandV1,
+    #[serde(default)]
+    paper_binding: Option<crate::PaperTrnmCommandBindingV1>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -265,6 +273,12 @@ struct ReadyResponse {
     top_level_modules: [&'static str; 3],
     finality_mode: &'static str,
     trusted_validator_sets: usize,
+    pinned_cometbft_trust_anchor_hashes: usize,
+    trnm_receipt_v2_max_body_bytes: usize,
+    trnm_receipt_v2_max_in_flight: usize,
+    paper_chain_finality_v2_command_lane: &'static str,
+    paper_scientific_finality_policy: &'static str,
+    paper_no_appeal_window_seconds: i64,
 }
 
 pub(crate) fn router() -> Router<AppState> {
@@ -358,30 +372,16 @@ async fn ready(State(state): State<AppState>) -> (StatusCode, Json<ReadyResponse
         failures.push("nakama_control_http_missing");
         "missing"
     };
-    let database = if let Some(pool) = &state.pool {
-        match pool.acquire().await {
-            Ok(mut connection) => match sqlx::query_scalar::<_, i32>("select 1")
-                .fetch_one(&mut *connection)
-                .await
-            {
-                Ok(1) => "reachable",
-                Ok(_) => {
-                    failures.push("database_probe_unexpected_result");
-                    "unreachable"
-                }
-                Err(_) => {
-                    failures.push("database_probe_failed");
-                    "unreachable"
-                }
-            },
-            Err(_) => {
-                failures.push("database_pool_acquire_failed");
+    let database = match state.probe_database_pools().await {
+        Ok(()) => "reachable",
+        Err(failure) => {
+            failures.push(failure);
+            if failure.ends_with("_missing") {
+                "not_configured"
+            } else {
                 "unreachable"
             }
         }
-    } else {
-        failures.push("database_pool_missing");
-        "not_configured"
     };
     let ready = failures.is_empty();
     let response = ReadyResponse {
@@ -403,6 +403,18 @@ async fn ready(State(state): State<AppState>) -> (StatusCode, Json<ReadyResponse
         top_level_modules: ["hepta", "nakama", "trnm"],
         finality_mode: state.security.finality_mode.as_str(),
         trusted_validator_sets: state.security.trusted_trnm_validator_sets.len(),
+        pinned_cometbft_trust_anchor_hashes: state
+            .security
+            .pinned_trnm_cometbft_trust_anchor_hashes
+            .len(),
+        trnm_receipt_v2_max_body_bytes: state.security.trnm_receipt_v2_max_body_bytes,
+        trnm_receipt_v2_max_in_flight: state.security.trnm_receipt_v2_max_in_flight,
+        paper_chain_finality_v2_command_lane:
+            crate::paper_chain_finality_v2::PAPER_TRNM_FINALITY_V2_COMMAND_LANE,
+        paper_scientific_finality_policy:
+            crate::paper_chain_finality_v2::PAPER_SCIENTIFIC_FINALITY_POLICY_SCHEMA_V1,
+        paper_no_appeal_window_seconds:
+            crate::paper_chain_finality_v2::PAPER_NO_APPEAL_WINDOW_SECONDS_V1,
     };
     (
         if ready {
@@ -414,13 +426,18 @@ async fn ready(State(state): State<AppState>) -> (StatusCode, Json<ReadyResponse
     )
 }
 
-fn require_verified_finality_mode(state: &AppState) -> Result<(), ApiError> {
+fn require_verified_finality_mode_selected(state: &AppState) -> Result<(), ApiError> {
     if state.security.finality_mode != FinalityMode::Verified {
         return Err(ApiError::conflict(
             "finality_pending_only",
             "Hepta is configured for pending_only finality; receipts remain held and no finality write is accepted",
         ));
     }
+    Ok(())
+}
+
+fn require_verified_finality_mode(state: &AppState) -> Result<(), ApiError> {
+    require_verified_finality_mode_selected(state)?;
     if state.security.trusted_trnm_validator_sets.is_empty() {
         return Err(ApiError::internal(
             "verified finality mode has no trusted validator sets",
@@ -430,7 +447,7 @@ fn require_verified_finality_mode(state: &AppState) -> Result<(), ApiError> {
 }
 
 async fn metrics(State(state): State<AppState>) -> Result<String, ApiError> {
-    state
+    let mut metrics = state
         .inspect(|league| {
             let pending = league
                 .trnm_commands
@@ -452,7 +469,9 @@ async fn metrics(State(state): State<AppState>) -> Result<String, ApiError> {
                 league.nakama_matches.len()
             ))
         })
-        .await
+        .await?;
+    metrics.push_str(&crate::paper_raid_v2::operational_metrics(&state).await?);
+    Ok(metrics)
 }
 
 async fn create_evaluator_manifest(
@@ -894,6 +913,43 @@ async fn create_trnm_command(
         .to_hex();
     let idempotency_key = request.signed_command.command_id.to_hex();
     let command_fingerprint = format_digest(&request.signed_command.command_fingerprint());
+    let paper_binding_fingerprint = request
+        .paper_binding
+        .as_ref()
+        .map(crate::paper_chain_finality_v1::paper_binding_fingerprint)
+        .transpose()?;
+    if let Some(binding) = &request.paper_binding {
+        crate::paper_chain_finality_v1::validate_signed_paper_binding(
+            &request.signed_command,
+            binding,
+        )?;
+    }
+    if let Some(existing) = state
+        .inspect(|league| {
+            Ok(league
+                .trnm_commands
+                .values()
+                .find(|command| command.idempotency_key == idempotency_key)
+                .cloned())
+        })
+        .await?
+    {
+        if existing.kind == kind
+            && existing.aggregate_id == aggregate_id
+            && existing.command_fingerprint == command_fingerprint
+            && existing.paper_binding == request.paper_binding
+            && existing.paper_binding_fingerprint == paper_binding_fingerprint
+        {
+            return Ok((StatusCode::OK, Json(existing)));
+        }
+        return Err(ApiError::conflict(
+            "trnm_idempotency_conflict",
+            "TRNM idempotency key was reused with different command or Paper binding data",
+        ));
+    }
+    if let Some(binding) = &request.paper_binding {
+        crate::paper_chain_finality_v1::validate_paper_binding_for_queue(&state, binding).await?;
+    }
     state
         .transact(|league| {
             if let Some(existing) = league
@@ -904,12 +960,14 @@ async fn create_trnm_command(
                 if existing.kind == kind
                     && existing.aggregate_id == aggregate_id
                     && existing.command_fingerprint == command_fingerprint
+                    && existing.paper_binding == request.paper_binding
+                    && existing.paper_binding_fingerprint == paper_binding_fingerprint
                 {
                     return Ok((StatusCode::OK, Json(existing.clone())));
                 }
                 return Err(ApiError::conflict(
                     "trnm_idempotency_conflict",
-                    "TRNM idempotency key was reused with different command data",
+                    "TRNM idempotency key was reused with different command or Paper binding data",
                 ));
             }
             let command = TrnmCommand {
@@ -918,6 +976,8 @@ async fn create_trnm_command(
                 aggregate_id,
                 idempotency_key,
                 command_fingerprint,
+                paper_binding: request.paper_binding,
+                paper_binding_fingerprint,
                 signed_command: request.signed_command,
                 status: TrnmProjectionStatus::PendingFinality,
                 created_at: Utc::now(),
@@ -941,19 +1001,19 @@ async fn ingest_trnm_finality(
     headers: HeaderMap,
     Json(receipt): Json<FinalityReceiptV1>,
 ) -> Result<(StatusCode, Json<TrnmFinalityProjection>), ApiError> {
-    require_verified_finality_mode(&state)?;
     require_service_token(
         &headers,
         TRNM_TOKEN_HEADER,
         &state.security.trnm_token,
         "trnm_auth_failed",
     )?;
-    let command_fingerprint = state
+    require_verified_finality_mode_selected(&state)?;
+    let command = state
         .inspect(|league| {
             league
                 .trnm_commands
                 .get(&receipt.command_id)
-                .map(|command| command.command_fingerprint.clone())
+                .cloned()
                 .ok_or_else(|| {
                     ApiError::not_found(
                         "trnm_command_not_found",
@@ -962,9 +1022,11 @@ async fn ingest_trnm_finality(
                 })
         })
         .await?;
+    reject_legacy_finality_for_paper_command(&command)?;
+    require_verified_finality_mode(&state)?;
     let verified = verify_finality_receipt(
         &receipt,
-        Some(&command_fingerprint),
+        Some(&command.command_fingerprint),
         &state.security.trusted_trnm_validator_sets,
     )
     .map_err(|error| {
@@ -975,6 +1037,16 @@ async fn ingest_trnm_finality(
     })?;
     state
         .transact(|league| {
+            let command = league
+                .trnm_commands
+                .get(&receipt.command_id)
+                .ok_or_else(|| {
+                    ApiError::not_found(
+                        "trnm_command_not_found",
+                        format!("TRNM command {} does not exist", receipt.command_id),
+                    )
+                })?;
+            reject_legacy_finality_for_paper_command(command)?;
             let inbox_key = format!("trnm-finality-v2:{}", receipt.source_event_id);
             if let Some(existing_hash) = league.inbox_events.get(&inbox_key) {
                 if existing_hash != &receipt.receipt_hash {
@@ -1047,7 +1119,6 @@ async fn ingest_live_trnm_finality(
     headers: HeaderMap,
     Json(request): Json<LiveTrnmFinalityRequestV1>,
 ) -> Result<(StatusCode, Json<LiveTrnmFinalityProjection>), ApiError> {
-    require_verified_finality_mode(&state)?;
     require_service_token(
         &headers,
         TRNM_TOKEN_HEADER,
@@ -1060,6 +1131,7 @@ async fn ingest_live_trnm_finality(
             "live Chain receipt command_id must be the queued Hepta UUID",
         )
     })?;
+    require_verified_finality_mode_selected(&state)?;
     let command = state
         .inspect(|league| {
             league
@@ -1074,6 +1146,8 @@ async fn ingest_live_trnm_finality(
                 })
         })
         .await?;
+    reject_legacy_finality_for_paper_command(&command)?;
+    require_verified_finality_mode(&state)?;
     verify_live_receipt_binding(
         &request.receipt,
         &command,
@@ -1088,6 +1162,11 @@ async fn ingest_live_trnm_finality(
 
     state
         .transact(|league| {
+            let queued = league
+                .trnm_commands
+                .get(&command_id)
+                .ok_or_else(|| ApiError::internal("queued TRNM command disappeared"))?;
+            reject_legacy_finality_for_paper_command(queued)?;
             let inbox_key = format!("trnm-live-finality-v1:{}", request.source_event_id);
             if let Some(existing_hash) = league.inbox_events.get(&inbox_key) {
                 if existing_hash != &request.receipt.receipt_hash_hex {
@@ -1130,6 +1209,16 @@ async fn ingest_live_trnm_finality(
             Ok((StatusCode::ACCEPTED, Json(projection)))
         })
         .await
+}
+
+fn reject_legacy_finality_for_paper_command(command: &TrnmCommand) -> Result<(), ApiError> {
+    if command.paper_binding.is_some() {
+        return Err(ApiError::conflict(
+            "paper_trnm_legacy_finality_forbidden",
+            "Paper-bound TRNM commands can be finalized only by the Receipt V2 Paper finality endpoint",
+        ));
+    }
+    Ok(())
 }
 
 async fn get_live_trnm_finality(
@@ -1276,7 +1365,9 @@ async fn get_trnm_finality(
                 .ok_or_else(|| {
                     ApiError::not_found(
                         "trnm_finality_not_found",
-                        format!("TRNM command {command_id} is still pending finality"),
+                        format!(
+                            "No TRNM finality projection is available for command {command_id}; pending versus unavailable is not inferred"
+                        ),
                     )
                 })
         })
@@ -1666,9 +1757,102 @@ fn hex_bytes(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::trnm_v1::{
+        ExternalKey, ResearchObjectKind, FINALITY_RECEIPT_V1, OBJECT_INCLUSION_PROOF_V1,
+        QUORUM_CERTIFICATE_V1,
+    };
+    use axum::http::HeaderValue;
     use ed25519_dalek::SigningKey;
     use sqlx::postgres::PgPoolOptions;
     use std::time::Duration;
+
+    fn unknown_command_finality_receipt() -> FinalityReceiptV1 {
+        let digest = |byte: u8| format!("sha256:{}", format!("{byte:02x}").repeat(32));
+        FinalityReceiptV1 {
+            protocol: FINALITY_RECEIPT_V1.to_string(),
+            source_event_id: Uuid::new_v4(),
+            command_id: Uuid::new_v4(),
+            command_fingerprint: digest(0x11),
+            chain_id: "pending-only-order-test".to_string(),
+            tx_hash: digest(0x22),
+            tx_index: 0,
+            block_height: 1,
+            block_hash: digest(0x33),
+            state_root: digest(0x44),
+            object_ref: ObjectRefV1::new(
+                ResearchObjectKind::EvaluationCommitment,
+                ExternalKey::from_bytes([0x55; 32]),
+                1,
+            ),
+            inclusion_proof: ObjectInclusionProofV1 {
+                protocol: OBJECT_INCLUSION_PROOF_V1.to_string(),
+                leaf_index: 0,
+                sibling_hashes: Vec::new(),
+            },
+            validator_set_id: "unknown-validator-set".to_string(),
+            quorum_certificate: QuorumCertificateV1 {
+                protocol: QUORUM_CERTIFICATE_V1.to_string(),
+                chain_id: "pending-only-order-test".to_string(),
+                validator_set_id: "unknown-validator-set".to_string(),
+                block_height: 1,
+                block_hash: digest(0x33),
+                state_root: digest(0x44),
+                signed_voting_power: 0,
+                total_voting_power: 1,
+                signatures: Vec::new(),
+            },
+            confirmations: 0,
+            receipt_hash: digest(0x66),
+        }
+    }
+
+    fn unknown_command_live_finality_request() -> LiveTrnmFinalityRequestV1 {
+        let zeros = "0".repeat(64);
+        let ones = "1".repeat(64);
+        LiveTrnmFinalityRequestV1 {
+            source_event_id: Uuid::new_v4(),
+            receipt: serde_json::from_value(json!({
+                "schema": "trnm_finality_receipt_v1",
+                "chain_id": "pending-only-order-test",
+                "command_id": Uuid::new_v4().to_string(),
+                "domain_command_fingerprint_hex": zeros,
+                "transaction_hash_hex": ones,
+                "transaction_index": 0,
+                "block_height": 1,
+                "block_hash_hex": "1".repeat(64),
+                "block_header": {
+                    "schema": "trnm_block_header_v1",
+                    "chain_id": "pending-only-order-test",
+                    "height": 1,
+                    "previous_block_hash_hex": "0".repeat(64),
+                    "transaction_root_hex": "1".repeat(64),
+                    "state_root_hex": "0".repeat(64),
+                    "validator_set_id": "unknown-validator-set",
+                    "timestamp_unix_ms": 1
+                },
+                "state_root_hex": "0".repeat(64),
+                "transaction_root_hex": "1".repeat(64),
+                "object_ref": null,
+                "transaction_inclusion_proof": {
+                    "tree_domain": "trnm.tx.v1",
+                    "leaf_hash_hex": "1".repeat(64),
+                    "leaf_index": 0,
+                    "leaf_count": 1,
+                    "steps": []
+                },
+                "object_inclusion_proof": null,
+                "validator_set_id": "unknown-validator-set",
+                "quorum_certificate": {
+                    "validator_set_id": "unknown-validator-set",
+                    "height": 1,
+                    "block_hash_hex": "1".repeat(64),
+                    "signatures": []
+                },
+                "receipt_hash_hex": "0".repeat(64)
+            }))
+            .expect("well-formed live finality fixture"),
+        }
+    }
 
     #[test]
     fn deterministic_scoring_is_fixed_point_and_order_independent() {
@@ -1729,6 +1913,109 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn missing_finality_projection_is_unknown_and_never_manufactures_pending() {
+        let command_id = Uuid::new_v4();
+        let state = AppState::new(crate::SecurityConfig::new("operator", "nakama"));
+
+        let error = get_trnm_finality(State(state), Path(command_id))
+            .await
+            .expect_err("missing finality projection must fail closed");
+
+        assert_eq!(error.status, StatusCode::NOT_FOUND);
+        assert_eq!(error.code, "trnm_finality_not_found");
+        assert_eq!(
+            error.message,
+            format!(
+                "No TRNM finality projection is available for command {command_id}; pending versus unavailable is not inferred"
+            )
+        );
+        assert!(!error.message.contains("still pending"));
+    }
+
+    #[tokio::test]
+    async fn pending_only_mode_precedes_unknown_finality_command_lookup() {
+        let state =
+            AppState::new(crate::SecurityConfig::new("operator", "nakama").with_trnm_token("trnm"));
+        let mut headers = HeaderMap::new();
+        headers.insert(TRNM_TOKEN_HEADER, HeaderValue::from_static("trnm"));
+
+        let error = ingest_trnm_finality(
+            State(state),
+            headers,
+            Json(unknown_command_finality_receipt()),
+        )
+        .await
+        .expect_err("pending-only mode must reject before command lookup");
+
+        assert_eq!(error.status, StatusCode::CONFLICT);
+        assert_eq!(error.code, "finality_pending_only");
+    }
+
+    #[tokio::test]
+    async fn pending_only_mode_precedes_unknown_live_finality_command_lookup() {
+        let state =
+            AppState::new(crate::SecurityConfig::new("operator", "nakama").with_trnm_token("trnm"));
+        let mut headers = HeaderMap::new();
+        headers.insert(TRNM_TOKEN_HEADER, HeaderValue::from_static("trnm"));
+
+        let error = ingest_live_trnm_finality(
+            State(state),
+            headers,
+            Json(unknown_command_live_finality_request()),
+        )
+        .await
+        .expect_err("pending-only mode must reject before live command lookup");
+
+        assert_eq!(error.status, StatusCode::CONFLICT);
+        assert_eq!(error.code, "finality_pending_only");
+    }
+
+    #[tokio::test]
+    async fn readiness_fails_closed_when_verified_mode_has_no_receipt_v2_pins() {
+        let security = crate::SecurityConfig::new("operator", "nakama")
+            .with_trnm_token("trnm")
+            .with_finality_mode(FinalityMode::Verified);
+        assert_eq!(
+            security
+                .validate_finality_startup()
+                .expect_err("verified startup without Receipt V2 pins must fail closed"),
+            "verified HEPTA_FINALITY_MODE requires HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON with at least one pinned trust-anchor hash"
+        );
+        let pinned_only = crate::SecurityConfig::new("operator", "nakama")
+            .with_trnm_token("trnm")
+            .with_finality_mode(FinalityMode::Verified)
+            .with_pinned_trnm_cometbft_trust_anchor_hash("11".repeat(32))
+            .expect("valid Receipt V2 pin");
+        pinned_only
+            .validate_finality_startup()
+            .expect("pinned-only verified startup is valid");
+        let state = AppState::new(security);
+        let (status, Json(response)) = ready(State(state)).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(!response.ready);
+        assert_eq!(response.finality_mode, "verified");
+        assert_eq!(response.pinned_cometbft_trust_anchor_hashes, 0);
+        assert_eq!(
+            response.paper_chain_finality_v2_command_lane,
+            "awaiting_chain_verifier_upgrade"
+        );
+        assert_eq!(
+            response.paper_scientific_finality_policy,
+            "hepta.paper_raid.scientific_finality_policy.v1"
+        );
+        assert_eq!(response.paper_no_appeal_window_seconds, 86_400);
+        assert_eq!(
+            response.trnm_receipt_v2_max_body_bytes,
+            crate::DEFAULT_TRNM_RECEIPT_V2_MAX_BODY_BYTES
+        );
+        assert_eq!(
+            response.trnm_receipt_v2_max_in_flight,
+            crate::DEFAULT_TRNM_RECEIPT_V2_MAX_IN_FLIGHT
+        );
+        assert!(response.failures.contains(&"trnm_finality_trust_missing"));
+    }
+
+    #[tokio::test]
     async fn readiness_fails_closed_when_postgres_pool_cannot_connect() {
         let security = crate::SecurityConfig::new("operator", "nakama")
             .with_trnm_token("trnm")
@@ -1746,6 +2033,7 @@ mod tests {
                 .connect_lazy("postgres://127.0.0.1:1/hepta_unreachable")
                 .expect("lazy pool"),
         );
+        state.finality_pool = state.pool.clone();
         let (status, Json(response)) = ready(State(state)).await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert!(!response.ready);

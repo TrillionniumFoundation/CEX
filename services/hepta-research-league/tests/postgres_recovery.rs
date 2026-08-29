@@ -31,6 +31,27 @@ async fn request(app: axum::Router, method: &str, uri: &str, body: Value) -> (St
     (status, serde_json::from_slice(&bytes).expect("json"))
 }
 
+async fn request_text(app: axum::Router, uri: &str) -> (StatusCode, String) {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(uri)
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    (
+        status,
+        String::from_utf8(bytes.to_vec()).expect("UTF-8 text"),
+    )
+}
+
 #[tokio::test]
 async fn postgres_survives_restart_and_multi_instance_outbox_claims_do_not_overlap() {
     let Ok(database_url) = std::env::var("HEPTA_TEST_DATABASE_URL") else {
@@ -113,6 +134,15 @@ async fn postgres_survives_restart_and_multi_instance_outbox_claims_do_not_overl
     let (a, b) = tokio::join!(register_a, register_b);
     assert_eq!(a.0, StatusCode::CREATED);
     assert_eq!(b.0, StatusCode::CREATED);
+
+    let (metrics_status, metrics) = request_text(app(first.clone()), "/metrics").await;
+    assert_eq!(metrics_status, StatusCode::OK);
+    assert!(metrics.contains("hepta_paper_raid_storage_backend_info{backend=\"postgres\"} 1"));
+    assert!(metrics.contains("hepta_paper_raid_pending_outbox_events 2"));
+    assert!(metrics.contains("hepta_paper_raid_oldest_pending_outbox_seconds "));
+    assert!(metrics.contains("hepta_paper_raid_max_pending_outbox_attempts 0"));
+    assert!(metrics.contains("hepta_paper_raid_oldest_pending_control_seconds 0"));
+    assert!(metrics.contains("hepta_paper_raid_max_pending_control_attempts 0"));
 
     let recovered = AppState::connect(&database_url, security)
         .await

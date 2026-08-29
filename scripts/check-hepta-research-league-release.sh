@@ -1,8 +1,98 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_dir"
+
+git_binary="$(PATH=/usr/bin:/bin command -v git)"
+
+git_authority() {
+  env -i \
+    PATH=/usr/bin:/bin \
+    HOME=/nonexistent \
+    XDG_CONFIG_HOME=/nonexistent \
+    LC_ALL=C \
+    GIT_CONFIG_NOSYSTEM=1 \
+    GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_NO_REPLACE_OBJECTS=1 \
+    "$git_binary" --no-replace-objects \
+      -c core.fsmonitor=false \
+      -c core.untrackedCache=false \
+      "$@"
+}
+
+release_lock="$(git_authority -C "$repo_dir" rev-parse --path-format=absolute \
+  --git-path hepta-release-authority.lock)"
+exec 9>"$release_lock"
+flock -n 9 || {
+  echo "another Hepta release-authority process is already running" >&2
+  exit 1
+}
+
+release_revision="$(git_authority -C "$repo_dir" rev-parse --verify HEAD^{commit})"
+release_tree="$(git_authority -C "$repo_dir" rev-parse --verify "$release_revision^{tree}")"
+
+verify_release_source_unchanged() {
+  local actual_helper_blob expected_helper_blob helper_entry helper_metadata
+  local helper_mode helper_object_type helper_relative_path helper_path
+  local observed_revision observed_tree observed_repo_root observed_status
+
+  observed_revision="$(git_authority -C "$repo_dir" rev-parse --verify HEAD^{commit})"
+  observed_tree="$(git_authority -C "$repo_dir" rev-parse --verify "$observed_revision^{tree}")"
+  observed_repo_root="$(git_authority -C "$repo_dir" rev-parse --show-toplevel)"
+  observed_status="$(git_authority -C "$repo_dir" status --porcelain=v1 --untracked-files=all)"
+
+  if [[ "$observed_repo_root" != "$repo_dir" ]]; then
+    echo "Hepta release gate repository identity changed" >&2
+    return 1
+  fi
+  if [[ "$observed_revision" != "$release_revision" ]]; then
+    echo "Hepta release gate HEAD changed while evidence was collected" >&2
+    return 1
+  fi
+  if [[ "$observed_tree" != "$release_tree" ]]; then
+    echo "Hepta release gate source tree changed while evidence was collected" >&2
+    return 1
+  fi
+  if [[ -n "$observed_status" ]]; then
+    echo "Hepta release gate requires a clean worktree, including untracked files" >&2
+    return 1
+  fi
+
+  helper_relative_path="scripts/verify-hepta-clean-source.py"
+  helper_path="$repo_dir/$helper_relative_path"
+  if [[ ! -f "$helper_path" || -L "$helper_path" || ! -x "$helper_path" ]]; then
+    echo "Hepta release gate clean-source verifier is missing or non-regular" >&2
+    return 1
+  fi
+  helper_entry="$(git_authority -C "$repo_dir" ls-tree "$release_revision" -- "$helper_relative_path")"
+  helper_metadata="${helper_entry%%$'\t'*}"
+  if [[ "$helper_entry" == "$helper_metadata" ]]; then
+    echo "Hepta release gate clean-source verifier is absent from the release commit" >&2
+    return 1
+  fi
+  helper_relative_path="${helper_entry#*$'\t'}"
+  read -r helper_mode helper_object_type expected_helper_blob <<<"$helper_metadata"
+  if [[ "$helper_relative_path" != "scripts/verify-hepta-clean-source.py" || \
+        "$helper_mode" != "100755" || \
+        "$helper_object_type" != "blob" || \
+        ! "$expected_helper_blob" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+    echo "Hepta release gate clean-source verifier commit authority is non-canonical" >&2
+    return 1
+  fi
+  actual_helper_blob="$(git_authority -C "$repo_dir" hash-object --no-filters -- "$helper_relative_path")"
+  if [[ "$actual_helper_blob" != "$expected_helper_blob" ]]; then
+    echo "Hepta release gate clean-source verifier bytes differ from the release commit" >&2
+    return 1
+  fi
+  python3 "$helper_path" \
+    --repo-dir "$repo_dir" \
+    --revision "$release_revision" \
+    --tree "$release_tree" \
+    >/dev/null
+}
+
+verify_release_source_unchanged
 
 : "${HEPTA_TEST_DATABASE_URL:?HEPTA_TEST_DATABASE_URL is required for the live PostgreSQL release gate}"
 cargo_gate="${HEPTA_CARGO_LOCK_FILE:-/tmp/trnm-paper-raid-cargo-gate.lock}"
@@ -28,6 +118,7 @@ python3 scripts/verify-hepta-research-league-sbom.py \
   --cargo-lock services/hepta-research-league/docker/Cargo.lock \
   --rust-toolchain services/hepta-research-league/docker/rust-toolchain.manifest
 bash scripts/check-hepta-research-league-release-structure.sh
+python3 scripts/check-hepta-route-openapi-parity.py
 
 python3 - <<'PY'
 import yaml
@@ -56,11 +147,17 @@ with open(vendor_root / "trnm-chain-vendor-manifest.json", encoding="utf-8") as 
     provenance = json.load(stream)
 assert provenance["schema"] == "hepta.vendor.trnm_chain_crates.v1"
 assert provenance["source_repository"] == "https://github.com/TrillionniumFoundation/Trillionnium-Chain.git"
-assert provenance["source_commit"] == "e73d1a930991f0e308bf72854b334b6191c7fcc3"
+assert provenance["source_branch"] == "feature/chain-paper-raid-receipt-v2"
+assert provenance["source_commit"] == "a691e486c2c43dfb1fb686a4866418f093f625e7"
+assert provenance["source_tree"] == "83580e4dbd1ecd7c0a40d9d59b7749a52d55dc6c"
 assert provenance["license"] == "MIT"
 assert provenance["update_policy"].strip()
 assert provenance["packaging_context"] == {
-    "workspace_inherited_crates": ["trnm-finality-types", "trnm-finality-verifier"],
+    "workspace_inherited_crates": [
+        "trnm-finality-types",
+        "trnm-finality-verifier",
+        "trnm-protocol",
+    ],
     "workspace_inherited_fields": ["edition", "license", "authors"],
     "source_workspace_values": {
         "edition": "2021",
@@ -77,12 +174,14 @@ assert provenance["packaging_context"] == {
 assert set(provenance["crates"]) == {
     "trnm-finality-types",
     "trnm-finality-verifier",
+    "trnm-protocol",
     "trnm-research-protocol",
 }
 expected_source_trees = {
-    "trnm-finality-types": "31d7e3a141332055232e2d82260bdaa7bbf62d14",
-    "trnm-finality-verifier": "ad3d2e1aacd5e6e6b3f0c520eb7f1dbfbebbf536",
-    "trnm-research-protocol": "223cd8adcce3e6a3ab7bed24ffb919e0ae1fda56",
+    "trnm-finality-types": "81914c339c0ace155ea169da0ff01555e09e58d0",
+    "trnm-finality-verifier": "3db7fe2b40faa15d9597ea2824b1079ca93c754c",
+    "trnm-protocol": "ee9b750ad0156a4a5e79a0373342353707a5803d",
+    "trnm-research-protocol": "ceb25412d0b874e99ad7b29d4cce0b6a9eb71745",
 }
 
 def git_object_id(kind, data):
@@ -167,11 +266,26 @@ for required_env in (
     "HEPTA_CONSUMER_EDGE_AUDIENCE",
     "HEPTA_CONSUMER_EDGE_ISSUER_KEY_ID",
     "HEPTA_CONSUMER_EDGE_ED25519_PUBLIC_KEY_BASE64",
+    "HEPTA_CONSUMER_EDGE_ED25519_PUBLIC_KEYS_JSON",
     "TRNM_NAKAMA_AUTHORITY_KEY_ID",
     "TRNM_NAKAMA_AUTHORITY_PUBLIC_KEY_BASE64",
+    "TRNM_NAKAMA_AUTHORITY_PUBLIC_KEYS_JSON",
     "HEPTA_FINALITY_MODE",
+    "HEPTA_TRNM_VALIDATOR_SETS_JSON",
+    "HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON",
+    "HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES",
+    "HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT",
 ):
     assert required_env in hepta["environment"]
+assert hepta["environment"]["HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON"] == (
+    "${HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON:?Receipt V2 pinned trust-anchor hashes required}"
+)
+assert hepta["environment"]["HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES"] == (
+    "${HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES:-32768}"
+)
+assert hepta["environment"]["HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT"] == (
+    "${HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT:-1}"
+)
 
 PY
 
@@ -224,6 +338,8 @@ node scripts/verify-hepta-paper-review-v4-fixture.mjs \
   docs/sdk-fixtures/hepta-paper-review-v4.json
 
 cargo_locked fmt --all -- --check
+cargo_locked test --locked -p trnm-finality-verifier --lib
 cargo_locked test --locked -p hepta-research-league
 cargo_locked check --locked --workspace
 cargo_locked clippy --locked --workspace --all-targets -- -D warnings
+verify_release_source_unchanged

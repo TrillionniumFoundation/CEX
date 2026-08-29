@@ -16,6 +16,8 @@ COPY vendor/trnm-finality-types/Cargo.toml vendor/trnm-finality-types/Cargo.toml
 COPY vendor/trnm-finality-types/src vendor/trnm-finality-types/src
 COPY vendor/trnm-finality-verifier/Cargo.toml vendor/trnm-finality-verifier/Cargo.toml
 COPY vendor/trnm-finality-verifier/src vendor/trnm-finality-verifier/src
+COPY vendor/trnm-protocol/Cargo.toml vendor/trnm-protocol/Cargo.toml
+COPY vendor/trnm-protocol/src vendor/trnm-protocol/src
 COPY vendor/trnm-research-protocol/Cargo.toml vendor/trnm-research-protocol/Cargo.toml
 COPY vendor/trnm-research-protocol/src vendor/trnm-research-protocol/src
 COPY migrations/0031_add_hepta_research_league.sql migrations/0031_add_hepta_research_league.sql
@@ -24,6 +26,24 @@ COPY migrations/0033_add_hepta_paper_collaboration_kernel.sql migrations/0033_ad
 COPY migrations/0034_add_hepta_paper_review_appeal.sql migrations/0034_add_hepta_paper_review_appeal.sql
 COPY migrations/0035_add_hepta_secure_onboarding.sql migrations/0035_add_hepta_secure_onboarding.sql
 COPY migrations/0036_add_hepta_nakama_research_control.sql migrations/0036_add_hepta_nakama_research_control.sql
+COPY migrations/0037_add_hepta_paper_chain_finality_v1.sql migrations/0037_add_hepta_paper_chain_finality_v1.sql
+COPY migrations/0038_add_hepta_paper_chain_finality_v2.sql migrations/0038_add_hepta_paper_chain_finality_v2.sql
+COPY migrations/0039_add_hepta_review_assignments.sql migrations/0039_add_hepta_review_assignments.sql
+COPY migrations/0040_add_hepta_evaluation_draft_quorum.sql migrations/0040_add_hepta_evaluation_draft_quorum.sql
+COPY migrations/0041_add_hepta_agent_capability_disclosure.sql migrations/0041_add_hepta_agent_capability_disclosure.sql
+COPY migrations/0042_add_hepta_team_proposal_deadlines.sql migrations/0042_add_hepta_team_proposal_deadlines.sql
+COPY migrations/0043_add_hepta_challenge_ruleset_v1.sql migrations/0043_add_hepta_challenge_ruleset_v1.sql
+COPY migrations/0044_add_hepta_agent_proposal_v2_epoch.sql migrations/0044_add_hepta_agent_proposal_v2_epoch.sql
+COPY migrations/0045_add_hepta_work_item_record_parity.sql migrations/0045_add_hepta_work_item_record_parity.sql
+COPY migrations/0046_add_hepta_matchmaking_record_parity_v2.sql migrations/0046_add_hepta_matchmaking_record_parity_v2.sql
+COPY migrations/0047_add_hepta_contribution_ledger_authority.sql migrations/0047_add_hepta_contribution_ledger_authority.sql
+COPY migrations/0048_add_hepta_consumer_finality_v2.sql migrations/0048_add_hepta_consumer_finality_v2.sql
+COPY migrations/0049_add_hepta_challenge_pack_activation.sql migrations/0049_add_hepta_challenge_pack_activation.sql
+COPY migrations/0050_add_hepta_paper_rework.sql migrations/0050_add_hepta_paper_rework.sql
+COPY migrations/0051_bind_legacy_evaluation_panel_lifecycle.sql migrations/0051_bind_legacy_evaluation_panel_lifecycle.sql
+COPY migrations/0052_harden_hepta_paper_finality_v2_preparation_ingress.sql migrations/0052_harden_hepta_paper_finality_v2_preparation_ingress.sql
+COPY migrations/0053_allow_review_ready_artifact_manifest_binding.sql migrations/0053_allow_review_ready_artifact_manifest_binding.sql
+COPY migrations/0054_bind_challenge_pack_activation_chain_proof.sql migrations/0054_bind_challenge_pack_activation_chain_proof.sql
 COPY docs/openapi/hepta-research-league-v1.yaml docs/openapi/hepta-research-league-v1.yaml
 COPY docs/openapi/hepta-paper-raid-v2.yaml docs/openapi/hepta-paper-raid-v2.yaml
 
@@ -37,14 +57,17 @@ RUN test "$(sed -n '1p' /toolchain/rust-toolchain.manifest)" = \
     && test "$(rustc --version)" = "rustc 1.95.0 (59807616e 2026-04-14)" \
     && test "$(cargo --version)" = "cargo 1.95.0 (f2d3ce0bd 2026-03-21)"
 
-FROM workspace AS lockfile-generator
+FROM workspace AS lockfile-verifier
+COPY services/hepta-research-league/docker/Cargo.lock Cargo.lock
 RUN CARGO_HTTP_TIMEOUT=600 \
     CARGO_HTTP_LOW_SPEED_LIMIT=1 \
     CARGO_NET_RETRY=5 \
-    cargo generate-lockfile
+    cargo fetch --locked \
+    && cargo metadata --locked --offline --format-version 1 \
+      > /cargo-lock-metadata.json
 
 FROM scratch AS cargo-lock-export
-COPY --from=lockfile-generator /src/Cargo.lock /Cargo.lock
+COPY --from=lockfile-verifier /src/Cargo.lock /Cargo.lock
 
 FROM workspace AS builder
 COPY services/hepta-research-league/docker/Cargo.lock Cargo.lock

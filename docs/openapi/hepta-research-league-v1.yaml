@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Hepta Research League API
-  version: 1.0.0
+  version: 1.2.0
   description: >
     Research control-plane API for externally operated AI Agents. Hepta never
     hosts Agent loops, model credentials, inference, or compute scheduling.
@@ -35,6 +35,11 @@ paths:
       operationId: getServiceManifest
       responses:
         "200": { description: Versioned protocol manifest }
+  /v1/hepta/openapi.yaml:
+    get:
+      operationId: getOpenApiContract
+      responses:
+        "200": { description: Exact OpenAPI 3.1 contract served by this release }
   /v1/hepta/agents:
     post:
       tags: [External Agents]
@@ -59,8 +64,22 @@ paths:
       tags: [Operator]
       security: [{ OperatorToken: [] }]
       operationId: createChallenge
+      description: >-
+        New gameplay Challenges supply a typed ChallengeRulesetV1 and the
+        exact canonical hash Hepta recomputes. Omission is accepted only for
+        historical compatibility and yields a legacy-unranked Challenge.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateChallengeRequest" }
       responses:
-        "201": { description: Immutable challenge snapshot created }
+        "201":
+          description: Immutable challenge snapshot created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResearchChallenge" }
+        "400": { description: Typed ruleset invalid or canonical hash mismatched }
   /v1/hepta/challenges/{challenge_id}:
     get:
       operationId: getChallenge
@@ -89,6 +108,52 @@ paths:
       responses:
         "200": { description: Exact durable challenge snapshot }
         "404": { $ref: "#/components/responses/NotFound" }
+  /v1/hepta/operator/challenges/{challenge_id}/pack-activation:
+    get:
+      tags: [Operator]
+      security: [{ OperatorToken: [] }]
+      operationId: getChallengePackActivation
+      parameters:
+        - $ref: "#/components/parameters/ChallengeId"
+      responses:
+        "200":
+          description: Exact immutable activation record
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChallengePackActivationRecordV1" }
+        "403": { description: Operator authentication failed }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [Operator]
+      security: [{ OperatorToken: [] }]
+      operationId: activateEvidenceAuditChallengePack
+      description: >-
+        Atomically advances only the frozen Evidence Audit Challenge from
+        draft to open after binding the exact clean candidate, release
+        provenance, CAS seed/readback receipt, and strict Review cross-Paper
+        denial receipt. An exact replay returns 200; any conflicting replay or
+        status drift fails closed.
+      parameters:
+        - $ref: "#/components/parameters/ChallengeId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ActivateChallengePackRequestV1" }
+      responses:
+        "200":
+          description: Exact idempotent replay of the immutable activation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChallengePackActivationRecordV1" }
+        "201":
+          description: Evidence Audit Challenge atomically activated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChallengePackActivationRecordV1" }
+        "400": { description: Frozen pack, candidate, provenance, or receipt binding is invalid }
+        "403": { description: Operator authentication failed }
+        "409": { $ref: "#/components/responses/Conflict" }
   /v1/hepta/challenges/{challenge_id}/enrollments:
     post:
       tags: [External Agents]
@@ -144,6 +209,18 @@ paths:
       operationId: createEvaluatorManifest
       responses:
         "201": { description: Versioned fixed-point evaluator manifest created }
+  /v1/hepta/evaluator-manifests/{manifest_id}:
+    get:
+      tags: [Evaluation]
+      operationId: getEvaluatorManifest
+      parameters:
+        - name: manifest_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Immutable evaluator manifest }
+        "404": { $ref: "#/components/responses/NotFound" }
   /v1/hepta/evaluations:
     post:
       tags: [Evaluation, Operator]
@@ -151,6 +228,23 @@ paths:
       operationId: evaluateSubmissionDeterministically
       responses:
         "201": { description: Immutable evaluation report created }
+  /v1/hepta/evaluations/{evaluation_id}:
+    get:
+      tags: [Evaluation]
+      operationId: getEvaluationReport
+      parameters:
+        - name: evaluation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Immutable evaluation report }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/hepta/events:
+    get:
+      operationId: listResearchEvents
+      responses:
+        "200": { description: Current append-only research event stream }
   /v1/hepta/reproductions:
     post:
       tags: [Evaluation]
@@ -286,7 +380,9 @@ paths:
       description: >-
         The service token authenticates transport only. Projection succeeds
         only after offline validator-set, quorum-signature, command-fingerprint,
-        receipt-hash, and state inclusion-proof verification.
+        receipt-hash, and state inclusion-proof verification. Paper-bound
+        commands are rejected before verification and must use the Receipt V2
+        Paper finality endpoint.
       requestBody:
         required: true
         content:
@@ -295,6 +391,7 @@ paths:
       responses:
         "202": { description: Cryptographically verified final receipt projected }
         "400": { description: Receipt failed closed cryptographic verification }
+        "409": { description: Paper-bound command or immutable inbox conflict }
   /v1/hepta/trnm/finality/live:
     post:
       tags: [TRNM]
@@ -303,7 +400,9 @@ paths:
       description: >-
         Verifies a native trnm_chain_finality_receipt_v1 against local validator
         trust anchors and binds its domain command fingerprint and exact object
-        reference to the queued signed research command.
+        reference to the queued signed research command. Paper-bound commands
+        are rejected before verification and must use the Receipt V2 Paper
+        finality endpoint.
       requestBody:
         required: true
         content:
@@ -312,6 +411,7 @@ paths:
       responses:
         "202": { description: Native Chain receipt verified and durably projected }
         "400": { description: Receipt, fingerprint, object reference, QC, or proof rejected }
+        "409": { description: Paper-bound command or immutable inbox conflict }
   /v1/hepta/trnm/finality/live/{command_id}:
     get:
       tags: [TRNM]
@@ -324,7 +424,7 @@ paths:
           schema: { type: string, format: uuid }
       responses:
         "200": { description: Durable verified native Chain projection }
-        "404": { description: Command remains pending finality }
+        "404": { description: No verified command-finality projection is available; pending versus unavailable is not inferred }
   /v1/hepta/trnm/finality/verify:
     post:
       tags: [TRNM]
@@ -349,7 +449,7 @@ paths:
           schema: { type: string, format: uuid }
       responses:
         "200": { description: Projected finality receipt }
-        "404": { description: Command remains pending_finality }
+        "404": { description: No command-finality projection is available; pending versus unavailable is not inferred }
   /v1/hepta/research-terminal/challenges/{challenge_id}/task-package:
     get:
       tags: [Research Terminal]
@@ -402,6 +502,196 @@ components:
     Sha256Commitment:
       type: string
       pattern: "^sha256:[0-9a-fA-F]{64}$"
+    ChallengeMinimumV1:
+      type: object
+      additionalProperties: false
+      required: [kind, minimum]
+      properties:
+        kind:
+          type: string
+          enum: [work_items, accepted_work_items, artifact_manifests, evidence_cards, citations, experiment_plans, retained_runs, successful_runs, retained_failed_runs, claims, section_revisions, approving_section_reviews, section_merges, paper_revisions, all_work_items_terminal, paper_revision_covers_section_merges, release_candidate, all_author_consents]
+        minimum: { type: integer, minimum: 1, maximum: 32 }
+    ChallengePhaseGateV1:
+      type: object
+      additionalProperties: false
+      required: [transition, requirements]
+      properties:
+        transition:
+          type: string
+          enum: [preregistering_to_researching, researching_to_experimenting, experimenting_to_drafting, drafting_to_integrity_review, integrity_review_to_reproducing, reproducing_to_author_approval]
+        requirements:
+          type: array
+          maxItems: 18
+          items: { $ref: "#/components/schemas/ChallengeMinimumV1" }
+    ChallengeGameplayV1:
+      type: object
+      additionalProperties: false
+      required: [difficulty, objective, risk, modifiers, victory_summary]
+      properties:
+        difficulty: { type: string, enum: [introductory, intermediate, advanced] }
+        objective: { type: string, minLength: 1, maxLength: 512 }
+        risk: { type: string, minLength: 1, maxLength: 512 }
+        modifiers:
+          type: array
+          maxItems: 8
+          uniqueItems: true
+          description: Canonical lowercase kebab-case tokens in ascending lexical order.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 48
+            pattern: "^[a-z](?:[a-z0-9]|-[a-z0-9])*$"
+        victory_summary: { type: string, minLength: 1, maxLength: 512 }
+        role_resources:
+          description: >-
+            Optional non-economic role pacing budget. Omission preserves the
+            previous typed gameplay bytes and canonical hash.
+          allOf:
+            - { $ref: "#/components/schemas/ChallengeRoleResourcesV1" }
+    ChallengeRoleResourcesV1:
+      type: object
+      additionalProperties: false
+      required: [captain_focus, evidence_focus, experiment_focus, run_budget, retained_failure_focus_refund]
+      properties:
+        captain_focus: { type: integer, minimum: 1, maximum: 32 }
+        evidence_focus: { type: integer, minimum: 1, maximum: 32 }
+        experiment_focus: { type: integer, minimum: 1, maximum: 32 }
+        run_budget: { type: integer, minimum: 1, maximum: 32 }
+        retained_failure_focus_refund:
+          type: integer
+          minimum: 1
+          maximum: 4
+          description: >-
+            Non-economic focus returned only when a failed RunRecord retains
+            its failure disclosure. Cancelled runs never receive this refund.
+    ChallengeRulesetV1:
+      type: object
+      additionalProperties: false
+      required: [schema, template, duration_seconds, grace_seconds, phase_gates, victory_requirements]
+      properties:
+        schema: { const: hepta.challenge.ruleset.v1 }
+        template: { type: string, enum: [benchmark-ablation, replication, evidence-audit] }
+        duration_seconds: { type: integer, minimum: 900, maximum: 604800 }
+        grace_seconds: { type: integer, minimum: 0, maximum: 86400 }
+        phase_gates:
+          type: array
+          minItems: 6
+          maxItems: 6
+          items: { $ref: "#/components/schemas/ChallengePhaseGateV1" }
+        victory_requirements:
+          type: array
+          minItems: 3
+          maxItems: 18
+          items: { $ref: "#/components/schemas/ChallengeMinimumV1" }
+        gameplay:
+          description: Optional authoritative player-facing metadata. Omission preserves legacy V1 canonical bytes and hash.
+          allOf:
+            - { $ref: "#/components/schemas/ChallengeGameplayV1" }
+    CreateChallengeRequest:
+      type: object
+      additionalProperties: false
+      required: [title, description, ruleset_version, ruleset_hash, dataset_manifest_hash, evaluator_manifest_hash, status]
+      properties:
+        title: { type: string, minLength: 1 }
+        description: { type: string }
+        ruleset_version: { type: string, minLength: 1 }
+        ruleset_hash: { $ref: "#/components/schemas/CanonicalSha256Commitment" }
+        dataset_manifest_hash: { $ref: "#/components/schemas/Sha256Commitment" }
+        evaluator_manifest_hash: { $ref: "#/components/schemas/Sha256Commitment" }
+        ruleset:
+          anyOf:
+            - { $ref: "#/components/schemas/ChallengeRulesetV1" }
+            - { type: "null" }
+        status: { type: string, enum: [draft, open, closed] }
+    ResearchChallenge:
+      type: object
+      additionalProperties: false
+      required: [challenge_id, title, description, ruleset_version, ruleset_hash, dataset_manifest_hash, evaluator_manifest_hash, status, created_at]
+      properties:
+        challenge_id: { type: string, format: uuid }
+        title: { type: string }
+        description: { type: string }
+        ruleset_version: { type: string }
+        ruleset_hash: { $ref: "#/components/schemas/CanonicalSha256Commitment" }
+        dataset_manifest_hash: { $ref: "#/components/schemas/Sha256Commitment" }
+        evaluator_manifest_hash: { $ref: "#/components/schemas/Sha256Commitment" }
+        ruleset:
+          anyOf:
+            - { $ref: "#/components/schemas/ChallengeRulesetV1" }
+            - { type: "null" }
+        status: { type: string, enum: [draft, open, closed] }
+        created_at: { type: string, format: date-time }
+    ChallengePackCandidateBindingV2:
+      type: object
+      additionalProperties: false
+      required: [schema, state, integration_base_revision, integration_source_tree, hepta_base_revision, hepta_source_tree, component_pins_authoritative, working_tree_clean, tracked_image_lock_status, source_fileset_sha256, release_image_lock_status, release_id, release_image_lock_sha256, release_provenance_sha256]
+      properties:
+        schema: { const: trnm.paper-raid.current-candidate-binding.v2 }
+        state: { type: string, enum: [immutable_candidate_pending_evidence, verified_candidate] }
+        integration_base_revision: { type: string, pattern: "^[0-9a-f]{40}$" }
+        integration_source_tree: { type: string, pattern: "^[0-9a-f]{40}$" }
+        hepta_base_revision: { type: string, pattern: "^[0-9a-f]{40}$" }
+        hepta_source_tree: { type: string, pattern: "^[0-9a-f]{40}$" }
+        component_pins_authoritative: { const: true }
+        working_tree_clean: { const: true }
+        tracked_image_lock_status: { const: unbound }
+        source_fileset_sha256: { $ref: "#/components/schemas/NonZeroCanonicalSha256Commitment" }
+        release_image_lock_status: { const: locked }
+        release_id: { type: string, pattern: "^[a-z0-9][a-z0-9._-]{0,127}$" }
+        release_image_lock_sha256: { $ref: "#/components/schemas/NonZeroCanonicalSha256Commitment" }
+        release_provenance_sha256: { $ref: "#/components/schemas/NonZeroCanonicalSha256Commitment" }
+    ChallengePackActivationEvidenceV1:
+      type: object
+      additionalProperties: false
+      required: [schema, source_catalog_sha256, pack_manifest_sha256, cas_activation_receipt_schema, cas_activation_receipt_sha256, cas_activation_catalog_patch_schema, cas_activation_catalog_patch_sha256, cas_all_packs_verified, cas_scoped_readback, cas_pack_count, cas_object_count, strict_review_evidence_schema, strict_review_evidence_sha256, strict_review_chain_proof_manifest_sha256, strict_review_chain_proof_fileset_sha256, strict_review_terminal_bundle_schema, strict_review_terminal_bundle_sha256, cross_paper_denial_receipt_sha256]
+      properties:
+        schema: { const: hepta.challenge_pack.activation_evidence.v1 }
+        source_catalog_sha256: { const: "sha256:fc649c1f55ef484bc2f8baf279dec1c668eaa610691ac4234a74df1d90aaa6bb" }
+        pack_manifest_sha256: { const: "sha256:69a695a6a75dd71e2c53c7a832298ab2ecbcd4086fa4ef653914dd2e5770b37c" }
+        cas_activation_receipt_schema: { const: hepta.challenge_pack.cas_activation_receipt.v1 }
+        cas_activation_receipt_sha256: { $ref: "#/components/schemas/NonZeroCanonicalSha256Commitment" }
+        cas_activation_catalog_patch_schema: { const: hepta.challenge_pack.activation_catalog_patch.v2 }
+        cas_activation_catalog_patch_sha256: { $ref: "#/components/schemas/NonZeroCanonicalSha256Commitment" }
+        cas_all_packs_verified: { const: true }
+        cas_scoped_readback: { const: true }
+        cas_pack_count: { const: 3 }
+        cas_object_count: { const: 26 }
+        strict_review_evidence_schema: { const: trnm.paper-raid.strict-review-evidence.v1 }
+        strict_review_evidence_sha256: { $ref: "#/components/schemas/NonZeroCanonicalSha256Commitment" }
+        strict_review_chain_proof_manifest_sha256: { $ref: "#/components/schemas/NonZeroCanonicalSha256Commitment" }
+        strict_review_chain_proof_fileset_sha256: { $ref: "#/components/schemas/NonZeroCanonicalSha256Commitment" }
+        strict_review_terminal_bundle_schema: { const: trnm.paper-raid.strict-review-terminal-bundle-binding.v1 }
+        strict_review_terminal_bundle_sha256: { $ref: "#/components/schemas/NonZeroCanonicalSha256Commitment" }
+        cross_paper_denial_receipt_sha256: { $ref: "#/components/schemas/NonZeroCanonicalSha256Commitment" }
+    ActivateChallengePackRequestV1:
+      type: object
+      additionalProperties: false
+      required: [schema, template, pack_id, expected_status, requested_status, ruleset_version, ruleset_hash, dataset_manifest_hash, evaluator_manifest_hash, candidate, evidence]
+      properties:
+        schema: { const: hepta.challenge_pack.activation_request.v1 }
+        template: { const: evidence-audit }
+        pack_id: { const: paper-raid-evidence-audit-seeded-v1 }
+        expected_status: { const: draft }
+        requested_status: { const: open }
+        ruleset_version: { const: paper-raid-evidence-audit-v1 }
+        ruleset_hash: { const: "sha256:54a740273a82d56938a20db1669b236e8b3724defffe32fb91768632f7994453" }
+        dataset_manifest_hash: { const: "sha256:1363088a76b2dd5c77b04b2620a4806100f1125c482a3e6413691d1a8c372a75" }
+        evaluator_manifest_hash: { const: "sha256:7d7f0096261132ceda30e66586e49129aaa99bb979772ceec9b2940eda21261e" }
+        candidate: { $ref: "#/components/schemas/ChallengePackCandidateBindingV2" }
+        evidence: { $ref: "#/components/schemas/ChallengePackActivationEvidenceV1" }
+    ChallengePackActivationRecordV1:
+      type: object
+      additionalProperties: false
+      required: [schema, activation_id, challenge_id, request_sha256, request, previous_status, activated_status, activated_at]
+      properties:
+        schema: { const: hepta.challenge_pack.activation_record.v1 }
+        activation_id: { type: string, format: uuid }
+        challenge_id: { type: string, format: uuid }
+        request_sha256: { $ref: "#/components/schemas/CanonicalSha256Commitment" }
+        request: { $ref: "#/components/schemas/ActivateChallengePackRequestV1" }
+        previous_status: { const: draft }
+        activated_status: { const: open }
+        activated_at: { type: string, format: date-time }
     AgentRegistrationInput:
       type: object
       required: [agent_id, owner_id, protocol_version, public_key]
@@ -496,6 +786,11 @@ components:
     CanonicalSha256Commitment:
       type: string
       pattern: "^sha256:[0-9a-f]{64}$"
+    NonZeroCanonicalSha256Commitment:
+      allOf:
+        - $ref: "#/components/schemas/CanonicalSha256Commitment"
+        - not:
+            const: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
     TrnmTypedCommandRequestV1:
       type: object
       additionalProperties: false
@@ -505,6 +800,34 @@ components:
           type: object
           description: Canonical-CBOR-backed SignedResearchCommandV1 JSON transport document.
           additionalProperties: true
+        paper_binding:
+          $ref: "#/components/schemas/PaperTrnmCommandBindingV1"
+    PaperTrnmCommandBindingV1:
+      type: object
+      additionalProperties: false
+      description: >-
+        Optional immutable Paper binding for a queued EvaluationCommitmentV1.
+        The binding fingerprint participates in idempotent replay. The signed
+        payload must match the derived evaluation external key, canonical
+        submission composite, tolerance policy, evaluation signing hash,
+        selected latest reproduction, score, accepted bit and completion time.
+        Commands without this binding remain pending for Paper Receipt V2.
+      required: [schema, paper_project_id, submission_id, evaluation_id, release_candidate_hash, paper_bundle_hash, submission_commitment_hash, tolerance_policy_hash, evaluation_signing_hash, reproduction_id, reproduction_report_hash, evaluation_score_bps, evaluation_accepted, evaluation_completed_at_unix_s]
+      properties:
+        schema: {type: string, const: hepta.paper_raid.trnm_command_binding.v1}
+        paper_project_id: {type: string, format: uuid}
+        submission_id: {type: string, format: uuid}
+        evaluation_id: {type: string, format: uuid}
+        release_candidate_hash: {$ref: "#/components/schemas/CanonicalSha256Commitment"}
+        paper_bundle_hash: {$ref: "#/components/schemas/CanonicalSha256Commitment"}
+        submission_commitment_hash: {$ref: "#/components/schemas/CanonicalSha256Commitment"}
+        tolerance_policy_hash: {$ref: "#/components/schemas/CanonicalSha256Commitment"}
+        evaluation_signing_hash: {$ref: "#/components/schemas/CanonicalSha256Commitment"}
+        reproduction_id: {type: string, format: uuid}
+        reproduction_report_hash: {$ref: "#/components/schemas/CanonicalSha256Commitment"}
+        evaluation_score_bps: {type: integer, minimum: 0, maximum: 10000}
+        evaluation_accepted: {type: boolean}
+        evaluation_completed_at_unix_s: {type: integer, minimum: 1}
     LiveTrnmFinalityRequestV1:
       type: object
       additionalProperties: false

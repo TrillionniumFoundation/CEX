@@ -258,6 +258,15 @@ impl<'a> Decoder<'a> {
             self.bytes_exact().map(Some)
         }
     }
+
+    pub(crate) fn consume_null(&mut self) -> bool {
+        if self.input.get(self.cursor) == Some(&0xf6) {
+            self.cursor += 1;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 /// Implemented explicitly by every consensus-facing protocol value.

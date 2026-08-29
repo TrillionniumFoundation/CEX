@@ -2,11 +2,99 @@ use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use ed25519_dalek::SigningKey;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use url::Url;
 use uuid::Uuid;
+
+pub const MIN_ALPHA_AUTHOR_IDENTITIES: usize = 3;
+pub const MIN_ALPHA_EVALUATOR_IDENTITIES: usize = 1;
+pub const MIN_ALPHA_REVIEWER_IDENTITIES: usize = 2;
+pub const MIN_ALPHA_REPRODUCER_IDENTITIES: usize = 1;
+pub const MIN_ALPHA_INDEPENDENT_REVIEW_IDENTITIES: usize = 4;
+pub const MAX_ALPHA_IDENTITIES: usize = 64;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IdentityMode {
+    FixedAlpha,
+    InviteAlpha,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DurableQuotaConfig {
+    pub login_window: Duration,
+    pub login_global_limit: u64,
+    pub login_bucket_limit: u64,
+    pub mutation_window: Duration,
+    pub mutation_account_limit: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct AgentBridgeQuotaConfig {
+    pub window: Duration,
+    pub pair_global_limit: u64,
+    pub pair_bucket_limit: u64,
+    pub request_global_limit: u64,
+    pub request_bucket_limit: u64,
+    pub request_binding_limit: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct InviteAlphaConfig {
+    pub quota: DurableQuotaConfig,
+    pub retention_policy_id: String,
+    pub activation: InviteActivationPins,
+}
+
+#[derive(Clone, Debug)]
+pub struct InviteActivationPins {
+    pub activation_id: Uuid,
+    pub release_id: String,
+    pub local_approval_sha256: String,
+    pub approval_sequence: u64,
+    pub nonce_sha256: String,
+    pub profile_sha256: String,
+    pub base_compose_sha256: String,
+    pub runtime_acl_sha256: String,
+    pub runtime_acl_state_sha256: String,
+    pub retention_policy_sha256: String,
+    pub image_lock_sha256: String,
+    pub release_provenance_sha256: String,
+    pub runtime_acl_evidence_sha256: String,
+    pub hepta_revision: String,
+    pub hepta_source_tree: String,
+    pub hepta_fileset_sha256: String,
+    pub database_name: String,
+    pub database_oid: u32,
+    pub cluster_system_identifier: String,
+    pub deployment_identity: String,
+    pub postgres_image: String,
+    pub object_store_image: String,
+    pub object_store_client_image: String,
+    pub ops_image: String,
+    pub nakama_image: String,
+    pub hepta_image: String,
+    pub bff_image: String,
+    pub accessctl_image: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AlphaIdentityScope {
+    Author,
+    Evaluator,
+    Reviewer,
+    Reproducer,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AlphaAuthorRole {
+    Captain,
+    Evidence,
+    Experiment,
+}
 
 #[derive(Clone)]
 pub struct AlphaIdentity {
@@ -15,12 +103,48 @@ pub struct AlphaIdentity {
     pub display_name: String,
     pub nakama_user_id: Uuid,
     pub player_id: Uuid,
+    pub scopes: Arc<[AlphaIdentityScope]>,
+    pub author_roles: Arc<[AlphaAuthorRole]>,
 }
 
 impl AlphaIdentity {
     pub fn login_matches(&self, candidate: &str) -> bool {
         let hash: [u8; 32] = Sha256::digest(candidate.as_bytes()).into();
         bool::from(self.login_key_hash.ct_eq(&hash))
+    }
+
+    pub fn has_scope(&self, scope: AlphaIdentityScope) -> bool {
+        self.scopes.contains(&scope)
+    }
+
+    pub fn supports_author_role(&self, role: AlphaAuthorRole) -> bool {
+        self.author_roles.contains(&role)
+    }
+
+    pub(crate) fn from_access_directory(
+        subject_id: String,
+        display_name: String,
+        nakama_user_id: Uuid,
+        player_id: Uuid,
+        scopes: Vec<AlphaIdentityScope>,
+        author_roles: Vec<AlphaAuthorRole>,
+    ) -> Result<Self, String> {
+        validate_opaque("subject_id", &subject_id, 128)?;
+        validate_display_name(&display_name)?;
+        validate_distinct_scopes(&scopes)?;
+        validate_author_roles(scopes.contains(&AlphaIdentityScope::Author), &author_roles)?;
+        Ok(Self {
+            // Invite-mode credentials are verified by the PostgreSQL access
+            // directory. This non-secret sentinel is never placed in the
+            // fixed identity array and therefore cannot authenticate a key.
+            login_key_hash: [0_u8; 32],
+            subject_id,
+            display_name,
+            nakama_user_id,
+            player_id,
+            scopes: scopes.into(),
+            author_roles: author_roles.into(),
+        })
     }
 
     #[cfg(test)]
@@ -31,6 +155,8 @@ impl AlphaIdentity {
             display_name: "Test Player".into(),
             nakama_user_id,
             player_id,
+            scopes: default_author_scopes().into(),
+            author_roles: default_author_roles().into(),
         }
     }
 }
@@ -43,6 +169,10 @@ struct AlphaIdentityInput {
     display_name: String,
     nakama_user_id: Uuid,
     player_id: Uuid,
+    #[serde(default = "default_author_scopes")]
+    scopes: Vec<AlphaIdentityScope>,
+    #[serde(default, deserialize_with = "deserialize_author_roles")]
+    author_roles: Option<Vec<AlphaAuthorRole>>,
 }
 
 #[derive(Clone)]
@@ -74,6 +204,9 @@ pub struct Config {
     pub database_url: String,
     pub session_key: [u8; 32],
     pub session_ttl: Duration,
+    pub identity_mode: IdentityMode,
+    pub invite_alpha: Option<InviteAlphaConfig>,
+    pub agent_bridge_quota: AgentBridgeQuotaConfig,
     pub identities: Arc<[AlphaIdentity]>,
     pub hepta_base: Url,
     pub nakama_base: Url,
@@ -99,13 +232,13 @@ impl Config {
                 EdgeScope::ContainerLoopbackPublish
             }
             "loopback_process" => {
-                return Err("loopback_process requires a loopback bind address".to_string())
+                return Err("loopback_process requires a loopback bind address".to_string());
             }
             "container_loopback_publish" => {
                 return Err(
                     "container_loopback_publish requires an unspecified container bind address"
                         .to_string(),
-                )
+                );
             }
             _ => return Err("PAPER_RAID_BFF_EDGE_SCOPE is invalid".to_string()),
         };
@@ -130,8 +263,56 @@ impl Config {
             &required("PAPER_RAID_BFF_CONSUMER_SIGNING_SEED_B64")?,
         )?;
 
-        let identities =
-            parse_alpha_identities(&required("PAPER_RAID_BFF_ALPHA_IDENTITIES_JSON")?)?;
+        let identity_mode = parse_identity_mode(
+            env::var("PAPER_RAID_BFF_IDENTITY_MODE")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .as_deref(),
+        )?;
+        let (identities, invite_alpha) = match identity_mode {
+            IdentityMode::FixedAlpha => (
+                parse_alpha_identities(&required("PAPER_RAID_BFF_ALPHA_IDENTITIES_JSON")?)?,
+                None,
+            ),
+            IdentityMode::InviteAlpha => {
+                if env::var("PAPER_RAID_BFF_ALPHA_IDENTITIES_JSON")
+                    .ok()
+                    .is_some_and(|value| !value.trim().is_empty())
+                {
+                    return Err(
+                        "invite_alpha forbids PAPER_RAID_BFF_ALPHA_IDENTITIES_JSON to avoid split identity authority"
+                            .to_string(),
+                    );
+                }
+                let retention_policy_id = required("PAPER_RAID_BFF_ACCESS_RETENTION_POLICY_ID")?;
+                validate_opaque("access retention policy id", &retention_policy_id, 128)?;
+                let activation = InviteActivationPins::from_env()?;
+                (
+                    Vec::new(),
+                    Some(InviteAlphaConfig {
+                        quota: DurableQuotaConfig {
+                            login_window: configured_duration(
+                                "PAPER_RAID_BFF_LOGIN_QUOTA_WINDOW_SECONDS",
+                            )?,
+                            login_global_limit: configured_limit(
+                                "PAPER_RAID_BFF_LOGIN_QUOTA_GLOBAL_LIMIT",
+                            )?,
+                            login_bucket_limit: configured_limit(
+                                "PAPER_RAID_BFF_LOGIN_QUOTA_BUCKET_LIMIT",
+                            )?,
+                            mutation_window: configured_duration(
+                                "PAPER_RAID_BFF_MUTATION_QUOTA_WINDOW_SECONDS",
+                            )?,
+                            mutation_account_limit: configured_limit(
+                                "PAPER_RAID_BFF_MUTATION_QUOTA_ACCOUNT_LIMIT",
+                            )?,
+                        },
+                        retention_policy_id,
+                        activation,
+                    }),
+                )
+            }
+        };
 
         let hepta_base = parse_service_url("PAPER_RAID_BFF_HEPTA_BASE_URL")?;
         let nakama_base = parse_service_url("PAPER_RAID_BFF_NAKAMA_BASE_URL")?;
@@ -150,6 +331,34 @@ impl Config {
             database_url: required("PAPER_RAID_BFF_DATABASE_URL")?,
             session_key,
             session_ttl: Duration::from_secs(8 * 60 * 60),
+            identity_mode,
+            invite_alpha,
+            agent_bridge_quota: AgentBridgeQuotaConfig {
+                window: configured_optional_duration(
+                    "PAPER_RAID_BFF_AGENT_BRIDGE_QUOTA_WINDOW_SECONDS",
+                    60,
+                )?,
+                pair_global_limit: configured_optional_limit(
+                    "PAPER_RAID_BFF_AGENT_PAIR_QUOTA_GLOBAL_LIMIT",
+                    120,
+                )?,
+                pair_bucket_limit: configured_optional_limit(
+                    "PAPER_RAID_BFF_AGENT_PAIR_QUOTA_BUCKET_LIMIT",
+                    8,
+                )?,
+                request_global_limit: configured_optional_limit(
+                    "PAPER_RAID_BFF_AGENT_REQUEST_QUOTA_GLOBAL_LIMIT",
+                    2_000,
+                )?,
+                request_bucket_limit: configured_optional_limit(
+                    "PAPER_RAID_BFF_AGENT_REQUEST_QUOTA_BUCKET_LIMIT",
+                    120,
+                )?,
+                request_binding_limit: configured_optional_limit(
+                    "PAPER_RAID_BFF_AGENT_REQUEST_QUOTA_BINDING_LIMIT",
+                    240,
+                )?,
+            },
             identities: identities.into(),
             hepta_base,
             nakama_base,
@@ -184,6 +393,368 @@ impl Config {
             .find(|identity| identity.subject_id == subject)
             .cloned()
     }
+
+    pub fn alpha_identity_topology_is_valid(&self) -> bool {
+        match self.identity_mode {
+            IdentityMode::FixedAlpha => {
+                self.invite_alpha.is_none() && alpha_identity_topology_is_valid(&self.identities)
+            }
+            IdentityMode::InviteAlpha => self.identities.is_empty() && self.invite_alpha.is_some(),
+        }
+    }
+}
+
+impl InviteActivationPins {
+    fn from_env() -> Result<Self, String> {
+        let activation_id = required("PAPER_RAID_BFF_INVITE_ACTIVATION_ID")?
+            .parse::<Uuid>()
+            .map_err(|_| "PAPER_RAID_BFF_INVITE_ACTIVATION_ID must be a UUID".to_string())?;
+        let digest = |name: &str| -> Result<String, String> {
+            let value = required(name)?;
+            validate_sha256(name, &value)?;
+            Ok(value)
+        };
+        let image = |name: &str| -> Result<String, String> {
+            let value = required(name)?;
+            validate_digest_image(name, &value)?;
+            Ok(value)
+        };
+        let git_oid = |name: &str| {
+            let value = required(name)?;
+            if value.len() != 40
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err(format!(
+                    "{name} must be a canonical lowercase 40-hex Git OID"
+                ));
+            }
+            Ok(value)
+        };
+        let approval_sequence = required("PAPER_RAID_BFF_INVITE_APPROVAL_SEQUENCE")?
+            .parse::<u64>()
+            .map_err(|_| {
+                "PAPER_RAID_BFF_INVITE_APPROVAL_SEQUENCE must be an integer".to_string()
+            })?;
+        if !(1..=9_007_199_254_740_991).contains(&approval_sequence) {
+            return Err(
+                "PAPER_RAID_BFF_INVITE_APPROVAL_SEQUENCE must be a positive JSON-safe integer"
+                    .to_string(),
+            );
+        }
+        let database_name = required("PAPER_RAID_BFF_INVITE_DATABASE_NAME")?;
+        validate_opaque("invite database name", &database_name, 63)?;
+        if !database_name
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+            || !database_name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        {
+            return Err(
+                "PAPER_RAID_BFF_INVITE_DATABASE_NAME must be a canonical database identifier"
+                    .to_string(),
+            );
+        }
+        let database_oid = required("PAPER_RAID_BFF_INVITE_DATABASE_OID")?
+            .parse::<u32>()
+            .map_err(|_| "PAPER_RAID_BFF_INVITE_DATABASE_OID must be a positive OID".to_string())?;
+        if database_oid == 0 {
+            return Err("PAPER_RAID_BFF_INVITE_DATABASE_OID must be a positive OID".to_string());
+        }
+        let cluster_system_identifier =
+            required("PAPER_RAID_BFF_INVITE_CLUSTER_SYSTEM_IDENTIFIER")?;
+        if cluster_system_identifier
+            .parse::<u64>()
+            .ok()
+            .filter(|value| *value > 0)
+            .is_none()
+            || cluster_system_identifier.starts_with('0')
+        {
+            return Err(
+                "PAPER_RAID_BFF_INVITE_CLUSTER_SYSTEM_IDENTIFIER must be a canonical positive decimal u64"
+                    .to_string(),
+            );
+        }
+        let deployment_identity = required("PAPER_RAID_BFF_INVITE_DEPLOYMENT_IDENTITY")?;
+        validate_opaque("invite deployment identity", &deployment_identity, 128)?;
+        if !deployment_identity
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        {
+            return Err(
+                "PAPER_RAID_BFF_INVITE_DEPLOYMENT_IDENTITY must begin with an ASCII alphanumeric character"
+                    .to_string(),
+            );
+        }
+        let release_id = required("PAPER_RAID_BFF_INVITE_RELEASE_ID")?;
+        if release_id.is_empty()
+            || release_id.len() > 128
+            || !release_id
+                .as_bytes()
+                .first()
+                .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+            || !release_id.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'.' | b'_' | b'-')
+            })
+        {
+            return Err(
+                "PAPER_RAID_BFF_INVITE_RELEASE_ID must be a canonical lowercase release id"
+                    .to_string(),
+            );
+        }
+        Ok(Self {
+            activation_id,
+            release_id,
+            local_approval_sha256: digest("PAPER_RAID_BFF_INVITE_ACTIVATION_RECEIPT_SHA256")?,
+            approval_sequence,
+            nonce_sha256: digest("PAPER_RAID_BFF_INVITE_APPROVAL_NONCE_SHA256")?,
+            profile_sha256: digest("PAPER_RAID_BFF_INVITE_PROFILE_SHA256")?,
+            base_compose_sha256: digest("PAPER_RAID_BFF_INVITE_BASE_COMPOSE_SHA256")?,
+            runtime_acl_sha256: digest("PAPER_RAID_BFF_INVITE_RUNTIME_ACL_SHA256")?,
+            runtime_acl_state_sha256: digest("PAPER_RAID_BFF_INVITE_RUNTIME_ACL_STATE_SHA256")?,
+            retention_policy_sha256: digest("PAPER_RAID_BFF_INVITE_RETENTION_POLICY_SHA256")?,
+            image_lock_sha256: digest("PAPER_RAID_BFF_INVITE_IMAGE_LOCK_SHA256")?,
+            release_provenance_sha256: digest("PAPER_RAID_BFF_INVITE_RELEASE_PROVENANCE_SHA256")?,
+            runtime_acl_evidence_sha256: digest(
+                "PAPER_RAID_BFF_INVITE_RUNTIME_ACL_EVIDENCE_SHA256",
+            )?,
+            hepta_revision: git_oid("PAPER_RAID_BFF_INVITE_HEPTA_REVISION")?,
+            hepta_source_tree: git_oid("PAPER_RAID_BFF_INVITE_HEPTA_SOURCE_TREE")?,
+            hepta_fileset_sha256: digest("PAPER_RAID_BFF_INVITE_HEPTA_FILESET_SHA256")?,
+            database_name,
+            database_oid,
+            cluster_system_identifier,
+            deployment_identity,
+            postgres_image: image("PAPER_RAID_BFF_INVITE_POSTGRES_IMAGE")?,
+            object_store_image: image("PAPER_RAID_BFF_INVITE_OBJECT_STORE_IMAGE")?,
+            object_store_client_image: image("PAPER_RAID_BFF_INVITE_OBJECT_STORE_CLIENT_IMAGE")?,
+            ops_image: image("PAPER_RAID_BFF_INVITE_OPS_IMAGE")?,
+            nakama_image: image("PAPER_RAID_BFF_INVITE_NAKAMA_IMAGE")?,
+            hepta_image: image("PAPER_RAID_BFF_INVITE_HEPTA_IMAGE")?,
+            bff_image: image("PAPER_RAID_BFF_INVITE_BFF_IMAGE")?,
+            accessctl_image: image("PAPER_RAID_BFF_INVITE_ACCESSCTL_IMAGE")?,
+        })
+    }
+}
+
+fn parse_identity_mode(value: Option<&str>) -> Result<IdentityMode, String> {
+    match value {
+        None | Some("fixed_alpha") => Ok(IdentityMode::FixedAlpha),
+        Some("invite_alpha") => Ok(IdentityMode::InviteAlpha),
+        Some(_) => Err("PAPER_RAID_BFF_IDENTITY_MODE is invalid".to_string()),
+    }
+}
+
+fn configured_duration(name: &str) -> Result<Duration, String> {
+    let seconds = required(name)?
+        .parse::<u64>()
+        .map_err(|_| format!("{name} must be an integer number of seconds"))?;
+    if !(1..=86_400).contains(&seconds) {
+        return Err(format!("{name} must be between 1 and 86400 seconds"));
+    }
+    Ok(Duration::from_secs(seconds))
+}
+
+fn configured_limit(name: &str) -> Result<u64, String> {
+    let limit = required(name)?
+        .parse::<u64>()
+        .map_err(|_| format!("{name} must be an integer"))?;
+    if !(1..=1_000_000).contains(&limit) {
+        return Err(format!("{name} must be between 1 and 1000000"));
+    }
+    Ok(limit)
+}
+
+fn configured_optional_duration(name: &str, default_seconds: u64) -> Result<Duration, String> {
+    match env::var(name) {
+        Ok(value) if !value.trim().is_empty() => {
+            let seconds = value
+                .parse::<u64>()
+                .map_err(|_| format!("{name} must be an integer number of seconds"))?;
+            if !(1..=86_400).contains(&seconds) {
+                return Err(format!("{name} must be between 1 and 86400 seconds"));
+            }
+            Ok(Duration::from_secs(seconds))
+        }
+        _ => Ok(Duration::from_secs(default_seconds)),
+    }
+}
+
+fn configured_optional_limit(name: &str, default: u64) -> Result<u64, String> {
+    match env::var(name) {
+        Ok(value) if !value.trim().is_empty() => {
+            let limit = value
+                .parse::<u64>()
+                .map_err(|_| format!("{name} must be an integer"))?;
+            if !(1..=1_000_000).contains(&limit) {
+                return Err(format!("{name} must be between 1 and 1000000"));
+            }
+            Ok(limit)
+        }
+        _ => Ok(default),
+    }
+}
+
+fn alpha_identity_topology_is_valid(identities: &[AlphaIdentity]) -> bool {
+    if !(MIN_ALPHA_AUTHOR_IDENTITIES..=MAX_ALPHA_IDENTITIES).contains(&identities.len()) {
+        return false;
+    }
+    let authors = identities
+        .iter()
+        .filter(|identity| identity.has_scope(AlphaIdentityScope::Author))
+        .collect::<Vec<_>>();
+    // Review independence is scoped to the target Paper, not to a global
+    // account class. A player may author Paper A and review Paper B; the Hepta
+    // assignment authority still rejects every author of the target Paper.
+    let review_capable = identities.iter().collect::<Vec<_>>();
+    authors.len() >= MIN_ALPHA_AUTHOR_IDENTITIES
+        && review_capable.len() >= MIN_ALPHA_INDEPENDENT_REVIEW_IDENTITIES
+        && distinct_author_role_assignment(&authors)
+        && review_capable
+            .iter()
+            .filter(|identity| identity.has_scope(AlphaIdentityScope::Evaluator))
+            .count()
+            >= MIN_ALPHA_EVALUATOR_IDENTITIES
+        && review_capable
+            .iter()
+            .filter(|identity| identity.has_scope(AlphaIdentityScope::Reviewer))
+            .count()
+            >= MIN_ALPHA_REVIEWER_IDENTITIES
+        && review_capable
+            .iter()
+            .filter(|identity| identity.has_scope(AlphaIdentityScope::Reproducer))
+            .count()
+            >= MIN_ALPHA_REPRODUCER_IDENTITIES
+        && distinct_independent_review_assignment(&review_capable)
+        && every_author_lineup_has_an_independent_review_panel(identities)
+        && [
+            AlphaAuthorRole::Captain,
+            AlphaAuthorRole::Evidence,
+            AlphaAuthorRole::Experiment,
+        ]
+        .into_iter()
+        .all(|role| {
+            authors
+                .iter()
+                .any(|identity| identity.supports_author_role(role))
+        })
+}
+
+fn every_author_lineup_has_an_independent_review_panel(identities: &[AlphaIdentity]) -> bool {
+    let author_indexes = identities
+        .iter()
+        .enumerate()
+        .filter_map(|(index, identity)| {
+            identity
+                .has_scope(AlphaIdentityScope::Author)
+                .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let mut found_author_lineup = false;
+    for left in 0..author_indexes.len() {
+        for middle in left + 1..author_indexes.len() {
+            for right in middle + 1..author_indexes.len() {
+                let lineup_indexes = [
+                    author_indexes[left],
+                    author_indexes[middle],
+                    author_indexes[right],
+                ];
+                let lineup = lineup_indexes
+                    .iter()
+                    .map(|index| &identities[*index])
+                    .collect::<Vec<_>>();
+                if !distinct_author_role_assignment(&lineup) {
+                    continue;
+                }
+                found_author_lineup = true;
+                let independent = identities
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, identity)| {
+                        (!lineup_indexes.contains(&index)).then_some(identity)
+                    })
+                    .collect::<Vec<_>>();
+                if !distinct_independent_review_assignment(&independent) {
+                    return false;
+                }
+            }
+        }
+    }
+    found_author_lineup
+}
+
+fn distinct_author_role_assignment(identities: &[&AlphaIdentity]) -> bool {
+    fn assign(
+        identities: &[&AlphaIdentity],
+        roles: &[AlphaAuthorRole],
+        role: usize,
+        used: &mut [bool],
+    ) -> bool {
+        if role == roles.len() {
+            return true;
+        }
+        for (index, identity) in identities.iter().enumerate() {
+            if !used[index] && identity.supports_author_role(roles[role]) {
+                used[index] = true;
+                if assign(identities, roles, role + 1, used) {
+                    return true;
+                }
+                used[index] = false;
+            }
+        }
+        false
+    }
+
+    assign(
+        identities,
+        &[
+            AlphaAuthorRole::Captain,
+            AlphaAuthorRole::Evidence,
+            AlphaAuthorRole::Experiment,
+        ],
+        0,
+        &mut vec![false; identities.len()],
+    )
+}
+
+fn distinct_independent_review_assignment(identities: &[&AlphaIdentity]) -> bool {
+    fn assign(
+        identities: &[&AlphaIdentity],
+        slots: &[AlphaIdentityScope],
+        slot: usize,
+        used: &mut [bool],
+    ) -> bool {
+        if slot == slots.len() {
+            return true;
+        }
+        for (index, identity) in identities.iter().enumerate() {
+            if !used[index] && identity.has_scope(slots[slot]) {
+                used[index] = true;
+                if assign(identities, slots, slot + 1, used) {
+                    return true;
+                }
+                used[index] = false;
+            }
+        }
+        false
+    }
+
+    // The review protocol requires four pairwise-distinct humans: one
+    // evaluator, two reviewers, and a reproducer outside that panel. Counting
+    // scope labels alone is insufficient when one identity has several scopes.
+    let slots = [
+        AlphaIdentityScope::Evaluator,
+        AlphaIdentityScope::Reviewer,
+        AlphaIdentityScope::Reviewer,
+        AlphaIdentityScope::Reproducer,
+    ];
+    assign(identities, &slots, 0, &mut vec![false; identities.len()])
 }
 
 fn find_identity(identities: &[AlphaIdentity], login_key: &str) -> Option<AlphaIdentity> {
@@ -199,16 +770,32 @@ fn find_identity(identities: &[AlphaIdentity], login_key: &str) -> Option<AlphaI
 fn parse_alpha_identities(raw: &str) -> Result<Vec<AlphaIdentity>, String> {
     let identity_inputs: Vec<AlphaIdentityInput> = serde_json::from_str(raw)
         .map_err(|_| "PAPER_RAID_BFF_ALPHA_IDENTITIES_JSON is invalid".to_string())?;
-    if identity_inputs.len() != 3 {
-        return Err("alpha profile requires exactly three identities".to_string());
+    if identity_inputs.len() < MIN_ALPHA_AUTHOR_IDENTITIES {
+        return Err(format!(
+            "alpha profile requires at least {MIN_ALPHA_AUTHOR_IDENTITIES} identities"
+        ));
     }
-    let mut identities = Vec::with_capacity(3);
+    if identity_inputs.len() > MAX_ALPHA_IDENTITIES {
+        return Err(format!(
+            "alpha profile permits at most {MAX_ALPHA_IDENTITIES} identities"
+        ));
+    }
+    let mut identities = Vec::with_capacity(identity_inputs.len());
     for input in identity_inputs {
         validate_opaque("subject_id", &input.subject_id, 128)?;
         validate_display_name(&input.display_name)?;
         if input.login_key.len() < 32 {
             return Err("each alpha login key must contain at least 32 bytes".to_string());
         }
+        let scopes = input.scopes;
+        validate_distinct_scopes(&scopes)?;
+        let is_author = scopes.contains(&AlphaIdentityScope::Author);
+        let author_roles = match input.author_roles {
+            Some(roles) => roles,
+            None if is_author => default_author_roles(),
+            None => Vec::new(),
+        };
+        validate_author_roles(is_author, &author_roles)?;
         let login_key_hash = Sha256::digest(input.login_key.as_bytes()).into();
         identities.push(AlphaIdentity {
             login_key_hash,
@@ -216,6 +803,8 @@ fn parse_alpha_identities(raw: &str) -> Result<Vec<AlphaIdentity>, String> {
             display_name: input.display_name,
             nakama_user_id: input.nakama_user_id,
             player_id: input.player_id,
+            scopes: scopes.into(),
+            author_roles: author_roles.into(),
         });
     }
     for left in 0..identities.len() {
@@ -229,7 +818,60 @@ fn parse_alpha_identities(raw: &str) -> Result<Vec<AlphaIdentity>, String> {
             }
         }
     }
+    if !alpha_identity_topology_is_valid(&identities) {
+        return Err(format!(
+            "alpha profile requires every valid three-Author captain/evidence/experiment lineup to leave {MIN_ALPHA_INDEPENDENT_REVIEW_IDENTITIES} pairwise-distinct evaluator/reviewer/reviewer/reproducer identities outside that target Paper"
+        ));
+    }
     Ok(identities)
+}
+
+fn default_author_scopes() -> Vec<AlphaIdentityScope> {
+    vec![AlphaIdentityScope::Author]
+}
+
+fn default_author_roles() -> Vec<AlphaAuthorRole> {
+    vec![
+        AlphaAuthorRole::Captain,
+        AlphaAuthorRole::Evidence,
+        AlphaAuthorRole::Experiment,
+    ]
+}
+
+fn deserialize_author_roles<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<AlphaAuthorRole>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Vec::<AlphaAuthorRole>::deserialize(deserializer).map(Some)
+}
+
+fn validate_distinct_scopes(scopes: &[AlphaIdentityScope]) -> Result<(), String> {
+    if scopes.is_empty() {
+        return Err("each alpha identity requires at least one scope".to_string());
+    }
+    for left in 0..scopes.len() {
+        if scopes[left + 1..].contains(&scopes[left]) {
+            return Err("alpha identity scopes must be distinct".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn validate_author_roles(is_author: bool, roles: &[AlphaAuthorRole]) -> Result<(), String> {
+    if !is_author && !roles.is_empty() {
+        return Err("author_roles require the author scope".to_string());
+    }
+    if is_author && roles.is_empty() {
+        return Err("author-scoped identities require at least one author role".to_string());
+    }
+    for left in 0..roles.len() {
+        if roles[left + 1..].contains(&roles[left]) {
+            return Err("alpha identity author_roles must be distinct".to_string());
+        }
+    }
+    Ok(())
 }
 
 fn required(name: &str) -> Result<String, String> {
@@ -296,6 +938,39 @@ fn validate_opaque(field: &str, value: &str, max: usize) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_sha256(field: &str, value: &str) -> Result<(), String> {
+    if value.len() != 71
+        || !value.starts_with("sha256:")
+        || !value[7..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(format!("{field} must be a canonical sha256 digest"));
+    }
+    Ok(())
+}
+
+fn validate_digest_image(field: &str, value: &str) -> Result<(), String> {
+    let Some((name, digest)) = value.rsplit_once('@') else {
+        return Err(format!("{field} must be a digest-pinned image"));
+    };
+    if name.is_empty()
+        || name.len() > 255
+        || !name
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        || name.bytes().any(|byte| {
+            !(byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'_' | b':' | b'/' | b'-'))
+        })
+    {
+        return Err(format!("{field} image name is invalid"));
+    }
+    validate_sha256(field, digest)
+}
+
 fn validate_display_name(value: &str) -> Result<(), String> {
     if value.trim().is_empty() || value.chars().count() > 80 || value.as_bytes().contains(&0) {
         return Err("display_name must contain 1..80 characters".to_string());
@@ -329,9 +1004,26 @@ mod tests {
             display_name: "One".into(),
             nakama_user_id: Uuid::nil(),
             player_id: Uuid::nil(),
+            scopes: default_author_scopes().into(),
+            author_roles: default_author_roles().into(),
         };
         assert!(identity.login_matches("a-very-long-alpha-login-key-value"));
         assert!(!identity.login_matches("wrong"));
+    }
+
+    #[test]
+    fn identity_mode_defaults_fixed_and_is_deny_unknown() {
+        assert_eq!(parse_identity_mode(None), Ok(IdentityMode::FixedAlpha));
+        assert_eq!(
+            parse_identity_mode(Some("fixed_alpha")),
+            Ok(IdentityMode::FixedAlpha)
+        );
+        assert_eq!(
+            parse_identity_mode(Some("invite_alpha")),
+            Ok(IdentityMode::InviteAlpha)
+        );
+        assert!(parse_identity_mode(Some("oidc")).is_err());
+        assert!(parse_identity_mode(Some("")).is_err());
     }
 
     #[test]
@@ -349,7 +1041,7 @@ mod tests {
     }
 
     #[test]
-    fn exactly_three_alpha_keys_map_only_to_their_fixed_identities() {
+    fn legacy_three_identity_topology_is_rejected_before_serving() {
         let keys = ["a".repeat(32), "b".repeat(32), "c".repeat(32)];
         let players = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
         let users = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
@@ -358,14 +1050,7 @@ mod tests {
             {"login_key":keys[1], "subject_id":"subject-2", "display_name":"Two", "nakama_user_id":users[1], "player_id":players[1]},
             {"login_key":keys[2], "subject_id":"subject-3", "display_name":"Three", "nakama_user_id":users[2], "player_id":players[2]}
         ]);
-        let identities = parse_alpha_identities(&raw.to_string()).expect("three identities");
-        for index in 0..3 {
-            let identity = find_identity(&identities, &keys[index]).expect("mapped identity");
-            assert_eq!(identity.subject_id, format!("subject-{}", index + 1));
-            assert_eq!(identity.player_id, players[index]);
-            assert_eq!(identity.nakama_user_id, users[index]);
-        }
-        assert!(find_identity(&identities, &"z".repeat(32)).is_none());
+        assert!(parse_alpha_identities(&raw.to_string()).is_err());
 
         let too_few = serde_json::json!([
             {"login_key":keys[0], "subject_id":"subject-1", "display_name":"One", "nakama_user_id":users[0], "player_id":players[0]}
@@ -378,5 +1063,267 @@ mod tests {
             {"login_key":keys[2], "subject_id":"subject-3", "display_name":"Three", "nakama_user_id":users[2], "player_id":players[2]}
         ]);
         assert!(parse_alpha_identities(&duplicate.to_string()).is_err());
+    }
+
+    #[test]
+    fn seven_identity_topology_expresses_authors_and_independent_review_scopes() {
+        let identities = serde_json::json!([
+            identity_json(
+                "author-1",
+                "a",
+                ["author"],
+                Some(["captain", "evidence", "experiment"])
+            ),
+            identity_json("author-2", "b", ["author"], Some(["evidence"])),
+            identity_json("author-3", "c", ["author"], Some(["experiment"])),
+            identity_json("evaluator-1", "d", ["evaluator"], None::<[&str; 0]>),
+            identity_json("reviewer-1", "e", ["reviewer"], None::<[&str; 0]>),
+            identity_json("reviewer-2", "f", ["reviewer"], None::<[&str; 0]>),
+            identity_json("reproducer-1", "g", ["reproducer"], None::<[&str; 0]>)
+        ]);
+
+        let parsed = parse_alpha_identities(&identities.to_string()).expect("seven identities");
+        assert_eq!(parsed.len(), 7);
+        assert_eq!(
+            parsed
+                .iter()
+                .filter(|identity| identity.has_scope(AlphaIdentityScope::Author))
+                .count(),
+            3
+        );
+        assert_eq!(
+            parsed
+                .iter()
+                .filter(|identity| identity.has_scope(AlphaIdentityScope::Reviewer))
+                .count(),
+            2
+        );
+        assert!(parsed[3].author_roles.is_empty());
+        assert!(parsed[6].has_scope(AlphaIdentityScope::Reproducer));
+        assert!(alpha_identity_topology_is_valid(&parsed));
+    }
+
+    #[test]
+    fn deploy_alpha_env_example_is_accepted_by_the_production_identity_parser() {
+        let raw = include_str!("../deploy/alpha.env.example")
+            .lines()
+            .find_map(|line| line.strip_prefix("PAPER_RAID_BFF_ALPHA_IDENTITIES_JSON="))
+            .expect("alpha deployment example identity variable");
+        let parsed = parse_alpha_identities(raw)
+            .expect("alpha deployment example must remain bootable under the production parser");
+        assert_eq!(parsed.len(), 7);
+        assert!(alpha_identity_topology_is_valid(&parsed));
+    }
+
+    #[test]
+    fn alpha_identity_topology_fails_closed_on_invalid_scope_and_role_sets() {
+        let too_few_authors = serde_json::json!([
+            identity_json("author-1", "a", ["author"], Some(["captain"])),
+            identity_json("author-2", "b", ["author"], Some(["evidence"])),
+            identity_json("reviewer-1", "c", ["reviewer"], None::<[&str; 0]>)
+        ]);
+        assert!(parse_alpha_identities(&too_few_authors.to_string()).is_err());
+
+        let duplicate_scope = serde_json::json!([
+            identity_json("author-1", "a", ["author", "author"], Some(["captain"])),
+            identity_json("author-2", "b", ["author"], Some(["evidence"])),
+            identity_json("author-3", "c", ["author"], Some(["experiment"]))
+        ]);
+        assert!(parse_alpha_identities(&duplicate_scope.to_string()).is_err());
+
+        let reviewer_with_author_role = serde_json::json!([
+            identity_json("author-1", "a", ["author"], Some(["captain"])),
+            identity_json("author-2", "b", ["author"], Some(["evidence"])),
+            identity_json("author-3", "c", ["author"], Some(["experiment"])),
+            identity_json("reviewer-1", "d", ["reviewer"], Some(["evidence"]))
+        ]);
+        assert!(parse_alpha_identities(&reviewer_with_author_role.to_string()).is_err());
+
+        let empty_author_roles = serde_json::json!([
+            identity_json("author-1", "a", ["author"], Some::<[&str; 0]>([])),
+            identity_json("author-2", "b", ["author"], Some(["evidence"])),
+            identity_json("author-3", "c", ["author"], Some(["experiment"]))
+        ]);
+        assert!(parse_alpha_identities(&empty_author_roles.to_string()).is_err());
+
+        let missing_second_reviewer = serde_json::json!([
+            identity_json("author-1", "a", ["author"], Some(["captain"])),
+            identity_json("author-2", "b", ["author"], Some(["evidence"])),
+            identity_json("author-3", "c", ["author"], Some(["experiment"])),
+            identity_json("evaluator-1", "d", ["evaluator"], None::<[&str; 0]>),
+            identity_json("reviewer-1", "e", ["reviewer"], None::<[&str; 0]>),
+            identity_json("observer-1", "f", ["evaluator"], None::<[&str; 0]>),
+            identity_json("reproducer-1", "g", ["reproducer"], None::<[&str; 0]>)
+        ]);
+        assert!(parse_alpha_identities(&missing_second_reviewer.to_string()).is_err());
+
+        let overlapping_scopes_cannot_fake_four_distinct_review_actors = serde_json::json!([
+            identity_json("author-1", "a", ["author"], Some(["captain"])),
+            identity_json("author-2", "b", ["author"], Some(["evidence"])),
+            identity_json("author-3", "c", ["author"], Some(["experiment"])),
+            identity_json(
+                "evaluation-reviewer",
+                "d",
+                ["evaluator", "reviewer"],
+                None::<[&str; 0]>
+            ),
+            identity_json("reviewer-1", "e", ["reviewer"], None::<[&str; 0]>),
+            identity_json("reproducer-1", "f", ["reproducer"], None::<[&str; 0]>),
+            identity_json("reproducer-2", "g", ["reproducer"], None::<[&str; 0]>)
+        ]);
+        assert!(parse_alpha_identities(
+            &overlapping_scopes_cannot_fake_four_distinct_review_actors.to_string()
+        )
+        .is_err());
+
+        let four_people_cannot_review_their_own_three_author_paper = serde_json::json!([
+            identity_json("author-1", "a", ["author", "evaluator"], Some(["captain"])),
+            identity_json("author-2", "b", ["author", "reviewer"], Some(["evidence"])),
+            identity_json(
+                "author-3",
+                "c",
+                ["author", "reviewer"],
+                Some(["experiment"])
+            ),
+            identity_json("reproducer-1", "d", ["reproducer"], None::<[&str; 0]>)
+        ]);
+        assert!(parse_alpha_identities(
+            &four_people_cannot_review_their_own_three_author_paper.to_string()
+        )
+        .is_err());
+
+        let six_person_dual_team_without_floating_reproducer = serde_json::json!([
+            identity_json("captain-1", "a", ["author", "evaluator"], Some(["captain"])),
+            identity_json("captain-2", "b", ["author", "evaluator"], Some(["captain"])),
+            identity_json(
+                "evidence-1",
+                "c",
+                ["author", "reviewer"],
+                Some(["evidence"])
+            ),
+            identity_json(
+                "evidence-2",
+                "d",
+                ["author", "reviewer"],
+                Some(["evidence"])
+            ),
+            identity_json(
+                "experiment-1",
+                "e",
+                ["author", "reviewer"],
+                Some(["experiment"])
+            ),
+            identity_json(
+                "experiment-2",
+                "f",
+                ["author", "reviewer"],
+                Some(["experiment"])
+            )
+        ]);
+        assert!(parse_alpha_identities(
+            &six_person_dual_team_without_floating_reproducer.to_string()
+        )
+        .is_err());
+
+        let seven_person_dual_team_with_floating_reproducer = serde_json::json!([
+            identity_json("captain-1", "a", ["author", "evaluator"], Some(["captain"])),
+            identity_json("captain-2", "b", ["author", "evaluator"], Some(["captain"])),
+            identity_json(
+                "evidence-1",
+                "c",
+                ["author", "reviewer"],
+                Some(["evidence"])
+            ),
+            identity_json(
+                "evidence-2",
+                "d",
+                ["author", "reviewer"],
+                Some(["evidence"])
+            ),
+            identity_json(
+                "experiment-1",
+                "e",
+                ["author", "reviewer"],
+                Some(["experiment"])
+            ),
+            identity_json(
+                "experiment-2",
+                "f",
+                ["author", "reviewer"],
+                Some(["experiment"])
+            ),
+            identity_json(
+                "floating-reproducer",
+                "g",
+                ["reproducer"],
+                None::<[&str; 0]>
+            )
+        ]);
+        assert!(parse_alpha_identities(
+            &seven_person_dual_team_with_floating_reproducer.to_string()
+        )
+        .is_ok());
+
+        let overlapping_author_capabilities_cannot_fake_three_distinct_roles = serde_json::json!([
+            identity_json(
+                "author-1",
+                "a",
+                ["author"],
+                Some(["captain", "evidence", "experiment"])
+            ),
+            identity_json("author-2", "b", ["author"], Some(["captain"])),
+            identity_json("author-3", "c", ["author"], Some(["captain"])),
+            identity_json("evaluator-1", "d", ["evaluator"], None::<[&str; 0]>),
+            identity_json("reviewer-1", "e", ["reviewer"], None::<[&str; 0]>),
+            identity_json("reviewer-2", "f", ["reviewer"], None::<[&str; 0]>),
+            identity_json("reproducer-1", "g", ["reproducer"], None::<[&str; 0]>)
+        ]);
+        assert!(parse_alpha_identities(
+            &overlapping_author_capabilities_cannot_fake_three_distinct_roles.to_string()
+        )
+        .is_err());
+
+        let mut null_scope = duplicate_scope;
+        null_scope[0]["scopes"] = serde_json::Value::Null;
+        assert!(parse_alpha_identities(&null_scope.to_string()).is_err());
+
+        let mut null_roles = reviewer_with_author_role;
+        null_roles[3]["author_roles"] = serde_json::Value::Null;
+        assert!(parse_alpha_identities(&null_roles.to_string()).is_err());
+
+        let too_many = serde_json::Value::Array(
+            (0..=MAX_ALPHA_IDENTITIES)
+                .map(|index| {
+                    serde_json::json!({
+                        "login_key": format!("alpha-login-key-{index}-{}", "x".repeat(32)),
+                        "subject_id": format!("author-{index}"),
+                        "display_name": format!("Author {index}"),
+                        "nakama_user_id": Uuid::new_v4(),
+                        "player_id": Uuid::new_v4()
+                    })
+                })
+                .collect(),
+        );
+        assert!(parse_alpha_identities(&too_many.to_string()).is_err());
+    }
+
+    fn identity_json<const S: usize, const R: usize>(
+        subject: &str,
+        key_prefix: &str,
+        scopes: [&str; S],
+        author_roles: Option<[&str; R]>,
+    ) -> serde_json::Value {
+        let mut value = serde_json::json!({
+            "login_key": key_prefix.repeat(32),
+            "subject_id": subject,
+            "display_name": subject,
+            "nakama_user_id": Uuid::new_v4(),
+            "player_id": Uuid::new_v4(),
+            "scopes": scopes.as_slice()
+        });
+        if let Some(author_roles) = author_roles {
+            value["author_roles"] = serde_json::json!(author_roles.as_slice());
+        }
+        value
     }
 }

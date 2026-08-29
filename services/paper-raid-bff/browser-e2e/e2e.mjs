@@ -8,6 +8,20 @@ const baseUrl = new URL(
 );
 const requireLobby = process.env.PAPER_RAID_BFF_BROWSER_REQUIRE_LOBBY !== "0";
 const expectedCsp = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+const phaseLabels = Object.freeze({
+  forming: "Form team / 组队成形",
+  preregistering: "Preregister / 预注册",
+  researching: "Research / 研究",
+  experimenting: "Experiment / 实验",
+  drafting: "Draft / 起草",
+  integrity_review: "Integrity review / 完整性审查",
+  reproducing: "Reproduction readiness / 复现准备",
+  reproduction_readiness: "Reproduction readiness / 复现准备",
+  author_approval: "Author approval / 作者批准",
+  integrity_hold: "Integrity hold / 完整性挂起",
+  submission_ready: "Author Raid complete / 作者远征完成",
+  waiting_for_authority: "Waiting for authority / 等待权威状态",
+});
 
 assert.ok(credentialsPath, "PAPER_RAID_BFF_BROWSER_CREDENTIALS_FILE is required");
 assert.ok(["http:", "https:"].includes(baseUrl.protocol));
@@ -66,7 +80,7 @@ async function signIn(page, loginKey) {
   assert.ok(response);
   assert.equal(response.status(), 200);
   assert.equal(response.headers()["content-security-policy"], expectedCsp);
-  await page.getByLabel("Alpha login key / 登录密钥").fill(loginKey);
+  await page.getByLabel("Closed-Alpha access key / 封闭 Alpha 访问密钥").fill(loginKey);
   await page.getByRole("button", { name: "Enter Paper Raid / 进入论文远征" }).click();
   await page.waitForURL(current => {
     const path = new URL(current).pathname;
@@ -124,6 +138,12 @@ async function registerHuman(page, index, allowLostResponse) {
 async function bindAgent(page, binding, expectedPlayerId) {
   const form = page.locator(".agent-binding-form");
   if (await form.count() === 0) return false;
+  await page.locator("details.agent-binding-recovery").evaluate(details => { details.open = true; });
+  await page.locator(".bridge-onboarding-primary").waitFor();
+  assert.match(
+    await page.locator(".bridge-onboarding-primary").textContent() || "",
+    /pair[\s\S]*--submit/,
+  );
   if (binding === null || binding === undefined) {
     assert.equal(requireLobby, false, "external Agent proof is required for the Lobby gate");
     return false;
@@ -132,7 +152,7 @@ async function bindAgent(page, binding, expectedPlayerId) {
   await form.getByLabel("Exact externally signed JSON / 外部 Agent 已签名 JSON").fill(
     JSON.stringify(binding, null, 2),
   );
-  await form.getByRole("button", { name: "Verify and bind / 验证并绑定" }).click();
+  await form.getByRole("button", { name: "Verify and bind public proof / 验证并绑定公开证明" }).click();
   await page.waitForURL(current => new URL(current).pathname === "/league");
   return true;
 }
@@ -159,8 +179,61 @@ async function runContext(browser, index) {
     });
   });
 
+  let releaseDelayedCsrf = null;
+  let delayedCsrfRouteInstalled = false;
   try {
-    await signIn(page, credentials.login_keys[index]);
+    let delayedCsrfRequest = null;
+    if (index === 0) {
+      delayedCsrfRequest = page.waitForRequest(request =>
+        new URL(request.url()).pathname === "/session/refresh"
+        && request.method() === "POST",
+        { timeout: 15_000 },
+      );
+      const delayedCsrfGate = new Promise(resolve => { releaseDelayedCsrf = resolve; });
+      await page.route("**/session/refresh", async route => {
+        await delayedCsrfGate;
+        await route.continue();
+      });
+      delayedCsrfRouteInstalled = true;
+    }
+    if (index === 0) {
+      await Promise.all([
+        signIn(page, credentials.login_keys[index]),
+        delayedCsrfRequest,
+      ]);
+    } else {
+      await signIn(page, credentials.login_keys[index]);
+    }
+    if (index === 0) {
+      await page.waitForFunction(() =>
+        document.documentElement.dataset.paperRaidBindingsReady === "true"
+      );
+      const importSubmit = page.locator('.human-key-import-form button[type="submit"]');
+      assert.equal(await importSubmit.count(), 1);
+      assert.equal(await importSubmit.isEnabled(), true);
+      const delayedPageUrl = page.url();
+      await page.getByText("Local signing key / 本地签名密钥", { exact: true }).click();
+      await page.getByLabel("Encrypted key bundle / 加密密钥包").setInputFiles({
+        name: "delayed-csrf-invalid-key-bundle.json",
+        mimeType: "application/json",
+        buffer: Buffer.from("{}\n", "utf8"),
+      });
+      await page.getByLabel("Passphrase / 口令").fill("delayed-csrf-binding-probe");
+      await importSubmit.click();
+      await page.locator(".human-key-import-form output.result-error")
+        .filter({ hasText: "unsupported_or_malformed_key_bundle" })
+        .waitFor();
+      assert.equal(page.url(), delayedPageUrl, "unbound key import navigated during CSRF warm-up");
+      assert.equal(new URL(page.url()).search, "", "key import exposed its passphrase in the URL");
+      const csrfCompleted = page.waitForResponse(response =>
+        new URL(response.url()).pathname === "/session/refresh"
+        && response.request().method() === "POST"
+      );
+      releaseDelayedCsrf();
+      assert.equal((await csrfCompleted).status(), 200);
+      await page.unroute("**/session/refresh");
+      delayedCsrfRouteInstalled = false;
+    }
     const sessionResponse = await context.request.get(url("/api/session"), {
       headers: { accept: "application/json" },
     });
@@ -175,6 +248,29 @@ async function runContext(browser, index) {
     if (requireLobby) {
       assert.equal(path, "/league");
       await page.getByRole("heading", { name: "Research Lobby" }).waitFor();
+      const reviewBoundary = await context.request.get(url("/league/review"), {
+        headers: { accept: "text/html" },
+      });
+      assert.equal(reviewBoundary.status(), 403, "Author identities must not enter Reviewer Raid");
+      for (const queueForm of await page.locator("form.queue-form").all()) {
+        const authorized = (await queueForm.getAttribute("data-authorized-roles") || "")
+          .split(",")
+          .filter(Boolean);
+        assert.deepEqual(authorized, session.author_roles);
+        const roleChoices = await queueForm.locator('input[name="roles"]').evaluateAll(inputs =>
+          inputs.map(input => ({ value: input.value, checked: input.checked })),
+        );
+        assert.deepEqual(roleChoices.map(choice => choice.value), authorized);
+        assert.ok(roleChoices.some(choice => choice.checked));
+        const partyCode = queueForm.locator('input[name="party_code"]');
+        await partyCode.waitFor();
+        await queueForm.locator(".generate-party-code").click();
+        assert.match(
+          await partyCode.inputValue(),
+          /^PR1-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+        );
+        await partyCode.fill("");
+      }
       const rotation = page.locator(".agent-rotation-form");
       await rotation.waitFor();
       if (credentials.agent_bindings?.[index]) {
@@ -209,6 +305,57 @@ async function runContext(browser, index) {
         await page.getByRole("heading", { name: heading }).waitFor();
       }
       await page.locator('form[data-command="submit_appeal"] .local-sign').waitFor();
+      const challengeRules = page.locator(".challenge-ruleset-panel");
+      await challengeRules.waitFor();
+      assert.equal(await challengeRules.getAttribute("data-ruleset-enforcement"), "authoritative_v1");
+      await challengeRules.getByText("Victory conditions / 胜利条件").waitFor();
+      await challengeRules.locator(".challenge-countdown").waitFor();
+      await challengeRules.locator("[data-challenge-outcome]").waitFor();
+      for (const outcomeForm of await challengeRules.locator(".challenge-outcome-form").all()) {
+        assert.equal(await outcomeForm.locator('[name="paper_id"]').count(), 0);
+        assert.equal(await outcomeForm.locator('[name="expected_version"]').count(), 0);
+        assert.equal(await outcomeForm.locator('[name="payload"]').count(), 0);
+      }
+      await page.locator(".raid-command-center").waitFor();
+      const developerTools = page.locator("details.developer-tools");
+      await developerTools.waitFor();
+      assert.equal(await developerTools.getAttribute("open"), null);
+      const commandForms = page.locator("form.command-form");
+      assert.ok(await commandForms.count() > 0);
+      for (let commandIndex = 0; commandIndex < await commandForms.count(); commandIndex += 1) {
+        assert.equal(await commandForms.nth(commandIndex).evaluate(form => Boolean(form.closest(".developer-tools"))), true);
+      }
+      for (const selector of [
+        ".create-experiment-plan-form",
+        ".create-evidence-card-form",
+        ".create-citation-record-form",
+        ".create-claim-record-form",
+        ".create-run-record-form",
+        ".input-manifest-wizard-form",
+        ".draft-manifest-wizard-form",
+        ".run-artifact-wizard-form",
+        ".figure-lineage-wizard-form",
+        ".role-resource-action-form",
+        ".acquire-section-lease-form",
+        ".bridge-inbox-task",
+        ".human-proposal-decision-form",
+        ".create-section-revision-form",
+        ".section-review-form",
+        ".merge-section-form",
+        ".freeze-contribution-ledger-form",
+        ".review-receipt-confirm-form",
+        ".review-attestation-form",
+        ".review-finalize-form",
+      ]) {
+        const guidedForms = page.locator(selector);
+        for (let formIndex = 0; formIndex < await guidedForms.count(); formIndex += 1) {
+          assert.equal(await guidedForms.nth(formIndex).evaluate(form => Boolean(form.closest(".developer-tools"))), false);
+          assert.equal(await guidedForms.nth(formIndex).locator('textarea[name="payload"]').count(), 0);
+          assert.equal(await guidedForms.nth(formIndex).locator(
+            'input[name="manifest_id"], input[name="evidence_card_id"], input[name="citation_id"], input[name="experiment_plan_id"], input[name="run_record_id"], input[name="claim_id"], input[name="lease_id"], input[name="proposal_id"], input[name="section_revision_id"], input[name="expected_version"], input[name="fencing_token"]',
+          ).count(), 0);
+        }
+      }
       const artifactLinks = page.locator(
         `a[href^="/api/papers/${credentials.paper_id}/artifacts/"]`,
       );
@@ -243,7 +390,66 @@ async function runContext(browser, index) {
           "application/gzip",
         ],
       );
-      await page.getByText("pending_finality", { exact: true }).first().waitFor();
+      const finalityStatus = await page.locator(".hero .status").first().textContent();
+      assert.match(
+        finalityStatus || "",
+        /(pending_finality|verified_finality|unknown_finality|unavailable_finality|error_finality)/,
+      );
+      assert.match(
+        finalityStatus || "",
+        /(Verification pending \/ 等待终局验证|Verified scientific finality \/ 科学终局已验证|Finality unknown \/ 终局状态未知|Finality temporarily unavailable \/ 终局暂不可用|Finality verification error \/ 终局验证错误)/,
+      );
+      assert.equal(await page.locator(".eligibility-grid li").count(), 4);
+      await page.locator('.live-connection[data-state="live"]').waitFor({ timeout: 15000 });
+      const renderedPhase = await page.locator(".live-phase").textContent();
+      const materializationSummary = page.locator(".materialization-summary");
+      await materializationSummary.waitFor();
+      assert.equal(
+        await materializationSummary.evaluate(node => Boolean(node.closest(".developer-tools"))),
+        false,
+      );
+      const authorityState = await page.evaluate(async paperId => {
+        const response = await fetch(`/api/papers/${encodeURIComponent(paperId)}/timeline?after_cursor=0&after_sequence=0`, {
+          credentials: "same-origin",
+          headers: { accept: "application/json" },
+        });
+        const value = await response.json();
+        const currentRevisionId = value.paper_room?.paper?.current_revision_id ?? null;
+        const currentRevision = (value.paper_room?.paper_revisions ?? []).find(
+          revision => revision.revision_id === currentRevisionId,
+        ) ?? null;
+        return {
+          ok: response.ok,
+          phase: value.paper_room?.paper?.phase ?? "waiting_for_authority",
+          materializationRoot: currentRevision?.section_materialization_root ?? null,
+          releaseMaterializationRoot:
+            currentRevision?.release_candidate?.section_materialization_root ?? null,
+        };
+      }, credentials.paper_id);
+      assert.equal(authorityState.ok, true);
+      assert.equal(
+        renderedPhase,
+        `Phase / 阶段: ${phaseLabels[authorityState.phase] || authorityState.phase}`,
+      );
+      if (authorityState.materializationRoot !== null) {
+        assert.match(authorityState.materializationRoot, /^sha256:[0-9a-f]{64}$/);
+        assert.match(
+          await materializationSummary.textContent() || "",
+          new RegExp(authorityState.materializationRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+        );
+      }
+      if (authorityState.releaseMaterializationRoot !== null) {
+        assert.equal(
+          authorityState.releaseMaterializationRoot,
+          authorityState.materializationRoot,
+        );
+      }
+      assert.ok(await page.locator(".live-participants li").count() >= 1);
+      const cursorState = await page.evaluate(paperId => JSON.parse(
+        sessionStorage.getItem(`hepta.paper-raid.live-cursor.v1:${paperId}`),
+      ));
+      assert.equal(Number.isSafeInteger(cursorState.hepta) && cursorState.hepta >= 0, true);
+      assert.deepEqual(Object.keys(cursorState), ["hepta"]);
     }
 
     const unexpectedFailures = requestFailures.filter(failure => {
@@ -263,6 +469,10 @@ async function runContext(browser, index) {
       recoveredLostResponse: registration.lostResponse,
     };
   } finally {
+    releaseDelayedCsrf?.();
+    if (delayedCsrfRouteInstalled) {
+      await page.unroute("**/session/refresh").catch(() => {});
+    }
     await context.close();
   }
 }
