@@ -6,23 +6,27 @@ on:
     paths:
       - 'docs/release-evidence/p0-candidate-trigger.json'
       - '.github/workflows/p0-release-candidate-gate.yml'
-  pull_request:
-    paths:
-      - 'docs/release-evidence/p0-candidate-trigger.json'
-      - '.github/workflows/p0-release-candidate-gate.yml'
 
 permissions:
   contents: read
   actions: read
 
+concurrency:
+  group: p0-release-candidate-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/cex_ci
   CEX_P0_EVIDENCE_DIR: run/p0-release-evidence
+  CEX_P0_GATE_POLL_ATTEMPTS: '160'
+  CEX_P0_GATE_POLL_INTERVAL_SECONDS: '15'
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: '0'
 
 jobs:
   repository-candidate-qualification:
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 90
     services:
       postgres:
         image: postgres:16
@@ -39,6 +43,15 @@ jobs:
           --health-retries 20
 
     steps:
+      - name: Require exact branch-tree event
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$GITHUB_EVENT_NAME" in
+            push|workflow_dispatch) ;;
+            *) echo "unsupported evidence event: $GITHUB_EVENT_NAME" >&2; exit 1 ;;
+          esac
+
       - name: Checkout exact candidate tree
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
