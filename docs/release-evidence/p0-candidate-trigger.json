@@ -1,7 +1,7 @@
 {
   "schema": "cex.p0-candidate-trigger.v1",
   "plan": "CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
-  "sequence": 1,
+  "sequence": 2,
   "purpose": "Bind every authoritative P0 gate and the candidate evidence gate to one commit and tree.",
   "qualification_scope": "repository-exact-money-control-plane",
   "production_authorization": "not_granted"
