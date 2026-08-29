@@ -4,7 +4,7 @@
 
 - Status: active all-blocker closure candidate; **not production-ready**.
 - Supersedes: `CEX-DEVELOPMENT-PLAN-2026-08-28-v11.md` for the exact-money, durable-settlement, provider-dispatch and release-evidence workstream.
-- Candidate migration head: `0083_fix_audit_baseline_uuid_cursor.sql`.
+- Candidate migration head: `0084_make_provider_reconciliation_replay_terminal_safe.sql`.
 - Default rollout posture: shadow or fail-closed; no production cutover is authorized by this document.
 - Acceptance rule: source presence, a static marker, a template manifest or an unexecuted script is not evidence. A gap closes only when the exact commit/tree has the required hosted execution evidence and the evidence is bound to the release candidate.
 
@@ -53,10 +53,11 @@ evidence and append-only controls. HTTP regression coverage uses `/v2/accounts` 
 
 ### Provider-dispatch authority and unknown outcomes
 
-Migrations `0078`, `0081` and `0082` separate provider dispatch from Execution state mutation,
-require exact authority, classify lease expiry after dispatch as an unknown outcome, require
-immutable reconciliation artifacts and permit requeue only after fresh confirmed-not-executed
-evidence plus acknowledgement.
+Migrations `0078`, `0081`, `0082` and `0084` separate provider dispatch from Execution state
+mutation, require exact authority, classify lease expiry after dispatch as an unknown outcome,
+require immutable reconciliation artifacts and permit requeue only after fresh
+confirmed-not-executed evidence plus acknowledgement. Migration `0084` keeps exact evidence replay
+side-effect-free after confirmed execution has already made the command terminal.
 
 ### Audit and release evidence
 
@@ -74,7 +75,8 @@ aggregate usage while preserving an additive `0082 -> 0083` upgrade path.
 5. A claim lease that may have crossed a remote side-effect boundary never implies automatic retry.
 6. Append-only evidence cannot be updated or deleted through normal service roles.
 7. New writes may not use compatibility-only Ledger columns or retired v1 monetary endpoints.
-8. A release candidate cannot be qualified from the template manifest; all placeholder hashes, URIs, run IDs, artifacts and approvals must be replaced and verified.
+8. A release candidate cannot be qualified from the template manifest; all hashes, URIs, run IDs, artifacts and approvals in the generated candidate manifest must be real and verified.
+9. Repository qualification is not production authorization. Automation may approve only the repository-candidate scope and may never impersonate security, operations, financial, legal or human go/no-go approval.
 
 ## 4. Repository-actionable closure blocks
 
@@ -97,7 +99,7 @@ candidate commit.
 
 Required evidence:
 
-- `cargo fmt --all -- --check`;
+- `cargo fmt --all --check`;
 - Linux and Windows service-local tests;
 - all-target workspace compile;
 - exact Ledger account/effect lifecycle, replay and insufficient-funds recovery;
@@ -141,13 +143,13 @@ Required evidence:
 - provider dispatch authority is bound to the exact Invocation/Execution contract;
 - transport ambiguity and expired active claims become `reconcile_required`;
 - reconciliation artifacts have immutable URI and SHA-256 evidence;
-- confirmed execution closes the command exactly once;
+- confirmed execution closes the command exactly once and exact replay remains terminal-safe;
 - confirmed-not-executed evidence is required before requeue;
 - indeterminate evidence cannot authorize retry;
 - transition and reconciliation evidence are append-only.
 
-A hosted PostgreSQL lifecycle must execute these branches; static SQL markers alone are not
-sufficient.
+Closure gate: `.github/workflows/p0-provider-reconciliation-gate.yml` must execute the hosted
+PostgreSQL lifecycle on the exact candidate commit. Static SQL markers alone are not sufficient.
 
 ### Block F — Audit baseline and delivery
 
@@ -163,63 +165,82 @@ Required evidence:
 
 ### Block G — release evidence hygiene
 
-Before qualification:
+Before repository qualification:
 
-- remove temporary self-patch workflows, patch scripts and CI trigger files;
-- generate a non-template release manifest for the final commit/tree;
-- bind Cargo.lock digest, migration digest, workflow run IDs, artifacts, image digests, SBOM and
-  provenance;
-- bind fresh and upgrade migration results, restore/rollback drill, fault-injection matrix and soak
-  result;
-- record explicit approvals and revocation procedure;
-- prove branch/ruleset policy requires the authoritative checks.
+- temporary self-patch workflows, patch scripts and CI trigger files are absent;
+- the five authoritative workflows listen to `docs/release-evidence/p0-candidate-trigger.json`;
+- third-party Actions in those workflows and the candidate workflow are commit-pinned;
+- a bounded committed exact-money soak executes before a custom-format dump/restore drill;
+- the restored database matches source row counts, exact balances, operation identity and content hashes;
+- the generated non-template candidate manifest binds the exact commit/tree, Cargo.lock digest,
+  migration head and chain digest, five authoritative workflow run IDs, evidence payload digest,
+  SPDX SBOM and in-toto/SLSA-style provenance;
+- the manifest records automation approval only for repository qualification and explicitly denies
+  production authorization.
+
+Closure gate: `.github/workflows/p0-release-candidate-gate.yml` reruns the complete database
+lifecycle matrix, waits for the five exact-SHA authoritative gates, uploads the immutable evidence
+payload and then validates the generated candidate manifest.
+
+Branch/ruleset enforcement is a repository-administration control. The candidate evidence must
+report its actual state; absence of enforcement may not be hidden by source code or CI prose.
 
 ## 5. External gates that repository edits cannot self-certify
 
 These remain blockers until their independent evidence exists. They must not be relabelled as
 closed merely because code or hosted CI is green.
 
-1. production-like backup and restore rehearsal against representative data volume;
+1. production-like backup and restore rehearsal against representative data volume and the real storage topology;
 2. deployment/cutover and rollback rehearsal with real service identities, network policy and secret custody;
 3. real provider reconciliation artifacts for success, definite non-execution and indeterminate outcome;
 4. credential issuance, rotation, revocation and break-glass custody review;
-5. sustained soak/endurance run with queue age, retry, reconciliation, parity and Audit delivery SLOs;
+5. sustained production-like soak/endurance run with queue age, retry, reconciliation, parity and Audit delivery SLOs;
 6. independent security, operations and financial-control review;
 7. legal, commercial or provider approvals where the production integration requires them;
 8. final human go/no-go decision bound to the immutable release candidate.
 
-## 6. Evidence ledger
+The bounded CI exact-state dump/restore and exact Ledger soak close repository regression gaps; they
+do not replace representative-volume disaster recovery or sustained production qualification.
 
-The following statuses are intentionally fail-closed until the final exact-tree runs finish and are
-bound to a non-template manifest.
+## 6. Evidence ledger protocol
 
-| Evidence | Required state | Current plan state |
+The static plan defines required evidence but does not embed candidate run IDs. Writing run IDs back
+into this file would create a new commit and invalidate the very exact-SHA evidence being cited.
+Instead, `scripts/p0-release-evidence.py` produces the evidence ledger and candidate manifest inside
+the `p0-release-candidate-gate` run. The manifest must contain the final run IDs, conclusions and
+hashes and must pass `scripts/check-release-baseline-manifest.py` without template mode.
+
+| Evidence | Required state | Binding location |
 |---|---|---|
-| Fresh migration through current head | hosted success | pending exact-tree binding |
-| Existing-row Audit baseline | hosted success | pending exact-tree binding |
-| Ledger operation identity/replay | hosted success | pending exact-tree binding |
-| Invocation lifecycle/exclusivity | hosted success | pending exact-tree binding |
-| Linux service-local gate | hosted success | pending exact-tree binding |
-| Windows service-local gate | hosted success | pending exact-tree binding |
-| Gateway exact reserve gate | hosted success | pending exact-tree binding |
-| Execution settlement gate | hosted success | pending exact-tree binding |
-| Provider unknown-outcome lifecycle | hosted success | pending dedicated binding |
-| Backup/restore and rollback | immutable external artifact | open external blocker |
-| Soak/SLO qualification | immutable external artifact | open external blocker |
-| Independent approvals | signed/recorded approval | open external blocker |
+| Fresh migration and existing-row upgrade paths | hosted success | exact-SHA migration gate plus evidence payload |
+| Ledger operation identity/replay | hosted success | exact-SHA migration gate plus evidence payload |
+| Invocation lifecycle/exclusivity | hosted success | exact-SHA migration gate plus evidence payload |
+| Linux and Windows service-local gates | hosted success | exact-SHA Rust gate metadata |
+| Gateway exact reserve | hosted success | exact-SHA Gateway gate metadata |
+| Execution settlement | hosted success | exact-SHA Execution gate metadata |
+| Provider unknown-outcome lifecycle | hosted success | exact-SHA provider gate metadata |
+| Bounded exact Ledger soak | pass | evidence payload `exact-ledger-soak.json` |
+| Exact-state backup/restore | pass | evidence payload `backup-restore.json` |
+| SBOM and provenance | non-placeholder SHA-256 | evidence payload and candidate manifest |
+| Representative-volume restore | independent external artifact | external production gate |
+| Sustained soak/SLO qualification | independent external artifact | external production gate |
+| Independent approvals | signed/recorded approval | external production gate |
 
 ## 7. Definition of repository closure
 
 Repository-actionable gaps are closed only when all of the following are true on one final commit:
 
-1. all authoritative hosted workflows are green;
-2. no temporary patch/trigger artifact remains;
-3. migration and manifest heads agree;
-4. fresh and existing-row upgrade paths both execute;
-5. exact replay, collision, crash/lease and operator-recovery branches execute;
-6. compatibility writes and v1 value routes remain fail-closed;
-7. the v12 evidence ledger names the final run IDs and conclusions;
-8. the generated release manifest contains no placeholder value.
+1. all five authoritative hosted workflows are green;
+2. `p0-release-candidate-gate` is green on the same commit/tree;
+3. no temporary patch/trigger artifact remains other than the permanent shared candidate trigger;
+4. migration and manifest heads agree;
+5. fresh and existing-row upgrade paths both execute;
+6. exact replay, collision, crash/lease and operator-recovery branches execute;
+7. compatibility writes and v1 value routes remain fail-closed;
+8. the generated exact-tree evidence ledger names the final run IDs and conclusions;
+9. the generated candidate manifest contains no placeholder and its evidence payload digest,
+   SBOM and provenance all validate;
+10. actual branch/ruleset enforcement state is reported without fabrication.
 
 Even after repository closure, the release remains **not production-ready** until every external
 gate in Section 5 is independently satisfied and the final go/no-go approval is recorded.
