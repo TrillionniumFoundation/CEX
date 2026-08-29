@@ -92,9 +92,7 @@ impl MoneyAmount {
         let mut total = whole.checked_mul(factor).ok_or(MoneyError::Overflow)?;
 
         if !fraction.is_empty() {
-            let fraction_value = fraction
-                .parse::<i128>()
-                .map_err(|_| MoneyError::Overflow)?;
+            let fraction_value = fraction.parse::<i128>().map_err(|_| MoneyError::Overflow)?;
             let padding = u32::from(scale)
                 - u32::try_from(fraction.len()).map_err(|_| MoneyError::Overflow)?;
             let fraction_minor = fraction_value
@@ -212,9 +210,9 @@ fn normalize_currency(currency: String) -> Result<String, MoneyError> {
     let currency = currency.trim().to_ascii_lowercase();
     if currency.is_empty()
         || currency.len() > 16
-        || !currency
-            .chars()
-            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '.' | '_' | '-'))
+        || !currency.chars().all(|ch| {
+            ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '.' | '_' | '-')
+        })
     {
         return Err(MoneyError::InvalidCurrency(currency));
     }
@@ -287,7 +285,10 @@ mod tests {
         let amount = MoneyAmount::credits(9_007_199_254_740_993);
         let value = serde_json::to_value(&amount).unwrap();
         assert_eq!(value["minor_units"], "9007199254740993");
-        assert_eq!(serde_json::from_value::<MoneyAmount>(value).unwrap(), amount);
+        assert_eq!(
+            serde_json::from_value::<MoneyAmount>(value).unwrap(),
+            amount
+        );
     }
 
     #[test]

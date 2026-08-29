@@ -6,10 +6,7 @@ pub const CONFIG_ERROR_EXIT_CODE: i32 = 78;
 const DEFAULT_DATABASE_TIMEOUT_SECONDS: u64 = 5;
 const MAX_DATABASE_TIMEOUT_SECONDS: u64 = 60;
 
-const IDENTITY_ADMIN_SOURCES: &[&str] = &[
-    "IDENTITY_ADMIN_TOKENS_JSON",
-    "IDENTITY_ADMIN_TOKEN",
-];
+const IDENTITY_ADMIN_SOURCES: &[&str] = &["IDENTITY_ADMIN_TOKENS_JSON", "IDENTITY_ADMIN_TOKEN"];
 const AUDIT_ADMIN_SOURCES: &[&str] = &[
     "AUDIT_ADMIN_TOKENS_JSON",
     "AUDIT_ADMIN_TOKEN",
@@ -444,9 +441,7 @@ async fn preflight_database() -> Result<(), StartupError> {
 }
 
 fn startup_database_timeout_seconds() -> Result<u64, StartupError> {
-    parse_timeout_seconds(
-        get_trimmed_env("CEX_STARTUP_DATABASE_TIMEOUT_SECONDS").as_deref(),
-    )
+    parse_timeout_seconds(get_trimmed_env("CEX_STARTUP_DATABASE_TIMEOUT_SECONDS").as_deref())
 }
 
 fn parse_timeout_seconds(raw: Option<&str>) -> Result<u64, StartupError> {
@@ -486,9 +481,18 @@ mod tests {
 
     #[test]
     fn profile_aliases_are_normalized() {
-        assert_eq!(RuntimeProfile::parse("development").unwrap(), RuntimeProfile::Dev);
-        assert_eq!(RuntimeProfile::parse("prod").unwrap(), RuntimeProfile::Production);
-        assert_eq!(RuntimeProfile::parse("stage").unwrap(), RuntimeProfile::Staging);
+        assert_eq!(
+            RuntimeProfile::parse("development").unwrap(),
+            RuntimeProfile::Dev
+        );
+        assert_eq!(
+            RuntimeProfile::parse("prod").unwrap(),
+            RuntimeProfile::Production
+        );
+        assert_eq!(
+            RuntimeProfile::parse("stage").unwrap(),
+            RuntimeProfile::Staging
+        );
     }
 
     #[test]
@@ -524,8 +528,14 @@ mod tests {
 
     #[test]
     fn weak_markers_detect_known_defaults_and_placeholders() {
-        assert_eq!(weak_marker("local-dev-admin-token"), Some("local-dev-admin-token"));
-        assert_eq!(weak_marker("postgres://cex:REPLACE_ME@db/cex"), Some("replace_"));
+        assert_eq!(
+            weak_marker("local-dev-admin-token"),
+            Some("local-dev-admin-token")
+        );
+        assert_eq!(
+            weak_marker("postgres://cex:REPLACE_ME@db/cex"),
+            Some("replace_")
+        );
         assert_eq!(weak_marker("high-entropy-production-token"), None);
     }
 

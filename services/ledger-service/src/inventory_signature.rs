@@ -233,8 +233,7 @@ fn database_error_response(context: &str, error: sqlx::Error) -> Response {
         if database_error.code().as_deref() == Some("23505") || message.contains("collision") {
             status = StatusCode::CONFLICT;
             code = "inventory_seal_collision";
-        } else if database_error.code().as_deref() == Some("P0002")
-            || message.contains("not found")
+        } else if database_error.code().as_deref() == Some("P0002") || message.contains("not found")
         {
             status = StatusCode::NOT_FOUND;
             code = "inventory_not_found";

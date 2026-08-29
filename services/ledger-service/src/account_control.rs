@@ -124,11 +124,7 @@ pub async fn get_account_exact(
     if account_id.is_nil() {
         return bad_request("account_id must be a non-nil UUID");
     }
-    let admin = match authorize_ledger_admin(
-        &state,
-        &headers,
-        &["ledger:read", "ledger:manage"],
-    ) {
+    let admin = match authorize_ledger_admin(&state, &headers, &["ledger:read", "ledger:manage"]) {
         Ok(admin) => admin,
         Err(response) => return response,
     };
@@ -265,11 +261,7 @@ pub async fn projection_status(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    let admin = match authorize_ledger_admin(
-        &state,
-        &headers,
-        &["ledger:read", "ledger:manage"],
-    ) {
+    let admin = match authorize_ledger_admin(&state, &headers, &["ledger:read", "ledger:manage"]) {
         Ok(admin) => admin,
         Err(response) => return response,
     };
@@ -450,7 +442,10 @@ async fn load_org_for_run(
     {
         Ok(Some(org_id)) => Ok(org_id),
         Ok(None) => Err(not_found("inventory run not found")),
-        Err(error) => Err(database_error_response("load inventory organization", error)),
+        Err(error) => Err(database_error_response(
+            "load inventory organization",
+            error,
+        )),
     }
 }
 
@@ -506,8 +501,7 @@ fn database_error_response(context: &str, error: sqlx::Error) -> Response {
         if database_error.code().as_deref() == Some("23505") || message.contains("collision") {
             status = StatusCode::CONFLICT;
             code = "ledger_account_control_collision";
-        } else if database_error.code().as_deref() == Some("P0002")
-            || message.contains("not found")
+        } else if database_error.code().as_deref() == Some("P0002") || message.contains("not found")
         {
             status = StatusCode::NOT_FOUND;
             code = "ledger_account_control_not_found";
@@ -525,7 +519,11 @@ fn database_error_response(context: &str, error: sqlx::Error) -> Response {
         }
     }
     eprintln!("ledger-service: {context} failed: {error}");
-    error_response(status, code, "exact account operation could not be completed")
+    error_response(
+        status,
+        code,
+        "exact account operation could not be completed",
+    )
 }
 
 fn decode_json_response(status: StatusCode, body: String) -> Response {
@@ -543,7 +541,11 @@ fn decode_json_response(status: StatusCode, body: String) -> Response {
 }
 
 fn bad_request(message: &'static str) -> Response {
-    error_response(StatusCode::BAD_REQUEST, "invalid_exact_account_request", message)
+    error_response(
+        StatusCode::BAD_REQUEST,
+        "invalid_exact_account_request",
+        message,
+    )
 }
 
 fn not_found(message: &'static str) -> Response {

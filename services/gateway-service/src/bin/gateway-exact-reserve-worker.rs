@@ -329,9 +329,7 @@ async fn claim_commands(
     )
     .await
     .map_err(|_| WorkerError::Database("claim Gateway reserve commands timed out".to_string()))?
-    .map_err(|error| {
-        WorkerError::Database(format!("claim Gateway reserve commands: {error}"))
-    })?;
+    .map_err(|error| WorkerError::Database(format!("claim Gateway reserve commands: {error}")))?;
 
     rows.into_iter()
         .map(|row| {
@@ -403,9 +401,7 @@ async fn classify_response(response: reqwest::Response) -> PersistedOutcome {
     if bytes.len() > MAX_RESPONSE_BYTES {
         return PersistedOutcome::reconcile(
             "ledger_response_too_large_unknown_outcome",
-            format!(
-                "Ledger response exceeded bounded body size of {MAX_RESPONSE_BYTES} bytes"
-            ),
+            format!("Ledger response exceeded bounded body size of {MAX_RESPONSE_BYTES} bytes"),
             Some(status.as_u16()),
         );
     }
@@ -430,11 +426,13 @@ async fn classify_response(response: reqwest::Response) -> PersistedOutcome {
         return PersistedOutcome::succeeded(body, replayed, status.as_u16());
     }
 
-    let code = extract_error_code(&body).unwrap_or_else(|| {
-        format!("ledger_http_{}", status.as_u16())
-    });
+    let code =
+        extract_error_code(&body).unwrap_or_else(|| format!("ledger_http_{}", status.as_u16()));
     let message = extract_error_message(&body).unwrap_or_else(|| {
-        format!("Ledger rejected exact reserve with HTTP {}", status.as_u16())
+        format!(
+            "Ledger rejected exact reserve with HTTP {}",
+            status.as_u16()
+        )
     });
 
     if is_retryable_status(status) {
@@ -584,8 +582,7 @@ fn validate_worker_id(worker_id: &str) -> Result<(), WorkerError> {
         })
     {
         return Err(WorkerError::Config(
-            "Gateway reserve worker id must use 1..128 characters from [A-Za-z0-9._:-]"
-                .to_string(),
+            "Gateway reserve worker id must use 1..128 characters from [A-Za-z0-9._:-]".to_string(),
         ));
     }
     Ok(())

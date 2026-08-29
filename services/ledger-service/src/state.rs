@@ -83,10 +83,7 @@ impl AppState {
             repository,
             operation_pool,
             fail_fast,
-            require_explicit_ledger_trace: env_flag(
-                "LEDGER_V2_REQUIRE_EXPLICIT_TRACE",
-                fail_fast,
-            ),
+            require_explicit_ledger_trace: env_flag("LEDGER_V2_REQUIRE_EXPLICIT_TRACE", fail_fast),
             admin_tokens: Arc::new(load_admin_tokens()),
             entitlement_signing_secret: Arc::new(required_secret(
                 "TRNM_VALUE_ENTITLEMENT_SIGNING_SECRET",

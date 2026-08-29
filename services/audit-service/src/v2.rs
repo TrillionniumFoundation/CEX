@@ -81,13 +81,11 @@ pub async fn create_event_v2(
     let value = match append_result {
         Ok(value) => value,
         Err(error) => {
-            let collision = error
-                .as_database_error()
-                .is_some_and(|database_error| {
-                    database_error
-                        .message()
-                        .contains("audit event id collision")
-                });
+            let collision = error.as_database_error().is_some_and(|database_error| {
+                database_error
+                    .message()
+                    .contains("audit event id collision")
+            });
             eprintln!(
                 "audit-service: append audit v2 event_id={} failed: {error}",
                 request.event_id
@@ -289,23 +287,31 @@ fn decode_record(row: PgRow) -> Result<AuditEventRecordV2, String> {
         event_id: row.try_get("event_id").map_err(|error| error.to_string())?,
         trace_id: row.try_get("trace_id").map_err(|error| error.to_string())?,
         org_id: row.try_get("org_id").map_err(|error| error.to_string())?,
-        chain_key: row.try_get("chain_key").map_err(|error| error.to_string())?,
+        chain_key: row
+            .try_get("chain_key")
+            .map_err(|error| error.to_string())?,
         tenant_sequence: row
             .try_get("tenant_sequence")
             .map_err(|error| error.to_string())?,
         previous_event_hash: row
             .try_get("previous_event_hash")
             .map_err(|error| error.to_string())?,
-        event_hash: row.try_get("event_hash").map_err(|error| error.to_string())?,
+        event_hash: row
+            .try_get("event_hash")
+            .map_err(|error| error.to_string())?,
         writer_service_id: row
             .try_get("writer_service_id")
             .map_err(|error| error.to_string())?,
         writer_auth_scheme: row
             .try_get("writer_auth_scheme")
             .map_err(|error| error.to_string())?,
-        actor_type: row.try_get("actor_type").map_err(|error| error.to_string())?,
+        actor_type: row
+            .try_get("actor_type")
+            .map_err(|error| error.to_string())?,
         actor_id: row.try_get("actor_id").map_err(|error| error.to_string())?,
-        event_type: row.try_get("event_type").map_err(|error| error.to_string())?,
+        event_type: row
+            .try_get("event_type")
+            .map_err(|error| error.to_string())?,
         schema_version: row
             .try_get("schema_version")
             .map_err(|error| error.to_string())?,
@@ -319,7 +325,10 @@ fn decode_record(row: PgRow) -> Result<AuditEventRecordV2, String> {
     })
 }
 
-fn authorize_audit_read(state: &AppState, headers: &HeaderMap) -> Result<AdminPrincipal, axum::response::Response> {
+fn authorize_audit_read(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<AdminPrincipal, axum::response::Response> {
     authorize_scoped_admin_from_map(
         headers,
         &state.admin_tokens,
@@ -342,20 +351,24 @@ fn enforce_org_boundary(
 
     let first_org = events.first().and_then(|event| event.org_id);
     if first_org.is_none() || events.iter().any(|event| event.org_id != first_org) {
-        return Some((
-            StatusCode::FORBIDDEN,
-            Json(json!({ "error": "audit v2 trace lacks a single org boundary" })),
-        )
-            .into_response());
+        return Some(
+            (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "audit v2 trace lacks a single org boundary" })),
+            )
+                .into_response(),
+        );
     }
     let org_id = first_org.expect("checked Some").to_string();
     if admin_principal_allows_org(admin, &org_id) {
         None
     } else {
-        Some((
-            StatusCode::FORBIDDEN,
-            Json(json!({ "error": "admin token not authorized for org" })),
+        Some(
+            (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "admin token not authorized for org" })),
+            )
+                .into_response(),
         )
-            .into_response())
     }
 }

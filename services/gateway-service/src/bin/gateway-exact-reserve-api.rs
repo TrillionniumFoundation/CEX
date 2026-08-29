@@ -275,7 +275,11 @@ fn map_database_error(error: sqlx::Error) -> axum::response::Response {
 }
 
 fn error_response(status: StatusCode, code: &str, message: &str) -> axum::response::Response {
-    (status, Json(json!({"error": {"code": code, "message": message}}))).into_response()
+    (
+        status,
+        Json(json!({"error": {"code": code, "message": message}})),
+    )
+        .into_response()
 }
 
 fn parse_positive_minor_units(raw: &str) -> Result<i64, &'static str> {
@@ -446,7 +450,10 @@ mod tests {
     #[test]
     fn exact_minor_units_reject_float_sign_and_noncanonical_zero_prefix() {
         assert_eq!(parse_positive_minor_units("1").unwrap(), 1);
-        assert_eq!(parse_positive_minor_units("9007199254740991").unwrap(), 9_007_199_254_740_991);
+        assert_eq!(
+            parse_positive_minor_units("9007199254740991").unwrap(),
+            9_007_199_254_740_991
+        );
         for invalid in ["", "0", "01", "+1", "-1", "1.0", " 1", "1 "] {
             assert!(parse_positive_minor_units(invalid).is_err(), "{invalid}");
         }

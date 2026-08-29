@@ -97,7 +97,10 @@ impl fmt::Display for AuditV2ContractError {
             ),
             Self::PayloadMustBeObject => formatter.write_str("audit payload must be a JSON object"),
             Self::ReservedPayloadKey(key) => {
-                write!(formatter, "audit payload contains server-reserved key '{key}'")
+                write!(
+                    formatter,
+                    "audit payload contains server-reserved key '{key}'"
+                )
             }
             Self::OccurredAtTooFarInFuture => {
                 formatter.write_str("occurred_at is more than five minutes in the future")
@@ -108,10 +111,7 @@ impl fmt::Display for AuditV2ContractError {
 
 impl Error for AuditV2ContractError {}
 
-fn validate_component(
-    field: &'static str,
-    raw: &str,
-) -> Result<(), AuditV2ContractError> {
+fn validate_component(field: &'static str, raw: &str) -> Result<(), AuditV2ContractError> {
     let value = raw.trim();
     if value.is_empty()
         || value.len() > MAX_COMPONENT_LEN

@@ -52,11 +52,13 @@ impl ServiceClients {
         &self,
         request: &LedgerEffectRequestV1,
     ) -> Result<Value, LedgerV2ClientError> {
-        request.validate(false).map_err(|error| LedgerV2ClientError {
-            status: None,
-            code: error.code().to_string(),
-            message: error.to_string(),
-        })?;
+        request
+            .validate(false)
+            .map_err(|error| LedgerV2ClientError {
+                status: None,
+                code: error.code().to_string(),
+                message: error.to_string(),
+            })?;
 
         let response = self
             .http
@@ -72,7 +74,10 @@ impl ServiceClients {
             })?;
 
         let status = response.status();
-        if response.content_length().is_some_and(|length| length > MAX_RESPONSE_BYTES) {
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_RESPONSE_BYTES)
+        {
             return Err(LedgerV2ClientError {
                 status: Some(status.as_u16()),
                 code: "ledger_v2_response_too_large".to_string(),
@@ -92,12 +97,10 @@ impl ServiceClients {
             });
         }
 
-        let document: Value = serde_json::from_str(&body).map_err(|error| {
-            LedgerV2ClientError {
-                status: Some(status.as_u16()),
-                code: "ledger_v2_response_invalid".to_string(),
-                message: format!("decode response failed: {error}"),
-            }
+        let document: Value = serde_json::from_str(&body).map_err(|error| LedgerV2ClientError {
+            status: Some(status.as_u16()),
+            code: "ledger_v2_response_invalid".to_string(),
+            message: format!("decode response failed: {error}"),
         })?;
         if !status.is_success() {
             return Err(LedgerV2ClientError {
@@ -153,9 +156,7 @@ fn parse_mode(raw: Option<&str>) -> Result<GatewayLedgerMode, String> {
             "legacy_v1" | "legacy" => Ok(GatewayLedgerMode::LegacyV1),
             "dual" | "prefer_v2" => Ok(GatewayLedgerMode::Dual),
             "require_v2" | "v2_only" => Ok(GatewayLedgerMode::RequireV2),
-            _ => Err(format!(
-                "{MODE_ENV} must be legacy_v1, dual, or require_v2"
-            )),
+            _ => Err(format!("{MODE_ENV} must be legacy_v1, dual, or require_v2")),
         },
     }
 }

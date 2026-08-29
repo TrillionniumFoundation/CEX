@@ -1,9 +1,7 @@
 #[path = "../../../crates/shared-config/src/runtime_guard.rs"]
 mod runtime_guard;
 
-use audit_service::{
-    build_router, state::AppState, validate_internal_service_auth,
-};
+use audit_service::{build_router, state::AppState, validate_internal_service_auth};
 use runtime_guard::ServiceKind;
 use shared_tracing::init_tracing;
 

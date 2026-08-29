@@ -55,8 +55,12 @@ impl DispatcherConfig {
                     .to_string(),
             );
         }
-        let max_response_bytes =
-            parse_usize_env("CEX_AUDIT_OUTBOX_MAX_RESPONSE_BYTES", 262_144, 1_024, 4_194_304)?;
+        let max_response_bytes = parse_usize_env(
+            "CEX_AUDIT_OUTBOX_MAX_RESPONSE_BYTES",
+            262_144,
+            1_024,
+            4_194_304,
+        )?;
 
         Ok(Self {
             database_url,
@@ -131,11 +135,7 @@ impl DeliveryFailure {
         }
     }
 
-    fn permanent(
-        code: &'static str,
-        message: impl Into<String>,
-        http_status: Option<i32>,
-    ) -> Self {
+    fn permanent(code: &'static str, message: impl Into<String>, http_status: Option<i32>) -> Self {
         Self {
             retryable: false,
             code,
@@ -237,8 +237,8 @@ async fn deliver_item(
     config: &DispatcherConfig,
     item: &ClaimedOutbox,
 ) -> Result<VerifiedDelivery, DeliveryFailure> {
-    let request: AuditEventCreateRequestV2 =
-        serde_json::from_value(item.envelope.clone()).map_err(|error| {
+    let request: AuditEventCreateRequestV2 = serde_json::from_value(item.envelope.clone())
+        .map_err(|error| {
             DeliveryFailure::permanent(
                 "invalid_outbox_envelope",
                 format!("decode Audit v2 envelope: {error}"),
@@ -510,9 +510,7 @@ fn is_retryable_status(status: StatusCode) -> bool {
     status.is_server_error()
         || matches!(
             status,
-            StatusCode::REQUEST_TIMEOUT
-                | StatusCode::TOO_EARLY
-                | StatusCode::TOO_MANY_REQUESTS
+            StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_EARLY | StatusCode::TOO_MANY_REQUESTS
         )
 }
 
@@ -575,7 +573,11 @@ fn parse_i32_env(name: &str, default: i32, min: i32, max: i32) -> Result<i32, St
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .map(|value| value.parse::<i32>().map_err(|error| format!("parse {name}: {error}")))
+        .map(|value| {
+            value
+                .parse::<i32>()
+                .map_err(|error| format!("parse {name}: {error}"))
+        })
         .transpose()?
         .unwrap_or(default);
     if !(min..=max).contains(&value) {
@@ -589,7 +591,11 @@ fn parse_u64_env(name: &str, default: u64, min: u64, max: u64) -> Result<u64, St
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .map(|value| value.parse::<u64>().map_err(|error| format!("parse {name}: {error}")))
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|error| format!("parse {name}: {error}"))
+        })
         .transpose()?
         .unwrap_or(default);
     if !(min..=max).contains(&value) {
@@ -598,12 +604,7 @@ fn parse_u64_env(name: &str, default: u64, min: u64, max: u64) -> Result<u64, St
     Ok(value)
 }
 
-fn parse_usize_env(
-    name: &str,
-    default: usize,
-    min: usize,
-    max: usize,
-) -> Result<usize, String> {
+fn parse_usize_env(name: &str, default: usize, min: usize, max: usize) -> Result<usize, String> {
     let value = env::var(name)
         .ok()
         .map(|value| value.trim().to_string())

@@ -16,8 +16,7 @@ use uuid::Uuid;
 use crate::{
     api::{self, ProcessExecutionRequest, StartExecutionRequest},
     providers::{
-        dispatch_via_provider, parse_provider_target, OpenClawCliEnvScope,
-        ProviderDispatchInput,
+        dispatch_via_provider, parse_provider_target, OpenClawCliEnvScope, ProviderDispatchInput,
     },
     state::AppState,
 };
@@ -39,14 +38,9 @@ pub async fn start_execution(
     let provider_target = match load_provider_route(&state, execution_id).await {
         Ok(Some(route)) => route,
         Ok(None) => {
-            return api::start_execution(
-                Path(execution_id),
-                State(state),
-                headers,
-                Json(request),
-            )
-            .await
-            .into_response()
+            return api::start_execution(Path(execution_id), State(state), headers, Json(request))
+                .await
+                .into_response()
         }
         Err(response) => return response,
     };
@@ -58,13 +52,8 @@ pub async fn start_execution(
     if let Err(response) = enforce_org_boundary(&admin, provider_target.org_id.as_deref()) {
         return response;
     }
-    if let Err(response) = enqueue_provider_command(
-        &state,
-        execution_id,
-        admin.actor_id.trim(),
-        None,
-    )
-    .await
+    if let Err(response) =
+        enqueue_provider_command(&state, execution_id, admin.actor_id.trim(), None).await
     {
         return response;
     }
@@ -83,14 +72,9 @@ pub async fn process_execution(
     let provider_target = match load_provider_route(&state, execution_id).await {
         Ok(Some(route)) => route,
         Ok(None) => {
-            return api::process_execution(
-                Path(execution_id),
-                State(state),
-                headers,
-                Json(request),
-            )
-            .await
-            .into_response()
+            return api::process_execution(Path(execution_id), State(state), headers, Json(request))
+                .await
+                .into_response()
         }
         Err(response) => return response,
     };
@@ -262,12 +246,8 @@ async fn process_command(
         .pool
         .as_ref()
         .ok_or_else(|| "provider dispatch worker lost PostgreSQL state".to_string())?;
-    let prompt = match load_verified_prompt(
-        pool,
-        command.invocation_id,
-        &command.prompt_sha256,
-    )
-    .await?
+    let prompt = match load_verified_prompt(pool, command.invocation_id, &command.prompt_sha256)
+        .await?
     {
         Some(prompt) => prompt,
         None => {
@@ -540,8 +520,7 @@ fn database_error_response(context: &str, error: sqlx::Error) -> Response {
         if database_error.code().as_deref() == Some("23505") || message.contains("collision") {
             status = StatusCode::CONFLICT;
             code = "provider_dispatch_collision";
-        } else if database_error.code().as_deref() == Some("P0002")
-            || message.contains("not found")
+        } else if database_error.code().as_deref() == Some("P0002") || message.contains("not found")
         {
             status = StatusCode::NOT_FOUND;
             code = "provider_dispatch_not_found";
@@ -558,7 +537,11 @@ fn database_error_response(context: &str, error: sqlx::Error) -> Response {
         }
     }
     eprintln!("execution-service: {context} failed: {error}");
-    error_response(status, code, "provider dispatch operation could not be completed")
+    error_response(
+        status,
+        code,
+        "provider dispatch operation could not be completed",
+    )
 }
 
 fn error_response(status: StatusCode, code: &'static str, message: &str) -> Response {
@@ -607,7 +590,10 @@ fn bool_env(name: &str, default: bool) -> Result<bool, String> {
 fn bounded_i32_env(name: &str, default: i32, min: i32, max: i32) -> Result<i32, String> {
     let value = env::var(name)
         .ok()
-        .map(|raw| raw.parse::<i32>().map_err(|_| format!("{name} must be an integer")))
+        .map(|raw| {
+            raw.parse::<i32>()
+                .map_err(|_| format!("{name} must be an integer"))
+        })
         .transpose()?
         .unwrap_or(default);
     if !(min..=max).contains(&value) {
@@ -619,7 +605,10 @@ fn bounded_i32_env(name: &str, default: i32, min: i32, max: i32) -> Result<i32, 
 fn bounded_u64_env(name: &str, default: u64, min: u64, max: u64) -> Result<u64, String> {
     let value = env::var(name)
         .ok()
-        .map(|raw| raw.parse::<u64>().map_err(|_| format!("{name} must be an integer")))
+        .map(|raw| {
+            raw.parse::<u64>()
+                .map_err(|_| format!("{name} must be an integer"))
+        })
         .transpose()?
         .unwrap_or(default);
     if !(min..=max).contains(&value) {

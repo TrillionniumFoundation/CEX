@@ -64,15 +64,9 @@ impl GatewayRuntimeMetrics {
             execution_approve_requests: self.execution_approve_requests.load(Ordering::Relaxed),
             execution_retry_requests: self.execution_retry_requests.load(Ordering::Relaxed),
             execution_cancel_requests: self.execution_cancel_requests.load(Ordering::Relaxed),
-            saga_shadow_write_attempts: self
-                .saga_shadow_write_attempts
-                .load(Ordering::Relaxed),
-            saga_shadow_write_successes: self
-                .saga_shadow_write_successes
-                .load(Ordering::Relaxed),
-            saga_shadow_write_failures: self
-                .saga_shadow_write_failures
-                .load(Ordering::Relaxed),
+            saga_shadow_write_attempts: self.saga_shadow_write_attempts.load(Ordering::Relaxed),
+            saga_shadow_write_successes: self.saga_shadow_write_successes.load(Ordering::Relaxed),
+            saga_shadow_write_failures: self.saga_shadow_write_failures.load(Ordering::Relaxed),
         }
     }
 }

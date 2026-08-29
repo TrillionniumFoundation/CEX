@@ -112,10 +112,7 @@ pub enum LedgerContractError {
     NilIdentifier(&'static str),
     ExplicitTraceRequired,
     Money(MoneyError),
-    InvalidComponent {
-        field: &'static str,
-        maximum: usize,
-    },
+    InvalidComponent { field: &'static str, maximum: usize },
     InvalidIdempotencyKey,
     IncompleteReference,
 }
@@ -159,12 +156,12 @@ impl fmt::Display for LedgerContractError {
                 formatter,
                 "{field} must use 1..{maximum} characters from [A-Za-z0-9._:-]"
             ),
-            Self::InvalidIdempotencyKey => formatter.write_str(
-                "idempotency_key must contain 1..256 non-control characters",
-            ),
-            Self::IncompleteReference => formatter.write_str(
-                "reference_type and reference_id must be supplied together",
-            ),
+            Self::InvalidIdempotencyKey => {
+                formatter.write_str("idempotency_key must contain 1..256 non-control characters")
+            }
+            Self::IncompleteReference => {
+                formatter.write_str("reference_type and reference_id must be supplied together")
+            }
         }
     }
 }
