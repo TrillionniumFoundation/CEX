@@ -65,6 +65,10 @@ for (const notice of [
   "Completion is not portable",
   "Pair exactly one active Agent Bridge first",
 ]) assert.ok(practiceHtml.includes(notice), `missing player boundary copy: ${notice}`);
+assert.ok(
+  practiceHtml.includes('href="/league?return_to=%2Fleague%2Fpractice"'),
+  "practice pairing does not preserve its fixed no-secret return path",
+);
 for (const forbidden of [
   "practice_session_id",
   "subject_id",
@@ -109,6 +113,27 @@ for (const forbidden of [
   "dispatchEvent(",
   "/api/agent-bridge/",
 ]) assert.equal(practiceBrowser.includes(forbidden), false, `practice browser escaped boundary: ${forbidden}`);
+
+const pairingBrowser = browser.slice(
+  browser.indexOf("const AGENT_PAIRING_RETURN_PATHS"),
+  browser.indexOf("function bindAgentBinding()"),
+);
+for (const marker of [
+  'new Set(["/league/practice"])',
+  'page.searchParams.getAll("return_to")',
+  'grant.state === "consumed"',
+  "grant.signed_health_observed_after_pairing === true",
+  "requestGeneration !== statusRequestGeneration",
+  "status?.grantId === activePairingGrantId",
+  "status?.healthConfirmed",
+  "window.location.assign(returnTarget)",
+]) assert.ok(pairingBrowser.includes(marker), `missing pairing return boundary: ${marker}`);
+for (const forbidden of [
+  "paper-raid-agent-bridge:",
+  "pairing_code=",
+  "localStorage",
+  "sessionStorage",
+]) assert.equal(pairingBrowser.includes(forbidden), false, `pairing return leaks authority: ${forbidden}`);
 
 const readyIndex = browser.indexOf('document.documentElement.dataset.paperRaidBindingsReady = "true"');
 const bindIndex = browser.indexOf("bindPractice();");
