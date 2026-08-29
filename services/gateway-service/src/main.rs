@@ -24,8 +24,11 @@ async fn main() {
         }
     };
     eprintln!(
-        "gateway-service startup guard accepted profile={} db_preflight={}",
-        startup.profile, startup.database_preflight
+        "{} startup guard accepted profile={} db_preflight={} identity_static_fallback_disabled={}",
+        startup.service,
+        startup.profile,
+        startup.database_preflight,
+        startup.identity_static_fallback_disabled
     );
 
     let config = GatewayConfig::from_env();
