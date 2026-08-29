@@ -12,6 +12,11 @@
     "commit": "12d1925e447be412d3c233da31330e71982362ca",
     "tree": "da130a2b883ff96c3f1aac8eee8f4a47e2f9afaf"
   },
+  "manual_rearm": {
+    "actor": "Tomasrgbsf",
+    "generation": 1,
+    "reason": "retrigger exact-source pull-request jobs after bot-authored lock refresh"
+  },
   "promotion_effect": "none",
   "native_world_actions_run": false,
   "trusted_settlement": false,
