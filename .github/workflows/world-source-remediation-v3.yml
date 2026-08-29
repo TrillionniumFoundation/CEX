@@ -61,6 +61,7 @@ jobs:
           test "$(git -C world hash-object trillionnium/crates/trnm-game-server/migrations/0018_online_settlement_operator_controls_v1.sql)" = cc9d7705d68a49ca0e2527359f6b0ace63c963dd
           test "$(git -C world hash-object trillionnium/crates/trnm-game-server/tests/settlement_database_contract.rs)" = 5433c7cf351500ab99801d6c33ebe6cd020dcacd
           test "$(git -C world hash-object trillionnium/crates/trnm-game-server/tests/settlement_operator_controls_database.rs)" = 46bdd04c1ff4d68518a4a96c02ee86310043465f
+          test "$(git -C world hash-object trillionnium/crates/trnm-game-server/build.rs)" = 24421c05304804ba64740ae2034b6008f5e6cb97
           python3 - <<'PY'
           from pathlib import Path
 
@@ -132,6 +133,19 @@ jobs:
           if text.count(old) != 1:
               raise SystemExit(f"policy truncate assertion marker count was {text.count(old)}, expected 1")
           operator_test.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          build_script = Path("world/trillionnium/crates/trnm-game-server/build.rs")
+          text = build_script.read_text(encoding="utf-8")
+          replacements = {
+              "use std::{env, fs, path::PathBuf};": "use std::{env, fs, path::{Path, PathBuf}};",
+              "fn generate_game_server(out_dir: &PathBuf) {": "fn generate_game_server(out_dir: &Path) {",
+              "fn generate_settlement_worker(out_dir: &PathBuf) {": "fn generate_settlement_worker(out_dir: &Path) {",
+          }
+          for old, new in replacements.items():
+              if text.count(old) != 1:
+                  raise SystemExit(f"build-script marker {old!r} count was {text.count(old)}, expected 1")
+              text = text.replace(old, new, 1)
+          build_script.write_text(text, encoding="utf-8")
           PY
           git -C world diff --check
 
@@ -162,6 +176,7 @@ jobs:
           mkdir -p remediation/trillionnium/crates/trnm-game-server/migrations
           mkdir -p remediation/trillionnium/crates/trnm-game-server/tests
           mkdir -p remediation/trillionnium/crates/trnm-game-server/src
+          cp world/trillionnium/crates/trnm-game-server/build.rs remediation/trillionnium/crates/trnm-game-server/
           cp world/trillionnium/crates/trnm-game-server/migrations/0018_online_settlement_operator_controls_v1.sql remediation/trillionnium/crates/trnm-game-server/migrations/
           cp world/trillionnium/crates/trnm-game-server/tests/settlement_database_contract.rs remediation/trillionnium/crates/trnm-game-server/tests/
           cp world/trillionnium/crates/trnm-game-server/tests/settlement_operator_controls_database.rs remediation/trillionnium/crates/trnm-game-server/tests/
