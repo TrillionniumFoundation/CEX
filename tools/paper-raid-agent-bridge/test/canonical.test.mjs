@@ -294,6 +294,15 @@ test("request proof freezes method, path, canonical query, and exact body hash",
       canonical_path: "/api/agent-bridge/review-receipts",
     }),
   );
+  for (const canonical_path of [
+    "/api/agent-bridge/practice-tasks",
+    "/api/agent-bridge/practice-claims",
+    "/api/agent-bridge/practice-results",
+  ]) {
+    assert.doesNotThrow(() =>
+      agentBridgeRequestProofFrame({ ...claim, canonical_path }),
+    );
+  }
   assert.throws(
     () =>
       agentBridgeRequestProofFrame({

@@ -441,6 +441,7 @@ jq -e '
 
 "$service_root/scripts/check-practice-unranked-boundary.sh"
 node "$service_root/scripts/check-practice-player-ui.mjs"
+node "$service_root/scripts/check-practice-agent-bridge.mjs"
 node "$service_root/scripts/check-browser-crypto.mjs"
 node "$service_root/scripts/check-player-language-focus.mjs"
 node "$service_root/scripts/check-p1-accessibility.mjs"

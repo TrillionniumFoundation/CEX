@@ -153,6 +153,9 @@ PAPER_RAID_BFF_TEST_DATABASE_URL="$test_database_url" \
 PAPER_RAID_BFF_TEST_DATABASE_URL="$test_database_url" \
   flock -n "$cargo_gate" \
   cargo test --locked -p paper-raid-bff practice_http::tests::real_postgres_abandon_uses_stored_binding_after_external_revocation -- --exact
+PAPER_RAID_BFF_TEST_DATABASE_URL="$test_database_url" \
+  flock -n "$cargo_gate" \
+  cargo test --locked -p paper-raid-bff review_receipts::tests::real_postgres_practice_agent_bridge_owner_replay_restart_and_authority_boundary -- --exact
 
 revoked_before=$(sudo -n docker exec "$container_name" \
   psql --username paper_raid_bff --dbname paper_raid_bff --tuples-only --no-align \
@@ -207,5 +210,8 @@ PAPER_RAID_BFF_TEST_DATABASE_URL="$test_database_url" \
 PAPER_RAID_BFF_TEST_DATABASE_URL="$test_database_url" \
   flock -n "$cargo_gate" \
   cargo test --locked -p paper-raid-bff practice_http::tests::real_postgres_abandon_uses_stored_binding_after_external_revocation -- --exact
+PAPER_RAID_BFF_TEST_DATABASE_URL="$test_database_url" \
+  flock -n "$cargo_gate" \
+  cargo test --locked -p paper-raid-bff review_receipts::tests::real_postgres_practice_agent_bridge_owner_replay_restart_and_authority_boundary -- --exact
 
 echo "paper-raid-bff PostgreSQL restart/revoke gate: ok"

@@ -41,6 +41,14 @@ use crate::{
     config::{AgentBridgeQuotaConfig, AlphaIdentity, AlphaIdentityScope},
     error::AppError,
     hepta::{BrowserCommand, CommandName},
+    practice::{
+        PracticeBridgeTaskStateV1, PracticeExperimentResultV1, PracticeSessionV1, PracticeStageV1,
+        PRACTICE_UNRANKED_MODE,
+    },
+    practice_http::{
+        apply_agent_practice_transition, load_current_agent_practice, practice_agent_task_token,
+        PracticeAgentTransitionV1,
+    },
 };
 
 const PAIRING_GRANT_TTL_SECONDS: i64 = 300;
@@ -64,6 +72,14 @@ const DELIVERY_IDEMPOTENCY_KEY_DOMAIN: &str =
     "hepta.paper_raid.agent_bridge.delivery_idempotency_key.v1";
 const REVIEW_TASK_ID_DOMAIN: &str = "hepta.paper_raid.agent_bridge.review_task_id.v1";
 const REVIEW_EVALUATION_ID_DOMAIN: &str = "hepta.paper_raid.agent_bridge.review_evaluation_id.v1";
+const PRACTICE_TASK_QUERY_V1: &str = "hepta.paper_raid.agent_bridge.practice_task_query.v1";
+const PRACTICE_TASKS_V1: &str = "hepta.paper_raid.agent_bridge.practice_tasks.v1";
+const PRACTICE_TASK_V1: &str = "hepta.paper_raid.agent_bridge.practice_task.v1";
+const PRACTICE_MATERIALS_V1: &str = "hepta.paper_raid.agent_bridge.practice_materials.v1";
+const PRACTICE_CLAIM_REQUEST_V1: &str = "hepta.paper_raid.agent_bridge.practice_claim_request.v1";
+const PRACTICE_RESULT_REQUEST_V1: &str = "hepta.paper_raid.agent_bridge.practice_result_request.v1";
+const PRACTICE_TRANSITION_RESULT_V1: &str =
+    "hepta.paper_raid.agent_bridge.practice_transition_result.v1";
 const LEGACY_GOLDEN_EVALUATOR_MANIFEST_HASH: &str =
     "sha256:805ee4ad69fa1e56cebc0721711419d211cf0fe2090e294db25bf712f10c74f8";
 const LEGACY_GOLDEN_DATASET_MANIFEST_HASH: &str =
@@ -289,6 +305,29 @@ struct HealthReport {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct PracticeTaskQueryV1 {
+    schema: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PracticeClaimRequestV1 {
+    schema: String,
+    expected_version: u64,
+    task_token: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PracticeResultRequestV1 {
+    schema: String,
+    expected_version: u64,
+    task_token: String,
+    result_code: PracticeExperimentResultV1,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct InboxRequest {
     schema: String,
     paper_ids: Vec<Uuid>,
@@ -442,6 +481,7 @@ struct VerifiedAgentRequest {
     identity: AlphaIdentity,
     mapping: BridgeMapping,
     authoritative_binding: Value,
+    exactly_one_active_binding: bool,
     claim: AgentBridgeRequestProofV1,
     request_hash: [u8; 32],
     replay: Option<(u16, Vec<u8>)>,
@@ -768,6 +808,189 @@ pub async fn agent_health(
         "observed_at_unix": report.observed_at_unix
     });
     complete_agent_request(&state, &verified, StatusCode::OK, &value).await
+}
+
+pub async fn agent_practice_tasks(
+    State(state): State<AppState>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AppError> {
+    let verified = verify_agent_request(&state, Method::POST, &uri, &headers, &body).await?;
+    if let Some(response) = replay_response(&verified) {
+        return Ok(response);
+    }
+    ensure_practice_agent_admission(&verified)?;
+    let request: PracticeTaskQueryV1 = decode_json(&body, 1024)?;
+    if request.schema != PRACTICE_TASK_QUERY_V1 {
+        return Err(AppError::Invalid("invalid practice task query".into()));
+    }
+    let practice = load_current_agent_practice(
+        &state.pool,
+        &verified.mapping.subject_id,
+        verified.mapping.player_id,
+        verified.mapping.binding_id,
+    )
+    .await?;
+    let value = practice_task_projection(practice.as_ref(), Utc::now())?;
+    complete_agent_request(&state, &verified, StatusCode::OK, &value).await
+}
+
+pub async fn agent_practice_claim(
+    State(state): State<AppState>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AppError> {
+    let verified = verify_agent_request(&state, Method::POST, &uri, &headers, &body).await?;
+    if let Some(response) = replay_response(&verified) {
+        return Ok(response);
+    }
+    ensure_practice_agent_admission(&verified)?;
+    let request: PracticeClaimRequestV1 = decode_json(&body, 1024)?;
+    if request.schema != PRACTICE_CLAIM_REQUEST_V1
+        || request.expected_version == 0
+        || request.expected_version > JSON_SAFE_U64_MAX
+        || decode_digest(&request.task_token).is_err()
+    {
+        return Err(AppError::Invalid("invalid practice claim request".into()));
+    }
+    let receipt = apply_agent_practice_transition(
+        &state.pool,
+        &verified.mapping.subject_id,
+        verified.mapping.player_id,
+        verified.mapping.binding_id,
+        request.expected_version,
+        &request.task_token,
+        &agent_request_hash_label(&verified),
+        PracticeAgentTransitionV1::Claim,
+    )
+    .await?;
+    let value = json!({
+        "schema": PRACTICE_TRANSITION_RESULT_V1,
+        "operation": "claim",
+        "status": "claimed",
+        "from_version": receipt.from_version,
+        "version": receipt.to_version,
+    });
+    complete_agent_request(&state, &verified, StatusCode::OK, &value).await
+}
+
+pub async fn agent_practice_result(
+    State(state): State<AppState>,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AppError> {
+    let verified = verify_agent_request(&state, Method::POST, &uri, &headers, &body).await?;
+    if let Some(response) = replay_response(&verified) {
+        return Ok(response);
+    }
+    ensure_practice_agent_admission(&verified)?;
+    let request: PracticeResultRequestV1 = decode_json(&body, 1024)?;
+    if request.schema != PRACTICE_RESULT_REQUEST_V1
+        || request.expected_version == 0
+        || request.expected_version > JSON_SAFE_U64_MAX
+        || decode_digest(&request.task_token).is_err()
+    {
+        return Err(AppError::Invalid("invalid practice result request".into()));
+    }
+    let receipt = apply_agent_practice_transition(
+        &state.pool,
+        &verified.mapping.subject_id,
+        verified.mapping.player_id,
+        verified.mapping.binding_id,
+        request.expected_version,
+        &request.task_token,
+        &agent_request_hash_label(&verified),
+        PracticeAgentTransitionV1::Result(request.result_code),
+    )
+    .await?;
+    if receipt.result_code != Some(request.result_code) {
+        return Err(AppError::Internal);
+    }
+    let value = json!({
+        "schema": PRACTICE_TRANSITION_RESULT_V1,
+        "operation": "result",
+        "status": "completed",
+        "from_version": receipt.from_version,
+        "version": receipt.to_version,
+        "result_code": request.result_code,
+    });
+    complete_agent_request(&state, &verified, StatusCode::OK, &value).await
+}
+
+fn ensure_practice_agent_admission(verified: &VerifiedAgentRequest) -> Result<(), AppError> {
+    if !verified.exactly_one_active_binding {
+        return Err(AppError::Conflict(
+            "practice_requires_exactly_one_active_binding".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn agent_request_hash_label(verified: &VerifiedAgentRequest) -> String {
+    format!("sha256:{}", hex::encode(verified.request_hash))
+}
+
+fn practice_task_projection(
+    practice: Option<&PracticeSessionV1>,
+    now: DateTime<Utc>,
+) -> Result<Value, AppError> {
+    let Some(practice) = practice else {
+        return Ok(json!({
+            "schema": PRACTICE_TASKS_V1,
+            "mode": PRACTICE_UNRANKED_MODE,
+            "status": "absent",
+            "task": Value::Null,
+        }));
+    };
+    practice.validate().map_err(|_| AppError::Internal)?;
+    let expired = now >= practice.expires_at;
+    let completed = practice.bridge_task_state == PracticeBridgeTaskStateV1::Completed;
+    let task_visible = completed
+        || (!expired
+            && practice.stage == PracticeStageV1::ExperimentWaitingBridge
+            && matches!(
+                practice.bridge_task_state,
+                PracticeBridgeTaskStateV1::Pending | PracticeBridgeTaskStateV1::Claimed
+            ));
+    if !task_visible {
+        return Ok(json!({
+            "schema": PRACTICE_TASKS_V1,
+            "mode": PRACTICE_UNRANKED_MODE,
+            "status": if expired { "expired" } else { "not_ready" },
+            "task": Value::Null,
+        }));
+    }
+    Ok(json!({
+        "schema": PRACTICE_TASKS_V1,
+        "mode": PRACTICE_UNRANKED_MODE,
+        "status": "ready",
+        "task": {
+            "schema": PRACTICE_TASK_V1,
+            "kind": "evidence_audit_intro",
+            "state": practice.bridge_task_state,
+            "version": practice.version,
+            "task_token": practice_agent_task_token(practice)?,
+            "expires_at": practice.expires_at,
+            "materials": {
+                "schema": PRACTICE_MATERIALS_V1,
+                "claim": "The candidate result remains supported after the evidence audit.",
+                "baseline": "Compare the stated claim with the supplied observation summary.",
+                "observations": [
+                    "The cited observation and the claimed scope do not fully align.",
+                    "Run the bounded practice check and report only one allowed result code."
+                ],
+            },
+            "allowed_result_codes": [
+                "concern_confirmed",
+                "concern_not_detected",
+                "inconclusive"
+            ],
+            "result_code": practice.bridge_result_code,
+        },
+    }))
 }
 
 pub async fn agent_delivery_draft(
@@ -3916,7 +4139,8 @@ async fn verify_agent_request(
     if identity.player_id != mapping.player_id {
         return Err(AppError::Forbidden);
     }
-    let authoritative = authoritative_bridge_binding(state, &identity, &mapping).await?;
+    let (authoritative, exactly_one_active_binding) =
+        authoritative_bridge_binding(state, &identity, &mapping).await?;
     let public_key = authoritative
         .get("agent_public_key")
         .and_then(Value::as_str)
@@ -3946,6 +4170,7 @@ async fn verify_agent_request(
         identity,
         mapping,
         authoritative_binding: authoritative,
+        exactly_one_active_binding,
         claim,
         request_hash,
         replay,
@@ -4029,9 +4254,31 @@ async fn authoritative_bridge_binding(
     state: &AppState,
     identity: &AlphaIdentity,
     mapping: &BridgeMapping,
-) -> Result<Value, AppError> {
+) -> Result<(Value, bool), AppError> {
     let value = state.hepta.list_current_agent_bindings(identity).await?;
     let bindings = value.as_array().ok_or(AppError::Upstream)?;
+    let expected_player = mapping.player_id.to_string();
+    let mut seen = HashSet::new();
+    let mut active_count = 0_usize;
+    for binding in bindings {
+        let binding_id_text = binding
+            .get("binding_id")
+            .and_then(Value::as_str)
+            .ok_or(AppError::Upstream)?;
+        let binding_id = Uuid::parse_str(binding_id_text).map_err(|_| AppError::Upstream)?;
+        if binding_id.is_nil()
+            || binding_id.to_string() != binding_id_text
+            || !seen.insert(binding_id)
+            || binding.get("player_id").and_then(Value::as_str) != Some(expected_player.as_str())
+        {
+            return Err(AppError::Upstream);
+        }
+        match binding.get("status").and_then(Value::as_str) {
+            Some("active") => active_count += 1,
+            Some("revoked") => {}
+            _ => return Err(AppError::Upstream),
+        }
+    }
     let expected_binding = mapping.binding_id.to_string();
     let matches: Vec<&Value> = bindings
         .iter()
@@ -4072,7 +4319,7 @@ async fn authoritative_bridge_binding(
     .bind(mapping.binding_id)
     .execute(&state.pool)
     .await?;
-    Ok(binding.clone())
+    Ok((binding.clone(), active_count == 1))
 }
 
 async fn begin_agent_request_use(
@@ -4306,6 +4553,146 @@ mod tests {
             })
             .collect();
         assert_eq!(values.len(), 256);
+    }
+
+    #[test]
+    fn practice_agent_requests_are_minimal_and_reject_authority_fields() {
+        serde_json::from_value::<PracticeTaskQueryV1>(json!({
+            "schema": PRACTICE_TASK_QUERY_V1,
+        }))
+        .expect("bounded practice task query");
+        serde_json::from_value::<PracticeClaimRequestV1>(json!({
+            "schema": PRACTICE_CLAIM_REQUEST_V1,
+            "expected_version": 3,
+            "task_token": format!("sha256:{}", "a".repeat(64)),
+        }))
+        .expect("bounded practice claim");
+        serde_json::from_value::<PracticeResultRequestV1>(json!({
+            "schema": PRACTICE_RESULT_REQUEST_V1,
+            "expected_version": 4,
+            "task_token": format!("sha256:{}", "b".repeat(64)),
+            "result_code": "concern_confirmed",
+        }))
+        .expect("bounded practice result");
+        assert!(serde_json::from_value::<PracticeTaskQueryV1>(json!({
+            "schema": PRACTICE_TASK_QUERY_V1,
+            "expected_version": 3,
+        }))
+        .is_err());
+        assert!(serde_json::from_value::<PracticeClaimRequestV1>(json!({
+            "schema": PRACTICE_CLAIM_REQUEST_V1,
+            "expected_version": 3,
+            "task_token": format!("sha256:{}", "a".repeat(64)),
+            "result_code": "concern_confirmed",
+        }))
+        .is_err());
+
+        for forbidden in [
+            "practice_session_id",
+            "subject_id",
+            "player_id",
+            "binding_id",
+            "bridge_task_id",
+            "event_id",
+            "request_hash",
+            "result_hash",
+            "paper_project_id",
+            "activation_id",
+            "qualification_id",
+            "finality_receipt_hash",
+            "rank",
+            "reward",
+            "economy",
+        ] {
+            let mut hostile = json!({
+                "schema": PRACTICE_RESULT_REQUEST_V1,
+                "expected_version": 4,
+                "task_token": format!("sha256:{}", "b".repeat(64)),
+                "result_code": "concern_confirmed",
+            });
+            hostile[forbidden] = json!(Uuid::new_v4());
+            assert!(
+                serde_json::from_value::<PracticeResultRequestV1>(hostile).is_err(),
+                "accepted hostile practice field {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn practice_agent_projection_is_bounded_and_owner_opaque() {
+        let now = Utc::now();
+        let mut practice = PracticeSessionV1::new(
+            Uuid::new_v4(),
+            "practice-agent-owner".into(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            now,
+            now + chrono::Duration::minutes(20),
+        )
+        .expect("practice fixture");
+        practice.stage = PracticeStageV1::ExperimentWaitingBridge;
+        practice.version = 3;
+        practice.captain_plan = Some(crate::practice::CaptainPlanChoiceV1::AuditHighestRiskClaim);
+        practice.evidence_assessment =
+            Some(crate::practice::EvidenceAssessmentChoiceV1::CitationMismatch);
+        practice.validate().expect("waiting practice fixture");
+
+        let projected =
+            practice_task_projection(Some(&practice), now).expect("bounded practice projection");
+        assert_eq!(projected["schema"], PRACTICE_TASKS_V1);
+        assert_eq!(projected["mode"], PRACTICE_UNRANKED_MODE);
+        assert_eq!(projected["task"]["state"], "pending");
+        assert_eq!(projected["task"]["version"], 3);
+        assert!(decode_digest(
+            projected["task"]["task_token"]
+                .as_str()
+                .expect("opaque practice task token")
+        )
+        .is_ok());
+        let original_token = projected["task"]["task_token"]
+            .as_str()
+            .expect("original opaque task token");
+        let mut substituted = practice.clone();
+        substituted.practice_session_id = Uuid::new_v4();
+        substituted.bridge_task_id = Uuid::new_v4();
+        substituted
+            .validate()
+            .expect("same-version replacement fixture");
+        assert_ne!(
+            original_token,
+            practice_agent_task_token(&substituted).expect("replacement opaque task token"),
+            "same-version replacement reused the prior task token"
+        );
+        assert_eq!(
+            projected["task"]["allowed_result_codes"],
+            json!(["concern_confirmed", "concern_not_detected", "inconclusive"])
+        );
+        let encoded = serde_json::to_string(&projected).expect("serialize projection");
+        for forbidden in [
+            "practice_session_id",
+            "subject_id",
+            "player_id",
+            "binding_id",
+            "bridge_task_id",
+            "request_hash",
+            "result_hash",
+            "activation_eligible",
+            "qualification_eligible",
+            "scientific_finality_eligible",
+            "ranking_eligible",
+            "reward_eligible",
+            "economic_eligible",
+        ] {
+            assert!(
+                !encoded.contains(forbidden),
+                "projection leaked {forbidden}"
+            );
+        }
+
+        let absent = practice_task_projection(None, now).expect("absent projection");
+        assert_eq!(absent["status"], "absent");
+        assert!(absent["task"].is_null());
     }
 
     #[test]
