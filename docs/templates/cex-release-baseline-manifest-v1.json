@@ -14,7 +14,7 @@
     "cargo_lock_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   },
   "database": {
-    "migration_head": "0081_close_exact_authority_and_evidence_guards.sql",
+    "migration_head": "0082_close_provider_unknown_outcome_reconciliation.sql",
     "migration_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   },
   "build": {
@@ -34,6 +34,20 @@
     },
     {
       "name": "0066_add_invocation_ledger_contract.sql-contract",
+      "status": "pending",
+      "uri": null,
+      "sha256": null,
+      "waiver": null
+    },
+    {
+      "name": "0081_exact-authority-and-role-guards",
+      "status": "pending",
+      "uri": null,
+      "sha256": null,
+      "waiver": null
+    },
+    {
+      "name": "0082_provider-unknown-outcome-reconciliation",
       "status": "pending",
       "uri": null,
       "sha256": null,
