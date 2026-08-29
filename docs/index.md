@@ -28,6 +28,7 @@ Source presence, prose, a template, or a green run on another SHA never override
 - Clean-deployment acceptance: `clean-deployment-acceptance-v1.md`
 - SLO and recovery contract: `slo-recovery-contract-v1.md`
 - Protocol compatibility matrix: `protocol/version-compatibility-matrix-v1.md`
+- TRNM production credential contract: `trnm-production-credential-contract-v1.md`
 
 The active set is validated by `scripts/check-development-docs.py`. The exact repository identity and authority-set digests are emitted by `scripts/check-repository-integrity.py`.
 
