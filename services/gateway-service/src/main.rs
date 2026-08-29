@@ -12,9 +12,18 @@ use runtime_guard::ServiceKind;
 use shared_config::GatewayConfig;
 use shared_tracing::init_tracing;
 
+const SHARED_RUNTIME_GUARD_SERVICE_KINDS: [ServiceKind; 5] = [
+    ServiceKind::Gateway,
+    ServiceKind::Identity,
+    ServiceKind::Ledger,
+    ServiceKind::Execution,
+    ServiceKind::Audit,
+];
+
 #[tokio::main]
 async fn main() {
     init_tracing();
+    debug_assert!(SHARED_RUNTIME_GUARD_SERVICE_KINDS.contains(&ServiceKind::Gateway));
 
     let startup = match runtime_guard::enforce(ServiceKind::Gateway).await {
         Ok(startup) => startup,
