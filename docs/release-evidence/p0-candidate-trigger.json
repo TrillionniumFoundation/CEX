@@ -1,8 +1,8 @@
 {
   "schema": "cex.p0-candidate-trigger.v1",
   "plan": "CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
-  "sequence": 5,
-  "purpose": "Bind every authoritative P0 gate and the candidate evidence gate to one commit and tree.",
+  "sequence": 6,
+  "purpose": "Qualify the final v12 tree after workflow hygiene, cross-platform all-target compilation, durable evidence binding, and TRNM response-loss receipt recovery closure.",
   "qualification_scope": "repository-exact-money-control-plane",
   "production_authorization": "not_granted"
 }
