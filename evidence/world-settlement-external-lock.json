@@ -2,16 +2,19 @@
   "schema": "trnm_world_cex_settlement_external_lock_v1",
   "world": {
     "repository": "TrillionniumFoundation/Trillionnium-World",
-    "commit": "e6995fbd97a7e9d64950d13f066cb8c24d55f8c6",
-    "tree": "1197c3760fc3af5b5286c6dc18e2bc982923c1d0"
+    "branch": "fix/world-settlement-gap-closure-v1",
+    "commit": "fa25187b0529ca0258344c75a612d66b706752a0",
+    "tree": "2adfa36dbb305b29cd07344916a4e8e3e0b34bef"
   },
   "cex_owner": {
     "repository": "TrillionniumFoundation/CEX",
+    "branch": "fix/cex-settlement-receipt-lookup-v1",
     "commit": "12d1925e447be412d3c233da31330e71982362ca",
     "tree": "da130a2b883ff96c3f1aac8eee8f4a47e2f9afaf"
   },
   "promotion_effect": "none",
   "native_world_actions_run": false,
+  "trusted_settlement": false,
   "public_online": false,
   "public_player_market": false
 }
