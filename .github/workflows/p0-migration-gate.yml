@@ -12,6 +12,7 @@ on:
       - 'services/ledger-service/src/receipt_lookup.rs'
       - 'scripts/check-p0-migrations.py'
       - 'scripts/check-p0-migrations-postgres.sh'
+      - 'scripts/check-term-exchange-receipt-partial-upgrade-postgres.sh'
       - 'scripts/check-audit-source-baseline-postgres.sh'
       - 'scripts/check-ledger-operation-identity-postgres.sh'
       - 'scripts/check-invocation-ledger-contract-static.py'
@@ -88,6 +89,9 @@ jobs:
 
       - name: Fresh apply and P0 database assertions
         run: bash scripts/check-p0-migrations-postgres.sh
+
+      - name: Term Exchange receipt partial-upgrade regression
+        run: bash scripts/check-term-exchange-receipt-partial-upgrade-postgres.sh
 
       - name: Existing-row Audit baseline lifecycle
         run: bash scripts/check-audit-source-baseline-postgres.sh

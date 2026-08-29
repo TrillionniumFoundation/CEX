@@ -2,6 +2,45 @@ use super::*;
 
 const TRILLIONNIUM_MARKET_SIMULATOR_CONTRACT_VERSION: &str = "trillionnium_market_simulator_v1";
 
+/// Push a world economy event at most once.  World command handlers can be retried after a
+/// remote Ledger call has already completed; the event id is the durable projection key and must
+/// therefore be checked before mutating the append-only compatibility feed.
+fn push_world_economy_event_once(world: &mut WorldState, event: WorldEconomyEvent) -> bool {
+    if world
+        .world_economy_events
+        .iter()
+        .any(|existing| existing.economy_event_id == event.economy_event_id)
+    {
+        return false;
+    }
+    world.world_economy_events.push(event);
+    true
+}
+
+fn world_rejection_attempt(world: &WorldState, work_order_id: &str) -> usize {
+    world
+        .world_work_rejections
+        .iter()
+        .filter(|rejection| rejection.work_order_id == work_order_id)
+        .count()
+}
+
+fn world_reopen_attempt(world: &WorldState, work_order_id: &str) -> usize {
+    world
+        .world_work_reopens
+        .iter()
+        .filter(|reopen| reopen.work_order_id == work_order_id)
+        .count()
+}
+
+fn world_cancellation_attempt(world: &WorldState, work_order_id: &str) -> usize {
+    world
+        .world_work_cancellations
+        .iter()
+        .filter(|cancellation| cancellation.work_order_id == work_order_id)
+        .count()
+}
+
 fn world_market_tax_credits_for_price(price_credits: i64) -> i64 {
     (price_credits.max(1) / 20).max(1)
 }
@@ -11,6 +50,323 @@ fn world_seller_net_credits_for_price(price_credits: i64) -> i64 {
         .max(1)
         .saturating_sub(world_market_tax_credits_for_price(price_credits))
         .max(0)
+}
+
+/// A compatibility economy event is useful as a projection marker only when its immutable
+/// identity tuple is still intact.  Looking up an event by id alone is insufficient: pre-v12
+/// snapshots can contain a stale/corrupt marker (or a marker written before the typed receipt
+/// cutover), and that marker must never authorize a value-bearing retry.
+fn world_economy_event_matches(
+    event: &WorldEconomyEvent,
+    event_id: &str,
+    matrix_user_id: &str,
+    event_kind: &str,
+    subject_id: &str,
+    credits_delta: i64,
+    reputation_delta: i64,
+    created_at_epoch: i64,
+) -> bool {
+    event.economy_event_id == event_id
+        && event.matrix_user_id == matrix_user_id
+        && event.event_kind == event_kind
+        && event.subject_id == subject_id
+        && event.credits_delta == credits_delta
+        && event.reputation_delta == reputation_delta
+        && event.created_at_epoch == created_at_epoch
+}
+
+/// Return whether both immutable buyer-reserve and seller-settlement receipts authorize the
+/// purchase projection.  The legacy economy event is deliberately not consulted here; it is only
+/// an idempotent projection marker after the exact receipt pair has been proven.
+fn world_purchase_payment_receipts_active(world: &WorldState, purchase: &WorldPurchase) -> bool {
+    world_purchase_buyer_reserve_active(world, purchase)
+        && world_purchase_seller_settlement_active(world, purchase)
+}
+
+/// Resolve a purchase economy marker without treating the marker itself as Ledger authority.
+/// `Some(true)` means the exact receipt pair and event tuple match, `Some(false)` means an event
+/// with the deterministic id exists but is poisoned, and `None` means no marker exists yet.
+pub(super) fn world_purchase_projection_marker(
+    world: &WorldState,
+    purchase: &WorldPurchase,
+    event_id: &str,
+    matrix_user_id: &str,
+    event_kind: &str,
+    credits_delta: i64,
+    reputation_delta: i64,
+) -> Option<bool> {
+    let event = world
+        .world_economy_events
+        .iter()
+        .find(|event| event.economy_event_id == event_id)?;
+    let matches = world_purchase_payment_receipts_active(world, purchase)
+        && world_economy_event_matches(
+            event,
+            event_id,
+            matrix_user_id,
+            event_kind,
+            &purchase.purchase_id,
+            credits_delta,
+            reputation_delta,
+            purchase.created_at_epoch,
+        );
+    Some(matches)
+}
+
+/// Work delivery identity is derived from the immutable command tuple and the current reopen
+/// cycle.  Wall-clock seconds are deliberately excluded: a response-loss retry must address the
+/// same delivery row, while a later delivery after a reopen gets a fresh cycle identity even when
+/// the seller happens to submit identical text.
+pub(super) fn world_work_delivery_id(
+    work_order_id: &str,
+    matrix_user_id: &str,
+    reopen_attempt: usize,
+    body: &str,
+) -> String {
+    league_hash_id(
+        "world-delivery",
+        &format!("{work_order_id}:{matrix_user_id}:{reopen_attempt}:{body}"),
+    )
+}
+
+pub(super) fn legacy_world_work_delivery_id(
+    work_order_id: &str,
+    matrix_user_id: &str,
+    created_at_epoch: i64,
+) -> String {
+    league_hash_id(
+        "world-delivery",
+        &format!("{work_order_id}:{matrix_user_id}:{created_at_epoch}"),
+    )
+}
+
+fn world_work_delivery_tuple_matches(
+    delivery: &WorldWorkDelivery,
+    work_order_id: &str,
+    matrix_user_id: &str,
+    body: &str,
+) -> bool {
+    delivery.work_order_id == work_order_id
+        && delivery.matrix_user_id == matrix_user_id
+        && delivery.body == body
+}
+
+/// Find an exact delivery replay.  New rows use the deterministic identity above; the validated
+/// legacy branch lets an upgraded pre-v12 row be replayed without trusting an arbitrary matching
+/// body/id pair.  A legacy row is only adopted while the order is in a delivery terminal/hold
+/// state; after a reopen the cycle counter forces a new deterministic identity.
+pub(super) fn world_work_delivery_for_request<'a>(
+    world: &'a WorldState,
+    work_order_id: &str,
+    matrix_user_id: &str,
+    reopen_attempt: usize,
+    body: &str,
+    work_order_status: &str,
+) -> Option<&'a WorldWorkDelivery> {
+    let deterministic_id =
+        world_work_delivery_id(work_order_id, matrix_user_id, reopen_attempt, body);
+    if let Some(delivery) = world
+        .world_work_deliveries
+        .iter()
+        .find(|delivery| delivery.delivery_id == deterministic_id)
+    {
+        return world_work_delivery_tuple_matches(delivery, work_order_id, matrix_user_id, body)
+            .then_some(delivery);
+    }
+    if !matches!(work_order_status, "delivered" | "delivery_review_hold") {
+        return None;
+    }
+    world
+        .world_work_deliveries
+        .iter()
+        .filter(|delivery| {
+            world_work_delivery_tuple_matches(delivery, work_order_id, matrix_user_id, body)
+                && delivery.delivery_id
+                    == legacy_world_work_delivery_id(
+                        work_order_id,
+                        matrix_user_id,
+                        delivery.created_at_epoch,
+                    )
+        })
+        .max_by(|left, right| {
+            // Prefer a terminal replay, then the latest persisted attempt.  This ordering is
+            // deterministic even when a legacy snapshot contains duplicate rows.
+            (left.status == "delivered")
+                .cmp(&(right.status == "delivered"))
+                .then_with(|| left.created_at_epoch.cmp(&right.created_at_epoch))
+                .then_with(|| left.delivery_id.cmp(&right.delivery_id))
+        })
+}
+
+fn world_work_delivery_event_id(delivery: &WorldWorkDelivery) -> String {
+    league_hash_id(
+        "world-econ",
+        &format!(
+            "{}:{}:{}",
+            delivery.matrix_user_id, delivery.work_order_id, delivery.delivery_id
+        ),
+    )
+}
+
+fn legacy_world_work_delivery_event_id(delivery: &WorldWorkDelivery) -> String {
+    league_hash_id(
+        "world-econ",
+        &format!(
+            "{}:{}:{}",
+            delivery.matrix_user_id, delivery.work_order_id, delivery.created_at_epoch
+        ),
+    )
+}
+
+pub(super) fn world_acceptance_projection_marker(
+    world: &WorldState,
+    purchase: &WorldPurchase,
+    event_id: &str,
+    matrix_user_id: &str,
+    work_order_id: &str,
+    reputation_delta: i64,
+    acceptance_created_at_epoch: i64,
+) -> Option<bool> {
+    let event = world
+        .world_economy_events
+        .iter()
+        .find(|event| event.economy_event_id == event_id)?;
+    let matches = world_purchase_buyer_consume_completed(world, purchase)
+        && world_economy_event_matches(
+            event,
+            event_id,
+            matrix_user_id,
+            "work_accepted",
+            work_order_id,
+            0,
+            reputation_delta,
+            acceptance_created_at_epoch,
+        );
+    Some(matches)
+}
+
+/// Return the exact buyer-side amount that a purchase reserve/consume/refund is allowed to use.
+///
+/// `WorldPurchase.price_credits` is retained as a compatibility field, but only a positive
+/// integer is a value-bearing Ledger authority.  A non-positive value is represented by an
+/// explicit terminal skip and must never unlock a buyer progression gate.
+fn world_purchase_buyer_amount(purchase: &WorldPurchase) -> Option<i64> {
+    (purchase.price_credits > 0).then_some(purchase.price_credits)
+}
+
+/// Return the exact seller-side amount for settlement/chargeback operations.  A zero seller net
+/// is a valid no-value terminal outcome, not a progression-bearing settlement.
+fn world_purchase_seller_amount(purchase: &WorldPurchase) -> i64 {
+    world_seller_net_credits_for_price(purchase.price_credits)
+}
+
+fn world_receipt_allows_exact_operation(
+    receipt: &TermExchangeReceiptState,
+    expected_amount_credits: i64,
+    expected_term_id: &str,
+    allowed_statuses: &[&str],
+) -> bool {
+    if expected_amount_credits <= 0
+        || receipt.term_id != expected_term_id
+        || receipt.backend_id != term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID
+        || receipt.backend_kind != term_exchange_protocol::SettlementBackendKind::Cex
+        || receipt.progression_class
+            != term_exchange_protocol::ReceiptProgressionClass::ProgressionAllowed
+        || receipt.amount_credits != Some(expected_amount_credits)
+    {
+        return false;
+    }
+    serde_json::to_value(&receipt.status)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .is_some_and(|status| allowed_statuses.iter().any(|allowed| *allowed == status))
+}
+
+/// A seller chargeback may be skipped only when the deterministic seller net is zero and the
+/// receipt/status explicitly says `skipped_zero_seller_net`.  Generic `skipped_*` statuses are
+/// holds or precondition failures and must never clear a rejection/cancellation.
+fn world_receipt_is_zero_seller_net_skip(
+    receipt: &TermExchangeReceiptState,
+    expected_amount_credits: i64,
+) -> bool {
+    expected_amount_credits == 0
+        && receipt.term_id == "world_commerce_purchase"
+        && receipt.backend_id == term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID
+        && receipt.backend_kind == term_exchange_protocol::SettlementBackendKind::Cex
+        && receipt.progression_class
+            == term_exchange_protocol::ReceiptProgressionClass::TerminalSkip
+        && receipt.status == term_exchange_protocol::ReceiptStatus::SkippedZeroSellerNet
+        && receipt.amount_credits == Some(0)
+}
+
+pub(super) fn world_settlement_is_zero_seller_net_skip(
+    settlement: &LeagueLedgerSettlement,
+    expected_amount_credits: i64,
+) -> bool {
+    if expected_amount_credits != 0 || !settlement.terminal_skip() {
+        return false;
+    }
+    if let Some(receipt) = settlement.term_exchange_receipt.as_ref() {
+        return world_receipt_is_zero_seller_net_skip(receipt, expected_amount_credits);
+    }
+    settlement.status == "skipped_zero_seller_net" && settlement.amount_credits == Some(0)
+}
+
+pub(super) fn world_settlement_is_zero_reward_skip(
+    settlement: &LeagueLedgerSettlement,
+    expected_amount_credits: Option<i64>,
+) -> bool {
+    if expected_amount_credits != Some(0)
+        || !settlement.terminal_skip()
+        || settlement.status != "skipped_zero_reward"
+        || settlement.amount_credits != Some(0)
+    {
+        return false;
+    }
+    if let Some(receipt) = settlement.term_exchange_receipt.as_ref() {
+        return receipt.term_id == "world_contract_completion_settlement"
+            && receipt.backend_id == term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID
+            && receipt.backend_kind == term_exchange_protocol::SettlementBackendKind::Cex
+            && receipt.progression_class
+                == term_exchange_protocol::ReceiptProgressionClass::TerminalSkip
+            && receipt.status == term_exchange_protocol::ReceiptStatus::SkippedZeroReward
+            && receipt.amount_credits == Some(0);
+    }
+    true
+}
+
+/// Project a contract completion's Ledger outcome into retry-safe World status fields.
+///
+/// A mutable `completed_*` string is never sufficient evidence of a payout. Only an exact
+/// progression receipt (or an explicitly typed zero-reward skip) may enter a terminal completed
+/// state; every other outcome remains retryable/reconcilable.
+pub(super) fn world_contract_settlement_projection(
+    current_status: &str,
+    ledger_status: Option<&str>,
+    settlement_completed: bool,
+    zero_reward_skipped: bool,
+) -> (String, String) {
+    if settlement_completed {
+        return ("completed_settled".to_string(), "completed".to_string());
+    }
+    if zero_reward_skipped {
+        return (
+            "completed_no_reward".to_string(),
+            "completed_no_reward".to_string(),
+        );
+    }
+    match ledger_status {
+        Some("held_review") => ("review_hold".to_string(), "review_hold".to_string()),
+        Some("settled") | Some("duplicate") => (
+            "settlement_reconcile_required".to_string(),
+            "reconcile_required".to_string(),
+        ),
+        Some(_) => (
+            "settlement_blocked".to_string(),
+            "settlement_blocked".to_string(),
+        ),
+        None => (current_status.to_string(), "settlement_pending".to_string()),
+    }
 }
 
 pub(super) fn world_purchase_seller_settlement_active(
@@ -23,16 +379,29 @@ pub(super) fn world_purchase_seller_settlement_active(
         world,
         &reopen_settlement_intent_prefix,
     ) {
-        return world_receipt_allows_progression(receipt);
+        let expected = world_purchase_seller_amount(purchase);
+        return world_receipt_allows_exact_operation(
+            receipt,
+            expected,
+            "world_commerce_purchase",
+            &["settled", "duplicate"],
+        ) || world_receipt_is_zero_seller_net_skip(receipt, expected);
     }
     let settlement_intent_id = format!("world_purchase:grant:{}", purchase.purchase_id);
     if let Some(receipt) = world_term_exchange_receipt_for_intent(world, &settlement_intent_id) {
-        return world_receipt_allows_progression(receipt);
+        let expected = world_purchase_seller_amount(purchase);
+        return world_receipt_allows_exact_operation(
+            receipt,
+            expected,
+            "world_commerce_purchase",
+            &["settled", "duplicate"],
+        ) || world_receipt_is_zero_seller_net_skip(receipt, expected);
     }
-    matches!(
-        purchase.ledger_status.as_deref(),
-        Some("settled") | Some("duplicate") | Some("reopened_settled")
-    )
+    // Legacy status strings do not carry an authenticated amount.  They remain useful for
+    // diagnostics/read compatibility, but cannot unlock a value-bearing world action after the
+    // exact receipt cutover.
+    world_purchase_seller_amount(purchase) == 0
+        && purchase.ledger_status.as_deref() == Some("skipped_zero_seller_net")
 }
 
 pub(super) fn world_purchase_buyer_reserve_active(
@@ -41,19 +410,30 @@ pub(super) fn world_purchase_buyer_reserve_active(
 ) -> bool {
     let reserve_intent_id = format!("world_purchase:reserve:{}", purchase.purchase_id);
     if let Some(receipt) = world_term_exchange_receipt_for_intent(world, &reserve_intent_id) {
-        return world_receipt_allows_progression(receipt);
+        return world_purchase_buyer_amount(purchase).is_some_and(|expected| {
+            world_receipt_allows_exact_operation(
+                receipt,
+                expected,
+                "world_commerce_purchase",
+                &["reserved", "duplicate"],
+            )
+        });
     }
     let reopen_reserve_intent_prefix =
         format!("world_purchase_reopen_reserve:{}:", purchase.purchase_id);
     if let Some(receipt) =
         latest_world_term_exchange_receipt_for_intent_prefix(world, &reopen_reserve_intent_prefix)
     {
-        return world_receipt_allows_progression(receipt);
+        return world_purchase_buyer_amount(purchase).is_some_and(|expected| {
+            world_receipt_allows_exact_operation(
+                receipt,
+                expected,
+                "world_commerce_purchase",
+                &["reserved", "duplicate"],
+            )
+        });
     }
-    matches!(
-        purchase.buyer_ledger_status.as_deref(),
-        Some("reserved") | Some("duplicate") | Some("reopened_reserved")
-    )
+    false
 }
 
 pub(super) fn world_purchase_buyer_consume_completed(
@@ -62,36 +442,82 @@ pub(super) fn world_purchase_buyer_consume_completed(
 ) -> bool {
     let consume_intent_id = format!("world_purchase:consume:{}", purchase.purchase_id);
     if let Some(receipt) = world_term_exchange_receipt_for_intent(world, &consume_intent_id) {
-        return world_receipt_allows_progression(receipt);
+        return world_purchase_buyer_amount(purchase).is_some_and(|expected| {
+            world_receipt_allows_exact_operation(
+                receipt,
+                expected,
+                "world_commerce_purchase",
+                &["consumed", "duplicate"],
+            )
+        });
     }
-    matches!(
-        purchase.buyer_consume_status.as_deref(),
-        Some("consumed") | Some("duplicate")
-    )
+    false
 }
 
-fn world_purchase_buyer_refund_completed(
+fn world_purchase_buyer_refund_receipt<'a>(
+    world: &'a WorldState,
+    purchase: &WorldPurchase,
+    refund_scope: Option<&str>,
+) -> Option<&'a TermExchangeReceiptState> {
+    if let Some(scope) = refund_scope {
+        let refund_intent_id = format!("world_purchase:refund:{}:{}", purchase.purchase_id, scope);
+        return world_term_exchange_receipt_for_intent(world, &refund_intent_id);
+    }
+    let refund_intent_prefix = format!("world_purchase:refund:{}:", purchase.purchase_id);
+    latest_world_term_exchange_receipt_for_intent_prefix(world, &refund_intent_prefix)
+}
+
+pub(super) fn world_purchase_buyer_refund_completed(
     world: &WorldState,
     purchase: &WorldPurchase,
     refund_scope: Option<&str>,
 ) -> bool {
-    if let Some(scope) = refund_scope {
-        let refund_intent_id = format!("world_purchase:refund:{}:{}", purchase.purchase_id, scope);
-        if let Some(receipt) = world_term_exchange_receipt_for_intent(world, &refund_intent_id) {
-            return world_receipt_allows_progression(receipt);
-        }
-    } else {
-        let refund_intent_prefix = format!("world_purchase:refund:{}:", purchase.purchase_id);
-        if let Some(receipt) =
-            latest_world_term_exchange_receipt_for_intent_prefix(world, &refund_intent_prefix)
-        {
-            return world_receipt_allows_progression(receipt);
-        }
-    }
-    matches!(purchase.buyer_consume_status.as_deref(), Some("refunded"))
+    world_purchase_buyer_amount(purchase).is_some_and(|expected| {
+        world_purchase_buyer_refund_receipt(world, purchase, refund_scope).is_some_and(|receipt| {
+            world_receipt_allows_exact_operation(
+                receipt,
+                expected,
+                "world_commerce_purchase",
+                &["refunded", "duplicate"],
+            )
+        })
+    })
 }
 
-fn world_purchase_seller_chargeback_cleared(
+/// Reuse a previously persisted buyer-refund receipt when a rejection/cancellation is retried
+/// only for the seller chargeback leg.  The old implementation synthesized a `refunded` status
+/// with no amount or receipt, which let a retry mint a progression decision from compatibility
+/// fields alone.  A retry is valid only when the immutable typed receipt proves the exact price.
+fn world_replay_buyer_refund_settlement(
+    world: &WorldState,
+    purchase: &WorldPurchase,
+    refund_scope: &str,
+) -> Option<LeagueLedgerSettlement> {
+    let expected_amount_credits = world_purchase_buyer_amount(purchase)?;
+    let receipt = world_purchase_buyer_refund_receipt(world, purchase, Some(refund_scope))?;
+    if !world_receipt_allows_exact_operation(
+        receipt,
+        expected_amount_credits,
+        "world_commerce_purchase",
+        &["refunded", "duplicate"],
+    ) {
+        return None;
+    }
+    Some(LeagueLedgerSettlement {
+        status: "refunded".to_string(),
+        account_id: purchase.buyer_ledger_account_id.clone(),
+        entry_id: receipt
+            .ledger_entry_id
+            .clone()
+            .or_else(|| purchase.buyer_consume_entry_id.clone()),
+        balance_after: purchase.buyer_consume_balance_after,
+        error: None,
+        amount_credits: receipt.amount_credits,
+        term_exchange_receipt: Some(receipt.clone()),
+    })
+}
+
+pub(super) fn world_purchase_seller_chargeback_cleared(
     world: &WorldState,
     purchase: &WorldPurchase,
     chargeback_scope: Option<&str>,
@@ -102,7 +528,13 @@ fn world_purchase_seller_chargeback_cleared(
             purchase.purchase_id, scope
         );
         if let Some(receipt) = world_term_exchange_receipt_for_intent(world, &consume_intent_id) {
-            return world_receipt_allows_progression_or_terminal_skip(receipt);
+            let expected = world_purchase_seller_amount(purchase);
+            return world_receipt_allows_exact_operation(
+                receipt,
+                expected,
+                "world_commerce_purchase",
+                &["seller_chargeback_consumed", "duplicate"],
+            ) || world_receipt_is_zero_seller_net_skip(receipt, expected);
         }
     } else {
         let consume_intent_prefix = format!(
@@ -112,13 +544,17 @@ fn world_purchase_seller_chargeback_cleared(
         if let Some(receipt) =
             latest_world_term_exchange_receipt_for_intent_prefix(world, &consume_intent_prefix)
         {
-            return world_receipt_allows_progression_or_terminal_skip(receipt);
+            let expected = world_purchase_seller_amount(purchase);
+            return world_receipt_allows_exact_operation(
+                receipt,
+                expected,
+                "world_commerce_purchase",
+                &["seller_chargeback_consumed", "duplicate"],
+            ) || world_receipt_is_zero_seller_net_skip(receipt, expected);
         }
     }
-    matches!(
-        purchase.ledger_status.as_deref(),
-        Some("seller_chargeback_consumed") | Some("skipped_zero_seller_net")
-    )
+    world_purchase_seller_amount(purchase) == 0
+        && purchase.ledger_status.as_deref() == Some("skipped_zero_seller_net")
 }
 
 fn world_purchase_seller_chargeback_recoverable_hold(
@@ -143,8 +579,12 @@ fn world_purchase_seller_chargeback_recoverable_hold(
                 .then_with(|| left.receipt_id.cmp(&right.receipt_id))
         })
         .map(|receipt| {
-            receipt.progression_class
-                == term_exchange_protocol::ReceiptProgressionClass::RecoverableHold
+            receipt.term_id == "world_commerce_purchase"
+                && receipt.backend_id == term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID
+                && receipt.backend_kind == term_exchange_protocol::SettlementBackendKind::Cex
+                && receipt.progression_class
+                    == term_exchange_protocol::ReceiptProgressionClass::RecoverableHold
+                && receipt.amount_credits == Some(world_purchase_seller_amount(purchase))
         })
         .unwrap_or(false)
 }
@@ -171,10 +611,17 @@ pub(super) fn world_work_reopen_reserve_completed(
             world,
             &reopen_reserve_intent_prefix,
         ) {
-            return world_receipt_allows_progression(receipt);
+            return world_purchase_buyer_amount(purchase).is_some_and(|expected| {
+                world_receipt_allows_exact_operation(
+                    receipt,
+                    expected,
+                    "world_commerce_purchase",
+                    &["reserved", "duplicate"],
+                )
+            });
         }
     }
-    matches!(reopen.reserve_status.as_str(), "reserved" | "duplicate")
+    false
 }
 
 fn world_purchase_for_work_order<'a>(
@@ -220,7 +667,7 @@ pub(super) fn world_work_rejection_refund_completed(
     rejection: &WorldWorkRejection,
 ) -> bool {
     let Some(purchase) = world_purchase_for_work_order(world, &rejection.work_order_id) else {
-        return rejection.refund_status == "refunded";
+        return false;
     };
     world_purchase_buyer_refund_completed(world, purchase, Some(&rejection.rejection_id))
 }
@@ -230,7 +677,7 @@ pub(super) fn world_work_cancellation_refund_completed(
     cancellation: &WorldWorkCancellation,
 ) -> bool {
     let Some(purchase) = world_purchase_for_work_order(world, &cancellation.work_order_id) else {
-        return cancellation.refund_status == "refunded";
+        return false;
     };
     world_purchase_buyer_refund_completed(world, purchase, Some(&cancellation.cancellation_id))
 }
@@ -240,19 +687,26 @@ fn world_term_exchange_receipt_for_intent<'a>(
     intent_id: &str,
 ) -> Option<&'a TermExchangeReceiptState> {
     let receipt_id = format!("receipt:{intent_id}");
+    if let Some(canonical) = world.world_term_exchange_receipts.get(&receipt_id) {
+        // A canonical receipt key is an immutable identity binding.  Never fall back to another
+        // row when that key has been poisoned with a different intent; doing so could authorize
+        // a value-bearing operation from unrelated evidence.
+        if canonical.intent_id != intent_id || canonical.receipt_id != receipt_id {
+            return None;
+        }
+    }
     world
         .world_term_exchange_receipts
-        .get(&receipt_id)
-        .or_else(|| {
-            world
-                .world_term_exchange_receipts
-                .values()
-                .filter(|receipt| receipt.intent_id == intent_id)
-                .max_by(|left, right| {
-                    left.finalized_at_epoch
-                        .cmp(&right.finalized_at_epoch)
-                        .then_with(|| left.receipt_id.cmp(&right.receipt_id))
-                })
+        .values()
+        // The receipt id is part of the immutable operation identity.  A row with the
+        // right intent but a non-canonical receipt id is legacy/corrupt evidence and must
+        // not be selected as a value-authorizing fallback (especially when the canonical
+        // map key has been poisoned or removed).
+        .filter(|receipt| receipt.intent_id == intent_id && receipt.receipt_id == receipt_id)
+        .max_by(|left, right| {
+            left.finalized_at_epoch
+                .cmp(&right.finalized_at_epoch)
+                .then_with(|| left.receipt_id.cmp(&right.receipt_id))
         })
 }
 
@@ -263,7 +717,10 @@ fn latest_world_term_exchange_receipt_for_intent_prefix<'a>(
     world
         .world_term_exchange_receipts
         .values()
-        .filter(|receipt| receipt.intent_id.starts_with(intent_prefix))
+        .filter(|receipt| {
+            receipt.intent_id.starts_with(intent_prefix)
+                && receipt.receipt_id == format!("receipt:{}", receipt.intent_id)
+        })
         .max_by(|left, right| {
             left.finalized_at_epoch
                 .cmp(&right.finalized_at_epoch)
@@ -271,38 +728,430 @@ fn latest_world_term_exchange_receipt_for_intent_prefix<'a>(
         })
 }
 
-fn world_receipt_allows_progression(receipt: &TermExchangeReceiptState) -> bool {
-    receipt.progression_class == term_exchange_protocol::ReceiptProgressionClass::ProgressionAllowed
-}
-
-fn world_receipt_allows_progression_or_terminal_skip(receipt: &TermExchangeReceiptState) -> bool {
-    matches!(
-        receipt.progression_class,
-        term_exchange_protocol::ReceiptProgressionClass::ProgressionAllowed
-            | term_exchange_protocol::ReceiptProgressionClass::TerminalSkip
-    )
-}
-
 pub(super) fn world_contract_completion_released(
     world: &WorldState,
     completion: &WorldContractCompletion,
 ) -> bool {
+    let Ok(expected_amount_credits) =
+        whole_credits_from_compatibility_amount(completion.reward_amount)
+    else {
+        return false;
+    };
     let intent_id = format!("world_contract_completion:{}", completion.completion_id);
     if let Some(receipt) = world_term_exchange_receipt_for_intent(world, &intent_id) {
-        return world_receipt_allows_progression_or_terminal_skip(receipt);
+        return world_receipt_allows_exact_operation(
+            receipt,
+            expected_amount_credits,
+            "world_contract_completion_settlement",
+            &["settled", "duplicate"],
+        ) || (expected_amount_credits == 0
+            && receipt.term_id == "world_contract_completion_settlement"
+            && receipt.backend_id == term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID
+            && receipt.backend_kind == term_exchange_protocol::SettlementBackendKind::Cex
+            && receipt.progression_class
+                == term_exchange_protocol::ReceiptProgressionClass::TerminalSkip
+            && receipt.status == term_exchange_protocol::ReceiptStatus::SkippedZeroReward
+            && receipt.amount_credits == Some(0));
     }
-    matches!(
-        completion.ledger_status.as_deref(),
-        Some("settled") | Some("duplicate") | Some("skipped_zero_reward")
+    false
+}
+
+/// Compare the immutable tuple bound to a deterministic contract-completion id.  A matching hash
+/// with a different contract, actor, or report body is an idempotency collision and must never be
+/// allowed to overwrite or settle the existing completion row.
+pub(super) fn world_contract_completion_identity_matches(
+    completion: &WorldContractCompletion,
+    contract_id: &str,
+    matrix_user_id: &str,
+    body: &str,
+) -> bool {
+    completion.contract_id == contract_id
+        && completion.matrix_user_id == matrix_user_id
+        && completion.body == body
+}
+
+pub(super) fn world_contract_completion_id_collision_response(
+    completion_id: &str,
+    error: &'static str,
+) -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(json!({
+            "error": error,
+            "completion_id": completion_id,
+        })),
+    )
+        .into_response()
+}
+
+/// Resolve a contract completion persisted by the pre-v12 routes.
+///
+/// Those routes derived completion ids from the wall-clock second.  The timestamp is no longer
+/// available in a retry request, so look up only a row whose immutable contract/actor/body tuple
+/// matches and whose id can be recomputed from its persisted creation timestamp.  Both the HTTP
+/// world-contract endpoint and the Trillionnium tactics endpoint had distinct legacy prefixes;
+/// accept either so an upgrade never creates a second Ledger intent for the same report.
+fn legacy_world_contract_completion_for_prefixes(
+    world: &WorldState,
+    contract_id: &str,
+    matrix_user_id: &str,
+    body: &str,
+    legacy_prefixes: &[&str],
+) -> Option<WorldContractCompletion> {
+    world
+        .world_contract_completions
+        .iter()
+        .filter(|completion| {
+            completion.contract_id == contract_id
+                && completion.matrix_user_id == matrix_user_id
+                && completion.body == body
+        })
+        .filter(|completion| {
+            legacy_prefixes.iter().any(|prefix| {
+                league_hash_id(
+                    prefix,
+                    &format!("{}:{}:{}", contract_id, completion.created_at_epoch, body),
+                ) == completion.completion_id
+            })
+        })
+        .max_by(|left, right| {
+            world_contract_completion_replay_priority(world, left)
+                .cmp(&world_contract_completion_replay_priority(world, right))
+                .then_with(|| left.created_at_epoch.cmp(&right.created_at_epoch))
+                .then_with(|| left.completion_id.cmp(&right.completion_id))
+        })
+        .cloned()
+}
+
+fn world_contract_completion_replay_priority(
+    world: &WorldState,
+    completion: &WorldContractCompletion,
+) -> u8 {
+    let intent_id = format!("world_contract_completion:{}", completion.completion_id);
+    let receipt_priority = world
+        .world_term_exchange_receipts
+        .values()
+        .filter(|receipt| {
+            receipt.intent_id == intent_id && receipt.receipt_id == format!("receipt:{intent_id}")
+        })
+        .map(|receipt| match receipt.status {
+            term_exchange_protocol::ReceiptStatus::Settled
+            | term_exchange_protocol::ReceiptStatus::ApprovedRelease
+            | term_exchange_protocol::ReceiptStatus::Duplicate
+            | term_exchange_protocol::ReceiptStatus::SkippedZeroReward => 3,
+            _ => 2,
+        })
+        .max()
+        .unwrap_or(0);
+    if receipt_priority > 0 {
+        return receipt_priority;
+    }
+    match completion.ledger_status.as_deref() {
+        Some("settled") | Some("approved_release") | Some("duplicate") => 1,
+        _ => 0,
+    }
+}
+
+/// Resolve either legacy completion prefix.  Kept as a compatibility helper for callers/tests
+/// that do not know which historical route produced the row.
+#[allow(dead_code)]
+pub(super) fn legacy_world_contract_completion_for_request(
+    world: &WorldState,
+    contract_id: &str,
+    matrix_user_id: &str,
+    body: &str,
+) -> Option<WorldContractCompletion> {
+    legacy_world_contract_completion_for_prefixes(
+        world,
+        contract_id,
+        matrix_user_id,
+        body,
+        &[
+            "world-contract-completion",
+            "world-trillionnium-task-completion",
+        ],
     )
 }
 
-fn world_contract_completion_final(contract: &WorldContract) -> bool {
-    matches!(contract.status.as_str(), "completed_settled")
-        || matches!(
-            contract.cex_status.as_deref(),
-            Some("completed") | Some("completed_no_reward")
+pub(super) fn legacy_world_contract_completion_for_legacy_prefix(
+    world: &WorldState,
+    contract_id: &str,
+    matrix_user_id: &str,
+    body: &str,
+    legacy_prefix: &str,
+) -> Option<WorldContractCompletion> {
+    legacy_world_contract_completion_for_prefixes(
+        world,
+        contract_id,
+        matrix_user_id,
+        body,
+        &[legacy_prefix],
+    )
+}
+
+fn merge_world_contract_completion_optional_fields(
+    target: &mut WorldContractCompletion,
+    source: &WorldContractCompletion,
+) {
+    if target.ledger_status.is_none() {
+        target.ledger_status = source.ledger_status.clone();
+    }
+    if target.ledger_account_id.is_none() {
+        target.ledger_account_id = source.ledger_account_id.clone();
+    }
+    if target.ledger_entry_id.is_none() {
+        target.ledger_entry_id = source.ledger_entry_id.clone();
+    }
+    if target.ledger_balance_after.is_none() {
+        target.ledger_balance_after = source.ledger_balance_after;
+    }
+    if target.ledger_error.is_none() {
+        target.ledger_error = source.ledger_error.clone();
+    }
+}
+
+fn hydrate_world_contract_completion_from_receipt(
+    world: &WorldState,
+    completion: &mut WorldContractCompletion,
+) {
+    let intent_id = format!("world_contract_completion:{}", completion.completion_id);
+    let Some(receipt) = world_term_exchange_receipt_for_intent(world, &intent_id) else {
+        return;
+    };
+    let status = serde_json::to_value(receipt.status.clone())
+        .ok()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned));
+    if !matches!(
+        completion.ledger_status.as_deref(),
+        Some("settled") | Some("duplicate") | Some("skipped_zero_reward")
+    ) {
+        completion.ledger_status = status;
+        completion.ledger_error = None;
+    }
+    if completion.ledger_entry_id.is_none() {
+        completion.ledger_entry_id = receipt.ledger_entry_id.clone();
+    }
+}
+
+/// Merge the result of a world-contract Ledger settlement into the compatibility projection.
+///
+/// Completion requests release the world lock while calling Ledger, so two requests can finish
+/// in either order.  The old inline projection replaced the completion row and contract status
+/// unconditionally; a late hold/failure could therefore downgrade a previously settled reward.
+/// This helper serializes the final projection under the world lock, preserves an exact terminal
+/// receipt, and applies the reward projection at most once via its economy-event id.
+pub(super) fn merge_world_contract_completion_settlement(
+    league: &mut LeagueState,
+    contract: &WorldContract,
+    incoming_completion: &WorldContractCompletion,
+    settlement: &LeagueLedgerSettlement,
+    settlement_completed: bool,
+    settlement_zero_reward_skipped: bool,
+) -> WorldContractCompletion {
+    // Store the typed receipt first.  `record_world_term_exchange_receipt` is monotonic, so a
+    // delayed hold cannot poison an already-final receipt for this intent.
+    record_world_term_exchange_receipt(&mut league.world, settlement.term_exchange_receipt.clone());
+
+    let existing_index = league
+        .world
+        .world_contract_completions
+        .iter()
+        .rposition(|existing| existing.completion_id == incoming_completion.completion_id);
+    let existing_completion = existing_index
+        .and_then(|index| league.world.world_contract_completions.get(index).cloned());
+    let existing_terminal = existing_completion
+        .as_ref()
+        .is_some_and(|existing| world_contract_completion_released(&league.world, existing));
+
+    let completion = if existing_terminal {
+        let mut existing = existing_completion
+            .expect("existing terminal completion must be present at its indexed position");
+        // Keep the first terminal payload authoritative, but allow a response-loss retry to
+        // hydrate missing Ledger metadata (entry id/status) from its receipt or duplicate reply.
+        merge_world_contract_completion_optional_fields(&mut existing, incoming_completion);
+        hydrate_world_contract_completion_from_receipt(&league.world, &mut existing);
+        existing
+    } else {
+        incoming_completion.clone()
+    };
+
+    if let Some(index) = existing_index {
+        if let Some(stored) = league.world.world_contract_completions.get_mut(index) {
+            *stored = completion.clone();
+        }
+    } else {
+        league
+            .world
+            .world_contract_completions
+            .push(completion.clone());
+    }
+
+    let expected_reward_credits =
+        whole_credits_from_compatibility_amount(completion.reward_amount).ok();
+    // If a prior terminal receipt was already present, use it as the authority even when this
+    // request received a transient hold.  Otherwise the current settlement flags determine the
+    // transition.
+    let canonical_terminal = existing_terminal
+        || (settlement_completed || settlement_zero_reward_skipped)
+            && world_contract_completion_released(&league.world, &completion);
+    let canonical_zero_reward_skipped = canonical_terminal
+        && expected_reward_credits == Some(0)
+        && world_contract_completion_released(&league.world, &completion);
+    let canonical_reward_settled = canonical_terminal && !canonical_zero_reward_skipped;
+    // Tactics-created contracts predate the generic HTTP completion route and used the
+    // `world-trillionnium-task-reward` projection id/shape.  Keep that marker authoritative when
+    // recovering such a row through either route, while still recognizing the newer generic
+    // `world-contract-reward` marker.  Without the dual lookup, a route hand-off could credit the
+    // player twice even though the Ledger intent/receipt was already idempotent.
+    let task_reward_projection = contract.task_id.starts_with("trillionnium-task:");
+    let canonical_reward_event_id =
+        league_hash_id("world-contract-reward", &completion.completion_id);
+    let legacy_reward_event_id =
+        league_hash_id("world-trillionnium-task-reward", &completion.completion_id);
+    let canonical_reputation_delta = (completion.score / 8.0).round() as i64;
+    let canonical_rating_delta = ((completion.score - 50.0) / 3.0).round() as i64;
+    let legacy_reputation_delta = (completion.score / 12.0).round() as i64;
+    let legacy_rating_delta = ((completion.score - 50.0) / 4.0).round() as i64;
+    let canonical_marker = league.world.world_economy_events.iter().any(|event| {
+        world_economy_event_matches(
+            event,
+            &canonical_reward_event_id,
+            &completion.matrix_user_id,
+            "world_contract_reward",
+            &contract.contract_id,
+            expected_reward_credits.unwrap_or_default(),
+            canonical_reputation_delta,
+            completion.created_at_epoch,
         )
+    });
+    let legacy_marker = league.world.world_economy_events.iter().any(|event| {
+        world_economy_event_matches(
+            event,
+            &legacy_reward_event_id,
+            &completion.matrix_user_id,
+            "trillionnium_task_reward",
+            &contract.contract_id,
+            expected_reward_credits.unwrap_or_default(),
+            legacy_reputation_delta,
+            completion.created_at_epoch,
+        )
+    });
+    let completion_reward_already_projected = canonical_marker || legacy_marker;
+    let completion_reward_event_id =
+        if (task_reward_projection && !canonical_marker) || legacy_marker {
+            legacy_reward_event_id.clone()
+        } else {
+            canonical_reward_event_id.clone()
+        };
+    let projection_reputation_delta = if completion_reward_event_id == legacy_reward_event_id {
+        legacy_reputation_delta
+    } else {
+        canonical_reputation_delta
+    };
+    let projection_rating_delta = if completion_reward_event_id == legacy_reward_event_id {
+        legacy_rating_delta
+    } else {
+        canonical_rating_delta
+    };
+    let projection_event_kind = if completion_reward_event_id == legacy_reward_event_id {
+        "trillionnium_task_reward"
+    } else {
+        "world_contract_reward"
+    };
+
+    if canonical_reward_settled
+        && expected_reward_credits.is_some_and(|amount| amount > 0)
+        && !completion_reward_already_projected
+    {
+        let amount_credits = expected_reward_credits
+            .expect("canonical world contract reward must carry an exact amount");
+        let matrix_user_id = completion.matrix_user_id.clone();
+        if exact_credits_to_legacy_display(amount_credits).is_some() {
+            let mut player = ensure_league_player(league, &matrix_user_id, None);
+            if let Some(next) = checked_legacy_display_add(player.earned_credits, amount_credits) {
+                player.earned_credits = next;
+            }
+            player.xp = player.xp.saturating_add(completion.score.round() as i64);
+            player.reputation = player
+                .reputation
+                .saturating_add(projection_reputation_delta);
+            player.rating = player.rating.saturating_add(projection_rating_delta);
+            league
+                .players_by_matrix_user
+                .insert(matrix_user_id.clone(), player);
+        }
+
+        let indexes = build_world_indexes(&league.world);
+        let asset_delta = (completion.score / 5.0).round() as i64;
+        if let Some(asset_index) = indexes.latest_asset_index_for_owner(&matrix_user_id) {
+            let asset = &mut league.world.world_assets[asset_index];
+            asset.value_score = asset.value_score.saturating_add(asset_delta.max(1));
+            asset.upgrade_points = asset.upgrade_points.saturating_add(asset_delta.max(1));
+            asset.upgrade_level = asset
+                .upgrade_level
+                .max(1)
+                .saturating_add((asset.upgrade_points / 60).max(0));
+            asset.last_upgrade_kind = Some("contract_completion".to_string());
+            asset.status = "upgraded_by_contract".to_string();
+        } else {
+            league.world.world_assets.push(WorldAsset {
+                asset_id: league_hash_id("world-asset", &completion.completion_id),
+                owner_matrix_user_id: matrix_user_id.clone(),
+                location_id: contract.location_id.clone(),
+                asset_kind: "contract_proof".to_string(),
+                name: "World Contract Proof".to_string(),
+                status: "active".to_string(),
+                value_score: asset_delta.max(1),
+                upgrade_level: 1,
+                upgrade_points: asset_delta.max(1),
+                last_upgrade_kind: Some("contract_completion".to_string()),
+                created_at_epoch: completion.created_at_epoch,
+            });
+        }
+        push_world_economy_event_once(
+            &mut league.world,
+            WorldEconomyEvent {
+                economy_event_id: completion_reward_event_id,
+                matrix_user_id,
+                event_kind: projection_event_kind.to_string(),
+                subject_id: contract.contract_id.clone(),
+                credits_delta: amount_credits,
+                reputation_delta: projection_reputation_delta,
+                created_at_epoch: completion.created_at_epoch,
+            },
+        );
+    }
+
+    let indexes = build_world_indexes(&league.world);
+    if let Some(contract_index) = indexes.contract_index(&contract.contract_id) {
+        let mut stored_contract = league.world.world_contracts[contract_index].clone();
+        let (projected_status, projected_cex_status) = if canonical_terminal {
+            world_contract_settlement_projection(
+                &stored_contract.status,
+                completion.ledger_status.as_deref(),
+                canonical_reward_settled,
+                canonical_zero_reward_skipped,
+            )
+        } else {
+            world_contract_settlement_projection(
+                &stored_contract.status,
+                completion.ledger_status.as_deref(),
+                settlement_completed,
+                settlement_zero_reward_skipped,
+            )
+        };
+        stored_contract.status = projected_status;
+        stored_contract.cex_status = Some(projected_cex_status);
+        if canonical_reward_settled && !completion_reward_already_projected {
+            let asset_delta = (completion.score / 5.0).round() as i64;
+            stored_contract.value_score = stored_contract
+                .value_score
+                .saturating_add(asset_delta.max(1));
+        }
+        indexes.replace_contract_by_id(&mut league.world, &stored_contract);
+    }
+
+    completion
 }
 
 fn world_market_simulation_json(world: &WorldState, listing: &WorldListing, now: i64) -> Value {
@@ -323,16 +1172,31 @@ fn world_market_simulation_json(world: &WorldState, listing: &WorldListing, now:
             candidate.company_id == listing.company_id && candidate.status == "listed"
         })
         .count() as i64;
-    let demand_premium = ((recent_company_purchase_count * base_price) / 20).clamp(0, 50);
-    let scarcity_premium = ((3 - active_company_listing_count).max(0) * 2).clamp(0, 12);
+    let demand_premium = (recent_company_purchase_count
+        .saturating_mul(base_price)
+        .saturating_div(20))
+    .clamp(0, 50);
+    let scarcity_premium = (3_i64
+        .saturating_sub(active_company_listing_count)
+        .max(0)
+        .saturating_mul(2))
+    .clamp(0, 12);
     let quality_premium = (listing.quality_score / 25).clamp(0, 20);
-    let dynamic_price_credits =
-        (base_price + demand_premium + scarcity_premium + quality_premium).max(1);
+    let dynamic_price_credits = base_price
+        .saturating_add(demand_premium)
+        .saturating_add(scarcity_premium)
+        .saturating_add(quality_premium)
+        .max(1);
     let market_tax_credits = world_market_tax_credits_for_price(dynamic_price_credits);
     let seller_net_credits = world_seller_net_credits_for_price(dynamic_price_credits);
-    let demand_index = (100 + recent_company_purchase_count * 8 + quality_premium).clamp(50, 200);
-    let scarcity_index =
-        (100 + scarcity_premium * 5 - active_company_listing_count * 2).clamp(40, 180);
+    let demand_index = 100_i64
+        .saturating_add(recent_company_purchase_count.saturating_mul(8))
+        .saturating_add(quality_premium)
+        .clamp(50, 200);
+    let scarcity_index = 100_i64
+        .saturating_add(scarcity_premium.saturating_mul(5))
+        .saturating_sub(active_company_listing_count.saturating_mul(2))
+        .clamp(40, 180);
     json!({
         "contract_version": TRILLIONNIUM_MARKET_SIMULATOR_CONTRACT_VERSION,
         "status": "priced",
@@ -446,8 +1310,10 @@ pub(super) async fn upgrade_world_asset_inner(
         } else {
             0
         };
-        let points_after = points_before + value_delta;
-        let level_after = level_before.max(1) + (points_after / 80) - (points_before / 80);
+        let points_after = points_before.saturating_add(value_delta);
+        let level_after = level_before
+            .max(1)
+            .saturating_add((points_after / 80).saturating_sub(points_before / 80));
         let upgrade_status = if judgement.payout_status == "eligible" {
             "applied".to_string()
         } else {
@@ -455,7 +1321,7 @@ pub(super) async fn upgrade_world_asset_inner(
         };
         if value_delta > 0 {
             let asset = &mut league.world.world_assets[asset_index];
-            asset.value_score += value_delta;
+            asset.value_score = asset.value_score.saturating_add(value_delta);
             asset.upgrade_points = points_after;
             asset.upgrade_level = level_after.max(level_before);
             asset.last_upgrade_kind = Some("manual_upgrade".to_string());
@@ -481,9 +1347,13 @@ pub(super) async fn upgrade_world_asset_inner(
         };
         if judgement.payout_status == "eligible" {
             let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
-            player.xp += judgement.score.round() as i64;
-            player.reputation += (judgement.score / 10.0).round() as i64;
-            player.rating += ((judgement.score - 50.0) / 4.0).round() as i64;
+            player.xp = player.xp.saturating_add(judgement.score.round() as i64);
+            player.reputation = player
+                .reputation
+                .saturating_add((judgement.score / 10.0).round() as i64);
+            player.rating = player
+                .rating
+                .saturating_add(((judgement.score - 50.0) / 4.0).round() as i64);
             league
                 .players_by_matrix_user
                 .insert(matrix_user_id.clone(), player);
@@ -674,11 +1544,12 @@ pub(super) async fn create_world_company_inner(
             0
         };
         let reputation_score = if released {
-            ((asset.upgrade_level.max(1) * 10) as f64 + judgement.score / 2.0).round() as i64
+            ((asset.upgrade_level.max(1).saturating_mul(10)) as f64 + judgement.score / 2.0).round()
+                as i64
         } else {
             0
         };
-        let level = 1 + (revenue_score / 100).max(0);
+        let level = 1_i64.saturating_add((revenue_score / 100).max(0));
         let company_kind = if body.contains("店") || body.to_ascii_lowercase().contains("shop") {
             "shop"
         } else if body.contains("工坊") || body.to_ascii_lowercase().contains("studio") {
@@ -769,9 +1640,13 @@ pub(super) async fn create_world_company_inner(
         };
         if released {
             let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
-            player.xp += judgement.score.round() as i64;
-            player.reputation += (judgement.score / 6.0).round() as i64;
-            player.rating += ((judgement.score - 50.0) / 4.0).round() as i64;
+            player.xp = player.xp.saturating_add(judgement.score.round() as i64);
+            player.reputation = player
+                .reputation
+                .saturating_add((judgement.score / 6.0).round() as i64);
+            player.rating = player
+                .rating
+                .saturating_add(((judgement.score - 50.0) / 4.0).round() as i64);
             league.world.world_relationships.push(WorldRelationship {
                 relationship_id: league_hash_id(
                     "world-rel",
@@ -1070,16 +1945,31 @@ pub(super) async fn create_world_listing_inner(
                 .as_ref()
                 .map(|event| event.reputation_delta)
                 .unwrap_or_default();
-            league.world.world_shops[shop_index].listing_count += 1;
-            league.world.world_shops[shop_index].gross_merchandise_score += listing.price_credits;
-            league.world.world_companies[company_index].revenue_score += listing.price_credits;
-            league.world.world_companies[company_index].reputation_score += reputation_delta;
-            league.world.world_companies[company_index].level =
-                1 + (league.world.world_companies[company_index].revenue_score / 100).max(0);
+            league.world.world_shops[shop_index].listing_count = league.world.world_shops
+                [shop_index]
+                .listing_count
+                .saturating_add(1);
+            league.world.world_shops[shop_index].gross_merchandise_score = league.world.world_shops
+                [shop_index]
+                .gross_merchandise_score
+                .saturating_add(listing.price_credits);
+            league.world.world_companies[company_index].revenue_score =
+                league.world.world_companies[company_index]
+                    .revenue_score
+                    .saturating_add(listing.price_credits);
+            league.world.world_companies[company_index].reputation_score =
+                league.world.world_companies[company_index]
+                    .reputation_score
+                    .saturating_add(reputation_delta);
+            league.world.world_companies[company_index].level = 1_i64.saturating_add(
+                (league.world.world_companies[company_index].revenue_score / 100).max(0),
+            );
             let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
-            player.xp += quality_score;
-            player.reputation += reputation_delta;
-            player.rating += ((judgement.score - 50.0) / 5.0).round() as i64;
+            player.xp = player.xp.saturating_add(quality_score);
+            player.reputation = player.reputation.saturating_add(reputation_delta);
+            player.rating = player
+                .rating
+                .saturating_add(((judgement.score - 50.0) / 5.0).round() as i64);
             league
                 .players_by_matrix_user
                 .insert(matrix_user_id.clone(), player);
@@ -1262,6 +2152,7 @@ pub(super) async fn settle_world_purchase_ledger_action(
     matrix_user_id: &str,
     purchase: &WorldPurchase,
     action: &str,
+    intent_id: String,
     success_status: &str,
     idempotency_key: String,
     reference_id: String,
@@ -1276,18 +2167,12 @@ pub(super) async fn settle_world_purchase_ledger_action(
             purchase.price_credits
         }
     });
-    if ledger_amount_credits <= 0 {
-        return LeagueLedgerSettlement {
-            status: "skipped_zero_price".to_string(),
-            ..Default::default()
-        };
-    }
     let mut extra_ledger_body = Map::new();
     extra_ledger_body.insert("gross_amount".to_string(), json!(purchase.price_credits));
     extra_ledger_body.insert(
         "market_tax_amount".to_string(),
         json!(if action == "grant" {
-            purchase.price_credits - ledger_amount_credits
+            purchase.price_credits.saturating_sub(ledger_amount_credits)
         } else {
             0
         }),
@@ -1299,7 +2184,7 @@ pub(super) async fn settle_world_purchase_ledger_action(
                 term_id: "world_commerce_purchase".to_string(),
                 term_version: "v1".to_string(),
                 domain: "trillionnium_world".to_string(),
-                intent_id: format!("world_purchase:{}:{}", action, purchase.purchase_id),
+                intent_id,
                 intent_kind: match action {
                     "reserve" => term_exchange_protocol::EconomicIntentKind::Reserve,
                     "consume" => term_exchange_protocol::EconomicIntentKind::Consume,
@@ -1327,6 +2212,11 @@ pub(super) async fn settle_world_purchase_ledger_action(
                     "seller_matrix_user_id": purchase.seller_matrix_user_id,
                     "price_credits": purchase.price_credits,
                     "ledger_action": action,
+                    "zero_value_outcome": if action == "grant" && ledger_amount_credits <= 0 {
+                        "zero_seller_net"
+                    } else {
+                        "value_bearing"
+                    },
                 }),
                 extra_ledger_body,
             },
@@ -1346,6 +2236,7 @@ pub(super) async fn reserve_world_purchase_with_ledger(
         &purchase.buyer_matrix_user_id,
         purchase,
         "reserve",
+        format!("world_purchase:reserve:{}", purchase.purchase_id),
         "reserved",
         format!("world_purchase_reserve:{}", purchase.purchase_id),
         purchase.purchase_id.clone(),
@@ -1367,6 +2258,7 @@ pub(super) async fn settle_world_purchase_with_ledger(
         &purchase.seller_matrix_user_id,
         purchase,
         "grant",
+        format!("world_purchase:grant:{}", purchase.purchase_id),
         "settled",
         format!("world_purchase:{}", purchase.purchase_id),
         purchase.listing_id.clone(),
@@ -1388,6 +2280,7 @@ pub(super) async fn consume_world_purchase_with_ledger(
         &purchase.buyer_matrix_user_id,
         purchase,
         "consume",
+        format!("world_purchase:consume:{}", purchase.purchase_id),
         "consumed",
         format!("world_purchase_consume:{}", purchase.purchase_id),
         purchase.purchase_id.clone(),
@@ -1410,6 +2303,10 @@ pub(super) async fn refund_world_purchase_with_ledger(
         &purchase.buyer_matrix_user_id,
         purchase,
         "refund",
+        format!(
+            "world_purchase:refund:{}:{}",
+            purchase.purchase_id, refund_scope
+        ),
         "refunded",
         format!(
             "world_purchase_refund:{}:{}",
@@ -1429,10 +2326,6 @@ pub(super) async fn chargeback_world_purchase_seller_with_ledger(
     purchase: &WorldPurchase,
     chargeback_scope: &str,
 ) -> LeagueLedgerSettlement {
-    let retrying_failed_chargeback = matches!(
-        purchase.ledger_status.as_deref(),
-        Some("seller_chargeback_failed")
-    );
     let (seller_settlement_active, typed_retrying_failed_chargeback) = {
         let league = state.inner.league_state.lock().await;
         (
@@ -1444,8 +2337,11 @@ pub(super) async fn chargeback_world_purchase_seller_with_ledger(
             ),
         )
     };
-    if !seller_settlement_active && !retrying_failed_chargeback && !typed_retrying_failed_chargeback
-    {
+    // A compatibility `seller_chargeback_failed` status is not proof that the seller was ever
+    // paid.  Retry is safe only when the immutable seller settlement receipt (or an exact,
+    // recoverable-hold chargeback receipt) establishes the value-bearing amount.  This prevents a
+    // synthetic/stale status from authorizing a new debit after restart.
+    if !seller_settlement_active && !typed_retrying_failed_chargeback {
         return LeagueLedgerSettlement {
             status: "skipped_seller_not_settled".to_string(),
             account_id: purchase.ledger_account_id.clone(),
@@ -1458,6 +2354,7 @@ pub(super) async fn chargeback_world_purchase_seller_with_ledger(
         return LeagueLedgerSettlement {
             status: "skipped_zero_seller_net".to_string(),
             account_id: purchase.ledger_account_id.clone(),
+            amount_credits: Some(0),
             ..Default::default()
         };
     }
@@ -1467,6 +2364,10 @@ pub(super) async fn chargeback_world_purchase_seller_with_ledger(
         &purchase.seller_matrix_user_id,
         purchase,
         "reserve",
+        format!(
+            "world_purchase_seller_chargeback_reserve:{}:{}",
+            purchase.purchase_id, chargeback_scope
+        ),
         "seller_chargeback_reserved",
         format!(
             "world_purchase_seller_chargeback_reserve:{}:{}",
@@ -1478,25 +2379,41 @@ pub(super) async fn chargeback_world_purchase_seller_with_ledger(
         Some(seller_net_credits),
     )
     .await;
-    if !reserve.progression_allowed(&["seller_chargeback_reserved", "duplicate"]) {
+    let reserve_amount_matches = reserve.amount_credits == Some(seller_net_credits);
+    if !reserve.progression_allowed_for_term(
+        "world_commerce_purchase",
+        &["seller_chargeback_reserved", "duplicate"],
+    ) || !reserve_amount_matches
+    {
         return LeagueLedgerSettlement {
             status: "seller_chargeback_reserve_failed".to_string(),
             account_id: reserve.account_id,
             entry_id: reserve.entry_id,
             balance_after: reserve.balance_after,
-            error: reserve.error.or(Some(format!(
-                "seller chargeback reserve did not complete: {}",
-                reserve.status
-            ))),
+            error: reserve.error.or_else(|| {
+                Some(if reserve_amount_matches {
+                    format!("seller chargeback reserve did not complete: {}", reserve.status)
+                } else {
+                    format!(
+                        "seller chargeback reserve amount mismatch: expected {seller_net_credits}, got {:?}",
+                        reserve.amount_credits
+                    )
+                })
+            }),
+            amount_credits: None,
             term_exchange_receipt: reserve.term_exchange_receipt,
         };
     }
-    settle_world_purchase_ledger_action(
+    let consume = settle_world_purchase_ledger_action(
         state,
         room_id,
         &purchase.seller_matrix_user_id,
         purchase,
         "consume",
+        format!(
+            "world_purchase_seller_chargeback_consume:{}:{}",
+            purchase.purchase_id, chargeback_scope
+        ),
         "seller_chargeback_consumed",
         format!(
             "world_purchase_seller_chargeback_consume:{}:{}",
@@ -1507,7 +2424,33 @@ pub(super) async fn chargeback_world_purchase_seller_with_ledger(
         "matrix identity could not be resolved for world seller chargeback consume",
         Some(seller_net_credits),
     )
-    .await
+    .await;
+    let consume_amount_matches = consume.amount_credits == Some(seller_net_credits);
+    if !consume.progression_allowed_for_term(
+        "world_commerce_purchase",
+        &["seller_chargeback_consumed", "duplicate"],
+    ) || !consume_amount_matches
+    {
+        return LeagueLedgerSettlement {
+            status: "seller_chargeback_failed".to_string(),
+            account_id: consume.account_id,
+            entry_id: consume.entry_id,
+            balance_after: consume.balance_after,
+            error: consume.error.or_else(|| {
+                Some(if consume_amount_matches {
+                    format!("seller chargeback consume did not complete: {}", consume.status)
+                } else {
+                    format!(
+                        "seller chargeback consume amount mismatch: expected {seller_net_credits}, got {:?}",
+                        consume.amount_credits
+                    )
+                })
+            }),
+            amount_credits: None,
+            term_exchange_receipt: consume.term_exchange_receipt,
+        };
+    }
+    consume
 }
 
 pub(super) async fn reserve_reopened_world_purchase_with_ledger(
@@ -1522,6 +2465,10 @@ pub(super) async fn reserve_reopened_world_purchase_with_ledger(
         &purchase.buyer_matrix_user_id,
         purchase,
         "reserve",
+        format!(
+            "world_purchase_reopen_reserve:{}:{}",
+            purchase.purchase_id, reopen.reopen_id
+        ),
         "reserved",
         format!(
             "world_purchase_reopen_reserve:{}:{}",
@@ -1547,6 +2494,10 @@ pub(super) async fn settle_reopened_world_purchase_with_ledger(
         &purchase.seller_matrix_user_id,
         purchase,
         "grant",
+        format!(
+            "world_purchase_reopen_settlement:{}:{}",
+            purchase.purchase_id, reopen.reopen_id
+        ),
         "reopened_settled",
         format!(
             "world_purchase_reopen_settlement:{}:{}",
@@ -1625,59 +2576,97 @@ pub(super) async fn buy_world_listing_inner(
             .and_then(Value::as_i64)
             .unwrap_or_else(|| listing.price_credits.max(1));
         let reputation_delta = (listing.quality_score / 5).max(1);
-        let purchase_nonce = league.world.world_purchases.len();
-        let work_order_nonce = league.world.world_work_orders.len();
-        let purchase = WorldPurchase {
-            purchase_id: league_hash_id(
-                "world-purchase",
-                &format!(
-                    "{}:{}:{}:{}:{}",
-                    buyer_matrix_user_id, listing.listing_id, price_credits, now, purchase_nonce
-                ),
-            ),
-            listing_id: listing.listing_id.clone(),
-            shop_id: listing.shop_id.clone(),
-            company_id: listing.company_id.clone(),
-            buyer_matrix_user_id: buyer_matrix_user_id.clone(),
-            seller_matrix_user_id: listing.owner_matrix_user_id.clone(),
-            price_credits,
-            status: "pending_payment".to_string(),
-            ledger_status: Some("pending".to_string()),
-            ledger_account_id: None,
-            ledger_entry_id: None,
-            ledger_balance_after: None,
-            ledger_error: None,
-            buyer_ledger_status: Some("pending".to_string()),
-            buyer_ledger_account_id: None,
-            buyer_ledger_entry_id: None,
-            buyer_ledger_balance_after: None,
-            buyer_ledger_error: None,
-            buyer_consume_status: Some("pending_acceptance".to_string()),
-            buyer_consume_entry_id: None,
-            buyer_consume_balance_after: None,
-            buyer_consume_error: None,
-            created_at_epoch: now,
-        };
-        let work_order = WorldWorkOrder {
-            work_order_id: league_hash_id(
-                "world-work",
-                &format!(
-                    "{}:{}:{}:{}",
-                    purchase.purchase_id, listing.listing_id, now, work_order_nonce
-                ),
-            ),
-            purchase_id: purchase.purchase_id.clone(),
-            listing_id: listing.listing_id.clone(),
-            buyer_matrix_user_id: buyer_matrix_user_id.clone(),
-            seller_matrix_user_id: listing.owner_matrix_user_id.clone(),
-            company_id: listing.company_id.clone(),
-            status: "open".to_string(),
-            brief: brief.clone(),
-            value_score: price_credits + listing.quality_score.max(0),
-            created_at_epoch: now,
-        };
-        league.world.world_purchases.push(purchase.clone());
-        league.world.world_work_orders.push(work_order.clone());
+        // Entity identity is an operation identity, not a timestamp.  Use the number of prior
+        // *same request* attempts as the deterministic sequence so a lost response can replay
+        // the same Ledger intent, while a later intentional purchase (after a terminal prior
+        // order) still receives a fresh identity.
+        let purchase_attempt = league
+            .world
+            .world_work_orders
+            .iter()
+            .filter(|work_order| {
+                work_order.listing_id == listing.listing_id
+                    && work_order.buyer_matrix_user_id == buyer_matrix_user_id
+                    && work_order.brief == brief
+            })
+            .count();
+        let existing_pending = league
+            .world
+            .world_work_orders
+            .iter()
+            .rev()
+            .find(|work_order| {
+                work_order.listing_id == listing.listing_id
+                    && work_order.buyer_matrix_user_id == buyer_matrix_user_id
+                    && work_order.brief == brief
+                    && !matches!(
+                        work_order.status.as_str(),
+                        "completed" | "rejected_refunded" | "cancelled_refunded"
+                    )
+            })
+            .and_then(|work_order| {
+                league
+                    .world
+                    .world_purchases
+                    .iter()
+                    .find(|purchase| purchase.purchase_id == work_order.purchase_id)
+                    .cloned()
+                    .map(|purchase| (purchase, work_order.clone()))
+            });
+        let (purchase, work_order) =
+            if let Some((existing_purchase, existing_work_order)) = existing_pending {
+                // Reuse the persisted operation and its scoped Ledger identities on a retry.  The
+                // state machine below will reconcile any pending/failed remote outcome.
+                (existing_purchase, existing_work_order)
+            } else {
+                let purchase_id = league_hash_id(
+                    "world-purchase",
+                    &format!(
+                        "{}:{}:{}:{}",
+                        buyer_matrix_user_id, listing.listing_id, purchase_attempt, brief
+                    ),
+                );
+                let purchase = WorldPurchase {
+                    purchase_id: purchase_id.clone(),
+                    listing_id: listing.listing_id.clone(),
+                    shop_id: listing.shop_id.clone(),
+                    company_id: listing.company_id.clone(),
+                    buyer_matrix_user_id: buyer_matrix_user_id.clone(),
+                    seller_matrix_user_id: listing.owner_matrix_user_id.clone(),
+                    price_credits,
+                    status: "pending_payment".to_string(),
+                    ledger_status: Some("pending".to_string()),
+                    ledger_account_id: None,
+                    ledger_entry_id: None,
+                    ledger_balance_after: None,
+                    ledger_error: None,
+                    buyer_ledger_status: Some("pending".to_string()),
+                    buyer_ledger_account_id: None,
+                    buyer_ledger_entry_id: None,
+                    buyer_ledger_balance_after: None,
+                    buyer_ledger_error: None,
+                    buyer_consume_status: Some("pending_acceptance".to_string()),
+                    buyer_consume_entry_id: None,
+                    buyer_consume_balance_after: None,
+                    buyer_consume_error: None,
+                    created_at_epoch: now,
+                };
+                let work_order = WorldWorkOrder {
+                    work_order_id: league_hash_id("world-work", &purchase_id),
+                    purchase_id: purchase.purchase_id.clone(),
+                    listing_id: listing.listing_id.clone(),
+                    buyer_matrix_user_id: buyer_matrix_user_id.clone(),
+                    seller_matrix_user_id: listing.owner_matrix_user_id.clone(),
+                    company_id: listing.company_id.clone(),
+                    status: "open".to_string(),
+                    brief: brief.clone(),
+                    value_score: price_credits.saturating_add(listing.quality_score.max(0)),
+                    created_at_epoch: now,
+                };
+                league.world.world_purchases.push(purchase.clone());
+                league.world.world_work_orders.push(work_order.clone());
+                (purchase, work_order)
+            };
         let company = company_index.map(|index| league.world.world_companies[index].clone());
         let shop = shop_index.map(|index| league.world.world_shops[index].clone());
         (
@@ -1692,12 +2681,25 @@ pub(super) async fn buy_world_listing_inner(
             faction_id.to_string(),
         )
     };
+    // Commit the operation identity before crossing the Ledger boundary.  If the process dies
+    // after reserve/settlement but before the response write, the next request can find this
+    // deterministic pending work order and replay the same scoped intents instead of minting a
+    // second purchase.
+    if let Err(response) =
+        // The pending purchase/work-order identity is durable before the first remote Ledger
+        // request.  Reuse the canonical command write-set so normalized final cutover persists
+        // this pre-network snapshot through the same typed SQL helpers as the final projection.
+        persist_league_state_after_command(&state, &snapshot.0, "world_buy").await
+    {
+        return response;
+    }
     let buyer_reserve = reserve_world_purchase_with_ledger(&state, &payload, &snapshot.1).await;
-    let local_dev_ledger_bypass =
-        matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
-            && buyer_reserve.status.starts_with("skipped");
-    let buyer_reserved =
-        buyer_reserve.progression_allowed(&["reserved", "duplicate"]) || local_dev_ledger_bypass;
+    let expected_buyer_amount = world_purchase_buyer_amount(&snapshot.1);
+    let buyer_reserve_progression_allowed = buyer_reserve
+        .progression_allowed_for_term("world_commerce_purchase", &["reserved", "duplicate"]);
+    let buyer_reserve_amount_matches = expected_buyer_amount
+        .is_some_and(|expected| buyer_reserve.amount_credits == Some(expected));
+    let buyer_reserved = buyer_reserve_progression_allowed && buyer_reserve_amount_matches;
     let settlement = if buyer_reserved {
         settle_world_purchase_with_ledger(&state, &payload, &snapshot.1).await
     } else {
@@ -1723,13 +2725,104 @@ pub(super) async fn buy_world_listing_inner(
         let mut economy_event = None;
         let mut seller_standing = None;
         let mut buyer_standing = None;
-        let released = settlement.progression_allowed(&["settled", "duplicate"]);
-        purchase.buyer_ledger_status = Some(buyer_reserve.status.clone());
-        purchase.buyer_ledger_account_id = buyer_reserve.account_id.clone();
-        purchase.buyer_ledger_entry_id = buyer_reserve.entry_id.clone();
-        purchase.buyer_ledger_balance_after = buyer_reserve.balance_after;
-        purchase.buyer_ledger_error = buyer_reserve.error.clone();
-        purchase.status = if buyer_reserved {
+        let expected_seller_net_credits =
+            world_seller_net_credits_for_price(purchase.price_credits);
+        let settlement_progression_allowed = settlement
+            .progression_allowed_for_term("world_commerce_purchase", &["settled", "duplicate"]);
+        let settlement_amount_matches =
+            settlement.amount_credits == Some(expected_seller_net_credits);
+        let seller_zero_net_skipped =
+            world_settlement_is_zero_seller_net_skip(&settlement, expected_seller_net_credits);
+        let remote_released = (settlement_progression_allowed && settlement_amount_matches)
+            || seller_zero_net_skipped;
+        let self_dealing_purchase = purchase.buyer_matrix_user_id == purchase.seller_matrix_user_id;
+        // The economy event is the durable projection key.  Once it exists, a retry must not
+        // apply the commercial projection a second time (or regress a terminal purchase when a
+        // later Ledger lookup is temporarily unavailable).
+        let purchase_event_id = league_hash_id(
+            "world-econ",
+            &format!(
+                "{}:{}:{}",
+                purchase.buyer_matrix_user_id, purchase.purchase_id, purchase.created_at_epoch
+            ),
+        );
+        let market_tax_event_id = league_hash_id(
+            "world-market-tax",
+            &format!(
+                "{}:{}:{}",
+                purchase.buyer_matrix_user_id, purchase.purchase_id, purchase.created_at_epoch
+            ),
+        );
+        let purchase_projection_marker = world_purchase_projection_marker(
+            &league.world,
+            &purchase,
+            &purchase_event_id,
+            &purchase.seller_matrix_user_id,
+            "listing_purchase",
+            expected_seller_net_credits,
+            snapshot.7,
+        );
+        let tax_projection_marker = world_purchase_projection_marker(
+            &league.world,
+            &purchase,
+            &market_tax_event_id,
+            &purchase.buyer_matrix_user_id,
+            "market_tax_sink",
+            world_market_tax_credits_for_price(purchase.price_credits).saturating_neg(),
+            0,
+        );
+        let purchase_projection_already_applied = purchase_projection_marker == Some(true);
+        let tax_projection_already_applied = tax_projection_marker == Some(true);
+        let projection_already_applied = if self_dealing_purchase {
+            tax_projection_already_applied
+        } else {
+            purchase_projection_already_applied
+        };
+        let projection_event_present = if self_dealing_purchase {
+            tax_projection_marker.is_some()
+        } else {
+            purchase_projection_marker.is_some()
+        };
+        // Either deterministic marker being present without its exact tuple/receipt evidence is
+        // a collision.  Do not let a valid primary marker hide a poisoned tax marker (or vice
+        // versa) and then continue a value-bearing retry.
+        let projection_event_poisoned =
+            purchase_projection_marker == Some(false) || tax_projection_marker == Some(false);
+        // A legacy marker can never authorize a release by itself.  If its deterministic id is
+        // present but the tuple/receipt pair is invalid, fail closed and keep the operation
+        // retryable rather than applying a second commercial projection.
+        let released =
+            !projection_event_poisoned && (remote_released || projection_already_applied);
+
+        // Do not overwrite an already-projected operation with an ambiguous/failed retry result.
+        // A successful duplicate response may still refresh the diagnostic fields.
+        if !projection_already_applied || remote_released {
+            purchase.buyer_ledger_status = Some(buyer_reserve.status.clone());
+            purchase.buyer_ledger_account_id = buyer_reserve.account_id.clone();
+            purchase.buyer_ledger_entry_id = buyer_reserve.entry_id.clone();
+            purchase.buyer_ledger_balance_after = buyer_reserve.balance_after;
+            purchase.buyer_ledger_error = buyer_reserve.error.clone().or_else(|| {
+                (buyer_reserve_progression_allowed && !buyer_reserve_amount_matches).then(|| {
+                    format!(
+                        "buyer reserve amount mismatch: expected {:?}, got {:?}",
+                        expected_buyer_amount, buyer_reserve.amount_credits
+                    )
+                })
+            });
+            purchase.ledger_status = Some(settlement.status.clone());
+            purchase.ledger_account_id = settlement.account_id.clone();
+            purchase.ledger_entry_id = settlement.entry_id.clone();
+            purchase.ledger_balance_after = settlement.balance_after;
+            purchase.ledger_error = settlement.error.clone().or_else(|| {
+                (settlement_progression_allowed && !settlement_amount_matches).then(|| {
+                    format!(
+                        "seller settlement amount mismatch: expected {expected_seller_net_credits}, got {:?}",
+                        settlement.amount_credits
+                    )
+                })
+            });
+        }
+        purchase.status = if buyer_reserved || projection_already_applied {
             if released {
                 "reserved".to_string()
             } else if settlement.status.starts_with("skipped") {
@@ -1742,12 +2835,7 @@ pub(super) async fn buy_world_listing_inner(
         } else {
             "buyer_reserve_failed".to_string()
         };
-        purchase.ledger_status = Some(settlement.status.clone());
-        purchase.ledger_account_id = settlement.account_id.clone();
-        purchase.ledger_entry_id = settlement.entry_id.clone();
-        purchase.ledger_balance_after = settlement.balance_after;
-        purchase.ledger_error = settlement.error.clone();
-        work_order.status = if released || local_dev_ledger_bypass {
+        work_order.status = if released {
             "open".to_string()
         } else if buyer_reserved {
             purchase.status.clone()
@@ -1756,69 +2844,87 @@ pub(super) async fn buy_world_listing_inner(
         };
         indexes.replace_purchase_by_id(&mut league.world, &purchase);
         indexes.replace_work_order_by_id(&mut league.world, &work_order);
-        let self_dealing_purchase = purchase.buyer_matrix_user_id == purchase.seller_matrix_user_id;
-        if released && !self_dealing_purchase {
+        if released
+            && !self_dealing_purchase
+            && !purchase_projection_already_applied
+            && !projection_event_present
+        {
             if let Some(index) = indexes.shop_index(&purchase.shop_id) {
-                league.world.world_shops[index].gross_merchandise_score += purchase.price_credits;
+                league.world.world_shops[index].gross_merchandise_score = league.world.world_shops
+                    [index]
+                    .gross_merchandise_score
+                    .saturating_add(purchase.price_credits);
             }
             if let Some(index) = indexes.company_index(&purchase.company_id) {
-                league.world.world_companies[index].revenue_score += purchase.price_credits;
-                league.world.world_companies[index].reputation_score += snapshot.7;
-                league.world.world_companies[index].level =
-                    1 + (league.world.world_companies[index].revenue_score / 100).max(0);
+                league.world.world_companies[index].revenue_score = league.world.world_companies
+                    [index]
+                    .revenue_score
+                    .saturating_add(purchase.price_credits);
+                league.world.world_companies[index].reputation_score = league.world.world_companies
+                    [index]
+                    .reputation_score
+                    .saturating_add(snapshot.7);
+                league.world.world_companies[index].level = 1_i64.saturating_add(
+                    (league.world.world_companies[index].revenue_score / 100).max(0),
+                );
             }
             let mut buyer = ensure_league_player(&mut league, &purchase.buyer_matrix_user_id, None);
-            buyer.xp += (snapshot.3.quality_score / 10).max(1);
-            buyer.reputation += 1;
-            buyer.rating += 1;
+            buyer.xp = buyer
+                .xp
+                .saturating_add((snapshot.3.quality_score / 10).max(1));
+            buyer.reputation = buyer.reputation.saturating_add(1);
+            buyer.rating = buyer.rating.saturating_add(1);
             league
                 .players_by_matrix_user
                 .insert(purchase.buyer_matrix_user_id.clone(), buyer);
             let mut seller =
                 ensure_league_player(&mut league, &purchase.seller_matrix_user_id, None);
-            seller.xp += (snapshot.3.quality_score / 2).max(1);
-            seller.reputation += snapshot.7;
-            seller.rating += (snapshot.3.quality_score / 10).max(1);
-            seller.earned_credits +=
-                world_seller_net_credits_for_price(purchase.price_credits) as f64;
+            seller.xp = seller
+                .xp
+                .saturating_add((snapshot.3.quality_score / 2).max(1));
+            seller.reputation = seller.reputation.saturating_add(snapshot.7);
+            seller.rating = seller
+                .rating
+                .saturating_add((snapshot.3.quality_score / 10).max(1));
+            if settlement
+                .amount_credits
+                .and_then(exact_credits_to_legacy_display)
+                .is_some()
+            {
+                // Compatibility projection only: seller value is authorized by the exact
+                // settlement receipt, never by the legacy purchase price field.
+                if let Some(next) = checked_legacy_display_add(
+                    seller.earned_credits,
+                    settlement.amount_credits.unwrap_or_default(),
+                ) {
+                    seller.earned_credits = next;
+                }
+            }
             league
                 .players_by_matrix_user
                 .insert(purchase.seller_matrix_user_id.clone(), seller);
             let purchase_event = WorldEconomyEvent {
-                economy_event_id: league_hash_id(
-                    "world-econ",
-                    &format!(
-                        "{}:{}:{}",
-                        purchase.buyer_matrix_user_id,
-                        purchase.purchase_id,
-                        purchase.created_at_epoch
-                    ),
-                ),
+                economy_event_id: purchase_event_id.clone(),
                 matrix_user_id: purchase.seller_matrix_user_id.clone(),
                 event_kind: "listing_purchase".to_string(),
                 subject_id: purchase.purchase_id.clone(),
-                credits_delta: world_seller_net_credits_for_price(purchase.price_credits),
+                credits_delta: settlement
+                    .amount_credits
+                    .expect("released seller settlement must carry exact amount_credits"),
                 reputation_delta: snapshot.7,
                 created_at_epoch: purchase.created_at_epoch,
             };
             let market_tax_event = WorldEconomyEvent {
-                economy_event_id: league_hash_id(
-                    "world-market-tax",
-                    &format!(
-                        "{}:{}:{}",
-                        purchase.buyer_matrix_user_id,
-                        purchase.purchase_id,
-                        purchase.created_at_epoch
-                    ),
-                ),
+                economy_event_id: market_tax_event_id.clone(),
                 matrix_user_id: purchase.buyer_matrix_user_id.clone(),
                 event_kind: "market_tax_sink".to_string(),
                 subject_id: purchase.purchase_id.clone(),
-                credits_delta: -snapshot
+                credits_delta: snapshot
                     .6
                     .get("market_tax_credits")
                     .and_then(Value::as_i64)
-                    .unwrap_or(1),
+                    .unwrap_or(1)
+                    .saturating_neg(),
                 reputation_delta: 0,
                 created_at_epoch: purchase.created_at_epoch,
             };
@@ -1852,11 +2958,8 @@ pub(super) async fn buy_world_listing_inner(
                 1,
                 purchase.created_at_epoch,
             ));
-            league
-                .world
-                .world_economy_events
-                .push(purchase_event.clone());
-            league.world.world_economy_events.push(market_tax_event);
+            push_world_economy_event_once(&mut league.world, purchase_event.clone());
+            push_world_economy_event_once(&mut league.world, market_tax_event);
             company = indexes
                 .company_index(&purchase.company_id)
                 .map(|index| league.world.world_companies[index].clone());
@@ -1864,29 +2967,61 @@ pub(super) async fn buy_world_listing_inner(
                 .shop_index(&purchase.shop_id)
                 .map(|index| league.world.world_shops[index].clone());
             economy_event = Some(purchase_event);
-        } else if released {
+        } else if released && !self_dealing_purchase && purchase_projection_already_applied {
+            economy_event = league
+                .world
+                .world_economy_events
+                .iter()
+                .find(|event| event.economy_event_id == purchase_event_id)
+                .cloned();
+            seller_standing = indexes
+                .faction_standing_index(&purchase.seller_matrix_user_id, &snapshot.8)
+                .and_then(|index| league.world.world_faction_standings.get(index).cloned());
+            buyer_standing = indexes
+                .faction_standing_index(&purchase.buyer_matrix_user_id, &snapshot.8)
+                .and_then(|index| league.world.world_faction_standings.get(index).cloned());
+            company = indexes
+                .company_index(&purchase.company_id)
+                .and_then(|index| league.world.world_companies.get(index).cloned());
+            shop = indexes
+                .shop_index(&purchase.shop_id)
+                .and_then(|index| league.world.world_shops.get(index).cloned());
+            // A crash can persist the primary purchase projection before its tax-sink marker.
+            // Repair the missing compatibility sink exactly once, but never overwrite a
+            // present/poisoned marker.
+            if tax_projection_marker.is_none() {
+                let market_tax_event = WorldEconomyEvent {
+                    economy_event_id: market_tax_event_id,
+                    matrix_user_id: purchase.buyer_matrix_user_id.clone(),
+                    event_kind: "market_tax_sink".to_string(),
+                    subject_id: purchase.purchase_id.clone(),
+                    credits_delta: world_market_tax_credits_for_price(purchase.price_credits)
+                        .saturating_neg(),
+                    reputation_delta: 0,
+                    created_at_epoch: purchase.created_at_epoch,
+                };
+                push_world_economy_event_once(&mut league.world, market_tax_event);
+            }
+        } else if released
+            && self_dealing_purchase
+            && !tax_projection_already_applied
+            && !projection_event_present
+        {
             let market_tax_event = WorldEconomyEvent {
-                economy_event_id: league_hash_id(
-                    "world-market-tax",
-                    &format!(
-                        "{}:{}:{}",
-                        purchase.buyer_matrix_user_id,
-                        purchase.purchase_id,
-                        purchase.created_at_epoch
-                    ),
-                ),
+                economy_event_id: market_tax_event_id,
                 matrix_user_id: purchase.buyer_matrix_user_id.clone(),
                 event_kind: "market_tax_sink".to_string(),
                 subject_id: purchase.purchase_id.clone(),
-                credits_delta: -snapshot
+                credits_delta: snapshot
                     .6
                     .get("market_tax_credits")
                     .and_then(Value::as_i64)
-                    .unwrap_or(1),
+                    .unwrap_or(1)
+                    .saturating_neg(),
                 reputation_delta: 0,
                 created_at_epoch: purchase.created_at_epoch,
             };
-            league.world.world_economy_events.push(market_tax_event);
+            push_world_economy_event_once(&mut league.world, market_tax_event);
         }
         (
             league.clone(),
@@ -2049,15 +3184,62 @@ pub(super) async fn deliver_world_work_order_inner(
             )
                 .into_response();
         }
-        if !matches!(
-            league.world.world_work_orders[work_index].status.as_str(),
-            "open" | "delivery_review_hold"
-        ) {
-            return (
+        let work_order_status = league.world.world_work_orders[work_index].status.clone();
+        let reopen_attempt = world_reopen_attempt(
+            &league.world,
+            &league.world.world_work_orders[work_index].work_order_id,
+        );
+        let deterministic_delivery_id = world_work_delivery_id(
+            &league.world.world_work_orders[work_index].work_order_id,
+            &matrix_user_id,
+            reopen_attempt,
+            &body,
+        );
+        if let Some(existing) = league
+            .world
+            .world_work_deliveries
+            .iter()
+            .find(|delivery| delivery.delivery_id == deterministic_delivery_id)
+        {
+            if !world_work_delivery_tuple_matches(
+                existing,
+                &league.world.world_work_orders[work_index].work_order_id,
+                &matrix_user_id,
+                &body,
+            ) {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(json!({
+                        "error": "world work delivery identity collision",
+                        "delivery_id": deterministic_delivery_id,
+                        "work_order_id": work_order_id,
+                    })),
+                )
+                    .into_response();
+            }
+        }
+        let existing_delivery = world_work_delivery_for_request(
+            &league.world,
+            &league.world.world_work_orders[work_index].work_order_id,
+            &matrix_user_id,
+            reopen_attempt,
+            &body,
+            &work_order_status,
+        )
+        .cloned();
+        if !matches!(work_order_status.as_str(), "open" | "delivery_review_hold") {
+            // An exact terminal delivery is a safe response-loss replay.  Other terminal order
+            // states remain conflicts and cannot be adopted by a new request.
+            if existing_delivery
+                .as_ref()
+                .is_none_or(|delivery| delivery.status != "delivered")
+            {
+                return (
                 StatusCode::CONFLICT,
-                Json(json!({ "error": "work order is not deliverable", "status": league.world.world_work_orders[work_index].status, "work_order_id": work_order_id })),
+                Json(json!({ "error": "work order is not deliverable", "status": work_order_status, "work_order_id": work_order_id })),
             )
                 .into_response();
+            }
         }
         let work_order_seed = league.world.world_work_orders[work_index].clone();
         let Some(purchase_index) = indexes
@@ -2086,27 +3268,47 @@ pub(super) async fn deliver_world_work_order_inner(
                 .into_response();
         }
         let faction_id = "faction-market-guild";
-        let delivery_status = if judgement.payout_status == "eligible" {
+        let requested_delivery_status = if judgement.payout_status == "eligible" {
             "delivered"
         } else {
             "review_hold"
         };
-        let delivery = WorldWorkDelivery {
-            delivery_id: league_hash_id(
-                "world-delivery",
-                &format!(
-                    "{}:{}:{}",
-                    work_order_seed.work_order_id, matrix_user_id, now
-                ),
-            ),
+        // A terminal delivery is immutable.  A response-loss retry may re-run the judge, but a
+        // late review-hold result must not downgrade the already delivered row or its work order.
+        let delivery_status = if existing_delivery
+            .as_ref()
+            .is_some_and(|delivery| delivery.status == "delivered")
+        {
+            "delivered"
+        } else {
+            requested_delivery_status
+        };
+        let mut delivery = WorldWorkDelivery {
+            delivery_id: existing_delivery
+                .as_ref()
+                .map(|delivery| delivery.delivery_id.clone())
+                .unwrap_or(deterministic_delivery_id),
             work_order_id: work_order_seed.work_order_id.clone(),
             matrix_user_id: matrix_user_id.clone(),
             body: body.clone(),
             score: judgement.score,
             judge_status: judgement.judge_status.clone(),
             status: delivery_status.to_string(),
-            created_at_epoch: now,
+            created_at_epoch: existing_delivery
+                .as_ref()
+                .map(|delivery| delivery.created_at_epoch)
+                .unwrap_or(now),
         };
+        if let Some(existing) = league
+            .world
+            .world_work_deliveries
+            .iter()
+            .find(|existing| existing.delivery_id == delivery.delivery_id)
+        {
+            if existing.status == "delivered" {
+                delivery = existing.clone();
+            }
+        }
         league.world.world_work_orders[work_index].status = if delivery_status == "delivered" {
             "delivered".to_string()
         } else {
@@ -2114,62 +3316,122 @@ pub(super) async fn deliver_world_work_order_inner(
         };
         let self_dealing_work =
             work_order_seed.buyer_matrix_user_id == work_order_seed.seller_matrix_user_id;
-        let reputation_delta = if delivery_status == "delivered" && !self_dealing_work {
-            (judgement.score / 10.0).round() as i64
+        let reputation_delta = if delivery.status == "delivered" && !self_dealing_work {
+            (delivery.score / 10.0).round() as i64
         } else {
             0
         };
-        if reputation_delta > 0 {
+        let delivery_event_id = world_work_delivery_event_id(&delivery);
+        let legacy_delivery_event_id = legacy_world_work_delivery_event_id(&delivery);
+        let existing_economy_event = league
+            .world
+            .world_economy_events
+            .iter()
+            .find(|event| {
+                (event.economy_event_id == delivery_event_id
+                    || event.economy_event_id == legacy_delivery_event_id)
+                    && world_economy_event_matches(
+                        event,
+                        &event.economy_event_id,
+                        &delivery.matrix_user_id,
+                        "work_delivered",
+                        &delivery.work_order_id,
+                        0,
+                        reputation_delta,
+                        delivery.created_at_epoch,
+                    )
+            })
+            .cloned();
+        let delivery_projection_already_applied = existing_economy_event.is_some();
+        let delivery_event_present = league.world.world_economy_events.iter().any(|event| {
+            event.economy_event_id == delivery_event_id
+                || event.economy_event_id == legacy_delivery_event_id
+        });
+        let delivery_event_poisoned =
+            delivery_event_present && !delivery_projection_already_applied;
+        let terminal_delivery_replay = existing_delivery
+            .as_ref()
+            .is_some_and(|existing| existing.status == "delivered");
+        if reputation_delta > 0
+            && !delivery_projection_already_applied
+            && !delivery_event_poisoned
+            && !terminal_delivery_replay
+        {
             if let Some(company_index) = indexes
                 .company_index_by_id
                 .get(&work_order_seed.company_id)
                 .copied()
             {
                 if let Some(company) = league.world.world_companies.get_mut(company_index) {
-                    company.reputation_score += reputation_delta;
+                    company.reputation_score =
+                        company.reputation_score.saturating_add(reputation_delta);
                 }
             }
             let mut seller = ensure_league_player(&mut league, &matrix_user_id, None);
-            seller.xp += judgement.score.round() as i64;
-            seller.reputation += reputation_delta;
-            seller.rating += ((judgement.score - 50.0) / 6.0).round() as i64;
+            seller.xp = seller.xp.saturating_add(delivery.score.round() as i64);
+            seller.reputation = seller.reputation.saturating_add(reputation_delta);
+            seller.rating = seller
+                .rating
+                .saturating_add(((delivery.score - 50.0) / 6.0).round() as i64);
             league
                 .players_by_matrix_user
                 .insert(matrix_user_id.clone(), seller);
         }
-        let standing = if reputation_delta > 0 {
+        let standing = if reputation_delta > 0
+            && !delivery_projection_already_applied
+            && !delivery_event_poisoned
+            && !terminal_delivery_replay
+        {
             Some(upsert_world_faction_standing(
                 &mut league,
                 &matrix_user_id,
                 faction_id,
                 reputation_delta,
-                now,
+                delivery.created_at_epoch,
             ))
+        } else if reputation_delta > 0 {
+            indexes
+                .faction_standing_index(&matrix_user_id, faction_id)
+                .and_then(|index| league.world.world_faction_standings.get(index).cloned())
         } else {
             None
         };
         let economy_event = if reputation_delta > 0 {
             Some(WorldEconomyEvent {
-                economy_event_id: league_hash_id(
-                    "world-econ",
-                    &format!(
-                        "{}:{}:{}",
-                        matrix_user_id, work_order_seed.work_order_id, now
-                    ),
-                ),
-                matrix_user_id: matrix_user_id.clone(),
+                economy_event_id: delivery_event_id.clone(),
+                matrix_user_id: delivery.matrix_user_id.clone(),
                 event_kind: "work_delivered".to_string(),
-                subject_id: work_order_seed.work_order_id.clone(),
+                subject_id: delivery.work_order_id.clone(),
                 credits_delta: 0,
                 reputation_delta,
-                created_at_epoch: now,
+                created_at_epoch: delivery.created_at_epoch,
             })
         } else {
             None
         };
-        league.world.world_work_deliveries.push(delivery.clone());
-        if let Some(economy_event) = economy_event.clone() {
-            league.world.world_economy_events.push(economy_event);
+        let economy_event = if delivery_projection_already_applied {
+            existing_economy_event.clone()
+        } else if delivery_event_poisoned {
+            None
+        } else {
+            if let Some(economy_event) = economy_event.clone() {
+                push_world_economy_event_once(&mut league.world, economy_event);
+            }
+            economy_event
+        };
+        if let Some(index) = league
+            .world
+            .world_work_deliveries
+            .iter()
+            .position(|existing| existing.delivery_id == delivery.delivery_id)
+        {
+            // Preserve the first delivered judge result; review-hold rows may be re-evaluated in
+            // place using the same deterministic identity.
+            if league.world.world_work_deliveries[index].status != "delivered" {
+                league.world.world_work_deliveries[index] = delivery.clone();
+            }
+        } else {
+            league.world.world_work_deliveries.push(delivery.clone());
         }
         (
             league.clone(),
@@ -2320,14 +3582,49 @@ pub(super) async fn accept_world_work_order_inner(
             )
                 .into_response();
         }
-        if league.world.world_work_orders[work_index].status != "delivered" {
+        let work_order_seed = league.world.world_work_orders[work_index].clone();
+        // Acceptance identity is derived from the immutable command body, not wall-clock time.
+        // This lets a retry reuse the same consume intent and projection key after a lost
+        // response.  A different body for the same work order is a collision, not a new payout.
+        let existing_acceptance = league
+            .world
+            .world_work_acceptances
+            .iter()
+            .rev()
+            .find(|acceptance| {
+                acceptance.work_order_id == work_order_seed.work_order_id
+                    && acceptance.matrix_user_id == matrix_user_id
+                    && acceptance.body == body
+            })
+            .cloned();
+        let has_conflicting_acceptance =
+            league
+                .world
+                .world_work_acceptances
+                .iter()
+                .any(|acceptance| {
+                    acceptance.work_order_id == work_order_seed.work_order_id
+                        && acceptance.matrix_user_id == matrix_user_id
+                        && acceptance.body != body
+                        && !matches!(acceptance.status.as_str(), "accepted" | "completed")
+                });
+        if has_conflicting_acceptance {
             return (
                 StatusCode::CONFLICT,
-                Json(json!({ "error": "work order is not ready for acceptance", "status": league.world.world_work_orders[work_index].status, "work_order_id": work_order_id })),
+                Json(json!({
+                    "error": "work order already has a pending acceptance with a different body",
+                    "work_order_id": work_order_id,
+                })),
             )
                 .into_response();
         }
-        let work_order_seed = league.world.world_work_orders[work_index].clone();
+        if existing_acceptance.is_none() && work_order_seed.status != "delivered" {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": "work order is not ready for acceptance", "status": work_order_seed.status, "work_order_id": work_order_id })),
+            )
+                .into_response();
+        }
         let Some(purchase_index) = indexes
             .purchase_index_by_id
             .get(&work_order_seed.purchase_id)
@@ -2354,23 +3651,33 @@ pub(super) async fn accept_world_work_order_inner(
                 .into_response();
         }
         let reputation_delta = (work_order_seed.value_score / 20).max(1);
-        let acceptance = WorldWorkAcceptance {
+        let acceptance = existing_acceptance.unwrap_or_else(|| WorldWorkAcceptance {
             acceptance_id: league_hash_id(
                 "world-acceptance",
                 &format!(
                     "{}:{}:{}",
-                    work_order_seed.work_order_id, matrix_user_id, now
+                    work_order_seed.work_order_id, matrix_user_id, body
                 ),
             ),
             work_order_id: work_order_seed.work_order_id.clone(),
             matrix_user_id: matrix_user_id.clone(),
-            body,
+            body: body.clone(),
             status: "pending_consume".to_string(),
             reputation_delta,
             created_at_epoch: now,
-        };
-        league.world.world_work_orders[work_index].status = "accepted_pending_payment".to_string();
-        league.world.world_work_acceptances.push(acceptance.clone());
+        });
+        if !matches!(acceptance.status.as_str(), "accepted" | "completed") {
+            league.world.world_work_orders[work_index].status =
+                "accepted_pending_payment".to_string();
+        }
+        if !league
+            .world
+            .world_work_acceptances
+            .iter()
+            .any(|candidate| candidate.acceptance_id == acceptance.acceptance_id)
+        {
+            league.world.world_work_acceptances.push(acceptance.clone());
+        }
         (
             league.clone(),
             league.world.world_work_orders[work_index].clone(),
@@ -2379,6 +3686,14 @@ pub(super) async fn accept_world_work_order_inner(
             reputation_delta,
         )
     };
+    // Persist the stable acceptance/consume identity before crossing the Ledger boundary.  A
+    // crash after consume but before the final response can then resume the same operation rather
+    // than creating another acceptance and another buyer projection.
+    if let Err(response) =
+        persist_league_state_after_command(&state, &snapshot.0, "world_work_accept").await
+    {
+        return response;
+    }
     let buyer_consume =
         consume_world_purchase_with_ledger(&state, payload.room_id.as_deref(), &snapshot.2).await;
     let buyer_consume_receipt = buyer_consume.term_exchange_receipt.clone();
@@ -2391,11 +3706,62 @@ pub(super) async fn accept_world_work_order_inner(
         let mut acceptance = snapshot.3.clone();
         let mut economy_event = None;
         let mut standing = None;
-        let buyer_consumed = buyer_consume.progression_allowed(&["consumed", "duplicate"]);
-        purchase.buyer_consume_status = Some(buyer_consume.status.clone());
-        purchase.buyer_consume_entry_id = buyer_consume.entry_id.clone();
-        purchase.buyer_consume_balance_after = buyer_consume.balance_after;
-        purchase.buyer_consume_error = buyer_consume.error.clone();
+        let expected_buyer_amount = world_purchase_buyer_amount(&purchase);
+        let buyer_consume_amount_matches = expected_buyer_amount
+            .is_some_and(|expected| buyer_consume.amount_credits == Some(expected));
+        let remote_buyer_consumed = buyer_consume
+            .progression_allowed_for_term("world_commerce_purchase", &["consumed", "duplicate"])
+            && buyer_consume_amount_matches;
+        let self_dealing_work = work_order.buyer_matrix_user_id == work_order.seller_matrix_user_id;
+        let accepted_event_id = league_hash_id(
+            "world-econ",
+            &format!(
+                "{}:{}:{}",
+                work_order.buyer_matrix_user_id,
+                acceptance.acceptance_id,
+                acceptance.created_at_epoch
+            ),
+        );
+        let acceptance_projection_marker = if self_dealing_work {
+            None
+        } else {
+            world_acceptance_projection_marker(
+                &league.world,
+                &purchase,
+                &accepted_event_id,
+                &work_order.seller_matrix_user_id,
+                &work_order.work_order_id,
+                snapshot.4,
+                acceptance.created_at_epoch,
+            )
+        };
+        let projection_already_applied = acceptance_projection_marker == Some(true);
+        let projection_event_present = acceptance_projection_marker.is_some();
+        let projection_event_poisoned = acceptance_projection_marker == Some(false);
+        // A poisoned compatibility marker must not turn a successful-looking retry into a
+        // terminal projection.  Keep the operation retryable until the immutable event/receipt
+        // identity is repaired or a fresh exact consume response can be reconciled safely.
+        let buyer_consumed =
+            !projection_event_poisoned && (remote_buyer_consumed || projection_already_applied);
+        // A replay that cannot reach Ledger must not regress a previously accepted operation.
+        if !projection_already_applied || remote_buyer_consumed {
+            purchase.buyer_consume_status = Some(buyer_consume.status.clone());
+            purchase.buyer_consume_entry_id = buyer_consume.entry_id.clone();
+            purchase.buyer_consume_balance_after = buyer_consume.balance_after;
+            purchase.buyer_consume_error = buyer_consume.error.clone().or_else(|| {
+                (!buyer_consume_amount_matches
+                    && buyer_consume.progression_allowed_for_term(
+                        "world_commerce_purchase",
+                        &["consumed", "duplicate"],
+                    ))
+                .then(|| {
+                    format!(
+                        "buyer consume amount mismatch: expected {:?}, got {:?}",
+                        expected_buyer_amount, buyer_consume.amount_credits
+                    )
+                })
+            });
+        }
         purchase.status = if buyer_consumed {
             "completed".to_string()
         } else if buyer_consume.status.starts_with("skipped") {
@@ -2420,43 +3786,39 @@ pub(super) async fn accept_world_work_order_inner(
         indexes.replace_purchase_by_id(&mut league.world, &purchase);
         indexes.replace_work_order_by_id(&mut league.world, &work_order);
         indexes.replace_acceptance_by_id(&mut league.world, &acceptance);
-        let self_dealing_work = work_order.buyer_matrix_user_id == work_order.seller_matrix_user_id;
-        if buyer_consumed && !self_dealing_work {
+        if buyer_consumed
+            && !self_dealing_work
+            && !projection_already_applied
+            && !projection_event_present
+            && !projection_event_poisoned
+        {
             if let Some(company_index) = indexes
                 .company_index_by_id
                 .get(&work_order.company_id)
                 .copied()
             {
                 if let Some(company) = league.world.world_companies.get_mut(company_index) {
-                    company.reputation_score += snapshot.4;
-                    company.level = 1 + (company.revenue_score / 100).max(0);
+                    company.reputation_score = company.reputation_score.saturating_add(snapshot.4);
+                    company.level = 1_i64.saturating_add((company.revenue_score / 100).max(0));
                 }
             }
             let mut buyer =
                 ensure_league_player(&mut league, &work_order.buyer_matrix_user_id, None);
-            buyer.xp += 3;
-            buyer.reputation += 1;
+            buyer.xp = buyer.xp.saturating_add(3);
+            buyer.reputation = buyer.reputation.saturating_add(1);
             league
                 .players_by_matrix_user
                 .insert(work_order.buyer_matrix_user_id.clone(), buyer);
             let mut seller =
                 ensure_league_player(&mut league, &work_order.seller_matrix_user_id, None);
-            seller.xp += snapshot.4;
-            seller.reputation += snapshot.4;
-            seller.rating += (snapshot.4 / 2).max(1);
+            seller.xp = seller.xp.saturating_add(snapshot.4);
+            seller.reputation = seller.reputation.saturating_add(snapshot.4);
+            seller.rating = seller.rating.saturating_add((snapshot.4 / 2).max(1));
             league
                 .players_by_matrix_user
                 .insert(work_order.seller_matrix_user_id.clone(), seller);
             let accepted_event = WorldEconomyEvent {
-                economy_event_id: league_hash_id(
-                    "world-econ",
-                    &format!(
-                        "{}:{}:{}",
-                        work_order.buyer_matrix_user_id,
-                        acceptance.acceptance_id,
-                        acceptance.created_at_epoch
-                    ),
-                ),
+                economy_event_id: accepted_event_id.clone(),
                 matrix_user_id: work_order.seller_matrix_user_id.clone(),
                 event_kind: "work_accepted".to_string(),
                 subject_id: work_order.work_order_id.clone(),
@@ -2471,11 +3833,18 @@ pub(super) async fn accept_world_work_order_inner(
                 snapshot.4,
                 acceptance.created_at_epoch,
             ));
-            league
+            push_world_economy_event_once(&mut league.world, accepted_event.clone());
+            economy_event = Some(accepted_event);
+        } else if buyer_consumed && !self_dealing_work && projection_already_applied {
+            economy_event = league
                 .world
                 .world_economy_events
-                .push(accepted_event.clone());
-            economy_event = Some(accepted_event);
+                .iter()
+                .find(|event| event.economy_event_id == accepted_event_id)
+                .cloned();
+            standing = indexes
+                .faction_standing_index(&work_order.seller_matrix_user_id, "faction-market-guild")
+                .and_then(|index| league.world.world_faction_standings.get(index).cloned());
         }
         (
             league.clone(),
@@ -2638,6 +4007,8 @@ pub(super) async fn reject_world_work_order_inner(
                 | "rejected_refund_hold"
                 | "rejected_refund_failed"
                 | "rejected_chargeback_failed"
+                | "rejected_pending_refund"
+                | "rejected_pending_chargeback"
         ) {
             return (
                 StatusCode::CONFLICT,
@@ -2675,7 +4046,11 @@ pub(super) async fn reject_world_work_order_inner(
         };
         let rejection = if matches!(
             work_order_seed.status.as_str(),
-            "rejected_refund_hold" | "rejected_refund_failed" | "rejected_chargeback_failed"
+            "rejected_refund_hold"
+                | "rejected_refund_failed"
+                | "rejected_chargeback_failed"
+                | "rejected_pending_refund"
+                | "rejected_pending_chargeback"
         ) {
             match league
                 .world
@@ -2695,7 +4070,9 @@ pub(super) async fn reject_world_work_order_inner(
                         "world-rejection",
                         &format!(
                             "{}:{}:{}",
-                            work_order_seed.work_order_id, matrix_user_id, now
+                            work_order_seed.work_order_id,
+                            matrix_user_id,
+                            world_rejection_attempt(&league.world, &work_order_seed.work_order_id)
                         ),
                     ),
                     work_order_id: work_order_seed.work_order_id.clone(),
@@ -2712,7 +4089,9 @@ pub(super) async fn reject_world_work_order_inner(
                     "world-rejection",
                     &format!(
                         "{}:{}:{}",
-                        work_order_seed.work_order_id, matrix_user_id, now
+                        work_order_seed.work_order_id,
+                        matrix_user_id,
+                        world_rejection_attempt(&league.world, &work_order_seed.work_order_id)
                     ),
                 ),
                 work_order_id: work_order_seed.work_order_id.clone(),
@@ -2744,15 +4123,28 @@ pub(super) async fn reject_world_work_order_inner(
             retry_chargeback_only,
         )
     };
+    // Persist the pending rejection operation before touching the remote Ledger.  A process crash
+    // or lost response can then resume the same rejection_id/intent instead of minting a second
+    // refund or seller chargeback.
+    if let Err(response) =
+        persist_league_state_after_command(&state, &snapshot.0, "world_work_reject").await
+    {
+        return response;
+    }
     let buyer_refund = if snapshot.4 {
-        LeagueLedgerSettlement {
-            status: "refunded".to_string(),
-            account_id: snapshot.2.buyer_ledger_account_id.clone(),
-            entry_id: snapshot.2.buyer_consume_entry_id.clone(),
-            balance_after: snapshot.2.buyer_consume_balance_after,
-            error: None,
-            term_exchange_receipt: None,
-        }
+        world_replay_buyer_refund_settlement(
+            &snapshot.0.world,
+            &snapshot.2,
+            &snapshot.3.rejection_id,
+        )
+        .unwrap_or_else(|| LeagueLedgerSettlement {
+            status: "reconcile_required".to_string(),
+            error: Some(
+                "prior buyer refund lacks an exact typed receipt; seller chargeback is blocked"
+                    .to_string(),
+            ),
+            ..Default::default()
+        })
     } else {
         refund_world_purchase_with_ledger(
             &state,
@@ -2762,7 +4154,12 @@ pub(super) async fn reject_world_work_order_inner(
         )
         .await
     };
-    let buyer_refunded = buyer_refund.progression_allowed(&["refunded", "duplicate"]);
+    let expected_buyer_amount = world_purchase_buyer_amount(&snapshot.2);
+    let buyer_refund_amount_matches =
+        expected_buyer_amount.is_some_and(|expected| buyer_refund.amount_credits == Some(expected));
+    let buyer_refunded = buyer_refund
+        .progression_allowed_for_term("world_commerce_purchase", &["refunded", "duplicate"])
+        && buyer_refund_amount_matches;
     let seller_chargeback = if buyer_refunded {
         chargeback_world_purchase_seller_with_ledger(
             &state,
@@ -2792,10 +4189,29 @@ pub(super) async fn reject_world_work_order_inner(
         let mut rejection = snapshot.3.clone();
         let mut economy_event = None;
         let mut standing = None;
+        let expected_seller_net_credits =
+            world_seller_net_credits_for_price(purchase.price_credits);
         let seller_charged_back = buyer_refunded
-            && seller_chargeback.progression_allowed(&["seller_chargeback_consumed", "duplicate"]);
-        let seller_chargeback_cleared =
-            buyer_refunded && (seller_charged_back || seller_chargeback.terminal_skip());
+            && seller_chargeback.progression_allowed_for_term(
+                "world_commerce_purchase",
+                &["seller_chargeback_consumed", "duplicate"],
+            )
+            && seller_chargeback.amount_credits == Some(expected_seller_net_credits);
+        let seller_zero_net_skipped = world_settlement_is_zero_seller_net_skip(
+            &seller_chargeback,
+            expected_seller_net_credits,
+        );
+        // A buyer refund is terminally safe when no seller settlement ever became active.  In
+        // that case there is no seller value to claw back, and the chargeback helper deliberately
+        // returns this typed no-op instead of manufacturing a failed debit.  Treat only this
+        // explicit status (with no receipt/amount) as a cleared seller leg; generic `skipped_*`
+        // outcomes remain holds and keep the cancellation retryable.
+        let seller_not_settled_skipped = buyer_refunded
+            && seller_chargeback.status == "skipped_seller_not_settled"
+            && seller_chargeback.amount_credits.is_none()
+            && seller_chargeback.term_exchange_receipt.is_none();
+        let seller_chargeback_cleared = buyer_refunded
+            && (seller_charged_back || seller_zero_net_skipped || seller_not_settled_skipped);
         purchase.buyer_consume_status = Some(if buyer_refunded {
             "refunded".to_string()
         } else {
@@ -2803,7 +4219,18 @@ pub(super) async fn reject_world_work_order_inner(
         });
         purchase.buyer_consume_entry_id = buyer_refund.entry_id.clone();
         purchase.buyer_consume_balance_after = buyer_refund.balance_after;
-        purchase.buyer_consume_error = buyer_refund.error.clone();
+        purchase.buyer_consume_error = buyer_refund.error.clone().or_else(|| {
+            (buyer_refund.progression_allowed_for_term(
+                "world_commerce_purchase",
+                &["refunded", "duplicate"],
+            ) && !buyer_refund_amount_matches)
+                .then(|| {
+                    format!(
+                        "buyer refund amount mismatch: expected {:?}, got {:?}",
+                        expected_buyer_amount, buyer_refund.amount_credits
+                    )
+                })
+        });
         purchase.status = if buyer_refunded {
             if seller_chargeback_cleared {
                 "rejected_refunded".to_string()
@@ -2818,7 +4245,7 @@ pub(super) async fn reject_world_work_order_inner(
         if buyer_refunded {
             purchase.ledger_status = Some(if seller_charged_back {
                 "seller_chargeback_consumed".to_string()
-            } else if seller_chargeback.terminal_skip() {
+            } else if seller_zero_net_skipped {
                 seller_chargeback.status.clone()
             } else {
                 "seller_chargeback_failed".to_string()
@@ -2845,49 +4272,57 @@ pub(super) async fn reject_world_work_order_inner(
                     matrix_user_id: rejection.matrix_user_id.clone(),
                     event_kind: "work_rejected".to_string(),
                     subject_id: work_order.work_order_id.clone(),
-                    credits_delta: -purchase.price_credits,
+                    credits_delta: purchase.price_credits.saturating_neg(),
                     reputation_delta: 0,
                     created_at_epoch: rejection.created_at_epoch,
                 };
-                standing = Some(upsert_world_faction_standing(
-                    &mut league,
-                    &rejection.matrix_user_id,
-                    "faction-market-guild",
-                    1,
-                    rejection.created_at_epoch,
-                ));
-                league
-                    .world
-                    .world_economy_events
-                    .push(rejected_event.clone());
+                if push_world_economy_event_once(&mut league.world, rejected_event.clone()) {
+                    standing = Some(upsert_world_faction_standing(
+                        &mut league,
+                        &rejection.matrix_user_id,
+                        "faction-market-guild",
+                        1,
+                        rejection.created_at_epoch,
+                    ));
+                }
                 economy_event = Some(rejected_event);
             }
             if seller_charged_back {
-                let seller_net_credits = world_seller_net_credits_for_price(purchase.price_credits);
-                if let Some(player) = league
-                    .players_by_matrix_user
-                    .get_mut(&purchase.seller_matrix_user_id)
-                {
-                    player.earned_credits =
-                        (player.earned_credits - seller_net_credits as f64).max(0.0);
-                }
-                league.world.world_economy_events.push(WorldEconomyEvent {
+                let seller_net_credits = seller_chargeback
+                    .amount_credits
+                    .expect("charged-back seller settlement must carry exact amount_credits");
+                let chargeback_event = WorldEconomyEvent {
                     economy_event_id: league_hash_id(
                         "world-seller-chargeback",
                         &format!(
                             "{}:{}:{}",
-                            purchase.seller_matrix_user_id,
-                            rejection.rejection_id,
-                            Utc::now().timestamp()
+                            purchase.seller_matrix_user_id, rejection.rejection_id, "projection"
                         ),
                     ),
                     matrix_user_id: purchase.seller_matrix_user_id.clone(),
                     event_kind: "seller_chargeback".to_string(),
                     subject_id: purchase.purchase_id.clone(),
-                    credits_delta: -seller_net_credits,
+                    credits_delta: seller_net_credits.saturating_neg(),
                     reputation_delta: 0,
-                    created_at_epoch: Utc::now().timestamp(),
-                });
+                    created_at_epoch: rejection.created_at_epoch,
+                };
+                // The event id is the projection id.  Only the first append may mutate the
+                // compatibility earned_credits balance; retries replay the Ledger receipt but do
+                // not debit the seller again.
+                if push_world_economy_event_once(&mut league.world, chargeback_event) {
+                    if let Some(player) = league
+                        .players_by_matrix_user
+                        .get_mut(&purchase.seller_matrix_user_id)
+                    {
+                        if let Some(seller_net_display) =
+                            exact_credits_to_legacy_display(seller_net_credits)
+                        {
+                            // Compatibility projection only: subtract the exact chargeback amount.
+                            player.earned_credits =
+                                (player.earned_credits - seller_net_display).max(0.0);
+                        }
+                    }
+                }
             }
         }
         work_order.status = purchase.status.clone();
@@ -3055,7 +4490,14 @@ pub(super) async fn reopen_world_work_order_inner(
         }
         if !matches!(
             league.world.world_work_orders[work_index].status.as_str(),
-            "rejected_refunded" | "rejected_refund_hold" | "rejected_refund_failed"
+            "rejected_refunded"
+                | "rejected_refund_hold"
+                | "rejected_refund_failed"
+                | "reopen_reserve_hold"
+                | "reopen_reserve_failed"
+                | "reopen_seller_settlement_pending"
+                | "reopen_seller_settlement_failed"
+                | "reopen_pending_reserve"
         ) {
             let status = league.world.world_work_orders[work_index].status.clone();
             return (
@@ -3095,23 +4537,73 @@ pub(super) async fn reopen_world_work_order_inner(
             )
                 .into_response();
         }
-        let reopen = WorldWorkReopen {
-            reopen_id: league_hash_id(
-                "world-reopen",
-                &format!(
-                    "{}:{}:{}:{}",
-                    work_order_seed.work_order_id, matrix_user_id, now, body
+        let retrying_reopen = matches!(
+            work_order_seed.status.as_str(),
+            "reopen_reserve_hold"
+                | "reopen_reserve_failed"
+                | "reopen_seller_settlement_pending"
+                | "reopen_seller_settlement_failed"
+                | "reopen_pending_reserve"
+        );
+        let reopen = if retrying_reopen {
+            league
+                .world
+                .world_work_reopens
+                .iter()
+                .rev()
+                .find(|reopen| reopen.work_order_id == work_order_seed.work_order_id)
+                .cloned()
+                .map(|mut reopen| {
+                    // Keep the original operation identity across a remote retry; the body is
+                    // diagnostic input and must not mint another reserve/settlement intent.
+                    reopen.body = body.clone();
+                    reopen.status = "pending_reopen_reserve".to_string();
+                    reopen.reserve_status = "pending".to_string();
+                    reopen
+                })
+                .unwrap_or_else(|| WorldWorkReopen {
+                    reopen_id: league_hash_id(
+                        "world-reopen",
+                        &format!(
+                            "{}:{}:{}",
+                            work_order_seed.work_order_id,
+                            matrix_user_id,
+                            world_reopen_attempt(&league.world, &work_order_seed.work_order_id)
+                        ),
+                    ),
+                    work_order_id: work_order_seed.work_order_id.clone(),
+                    matrix_user_id: matrix_user_id.clone(),
+                    body: body.clone(),
+                    status: "pending_reopen_reserve".to_string(),
+                    reserve_status: "pending".to_string(),
+                    created_at_epoch: now,
+                })
+        } else {
+            WorldWorkReopen {
+                reopen_id: league_hash_id(
+                    "world-reopen",
+                    &format!(
+                        "{}:{}:{}",
+                        work_order_seed.work_order_id,
+                        matrix_user_id,
+                        world_reopen_attempt(&league.world, &work_order_seed.work_order_id)
+                    ),
                 ),
-            ),
-            work_order_id: work_order_seed.work_order_id.clone(),
-            matrix_user_id: matrix_user_id.clone(),
-            body,
-            status: "pending_reopen_reserve".to_string(),
-            reserve_status: "pending".to_string(),
-            created_at_epoch: now,
+                work_order_id: work_order_seed.work_order_id.clone(),
+                matrix_user_id: matrix_user_id.clone(),
+                body,
+                status: "pending_reopen_reserve".to_string(),
+                reserve_status: "pending".to_string(),
+                created_at_epoch: now,
+            }
         };
         league.world.world_work_orders[work_index].status = "reopen_pending_reserve".to_string();
-        league.world.world_work_reopens.push(reopen.clone());
+        let reopen_index = indexes.reopen_index_by_id.get(&reopen.reopen_id).copied();
+        if reopen_index.is_some() {
+            indexes.replace_reopen_by_id(&mut league.world, &reopen);
+        } else {
+            league.world.world_work_reopens.push(reopen.clone());
+        }
         (
             league.clone(),
             league.world.world_work_orders[work_index].clone(),
@@ -3119,6 +4611,13 @@ pub(super) async fn reopen_world_work_order_inner(
             reopen,
         )
     };
+    // The reopen reserve intent must survive before the network call.  This is intentionally the
+    // same supported command as the final projection; no separate transient write-set exists.
+    if let Err(response) =
+        persist_league_state_after_command(&state, &snapshot.0, "world_work_reopen").await
+    {
+        return response;
+    }
     let buyer_reopen_reserve = reserve_reopened_world_purchase_with_ledger(
         &state,
         payload.room_id.as_deref(),
@@ -3126,7 +4625,13 @@ pub(super) async fn reopen_world_work_order_inner(
         &snapshot.3,
     )
     .await;
-    let buyer_reserved = buyer_reopen_reserve.progression_allowed(&["reserved", "duplicate"]);
+    let expected_buyer_amount = world_purchase_buyer_amount(&snapshot.2);
+    let buyer_reopen_reserve_progression_allowed = buyer_reopen_reserve
+        .progression_allowed_for_term("world_commerce_purchase", &["reserved", "duplicate"]);
+    let buyer_reopen_reserve_amount_matches = expected_buyer_amount
+        .is_some_and(|expected| buyer_reopen_reserve.amount_credits == Some(expected));
+    let buyer_reserved =
+        buyer_reopen_reserve_progression_allowed && buyer_reopen_reserve_amount_matches;
     let seller_reopen_settlement = if buyer_reserved {
         settle_reopened_world_purchase_with_ledger(
             &state,
@@ -3145,8 +4650,14 @@ pub(super) async fn reopen_world_work_order_inner(
             ..Default::default()
         }
     };
-    let seller_resettled =
-        seller_reopen_settlement.progression_allowed(&["reopened_settled", "duplicate"]);
+    let expected_seller_net_credits = world_seller_net_credits_for_price(snapshot.2.price_credits);
+    let seller_reopen_progression_allowed = seller_reopen_settlement.progression_allowed_for_term(
+        "world_commerce_purchase",
+        &["reopened_settled", "duplicate"],
+    );
+    let seller_reopen_amount_matches =
+        seller_reopen_settlement.amount_credits == Some(expected_seller_net_credits);
+    let seller_resettled = seller_reopen_progression_allowed && seller_reopen_amount_matches;
     let buyer_reopen_reserve_receipt = buyer_reopen_reserve.term_exchange_receipt.clone();
     let seller_reopen_settlement_receipt = seller_reopen_settlement.term_exchange_receipt.clone();
     let final_snapshot = {
@@ -3166,13 +4677,29 @@ pub(super) async fn reopen_world_work_order_inner(
         });
         purchase.buyer_ledger_entry_id = buyer_reopen_reserve.entry_id.clone();
         purchase.buyer_ledger_balance_after = buyer_reopen_reserve.balance_after;
-        purchase.buyer_ledger_error = buyer_reopen_reserve.error.clone();
+        purchase.buyer_ledger_error = buyer_reopen_reserve.error.clone().or_else(|| {
+            (buyer_reopen_reserve_progression_allowed && !buyer_reopen_reserve_amount_matches).then(
+                || {
+                    format!(
+                        "buyer reopen reserve amount mismatch: expected {:?}, got {:?}",
+                        expected_buyer_amount, buyer_reopen_reserve.amount_credits
+                    )
+                },
+            )
+        });
         if buyer_reserved {
             purchase.ledger_status = Some(seller_reopen_settlement.status.clone());
             purchase.ledger_account_id = seller_reopen_settlement.account_id.clone();
             purchase.ledger_entry_id = seller_reopen_settlement.entry_id.clone();
             purchase.ledger_balance_after = seller_reopen_settlement.balance_after;
-            purchase.ledger_error = seller_reopen_settlement.error.clone();
+            purchase.ledger_error = seller_reopen_settlement.error.clone().or_else(|| {
+                (seller_reopen_progression_allowed && !seller_reopen_amount_matches).then(|| {
+                    format!(
+                        "seller reopen settlement amount mismatch: expected {expected_seller_net_credits}, got {:?}",
+                        seller_reopen_settlement.amount_credits
+                    )
+                })
+            });
         }
         purchase.status = if buyer_reserved {
             if seller_resettled {
@@ -3222,17 +4749,17 @@ pub(super) async fn reopen_world_work_order_inner(
                 reputation_delta: 1,
                 created_at_epoch: reopen.created_at_epoch,
             };
-            standing = Some(upsert_world_faction_standing(
-                &mut league,
-                &reopen.matrix_user_id,
-                "faction-market-guild",
-                1,
-                reopen.created_at_epoch,
-            ));
-            league
-                .world
-                .world_economy_events
-                .push(reopened_event.clone());
+            let event_was_new =
+                push_world_economy_event_once(&mut league.world, reopened_event.clone());
+            if event_was_new {
+                standing = Some(upsert_world_faction_standing(
+                    &mut league,
+                    &reopen.matrix_user_id,
+                    "faction-market-guild",
+                    1,
+                    reopen.created_at_epoch,
+                ));
+            }
             economy_event = Some(reopened_event);
         }
         indexes.replace_purchase_by_id(&mut league.world, &purchase);
@@ -3408,6 +4935,8 @@ pub(super) async fn cancel_world_work_order_inner(
                 | "cancelled_refund_hold"
                 | "cancelled_refund_failed"
                 | "cancelled_chargeback_failed"
+                | "cancel_pending_refund"
+                | "cancel_pending_chargeback"
         ) {
             let status = league.world.world_work_orders[work_index].status.clone();
             return (
@@ -3446,7 +4975,11 @@ pub(super) async fn cancel_world_work_order_inner(
         };
         let cancellation = if matches!(
             work_order_seed.status.as_str(),
-            "cancelled_refund_hold" | "cancelled_refund_failed" | "cancelled_chargeback_failed"
+            "cancelled_refund_hold"
+                | "cancelled_refund_failed"
+                | "cancelled_chargeback_failed"
+                | "cancel_pending_refund"
+                | "cancel_pending_chargeback"
         ) {
             match league
                 .world
@@ -3466,7 +4999,13 @@ pub(super) async fn cancel_world_work_order_inner(
                         "world-cancel",
                         &format!(
                             "{}:{}:{}:{}",
-                            work_order_seed.work_order_id, matrix_user_id, now, body
+                            work_order_seed.work_order_id,
+                            matrix_user_id,
+                            world_cancellation_attempt(
+                                &league.world,
+                                &work_order_seed.work_order_id
+                            ),
+                            "operation"
                         ),
                     ),
                     work_order_id: work_order_seed.work_order_id.clone(),
@@ -3483,7 +5022,10 @@ pub(super) async fn cancel_world_work_order_inner(
                     "world-cancel",
                     &format!(
                         "{}:{}:{}:{}",
-                        work_order_seed.work_order_id, matrix_user_id, now, body
+                        work_order_seed.work_order_id,
+                        matrix_user_id,
+                        world_cancellation_attempt(&league.world, &work_order_seed.work_order_id),
+                        "operation"
                     ),
                 ),
                 work_order_id: work_order_seed.work_order_id.clone(),
@@ -3518,15 +5060,27 @@ pub(super) async fn cancel_world_work_order_inner(
             retry_chargeback_only,
         )
     };
+    // Persist the pending cancellation before refund/chargeback network calls so a retry can
+    // recover the original cancellation identity and Ledger intent.
+    if let Err(response) =
+        persist_league_state_after_command(&state, &snapshot.0, "world_work_cancel").await
+    {
+        return response;
+    }
     let buyer_cancel_refund = if snapshot.4 {
-        LeagueLedgerSettlement {
-            status: "refunded".to_string(),
-            account_id: snapshot.2.buyer_ledger_account_id.clone(),
-            entry_id: snapshot.2.buyer_consume_entry_id.clone(),
-            balance_after: snapshot.2.buyer_consume_balance_after,
-            error: None,
-            term_exchange_receipt: None,
-        }
+        world_replay_buyer_refund_settlement(
+            &snapshot.0.world,
+            &snapshot.2,
+            &snapshot.3.cancellation_id,
+        )
+        .unwrap_or_else(|| LeagueLedgerSettlement {
+            status: "reconcile_required".to_string(),
+            error: Some(
+                "prior buyer refund lacks an exact typed receipt; seller chargeback is blocked"
+                    .to_string(),
+            ),
+            ..Default::default()
+        })
     } else {
         refund_world_purchase_with_ledger(
             &state,
@@ -3536,7 +5090,12 @@ pub(super) async fn cancel_world_work_order_inner(
         )
         .await
     };
-    let buyer_refunded = buyer_cancel_refund.progression_allowed(&["refunded", "duplicate"]);
+    let expected_buyer_amount = world_purchase_buyer_amount(&snapshot.2);
+    let buyer_refund_amount_matches = expected_buyer_amount
+        .is_some_and(|expected| buyer_cancel_refund.amount_credits == Some(expected));
+    let buyer_refunded = buyer_cancel_refund
+        .progression_allowed_for_term("world_commerce_purchase", &["refunded", "duplicate"])
+        && buyer_refund_amount_matches;
     let seller_chargeback = if buyer_refunded {
         chargeback_world_purchase_seller_with_ledger(
             &state,
@@ -3566,10 +5125,27 @@ pub(super) async fn cancel_world_work_order_inner(
         let mut cancellation = snapshot.3.clone();
         let mut economy_event = None;
         let mut standing = None;
+        let expected_seller_net_credits =
+            world_seller_net_credits_for_price(purchase.price_credits);
         let seller_charged_back = buyer_refunded
-            && seller_chargeback.progression_allowed(&["seller_chargeback_consumed", "duplicate"]);
-        let seller_chargeback_cleared =
-            buyer_refunded && (seller_charged_back || seller_chargeback.terminal_skip());
+            && seller_chargeback.progression_allowed_for_term(
+                "world_commerce_purchase",
+                &["seller_chargeback_consumed", "duplicate"],
+            )
+            && seller_chargeback.amount_credits == Some(expected_seller_net_credits);
+        let seller_zero_net_skipped = world_settlement_is_zero_seller_net_skip(
+            &seller_chargeback,
+            expected_seller_net_credits,
+        );
+        // If no seller settlement ever became active, there is no seller value to claw back.
+        // `chargeback_world_purchase_seller_with_ledger` emits this explicit no-op only after
+        // checking the immutable settlement evidence; generic skipped outcomes remain holds.
+        let seller_not_settled_skipped = buyer_refunded
+            && seller_chargeback.status == "skipped_seller_not_settled"
+            && seller_chargeback.amount_credits.is_none()
+            && seller_chargeback.term_exchange_receipt.is_none();
+        let seller_chargeback_cleared = buyer_refunded
+            && (seller_charged_back || seller_zero_net_skipped || seller_not_settled_skipped);
         purchase.buyer_consume_status = Some(if buyer_refunded {
             "refunded".to_string()
         } else {
@@ -3577,7 +5153,18 @@ pub(super) async fn cancel_world_work_order_inner(
         });
         purchase.buyer_consume_entry_id = buyer_cancel_refund.entry_id.clone();
         purchase.buyer_consume_balance_after = buyer_cancel_refund.balance_after;
-        purchase.buyer_consume_error = buyer_cancel_refund.error.clone();
+        purchase.buyer_consume_error = buyer_cancel_refund.error.clone().or_else(|| {
+            (buyer_cancel_refund.progression_allowed_for_term(
+                "world_commerce_purchase",
+                &["refunded", "duplicate"],
+            ) && !buyer_refund_amount_matches)
+                .then(|| {
+                    format!(
+                        "buyer refund amount mismatch: expected {:?}, got {:?}",
+                        expected_buyer_amount, buyer_cancel_refund.amount_credits
+                    )
+                })
+        });
         purchase.status = if buyer_refunded {
             if seller_chargeback_cleared {
                 "cancelled_refunded".to_string()
@@ -3590,11 +5177,13 @@ pub(super) async fn cancel_world_work_order_inner(
             "cancelled_refund_failed".to_string()
         };
         if buyer_refunded {
-            if seller_charged_back || !seller_chargeback.terminal_skip() {
+            if seller_charged_back || seller_zero_net_skipped || seller_not_settled_skipped {
                 purchase.ledger_status = Some(if seller_charged_back {
                     "seller_chargeback_consumed".to_string()
+                } else if seller_zero_net_skipped {
+                    "skipped_zero_seller_net".to_string()
                 } else {
-                    "seller_chargeback_failed".to_string()
+                    "skipped_seller_not_settled".to_string()
                 });
                 purchase.ledger_entry_id = seller_chargeback
                     .entry_id
@@ -3619,48 +5208,56 @@ pub(super) async fn cancel_world_work_order_inner(
                     matrix_user_id: cancellation.matrix_user_id.clone(),
                     event_kind: "work_cancelled".to_string(),
                     subject_id: work_order.work_order_id.clone(),
-                    credits_delta: -purchase.price_credits,
+                    credits_delta: purchase.price_credits.saturating_neg(),
                     reputation_delta: 0,
                     created_at_epoch: cancellation.created_at_epoch,
                 };
-                standing = Some(upsert_world_faction_standing(
-                    &mut league,
-                    &cancellation.matrix_user_id,
-                    "faction-market-guild",
-                    1,
-                    cancellation.created_at_epoch,
-                ));
-                league
-                    .world
-                    .world_economy_events
-                    .push(cancelled_event.clone());
+                if push_world_economy_event_once(&mut league.world, cancelled_event.clone()) {
+                    standing = Some(upsert_world_faction_standing(
+                        &mut league,
+                        &cancellation.matrix_user_id,
+                        "faction-market-guild",
+                        1,
+                        cancellation.created_at_epoch,
+                    ));
+                }
                 economy_event = Some(cancelled_event);
             }
             if seller_charged_back {
-                let seller_net_credits = world_seller_net_credits_for_price(purchase.price_credits);
-                if let Some(player) = league
-                    .players_by_matrix_user
-                    .get_mut(&purchase.seller_matrix_user_id)
-                {
-                    player.earned_credits =
-                        (player.earned_credits - seller_net_credits as f64).max(0.0);
-                }
-                let now = Utc::now().timestamp();
-                league.world.world_economy_events.push(WorldEconomyEvent {
+                let seller_net_credits = seller_chargeback
+                    .amount_credits
+                    .expect("charged-back seller settlement must carry exact amount_credits");
+                let chargeback_event = WorldEconomyEvent {
                     economy_event_id: league_hash_id(
                         "world-seller-chargeback",
                         &format!(
                             "{}:{}:{}",
-                            purchase.seller_matrix_user_id, cancellation.cancellation_id, now
+                            purchase.seller_matrix_user_id,
+                            cancellation.cancellation_id,
+                            "projection"
                         ),
                     ),
                     matrix_user_id: purchase.seller_matrix_user_id.clone(),
                     event_kind: "seller_chargeback".to_string(),
                     subject_id: purchase.purchase_id.clone(),
-                    credits_delta: -seller_net_credits,
+                    credits_delta: seller_net_credits.saturating_neg(),
                     reputation_delta: 0,
-                    created_at_epoch: now,
-                });
+                    created_at_epoch: cancellation.created_at_epoch,
+                };
+                if push_world_economy_event_once(&mut league.world, chargeback_event) {
+                    if let Some(player) = league
+                        .players_by_matrix_user
+                        .get_mut(&purchase.seller_matrix_user_id)
+                    {
+                        if let Some(seller_net_display) =
+                            exact_credits_to_legacy_display(seller_net_credits)
+                        {
+                            // Compatibility projection only: subtract the exact chargeback amount.
+                            player.earned_credits =
+                                (player.earned_credits - seller_net_display).max(0.0);
+                        }
+                    }
+                }
             }
         }
         work_order.status = purchase.status.clone();
@@ -3815,9 +5412,10 @@ pub(super) async fn settle_world_contract_completion_with_ledger(
     contract: &WorldContract,
     completion: &WorldContractCompletion,
 ) -> LeagueLedgerSettlement {
-    if completion.reward_amount <= 0.0 {
+    if completion.reward_amount < 0.0 {
         return LeagueLedgerSettlement {
-            status: "skipped_zero_reward".to_string(),
+            status: "failed_ledger".to_string(),
+            error: Some("world contract reward amount must be non-negative".to_string()),
             ..Default::default()
         };
     }
@@ -3845,7 +5443,11 @@ pub(super) async fn settle_world_contract_completion_with_ledger(
                 term_version: "v1".to_string(),
                 domain: "trillionnium_world".to_string(),
                 intent_id: format!("world_contract_completion:{}", completion.completion_id),
-                intent_kind: term_exchange_protocol::EconomicIntentKind::CompleteContract,
+                // CompleteContract is an audit-only, zero-value intent in the native Ledger
+                // contract.  This path carries an actual reward amount, so classify it as the
+                // value-bearing ReleaseReward operation while retaining the World completion
+                // term/intent scope for idempotent evidence.
+                intent_kind: term_exchange_protocol::EconomicIntentKind::ReleaseReward,
                 room_id: payload.room_id.clone(),
                 matrix_user_id: matrix_user_id.to_string(),
                 account_id_override: None,
@@ -3912,7 +5514,9 @@ pub(super) async fn complete_world_contract_inner(
                     completion.contract_id == contract.contract_id
                         && world_contract_completion_released(&league.world, completion)
                 });
-        if released_completion_exists || world_contract_completion_final(&contract) {
+        // A mutable `completed_*` compatibility status is not proof of a Ledger effect.  Only a
+        // typed receipt-backed completion suppresses replay; stale status rows remain retryable.
+        if released_completion_exists {
             return (
                 StatusCode::CONFLICT,
                 Json(json!({
@@ -3941,12 +5545,66 @@ pub(super) async fn complete_world_contract_inner(
         let now = Utc::now().timestamp();
         let mut league = state.inner.league_state.lock().await;
         let indexes = build_world_indexes(&league.world);
-        let completion_id = league_hash_id(
+        // Completion identity is derived from the immutable contract + actor + report body.  A
+        // retry after a lost response therefore reuses the same Ledger intent; a distinct report
+        // is a distinct attempted completion and cannot overwrite the prior evidence.
+        let deterministic_completion_id = league_hash_id(
             "world-contract-completion",
-            &format!("{}:{}:{}", contract.contract_id, now, body),
+            &format!("{}:{}:{}", contract.contract_id, matrix_user_id, body),
         );
-        let completion = WorldContractCompletion {
-            completion_id: completion_id.clone(),
+        // Tactics and the direct contract endpoint historically used different completion
+        // namespaces.  A tactics response can be lost after the row is durable, then recovered
+        // through this endpoint; derive/check both current ids before falling back to timestamp
+        // identities.  Every candidate is still bound to the immutable contract/actor/body tuple
+        // so an id collision fails closed rather than creating a second Ledger intent.
+        let tactics_completion_id = league_hash_id(
+            "world-trillionnium-task-completion",
+            &format!("{}:{}:{}", contract.contract_id, matrix_user_id, body),
+        );
+        let mut existing_completion_by_id = None;
+        for candidate_id in [&deterministic_completion_id, &tactics_completion_id] {
+            if let Some(existing_completion) = league
+                .world
+                .world_contract_completions
+                .iter()
+                .find(|existing| existing.completion_id == *candidate_id)
+                .cloned()
+            {
+                if !world_contract_completion_identity_matches(
+                    &existing_completion,
+                    &contract.contract_id,
+                    &matrix_user_id,
+                    &body,
+                ) {
+                    return world_contract_completion_id_collision_response(
+                        candidate_id,
+                        "world contract completion_id is already bound to a different payload",
+                    );
+                }
+                // If both namespaces exist (for example, a concurrent upgrade straddled the
+                // route cutover), prefer the terminal/receipt-backed row; otherwise retain the
+                // first canonical HTTP candidate deterministically.
+                let should_replace = existing_completion_by_id.as_ref().is_some_and(|current| {
+                    world_contract_completion_replay_priority(&league.world, &existing_completion)
+                        > world_contract_completion_replay_priority(&league.world, current)
+                });
+                if existing_completion_by_id.is_none() || should_replace {
+                    existing_completion_by_id = Some(existing_completion);
+                }
+            }
+        }
+        let existing_completion = existing_completion_by_id.or_else(|| {
+            // Timestamp-derived rows from either historical route are valid recovery candidates
+            // here: this endpoint is the documented settlement authority for both surfaces.
+            legacy_world_contract_completion_for_request(
+                &league.world,
+                &contract.contract_id,
+                &matrix_user_id,
+                &body,
+            )
+        });
+        let completion = existing_completion.unwrap_or_else(|| WorldContractCompletion {
+            completion_id: deterministic_completion_id.clone(),
             contract_id: contract.contract_id.clone(),
             matrix_user_id: matrix_user_id.clone(),
             body: body.clone(),
@@ -3963,27 +5621,68 @@ pub(super) async fn complete_world_contract_inner(
             ledger_balance_after: None,
             ledger_error: None,
             created_at_epoch: now,
-        };
-        let released = judgement.payout_status == "eligible";
+        });
+        let released = completion.payout_status == "eligible";
         if let Some(contract_index) = indexes.contract_index(&contract.contract_id) {
+            let terminal_projection_marker = matches!(
+                completion.ledger_status.as_deref(),
+                Some("settled")
+                    | Some("approved_release")
+                    | Some("duplicate")
+                    | Some("skipped_zero_reward")
+            );
+            // Evaluate the receipt predicate before taking a mutable borrow of the contract.  The
+            // world lock is already held, and keeping this immutable check separate avoids
+            // aliasing the same `league.world` while projecting the compatibility row.
+            let exact_receipt_present =
+                world_contract_completion_released(&league.world, &completion);
             let stored_contract = &mut league.world.world_contracts[contract_index];
-            stored_contract.status = if released {
-                "completed_pending_settlement".to_string()
+            if terminal_projection_marker && !exact_receipt_present {
+                // A legacy row can claim a terminal compatibility status while its exact receipt
+                // is absent or malformed.  Preserve the fact that this is a reconciliation case
+                // instead of regressing it to a fresh pending/review projection; the settlement
+                // call below still uses the original completion id and remains fail-closed.
+                stored_contract.status = "settlement_reconcile_required".to_string();
+                stored_contract.cex_status = Some("reconcile_required".to_string());
             } else {
-                "review_hold".to_string()
-            };
-            stored_contract.cex_status = Some(if released {
-                "settlement_pending".to_string()
-            } else {
-                "review_hold".to_string()
-            });
+                stored_contract.status = if released {
+                    "completed_pending_settlement".to_string()
+                } else {
+                    "review_hold".to_string()
+                };
+                stored_contract.cex_status = Some(if released {
+                    "settlement_pending".to_string()
+                } else {
+                    "review_hold".to_string()
+                });
+            }
         }
-        league
+        if !league
             .world
             .world_contract_completions
-            .push(completion.clone());
+            .iter()
+            .any(|existing| existing.completion_id == completion.completion_id)
+        {
+            league
+                .world
+                .world_contract_completions
+                .push(completion.clone());
+        }
         completion
     };
+    // Completion identity/status is now durable before the remote settlement.  If the process
+    // dies after Ledger commits but before the response is returned, the next request can replay
+    // the same completion_id and exact Ledger intent.
+    let pending_snapshot = {
+        let league = state.inner.league_state.lock().await;
+        league.clone()
+    };
+    if let Err(response) =
+        persist_league_state_after_command(&state, &pending_snapshot, "world_contract_completion")
+            .await
+    {
+        return response;
+    }
     let settlement = settle_world_contract_completion_with_ledger(
         &state,
         &payload,
@@ -3992,77 +5691,39 @@ pub(super) async fn complete_world_contract_inner(
         &completion,
     )
     .await;
-    let settlement_completed = settlement.progression_allowed(&["settled", "duplicate"]);
-    let settlement_receipt = settlement.term_exchange_receipt.clone();
+    let exact_reward_credits = whole_credits_from_compatibility_amount(completion.reward_amount);
+    let expected_reward_credits = exact_reward_credits.as_ref().ok().copied();
+    let settlement_progression_allowed = settlement.progression_allowed_for_term(
+        "world_contract_completion_settlement",
+        &["settled", "duplicate"],
+    );
+    let settlement_amount_matches =
+        expected_reward_credits.is_some_and(|expected| settlement.amount_credits == Some(expected));
+    let settlement_completed = settlement_progression_allowed && settlement_amount_matches;
+    let settlement_zero_reward_skipped =
+        world_settlement_is_zero_reward_skip(&settlement, expected_reward_credits);
     completion.ledger_status = Some(settlement.status.clone());
-    completion.ledger_account_id = settlement.account_id;
-    completion.ledger_entry_id = settlement.entry_id;
+    completion.ledger_account_id = settlement.account_id.clone();
+    completion.ledger_entry_id = settlement.entry_id.clone();
     completion.ledger_balance_after = settlement.balance_after;
-    completion.ledger_error = settlement.error;
+    completion.ledger_error = settlement.error.clone().or_else(|| {
+        (settlement_progression_allowed && !settlement_amount_matches).then(|| {
+            format!(
+                "world contract settlement amount mismatch: expected {:?}, got {:?}",
+                expected_reward_credits, settlement.amount_credits
+            )
+        })
+    });
     let snapshot = {
         let mut league = state.inner.league_state.lock().await;
-        record_world_term_exchange_receipt(&mut league.world, settlement_receipt);
-        let indexes = build_world_indexes(&league.world);
-        indexes.replace_contract_completion_by_id(&mut league.world, &completion);
-        if settlement_completed {
-            let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
-            player.earned_credits += completion.reward_amount;
-            player.xp += completion.score.round() as i64;
-            player.reputation += (completion.score / 8.0).round() as i64;
-            player.rating += ((completion.score - 50.0) / 3.0).round() as i64;
-            league
-                .players_by_matrix_user
-                .insert(matrix_user_id.clone(), player);
-
-            let asset_delta = (completion.score / 5.0).round() as i64;
-            if let Some(asset_index) = indexes.latest_asset_index_for_owner(&matrix_user_id) {
-                let asset = &mut league.world.world_assets[asset_index];
-                asset.value_score += asset_delta.max(1);
-                asset.upgrade_points += asset_delta.max(1);
-                asset.upgrade_level =
-                    asset.upgrade_level.max(1) + (asset.upgrade_points / 60).max(0);
-                asset.last_upgrade_kind = Some("contract_completion".to_string());
-                asset.status = "upgraded_by_contract".to_string();
-            } else {
-                league.world.world_assets.push(WorldAsset {
-                    asset_id: league_hash_id("world-asset", &completion.completion_id),
-                    owner_matrix_user_id: matrix_user_id.clone(),
-                    location_id: contract.location_id.clone(),
-                    asset_kind: "contract_proof".to_string(),
-                    name: "World Contract Proof".to_string(),
-                    status: "active".to_string(),
-                    value_score: asset_delta.max(1),
-                    upgrade_level: 1,
-                    upgrade_points: asset_delta.max(1),
-                    last_upgrade_kind: Some("contract_completion".to_string()),
-                    created_at_epoch: completion.created_at_epoch,
-                });
-            }
-        }
-        if let Some(contract_index) = indexes.contract_index(&contract.contract_id) {
-            let mut stored_contract = league.world.world_contracts[contract_index].clone();
-            stored_contract.status = match completion.ledger_status.as_deref() {
-                Some("settled") | Some("duplicate") => "completed_settled".to_string(),
-                Some("held_review") => "review_hold".to_string(),
-                Some(status) => format!("completed_{status}"),
-                None => stored_contract.status.clone(),
-            };
-            stored_contract.cex_status = Some(match completion.ledger_status.as_deref() {
-                Some("settled") | Some("duplicate") => "completed".to_string(),
-                Some("held_review") => "review_hold".to_string(),
-                Some("skipped_zero_reward") => "completed_no_reward".to_string(),
-                Some(_) => "settlement_blocked".to_string(),
-                None => stored_contract
-                    .cex_status
-                    .clone()
-                    .unwrap_or_else(|| "settlement_pending".to_string()),
-            });
-            if settlement_completed {
-                let asset_delta = (completion.score / 5.0).round() as i64;
-                stored_contract.value_score += asset_delta.max(1);
-            }
-            indexes.replace_contract_by_id(&mut league.world, &stored_contract);
-        }
+        completion = merge_world_contract_completion_settlement(
+            &mut league,
+            &contract,
+            &completion,
+            &settlement,
+            settlement_completed,
+            settlement_zero_reward_skipped,
+        );
         league.clone()
     };
     if let Err(response) =

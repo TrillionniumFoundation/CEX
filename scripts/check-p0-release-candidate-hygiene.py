@@ -24,7 +24,7 @@ TRIGGER_PATH = "docs/release-evidence/p0-candidate-trigger.json"
 ACTIVE_PLAN = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"
 ACTIVE_ADDENDUM = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md"
 DOC_CHECKER = "scripts/check-development-docs.py"
-EXPECTED_MIGRATION_HEAD = "0084_make_provider_reconciliation_replay_terminal_safe.sql"
+EXPECTED_MIGRATION_HEAD = "0087_add_term_exchange_receipt_event_history.sql"
 TEMPORARY_EXACT_PATHS = (
     "scripts/apply-closure-fixes.py",
     "scripts/patch-0082-provider-view.py",
@@ -109,6 +109,7 @@ for pattern in (
     ".github/workflows/closure-*.yaml",
     "scripts/closure-ci-trigger-*",
     "migrations/closure-ci-trigger-*",
+    "**/closure-ci-trigger-*",
     *TEMPORARY_WORKFLOW_PATTERNS,
 ):
     for path in sorted(ROOT.glob(pattern)):

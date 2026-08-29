@@ -4,7 +4,7 @@
 
 - Status: active all-blocker closure candidate; **not production-ready**.
 - Supersedes: `CEX-DEVELOPMENT-PLAN-2026-08-28-v11.md` for the exact-money, durable-settlement, provider-dispatch and release-evidence workstream.
-- Candidate migration head: `0084_make_provider_reconciliation_replay_terminal_safe.sql`.
+- Candidate migration head: `0087_add_term_exchange_receipt_event_history.sql`.
 - Default rollout posture: shadow or fail-closed; no production cutover is authorized by this document.
 - Acceptance rule: source presence, a static marker, a template manifest or an unexecuted script is not evidence. A gap closes only when the exact commit/tree has the required hosted execution evidence and the evidence is bound to the release candidate.
 

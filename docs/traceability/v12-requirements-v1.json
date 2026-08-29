@@ -3,7 +3,7 @@
   "status": "active",
   "active_plan": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
   "active_addendum": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md",
-  "migration_head": "0084_make_provider_reconciliation_replay_terminal_safe.sql",
+  "migration_head": "0087_add_term_exchange_receipt_event_history.sql",
   "production_authorization": "not_granted",
   "requirements": [
     {
@@ -13,7 +13,12 @@
       "status": "required_hosted_exact_sha",
       "self_certifiable": true,
       "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"],
-      "implementation": ["migrations/0084_make_provider_reconciliation_replay_terminal_safe.sql"],
+      "implementation": [
+        "migrations/0084_make_provider_reconciliation_replay_terminal_safe.sql",
+        "migrations/0085_harden_term_exchange_receipt_projections.sql",
+        "migrations/0086_add_trnm_native_receipt_evidence.sql",
+        "migrations/0087_add_term_exchange_receipt_event_history.sql"
+      ],
       "verification": ["scripts/check-p0-migrations.py", "scripts/check-p0-migrations-postgres.sh"],
       "gates": [".github/workflows/p0-migration-gate.yml"]
     },
@@ -57,7 +62,10 @@
       "status": "required_hosted_exact_sha",
       "self_certifiable": true,
       "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"],
-      "implementation": ["migrations/0084_make_provider_reconciliation_replay_terminal_safe.sql"],
+      "implementation": [
+        "migrations/0084_make_provider_reconciliation_replay_terminal_safe.sql",
+        "migrations/0087_add_term_exchange_receipt_event_history.sql"
+      ],
       "verification": ["scripts/check-provider-reconciliation-postgres.sh"],
       "gates": [".github/workflows/p0-provider-reconciliation-gate.yml"]
     },

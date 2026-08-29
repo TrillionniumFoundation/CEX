@@ -35,11 +35,15 @@ CURRENT_PHASE="restore-parity"
 primary_counts="$(cex_psql_stdin -Atc "select json_build_object(
   'intents',(select count(*) from trnm_economic_intents),
   'receipts',(select count(*) from trnm_economic_receipts),
+  'receipt_events',(select count(*) from trnm_economic_receipt_events_v1),
+  'receipt_event_intents',(select count(distinct intent_id) from trnm_economic_receipt_events_v1),
   'escrows',(select count(*) from trnm_escrow_trades),
   'identities',(select count(*) from trnm_player_identities));")"
 restored_counts="$(cex_docker exec "$CEX_POSTGRES_CONTAINER_NAME" psql -U "$CEX_POSTGRES_USER" -d "$RESTORE_DB" -Atc "select json_build_object(
   'intents',(select count(*) from trnm_economic_intents),
   'receipts',(select count(*) from trnm_economic_receipts),
+  'receipt_events',(select count(*) from trnm_economic_receipt_events_v1),
+  'receipt_event_intents',(select count(distinct intent_id) from trnm_economic_receipt_events_v1),
   'escrows',(select count(*) from trnm_escrow_trades),
   'identities',(select count(*) from trnm_player_identities));")"
 jq -e --argjson restored "$restored_counts" '. == $restored' <<<"$primary_counts" >/dev/null
@@ -91,9 +95,11 @@ cmp "$WORK_DIR/primary.json" "$WORK_DIR/secondary.json"
 db_exactly_once="$(cex_psql_stdin -Atc "select json_build_object(
   'intent_count',(select count(*) from trnm_economic_intents where intent_id = '$RUN_ID:reward'),
   'receipt_count',(select count(*) from trnm_economic_receipts where intent_id = '$RUN_ID:reward'),
+  'receipt_event_count',(select count(*) from trnm_economic_receipt_events_v1 where intent_id = '$RUN_ID:reward'),
   'entry_count',(select count(*) from ledger_entries where idempotency_key = '$RUN_ID:reward'),
   'balance',(select balance from accounts where account_id = '$account_id')); ")"
-jq -e '.intent_count == 1 and .receipt_count == 1 and .entry_count == 1 and (.balance|tonumber) == 25' \
+jq -e '.intent_count == 1 and .receipt_count == 1 and .receipt_event_count == 1 and
+  .entry_count == 1 and (.balance|tonumber) == 25' \
   <<<"$db_exactly_once" >/dev/null
 
 CURRENT_PHASE="report"

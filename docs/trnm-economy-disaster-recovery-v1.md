@@ -16,11 +16,13 @@ scripts/check-trnm-economy-disaster-recovery.sh
 
 The gate creates a custom-format logical backup of the organizations,
 accounts, ledger and `trnm_*` tables, restores it into an isolated database,
-and compares authoritative intent, receipt, escrow and identity row counts. It
-then starts a second ledger process against the primary PostgreSQL database and
-races the same intent through both processes. The PostgreSQL advisory lock and
-unique constraints must produce one intent, one receipt, one ledger entry and
-one balance change.
+and compares authoritative intent, receipt-event, escrow and identity row
+counts. It then starts a second ledger process against the primary PostgreSQL
+database and races the same intent through both processes. The PostgreSQL
+advisory lock and unique constraints must produce one intent, one compatibility
+receipt seed, one append-only receipt event, one ledger entry and one balance
+change. If an attempt ends in `recoverable_hold`, a later retry appends another
+event; it never updates or deletes the earlier snapshot.
 
 The temporary restore database and second ledger are removed on exit. The
 primary services and database remain authoritative.
@@ -70,11 +72,11 @@ single-node service.
    to the in-memory repository.
 2. Preserve the failed database volume and service logs before changing state.
 3. Restore the latest verified logical backup into a new database, apply every
-   migration through `0030_add_trnm_online_product_identity.sql`, and
+   migration through `0087_add_term_exchange_receipt_event_history.sql`, and
    run the automated gate against that database.
-4. Verify account non-negative constraints, one receipt per intent, escrow
-   state constraints and reconciliation cursors before changing the service
-   `DATABASE_URL`.
+4. Verify account non-negative constraints, one immutable receipt seed and at
+   least one append-only receipt event per intent, escrow state constraints and
+   reconciliation cursors before changing the service `DATABASE_URL`.
 5. Start ledger first, verify `/v1/trnm/economy/readiness`, then start consumer
    and reconcile every bound client. Pending priority compensation must drain
    before the normal outbox.

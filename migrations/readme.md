@@ -47,11 +47,16 @@ not-null/default 目录形状；任何旧格式记录、带不兼容记录的部
 schema 漂移均失败关闭。
 
 CEX P0 production-baseline 的 canonical migration head 当前为
-`0072_add_execution_ledger_settlement_operator.sql`。0065 为 Ledger effect
+`0087_add_term_exchange_receipt_event_history.sql`。0065 为 Ledger effect
 增加不可变 operation provenance；0066 建立 Invocation 与 reserve/consume/refund
 的精确 durable contract。P0-N5 的 Execution 终态结算按职责拆成唯一编号的
 0067–0072：schema/fingerprint、数据库 guard 与 append-only transition evidence、
 exact enqueue 与 shadow promotion、短事务 claim/lease 和 verified receipt、
 worker outcome persistence，以及 operator acknowledgement/requeue/status projection。
+0075–0077 提供 exact account opening 与 inventory parity；0078、0081、0082、0084
+收口 provider dispatch 与 unknown-outcome reconciliation；0085 强化 normalized
+receipt projection 的 append-only/非负金额约束，0086 增加 TRNM native receipt 的
+不可变事件证据，0087 增加 League/World Term Exchange receipt 的 hold→final
+append-only history。
 这些迁移必须按编号完整执行；不得把已拆分、已废弃的
 `0067_add_execution_ledger_settlement_commands.sql` 重新加入链中。

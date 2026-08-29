@@ -61,10 +61,10 @@ jobs:
           python3 -m json.tool evidence/world-settlement-external-lock.json >/dev/null
           jq -e '
             .schema == "trnm_world_cex_settlement_external_lock_v1" and
-            (.world.repository | type == "string") and
+            .world.repository == "TrillionniumFoundation/Trillionnium-World" and
             (.world.commit | test("^[0-9a-f]{40}$")) and
             (.world.tree | test("^[0-9a-f]{40}$")) and
-            (.cex_owner.repository | type == "string") and
+            .cex_owner.repository == "TrillionniumFoundation/CEX" and
             (.cex_owner.commit | test("^[0-9a-f]{40}$")) and
             (.cex_owner.tree | test("^[0-9a-f]{40}$")) and
             .promotion_effect == "none" and
@@ -160,6 +160,9 @@ jobs:
           cargo metadata --locked --no-deps --format-version 1 > /dev/null
           cargo fmt --all
       - name: Assemble exact World rustfmt remediation
+        env:
+          WORLD_COMMIT: ${{ steps.lock.outputs.world_commit }}
+          WORLD_TREE: ${{ steps.lock.outputs.world_tree }}
         run: |
           set -euo pipefail
           mkdir -p run/world-rustfmt/formatted-files run/world-rustfmt/generated
@@ -183,8 +186,8 @@ jobs:
           files = sorted(path for path in root.rglob('*') if path.is_file())
           payload = {
               'schema': 'trnm_world_settlement_rustfmt_remediation_v1',
-              'world_commit': os.environ.get('WORLD_COMMIT', '${{ steps.lock.outputs.world_commit }}'),
-              'world_tree': '${{ steps.lock.outputs.world_tree }}',
+              'world_commit': os.environ['WORLD_COMMIT'],
+              'world_tree': os.environ['WORLD_TREE'],
               'rust_toolchain': '1.98.0',
               'changed_files': changed,
               'clean_before_tests': not changed,

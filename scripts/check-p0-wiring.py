@@ -15,7 +15,7 @@ ACTIVE_PLAN = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"
 ACTIVE_ADDENDUM = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md"
 DOC_CHECKER = "scripts/check-development-docs.py"
 SHARED_TRIGGER = "docs/release-evidence/p0-candidate-trigger.json"
-MIGRATION_HEAD = "0084_make_provider_reconciliation_replay_terminal_safe.sql"
+MIGRATION_HEAD = "0087_add_term_exchange_receipt_event_history.sql"
 AUTHORITATIVE_WORKFLOWS = (
     ".github/workflows/p0-migration-gate.yml",
     ".github/workflows/rust-service-gate.yml",
@@ -187,6 +187,18 @@ def verify_core() -> None:
 
 
 def verify_exact_contracts() -> None:
+    # The normalized runtime probe must honor an explicitly supplied
+    # DATABASE_URL even though it loads the repository's .env for the rest of
+    # its local defaults.  Keep this contract visible to the static gate so a
+    # future refactor cannot silently redirect a CI/operator run to cex_ai.
+    require_text(
+        "scripts/check-trillionnium-league-normalized-runtime-dual-write.sh",
+        "NORMALIZED_RUNTIME_CALLER_DATABASE_URL=\"${DATABASE_URL-}\"",
+        "NORMALIZED_RUNTIME_CALLER_DATABASE_URL_SET=0",
+        "cex_load_env",
+        'if [[ \"$NORMALIZED_RUNTIME_CALLER_DATABASE_URL_SET\" == \"1\" ]]; then',
+        'export DATABASE_URL=\"$NORMALIZED_RUNTIME_CALLER_DATABASE_URL\"',
+    )
     require_text(
         "crates/shared-types/src/ledger_v2.rs",
         "LedgerEffectRequestV1",

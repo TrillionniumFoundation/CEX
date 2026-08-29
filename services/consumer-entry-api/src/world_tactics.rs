@@ -263,6 +263,7 @@ fn world_tactics_default_session(
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn record_world_tactics_simulation_tick(
     world: &mut WorldState,
     matrix_user_id: &str,
@@ -273,6 +274,36 @@ pub(super) fn record_world_tactics_simulation_tick(
     osm_game_overlay_id: Option<&str>,
     outcome: &Value,
     now_epoch: i64,
+) -> (Value, Value) {
+    record_world_tactics_simulation_tick_with_event_id(
+        world,
+        matrix_user_id,
+        room_id,
+        command,
+        unit_id,
+        target_tile,
+        osm_game_overlay_id,
+        outcome,
+        now_epoch,
+        None,
+    )
+}
+
+/// Record a simulation tick for a command whose event identity is already known.  New command
+/// paths use the event id in the tick identity so a response-loss retry can locate the exact
+/// victory tick without guessing from the actor's latest session.  The wrapper above preserves
+/// the legacy timestamp-derived identity for callers that do not yet have an event id.
+pub(super) fn record_world_tactics_simulation_tick_with_event_id(
+    world: &mut WorldState,
+    matrix_user_id: &str,
+    room_id: Option<&str>,
+    command: &str,
+    unit_id: Option<&str>,
+    target_tile: Option<&str>,
+    osm_game_overlay_id: Option<&str>,
+    outcome: &Value,
+    now_epoch: i64,
+    event_id: Option<&str>,
 ) -> (Value, Value) {
     let session_id = world_tactics_session_id(matrix_user_id, room_id);
     let current_node_id = world_tactics_active_node_id(world, matrix_user_id);
@@ -366,12 +397,22 @@ pub(super) fn record_world_tactics_simulation_tick(
         .and_then(|combat| combat.get("combat_resolution_id"))
         .and_then(Value::as_str)
         .map(ToString::to_string);
+    let tick_id = event_id
+        .map(|event_id| {
+            league_hash_id(
+                "world-tactics-tick",
+                &format!("{}:{}:event:{}", session_id, tick_index, event_id),
+            )
+        })
+        .unwrap_or_else(|| {
+            league_hash_id(
+                "world-tactics-tick",
+                &format!("{}:{}:{}:{}", session_id, tick_index, command, now_epoch),
+            )
+        });
     let tick = WorldTacticsSimulationTick {
         contract_version: TRILLIONNIUM_TACTICS_SIMULATION_TICK_CONTRACT_VERSION.to_string(),
-        tick_id: league_hash_id(
-            "world-tactics-tick",
-            &format!("{}:{}:{}:{}", session_id, tick_index, command, now_epoch),
-        ),
+        tick_id,
         session_id: session_id.clone(),
         matrix_user_id: matrix_user_id.to_string(),
         room_id: room_id.map(ToString::to_string),
@@ -399,12 +440,120 @@ pub(super) fn record_world_tactics_simulation_tick(
         created_at_epoch: now_epoch,
         source_of_truth: "rust_tactics_simulation_tick".to_string(),
     };
+    // Reserve the immutable reward identity before the remote Ledger call.  This field is part
+    // of the durable session snapshot/normalized projection, so a process crash after the
+    // Ledger accepted the grant can recover the same intent instead of minting a new one.
+    if session.victory_state == "victory"
+        && session.reward_status == "pending_settlement"
+        && session.reward_event_id.is_none()
+    {
+        let reward_identity = event_id
+            .map(|event_id| format!("event:{event_id}"))
+            .unwrap_or_else(|| format!("legacy:{}:{}", session_id, tick.tick_id));
+        session.reward_event_id = Some(league_hash_id(
+            "world-tactics-victory-reward",
+            &reward_identity,
+        ));
+    }
     world.world_tactics_simulation_ticks.push(tick.clone());
     if world.world_tactics_simulation_ticks.len() > 512 {
         let overflow = world.world_tactics_simulation_ticks.len() - 512;
         world.world_tactics_simulation_ticks.drain(0..overflow);
     }
     (json!(session), json!(tick))
+}
+
+/// Recover a pending victory session for an exact replayed command.  A replay is eligible only
+/// when its deterministic event-derived tick exists, or when a legacy tick matches every
+/// immutable request attribute and timestamp.  This prevents an unrelated command from
+/// borrowing the actor's latest victory/reward while still allowing old snapshots to migrate
+/// into the durable reward identity field.
+pub(super) fn pending_world_tactics_replay_snapshot(
+    world: &mut WorldState,
+    matrix_user_id: &str,
+    room_id: Option<&str>,
+    command: &str,
+    unit_id: Option<&str>,
+    target_tile: Option<&str>,
+    event_id: &str,
+    event_result: Option<&str>,
+    event_created_at_epoch: i64,
+) -> Option<(Value, Value)> {
+    let session_ids: Vec<String> = world
+        .world_tactics_sessions
+        .values()
+        .filter(|session| {
+            session.matrix_user_id == matrix_user_id
+                && session.room_id.as_deref() == room_id
+                && session.victory_state == "victory"
+                && session.reward_status == "pending_settlement"
+        })
+        .map(|session| session.session_id.clone())
+        .collect();
+
+    for session_id in session_ids {
+        let session_snapshot = world.world_tactics_sessions.get(&session_id)?.clone();
+        let deterministic_tick = world
+            .world_tactics_simulation_ticks
+            .iter()
+            .find(|tick| {
+                tick.tick_id
+                    == league_hash_id(
+                        "world-tactics-tick",
+                        &format!("{}:{}:event:{}", session_id, tick.tick_index, event_id),
+                    )
+                    && tick.session_id == session_id
+                    && tick.matrix_user_id == matrix_user_id
+                    && tick.room_id.as_deref() == room_id
+                    && tick.command == command
+                    && tick.unit_id == unit_id.unwrap_or("lord")
+                    && tick.target_tile.as_deref() == target_tile
+                    && tick.victory_state_after == "victory"
+                    && tick.reward_status_after == "pending_settlement"
+            })
+            .cloned();
+        let (tick, is_deterministic) = if let Some(tick) = deterministic_tick {
+            (tick, true)
+        } else {
+            let legacy_tick = world
+                .world_tactics_simulation_ticks
+                .iter()
+                .filter(|tick| {
+                    tick.session_id == session_id
+                        && tick.matrix_user_id == matrix_user_id
+                        && tick.room_id.as_deref() == room_id
+                        && tick.tick_index == session_snapshot.current_tick
+                        && tick.command == command
+                        && tick.unit_id == unit_id.unwrap_or("lord")
+                        && tick.target_tile.as_deref() == target_tile
+                        && event_result.is_none_or(|result| tick.outcome_result == result)
+                        && tick.created_at_epoch == event_created_at_epoch
+                        && tick.victory_state_after == "victory"
+                        && tick.reward_status_after == "pending_settlement"
+                })
+                .max_by_key(|tick| tick.created_at_epoch)
+                .cloned();
+            (legacy_tick?, false)
+        };
+
+        let reward_event_id = session_snapshot.reward_event_id.clone().unwrap_or_else(|| {
+            if is_deterministic {
+                league_hash_id("world-tactics-victory-reward", &format!("event:{event_id}"))
+            } else {
+                league_hash_id(
+                    "world-tactics-victory-reward",
+                    &format!("{}:{}:{}", matrix_user_id, session_id, tick.tick_id),
+                )
+            }
+        });
+        if let Some(session) = world.world_tactics_sessions.get_mut(&session_id) {
+            if session.reward_event_id.is_none() {
+                session.reward_event_id = Some(reward_event_id);
+            }
+            return Some((json!(session), json!(tick)));
+        }
+    }
+    None
 }
 
 pub(super) fn mark_world_tactics_reward_settled(

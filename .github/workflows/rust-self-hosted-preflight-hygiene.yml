@@ -19,6 +19,9 @@ jobs:
     timeout-minutes: 30
     env:
       ARTIFACT_ROOT: ci-artifacts\self-hosted-preflight-hygiene
+      WORKFLOW_EVENT_NAME: ${{ github.event_name }}
+      WORKFLOW_REF: ${{ github.ref }}
+      WORKFLOW_SHA: ${{ github.sha }}
     defaults:
       run:
         shell: powershell
@@ -38,9 +41,9 @@ jobs:
       - name: Record hygiene workflow context
         run: |
           @(
-            "event_name=${{ github.event_name }}"
-            "ref=${{ github.ref }}"
-            "sha=${{ github.sha }}"
+            ("event_name={0}" -f $env:WORKFLOW_EVENT_NAME)
+            ("ref={0}" -f $env:WORKFLOW_REF)
+            ("sha={0}" -f $env:WORKFLOW_SHA)
             "workflow=rust-self-hosted-preflight-hygiene"
             "schedule_utc=15 2 * * 1"
           ) | Set-Content -LiteralPath (Join-Path $env:ARTIFACT_ROOT 'hygiene-context.txt') -Encoding UTF8

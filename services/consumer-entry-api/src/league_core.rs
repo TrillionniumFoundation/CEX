@@ -539,10 +539,16 @@ pub(super) async fn record_league_raid_contribution(
             created_at_epoch: now,
         };
         if released {
-            player.xp += (judgement.score / 2.0).round() as i64;
-            player.reputation += (judgement.score / 20.0).round() as i64;
-            player.rating += ((judgement.score - 50.0) / 6.0).round() as i64;
-            entry.battles_started += 1;
+            player.xp = player
+                .xp
+                .saturating_add((judgement.score / 2.0).round() as i64);
+            player.reputation = player
+                .reputation
+                .saturating_add((judgement.score / 20.0).round() as i64);
+            player.rating = player
+                .rating
+                .saturating_add(((judgement.score - 50.0) / 6.0).round() as i64);
+            entry.battles_started = entry.battles_started.saturating_add(1);
             league
                 .players_by_matrix_user
                 .insert(matrix_user_id.clone(), player);
@@ -1111,37 +1117,159 @@ pub(super) fn league_loadout_for_player(league: &LeagueState, matrix_user_id: &s
         .unwrap_or_else(default_league_loadout)
 }
 
-pub(super) fn league_reward_receipt_progression_allows(
-    league: &LeagueState,
+pub(super) fn league_reward_expected_amount_credits(reward: &LeagueReward) -> Option<i64> {
+    // `LeagueReward.amount` is retained as a legacy display field.  It can only be
+    // used to establish the expected whole-credit value when the value is exactly
+    // representable; fractional/non-finite values are deliberately rejected.
+    if !matches!(
+        reward.currency_unit.trim().to_ascii_lowercase().as_str(),
+        "credit" | "credits"
+    ) {
+        return None;
+    }
+    let amount_credits = whole_credits_from_compatibility_amount(reward.amount).ok()?;
+    if amount_credits <= 0 || exact_credits_to_legacy_display(amount_credits).is_none() {
+        return None;
+    }
+    Some(amount_credits)
+}
+
+/// Verify that a reward and its submission resolve to one identical whole-credit contract.
+/// Rewards are the source for Ledger requests while submissions are the source for game
+/// progression, so a drift between their legacy display projections must fail closed.
+pub(super) fn league_reward_submission_amounts_match(
     reward: &LeagueReward,
-) -> Option<bool> {
+    submission: &LeagueSubmission,
+) -> bool {
+    let Some(reward_amount_credits) = league_reward_expected_amount_credits(reward) else {
+        return false;
+    };
+    let Ok(submission_amount_credits) =
+        whole_credits_from_compatibility_amount(submission.reward_amount)
+    else {
+        return false;
+    };
+    reward_amount_credits == submission_amount_credits
+}
+
+/// Bind a persisted reward to the immutable submission that produced its deterministic intent.
+///
+/// Rewards and submissions are stored as separate compatibility projections.  Matching only the
+/// amount would allow a corrupted reward row to reuse a valid amount while redirecting the payout
+/// to another match, entry, player, or Matrix identity.
+pub(super) fn league_reward_submission_identity_matches(
+    reward: &LeagueReward,
+    submission: &LeagueSubmission,
+) -> bool {
+    reward.reward_id == league_hash_id("reward", &submission.submission_id)
+        && reward.match_id == submission.match_id
+        && reward.entry_id == submission.entry_id
+        && reward.player_id == submission.player_id
+        && reward.matrix_user_id == submission.matrix_user_id
+}
+
+/// Resolve the canonical persisted receipt for a league reward intent.
+///
+/// Some old snapshots keyed the in-memory map inconsistently, so the fallback scans values.  The
+/// receipt's own id remains authoritative: an arbitrary map key or alternate receipt id must not
+/// authorize this reward.
+pub(super) fn league_reward_persisted_receipt<'a>(
+    league: &'a LeagueState,
+    reward: &LeagueReward,
+) -> Option<&'a TermExchangeReceiptState> {
     let intent_id = format!("league_reward:{}", reward.reward_id);
+    let receipt_id = format!("receipt:{intent_id}");
+    if let Some(receipt) = league.term_exchange_receipts.get(&receipt_id) {
+        return (receipt.intent_id == intent_id && receipt.receipt_id == receipt_id)
+            .then_some(receipt);
+    }
     league
         .term_exchange_receipts
         .values()
-        .filter(|receipt| receipt.intent_id == intent_id)
+        .filter(|receipt| receipt.intent_id == intent_id && receipt.receipt_id == receipt_id)
         .max_by(|left, right| {
             left.finalized_at_epoch
                 .cmp(&right.finalized_at_epoch)
                 .then_with(|| left.receipt_id.cmp(&right.receipt_id))
         })
-        .map(|receipt| {
-            receipt.progression_class
-                == term_exchange_protocol::ReceiptProgressionClass::ProgressionAllowed
-        })
+}
+
+fn latest_league_reward_receipt<'a>(
+    league: &'a LeagueState,
+    reward: &LeagueReward,
+) -> Option<&'a TermExchangeReceiptState> {
+    league_reward_persisted_receipt(league, reward)
+}
+
+/// Return the exact amount authorized by the latest persisted receipt, if and only if
+/// it matches the reward's expected whole-credit contract.  A missing amount (including
+/// legacy receipts written before exact amount evidence existed) is intentionally
+/// non-progressing rather than inferred from a display/status field.
+pub(super) fn league_reward_exact_released_amount_from_state(
+    league: &LeagueState,
+    reward: &LeagueReward,
+) -> Option<i64> {
+    let expected_amount_credits = league_reward_expected_amount_credits(reward)?;
+    // If a matching submission is present, require its immutable amount projection to agree with
+    // the reward before any read model or progression counter treats the receipt as released.
+    // Keep the optional lookup for old/manual reward rows that predate a submission record; the
+    // exact receipt predicate below still remains mandatory for those rows.
+    if let Some(submission) = league
+        .submissions
+        .values()
+        .find(|submission| league_hash_id("reward", &submission.submission_id) == reward.reward_id)
+    {
+        if !league_reward_submission_identity_matches(reward, submission)
+            || !league_reward_submission_amounts_match(reward, submission)
+        {
+            return None;
+        }
+    }
+    let receipt = latest_league_reward_receipt(league, reward)?;
+    if receipt.protocol_version != term_exchange_protocol::TERM_EXCHANGE_PROTOCOL_VERSION
+        || receipt.receipt_id != format!("receipt:league_reward:{}", reward.reward_id)
+        || receipt.intent_id != format!("league_reward:{}", reward.reward_id)
+        || receipt.progression_class != receipt.status.progression_class()
+        || receipt.progression_class
+            != term_exchange_protocol::ReceiptProgressionClass::ProgressionAllowed
+        || !matches!(
+            receipt.status,
+            term_exchange_protocol::ReceiptStatus::Settled
+                | term_exchange_protocol::ReceiptStatus::ApprovedRelease
+                | term_exchange_protocol::ReceiptStatus::Duplicate
+        )
+        || receipt.term_id != "league_reward_settlement"
+        || receipt.backend_id != term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID
+        || receipt.backend_kind != term_exchange_protocol::SettlementBackendKind::Cex
+        || receipt.amount_credits != Some(expected_amount_credits)
+        || reward
+            .ledger_entry_id
+            .as_deref()
+            .is_some_and(|entry_id| receipt.ledger_entry_id.as_deref() != Some(entry_id))
+    {
+        return None;
+    }
+    Some(expected_amount_credits)
+}
+
+pub(super) fn league_reward_receipt_progression_allows(
+    league: &LeagueState,
+    reward: &LeagueReward,
+) -> Option<bool> {
+    // Preserve the tri-state shape for callers that distinguish "no receipt yet" from
+    // an explicit failed/mismatched receipt, while requiring exact amount evidence for
+    // the true branch.
+    latest_league_reward_receipt(league, reward)
+        .map(|_| league_reward_exact_released_amount_from_state(league, reward).is_some())
 }
 
 pub(super) fn league_reward_ledger_released_from_state(
     league: &LeagueState,
     reward: &LeagueReward,
 ) -> bool {
-    if let Some(typed_released) = league_reward_receipt_progression_allows(league, reward) {
-        return typed_released;
-    }
-    matches!(
-        reward.ledger_status.as_deref(),
-        Some("settled") | Some("duplicate")
-    )
+    // Legacy `ledger_status` is retained for audit/read compatibility only.  It does
+    // not carry enough precision to authorize progression after restart.
+    league_reward_receipt_progression_allows(league, reward).unwrap_or(false)
 }
 
 pub(super) fn league_successful_task_count(league: &LeagueState, matrix_user_id: &str) -> i64 {

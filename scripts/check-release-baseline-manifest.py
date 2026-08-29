@@ -16,6 +16,14 @@ RELEASE_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 MIGRATION_RE = re.compile(r"^[0-9]{4}_[a-z0-9][a-z0-9._-]*\.sql$")
 ZERO_GIT_SHA = "0" * 40
 ZERO_SHA256 = "sha256:" + "0" * 64
+QUALIFICATION_SCOPE = (
+    "repository-exact-money-control-plane-plus-hepta-durability-doc-integrity-full-suite-lint-receipt-recovery-and-trnm-production-config-hardening"
+)
+
+
+def reject_unknown(item: dict[str, Any], allowed: set[str], path: str) -> None:
+    unknown = sorted(set(item) - allowed)
+    require(not unknown, f"{path} contains unknown field(s): {', '.join(unknown)}")
 
 
 class ValidationError(Exception):
@@ -63,8 +71,29 @@ def validate_artifact(value: Any, path: str, allow_placeholder: bool) -> None:
 
 def validate_manifest(data: Any, allow_template: bool) -> None:
     root = object_at(data, "$" )
+    reject_unknown(
+        root,
+        {
+            "schema", "status", "qualification_scope", "production_ready",
+            "production_authorization", "project_id", "release_id", "generated_at",
+            "source", "dependencies", "database", "build", "evidence", "approvals",
+            "external_gates", "revocation",
+        },
+        "$",
+    )
     require(root.get("schema") == "cex.release-baseline-manifest.v1", "$.schema is invalid")
     require(root.get("project_id") == "hepta-control-plane", "$.project_id is invalid")
+
+    qualification_scope = string_at(root.get("qualification_scope"), "$.qualification_scope")
+    require(
+        qualification_scope == QUALIFICATION_SCOPE,
+        "$.qualification_scope is not the active v12 scope",
+    )
+    require(root.get("production_ready") is False, "$.production_ready must be false")
+    require(
+        root.get("production_authorization") == "not_granted",
+        "$.production_authorization must be not_granted",
+    )
 
     status = string_at(root.get("status"), "$.status")
     require(status in {"draft", "candidate", "released", "revoked"}, "$.status is invalid")
@@ -73,6 +102,7 @@ def validate_manifest(data: Any, allow_template: bool) -> None:
     validate_datetime(root.get("generated_at"), "$.generated_at")
 
     source = object_at(root.get("source"), "$.source")
+    reject_unknown(source, {"repository", "branch", "commit_sha", "tree_sha"}, "$.source")
     require(source.get("repository") == "TrillionniumFoundation/CEX", "$.source.repository is invalid")
     string_at(source.get("branch"), "$.source.branch")
     for field in ("commit_sha", "tree_sha"):
@@ -82,6 +112,7 @@ def validate_manifest(data: Any, allow_template: bool) -> None:
             require(value != ZERO_GIT_SHA, f"$.source.{field} must not be all-zero")
 
     dependencies = object_at(root.get("dependencies"), "$.dependencies")
+    reject_unknown(dependencies, {"cargo_lock_sha256"}, "$.dependencies")
     validate_sha256(
         dependencies.get("cargo_lock_sha256"),
         "$.dependencies.cargo_lock_sha256",
@@ -89,11 +120,26 @@ def validate_manifest(data: Any, allow_template: bool) -> None:
     )
 
     database = object_at(root.get("database"), "$.database")
+    reject_unknown(
+        database,
+        {"migration_head", "migration_sha256", "migration_chain_sha256"},
+        "$.database",
+    )
     migration_head = string_at(database.get("migration_head"), "$.database.migration_head")
     require(bool(MIGRATION_RE.fullmatch(migration_head)), "$.database.migration_head is invalid")
     validate_sha256(database.get("migration_sha256"), "$.database.migration_sha256", allow_template)
+    validate_sha256(
+        database.get("migration_chain_sha256"),
+        "$.database.migration_chain_sha256",
+        allow_template,
+    )
 
     build = object_at(root.get("build"), "$.build")
+    reject_unknown(
+        build,
+        {"workflow_run_id", "artifacts", "images", "sbom", "provenance"},
+        "$.build",
+    )
     workflow_run_id = build.get("workflow_run_id")
     require(workflow_run_id is None or (isinstance(workflow_run_id, int) and workflow_run_id > 0),
             "$.build.workflow_run_id must be null or a positive integer")
@@ -102,21 +148,49 @@ def validate_manifest(data: Any, allow_template: bool) -> None:
     require(isinstance(artifacts, list), "$.build.artifacts must be an array")
     require(isinstance(images, list), "$.build.images must be an array")
     for index, artifact in enumerate(artifacts):
+        reject_unknown(
+            object_at(artifact, f"$.build.artifacts[{index}]"),
+            {"name", "uri", "sha256"},
+            f"$.build.artifacts[{index}]",
+        )
         validate_artifact(artifact, f"$.build.artifacts[{index}]", allow_template)
     for index, image in enumerate(images):
         item = object_at(image, f"$.build.images[{index}]")
+        reject_unknown(item, {"name", "digest"}, f"$.build.images[{index}]")
         string_at(item.get("name"), f"$.build.images[{index}].name")
         validate_sha256(item.get("digest"), f"$.build.images[{index}].digest", allow_template)
     for field in ("sbom", "provenance"):
         value = build.get(field)
         if value is not None:
+            reject_unknown(
+                object_at(value, f"$.build.{field}"),
+                {"name", "uri", "sha256"},
+                f"$.build.{field}",
+            )
             validate_artifact(value, f"$.build.{field}", allow_template)
+
+    external_gates = object_at(root.get("external_gates"), "$.external_gates")
+    reject_unknown(external_gates, {"status", "items"}, "$.external_gates")
+    require(
+        external_gates.get("status") == "independent_approval_required",
+        "$.external_gates.status is invalid",
+    )
+    gate_items = external_gates.get("items")
+    require(isinstance(gate_items, list) and len(gate_items) == 8,
+            "$.external_gates.items must contain exactly eight external gates")
+    for index, item in enumerate(gate_items):
+        string_at(item, f"$.external_gates.items[{index}]")
 
     evidence = root.get("evidence")
     require(isinstance(evidence, list) and evidence, "$.evidence must be a non-empty array")
     evidence_statuses: list[str] = []
     for index, evidence_item in enumerate(evidence):
         item = object_at(evidence_item, f"$.evidence[{index}]")
+        reject_unknown(
+            item,
+            {"name", "status", "uri", "sha256", "waiver"},
+            f"$.evidence[{index}]",
+        )
         string_at(item.get("name"), f"$.evidence[{index}].name")
         evidence_status = string_at(item.get("status"), f"$.evidence[{index}].status")
         require(evidence_status in {"pending", "pass", "fail", "waived"},
@@ -137,11 +211,17 @@ def validate_manifest(data: Any, allow_template: bool) -> None:
     require(isinstance(approvals, list), "$.approvals must be an array")
     for index, approval in enumerate(approvals):
         item = object_at(approval, f"$.approvals[{index}]")
+        reject_unknown(
+            item,
+            {"role", "actor", "decision", "decided_at", "scope"},
+            f"$.approvals[{index}]",
+        )
         string_at(item.get("role"), f"$.approvals[{index}].role")
         string_at(item.get("actor"), f"$.approvals[{index}].actor")
         require(item.get("decision") in {"approve", "reject", "revoke"},
                 f"$.approvals[{index}].decision is invalid")
         validate_datetime(item.get("decided_at"), f"$.approvals[{index}].decided_at")
+        string_at(item.get("scope"), f"$.approvals[{index}].scope")
 
     if status in {"candidate", "released"}:
         require(not allow_template, "candidate/released manifests cannot use template mode")
@@ -157,6 +237,7 @@ def validate_manifest(data: Any, allow_template: bool) -> None:
     revocation = root.get("revocation")
     if status == "revoked":
         revocation = object_at(revocation, "$.revocation")
+        reject_unknown(revocation, {"reason", "revoked_at", "actor"}, "$.revocation")
         string_at(revocation.get("reason"), "$.revocation.reason")
         string_at(revocation.get("actor"), "$.revocation.actor")
         validate_datetime(revocation.get("revoked_at"), "$.revocation.revoked_at")

@@ -203,6 +203,16 @@ db_evidence="$(cex_psql_stdin -Atc "
   select json_build_object(
     'intents', count(distinct i.intent_id),
     'receipts', count(distinct r.intent_id),
+    'receipt_events', (
+      select count(*)
+        from trnm_economic_receipt_events_v1 e
+       where e.intent_id like '$RUN_ID%'
+    ),
+    'receipt_event_intents', (
+      select count(distinct e.intent_id)
+        from trnm_economic_receipt_events_v1 e
+       where e.intent_id like '$RUN_ID%'
+    ),
     'ledger_entries', count(distinct l.entry_id),
     'held_refund_status', max(e.status) filter (where e.purchase_id = '$held_purchase'),
     'committed_reversal_status', max(e.status) filter (where e.purchase_id = '$committed_purchase'),
@@ -218,7 +228,8 @@ db_evidence="$(cex_psql_stdin -Atc "
   where i.idempotency_key like '$RUN_ID%';
 ")"
 
-jq -e '.intents == 8 and .receipts == 8 and .ledger_entries == 9 and
+jq -e '.intents == 8 and .receipts == 8 and .receipt_events == 8 and
+  .receipt_event_intents == 8 and .ledger_entries == 9 and
   .held_refund_status == "refunded" and .committed_reversal_status == "reversed" and .cursor == 18' \
   <<<"$db_evidence" >/dev/null
 

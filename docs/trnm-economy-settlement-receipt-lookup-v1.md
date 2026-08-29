@@ -171,6 +171,17 @@ The receipt table has statement-level triggers that reject `UPDATE`, `DELETE`
 and `TRUNCATE` with SQLSTATE `55000`. No in-memory cache is authoritative.
 Receipt, account and ledger foreign keys use `ON DELETE RESTRICT`.
 
+The active `ledger-service` native repository has an additional compatibility
+boundary for the older 0027 schema. Migration
+`0086_add_trnm_native_receipt_evidence.sql` backfills each existing
+`trnm_economic_receipts` row into the append-only
+`trnm_economic_receipt_events_v1` stream, then rejects mutation of both the
+seed row and event rows. A normal attempt inserts the seed with
+`ON CONFLICT DO NOTHING` and appends one event. A `recoverable_hold` retry
+appends a later event (ordered by `event_sequence`) so recovery can progress
+without rewriting prior receipt evidence. Lookup and administrative listing
+read the latest event and retain the seed only as an upgrade fallback.
+
 ## Reward policy
 
 Candidate online battle rewards require:
@@ -197,7 +208,7 @@ trace/operation/reference UUIDs, scoped idempotency identity, source service
 and authority principal. The database function owns the exact balance update,
 append-only ledger provenance, replay/collision checks and audit hooks.
 
-The complete numbered CEX migration chain (through `0084`) must be applied
+The complete numbered CEX migration chain (through `0087`) must be applied
 before the service-owned `settlement_v1.sql` bootstrap. The latter owns only
 TRNM receipt and reward-budget tables; it is not a substitute for the exact
 Ledger v2 authority. Readiness fails closed when the Ledger v2 function or its

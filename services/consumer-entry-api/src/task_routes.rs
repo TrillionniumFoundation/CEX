@@ -784,7 +784,7 @@ pub(super) async fn get_matrix_wallet(
     );
     let response = match state
         .inner
-        .http
+        .ledger_http
         .get(url)
         .header("x-admin-token", ledger_admin_token)
         .send()
@@ -801,8 +801,19 @@ pub(super) async fn get_matrix_wallet(
     };
 
     let status = response.status();
+    let body =
+        match read_bounded_ledger_body(response).await {
+            Ok(body) => body,
+            Err(err) => return (
+                StatusCode::BAD_GATEWAY,
+                Json(
+                    json!({ "error": format!("ledger-service returned invalid response: {err}") }),
+                ),
+            )
+                .into_response(),
+        };
     let account =
-        match response.json::<Value>().await {
+        match serde_json::from_str::<Value>(&body) {
             Ok(value) => value,
             Err(err) => return (
                 StatusCode::BAD_GATEWAY,

@@ -24,6 +24,10 @@ REQUIRED_GATES = {
     "p0-execution-settlement-gate": ".github/workflows/p0-execution-settlement-gate.yml",
     "p0-provider-reconciliation-gate": ".github/workflows/p0-provider-reconciliation-gate.yml",
 }
+QUALIFICATION_SCOPE = (
+    "repository-exact-money-control-plane-plus-hepta-durability-doc-integrity-full-suite-lint-receipt-recovery-and-trnm-production-config-hardening"
+)
+TRIGGER_RELATIVE_PATH = "docs/release-evidence/p0-candidate-trigger.json"
 # Hosted evidence is only authoritative when produced by a branch-tree event.
 # Pull-request runs can share a commit SHA with the candidate branch but are
 # evaluated against a merge ref and therefore do not prove the checked-out
@@ -80,6 +84,30 @@ def sha256_file(path: Path) -> str:
 def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def qualification_scope(root: Path) -> str:
+    """Read the immutable candidate scope from the shared trigger.
+
+    The trigger is the single operator-visible qualification contract.  Keeping
+    the generated manifest bound to it prevents a stale generator constant
+    from silently narrowing (or widening) what the hosted evidence claims.
+    """
+
+    trigger_path = root / TRIGGER_RELATIVE_PATH
+    try:
+        trigger = json.loads(trigger_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise SystemExit(f"cannot read candidate trigger scope: {error}") from error
+    scope = trigger.get("qualification_scope") if isinstance(trigger, dict) else None
+    if not isinstance(scope, str) or not scope.strip():
+        raise SystemExit("candidate trigger qualification_scope must be a non-empty string")
+    scope = scope.strip()
+    if scope != QUALIFICATION_SCOPE:
+        raise SystemExit(
+            "candidate trigger qualification_scope is not the generator's v12 scope"
+        )
+    return scope
 
 
 def run_git(root: Path, *args: str) -> str:
@@ -568,6 +596,7 @@ def collect(args: argparse.Namespace) -> int:
         "migration_chain_sha256": migration_chain_sha256,
         "files": files,
         "hosted_gates": gate_records,
+        "qualification_scope": qualification_scope(root),
     }
     write_json(context_path, context)
     print(context_path)
@@ -684,7 +713,7 @@ def manifest(args: argparse.Namespace) -> int:
     data = {
         "schema": "cex.release-baseline-manifest.v1",
         "status": "candidate",
-        "qualification_scope": "repository-exact-money-control-plane",
+        "qualification_scope": context["qualification_scope"],
         "production_ready": False,
         "production_authorization": "not_granted",
         "project_id": "hepta-control-plane",

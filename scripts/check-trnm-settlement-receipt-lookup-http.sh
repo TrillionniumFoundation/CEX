@@ -235,7 +235,9 @@ committed=0
 for _ in $(seq 1 120); do
   committed=$(psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -At \
     -v intent_id="$response_loss_intent" <<'SQL'
-select count(*) from public.trnm_economic_receipts where intent_id = :'intent_id';
+select count(*)
+  from public.trnm_economic_receipt_events_v1
+ where intent_id = :'intent_id';
 SQL
 )
   if [[ "$committed" == "1" ]]; then
@@ -356,6 +358,14 @@ select json_build_object(
     select count(*) from public.trnm_economic_receipts
      where intent_id in (:'response_loss_intent', :'concurrent_intent')
   ),
+  'append_only_event_count', (
+    select count(*) from public.trnm_economic_receipt_events_v1
+     where intent_id in (:'response_loss_intent', :'concurrent_intent')
+  ),
+  'append_only_event_intent_count', (
+    select count(distinct intent_id) from public.trnm_economic_receipt_events_v1
+     where intent_id in (:'response_loss_intent', :'concurrent_intent')
+  ),
   'ledger_entry_count', (
     select count(*) from public.ledger_entries where account_id = :'account_id'::uuid
   ),
@@ -396,6 +406,8 @@ response_loss = json.loads(Path(sys.argv[3]).read_text(encoding="utf-8"))
 concurrent = json.loads(Path(sys.argv[4]).read_text(encoding="utf-8"))
 assert database["intent_count"] == 2, database
 assert database["receipt_count"] == 2, database
+assert database["append_only_event_count"] == 2, database
+assert database["append_only_event_intent_count"] == 2, database
 assert database["ledger_entry_count"] == 3, database
 assert database["distinct_operation_count"] == 3, database
 assert float(database["balance"]) == 100.0, database

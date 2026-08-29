@@ -35,12 +35,16 @@ the current contract.
 The intent endpoint accepts only protocol-v2 `trnm_game` intents with explicit
 actor/account binding and idempotency scope/key. It maps reward, reserve,
 escrow hold, consume/commit, refund and chargeback operations to the PostgreSQL
-ledger backend and returns a typed receipt. Ledger mutation and the unique
-intent/receipt row commit in one SQL transaction. The seller is credited and
+ledger backend and returns a typed receipt. Ledger mutation and receipt
+evidence commit in one SQL transaction. The initial 0027 receipt row is kept
+as an immutable compatibility seed; each attempt is appended to
+`trnm_economic_receipt_events_v1`, so a recoverable hold can be retried without
+rewriting prior evidence. The seller is credited and
 reserved only when consume commits held escrow. The payout remains unspendable
 through a 24-hour reversible window. A held refund returns buyer funds; a committed
-chargeback consumes the seller payout hold and credits the buyer. The receipt is
-also recorded in the CEX Term Exchange read projection. Transport and ledger
+chargeback consumes the seller payout hold and credits the buyer. The latest
+receipt event is also recorded in the CEX Term Exchange read projection.
+Transport and ledger
 failures return non-progressing responses; a bad protocol payload is rejected.
 TRNM namespaces connected campaign and intent identifiers by the bound account,
 while CEX still enforces global intent and `(scope,key)` uniqueness.
@@ -109,11 +113,13 @@ generation, revocation, expiry and exact player/account ownership. The game
 server then owns the match result and calls the signed v2 intent path;
 the player client cannot supply a terminal result or mint amount.
 
-Migrations `0027_add_trnm_native_economy_persistence.sql` and
+Migrations `0027_add_trnm_native_economy_persistence.sql`,
 `0028_add_trnm_seller_hold_and_identity_recovery.sql` and
 `0029_add_trnm_value_entitlements_and_player_sessions.sql` and
-`0030_add_trnm_online_product_identity.sql` supply unique intent,
-idempotency, receipt, cursor and escrow constraints. Formal release services
+`0030_add_trnm_online_product_identity.sql` and
+`0086_add_trnm_native_receipt_evidence.sql` supply unique intent,
+idempotency, append-only receipt-event, cursor and escrow constraints. Formal
+release services
 are installed as `cex-trnm-ledger.service` and
 `cex-trnm-consumer.service`; `LEDGER_FAIL_FAST=true` makes PostgreSQL absence a
 startup blocker, not a trigger for memory fallback. PostgreSQL itself uses the
@@ -134,6 +140,7 @@ recovery boundary, not evidence of real-user support or public account issuance.
 `scripts/check-trnm-native-economy-cross-process.sh` then uses the two formal
 services and PostgreSQL to prove independent account creation, reward
 exactly-once, byte-identical receipt replay before and after service restart,
+append-only receipt-event retention and recoverable-hold retry evidence,
 held escrow refund, committed escrow, seller chargeback/buyer refund,
 wallet/cursor recovery and unique database rows. Legacy League/World receipt
 tests remain green for read compatibility.

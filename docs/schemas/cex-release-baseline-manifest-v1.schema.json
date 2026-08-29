@@ -10,12 +10,16 @@
     "project_id",
     "release_id",
     "generated_at",
+    "qualification_scope",
+    "production_ready",
+    "production_authorization",
     "source",
     "dependencies",
     "database",
     "build",
     "evidence",
-    "approvals"
+    "approvals",
+    "external_gates"
   ],
   "properties": {
     "schema": { "const": "cex.release-baseline-manifest.v1" },
@@ -28,6 +32,11 @@
       "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
     },
     "generated_at": { "type": "string", "format": "date-time" },
+    "qualification_scope": {
+      "const": "repository-exact-money-control-plane-plus-hepta-durability-doc-integrity-full-suite-lint-receipt-recovery-and-trnm-production-config-hardening"
+    },
+    "production_ready": { "const": false },
+    "production_authorization": { "const": "not_granted" },
     "source": {
       "type": "object",
       "additionalProperties": false,
@@ -50,13 +59,14 @@
     "database": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["migration_head", "migration_sha256"],
+      "required": ["migration_head", "migration_sha256", "migration_chain_sha256"],
       "properties": {
         "migration_head": {
           "type": "string",
           "pattern": "^[0-9]{4}_[a-z0-9][a-z0-9._-]*\\.sql$"
         },
         "migration_sha256": { "$ref": "#/$defs/sha256" }
+        ,"migration_chain_sha256": { "$ref": "#/$defs/sha256" }
       }
     },
     "build": {
@@ -108,12 +118,27 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["role", "actor", "decision", "decided_at"],
+        "required": ["role", "actor", "decision", "decided_at", "scope"],
         "properties": {
           "role": { "type": "string", "minLength": 1 },
           "actor": { "type": "string", "minLength": 1 },
           "decision": { "enum": ["approve", "reject", "revoke"] },
-          "decided_at": { "type": "string", "format": "date-time" }
+          "decided_at": { "type": "string", "format": "date-time" },
+          "scope": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "external_gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "items"],
+      "properties": {
+        "status": { "const": "independent_approval_required" },
+        "items": {
+          "type": "array",
+          "minItems": 8,
+          "maxItems": 8,
+          "items": { "type": "string", "minLength": 1 }
         }
       }
     },

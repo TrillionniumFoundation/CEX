@@ -101,6 +101,10 @@ pub struct AppState {
 
 struct AppStateInner {
     http: Client,
+    /// Dedicated Ledger client. Ledger calls carry scoped admin credentials and must never
+    /// follow redirects or wait without a bounded deadline; other integrations retain the
+    /// general-purpose client above because their redirect policy is independent.
+    ledger_http: Client,
     config: ConsumerEntryConfig,
     identity_binding_store: RwLock<IdentityBindingStore>,
     identity_binding_audit_state: RwLock<IdentityBindingAuditState>,
@@ -1282,11 +1286,26 @@ pub(crate) struct TermExchangeReceiptState {
     settlement_reference: Option<String>,
     ledger_entry_id: Option<String>,
     reason: Option<String>,
+    /// Exact whole-credit amount carried by the immutable economic intent evidence.  This is
+    /// deliberately optional for backwards-compatible deserialization of receipts written before
+    /// exact amount projection was added; a missing amount must fail closed at every value gate.
+    #[serde(default)]
+    pub(crate) amount_credits: Option<i64>,
     finalized_at_epoch: i64,
 }
 
 impl From<&term_exchange_protocol::EconomicReceipt> for TermExchangeReceiptState {
     fn from(receipt: &term_exchange_protocol::EconomicReceipt) -> Self {
+        // The backend binds the exact amount to the EconomicIntent and embeds that intent in the
+        // receipt evidence.  Never inspect `amount_minor` or a floating compatibility field here:
+        // this projection is whole credits only.  A few older adapter artifacts used a top-level
+        // or ledger-request amount, so accept those exact integer aliases for replay compatibility.
+        let amount_credits = receipt
+            .evidence
+            .pointer("/intent/amount_credits")
+            .or_else(|| receipt.evidence.pointer("/ledger_request/amount_credits"))
+            .or_else(|| receipt.evidence.get("amount_credits"))
+            .and_then(Value::as_i64);
         Self {
             protocol_version: receipt.protocol_version.clone(),
             receipt_id: receipt.receipt_id.clone(),
@@ -1299,9 +1318,110 @@ impl From<&term_exchange_protocol::EconomicReceipt> for TermExchangeReceiptState
             settlement_reference: receipt.settlement_reference.clone(),
             ledger_entry_id: receipt.ledger_entry_id.clone(),
             reason: receipt.reason.clone(),
+            amount_credits,
             finalized_at_epoch: receipt.finalized_at_epoch,
         }
     }
+}
+
+/// Merge a receipt into an in-memory projection without allowing a retry/late response to
+/// regress an already-authoritative snapshot.
+///
+/// Term-exchange receipts are append-only at the normalized repository boundary, but the JSON
+/// compatibility projection is a map keyed by `receipt_id`.  A blind `HashMap::insert` here used
+/// to let a delayed `recoverable_hold` replace a terminal receipt (or let a differently-bound
+/// receipt poison the canonical key) before the database append failed.  Keep the immutable
+/// identity and amount fail-closed, and only permit the one legal transition represented by the
+/// protocol: recoverable hold -> a non-recoverable outcome.  Repeated holds are accepted only when
+/// they are newer; every non-recoverable snapshot remains authoritative once observed.
+fn merge_term_exchange_receipt(
+    receipts: &mut HashMap<String, TermExchangeReceiptState>,
+    incoming: TermExchangeReceiptState,
+) -> bool {
+    let receipt_id = incoming.receipt_id.clone();
+    if receipt_id.trim().is_empty() {
+        return false;
+    }
+
+    let Some(existing) = receipts.get_mut(&receipt_id) else {
+        receipts.insert(receipt_id, incoming);
+        return true;
+    };
+
+    // Every field below is part of the immutable term-exchange identity.  A map key alone is not
+    // sufficient evidence: a malformed/replayed response must not overwrite a canonical row for
+    // another intent or term.
+    if existing.protocol_version != incoming.protocol_version
+        || existing.receipt_id != incoming.receipt_id
+        || existing.intent_id != incoming.intent_id
+        || existing.term_id != incoming.term_id
+        || existing.backend_id != incoming.backend_id
+        || existing.backend_kind != incoming.backend_kind
+        || !receipt_amounts_compatible(existing.amount_credits, incoming.amount_credits)
+    {
+        return false;
+    }
+
+    let existing_recoverable = receipt_is_recoverable_hold(existing);
+    let incoming_recoverable = receipt_is_recoverable_hold(&incoming);
+    if existing_recoverable {
+        if !incoming_recoverable || incoming.finalized_at_epoch > existing.finalized_at_epoch {
+            // Preserve optional evidence from the hold when the final response omits a field.
+            let mut merged = incoming;
+            merge_receipt_optional_fields(&mut merged, existing);
+            *existing = merged;
+            return true;
+        }
+
+        // An older/equal hold cannot move the projection backwards.  It may still carry exact
+        // amount or ledger evidence that was absent from the first response.
+        return merge_receipt_optional_fields(existing, &incoming);
+    }
+
+    // Once a non-recoverable outcome (progression, terminal skip, or hard failure) is observed,
+    // never replace its status with any later response.  Fill only fields that are genuinely
+    // absent; this lets a duplicate response enrich compatibility metadata without changing the
+    // authority decision.
+    merge_receipt_optional_fields(existing, &incoming)
+}
+
+fn receipt_amounts_compatible(existing: Option<i64>, incoming: Option<i64>) -> bool {
+    match (existing, incoming) {
+        (Some(left), Some(right)) => left == right,
+        _ => true,
+    }
+}
+
+fn receipt_is_recoverable_hold(receipt: &TermExchangeReceiptState) -> bool {
+    // Treat an inconsistent status/class pair as non-recoverable.  Failing closed here is safer
+    // than allowing a forged `progression_class = recoverable_hold` to replace a terminal status.
+    receipt.progression_class == term_exchange_protocol::ReceiptProgressionClass::RecoverableHold
+        && receipt.status.progression_class()
+            == term_exchange_protocol::ReceiptProgressionClass::RecoverableHold
+}
+
+fn merge_receipt_optional_fields(
+    target: &mut TermExchangeReceiptState,
+    source: &TermExchangeReceiptState,
+) -> bool {
+    let mut changed = false;
+    if target.settlement_reference.is_none() && source.settlement_reference.is_some() {
+        target.settlement_reference = source.settlement_reference.clone();
+        changed = true;
+    }
+    if target.ledger_entry_id.is_none() && source.ledger_entry_id.is_some() {
+        target.ledger_entry_id = source.ledger_entry_id.clone();
+        changed = true;
+    }
+    if target.reason.is_none() && source.reason.is_some() {
+        target.reason = source.reason.clone();
+        changed = true;
+    }
+    if target.amount_credits.is_none() && source.amount_credits.is_some() {
+        target.amount_credits = source.amount_credits;
+        changed = true;
+    }
+    changed
 }
 
 fn record_league_term_exchange_receipt(
@@ -1309,9 +1429,7 @@ fn record_league_term_exchange_receipt(
     receipt: Option<TermExchangeReceiptState>,
 ) {
     if let Some(receipt) = receipt {
-        league
-            .term_exchange_receipts
-            .insert(receipt.receipt_id.clone(), receipt);
+        merge_term_exchange_receipt(&mut league.term_exchange_receipts, receipt);
     }
 }
 
@@ -1320,9 +1438,7 @@ fn record_world_term_exchange_receipt(
     receipt: Option<TermExchangeReceiptState>,
 ) {
     if let Some(receipt) = receipt {
-        world
-            .world_term_exchange_receipts
-            .insert(receipt.receipt_id.clone(), receipt);
+        merge_term_exchange_receipt(&mut world.world_term_exchange_receipts, receipt);
     }
 }
 
@@ -4213,6 +4329,11 @@ impl AppState {
         Self {
             inner: Arc::new(AppStateInner {
                 http: Client::new(),
+                ledger_http: Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .timeout(Duration::from_secs(20))
+                    .build()
+                    .expect("consumer-entry Ledger HTTP client must build"),
                 config,
                 identity_binding_store: RwLock::new(identity_binding_store),
                 identity_binding_audit_state: RwLock::new(identity_binding_audit_state),

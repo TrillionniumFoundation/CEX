@@ -2,7 +2,9 @@
 
 Status: CEX-owned P0 contract  
 Contract version: `trnm_cex_settlement_receipt_lookup_v1`  
-Authoritative store: PostgreSQL `trnm_economic_intents` + `trnm_economic_receipts`
+Authoritative store: PostgreSQL `trnm_economic_intents` + append-only
+`trnm_economic_receipt_events_v1` (with the 0027 receipt row retained as an
+immutable compatibility seed)
 
 ## Purpose
 
@@ -32,7 +34,7 @@ Canonical bytes are produced as follows:
 4. Encode compact UTF-8 JSON with no insignificant whitespace.
 5. Compute SHA-256 and encode 64 lowercase hexadecimal characters.
 
-CEX computes and stores this hash before applying the economic effect. The hash is also embedded in the persisted receipt evidence. Lookup independently recomputes the hash from the durable `intent_json`, compares it with `trnm_economic_intents.payload_hash`, compares the requested hash, and finally compares the receipt evidence hash.
+CEX computes and stores this hash before applying the economic effect. The hash is also embedded in every persisted receipt event. Lookup independently recomputes the hash from the durable `intent_json`, compares it with `trnm_economic_intents.payload_hash`, compares the requested hash, and finally compares the latest receipt event's evidence hash.
 
 ## Success response
 
@@ -68,12 +70,12 @@ CEX computes and stores this hash before applying the economic effect. The hash 
 - the intent row exists;
 - the stored intent JSON hashes to the stored `payload_hash`;
 - the requested hash equals the stored hash;
-- the receipt row exists;
+- an immutable receipt event exists (with the 0027 seed as a compatibility fallback during upgrade);
 - the decoded receipt ID equals the durable receipt row ID;
 - the receipt intent ID equals the requested intent ID;
 - the receipt evidence hash equals the stored intent hash.
 
-Repeated successful lookups return the same durable receipt identity and economic binding. A later lookup may observe a legitimate persisted transition from a recoverable-hold receipt to its final receipt, but never a receipt synthesized from request data or memory.
+Repeated successful lookups return the latest immutable receipt event for the intent. A later lookup may observe a legitimate appended transition from a recoverable-hold receipt to its final receipt, but never a receipt synthesized from request data or memory. The stable `receipt_id` identifies the intent-level receipt; `event_sequence` distinguishes each immutable attempt.
 
 ## Stable error contract
 
@@ -111,14 +113,15 @@ Clients may retry `503` with bounded backoff. They must not submit a replacement
 1. computes the canonical payload hash;
 2. inserts or validates `trnm_economic_intents`;
 3. applies at most one Ledger effect;
-4. inserts or updates `trnm_economic_receipts` with the same intent identity and hash evidence;
-5. commits before returning success.
+4. inserts the 0027 compatibility seed with `ON CONFLICT DO NOTHING`;
+5. appends one immutable row to `trnm_economic_receipt_events_v1` with the same intent identity and hash evidence;
+6. commits before returning success.
 
-A concurrent duplicate with the same ID and bytes returns the same stored receipt. The same ID or idempotency identity with different bytes is an immutable conflict. There is no in-memory recovery cache.
+A concurrent duplicate with the same ID and bytes returns the latest stored receipt without another Ledger effect once a progression-allowed or terminal event exists. A recoverable-hold result is deliberately retryable: a subsequent attempt appends a new event and may advance the escrow/hold state. The same ID or idempotency identity with different bytes is an immutable conflict. There is no in-memory recovery cache, and no receipt event is updated or deleted.
 
 ## Retention policy
 
-CEX v1 retains authoritative TRNM intent and receipt rows **indefinitely**, which exceeds the supported World compatibility window. No migration or Ledger maintenance path deletes or truncates `trnm_economic_intents` or `trnm_economic_receipts`. The receipt foreign key remains bound to the intent identity.
+CEX v1 retains authoritative TRNM intent and receipt events **indefinitely**, which exceeds the supported World compatibility window. No migration or Ledger maintenance path deletes or truncates `trnm_economic_intents`, `trnm_economic_receipts`, or `trnm_economic_receipt_events_v1`. The receipt-event foreign key remains bound to the intent identity, and both receipt tables reject update/delete/truncate through always-enabled database triggers.
 
 Any future pruning policy requires a new versioned owner contract, an explicit minimum World compatibility window, migration and restore evidence, and consumer rollout proving that no supported World build depends on the rows. Silent TTL expiry is forbidden.
 
@@ -135,5 +138,7 @@ The exact candidate commit must prove all of the following:
 - a missing identity alone returns `404`;
 - database unavailability returns `503`, not `404`;
 - process restart preserves byte-identical lookup output;
+- a recoverable-hold retry appends a second event while preserving the first event unchanged;
+- direct SQL update/delete/truncate against native receipt evidence is rejected;
 - candidate evidence records the contract, hash, receipt IDs, Ledger counts, commit SHA, Cargo lock, SBOM, and provenance;
 - World pins the exact qualified CEX commit and reports zero unexplained receipt divergence.

@@ -3,11 +3,39 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+# Preserve caller-supplied database credentials before the helper installs its
+# development default.  When DATABASE_URL already contains a password, an
+# implicit `PGPASSWORD=postgres` would incorrectly override it.
+NORMALIZED_RUNTIME_PSQL_PASSWORD="${PGPASSWORD:-${CEX_POSTGRES_PASSWORD:-}}"
+# Keep track of an explicitly supplied URL separately from its value.  The
+# development helper loads `.env` by exporting every line, so calling it
+# unconditionally would silently replace a CI/operator DATABASE_URL with the
+# repository's local development database.  We still load the rest of the
+# helper configuration, then restore the caller's URL below.
+NORMALIZED_RUNTIME_CALLER_DATABASE_URL="${DATABASE_URL-}"
+NORMALIZED_RUNTIME_CALLER_DATABASE_URL_SET=0
+if [[ ${DATABASE_URL+x} ]]; then
+  NORMALIZED_RUNTIME_CALLER_DATABASE_URL_SET=1
+fi
 # shellcheck source=scripts/_dev-helpers.sh
 source "$SCRIPT_DIR/_dev-helpers.sh"
 
 cex_load_env
+if [[ "$NORMALIZED_RUNTIME_CALLER_DATABASE_URL_SET" == "1" ]]; then
+  export DATABASE_URL="$NORMALIZED_RUNTIME_CALLER_DATABASE_URL"
+fi
 cex_require_cmd cargo curl node >/dev/null
+if [[ -z "$NORMALIZED_RUNTIME_PSQL_PASSWORD" && "${CEX_POSTGRES_PASSWORD:-postgres}" != "postgres" ]]; then
+  NORMALIZED_RUNTIME_PSQL_PASSWORD="$CEX_POSTGRES_PASSWORD"
+fi
+
+run_psql() {
+  if [[ -n "$NORMALIZED_RUNTIME_PSQL_PASSWORD" ]]; then
+    PGPASSWORD="$NORMALIZED_RUNTIME_PSQL_PASSWORD" psql "$@"
+  else
+    psql "$@"
+  fi
+}
 
 TMP_DB="${CEX_NORMALIZED_RUNTIME_TMP_DB:-cex_normalized_runtime_$(date +%s)_$$}"
 if [[ ! "$TMP_DB" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
@@ -56,7 +84,7 @@ run_admin_sql() {
   local sql="$1"
   if cex_has_local_psql; then
     local admin_url="${BASE_URL%/*}/postgres"
-    PGPASSWORD="$CEX_POSTGRES_PASSWORD" psql "$admin_url" -v ON_ERROR_STOP=1 -c "$sql"
+    run_psql "$admin_url" -v ON_ERROR_STOP=1 -c "$sql"
     return 0
   fi
   if cex_can_use_docker_postgres; then
@@ -72,7 +100,7 @@ run_tmp_file() {
   local file="$1"
   if cex_has_local_psql; then
     local tmp_url="${BASE_URL%/*}/$TMP_DB"
-    PGPASSWORD="$CEX_POSTGRES_PASSWORD" psql "$tmp_url" -v ON_ERROR_STOP=1 -f "$file"
+    run_psql "$tmp_url" -v ON_ERROR_STOP=1 -f "$file"
     return 0
   fi
   if cex_can_use_docker_postgres; then
@@ -88,7 +116,7 @@ run_tmp_sql() {
   local sql="$1"
   if cex_has_local_psql; then
     local tmp_url="${BASE_URL%/*}/$TMP_DB"
-    PGPASSWORD="$CEX_POSTGRES_PASSWORD" psql "$tmp_url" -v ON_ERROR_STOP=1 -c "$sql"
+    run_psql "$tmp_url" -v ON_ERROR_STOP=1 -c "$sql"
     return 0
   fi
   if cex_can_use_docker_postgres; then
@@ -115,7 +143,11 @@ cleanup() {
     wait "$SECOND_APP_PID" >/dev/null 2>&1 || true
   fi
   drop_tmp_db
-  rm -rf "$TMP_DIR"
+  if [[ "${CEX_KEEP_NORMALIZED_RUNTIME_TMP:-0}" == "1" ]]; then
+    echo "keeping normalized runtime diagnostics at $TMP_DIR" >&2
+  else
+    rm -rf "$TMP_DIR"
+  fi
 }
 trap cleanup EXIT
 
@@ -155,6 +187,12 @@ DUAL_WRITE_STATE="$TMP_DIR/dual-write-state.json"
 DUAL_WRITE_SQL_SNAPSHOT="$TMP_DIR/dual-write-snapshot.sql"
 SMOKE_BODY="Runtime dual-write smoke: record normalized repository evidence, risk gate, acceptance standard, and next step."
 CONTRACT_TASK_ID="runtime-contract-task-direct-write-${TMP_DB}"
+# Tactics command ids are content-derived (rather than timestamp-derived), so
+# include the disposable run name in the probe body.  This keeps repeated local
+# runs from colliding with a previous Ledger operation while preserving the
+# same deterministic replay semantics within one run.
+TACTICS_TRAIN_BODY="Train the normalized direct-write tactics attacker at the civic square before resolving the combat objective [run=$TMP_DB]."
+TACTICS_ATTACK_BODY="Resolve normalized direct-write tactics victory against the market bandit with deterministic reward settlement [run=$TMP_DB]."
 
 LEDGER_BASE_URL_EFFECTIVE="${LEDGER_BASE_URL:-http://127.0.0.1:7002}"
 LEDGER_ADMIN_TOKEN_EFFECTIVE="${LEDGER_ADMIN_TOKEN:-}"
@@ -165,7 +203,10 @@ const raw = process.env.LEDGER_ADMIN_TOKENS_JSON || '';
 try {
   const parsed = JSON.parse(raw);
   const candidates = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.tokens) ? parsed.tokens : Object.values(parsed));
-  for (const candidate of candidates) {
+  const managed = candidates.filter((candidate) => candidate && typeof candidate === 'object'
+    && Array.isArray(candidate.scopes) && candidate.scopes.includes('ledger:manage'));
+  const ordered = managed.length ? managed : candidates;
+  for (const candidate of ordered) {
     if (typeof candidate === 'string' && candidate.trim()) {
       process.stdout.write(candidate.trim());
       process.exit(0);
@@ -188,7 +229,10 @@ const raw = process.env.LEDGER_ADMIN_TOKENS_JSON || '';
 try {
   const parsed = JSON.parse(raw);
   const candidates = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.tokens) ? parsed.tokens : Object.values(parsed));
-  for (const candidate of candidates) {
+  const managed = candidates.filter((candidate) => candidate && typeof candidate === 'object'
+    && Array.isArray(candidate.scopes) && candidate.scopes.includes('ledger:manage'));
+  const ordered = managed.length ? managed : candidates;
+  for (const candidate of ordered) {
     if (!candidate || typeof candidate !== 'object') {
       continue;
     }
@@ -209,18 +253,37 @@ try {
 NODE
 )"
 fi
-LEDGER_ADMIN_ORG_ID_EFFECTIVE="${LEDGER_ADMIN_ORG_ID_EFFECTIVE:-world-commerce-org}"
 if [[ -z "$LEDGER_ADMIN_TOKEN_EFFECTIVE" ]]; then
   echo "normalized runtime dual-write requires LEDGER_ADMIN_TOKEN or LEDGER_ADMIN_TOKENS_JSON to create isolated ledger accounts" >&2
   exit 1
 fi
 
+# The exact Ledger account contract and the identity bindings must refer to the
+# same organization.  Keep the default on the repository's disposable UUID
+# used by the local smoke; a split-admin rehearsal may override it through its
+# token bundle (or LEDGER_ADMIN_ORG_ID) when exercising another isolated org.
+LEDGER_RUNTIME_ORG_ID="${LEDGER_ADMIN_ORG_ID:-${LEDGER_ADMIN_ORG_ID_EFFECTIVE:-00000000-0000-0000-0000-00000000ce01}}"
+LEDGER_ADMIN_ORG_ID_EFFECTIVE="$LEDGER_RUNTIME_ORG_ID"
+if [[ ! "$LEDGER_RUNTIME_ORG_ID" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+  echo "normalized runtime Ledger org id must be a UUID: $LEDGER_RUNTIME_ORG_ID" >&2
+  exit 1
+fi
+
 create_runtime_ledger_account() {
   local initial_balance="$1"
-  curl -fsS -X POST "$LEDGER_BASE_URL_EFFECTIVE/v1/accounts" \
+  local account_id
+  local trace_id
+  local opening_minor
+  account_id="$(node -e 'process.stdout.write(require("crypto").randomUUID())')"
+  trace_id="$(node -e 'process.stdout.write(require("crypto").randomUUID())')"
+  # The exact ledger API takes minor units.  Keep the smoke's historical
+  # balance values (0 or 1000 credits) while representing them at the
+  # canonical six-decimal credit scale.
+  opening_minor="$(node -e 'const value=Number(process.argv[1]); if (!Number.isSafeInteger(value) || value < 0) process.exit(1); process.stdout.write(String(value * 1000000));' "$initial_balance")"
+  curl -fsS -X POST "$LEDGER_BASE_URL_EFFECTIVE/v2/accounts" \
     -H "x-admin-token: $LEDGER_ADMIN_TOKEN_EFFECTIVE" \
     -H 'content-type: application/json' \
-    -d "{\"org_id\":\"$LEDGER_ADMIN_ORG_ID_EFFECTIVE\",\"account_type\":\"world_player\",\"currency_unit\":\"credit\",\"initial_balance\":$initial_balance}" \
+    -d "{\"account_id\":\"$account_id\",\"org_id\":\"$LEDGER_RUNTIME_ORG_ID\",\"trace_id\":\"$trace_id\",\"account_type\":\"world_player\",\"currency_unit\":\"credits\",\"currency_scale\":6,\"opening_minor\":\"$opening_minor\",\"idempotency_scope\":\"normalized-runtime:account:$account_id\",\"idempotency_key\":\"open:$account_id\"}" \
     | node -e 'const fs=require("fs"); const raw=fs.readFileSync(0,"utf8"); const json=JSON.parse(raw); const id=json.account_id || json.account?.account_id; if (!id) { console.error(raw); process.exit(1); } process.stdout.write(id);'
 }
 
@@ -251,6 +314,8 @@ NODE
   CONSUMER_ENTRY_INGRESS_TOKEN="" \
   CONSUMER_ENTRY_REQUIRE_SESSION_AUTH="false" \
   CONSUMER_ENTRY_REQUIRE_IDENTITY_BINDING="false" \
+  CONSUMER_ENTRY_LEDGER_BASE_URL="$LEDGER_BASE_URL_EFFECTIVE" \
+  CONSUMER_ENTRY_LEDGER_ADMIN_TOKEN="$LEDGER_ADMIN_TOKEN_EFFECTIVE" \
   CONSUMER_ENTRY_REPLAY_STORE_PATH="" \
   CONSUMER_ENTRY_RATE_LIMIT_STORE_PATH="" \
   CONSUMER_ENTRY_IDENTITY_BINDINGS_PATH="$IDENTITY_BINDINGS_PATH" \
@@ -348,7 +413,7 @@ fi
 TACTICS_TRAIN_STATUS="$TMP_DIR/world-tactics-train-status.txt"
 if ! curl -sS -o "$TMP_DIR/world-tactics-train-response.json" -w '%{http_code}' -X POST "$BASE_APP_URL/v1/world/tactics/command" \
   -H 'content-type: application/json' \
-  -d '{"matrix_user_id":"@runtime-dual:local.dev","room_id":"!runtime-dual:local.dev","command":"train_skill","unit_id":"lord","target_tile":"G8","skill_id":"basic_unarmed","osm_game_overlay_id":"trillionnium-world-node:mirror-city-square","body":"Train the normalized direct-write tactics attacker at the civic square before resolving the combat objective."}' \
+  -d "{\"matrix_user_id\":\"@runtime-dual:local.dev\",\"room_id\":\"!runtime-dual:local.dev\",\"command\":\"train_skill\",\"unit_id\":\"lord\",\"target_tile\":\"G8\",\"skill_id\":\"basic_unarmed\",\"osm_game_overlay_id\":\"trillionnium-world-node:mirror-city-square\",\"body\":\"$TACTICS_TRAIN_BODY\"}" \
   > "$TACTICS_TRAIN_STATUS"; then
   echo "runtime dual-write world_tactics_command training curl failed" >&2
   tail -120 "$DUAL_WRITE_LOG" >&2 || true
@@ -366,7 +431,7 @@ fi
 TACTICS_STATUS="$TMP_DIR/world-tactics-command-status.txt"
 if ! curl -sS -o "$TMP_DIR/world-tactics-command-response.json" -w '%{http_code}' -X POST "$BASE_APP_URL/v1/world/tactics/command" \
   -H 'content-type: application/json' \
-  -d '{"matrix_user_id":"@runtime-dual:local.dev","room_id":"!runtime-dual:local.dev","command":"attack","unit_id":"lord","target_tile":"F5","skill_id":"basic_unarmed","body":"Resolve normalized direct-write tactics victory against the market bandit with deterministic reward settlement."}' \
+  -d "{\"matrix_user_id\":\"@runtime-dual:local.dev\",\"room_id\":\"!runtime-dual:local.dev\",\"command\":\"attack\",\"unit_id\":\"lord\",\"target_tile\":\"F5\",\"skill_id\":\"basic_unarmed\",\"body\":\"$TACTICS_ATTACK_BODY\"}" \
   > "$TACTICS_STATUS"; then
   echo "runtime dual-write world_tactics_command curl failed" >&2
   tail -120 "$DUAL_WRITE_LOG" >&2 || true
@@ -798,12 +863,35 @@ begin
   if (select count(*) from world_term_exchange_receipts where backend_kind = 'cex' and status in ('reserved', 'settled', 'consumed', 'refunded', 'seller_chargeback_reserved', 'seller_chargeback_consumed', 'duplicate')) < 1 then
     raise exception 'runtime direct Term Exchange receipt helper did not preserve typed receipt status/backend_kind';
   end if;
-  with world_receipt_progression_classes as (
+  with world_receipt_events_latest as (
+    select distinct on (receipt_id)
+      receipt_id, protocol_version, intent_id, term_id, backend_id, backend_kind,
+      status, progression_class, settlement_reference, ledger_entry_id, reason,
+      amount_credits, finalized_at
+    from world_term_exchange_receipt_events_v1
+    order by receipt_id, event_sequence desc, event_id desc
+  ),
+  world_receipt_source as (
+    select e.receipt_id, e.protocol_version, e.intent_id, e.term_id, e.backend_id,
+      e.backend_kind, e.status, e.progression_class, e.settlement_reference,
+      e.ledger_entry_id, e.reason, e.amount_credits, e.finalized_at
+    from world_receipt_events_latest e
+    union all
+    select p.receipt_id, p.protocol_version, p.intent_id, p.term_id, p.backend_id,
+      p.backend_kind, p.status, p.progression_class, p.settlement_reference,
+      p.ledger_entry_id, p.reason, p.amount_credits, p.finalized_at
+    from world_term_exchange_receipts p
+    where not exists (
+      select 1 from world_receipt_events_latest e where e.receipt_id = p.receipt_id
+    )
+  ),
+  world_receipt_progression_classes as (
     select coalesce(jsonb_object_agg(progression_class, receipt_count), '{}'::jsonb) as value
-    from (select progression_class, count(*) as receipt_count from world_term_exchange_receipts group by progression_class) classes
+    from (select progression_class, count(*) as receipt_count from world_receipt_source group by progression_class) classes
   ),
   world_latest_receipts as (
     select coalesce(jsonb_agg(jsonb_build_object(
+      'protocol_version', protocol_version,
       'receipt_id', receipt_id,
       'intent_id', intent_id,
       'term_id', term_id,
@@ -814,9 +902,10 @@ begin
       'settlement_reference', settlement_reference,
       'ledger_entry_id', ledger_entry_id,
       'reason', reason,
+      'amount_credits', amount_credits,
       'finalized_at_epoch', extract(epoch from finalized_at)::bigint
     ) order by finalized_at desc, receipt_id desc), '[]'::jsonb) as value
-    from (select receipt_id, intent_id, term_id, backend_id, backend_kind, status, progression_class, settlement_reference, ledger_entry_id, reason, finalized_at from world_term_exchange_receipts order by finalized_at desc, receipt_id desc limit 6) latest_receipts
+    from (select receipt_id, protocol_version, intent_id, term_id, backend_id, backend_kind, status, progression_class, settlement_reference, ledger_entry_id, reason, amount_credits, finalized_at from world_receipt_source order by finalized_at desc, receipt_id desc limit 6) latest_receipts
   ),
   world_receipt_state_map as (
     select coalesce(jsonb_object_agg(receipt_id, jsonb_build_object(
@@ -831,13 +920,14 @@ begin
       'settlement_reference', settlement_reference,
       'ledger_entry_id', ledger_entry_id,
       'reason', reason,
+      'amount_credits', amount_credits,
       'finalized_at_epoch', extract(epoch from finalized_at)::bigint
     )), '{}'::jsonb) as value
-    from world_term_exchange_receipts
+    from world_receipt_source
   )
   select jsonb_build_object(
     'read_model_version', 'trillionnium_normalized_world_home_read_model_v1',
-    'source_tables', jsonb_build_array('world_events', 'world_relationships', 'world_map_nodes', 'world_contracts', 'world_work_orders', 'world_faction_standings', 'league_term_exchange_receipts', 'world_term_exchange_receipts'),
+    'source_tables', jsonb_build_array('world_events', 'world_relationships', 'world_map_nodes', 'world_contracts', 'world_work_orders', 'world_faction_standings', 'league_term_exchange_receipts', 'world_term_exchange_receipts', 'world_term_exchange_receipt_events_v1'),
     'world_event_count', (select count(*) from world_events),
     'world_relationship_count', (select count(*) from world_relationships),
     'world_map_node_count', (select count(*) from world_map_nodes),
@@ -845,7 +935,7 @@ begin
     'world_work_order_count', (select count(*) from world_work_orders),
     'world_faction_standing_count', (select count(*) from world_faction_standings),
     'league_term_exchange_receipt_count', (select count(*) from league_term_exchange_receipts),
-    'world_term_exchange_receipt_count', (select count(*) from world_term_exchange_receipts),
+    'world_term_exchange_receipt_count', (select count(*) from world_receipt_source),
     'world_term_exchange_receipt_progression_classes', (select value from world_receipt_progression_classes),
     'term_exchange_receipts', (select value from world_receipt_state_map),
     'term_exchange_receipt_projection', jsonb_build_object(
@@ -853,9 +943,14 @@ begin
       'source_state_path', 'WorldState.world_term_exchange_receipts',
       'normalized_source_table', 'world_term_exchange_receipts',
       'read_model_alignment', 'normalized_world_home_client_feed_and_client_app_receipt_probes',
-      'receipt_count', (select count(*) from world_term_exchange_receipts),
+      'receipt_count', (select count(*) from world_receipt_source),
       'progression_classes', (select value from world_receipt_progression_classes),
-      'latest_receipts', (select value from world_latest_receipts)
+      'latest_receipts', (select value from world_latest_receipts),
+      'receipt_history', jsonb_build_object(
+        'event_tables', jsonb_build_array('world_term_exchange_receipt_events_v1'),
+        'latest_order', 'event_sequence desc, event_id desc',
+        'append_only', true
+      )
     ),
     'latest_event_ids', coalesce((select jsonb_agg(event_id order by created_at desc, event_id desc) from (select event_id, created_at from world_events order by created_at desc, event_id desc limit 6) recent_events), '[]'::jsonb),
     'latest_work_order_ids', coalesce((select jsonb_agg(work_order_id order by created_at desc, work_order_id desc) from (select work_order_id, created_at from world_work_orders order by created_at desc, work_order_id desc limit 6) recent_work_orders), '[]'::jsonb),
@@ -891,16 +986,57 @@ begin
   if jsonb_typeof(read_model->'term_exchange_receipts') <> 'object' then
     raise exception 'runtime normalized world home read model missing receipt state map: %', read_model;
   end if;
-  with world_receipt_progression_classes as (
+  with league_receipt_events_latest as (
+    select distinct on (receipt_id)
+      receipt_id, protocol_version, intent_id, term_id, backend_id, backend_kind,
+      status, progression_class, settlement_reference, ledger_entry_id, reason,
+      amount_credits, finalized_at
+    from league_term_exchange_receipt_events_v1
+    order by receipt_id, event_sequence desc, event_id desc
+  ),
+  league_receipt_source as (
+    select e.receipt_id, e.protocol_version, e.intent_id, e.term_id, e.backend_id,
+      e.backend_kind, e.status, e.progression_class, e.settlement_reference,
+      e.ledger_entry_id, e.reason, e.amount_credits, e.finalized_at
+    from league_receipt_events_latest e
+    union all
+    select p.receipt_id, p.protocol_version, p.intent_id, p.term_id, p.backend_id,
+      p.backend_kind, p.status, p.progression_class, p.settlement_reference,
+      p.ledger_entry_id, p.reason, p.amount_credits, p.finalized_at
+    from league_term_exchange_receipts p
+    where not exists (select 1 from league_receipt_events_latest e where e.receipt_id = p.receipt_id)
+  ),
+  world_receipt_events_latest as (
+    select distinct on (receipt_id)
+      receipt_id, protocol_version, intent_id, term_id, backend_id, backend_kind,
+      status, progression_class, settlement_reference, ledger_entry_id, reason,
+      amount_credits, finalized_at
+    from world_term_exchange_receipt_events_v1
+    order by receipt_id, event_sequence desc, event_id desc
+  ),
+  world_receipt_source as (
+    select e.receipt_id, e.protocol_version, e.intent_id, e.term_id, e.backend_id,
+      e.backend_kind, e.status, e.progression_class, e.settlement_reference,
+      e.ledger_entry_id, e.reason, e.amount_credits, e.finalized_at
+    from world_receipt_events_latest e
+    union all
+    select p.receipt_id, p.protocol_version, p.intent_id, p.term_id, p.backend_id,
+      p.backend_kind, p.status, p.progression_class, p.settlement_reference,
+      p.ledger_entry_id, p.reason, p.amount_credits, p.finalized_at
+    from world_term_exchange_receipts p
+    where not exists (select 1 from world_receipt_events_latest e where e.receipt_id = p.receipt_id)
+  ),
+  world_receipt_progression_classes as (
     select coalesce(jsonb_object_agg(progression_class, receipt_count), '{}'::jsonb) as value
-    from (select progression_class, count(*) as receipt_count from world_term_exchange_receipts group by progression_class) classes
+    from (select progression_class, count(*) as receipt_count from world_receipt_source group by progression_class) classes
   ),
   combined_receipt_progression_classes as (
     select coalesce(jsonb_object_agg(progression_class, receipt_count), '{}'::jsonb) as value
-    from (select progression_class, count(*) as receipt_count from (select progression_class from league_term_exchange_receipts union all select progression_class from world_term_exchange_receipts) receipt_classes group by progression_class) classes
+    from (select progression_class, count(*) as receipt_count from (select progression_class from league_receipt_source union all select progression_class from world_receipt_source) receipt_classes group by progression_class) classes
   ),
   world_latest_receipts as (
     select coalesce(jsonb_agg(jsonb_build_object(
+      'protocol_version', protocol_version,
       'receipt_id', receipt_id,
       'intent_id', intent_id,
       'term_id', term_id,
@@ -911,13 +1047,14 @@ begin
       'settlement_reference', settlement_reference,
       'ledger_entry_id', ledger_entry_id,
       'reason', reason,
+      'amount_credits', amount_credits,
       'finalized_at_epoch', extract(epoch from finalized_at)::bigint
     ) order by finalized_at desc, receipt_id desc), '[]'::jsonb) as value
-    from (select receipt_id, intent_id, term_id, backend_id, backend_kind, status, progression_class, settlement_reference, ledger_entry_id, reason, finalized_at from world_term_exchange_receipts order by finalized_at desc, receipt_id desc limit 6) latest_receipts
+    from (select receipt_id, protocol_version, intent_id, term_id, backend_id, backend_kind, status, progression_class, settlement_reference, ledger_entry_id, reason, amount_credits, finalized_at from world_receipt_source order by finalized_at desc, receipt_id desc limit 6) latest_receipts
   )
   select jsonb_build_object(
     'read_model_version', 'trillionnium_normalized_client_feed_read_model_v1',
-    'source_tables', jsonb_build_array('world_events', 'world_contracts', 'world_purchases', 'world_work_orders', 'world_work_deliveries', 'world_work_acceptances', 'world_work_rejections', 'world_work_reopens', 'world_work_cancellations', 'world_economy_events', 'league_term_exchange_receipts', 'world_term_exchange_receipts'),
+    'source_tables', jsonb_build_array('world_events', 'world_contracts', 'world_purchases', 'world_work_orders', 'world_work_deliveries', 'world_work_acceptances', 'world_work_rejections', 'world_work_reopens', 'world_work_cancellations', 'world_economy_events', 'league_term_exchange_receipts', 'world_term_exchange_receipts', 'league_term_exchange_receipt_events_v1', 'world_term_exchange_receipt_events_v1'),
     'world_event_count', (select count(*) from world_events),
     'world_contract_count', (select count(*) from world_contracts),
     'world_purchase_count', (select count(*) from world_purchases),
@@ -928,11 +1065,11 @@ begin
     'world_work_reopen_count', (select count(*) from world_work_reopens),
     'world_work_cancellation_count', (select count(*) from world_work_cancellations),
     'world_economy_event_count', (select count(*) from world_economy_events),
-    'league_term_exchange_receipt_count', (select count(*) from league_term_exchange_receipts),
-    'world_term_exchange_receipt_count', (select count(*) from world_term_exchange_receipts),
+    'league_term_exchange_receipt_count', (select count(*) from league_receipt_source),
+    'world_term_exchange_receipt_count', (select count(*) from world_receipt_source),
     'term_exchange_receipt_progression_classes', (select value from combined_receipt_progression_classes),
     'term_exchange_receipts', jsonb_build_object(
-      'count', (select count(*) from world_term_exchange_receipts),
+      'count', (select count(*) from world_receipt_source),
       'progression_classes', (select value from world_receipt_progression_classes),
       'recent', (select value from world_latest_receipts)
     ),
@@ -941,9 +1078,14 @@ begin
       'source_state_path', 'WorldState.world_term_exchange_receipts',
       'normalized_source_table', 'world_term_exchange_receipts',
       'read_model_alignment', 'normalized_world_home_client_feed_and_client_app_receipt_probes',
-      'receipt_count', (select count(*) from world_term_exchange_receipts),
+      'receipt_count', (select count(*) from world_receipt_source),
       'progression_classes', (select value from world_receipt_progression_classes),
-      'latest_receipts', (select value from world_latest_receipts)
+      'latest_receipts', (select value from world_latest_receipts),
+      'receipt_history', jsonb_build_object(
+        'event_tables', jsonb_build_array('league_term_exchange_receipt_events_v1', 'world_term_exchange_receipt_events_v1'),
+        'latest_order', 'event_sequence desc, event_id desc',
+        'append_only', true
+      )
     ),
     'feed_item_count', (
       select count(*)
@@ -958,8 +1100,8 @@ begin
         union all select reopen_id from world_work_reopens
         union all select cancellation_id from world_work_cancellations
         union all select economy_event_id from world_economy_events
-        union all select receipt_id from league_term_exchange_receipts
-        union all select receipt_id from world_term_exchange_receipts
+        union all select receipt_id from league_receipt_source
+        union all select receipt_id from world_receipt_source
       ) feed_items
     ),
     'latest_feed_items', coalesce((
@@ -977,8 +1119,8 @@ begin
           union all select 'work_reopen', reopen_id, created_at from world_work_reopens
           union all select 'work_cancellation', cancellation_id, created_at from world_work_cancellations
           union all select 'economy_event', economy_event_id, created_at from world_economy_events
-          union all select 'league_term_exchange_receipt', receipt_id, finalized_at from league_term_exchange_receipts
-          union all select 'world_term_exchange_receipt', receipt_id, finalized_at from world_term_exchange_receipts
+          union all select 'league_term_exchange_receipt', receipt_id, finalized_at from league_receipt_source
+          union all select 'world_term_exchange_receipt', receipt_id, finalized_at from world_receipt_source
         ) raw_feed_items
         order by created_at desc, item_id desc
         limit 12
@@ -1091,6 +1233,8 @@ READ_SWITCH_STATE="$TMP_DIR/read-switch-state.json"
   CONSUMER_ENTRY_INGRESS_TOKEN="" \
   CONSUMER_ENTRY_REQUIRE_SESSION_AUTH="false" \
   CONSUMER_ENTRY_REQUIRE_IDENTITY_BINDING="false" \
+  CONSUMER_ENTRY_LEDGER_BASE_URL="$LEDGER_BASE_URL_EFFECTIVE" \
+  CONSUMER_ENTRY_LEDGER_ADMIN_TOKEN="$LEDGER_ADMIN_TOKEN_EFFECTIVE" \
   CONSUMER_ENTRY_REPLAY_STORE_PATH="" \
   CONSUMER_ENTRY_RATE_LIMIT_STORE_PATH="" \
   CONSUMER_ENTRY_LEAGUE_STATE_PATH="$READ_SWITCH_STATE" \

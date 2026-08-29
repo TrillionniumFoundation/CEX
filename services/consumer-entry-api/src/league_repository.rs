@@ -1513,10 +1513,10 @@ pub(super) fn normalized_term_exchange_receipts_shadow_sql(
     table_name: &str,
     receipts: &[&TermExchangeReceiptState],
 ) -> Result<String, serde_json::Error> {
-    normalized_shadow_json_upsert_sql(
+    let mut sql = normalized_shadow_json_upsert_sql(
         table_name,
         receipts,
-        "protocol_version text, receipt_id text, intent_id text, term_id text, backend_id text, backend_kind text, status text, progression_class text, settlement_reference text, ledger_entry_id text, reason text, finalized_at_epoch bigint",
+        "protocol_version text, receipt_id text, intent_id text, term_id text, backend_id text, backend_kind text, status text, progression_class text, settlement_reference text, ledger_entry_id text, reason text, amount_credits bigint, finalized_at_epoch bigint",
         &[
             "protocol_version",
             "receipt_id",
@@ -1529,6 +1529,7 @@ pub(super) fn normalized_term_exchange_receipts_shadow_sql(
             "settlement_reference",
             "ledger_entry_id",
             "reason",
+            "amount_credits",
             "finalized_at",
             "updated_at",
         ],
@@ -1544,25 +1545,24 @@ pub(super) fn normalized_term_exchange_receipts_shadow_sql(
             "settlement_reference",
             "ledger_entry_id",
             "reason",
+            "amount_credits",
             "to_timestamp(finalized_at_epoch)",
             "now()",
         ],
         "receipt_id",
         &[
-            "protocol_version",
-            "intent_id",
-            "term_id",
-            "backend_id",
-            "backend_kind",
-            "status",
-            "progression_class",
-            "settlement_reference",
-            "ledger_entry_id",
-            "reason",
-            "finalized_at",
-            "updated_at",
+            // Receipt rows are immutable evidence.  Replays and the generated
+            // snapshot projection must never issue an UPDATE that would trip
+            // the 0085 append-only database guard.
         ],
-    )
+    )?;
+    if let Some(event_table) = normalized_term_exchange_receipt_event_table(table_name) {
+        sql.push_str(&normalized_term_exchange_receipt_events_shadow_sql(
+            event_table,
+            receipts,
+        )?);
+    }
+    Ok(sql)
 }
 
 pub(super) fn league_term_exchange_receipts_shadow_sql(
@@ -2001,6 +2001,7 @@ pub(super) fn normalized_world_shadow_tables() -> Vec<&'static str> {
         "world_tactics_sessions",
         "world_tactics_simulation_ticks",
         "world_term_exchange_receipts",
+        "world_term_exchange_receipt_events_v1",
         "world_assets",
         "world_events",
         "world_relationships",
@@ -2032,9 +2033,14 @@ pub(super) fn normalized_world_shadow_sql_contract_json(generated_sql_bytes: usi
         "sorted_vector_index_layer": "WorldIndexes::normalized_shadow_sorted_vector_indices_v1",
         "term_exchange_receipt_tables": [
             "league_term_exchange_receipts",
-            "world_term_exchange_receipts"
+            "world_term_exchange_receipts",
+            "league_term_exchange_receipt_events_v1",
+            "world_term_exchange_receipt_events_v1"
         ],
-        "additional_repository_tables": ["league_term_exchange_receipts"],
+        "additional_repository_tables": [
+            "league_term_exchange_receipts",
+            "league_term_exchange_receipt_events_v1"
+        ],
         "table_count": tables.len(),
         "tables": tables,
         "generated_sql_bytes": generated_sql_bytes,
@@ -2123,6 +2129,12 @@ pub(super) fn normalized_repository_command_world_table_closure(
         }
         if include_tables.contains("world_tactics_simulation_ticks") {
             add_world_table_dependency(&mut include_tables, "world_tactics_sessions");
+        }
+        if include_tables.contains("world_term_exchange_receipts") {
+            add_world_table_dependency(
+                &mut include_tables,
+                "world_term_exchange_receipt_events_v1",
+            );
         }
         if include_tables.contains("world_contracts") {
             add_world_table_dependency(&mut include_tables, "world_events");
@@ -2308,9 +2320,15 @@ pub(super) fn normalized_repository_direct_write_contract_json() -> Value {
         "transaction_boundary": "write_normalized_repository_snapshot_to_database commits direct typed SQLx upserts first, then writes JSON/snapshot export and audit artifacts, atomically in one PostgreSQL transaction",
         "receipt_table_helper": "upsert_normalized_term_exchange_receipt_tables",
         "receipt_table_mode": "typed_sqlx_receipt_upserts_from_repository_snapshot",
+        "receipt_mutation_mode": "append_only_insert_on_conflict_do_nothing",
+        "receipt_event_history_mode": "append_distinct_snapshots_with_sequence_and_hash_chain",
         "receipt_tables": [
             "league_term_exchange_receipts",
             "world_term_exchange_receipts"
+        ],
+        "receipt_event_tables": [
+            "league_term_exchange_receipt_events_v1",
+            "world_term_exchange_receipt_events_v1"
         ],
         "receipt_table_scope": "all supported world command direct writes plus final-cutover non-world snapshot writes upsert typed TermExchangeReceiptState projections before rollback/audit export",
         "command_helpers": [
@@ -2459,41 +2477,116 @@ fn term_exchange_receipt_enum_text<T: Serialize>(value: &T, label: &str) -> Resu
         .ok_or_else(|| format!("term exchange receipt {label} did not serialize to text"))
 }
 
+fn normalized_term_exchange_receipt_event_table(table_name: &str) -> Option<&'static str> {
+    match table_name {
+        "league_term_exchange_receipts" => Some("league_term_exchange_receipt_events_v1"),
+        "world_term_exchange_receipts" => Some("world_term_exchange_receipt_events_v1"),
+        _ => None,
+    }
+}
+
+fn normalized_term_exchange_receipt_event_kind(
+    previous_progression_class: Option<&str>,
+    progression_class: &str,
+) -> &'static str {
+    if previous_progression_class.is_none() {
+        "initial"
+    } else if progression_class == "recoverable_hold" {
+        "hold"
+    } else if matches!(
+        progression_class,
+        "progression_allowed" | "terminal_skip" | "hard_fail"
+    ) {
+        "final"
+    } else {
+        "transition"
+    }
+}
+
+fn normalized_term_exchange_receipt_events_shadow_sql(
+    event_table: &str,
+    receipts: &[&TermExchangeReceiptState],
+) -> Result<String, serde_json::Error> {
+    if receipts.is_empty() {
+        return Ok(String::new());
+    }
+
+    let mut sql =
+        String::from("-- Append-only normalized Term Exchange receipt event history (0087).\n");
+    for receipt in receipts {
+        let receipt_json = sql_quote(&serde_json::to_string(receipt)?);
+        let lock_key = sql_quote(&format!(
+            "cex:term-exchange-receipt-event:{event_table}:{}",
+            receipt.receipt_id
+        ));
+        sql.push_str(&format!(
+            "with lock as (\n\
+  select pg_advisory_xact_lock(hashtextextended('{lock_key}', 0)) as locked\n\
+), candidate as (\n\
+  select x.*, '{receipt_json}'::jsonb as receipt_json\n\
+  from lock\n\
+  cross join jsonb_to_record('{receipt_json}'::jsonb) as x(\n\
+    protocol_version text, receipt_id text, intent_id text, term_id text,\n\
+    backend_id text, backend_kind text, status text, progression_class text,\n\
+    settlement_reference text, ledger_entry_id text, reason text,\n\
+    amount_credits bigint, finalized_at_epoch bigint\n\
+  )\n\
+), latest as (\n\
+  select e.event_id, e.event_sequence, e.receipt_hash, e.receipt_json\n\
+  from {event_table} e\n\
+  join candidate c on c.receipt_id = e.receipt_id\n\
+  order by e.event_sequence desc, e.event_id desc\n\
+  limit 1\n\
+)\n\
+insert into {event_table} (\n\
+  receipt_id, event_sequence, event_kind, previous_receipt_hash,\n\
+  protocol_version, intent_id, term_id, backend_id, backend_kind, status,\n\
+  progression_class, settlement_reference, ledger_entry_id, reason,\n\
+  amount_credits, finalized_at, receipt_json, receipt_hash\n\
+)\n\
+select c.receipt_id,\n\
+       coalesce(l.event_sequence, 0) + 1,\n\
+       case\n\
+         when l.event_id is null then 'initial'\n\
+         when c.progression_class = 'recoverable_hold' then 'hold'\n\
+         when c.progression_class in ('progression_allowed', 'terminal_skip', 'hard_fail') then 'final'\n\
+         else 'transition'\n\
+       end,\n\
+       l.receipt_hash,\n\
+       c.protocol_version, c.intent_id, c.term_id, c.backend_id, c.backend_kind, c.status,\n\
+       c.progression_class, c.settlement_reference, c.ledger_entry_id, c.reason,\n\
+       c.amount_credits, to_timestamp(c.finalized_at_epoch::double precision),\n\
+       c.receipt_json,\n\
+       'sha256:' || encode(digest(c.receipt_json::text, 'sha256'), 'hex')\n\
+  from candidate c\n\
+  left join latest l on true\n\
+ where l.event_id is null or l.receipt_json is distinct from c.receipt_json\n\
+ on conflict (receipt_id, event_sequence) do nothing;\n"
+        ));
+    }
+    Ok(sql)
+}
+
 async fn upsert_normalized_term_exchange_receipts_for_table(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
     table_name: &str,
     receipts: Vec<&TermExchangeReceiptState>,
 ) -> Result<usize, String> {
-    if !matches!(
-        table_name,
-        "league_term_exchange_receipts" | "world_term_exchange_receipts"
-    ) {
+    let Some(event_table) = normalized_term_exchange_receipt_event_table(table_name) else {
         return Err(format!(
             "unsupported normalized term exchange receipt table: {table_name}"
         ));
-    }
+    };
     let query = format!(
         "insert into {table_name} (
              receipt_id, protocol_version, intent_id, term_id, backend_id,
              backend_kind, status, progression_class, settlement_reference,
-             ledger_entry_id, reason, finalized_at, updated_at
+             ledger_entry_id, reason, amount_credits, finalized_at, updated_at
          ) values (
              $1, $2, $3, $4, $5,
              $6, $7, $8, $9,
-             $10, $11, to_timestamp($12::double precision), now()
-         ) on conflict (receipt_id) do update set
-             protocol_version = excluded.protocol_version,
-             intent_id = excluded.intent_id,
-             term_id = excluded.term_id,
-             backend_id = excluded.backend_id,
-             backend_kind = excluded.backend_kind,
-             status = excluded.status,
-             progression_class = excluded.progression_class,
-             settlement_reference = excluded.settlement_reference,
-             ledger_entry_id = excluded.ledger_entry_id,
-             reason = excluded.reason,
-             finalized_at = excluded.finalized_at,
-             updated_at = now()"
+             $10, $11, $12, to_timestamp($13::double precision), now()
+         ) on conflict (receipt_id) do nothing"
     );
     let mut rows = 0;
     for receipt in receipts {
@@ -2501,6 +2594,8 @@ async fn upsert_normalized_term_exchange_receipts_for_table(
         let status = term_exchange_receipt_enum_text(&receipt.status, "status")?;
         let progression_class =
             term_exchange_receipt_enum_text(&receipt.progression_class, "progression_class")?;
+        let receipt_json = serde_json::to_value(receipt)
+            .map_err(|err| format!("failed to serialize normalized receipt evidence: {err}"))?;
         sqlx::query(&query)
             .bind(&receipt.receipt_id)
             .bind(&receipt.protocol_version)
@@ -2513,10 +2608,103 @@ async fn upsert_normalized_term_exchange_receipts_for_table(
             .bind(receipt.settlement_reference.as_deref())
             .bind(receipt.ledger_entry_id.as_deref())
             .bind(receipt.reason.as_deref())
+            .bind(receipt.amount_credits)
             .bind(receipt.finalized_at_epoch as f64)
             .execute(&mut **conn)
             .await
             .map_err(|err| format!("failed to direct-upsert {table_name}: {err}"))?;
+
+        // Serialize each distinct receipt snapshot into the append-only 0087
+        // event stream.  The transaction-scoped advisory lock makes the
+        // sequence/hash-chain decision deterministic across concurrent command
+        // writers; an identical latest JSON snapshot is an idempotent replay.
+        sqlx::query("select pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(format!(
+                "cex:term-exchange-receipt-event:{event_table}:{}",
+                receipt.receipt_id
+            ))
+            .execute(&mut **conn)
+            .await
+            .map_err(|err| {
+                format!(
+                    "failed to lock normalized term exchange receipt event {event_table}: {err}"
+                )
+            })?;
+
+        let latest = sqlx::query_as::<_, (i64, String, Value, String)>(&format!(
+            "select event_sequence, receipt_hash, receipt_json, progression_class\n\
+               from {event_table}\n\
+              where receipt_id = $1\n\
+              order by event_sequence desc, event_id desc\n\
+              limit 1\n\
+              for update"
+        ))
+        .bind(&receipt.receipt_id)
+        .fetch_optional(&mut **conn)
+        .await
+        .map_err(|err| {
+            format!("failed to read latest normalized receipt event {event_table}: {err}")
+        })?;
+
+        if latest
+            .as_ref()
+            .is_some_and(|(_, _, latest_json, _)| latest_json == &receipt_json)
+        {
+            rows += 1;
+            continue;
+        }
+
+        let (event_sequence, previous_receipt_hash, previous_progression_class) = latest
+            .as_ref()
+            .map(|(sequence, hash, _, progression)| {
+                (
+                    sequence.saturating_add(1),
+                    Some(hash.as_str()),
+                    Some(progression.as_str()),
+                )
+            })
+            .unwrap_or((1, None, None));
+        let event_kind = normalized_term_exchange_receipt_event_kind(
+            previous_progression_class,
+            &progression_class,
+        );
+        let event_insert_query = format!(
+            "insert into {event_table} (\n\
+                 receipt_id, event_sequence, event_kind, previous_receipt_hash,\n\
+                 protocol_version, intent_id, term_id, backend_id, backend_kind, status,\n\
+                 progression_class, settlement_reference, ledger_entry_id, reason,\n\
+                 amount_credits, finalized_at, receipt_json, receipt_hash\n\
+             ) values (\n\
+                 $1, $2, $3, $4,\n\
+                 $5, $6, $7, $8, $9, $10,\n\
+                 $11, $12, $13, $14,\n\
+                 $15, to_timestamp($16::double precision), $17::jsonb,\n\
+                 'sha256:' || encode(digest($17::jsonb::text, 'sha256'), 'hex')\n\
+             ) on conflict (receipt_id, event_sequence) do nothing"
+        );
+        sqlx::query(&event_insert_query)
+            .bind(&receipt.receipt_id)
+            .bind(event_sequence)
+            .bind(event_kind)
+            .bind(previous_receipt_hash)
+            .bind(&receipt.protocol_version)
+            .bind(&receipt.intent_id)
+            .bind(&receipt.term_id)
+            .bind(&receipt.backend_id)
+            .bind(&backend_kind)
+            .bind(&status)
+            .bind(&progression_class)
+            .bind(receipt.settlement_reference.as_deref())
+            .bind(receipt.ledger_entry_id.as_deref())
+            .bind(receipt.reason.as_deref())
+            .bind(receipt.amount_credits)
+            .bind(receipt.finalized_at_epoch as f64)
+            .bind(receipt_json)
+            .execute(&mut **conn)
+            .await
+            .map_err(|err| {
+                format!("failed to append normalized receipt event {event_table}: {err}")
+            })?;
         rows += 1;
     }
     Ok(rows)
@@ -4362,7 +4550,7 @@ pub(super) async fn execute_normalized_repository_direct_command_write(
 }
 
 pub(super) const TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR: &str =
-    "0026_add_term_exchange_receipt_tables.sql";
+    "0087_add_term_exchange_receipt_event_history.sql";
 const TRILLIONNIUM_REPOSITORY_FINAL_CUTOVER_PHASE: &str = "final_cutover";
 const TRILLIONNIUM_CURRENT_REPOSITORY: &str = "json_file_with_sql_snapshot";
 const TRILLIONNIUM_NEXT_REPOSITORY: &str = "normalized_sql_dual_write";
@@ -4961,12 +5149,61 @@ pub(super) fn league_state_repository_dual_write_plan_json() -> Value {
 
 #[allow(dead_code)]
 pub(super) fn normalized_repository_world_home_read_model_sql() -> &'static str {
-    "with world_receipt_progression_classes as (
+    r#"with league_receipt_events_latest as (
+  select distinct on (receipt_id)
+    receipt_id, protocol_version, intent_id, term_id, backend_id, backend_kind,
+    status, progression_class, settlement_reference, ledger_entry_id, reason,
+    amount_credits, finalized_at
+  from league_term_exchange_receipt_events_v1
+  order by receipt_id, event_sequence desc, event_id desc
+),
+league_receipt_source as (
+  select e.receipt_id, e.protocol_version, e.intent_id, e.term_id, e.backend_id,
+    e.backend_kind, e.status, e.progression_class, e.settlement_reference,
+    e.ledger_entry_id, e.reason, e.amount_credits, e.finalized_at
+  from league_receipt_events_latest e
+  union all
+  select p.receipt_id, p.protocol_version, p.intent_id, p.term_id, p.backend_id,
+    p.backend_kind, p.status, p.progression_class, p.settlement_reference,
+    p.ledger_entry_id, p.reason, p.amount_credits, p.finalized_at
+  from league_term_exchange_receipts p
+  where not exists (
+    select 1 from league_receipt_events_latest e where e.receipt_id = p.receipt_id
+  )
+),
+world_receipt_events_latest as (
+  select distinct on (receipt_id)
+    receipt_id, protocol_version, intent_id, term_id, backend_id, backend_kind,
+    status, progression_class, settlement_reference, ledger_entry_id, reason,
+    amount_credits, finalized_at
+  from world_term_exchange_receipt_events_v1
+  order by receipt_id, event_sequence desc, event_id desc
+),
+world_receipt_source as (
+  select e.receipt_id, e.protocol_version, e.intent_id, e.term_id, e.backend_id,
+    e.backend_kind, e.status, e.progression_class, e.settlement_reference,
+    e.ledger_entry_id, e.reason, e.amount_credits, e.finalized_at
+  from world_receipt_events_latest e
+  union all
+  select p.receipt_id, p.protocol_version, p.intent_id, p.term_id, p.backend_id,
+    p.backend_kind, p.status, p.progression_class, p.settlement_reference,
+    p.ledger_entry_id, p.reason, p.amount_credits, p.finalized_at
+  from world_term_exchange_receipts p
+  where not exists (
+    select 1 from world_receipt_events_latest e where e.receipt_id = p.receipt_id
+  )
+),
+world_receipt_progression_classes as (
   select coalesce(jsonb_object_agg(progression_class, receipt_count), '{}'::jsonb) as value
-  from (select progression_class, count(*) as receipt_count from world_term_exchange_receipts group by progression_class) classes
+  from (
+    select progression_class, count(*) as receipt_count
+    from world_receipt_source
+    group by progression_class
+  ) classes
 ),
 world_latest_receipts as (
   select coalesce(jsonb_agg(jsonb_build_object(
+    'protocol_version', protocol_version,
     'receipt_id', receipt_id,
     'intent_id', intent_id,
     'term_id', term_id,
@@ -4977,9 +5214,17 @@ world_latest_receipts as (
     'settlement_reference', settlement_reference,
     'ledger_entry_id', ledger_entry_id,
     'reason', reason,
+    'amount_credits', amount_credits,
     'finalized_at_epoch', extract(epoch from finalized_at)::bigint
   ) order by finalized_at desc, receipt_id desc), '[]'::jsonb) as value
-  from (select receipt_id, intent_id, term_id, backend_id, backend_kind, status, progression_class, settlement_reference, ledger_entry_id, reason, finalized_at from world_term_exchange_receipts order by finalized_at desc, receipt_id desc limit 6) latest_receipts
+  from (
+    select receipt_id, protocol_version, intent_id, term_id, backend_id,
+      backend_kind, status, progression_class, settlement_reference,
+      ledger_entry_id, reason, amount_credits, finalized_at
+    from world_receipt_source
+    order by finalized_at desc, receipt_id desc
+    limit 6
+  ) latest_receipts
 ),
 world_receipt_state_map as (
   select coalesce(jsonb_object_agg(receipt_id, jsonb_build_object(
@@ -4994,21 +5239,22 @@ world_receipt_state_map as (
     'settlement_reference', settlement_reference,
     'ledger_entry_id', ledger_entry_id,
     'reason', reason,
+    'amount_credits', amount_credits,
     'finalized_at_epoch', extract(epoch from finalized_at)::bigint
   )), '{}'::jsonb) as value
-  from world_term_exchange_receipts
+  from world_receipt_source
 )
 select jsonb_build_object(
   'read_model_version', 'trillionnium_normalized_world_home_read_model_v1',
-  'source_tables', jsonb_build_array('world_events', 'world_relationships', 'world_map_nodes', 'world_contracts', 'world_work_orders', 'world_faction_standings', 'league_term_exchange_receipts', 'world_term_exchange_receipts'),
+  'source_tables', jsonb_build_array('world_events', 'world_relationships', 'world_map_nodes', 'world_contracts', 'world_work_orders', 'world_faction_standings', 'league_term_exchange_receipts', 'world_term_exchange_receipts', 'league_term_exchange_receipt_events_v1', 'world_term_exchange_receipt_events_v1'),
   'world_event_count', (select count(*) from world_events),
   'world_relationship_count', (select count(*) from world_relationships),
   'world_map_node_count', (select count(*) from world_map_nodes),
   'world_contract_count', (select count(*) from world_contracts),
   'world_work_order_count', (select count(*) from world_work_orders),
   'world_faction_standing_count', (select count(*) from world_faction_standings),
-  'league_term_exchange_receipt_count', (select count(*) from league_term_exchange_receipts),
-  'world_term_exchange_receipt_count', (select count(*) from world_term_exchange_receipts),
+  'league_term_exchange_receipt_count', (select count(*) from league_receipt_source),
+  'world_term_exchange_receipt_count', (select count(*) from world_receipt_source),
   'world_term_exchange_receipt_progression_classes', (select value from world_receipt_progression_classes),
   'term_exchange_receipts', (select value from world_receipt_state_map),
   'term_exchange_receipt_projection', jsonb_build_object(
@@ -5016,28 +5262,90 @@ select jsonb_build_object(
     'source_state_path', 'WorldState.world_term_exchange_receipts',
     'normalized_source_table', 'world_term_exchange_receipts',
     'read_model_alignment', 'normalized_world_home_client_feed_and_client_app_receipt_probes',
-    'receipt_count', (select count(*) from world_term_exchange_receipts),
+    'receipt_count', (select count(*) from world_receipt_source),
     'progression_classes', (select value from world_receipt_progression_classes),
-    'latest_receipts', (select value from world_latest_receipts)
+    'latest_receipts', (select value from world_latest_receipts),
+    'receipt_history', jsonb_build_object(
+      'event_tables', jsonb_build_array('league_term_exchange_receipt_events_v1', 'world_term_exchange_receipt_events_v1'),
+      'latest_order', 'event_sequence desc, event_id desc',
+      'append_only', true
+    )
   ),
   'latest_event_ids', coalesce((select jsonb_agg(event_id order by created_at desc, event_id desc) from (select event_id, created_at from world_events order by created_at desc, event_id desc limit 6) recent_events), '[]'::jsonb),
   'latest_work_order_ids', coalesce((select jsonb_agg(work_order_id order by created_at desc, work_order_id desc) from (select work_order_id, created_at from world_work_orders order by created_at desc, work_order_id desc limit 6) recent_work_orders), '[]'::jsonb),
   'latest_world_term_exchange_receipts', (select value from world_latest_receipts)
-) as normalized_world_home_read_model"
+) as normalized_world_home_read_model"#
 }
 
 #[allow(dead_code)]
 pub(super) fn normalized_repository_client_feed_read_model_sql() -> &'static str {
-    "with world_receipt_progression_classes as (
+    r#"with league_receipt_events_latest as (
+  select distinct on (receipt_id)
+    receipt_id, protocol_version, intent_id, term_id, backend_id, backend_kind,
+    status, progression_class, settlement_reference, ledger_entry_id, reason,
+    amount_credits, finalized_at
+  from league_term_exchange_receipt_events_v1
+  order by receipt_id, event_sequence desc, event_id desc
+),
+league_receipt_source as (
+  select e.receipt_id, e.protocol_version, e.intent_id, e.term_id, e.backend_id,
+    e.backend_kind, e.status, e.progression_class, e.settlement_reference,
+    e.ledger_entry_id, e.reason, e.amount_credits, e.finalized_at
+  from league_receipt_events_latest e
+  union all
+  select p.receipt_id, p.protocol_version, p.intent_id, p.term_id, p.backend_id,
+    p.backend_kind, p.status, p.progression_class, p.settlement_reference,
+    p.ledger_entry_id, p.reason, p.amount_credits, p.finalized_at
+  from league_term_exchange_receipts p
+  where not exists (
+    select 1 from league_receipt_events_latest e where e.receipt_id = p.receipt_id
+  )
+),
+world_receipt_events_latest as (
+  select distinct on (receipt_id)
+    receipt_id, protocol_version, intent_id, term_id, backend_id, backend_kind,
+    status, progression_class, settlement_reference, ledger_entry_id, reason,
+    amount_credits, finalized_at
+  from world_term_exchange_receipt_events_v1
+  order by receipt_id, event_sequence desc, event_id desc
+),
+world_receipt_source as (
+  select e.receipt_id, e.protocol_version, e.intent_id, e.term_id, e.backend_id,
+    e.backend_kind, e.status, e.progression_class, e.settlement_reference,
+    e.ledger_entry_id, e.reason, e.amount_credits, e.finalized_at
+  from world_receipt_events_latest e
+  union all
+  select p.receipt_id, p.protocol_version, p.intent_id, p.term_id, p.backend_id,
+    p.backend_kind, p.status, p.progression_class, p.settlement_reference,
+    p.ledger_entry_id, p.reason, p.amount_credits, p.finalized_at
+  from world_term_exchange_receipts p
+  where not exists (
+    select 1 from world_receipt_events_latest e where e.receipt_id = p.receipt_id
+  )
+),
+world_receipt_progression_classes as (
   select coalesce(jsonb_object_agg(progression_class, receipt_count), '{}'::jsonb) as value
-  from (select progression_class, count(*) as receipt_count from world_term_exchange_receipts group by progression_class) classes
+  from (
+    select progression_class, count(*) as receipt_count
+    from world_receipt_source
+    group by progression_class
+  ) classes
 ),
 combined_receipt_progression_classes as (
   select coalesce(jsonb_object_agg(progression_class, receipt_count), '{}'::jsonb) as value
-  from (select progression_class, count(*) as receipt_count from (select progression_class from league_term_exchange_receipts union all select progression_class from world_term_exchange_receipts) receipt_classes group by progression_class) classes
+  from (
+    select progression_class, count(*) as receipt_count
+    from (
+      select progression_class from league_receipt_source
+      union all
+      select progression_class from world_receipt_source
+    ) receipt_classes
+    group by progression_class
+  ) classes
 ),
 world_latest_receipts as (
   select coalesce(jsonb_agg(jsonb_build_object(
+    'protocol_version', protocol_version,
     'receipt_id', receipt_id,
     'intent_id', intent_id,
     'term_id', term_id,
@@ -5048,9 +5356,17 @@ world_latest_receipts as (
     'settlement_reference', settlement_reference,
     'ledger_entry_id', ledger_entry_id,
     'reason', reason,
+    'amount_credits', amount_credits,
     'finalized_at_epoch', extract(epoch from finalized_at)::bigint
   ) order by finalized_at desc, receipt_id desc), '[]'::jsonb) as value
-  from (select receipt_id, intent_id, term_id, backend_id, backend_kind, status, progression_class, settlement_reference, ledger_entry_id, reason, finalized_at from world_term_exchange_receipts order by finalized_at desc, receipt_id desc limit 6) latest_receipts
+  from (
+    select receipt_id, protocol_version, intent_id, term_id, backend_id,
+      backend_kind, status, progression_class, settlement_reference,
+      ledger_entry_id, reason, amount_credits, finalized_at
+    from world_receipt_source
+    order by finalized_at desc, receipt_id desc
+    limit 6
+  ) latest_receipts
 )
 select jsonb_build_object(
   'read_model_version', 'trillionnium_normalized_client_feed_read_model_v1',
@@ -5066,7 +5382,9 @@ select jsonb_build_object(
     'world_work_cancellations',
     'world_economy_events',
     'league_term_exchange_receipts',
-    'world_term_exchange_receipts'
+    'world_term_exchange_receipts',
+    'league_term_exchange_receipt_events_v1',
+    'world_term_exchange_receipt_events_v1'
   ),
   'world_event_count', (select count(*) from world_events),
   'world_contract_count', (select count(*) from world_contracts),
@@ -5078,11 +5396,11 @@ select jsonb_build_object(
   'world_work_reopen_count', (select count(*) from world_work_reopens),
   'world_work_cancellation_count', (select count(*) from world_work_cancellations),
   'world_economy_event_count', (select count(*) from world_economy_events),
-  'league_term_exchange_receipt_count', (select count(*) from league_term_exchange_receipts),
-  'world_term_exchange_receipt_count', (select count(*) from world_term_exchange_receipts),
+  'league_term_exchange_receipt_count', (select count(*) from league_receipt_source),
+  'world_term_exchange_receipt_count', (select count(*) from world_receipt_source),
   'term_exchange_receipt_progression_classes', (select value from combined_receipt_progression_classes),
   'term_exchange_receipts', jsonb_build_object(
-    'count', (select count(*) from world_term_exchange_receipts),
+    'count', (select count(*) from world_receipt_source),
     'progression_classes', (select value from world_receipt_progression_classes),
     'recent', (select value from world_latest_receipts)
   ),
@@ -5091,9 +5409,14 @@ select jsonb_build_object(
     'source_state_path', 'WorldState.world_term_exchange_receipts',
     'normalized_source_table', 'world_term_exchange_receipts',
     'read_model_alignment', 'normalized_world_home_client_feed_and_client_app_receipt_probes',
-    'receipt_count', (select count(*) from world_term_exchange_receipts),
+    'receipt_count', (select count(*) from world_receipt_source),
     'progression_classes', (select value from world_receipt_progression_classes),
-    'latest_receipts', (select value from world_latest_receipts)
+    'latest_receipts', (select value from world_latest_receipts),
+    'receipt_history', jsonb_build_object(
+      'event_tables', jsonb_build_array('league_term_exchange_receipt_events_v1', 'world_term_exchange_receipt_events_v1'),
+      'latest_order', 'event_sequence desc, event_id desc',
+      'append_only', true
+    )
   ),
   'feed_item_count', (
     select count(*)
@@ -5108,8 +5431,8 @@ select jsonb_build_object(
       union all select reopen_id from world_work_reopens
       union all select cancellation_id from world_work_cancellations
       union all select economy_event_id from world_economy_events
-      union all select receipt_id from league_term_exchange_receipts
-      union all select receipt_id from world_term_exchange_receipts
+      union all select receipt_id from league_receipt_source
+      union all select receipt_id from world_receipt_source
     ) feed_items
   ),
   'latest_feed_items', coalesce((
@@ -5127,14 +5450,14 @@ select jsonb_build_object(
         union all select 'work_reopen', reopen_id, created_at from world_work_reopens
         union all select 'work_cancellation', cancellation_id, created_at from world_work_cancellations
         union all select 'economy_event', economy_event_id, created_at from world_economy_events
-        union all select 'league_term_exchange_receipt', receipt_id, finalized_at from league_term_exchange_receipts
-        union all select 'world_term_exchange_receipt', receipt_id, finalized_at from world_term_exchange_receipts
+        union all select 'league_term_exchange_receipt', receipt_id, finalized_at from league_receipt_source
+        union all select 'world_term_exchange_receipt', receipt_id, finalized_at from world_receipt_source
       ) raw_feed_items
       order by created_at desc, item_id desc
       limit 12
     ) latest_feed_items
   ), '[]'::jsonb)
-) as normalized_client_feed_read_model"
+) as normalized_client_feed_read_model"#
 }
 
 pub(super) fn normalized_repository_read_model_contract_json() -> Value {
@@ -5153,7 +5476,8 @@ pub(super) fn normalized_repository_read_model_contract_json() -> Value {
                 "world_work_orders",
                 "world_faction_standings",
                 "league_term_exchange_receipts",
-                "world_term_exchange_receipts"
+                "world_term_exchange_receipts",
+                "world_term_exchange_receipt_events_v1"
             ],
             "receipt_probe_fields": [
                 "world_term_exchange_receipt_count",
@@ -5162,6 +5486,29 @@ pub(super) fn normalized_repository_read_model_contract_json() -> Value {
                 "term_exchange_receipts",
                 "term_exchange_receipt_projection"
             ],
+            "receipt_fields": [
+                "protocol_version",
+                "receipt_id",
+                "intent_id",
+                "term_id",
+                "backend_id",
+                "backend_kind",
+                "status",
+                "progression_class",
+                "settlement_reference",
+                "ledger_entry_id",
+                "reason",
+                "amount_credits",
+                "finalized_at_epoch"
+            ],
+            "receipt_history": {
+                "event_tables": [
+                    "league_term_exchange_receipt_events_v1",
+                    "world_term_exchange_receipt_events_v1"
+                ],
+                "latest_order": ["event_sequence desc", "event_id desc"],
+                "append_only": true
+            },
             "parity_gate": "normalized_world_home_read_model_green",
             "startup_gate": "normalized_read_model_startup_gate_green"
         },
@@ -5180,7 +5527,9 @@ pub(super) fn normalized_repository_read_model_contract_json() -> Value {
                 "world_work_cancellations",
                 "world_economy_events",
                 "league_term_exchange_receipts",
-                "world_term_exchange_receipts"
+                "world_term_exchange_receipts",
+                "league_term_exchange_receipt_events_v1",
+                "world_term_exchange_receipt_events_v1"
             ],
             "receipt_probe_fields": [
                 "league_term_exchange_receipt_count",
@@ -5189,6 +5538,29 @@ pub(super) fn normalized_repository_read_model_contract_json() -> Value {
                 "term_exchange_receipts",
                 "term_exchange_receipt_projection"
             ],
+            "receipt_fields": [
+                "protocol_version",
+                "receipt_id",
+                "intent_id",
+                "term_id",
+                "backend_id",
+                "backend_kind",
+                "status",
+                "progression_class",
+                "settlement_reference",
+                "ledger_entry_id",
+                "reason",
+                "amount_credits",
+                "finalized_at_epoch"
+            ],
+            "receipt_history": {
+                "event_tables": [
+                    "league_term_exchange_receipt_events_v1",
+                    "world_term_exchange_receipt_events_v1"
+                ],
+                "latest_order": ["event_sequence desc", "event_id desc"],
+                "append_only": true
+            },
             "parity_gate": "normalized_client_feed_read_model_green",
             "startup_gate": "normalized_client_feed_read_model_startup_gate_green"
         },
@@ -5326,7 +5698,7 @@ pub(super) fn league_state_repository_contract_json() -> Value {
             }
         ],
         "read_switch_gates": [
-            "all migrations through 0026_add_term_exchange_receipt_tables.sql applied",
+            "all migrations through 0087_add_term_exchange_receipt_event_history.sql applied",
             "league_and_world_term_exchange_receipt_tables_shadow_status_and_progression_class",
             "WorldState projection contexts read from repository snapshots without direct LeagueState coupling",
             "repository_audit_green",

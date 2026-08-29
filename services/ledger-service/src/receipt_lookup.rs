@@ -166,8 +166,22 @@ pub async fn get_trnm_economic_receipt_by_intent(
         "select
              (select payload_hash from public.trnm_economic_intents where intent_id = $1),
              (select intent_json from public.trnm_economic_intents where intent_id = $1),
-             (select receipt_id from public.trnm_economic_receipts where intent_id = $1),
-             (select receipt_json from public.trnm_economic_receipts where intent_id = $1)",
+             coalesce(
+                 (select e.receipt_id
+                    from public.trnm_economic_receipt_events_v1 e
+                   where e.intent_id = $1
+                   order by e.event_sequence desc, e.event_id desc
+                   limit 1),
+                 (select receipt_id from public.trnm_economic_receipts where intent_id = $1)
+             ),
+             coalesce(
+                 (select e.receipt_json
+                    from public.trnm_economic_receipt_events_v1 e
+                   where e.intent_id = $1
+                   order by e.event_sequence desc, e.event_id desc
+                   limit 1),
+                 (select receipt_json from public.trnm_economic_receipts where intent_id = $1)
+             )",
     )
     .bind(&query.intent_id)
     .fetch_one(pool)
@@ -232,11 +246,20 @@ fn resolve_binding(
     let receipt: EconomicReceipt =
         serde_json::from_value(receipt_json.expect("receipt_json checked above"))
             .map_err(|_| LookupFailure::CorruptBinding)?;
+    let expected_amount = intent_json
+        .get("amount_credits")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let receipt_amount = receipt
+        .evidence
+        .get("amount_credits")
+        .and_then(Value::as_i64);
     if receipt.intent_id != intent_id
         || receipt.receipt_id != receipt_id
         || receipt.protocol_version != TERM_EXCHANGE_PROTOCOL_VERSION
         || receipt.evidence.get("payload_hash").and_then(Value::as_str)
             != Some(stored_hash.as_str())
+        || receipt_amount != Some(expected_amount)
     {
         return Err(LookupFailure::CorruptBinding);
     }
@@ -333,7 +356,7 @@ mod tests {
             ReceiptStatus::ApprovedRelease,
             1,
         );
-        receipt.evidence = json!({"payload_hash": payload_hash.clone()});
+        receipt.evidence = json!({"payload_hash": payload_hash.clone(), "amount_credits": 25});
         (
             payload_hash.clone(),
             StoredReceiptBinding {

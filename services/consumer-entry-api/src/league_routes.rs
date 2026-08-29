@@ -123,6 +123,123 @@ fn escape_league_visible_text(value: &str) -> String {
     i18n_span_from_bilingual_slash_copy(&copy).unwrap_or_else(|| escape_html_text(&copy))
 }
 
+/// Resolve a submission written by the pre-v12 compatibility routes.
+///
+/// Before submission identities were made deterministic, both the browser and API handlers
+/// included the wall-clock second in the hash.  A retry which arrives after an upgrade therefore
+/// cannot derive the old id from the request alone.  We deliberately require the complete
+/// immutable request tuple *and* verify the legacy hash against the persisted creation timestamp
+/// before returning a row.  This keeps arbitrary/corrupt rows from becoming an idempotency alias,
+/// while allowing a response-loss retry to reuse the original reward/ledger intent.
+fn legacy_league_submission_replay_priority(
+    league: &LeagueState,
+    submission: &LeagueSubmission,
+) -> u8 {
+    let reward_id = league_hash_id("reward", &submission.submission_id);
+    let has_exact_terminal_receipt = league
+        .rewards
+        .iter()
+        .rev()
+        .filter(|reward| reward.reward_id == reward_id)
+        .any(|reward| {
+            // A mutable compatibility status or a receipt with a merely terminal-looking
+            // status is not enough.  Reuse priority is granted only by the same typed receipt
+            // predicate that authorizes progression, including exact amount, identity, term,
+            // backend and receipt ID checks.
+            league_reward_submission_identity_matches(reward, submission)
+                && league_reward_submission_amounts_match(reward, submission)
+                && league_reward_exact_released_amount_from_state(league, reward).is_some()
+        });
+    u8::from(has_exact_terminal_receipt)
+}
+
+/// Verify that a persisted submission is the exact immutable request represented by a retry.
+///
+/// Submission IDs are deliberately short display/index identifiers.  They must never be treated
+/// as authorization by themselves: checking the complete tuple closes truncated-hash collisions
+/// and the historical colon-delimited preimage ambiguity while preserving all existing IDs.
+pub(super) fn league_submission_request_identity_matches(
+    submission: &LeagueSubmission,
+    match_id: &str,
+    entry_id: &str,
+    player_id: &str,
+    matrix_user_id: &str,
+    task_id: Option<&str>,
+    body: &str,
+) -> bool {
+    submission.match_id == match_id
+        && submission.entry_id == entry_id
+        && submission.player_id == player_id
+        && submission.matrix_user_id == matrix_user_id
+        && submission.task_id.as_deref() == task_id
+        && submission.body == body
+}
+
+fn league_submission_identity_conflict_response(
+    submission_id: &str,
+    match_id: &str,
+    entry_id: &str,
+) -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(json!({
+            "error": "league submission identity conflict",
+            "submission_id": submission_id,
+            "match_id": match_id,
+            "entry_id": entry_id,
+        })),
+    )
+        .into_response()
+}
+
+pub(super) fn legacy_league_submission_for_request(
+    league: &LeagueState,
+    match_id: &str,
+    entry_id: &str,
+    matrix_user_id: &str,
+    task_id: Option<&str>,
+    body: &str,
+) -> Option<LeagueSubmission> {
+    league
+        .submissions
+        .values()
+        .filter(|submission| {
+            submission.match_id == match_id
+                && submission.entry_id == entry_id
+                && submission.matrix_user_id == matrix_user_id
+                && submission.task_id.as_deref() == task_id
+                && submission.body == body
+        })
+        .filter(|submission| {
+            let legacy_api_id = league_hash_id(
+                "submission",
+                &format!(
+                    "{}:{}:{}:{}",
+                    match_id, entry_id, submission.created_at_epoch, body
+                ),
+            );
+            let legacy_web_id = league_hash_id(
+                "submission",
+                &format!(
+                    "web:{}:{}:{}:{}",
+                    match_id, entry_id, submission.created_at_epoch, body
+                ),
+            );
+            submission.submission_id == legacy_api_id || submission.submission_id == legacy_web_id
+        })
+        // Old clients could submit the same report more than once.  Prefer the most recent
+        // persisted attempt, but let a row with an existing terminal/remote receipt win over a
+        // newer pending attempt.  This is important when the old timestamp-based route accepted
+        // two identical reports and only the first Ledger call completed before the crash.
+        .max_by(|left, right| {
+            legacy_league_submission_replay_priority(league, left)
+                .cmp(&legacy_league_submission_replay_priority(league, right))
+                .then_with(|| left.created_at_epoch.cmp(&right.created_at_epoch))
+                .then_with(|| left.submission_id.cmp(&right.submission_id))
+        })
+        .cloned()
+}
+
 pub(super) async fn get_league_season(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -929,12 +1046,54 @@ pub(super) async fn post_league_web_action(
                 let grade = judgement.grade.clone();
                 let reward_amount = judgement.reward_amount;
                 let now = Utc::now().timestamp();
-                let submission_id = league_hash_id(
+                // Submission identity is a deterministic hash of the immutable match/entry/body
+                // contract.  A browser retry after a lost response reuses the same reward intent;
+                // a materially different report remains a new submission.
+                let deterministic_submission_id = league_hash_id(
                     "submission",
-                    &format!("web:{}:{}:{}:{}", match_id, entry.entry_id, now, body),
+                    &format!("{}:{}:{}", match_id, entry.entry_id, body),
                 );
-                let submission = LeagueSubmission {
-                    submission_id: submission_id.clone(),
+                // A state snapshot may still contain a submission created by the pre-v12
+                // timestamp-derived route.  Resolve that row before falling back to the new
+                // deterministic id so its reward/intent remains the replay identity.
+                let deterministic_submission = league
+                    .submissions
+                    .get(&deterministic_submission_id)
+                    .cloned();
+                let existing_submission = deterministic_submission.clone().or_else(|| {
+                    legacy_league_submission_for_request(
+                        &league,
+                        &match_id,
+                        &entry.entry_id,
+                        &matrix_user_id,
+                        None,
+                        &body,
+                    )
+                });
+                if entry.player_id != player.player_id
+                    || entry.matrix_user_id != matrix_user_id
+                    || existing_submission.as_ref().is_some_and(|existing| {
+                        (deterministic_submission.is_some()
+                            && existing.submission_id != deterministic_submission_id)
+                            || !league_submission_request_identity_matches(
+                                existing,
+                                &match_id,
+                                &entry.entry_id,
+                                &player.player_id,
+                                &matrix_user_id,
+                                None,
+                                &body,
+                            )
+                    })
+                {
+                    return league_submission_identity_conflict_response(
+                        &deterministic_submission_id,
+                        &match_id,
+                        &entry.entry_id,
+                    );
+                }
+                let submission = existing_submission.unwrap_or_else(|| LeagueSubmission {
+                    submission_id: deterministic_submission_id.clone(),
                     match_id: match_id.clone(),
                     entry_id: entry.entry_id.clone(),
                     player_id: player.player_id.clone(),
@@ -949,37 +1108,79 @@ pub(super) async fn post_league_web_action(
                     anti_cheat_flags: judgement.anti_cheat_flags.clone(),
                     score_events: judgement.score_events.clone(),
                     created_at_epoch: now,
-                };
-                let reward = LeagueReward {
-                    reward_id: league_hash_id("reward", &submission_id),
-                    match_id: match_id.clone(),
-                    entry_id: entry.entry_id.clone(),
-                    player_id: player.player_id.clone(),
-                    matrix_user_id: matrix_user_id.clone(),
-                    amount: reward_amount,
-                    currency_unit: "credit".to_string(),
-                    reason: format!("league_web_submission_score_{score:.1}_{grade}"),
-                    ledger_status: Some("pending".to_string()),
-                    ledger_account_id: None,
-                    ledger_entry_id: None,
-                    ledger_balance_after: None,
-                    ledger_error: None,
-                    review_status: if judgement.payout_status == "review_hold" {
-                        Some("pending_review".to_string())
-                    } else {
-                        None
-                    },
-                    reviewed_by: None,
-                    review_note: None,
-                    reviewed_at_epoch: None,
-                    created_at_epoch: now,
-                };
-                league
-                    .submissions
-                    .insert(submission_id.clone(), submission.clone());
-                league.rewards.push(reward.clone());
+                });
+                let reward_id = league_hash_id("reward", &submission.submission_id);
+                // Once a submission exists, its judged amount and payout classification are
+                // immutable.  A retry may run a non-deterministic external judge again; never let
+                // that fresh result rewrite the reward contract for the existing submission.
+                let submission_reward_amount = submission.reward_amount;
+                let submission_score = submission.score;
+                let submission_grade = submission.grade.clone();
+                let submission_payout_status = submission.payout_status.as_deref();
+                let reward = league
+                    .rewards
+                    .iter()
+                    .rev()
+                    .find(|existing| existing.reward_id == reward_id)
+                    .cloned()
+                    .unwrap_or_else(|| LeagueReward {
+                        reward_id: reward_id.clone(),
+                        match_id: match_id.clone(),
+                        entry_id: entry.entry_id.clone(),
+                        player_id: player.player_id.clone(),
+                        matrix_user_id: matrix_user_id.clone(),
+                        amount: submission_reward_amount,
+                        currency_unit: "credit".to_string(),
+                        reason: format!(
+                            "league_web_submission_score_{submission_score:.1}_{submission_grade}"
+                        ),
+                        ledger_status: Some("pending".to_string()),
+                        ledger_account_id: None,
+                        ledger_entry_id: None,
+                        ledger_balance_after: None,
+                        ledger_error: None,
+                        review_status: if submission_payout_status == Some("review_hold") {
+                            Some("pending_review".to_string())
+                        } else {
+                            None
+                        },
+                        reviewed_by: None,
+                        review_note: None,
+                        reviewed_at_epoch: None,
+                        created_at_epoch: now,
+                    });
+                if !league_reward_submission_identity_matches(&reward, &submission) {
+                    return league_submission_identity_conflict_response(
+                        &submission.submission_id,
+                        &match_id,
+                        &entry.entry_id,
+                    );
+                }
+                if !league.submissions.contains_key(&submission.submission_id) {
+                    league
+                        .submissions
+                        .insert(submission.submission_id.clone(), submission.clone());
+                }
+                if !league
+                    .rewards
+                    .iter()
+                    .any(|existing| existing.reward_id == reward.reward_id)
+                {
+                    league.rewards.push(reward.clone());
+                }
                 (submission, reward)
             };
+            // Persist the deterministic submission/reward identity before crossing the remote
+            // Ledger boundary.  A process crash after Ledger commits but before the HTTP response
+            // is written must leave enough durable state for the next request to replay the same
+            // idempotency key rather than minting a second reward intent.
+            let pending_snapshot = {
+                let league = state.inner.league_state.lock().await;
+                league.clone()
+            };
+            if let Err(response) = persist_league_state(&state, &pending_snapshot).await {
+                return response;
+            }
             let submit_payload = LeagueSubmitRequest {
                 matrix_user_id: matrix_user_id.clone(),
                 room_id: Some("!web-local:local.dev".to_string()),
@@ -999,22 +1200,8 @@ pub(super) async fn post_league_web_action(
             reward.ledger_entry_id = settlement.entry_id.clone();
             reward.ledger_balance_after = settlement.balance_after;
             reward.ledger_error = settlement.error.clone();
-            let settlement_receipt = settlement.term_exchange_receipt.clone();
-
-            let settlement_completed =
-                league_reward_ledger_released(None, &reward, Some(&settlement));
             let mut league = state.inner.league_state.lock().await;
-            record_league_term_exchange_receipt(&mut league, settlement_receipt);
-            if let Some(stored_reward) = league
-                .rewards
-                .iter_mut()
-                .find(|stored| stored.reward_id == reward.reward_id)
-            {
-                *stored_reward = reward.clone();
-            }
-            if settlement_completed {
-                release_league_submission_progression(&mut league, &submission, &reward);
-            }
+            merge_league_reward_settlement(&mut league, &mut reward, &submission, &settlement);
             league.clone()
         }
         "raid" => {
@@ -1228,52 +1415,204 @@ fn league_submission_for_reward<'a>(
 }
 
 fn league_reward_already_released(league: &LeagueState, reward: &LeagueReward) -> bool {
-    league_reward_ledger_released_from_state(league, reward)
-        || reward.review_status.as_deref() == Some("approved")
+    // Review status is a mutable compatibility projection, not proof of an exact
+    // Ledger effect.  Only the persisted typed receipt and matching amount may
+    // suppress a retry.
+    league_submission_for_reward(league, reward).is_some_and(|submission| {
+        league_reward_submission_identity_matches(reward, submission)
+            && league_reward_submission_amounts_match(reward, submission)
+    }) && league_reward_ledger_released_from_state(league, reward)
 }
 
-fn league_reward_ledger_released(
+pub(super) fn league_reward_ledger_released(
     league: Option<&LeagueState>,
     reward: &LeagueReward,
     settlement: Option<&LeagueLedgerSettlement>,
 ) -> bool {
+    let Some(expected_amount_credits) = league_reward_expected_amount_credits(reward) else {
+        return false;
+    };
     if let Some(settlement) = settlement {
-        return settlement.progression_allowed(&["settled", "duplicate"]);
+        // A progression-allowed receipt is only authoritative for this exact reward intent.
+        // The typed term/backend/status gates below do not bind a receipt to the reward id;
+        // accepting a same-amount receipt for another intent would let a replay cross-credit
+        // two rewards.  Keep this check adjacent to the settlement helper so every caller of
+        // `merge_league_reward_settlement` gets the same fail-closed identity contract.
+        let Some(receipt) = settlement.term_exchange_receipt.as_ref() else {
+            return false;
+        };
+        if receipt.receipt_id != format!("receipt:league_reward:{}", reward.reward_id)
+            || receipt.intent_id != format!("league_reward:{}", reward.reward_id)
+        {
+            return false;
+        }
+        return settlement
+            .progression_allowed_for_term("league_reward_settlement", &["settled", "duplicate"])
+            && settlement.amount_credits == Some(expected_amount_credits);
     }
     if let Some(league) = league {
-        return league_reward_ledger_released_from_state(league, reward);
+        return league_reward_exact_released_amount_from_state(league, reward)
+            == Some(expected_amount_credits);
     }
-    matches!(
-        reward.ledger_status.as_deref(),
-        Some("settled") | Some("duplicate")
-    )
+    false
+}
+
+/// Merge a remote reward settlement into persisted league state without allowing a retry hold to
+/// regress an already-authorized terminal receipt.  A process can crash after the Ledger commits
+/// (or after the receipt is persisted) but before progression counters are written; replaying the
+/// same request must reconcile that terminal state, not replace it with a transient network/room
+/// failure.  The inventory projection remains the idempotent progression marker.
+pub(super) fn merge_league_reward_settlement(
+    league: &mut LeagueState,
+    reward: &mut LeagueReward,
+    submission: &LeagueSubmission,
+    settlement: &LeagueLedgerSettlement,
+) {
+    let incoming_terminal = league_reward_ledger_released(None, reward, Some(settlement))
+        && settlement.amount_credits.is_some()
+        && league_reward_submission_identity_matches(reward, submission)
+        && league_reward_submission_amounts_match(reward, submission);
+    let existing_terminal_reward = league
+        .rewards
+        .iter()
+        .rev()
+        .filter(|stored| stored.reward_id == reward.reward_id)
+        .find(|stored| league_reward_already_released(league, stored))
+        .cloned();
+    if let Some(existing_reward) = existing_terminal_reward {
+        if incoming_terminal {
+            // A second verified terminal receipt (normally an idempotent `duplicate`) may enrich
+            // the compatibility projection, but never let it erase fields that were already
+            // durable in the first terminal write.
+            record_league_term_exchange_receipt(league, settlement.term_exchange_receipt.clone());
+            if reward.ledger_account_id.is_none() {
+                reward.ledger_account_id = existing_reward.ledger_account_id.clone();
+            }
+            if reward.ledger_entry_id.is_none() {
+                reward.ledger_entry_id = existing_reward.ledger_entry_id.clone();
+            }
+            if reward.ledger_balance_after.is_none() {
+                reward.ledger_balance_after = existing_reward.ledger_balance_after;
+            }
+        } else {
+            // Keep the first terminal projection authoritative; in particular, do not overwrite
+            // it with a later `held_review` or missing-room result.  If a crash persisted the
+            // receipt before the reward compatibility row, hydrate that row from the receipt so
+            // restart reconciliation does not leave a settled reward labelled as pending/held.
+            *reward = existing_reward;
+            if let Some(receipt) = league_reward_persisted_receipt(league, reward) {
+                let status = serde_json::to_value(receipt.status.clone())
+                    .ok()
+                    .and_then(|value| value.as_str().map(ToOwned::to_owned));
+                if !matches!(
+                    reward.ledger_status.as_deref(),
+                    Some("settled") | Some("approved_release") | Some("duplicate")
+                ) {
+                    reward.ledger_status = status;
+                    reward.ledger_entry_id = receipt
+                        .ledger_entry_id
+                        .clone()
+                        .or_else(|| reward.ledger_entry_id.clone());
+                    reward.ledger_error = None;
+                    reward.review_status = Some("approved".to_string());
+                }
+            }
+        }
+        if let Some(stored_reward) = league
+            .rewards
+            .iter_mut()
+            .find(|stored| stored.reward_id == reward.reward_id)
+        {
+            *stored_reward = reward.clone();
+        }
+        if let Some(amount_credits) = league_reward_exact_released_amount_from_state(league, reward)
+        {
+            release_league_submission_progression(league, submission, amount_credits);
+        }
+        return;
+    }
+
+    record_league_term_exchange_receipt(league, settlement.term_exchange_receipt.clone());
+    if let Some(stored_reward) = league
+        .rewards
+        .iter_mut()
+        .rev()
+        .find(|stored| stored.reward_id == reward.reward_id)
+    {
+        *stored_reward = reward.clone();
+    }
+    if incoming_terminal {
+        if let Some(amount_credits) = settlement.amount_credits {
+            release_league_submission_progression(league, submission, amount_credits);
+        }
+    }
 }
 
 fn release_league_submission_progression(
     league: &mut LeagueState,
     submission: &LeagueSubmission,
-    reward: &LeagueReward,
+    settled_amount_credits: i64,
 ) {
+    let Some(expected_amount_credits) =
+        whole_credits_from_compatibility_amount(submission.reward_amount)
+            .ok()
+            .filter(|amount| *amount > 0)
+    else {
+        // A fractional/non-finite legacy reward has no exact progression contract.
+        return;
+    };
+    if settled_amount_credits != expected_amount_credits {
+        // Never project a Ledger result into game state when the exact amount differs
+        // from the immutable submission contract.
+        return;
+    }
+    if exact_credits_to_legacy_display(settled_amount_credits).is_none() {
+        // A value outside the exact Ledger-to-display bound is not a safe compatibility
+        // projection.  Keep all progression blocked rather than emitting a lossy f64.
+        return;
+    }
+    // The inventory item is the durable projection marker.  A replayed `duplicate`
+    // receipt must not increment player/entry counters a second time.
+    if league
+        .inventory_items
+        .iter()
+        .any(|item| item.source_submission_id == submission.submission_id)
+    {
+        return;
+    }
     if let Some(player) = league
         .players_by_matrix_user
         .get_mut(&submission.matrix_user_id)
     {
-        player.submissions += 1;
-        player.xp += submission.score.round() as i64;
-        player.reputation += (submission.score / 10.0).round() as i64;
-        player.rating += ((submission.score - 50.0) / 2.0).round() as i64;
+        player.submissions = player.submissions.saturating_add(1);
+        player.xp = player.xp.saturating_add(submission.score.round() as i64);
+        player.reputation = player
+            .reputation
+            .saturating_add((submission.score / 10.0).round() as i64);
+        player.rating = player
+            .rating
+            .saturating_add(((submission.score - 50.0) / 2.0).round() as i64);
         if submission.score >= 80.0 {
-            player.wins += 1;
+            player.wins = player.wins.saturating_add(1);
         }
-        player.earned_credits += reward.amount;
+        // Legacy f64 field is display-only; the authenticated integer Ledger amount is the
+        // progression authority and has already passed the exact response contract.
+        if let Some(next) =
+            checked_legacy_display_add(player.earned_credits, settled_amount_credits)
+        {
+            player.earned_credits = next;
+        }
     }
     if let Some(entry) = league.entries.get_mut(&league_entry_key(
         &submission.match_id,
         &submission.matrix_user_id,
     )) {
-        entry.submissions += 1;
+        entry.submissions = entry.submissions.saturating_add(1);
         entry.best_score = entry.best_score.max(submission.score);
-        entry.rewards_earned += reward.amount;
+        if let Some(next) = checked_legacy_display_add(entry.rewards_earned, settled_amount_credits)
+        {
+            entry.rewards_earned = next;
+        }
     }
     if !league
         .inventory_items
@@ -1398,49 +1737,49 @@ pub(super) async fn approve_league_review(
     )
     .await;
     let now = Utc::now().timestamp();
-    let released = settlement.progression_allowed(&["settled", "duplicate"]);
-    let settlement_receipt = settlement.term_exchange_receipt.clone();
+    let released = league_reward_ledger_released(None, &reward, Some(&settlement))
+        && league_reward_submission_amounts_match(&reward, &submission);
+    let mut reward = reward;
+    reward.ledger_status = Some(settlement.status.clone());
+    reward.ledger_account_id = settlement.account_id.clone();
+    reward.ledger_entry_id = settlement.entry_id.clone();
+    reward.ledger_balance_after = settlement.balance_after;
+    reward.ledger_error = settlement.error.clone();
     let snapshot = {
         let mut league = state.inner.league_state.lock().await;
-        record_league_term_exchange_receipt(&mut league, settlement_receipt);
-        if let Some(stored_submission) = league.submissions.get_mut(&submission.submission_id) {
-            stored_submission.payout_status = Some(
-                if released {
-                    "approved_release"
-                } else {
-                    "review_hold"
-                }
-                .to_string(),
-            );
-            stored_submission.score_events.push(LeagueScoreEvent {
-                dimension: if released {
-                    "human_review_release"
-                } else {
-                    "human_review_release_failed"
-                }
-                .to_string(),
-                score: stored_submission.score,
-                weight: 0.0,
-                judge_kind: "review_admin_v1".to_string(),
-                evidence: json!({"reviewer_id": reviewer_id.clone(), "note": review_note.clone(), "ledger_status": settlement.status.clone()}),
-            });
-        }
-        if released {
-            let mut released_reward = reward.clone();
-            released_reward.ledger_status = Some(settlement.status.clone());
-            release_league_submission_progression(&mut league, &submission, &released_reward);
-        }
-        if let Some(stored_reward) = league
+        // A second approval can finish after a first approval has already committed.  Detect the
+        // terminal row while holding the same lock used by the merge helper; a late hold/failure
+        // must not rewrite the review decision or submission status.
+        let existing_terminal = league
             .rewards
-            .iter_mut()
+            .iter()
+            .rev()
             .find(|stored| stored.reward_id == reward.reward_id)
-        {
-            stored_reward.ledger_status = Some(settlement.status.clone());
-            stored_reward.ledger_account_id = settlement.account_id.clone();
-            stored_reward.ledger_entry_id = settlement.entry_id.clone();
-            stored_reward.ledger_balance_after = settlement.balance_after;
-            stored_reward.ledger_error = settlement.error.clone();
-            stored_reward.review_status = Some(
+            .is_some_and(|stored| league_reward_already_released(&league, stored));
+        if !existing_terminal {
+            if let Some(stored_submission) = league.submissions.get_mut(&submission.submission_id) {
+                stored_submission.payout_status = Some(
+                    if released {
+                        "approved_release"
+                    } else {
+                        "review_hold"
+                    }
+                    .to_string(),
+                );
+                stored_submission.score_events.push(LeagueScoreEvent {
+                    dimension: if released {
+                        "human_review_release"
+                    } else {
+                        "human_review_release_failed"
+                    }
+                    .to_string(),
+                    score: stored_submission.score,
+                    weight: 0.0,
+                    judge_kind: "review_admin_v1".to_string(),
+                    evidence: json!({"reviewer_id": reviewer_id.clone(), "note": review_note.clone(), "ledger_status": settlement.status.clone()}),
+                });
+            }
+            reward.review_status = Some(
                 if released {
                     "approved"
                 } else {
@@ -1448,9 +1787,23 @@ pub(super) async fn approve_league_review(
                 }
                 .to_string(),
             );
-            stored_reward.reviewed_by = Some(reviewer_id.clone());
-            stored_reward.review_note = review_note.clone();
-            stored_reward.reviewed_at_epoch = Some(now);
+            reward.reviewed_by = Some(reviewer_id.clone());
+            reward.review_note = review_note.clone();
+            reward.reviewed_at_epoch = Some(now);
+        }
+
+        // Re-check the exact typed receipt and preserve an existing terminal reward when this
+        // approval received a transient response or raced another approval.
+        merge_league_reward_settlement(&mut league, &mut reward, &submission, &settlement);
+        if league_reward_already_released(&league, &reward) {
+            // A crash may have persisted the terminal receipt before the compatibility submission
+            // row.  Hydrate only the status; do not append another review event on a retry.
+            if let Some(stored_submission) = league.submissions.get_mut(&submission.submission_id) {
+                stored_submission.payout_status = Some("approved_release".to_string());
+            }
+            if reward.review_status.is_none() {
+                reward.review_status = Some("approved".to_string());
+            }
         }
         league.clone()
     };
@@ -1463,10 +1816,10 @@ pub(super) async fn approve_league_review(
             "kind": "league_review_approved",
             "league": "trillionnium_league",
             "reward_id": reward.reward_id,
-            "review_status": if released { "approved" } else { "approval_failed" },
-            "ledger_status": settlement.status,
-            "ledger_entry_id": settlement.entry_id,
-            "ledger_error": settlement.error,
+            "review_status": reward.review_status,
+            "ledger_status": reward.ledger_status,
+            "ledger_entry_id": reward.ledger_entry_id,
+            "ledger_error": reward.ledger_error,
         })),
     )
         .into_response()
@@ -1790,7 +2143,7 @@ pub(super) async fn create_league_battle(
         let player = ensure_league_player(&mut league, &matrix_user_id, None);
         let mut entry =
             ensure_league_entry(&mut league, &match_id, &matrix_user_id, &player.player_id);
-        entry.battles_started += 1;
+        entry.battles_started = entry.battles_started.saturating_add(1);
         league
             .entries
             .insert(league_entry_key(&match_id, &matrix_user_id), entry.clone());
@@ -1862,7 +2215,7 @@ pub(super) async fn create_league_battle(
     let (player, entry, battle, snapshot) = {
         let mut league = state.inner.league_state.lock().await;
         let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
-        player.battles += 1;
+        player.battles = player.battles.saturating_add(1);
         let mut entry =
             ensure_league_entry(&mut league, &match_id, &matrix_user_id, &player.player_id);
         let task_id = task.task_id.clone();
@@ -1955,7 +2308,7 @@ pub(super) async fn submit_league_match(
     };
     let judgement = judge_league_submission_with_pipeline(&state, &body, &league_match.mode).await;
 
-    let (player, entry, submission, reward, _snapshot) = {
+    let (player, entry, submission, reward, pending_snapshot) = {
         let mut league = state.inner.league_state.lock().await;
         if !league.matches.contains_key(&match_id) {
             return (
@@ -1970,12 +2323,51 @@ pub(super) async fn submit_league_match(
         let grade = judgement.grade.clone();
         let reward_amount = judgement.reward_amount;
         let now = Utc::now().timestamp();
-        let submission_id = league_hash_id(
+        // The submission body is the immutable request contract.  Excluding wall-clock time
+        // makes a lost-response retry resolve to the same reward/ledger identity while preserving
+        // separate identities for distinct reports.
+        let deterministic_submission_id = league_hash_id(
             "submission",
-            &format!("{}:{}:{}:{}", match_id, entry.entry_id, now, body),
+            &format!("{}:{}:{}", match_id, entry.entry_id, body),
         );
-        let submission = LeagueSubmission {
-            submission_id: submission_id.clone(),
+        let deterministic_submission = league
+            .submissions
+            .get(&deterministic_submission_id)
+            .cloned();
+        let existing_submission = deterministic_submission.clone().or_else(|| {
+            legacy_league_submission_for_request(
+                &league,
+                &match_id,
+                &entry.entry_id,
+                &matrix_user_id,
+                payload.task_id.as_deref(),
+                &body,
+            )
+        });
+        if entry.player_id != player.player_id
+            || entry.matrix_user_id != matrix_user_id
+            || existing_submission.as_ref().is_some_and(|existing| {
+                (deterministic_submission.is_some()
+                    && existing.submission_id != deterministic_submission_id)
+                    || !league_submission_request_identity_matches(
+                        existing,
+                        &match_id,
+                        &entry.entry_id,
+                        &player.player_id,
+                        &matrix_user_id,
+                        payload.task_id.as_deref(),
+                        &body,
+                    )
+            })
+        {
+            return league_submission_identity_conflict_response(
+                &deterministic_submission_id,
+                &match_id,
+                &entry.entry_id,
+            );
+        }
+        let submission = existing_submission.unwrap_or_else(|| LeagueSubmission {
+            submission_id: deterministic_submission_id.clone(),
             match_id: match_id.clone(),
             entry_id: entry.entry_id.clone(),
             player_id: player.player_id.clone(),
@@ -1990,36 +2382,72 @@ pub(super) async fn submit_league_match(
             anti_cheat_flags: judgement.anti_cheat_flags.clone(),
             score_events: judgement.score_events.clone(),
             created_at_epoch: now,
-        };
-        let reward = LeagueReward {
-            reward_id: league_hash_id("reward", &submission_id),
-            match_id: match_id.clone(),
-            entry_id: entry.entry_id.clone(),
-            player_id: player.player_id.clone(),
-            matrix_user_id: matrix_user_id.clone(),
-            amount: reward_amount,
-            currency_unit: "credit".to_string(),
-            reason: format!("league_submission_score_{score:.1}_{grade}"),
-            ledger_status: Some("pending".to_string()),
-            ledger_account_id: None,
-            ledger_entry_id: None,
-            ledger_balance_after: None,
-            ledger_error: None,
-            review_status: if judgement.payout_status == "review_hold" {
-                Some("pending_review".to_string())
-            } else {
-                None
-            },
-            reviewed_by: None,
-            review_note: None,
-            reviewed_at_epoch: None,
-            created_at_epoch: now,
-        };
-        league.submissions.insert(submission_id, submission.clone());
-        league.rewards.push(reward.clone());
+        });
+        let reward_id = league_hash_id("reward", &submission.submission_id);
+        // Preserve the original judged contract across response-loss retries.  The judge may be
+        // remote/non-deterministic, but an existing submission must never inherit a fresh amount
+        // or payout classification.
+        let submission_reward_amount = submission.reward_amount;
+        let submission_score = submission.score;
+        let submission_grade = submission.grade.clone();
+        let submission_payout_status = submission.payout_status.as_deref();
+        let reward = league
+            .rewards
+            .iter()
+            .rev()
+            .find(|existing| existing.reward_id == reward_id)
+            .cloned()
+            .unwrap_or_else(|| LeagueReward {
+                reward_id: reward_id.clone(),
+                match_id: match_id.clone(),
+                entry_id: entry.entry_id.clone(),
+                player_id: player.player_id.clone(),
+                matrix_user_id: matrix_user_id.clone(),
+                amount: submission_reward_amount,
+                currency_unit: "credit".to_string(),
+                reason: format!("league_submission_score_{submission_score:.1}_{submission_grade}"),
+                ledger_status: Some("pending".to_string()),
+                ledger_account_id: None,
+                ledger_entry_id: None,
+                ledger_balance_after: None,
+                ledger_error: None,
+                review_status: if submission_payout_status == Some("review_hold") {
+                    Some("pending_review".to_string())
+                } else {
+                    None
+                },
+                reviewed_by: None,
+                review_note: None,
+                reviewed_at_epoch: None,
+                created_at_epoch: now,
+            });
+        if !league_reward_submission_identity_matches(&reward, &submission) {
+            return league_submission_identity_conflict_response(
+                &submission.submission_id,
+                &match_id,
+                &entry.entry_id,
+            );
+        }
+        league
+            .submissions
+            .entry(submission.submission_id.clone())
+            .or_insert_with(|| submission.clone());
+        if !league
+            .rewards
+            .iter()
+            .any(|existing| existing.reward_id == reward.reward_id)
+        {
+            league.rewards.push(reward.clone());
+        }
         let snapshot = league.clone();
         (player, entry, submission, reward, snapshot)
     };
+
+    // Commit the immutable submission/reward identity before the first remote Ledger request.
+    // This is the same response-loss boundary used by World commerce and contract completion.
+    if let Err(response) = persist_league_state(&state, &pending_snapshot).await {
+        return response;
+    }
 
     let mut reward = reward;
     let settlement =
@@ -2030,22 +2458,9 @@ pub(super) async fn submit_league_match(
     reward.ledger_entry_id = settlement.entry_id.clone();
     reward.ledger_balance_after = settlement.balance_after;
     reward.ledger_error = settlement.error.clone();
-    let settlement_receipt = settlement.term_exchange_receipt.clone();
-
-    let settlement_completed = league_reward_ledger_released(None, &reward, Some(&settlement));
     let (response_player, response_entry, snapshot) = {
         let mut league = state.inner.league_state.lock().await;
-        record_league_term_exchange_receipt(&mut league, settlement_receipt);
-        if let Some(stored_reward) = league
-            .rewards
-            .iter_mut()
-            .find(|stored| stored.reward_id == reward.reward_id)
-        {
-            *stored_reward = reward.clone();
-        }
-        if settlement_completed {
-            release_league_submission_progression(&mut league, &submission, &reward);
-        }
+        merge_league_reward_settlement(&mut league, &mut reward, &submission, &settlement);
         let response_player = league
             .players_by_matrix_user
             .get(&matrix_user_id)
@@ -2086,26 +2501,76 @@ pub(super) struct LeagueLedgerSettlement {
     pub(super) entry_id: Option<String>,
     pub(super) balance_after: Option<f64>,
     pub(super) error: Option<String>,
+    /// Exact whole-credit amount authenticated by the Ledger receipt.  A missing value means
+    /// progression must remain blocked; legacy display fields must never infer it from `f64`.
+    pub(super) amount_credits: Option<i64>,
     pub(super) term_exchange_receipt: Option<TermExchangeReceiptState>,
 }
 
 impl LeagueLedgerSettlement {
-    pub(super) fn progression_allowed(&self, legacy_allowed_statuses: &[&str]) -> bool {
-        if let Some(receipt) = self.term_exchange_receipt.as_ref() {
-            return receipt.progression_class
-                == term_exchange_protocol::ReceiptProgressionClass::ProgressionAllowed;
+    /// Return true only when a typed CEX receipt authorizes the *requested* transition.
+    ///
+    /// The progression class alone is intentionally insufficient: `reserved`, `consumed`, and
+    /// `refunded` are all progression-allowed at the protocol level, but a caller settling a
+    /// reward must not treat one of those statuses as `settled`.  Callers still authenticate the
+    /// exact integer amount separately; this helper only binds the typed status to the operation's
+    /// allow-list.  `reopened_settled` is a legacy wire alias for the typed `settled` status.
+    pub(super) fn progression_allowed(&self, allowed_statuses: &[&str]) -> bool {
+        self.progression_allowed_for_term("", allowed_statuses)
+    }
+
+    /// Validate a progression receipt against the operation's complete authority contract.
+    ///
+    /// `ReceiptProgressionClass::ProgressionAllowed` is intentionally not enough: a receipt for
+    /// a reserve/consume/refund operation, another term, or another backend must never authorize
+    /// a reward or settlement projection.  Callers that know the term should use this method;
+    /// the empty-term form retained above is only for compatibility helpers/tests that already
+    /// establish the operation identity elsewhere.
+    pub(super) fn progression_allowed_for_term(
+        &self,
+        expected_term_id: &str,
+        allowed_statuses: &[&str],
+    ) -> bool {
+        let Some(receipt) = self.term_exchange_receipt.as_ref() else {
+            return false;
+        };
+        if receipt.progression_class
+            != term_exchange_protocol::ReceiptProgressionClass::ProgressionAllowed
+        {
+            return false;
         }
-        legacy_allowed_statuses
-            .iter()
-            .any(|status| self.status == *status)
+        if !expected_term_id.is_empty()
+            && (receipt.term_id != expected_term_id
+                || receipt.backend_id != term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID
+                || receipt.backend_kind != term_exchange_protocol::SettlementBackendKind::Cex)
+        {
+            return false;
+        }
+        let Some(typed_status) = serde_json::to_value(receipt.status.clone())
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+        else {
+            return false;
+        };
+        allowed_statuses.iter().any(|allowed| {
+            *allowed == typed_status
+                || (*allowed == "reopened_settled" && typed_status == "settled")
+        })
     }
 
     pub(super) fn terminal_skip(&self) -> bool {
         if let Some(receipt) = self.term_exchange_receipt.as_ref() {
             return receipt.progression_class
-                == term_exchange_protocol::ReceiptProgressionClass::TerminalSkip;
+                == term_exchange_protocol::ReceiptProgressionClass::TerminalSkip
+                && receipt.amount_credits == Some(0);
         }
-        self.status.starts_with("skipped")
+        // A no-receipt compatibility skip is allowed only for deterministic zero-value outcomes.
+        // Missing room/account, network, and generic `skipped_*` statuses remain recoverable
+        // holds and must never clear a value-bearing state transition.
+        matches!(
+            self.status.as_str(),
+            "skipped_zero_price" | "skipped_zero_reward" | "skipped_zero_seller_net"
+        ) && self.amount_credits == Some(0)
     }
 
     #[allow(dead_code)]
@@ -2113,14 +2578,7 @@ impl LeagueLedgerSettlement {
         &self,
         legacy_allowed_statuses: &[&str],
     ) -> bool {
-        if let Some(receipt) = self.term_exchange_receipt.as_ref() {
-            return matches!(
-                receipt.progression_class,
-                term_exchange_protocol::ReceiptProgressionClass::ProgressionAllowed
-                    | term_exchange_protocol::ReceiptProgressionClass::TerminalSkip
-            );
-        }
-        self.progression_allowed(legacy_allowed_statuses) || self.status.starts_with("skipped")
+        self.progression_allowed(legacy_allowed_statuses) || self.terminal_skip()
     }
 }
 
@@ -2131,12 +2589,6 @@ pub(super) async fn settle_league_reward_with_ledger(
     submission: &LeagueSubmission,
     reward: &LeagueReward,
 ) -> LeagueLedgerSettlement {
-    if reward.amount <= 0.0 {
-        return LeagueLedgerSettlement {
-            status: "skipped_zero_reward".to_string(),
-            ..Default::default()
-        };
-    }
     let payout_status = submission.payout_status.as_deref().unwrap_or("eligible");
     let approved_release = payout_status == "approved_release";
     if (!submission.anti_cheat_flags.is_empty() || payout_status != "eligible") && !approved_release
@@ -2151,11 +2603,78 @@ pub(super) async fn settle_league_reward_with_ledger(
         };
     }
 
-    let (amount_credits, amount_validation_error) =
+    // The reward row is a mutable compatibility projection, while the submission is the
+    // immutable payout contract.  Never send a value-bearing Ledger request when the two rows are
+    // bound to different identities (or when a valid reward amount would be paired with an
+    // unresolvable submission amount).  Invalid reward amounts are still passed to the adapter so
+    // it can preserve its established missing-room/account precedence; the adapter carries an
+    // explicit validation error and cannot mint a value effect in that case.
+    if matrix_user_id != submission.matrix_user_id
+        || !league_reward_submission_identity_matches(reward, submission)
+    {
+        return LeagueLedgerSettlement {
+            status: "failed_ledger".to_string(),
+            error: Some("league reward identity does not match immutable submission".to_string()),
+            ..Default::default()
+        };
+    }
+    let reward_amount_credits = league_reward_expected_amount_credits(reward);
+    let submission_amount_credits =
+        whole_credits_from_compatibility_amount(submission.reward_amount).ok();
+    if reward_amount_credits.is_some() && reward_amount_credits != submission_amount_credits {
+        return LeagueLedgerSettlement {
+            status: "failed_ledger".to_string(),
+            error: Some(
+                "league reward amount does not match immutable submission amount".to_string(),
+            ),
+            ..Default::default()
+        };
+    }
+
+    // A receipt persisted before a process crash is already the idempotency/release authority.
+    // Reconcile it locally instead of issuing another remote grant.  This also prevents a retry
+    // that now has a missing room/account from downgrading a terminal reward to a hold.
+    let persisted_settlement = {
+        let league = state.inner.league_state.lock().await;
+        let amount_credits = league_reward_exact_released_amount_from_state(&league, reward);
+        amount_credits.and_then(|amount_credits| {
+            league_reward_persisted_receipt(&league, reward).and_then(|receipt| {
+                let status = serde_json::to_value(receipt.status.clone())
+                    .ok()
+                    .and_then(|value| value.as_str().map(ToOwned::to_owned))?;
+                Some(LeagueLedgerSettlement {
+                    status,
+                    account_id: reward.ledger_account_id.clone(),
+                    entry_id: receipt
+                        .ledger_entry_id
+                        .clone()
+                        .or_else(|| reward.ledger_entry_id.clone()),
+                    balance_after: reward.ledger_balance_after,
+                    error: None,
+                    amount_credits: Some(amount_credits),
+                    term_exchange_receipt: Some(receipt.clone()),
+                })
+            })
+        })
+    };
+    if let Some(settlement) = persisted_settlement {
+        return settlement;
+    }
+
+    let (amount_credits, amount_validation_error) = if !matches!(
+        reward.currency_unit.trim().to_ascii_lowercase().as_str(),
+        "credit" | "credits"
+    ) {
+        (
+            0,
+            Some("league reward currency must be credit(s)".to_string()),
+        )
+    } else {
         match whole_credits_from_compatibility_amount(reward.amount) {
             Ok(value) => (value, None),
             Err(error) => (0, Some(error)),
-        };
+        }
+    };
     let mut extra_ledger_body = Map::new();
     if let Some(task_id) = submission
         .task_id
@@ -2407,8 +2926,10 @@ pub(super) async fn get_league_player_rewards(
         .collect();
     let total_earned: f64 = rewards
         .iter()
-        .filter(|reward| league_reward_ledger_released_from_state(&league, reward))
-        .map(|reward| reward.amount)
+        .filter_map(|reward| {
+            league_reward_exact_released_amount_from_state(&league, reward)
+                .and_then(exact_credits_to_legacy_display)
+        })
         .sum();
     (
         StatusCode::OK,

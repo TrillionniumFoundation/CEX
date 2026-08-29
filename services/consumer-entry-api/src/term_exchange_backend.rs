@@ -1,5 +1,6 @@
 use super::*;
 use async_trait::async_trait;
+use reqwest::Response;
 use sha2::{Digest, Sha256};
 use term_exchange_protocol::{
     ActorRef, AssetRef, EconomicIntent, EconomicIntentKind, EconomicReceipt, IdempotencyKey,
@@ -12,6 +13,8 @@ pub(super) const TERM_EXCHANGE_BACKEND_ADAPTER_CONTRACT_VERSION: &str =
     "trillionnium_term_exchange_backend_adapter_v2";
 const TERM_EXCHANGE_EXACT_CURRENCY_SCALE: u8 = 6;
 const LEDGER_EFFECT_SCHEMA_V1: &str = "cex.ledger.effect.v1";
+const MAX_LEDGER_RESPONSE_BYTES: usize = 64 * 1024;
+const MAX_EXACT_WHOLE_CREDITS_FOR_DISPLAY: i64 = 9_223_372_036_854;
 
 #[derive(Debug, Clone)]
 pub(super) struct TermExchangeLedgerActionRequest {
@@ -90,6 +93,11 @@ pub(super) struct TermExchangeBackendReceipt {
     pub(super) entry_id: Option<String>,
     pub(super) balance_after: Option<f64>,
     pub(super) error: Option<String>,
+    /// Exact whole-credit amount carried by the immutable intent evidence when it is available.
+    /// A recoverable hold is allowed to retain this amount for an authenticated retry decision,
+    /// but its status/progression class still prevents any value projection.  Callers must never
+    /// treat this field alone as proof that a Ledger effect committed.
+    pub(super) amount_credits: Option<i64>,
 }
 
 impl TermExchangeBackendReceipt {
@@ -101,6 +109,7 @@ impl TermExchangeBackendReceipt {
             entry_id: self.entry_id,
             balance_after: self.balance_after,
             error: self.error,
+            amount_credits: self.amount_credits,
             term_exchange_receipt: Some(TermExchangeReceiptState::from(&self.receipt)),
         }
     }
@@ -136,8 +145,34 @@ async fn execute_cex_ledger_action(
     // Preserve the adapter's established precondition precedence: a missing room/account is
     // reported before a rejected legacy display amount. The request still carries no f64 value;
     // callers put any failed compatibility resolution in `amount_validation_error`.
-    if request.amount_validation_error.is_none() && request.amount_credits <= 0 {
-        let raw_status = if request.term_id.contains("purchase") {
+    // Zero is a deliberate terminal no-value outcome.  A negative exact amount, however, is
+    // never a valid economic intent and must not be silently reclassified as a zero skip (which
+    // could incorrectly clear a caller's retry/recovery state).  Reject it before any remote
+    // call; the typed receipt remains a hard `failed_ledger` outcome with no amount authority.
+    if request.amount_credits < 0 {
+        return backend_receipt(
+            request,
+            "failed_ledger",
+            None,
+            None,
+            None,
+            Some("settlement amount_credits must be non-negative".to_string()),
+            None,
+            json!({
+                "amount_authority": "amount_credits",
+                "amount_conversion": "rejected",
+            }),
+        );
+    }
+    if request.amount_validation_error.is_none() && request.amount_credits == 0 {
+        let raw_status = if request
+            .metadata
+            .get("zero_value_outcome")
+            .and_then(Value::as_str)
+            == Some("zero_seller_net")
+        {
+            "skipped_zero_seller_net"
+        } else if request.term_id.contains("purchase") {
             "skipped_zero_price"
         } else {
             "skipped_zero_reward"
@@ -315,7 +350,7 @@ async fn execute_cex_ledger_action(
 
     let response = state
         .inner
-        .http
+        .ledger_http
         .post(&url)
         .header("x-admin-token", &ledger_admin_token)
         .json(&body_value)
@@ -380,9 +415,26 @@ async fn execute_cex_ledger_action(
     };
 
     let status = response.status();
-    let text = match response.text().await {
+    let text = match read_bounded_ledger_body(response).await {
         Ok(text) => text,
         Err(error) => {
+            let response_error = format!("{error} (HTTP {})", status.as_u16());
+            if !status.is_success() && !ambiguous_ledger_status(status) {
+                return backend_receipt(
+                    request,
+                    "failed_ledger",
+                    Some(account_uuid.to_string()),
+                    None,
+                    None,
+                    Some(response_error),
+                    None,
+                    json!({
+                        "ledger_request": body_value,
+                        "operation_id": operation_id,
+                        "http_status": status.as_u16(),
+                    }),
+                );
+            }
             return recover_after_bad_response(
                 state,
                 request,
@@ -391,7 +443,7 @@ async fn execute_cex_ledger_action(
                 operation_id,
                 account_uuid,
                 body_value,
-                format!("read exact ledger response failed: {error}"),
+                response_error,
             )
             .await;
         }
@@ -502,9 +554,41 @@ async fn execute_cex_ledger_action(
 /// treating them as definitive failures could cause a caller to retry while money is already
 /// committed. Explicit client rejections remain deterministic and are not included here.
 fn ambiguous_ledger_status(status: StatusCode) -> bool {
-    status == StatusCode::REQUEST_TIMEOUT
+    status.is_redirection()
+        || status == StatusCode::REQUEST_TIMEOUT
+        || status == StatusCode::TOO_EARLY
         || status == StatusCode::TOO_MANY_REQUESTS
         || status.is_server_error()
+}
+
+/// Read an exact Ledger response without allowing an unbounded upstream body to reach memory.
+/// A missing Content-Length is not trusted; streamed chunks are counted independently.
+pub(super) async fn read_bounded_ledger_body(mut response: Response) -> Result<String, String> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_LEDGER_RESPONSE_BYTES as u64)
+    {
+        return Err(format!(
+            "exact ledger response exceeds {} byte limit",
+            MAX_LEDGER_RESPONSE_BYTES
+        ));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| format!("read exact ledger response failed: {error}"))?
+    {
+        if body.len().saturating_add(chunk.len()) > MAX_LEDGER_RESPONSE_BYTES {
+            return Err(format!(
+                "exact ledger response exceeds {} byte limit",
+                MAX_LEDGER_RESPONSE_BYTES
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    String::from_utf8(body)
+        .map_err(|error| format!("exact ledger response is not valid UTF-8: {error}"))
 }
 
 async fn recover_after_bad_response(
@@ -531,9 +615,13 @@ async fn recover_after_bad_response(
                 ),
             }
         }
+        // A missing lookup after an ambiguous write is not proof that the write did not commit:
+        // the read may have raced replication or an eventually-consistent index.  Keep this as a
+        // recoverable network outcome so callers retry/reconcile the same operation id instead of
+        // manufacturing a new economic intent.
         Ok(None) => backend_receipt(
             request,
-            "failed_bad_response",
+            "failed_network",
             Some(account_id.to_string()),
             None,
             None,
@@ -547,7 +635,7 @@ async fn recover_after_bad_response(
         ),
         Err(lookup_error) => backend_receipt(
             request,
-            "failed_bad_response",
+            "failed_network",
             Some(account_id.to_string()),
             None,
             None,
@@ -572,7 +660,7 @@ async fn lookup_exact_effect(
 ) -> Result<Option<Value>, String> {
     let response = state
         .inner
-        .http
+        .ledger_http
         .get(format!("{base_url}/v2/ledger/effects/{operation_id}"))
         .header("x-admin-token", ledger_admin_token)
         .send()
@@ -582,10 +670,9 @@ async fn lookup_exact_effect(
         return Ok(None);
     }
     let status = response.status();
-    let text = response
-        .text()
+    let text = read_bounded_ledger_body(response)
         .await
-        .map_err(|error| format!("read effect lookup response failed: {error}"))?;
+        .map_err(|error| format!("effect lookup response body invalid: {error}"))?;
     if !status.is_success() {
         return Err(format!(
             "effect lookup returned {}: {text}",
@@ -898,6 +985,36 @@ fn minor_to_f64(value: i64, scale: u8) -> f64 {
     value as f64 / 10_f64.powi(i32::from(scale))
 }
 
+/// Project an already-authenticated whole-credit amount into a legacy display field.
+///
+/// The Ledger v2 adapter limits the exact amount to `i64::MAX / 10^scale`; at the fixed scale
+/// used here that is well below the 2^53 integer-precision boundary of an IEEE-754 `f64`.  Keeping
+/// this conversion in one named helper makes it explicit that the floating value is a read/model
+/// compatibility projection, never an authority for a new Ledger write.
+pub(super) fn exact_credits_to_legacy_display(amount_credits: i64) -> Option<f64> {
+    if !(0..=MAX_EXACT_WHOLE_CREDITS_FOR_DISPLAY).contains(&amount_credits) {
+        return None;
+    }
+    Some(amount_credits as f64)
+}
+
+/// Add an already-authenticated exact amount to a legacy display accumulator.
+///
+/// Compatibility projections are not allowed to turn a corrupt/non-finite persisted display value
+/// into a new value, nor may an overflowing `f64` silently become `+inf`.  Returning `None` lets a
+/// caller keep the exact receipt/economy event authoritative while leaving the unsafe display field
+/// untouched for operator repair.
+pub(super) fn checked_legacy_display_add(current: f64, amount_credits: i64) -> Option<f64> {
+    if !current.is_finite()
+        || current < 0.0
+        || !(0..=MAX_EXACT_WHOLE_CREDITS_FOR_DISPLAY).contains(&amount_credits)
+    {
+        return None;
+    }
+    let next = current + amount_credits as f64;
+    (next.is_finite() && next <= MAX_EXACT_WHOLE_CREDITS_FOR_DISPLAY as f64).then_some(next)
+}
+
 /// Resolve a legacy display amount to an exact whole-credit compatibility value.
 ///
 /// This helper is deliberately a narrow ingress shim, not a Ledger amount conversion. The v2
@@ -907,6 +1024,14 @@ fn minor_to_f64(value: i64, scale: u8) -> f64 {
 pub(super) fn whole_credits_from_compatibility_amount(value: f64) -> Result<i64, String> {
     if !value.is_finite() || value < 0.0 {
         return Err("compatibility settlement amount must be finite and non-negative".to_string());
+    }
+    // A legacy JSON number has already passed through IEEE-754 before it reaches this
+    // compatibility boundary.  Values above the exact whole-credit/display ceiling can either
+    // lose integer bits (for example 9_007_199_254_740_993 becoming 9_007_199_254_740_992) or
+    // overflow the fixed-scale minor-unit contract.  Reject them before looking at `fract()` or
+    // formatting the float so no silently changed integer can become Ledger authority.
+    if value > MAX_EXACT_WHOLE_CREDITS_FOR_DISPLAY as f64 {
+        return Err("compatibility settlement amount exceeds exact whole-credit range".to_string());
     }
     if value.fract() != 0.0 {
         return Err(
@@ -963,6 +1088,34 @@ fn backend_receipt(
     let intent = request.economic_intent(account_id.clone());
     let typed_status = receipt_status_from_raw(&raw_status);
     let progression_class = typed_status.progression_class();
+    // Derive the retry amount from the exact intent that is embedded in receipt evidence, rather
+    // than from a mutable compatibility/status field.  The asset quantity and top-level intent
+    // amount must agree; otherwise the receipt carries no amount authority.  Recoverable holds
+    // retain this authenticated amount so a later chargeback retry can prove it is the same
+    // operation, while hard-fail receipts remain amount-less.
+    let immutable_intent_amount = if request.amount_validation_error.is_none() {
+        intent
+            .amount_credits
+            .filter(|amount| *amount >= 0)
+            .filter(|amount| {
+                intent
+                    .assets
+                    .first()
+                    .is_some_and(|asset| asset.quantity == *amount)
+            })
+    } else {
+        None
+    };
+    let amount_credits = if matches!(
+        progression_class,
+        term_exchange_protocol::ReceiptProgressionClass::ProgressionAllowed
+            | term_exchange_protocol::ReceiptProgressionClass::TerminalSkip
+            | term_exchange_protocol::ReceiptProgressionClass::RecoverableHold
+    ) {
+        immutable_intent_amount
+    } else {
+        None
+    };
     if let Some(map) = evidence.as_object_mut() {
         map.insert(
             "adapter_contract_version".to_string(),
@@ -996,6 +1149,7 @@ fn backend_receipt(
         entry_id,
         balance_after,
         error,
+        amount_credits,
     }
 }
 
@@ -1055,6 +1209,41 @@ mod tests {
     }
 
     #[test]
+    fn recoverable_hold_retains_amount_from_immutable_intent_evidence() {
+        let (request, _ledger_request, _response) = exact_response_fixture();
+        let receipt = backend_receipt(
+            request,
+            "failed_ledger",
+            Some(Uuid::new_v4().to_string()),
+            None,
+            None,
+            Some("seller has no available funds".to_string()),
+            None,
+            json!({}),
+        );
+
+        assert_eq!(receipt.raw_status, "failed_ledger");
+        assert_eq!(receipt.amount_credits, Some(42));
+        assert_eq!(
+            receipt
+                .receipt
+                .evidence
+                .pointer("/intent/amount_credits")
+                .and_then(Value::as_i64),
+            Some(42)
+        );
+        let settlement = receipt.into_legacy_settlement();
+        assert_eq!(settlement.amount_credits, Some(42));
+        assert_eq!(
+            settlement
+                .term_exchange_receipt
+                .as_ref()
+                .and_then(|value| value.amount_credits),
+            Some(42)
+        );
+    }
+
+    #[test]
     fn ledger_action_request_projects_economic_intent() {
         let request = TermExchangeLedgerActionRequest {
             term_id: "league_reward_settlement".to_string(),
@@ -1100,6 +1289,11 @@ mod tests {
         assert!(whole_credits_from_compatibility_amount(4.24).is_err());
         assert!(whole_credits_from_compatibility_amount(0.000_001).is_err());
         assert!(whole_credits_from_compatibility_amount(f64::NAN).is_err());
+        assert!(whole_credits_from_compatibility_amount(
+            MAX_EXACT_WHOLE_CREDITS_FOR_DISPLAY as f64 + 1.0
+        )
+        .is_err());
+        assert!(whole_credits_from_compatibility_amount(9_007_199_254_740_992.0).is_err());
     }
 
     #[test]
@@ -1110,7 +1304,9 @@ mod tests {
 
     #[test]
     fn ambiguous_ledger_http_statuses_require_operation_lookup() {
+        assert!(ambiguous_ledger_status(StatusCode::MULTIPLE_CHOICES));
         assert!(ambiguous_ledger_status(StatusCode::REQUEST_TIMEOUT));
+        assert!(ambiguous_ledger_status(StatusCode::TOO_EARLY));
         assert!(ambiguous_ledger_status(StatusCode::TOO_MANY_REQUESTS));
         assert!(ambiguous_ledger_status(StatusCode::BAD_GATEWAY));
         assert!(ambiguous_ledger_status(StatusCode::INTERNAL_SERVER_ERROR));

@@ -1,6 +1,9 @@
 {
   "schema": "cex.release-baseline-manifest.v1",
   "status": "draft",
+  "qualification_scope": "repository-exact-money-control-plane-plus-hepta-durability-doc-integrity-full-suite-lint-receipt-recovery-and-trnm-production-config-hardening",
+  "production_ready": false,
+  "production_authorization": "not_granted",
   "project_id": "hepta-control-plane",
   "release_id": "cex-p0-template",
   "generated_at": "2026-08-29T00:00:00Z",
@@ -14,8 +17,9 @@
     "cargo_lock_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   },
   "database": {
-    "migration_head": "0084_make_provider_reconciliation_replay_terminal_safe.sql",
-    "migration_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    "migration_head": "0087_add_term_exchange_receipt_event_history.sql",
+    "migration_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "migration_chain_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   },
   "build": {
     "workflow_run_id": null,
@@ -68,6 +72,13 @@
       "waiver": null
     },
     {
+      "name": "0087_term-exchange-receipt-event-history",
+      "status": "pending",
+      "uri": null,
+      "sha256": null,
+      "waiver": null
+    },
+    {
       "name": "p0-audit-outbox-lifecycle-fixture",
       "status": "pending",
       "uri": null,
@@ -97,5 +108,18 @@
     }
   ],
   "approvals": [],
+  "external_gates": {
+    "status": "independent_approval_required",
+    "items": [
+      "X1: production-like backup and restore rehearsal",
+      "X2: deployment/cutover and rollback rehearsal",
+      "X3: real provider reconciliation artifacts",
+      "X4: credential issuance, rotation, revocation and break-glass custody review",
+      "X5: sustained production-like soak/endurance run",
+      "X6: independent security, operations and financial-control review",
+      "X7: legal, commercial or provider approvals",
+      "X8: final human go/no-go decision"
+    ]
+  },
   "revocation": null
 }

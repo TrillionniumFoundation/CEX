@@ -365,7 +365,13 @@ pub(super) fn build_world_indexes(world: &WorldState) -> WorldIndexes {
                 .latest_deliverable_work_order_by_seller
                 .insert(work_order.seller_matrix_user_id.clone(), index);
         }
-        if work_order.status == "delivered" {
+        if matches!(
+            work_order.status.as_str(),
+            "delivered"
+                | "accepted_pending_payment"
+                | "accepted_payment_hold"
+                | "accepted_payment_failed"
+        ) {
             indexes
                 .latest_acceptable_work_order_by_buyer
                 .insert(work_order.buyer_matrix_user_id.clone(), index);
@@ -377,12 +383,22 @@ pub(super) fn build_world_indexes(world: &WorldState) -> WorldIndexes {
                 | "rejected_refund_hold"
                 | "rejected_refund_failed"
                 | "rejected_chargeback_failed"
+                | "rejected_pending_refund"
+                | "rejected_pending_chargeback"
         ) {
             indexes
                 .latest_rejectable_work_order_by_buyer
                 .insert(work_order.buyer_matrix_user_id.clone(), index);
         }
-        if work_order.status == "rejected_refunded" {
+        if matches!(
+            work_order.status.as_str(),
+            "rejected_refunded"
+                | "reopen_reserve_hold"
+                | "reopen_reserve_failed"
+                | "reopen_seller_settlement_pending"
+                | "reopen_seller_settlement_failed"
+                | "reopen_pending_reserve"
+        ) {
             indexes
                 .latest_reopenable_work_order_by_buyer
                 .insert(work_order.buyer_matrix_user_id.clone(), index);
@@ -400,6 +416,8 @@ pub(super) fn build_world_indexes(world: &WorldState) -> WorldIndexes {
                 | "cancelled_refund_hold"
                 | "cancelled_refund_failed"
                 | "cancelled_chargeback_failed"
+                | "cancel_pending_refund"
+                | "cancel_pending_chargeback"
         ) {
             indexes
                 .latest_cancellable_work_order_by_buyer
@@ -722,6 +740,7 @@ impl WorldIndexes {
         }
     }
 
+    #[allow(dead_code)]
     pub(super) fn replace_contract_completion_by_id(
         &self,
         world: &mut WorldState,

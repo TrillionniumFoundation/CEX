@@ -13,6 +13,9 @@ from pathlib import Path
 from typing import Any
 
 MIGRATION_RE = re.compile(r"^(\d{4})_[a-z0-9][a-z0-9._-]*\.sql$")
+QUALIFICATION_SCOPE = (
+    "repository-exact-money-control-plane-plus-hepta-durability-doc-integrity-full-suite-lint-receipt-recovery-and-trnm-production-config-hardening"
+)
 
 
 def run_git(root: Path, *args: str) -> str:
@@ -57,10 +60,19 @@ def build_manifest(root: Path, release_id: str) -> dict[str, Any]:
     tree = run_git(root, "rev-parse", "HEAD^{tree}")
     branch = run_git(root, "branch", "--show-current") or "detached-head"
     migration = migration_head(root)
+    migration_chain_digest = hashlib.sha256()
+    for candidate in sorted((root / "migrations").glob("[0-9][0-9][0-9][0-9]_*.sql")):
+        migration_chain_digest.update(candidate.name.encode("utf-8"))
+        migration_chain_digest.update(b"\0")
+        migration_chain_digest.update(candidate.read_bytes())
+        migration_chain_digest.update(b"\0")
 
     return {
         "schema": "cex.release-baseline-manifest.v1",
         "status": "draft",
+        "qualification_scope": QUALIFICATION_SCOPE,
+        "production_ready": False,
+        "production_authorization": "not_granted",
         "project_id": "hepta-control-plane",
         "release_id": release_id,
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -76,6 +88,7 @@ def build_manifest(root: Path, release_id: str) -> dict[str, Any]:
         "database": {
             "migration_head": migration.name,
             "migration_sha256": sha256_file(migration),
+            "migration_chain_sha256": f"sha256:{migration_chain_digest.hexdigest()}",
         },
         "build": {
             "workflow_run_id": None,
@@ -94,6 +107,19 @@ def build_manifest(root: Path, release_id: str) -> dict[str, Any]:
             )
         ],
         "approvals": [],
+        "external_gates": {
+            "status": "independent_approval_required",
+            "items": [
+                "X1: production-like backup and restore rehearsal",
+                "X2: deployment/cutover and rollback rehearsal",
+                "X3: real provider reconciliation artifacts",
+                "X4: credential issuance, rotation, revocation and break-glass custody review",
+                "X5: sustained production-like soak/endurance run",
+                "X6: independent security, operations and financial-control review",
+                "X7: legal, commercial or provider approvals",
+                "X8: final human go/no-go decision",
+            ],
+        },
         "revocation": None,
     }
 

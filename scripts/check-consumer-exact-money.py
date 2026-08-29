@@ -27,6 +27,7 @@ def read(relative: str) -> str:
 
 
 term = read("services/consumer-entry-api/src/term_exchange_backend.rs")
+consumer_lib = read("services/consumer-entry-api/src/lib.rs")
 league = read("services/consumer-entry-api/src/league_routes.rs")
 world = read("services/consumer-entry-api/src/world_commerce_routes.rs")
 world_runtime = read("services/consumer-entry-api/src/world_routes.rs")
@@ -47,6 +48,11 @@ require(term, '"amount_authority": "amount_credits"', "term exchange failure evi
 require(term, "validate_exact_ledger_response", "exact Ledger response validator")
 require(term, "malformed_exact_response_receipt", "malformed Ledger response fail-closed path")
 require(term, "ambiguous_ledger_status", "ambiguous Ledger status recovery")
+require(term, "read_bounded_ledger_body", "bounded Ledger response body")
+require(term, "MAX_LEDGER_RESPONSE_BYTES", "Ledger response body cap")
+require(consumer_lib, "ledger_http: Client", "dedicated Ledger HTTP client")
+require(consumer_lib, "reqwest::redirect::Policy::none()", "Ledger redirect fail-closed policy")
+require(consumer_lib, ".timeout(Duration::from_secs(20))", "Ledger HTTP timeout")
 require(term, "10_f64.powi", "bounded exact-to-display conversion")
 require(term, "exact ledger response effect account_id", "exact response identity binding")
 require(
@@ -80,6 +86,49 @@ if re.search(
 ):
     problems.append("world task reward projection still rounds/casts reward_amount")
 require(world_runtime, "whole_credits_from_compatibility_amount", "world task reward projection")
+require(
+    world_runtime,
+    "settle_world_tactics_reward_with_ledger",
+    "world tactics reward settlement",
+)
+require(world_runtime, '"ledger_required": true', "world tactics reward settlement")
+require(world_runtime, '"amount_authority": "amount_credits"', "world tactics reward settlement")
+require(
+    world_runtime,
+    "mark_world_tactics_reward_settled",
+    "world tactics post-receipt projection",
+)
+require(
+    world,
+    "seller_reopen_settlement.amount_credits == Some(expected_seller_net_credits)",
+    "world reopen exact seller settlement guard",
+)
+
+# Value-bearing compatibility projections must never fall back to a raw f64/legacy field.  Keep
+# these checks intentionally narrow so unrelated gameplay arithmetic remains allowed.
+for label, source, patterns in (
+    (
+        "world tactics reward projection",
+        world_runtime,
+        (
+            r"earned_credits\s*\+=\s*reward_credits\s+as\s+f64",
+            r"earned_credits\s*\+=\s*reward\.amount",
+        ),
+    ),
+    (
+        "world contract reward projection",
+        world,
+        (r"earned_credits\s*\+=\s*completion\.reward_amount",),
+    ),
+    (
+        "league reward projection",
+        league,
+        (r"earned_credits\s*\+=\s*reward\.amount",),
+    ),
+):
+    for pattern in patterns:
+        if re.search(pattern, source):
+            problems.append(f"{label} still uses unauthenticated legacy amount: {pattern}")
 
 # A direct f64-to-minor bridge is the specific regression this check protects against. Keep the
 # pattern narrow so harmless read/display conversions (minor_to_f64) and geometry math do not

@@ -243,6 +243,7 @@ Stored fields:
 - `settlement_reference`
 - `ledger_entry_id`
 - `reason`
+- `amount_credits` (exact whole-credit amount; nullable only for legacy receipts)
 - `finalized_at_epoch`
 
 Legacy status fields remain for endpoint compatibility, but World/League state now also carries typed receipt status and progression class. This is the bridge toward making domain progression read from `EconomicReceipt` instead of stringly ledger fields.
@@ -251,7 +252,9 @@ Legacy status fields remain for endpoint compatibility, but World/League state n
 
 ## 9. Normalized SQL receipt-table shadow slice
 
-Typed receipts now have normalized repository tables in migration `0026_add_term_exchange_receipt_tables.sql`:
+Typed receipts now have normalized repository tables in migration `0026_add_term_exchange_receipt_tables.sql`.
+Migration `0085_harden_term_exchange_receipt_projections.sql` adds the exact
+`amount_credits` projection and closes the receipt tables as append-only evidence:
 
 - `league_term_exchange_receipts`
 - `world_term_exchange_receipts`
@@ -263,10 +266,33 @@ Both tables preserve the compact receipt projection fields needed for protocol-f
 - `status`
 - `progression_class`
 - `settlement_reference`, `ledger_entry_id`, `reason`
+- `amount_credits` (nullable during legacy-row compatibility; non-negative when present)
 - `finalized_at`
 
 The generated repository SQL snapshot shadows `LeagueState.term_exchange_receipts` and `WorldState.world_term_exchange_receipts` into those tables, and the Term Exchange Kernel manifest reports `normalized_sql_shadow_status=receipt_tables_shadowed`.
 
-The normalized direct-write path now also upserts both receipt tables through `upsert_normalized_term_exchange_receipt_tables` before rollback/audit snapshot export. Supported world command writes and final-cutover non-world snapshot writes persist the typed `TermExchangeReceiptState` projection with `status` and `progression_class` intact.
+The normalized direct-write path now inserts both receipt tables through `upsert_normalized_term_exchange_receipt_tables` before rollback/audit snapshot export. Receipt replays use `ON CONFLICT (receipt_id) DO NOTHING`; database UPDATE/DELETE/TRUNCATE guards reject mutation of an existing evidence row. Supported world command writes and final-cutover non-world snapshot writes persist the typed `TermExchangeReceiptState` projection with `status`, `progression_class`, and exact `amount_credits` intact when available.
+
+Migration `0087_add_term_exchange_receipt_event_history.sql` adds the durable
+history boundary required for retries that reuse a `receipt_id`:
+
+- `league_term_exchange_receipt_events_v1`
+- `world_term_exchange_receipt_events_v1`
+
+Each event stores the complete typed receipt snapshot plus `event_sequence`,
+`event_kind`, `receipt_hash`, and `previous_receipt_hash`.  The insert trigger
+checks typed/JSON parity, the SHA-256 digest, and contiguous hash-chain
+ordering; append-only UPDATE/DELETE/TRUNCATE guards are enabled always and
+the migration backfills sequence one from the immutable 0026 projection rows.
+Direct SQLx writes take a transaction-scoped advisory lock per table/receipt,
+skip an identical latest snapshot on replay, and append `hold`, `final`, or
+`transition` events for a changed snapshot.  The generated shadow SQL follows
+the same rule.  World-home and client-feed normalized read SQL select the
+latest event by `(event_sequence DESC, event_id DESC)` and fall back to the
+projection row only when history is absent, so existing API JSON fields remain
+stable while a hold-to-final retry is retained for audit/recovery.
 
 Current cutover boundary: receipt tables are shadowed/direct-written, progression decisions prefer typed `ReceiptProgressionClass` when a receipt exists, and legacy string fields remain as endpoint/read-model compatibility fallbacks. The normalized world-home and client-feed read-model seams now expose receipt-table counts, latest receipt metadata, typed progression-class probes, and the same `trillionnium_term_exchange_receipt_projection_v1` object used by runtime `/v1/world/home`; client-feed SQL also carries a `term_exchange_receipts` snapshot with `count`, `progression_classes`, and `recent` receipts. Runtime `/v1/world/home`, client feed projections, `/v1/client/app/:matrix_user_id` embedded feed projections, the `/app` bootstrap shell, and JSON command-response `home` payloads expose typed world receipt counts, progression-class groups, latest receipt metadata, and receipt feed items; when the normalized read switch is active those receipt slices are hydrated from the normalized SQL read models instead of the JSON export snapshot, while legacy public status strings remain compatibility fallbacks. World commerce runtime progression now also reads typed receipts first for purchase reserve/settlement/consume, refund + seller-chargeback recovery, reopen settlement, contract completion release, and health/playability readiness counts; stale legacy `ledger_status`, `buyer_consume_status`, or `refund_status` strings no longer override a typed receipt when one exists. The read-switch source-of-truth gate now explicitly includes the client-app embedded-feed overlay and startup overlay validation so future parity checks cannot regress to world-home/client-feed-only coverage.
+The normalized repository migration floor for these read/write seams is now
+`0087_add_term_exchange_receipt_event_history.sql`; deployments must apply the
+complete numbered chain through that head before enabling the read switch.

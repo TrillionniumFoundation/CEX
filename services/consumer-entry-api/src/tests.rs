@@ -10,14 +10,16 @@ use super::{
     build_matrix_room_rate_limit_key, build_matrix_session_rate_limit_key,
     build_matrix_user_rate_limit_key, build_router, build_world_indexes,
     build_world_route_artifacts, cex_trillionnium_world_adapter_readiness_json_for_league,
-    client_app_json, client_feed_json, default_league_state, default_world_node_id,
-    encode_league_web_session, evaluate_identity_binding_reload_governance,
+    checked_legacy_display_add, client_app_json, client_feed_json, default_league_state,
+    default_world_node_id, encode_league_web_session, evaluate_identity_binding_reload_governance,
     get_client_app_web_shell, get_world_web_shell, league_hash_id, league_hidden_test_event,
-    league_reward_ledger_released_from_state, league_state_hash,
+    league_reward_exact_released_amount_from_state, league_reward_ledger_released_from_state,
+    league_reward_submission_identity_matches, league_state_hash,
     league_state_repository_write_set_for_command, league_state_sql_cutover_plan_json,
-    league_state_sql_shadow_validation_json, load_game_account_registry,
-    load_identity_binding_revision_approval_state, load_identity_binding_store,
-    load_rate_limit_cache, load_session_auth_issuer_registry,
+    league_state_sql_shadow_validation_json, league_submission_request_identity_matches,
+    legacy_league_submission_for_request, legacy_world_tactics_event_for_request,
+    load_game_account_registry, load_identity_binding_revision_approval_state,
+    load_identity_binding_store, load_rate_limit_cache, load_session_auth_issuer_registry,
     load_session_auth_issuer_registry_revision_approval_state,
     normalized_repository_client_feed_read_model_sql, normalized_repository_command_shadow_sql,
     normalized_repository_direct_write_contract_json,
@@ -27,12 +29,20 @@ use super::{
     openstreetmap_provider_mode_status_json, parse_csv_list, project_consumer_status,
     prune_rate_limit_cache, real_world_map_engine_json, resolve_chat_identity,
     session_auth_issuer_registry_active_key_diff_json, sign_user_session_assertion,
+    term_exchange_backend::{
+        CexTermExchangeBackend, TermExchangeBackend, TermExchangeLedgerActionRequest,
+    },
     validate_normalized_repository_client_app_feed_overlay_gate, validate_text_payload,
     world_commerce_routes::{
-        world_contract_completion_released, world_purchase_buyer_consume_completed,
-        world_purchase_buyer_reserve_active, world_purchase_rejection_settlement_released,
-        world_purchase_seller_settlement_active, world_work_rejection_refund_completed,
-        world_work_reopen_reserve_completed,
+        legacy_world_contract_completion_for_legacy_prefix,
+        legacy_world_contract_completion_for_request, merge_world_contract_completion_settlement,
+        world_acceptance_projection_marker, world_contract_completion_released,
+        world_purchase_buyer_consume_completed, world_purchase_buyer_reserve_active,
+        world_purchase_projection_marker, world_purchase_rejection_settlement_released,
+        world_purchase_seller_chargeback_cleared, world_purchase_seller_settlement_active,
+        world_settlement_is_zero_seller_net_skip, world_work_cancellation_refund_completed,
+        world_work_delivery_for_request, world_work_delivery_id,
+        world_work_rejection_refund_completed, world_work_reopen_reserve_completed,
     },
     world_home_json, world_map_delta_json, world_map_json, world_map_viewport_json,
     world_route_ui_contract_json, world_tactics_board_projection_json,
@@ -46,11 +56,11 @@ use super::{
     SessionAuthIssuerRegistryRuntimeState, TermExchangeReceiptState, UserSessionAuthClaims,
     WorldAsset, WorldCompany, WorldContract, WorldContractCompletion, WorldEconomyEvent,
     WorldEvent, WorldListing, WorldMapNode, WorldPlayerPosition, WorldPurchase, WorldRelationship,
-    WorldShop, WorldTrillionniumCharacter, WorldWorkCancellation, WorldWorkOrder,
-    WorldWorkRejection, WorldWorkReopen, DEFAULT_GAME_ACCOUNT_AUTH_RATE_LIMIT_MAX_REQUESTS,
-    DEFAULT_GAME_ACCOUNT_PASSWORD_MIN_CHARS, DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS,
-    DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS, DEFAULT_MAX_TEXT_CHARS,
-    TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR, USER_SESSION_ASSERTION_HEADER,
+    WorldShop, WorldState, WorldTrillionniumCharacter, WorldWorkCancellation, WorldWorkDelivery,
+    WorldWorkOrder, WorldWorkRejection, WorldWorkReopen,
+    DEFAULT_GAME_ACCOUNT_AUTH_RATE_LIMIT_MAX_REQUESTS, DEFAULT_GAME_ACCOUNT_PASSWORD_MIN_CHARS,
+    DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS, DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS,
+    DEFAULT_MAX_TEXT_CHARS, TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR, USER_SESSION_ASSERTION_HEADER,
     USER_SESSION_SIGNATURE_HEADER, WORLD_ROUTE_ACTION_TEXTAREA_ID, WORLD_ROUTE_CONTRACTS_PANEL_ID,
     WORLD_ROUTE_CONTRACT_INPUT_ID, WORLD_ROUTE_WORK_DELIVER_TEXTAREA_ID,
 };
@@ -71,7 +81,7 @@ use std::{
     fs,
     path::Path,
     sync::{atomic::AtomicU64, Arc, RwLock as StdRwLock},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::{Mutex, RwLock};
 use tower::ServiceExt;
@@ -102,6 +112,922 @@ fn validate_text_payload_rejects_empty_and_large_input() {
         validate_text_payload("  hello  ", DEFAULT_MAX_TEXT_CHARS).unwrap(),
         "hello"
     );
+}
+
+#[test]
+fn legacy_league_submission_retry_resolves_timestamp_identity() {
+    let mut league = default_league_state();
+    let match_id = "daily-dungeon-001";
+    let entry_id = "entry-legacy-replay";
+    let matrix_user_id = "@legacy-replay:local.dev";
+    let body = "legacy immutable report body";
+    let created_at_epoch = 1_778_700_101;
+    let submission_id = league_hash_id(
+        "submission",
+        &format!("{match_id}:{entry_id}:{created_at_epoch}:{body}"),
+    );
+    league.submissions.insert(
+        submission_id.clone(),
+        LeagueSubmission {
+            submission_id: submission_id.clone(),
+            match_id: match_id.to_string(),
+            entry_id: entry_id.to_string(),
+            player_id: "player-legacy-replay".to_string(),
+            matrix_user_id: matrix_user_id.to_string(),
+            task_id: Some("task-legacy-replay".to_string()),
+            body: body.to_string(),
+            score: 86.0,
+            grade: "A".to_string(),
+            reward_amount: 12.0,
+            judge_status: Some("legacy".to_string()),
+            payout_status: Some("eligible".to_string()),
+            anti_cheat_flags: Vec::new(),
+            score_events: Vec::new(),
+            created_at_epoch,
+        },
+    );
+    let resolved = legacy_league_submission_for_request(
+        &league,
+        match_id,
+        entry_id,
+        matrix_user_id,
+        Some("task-legacy-replay"),
+        body,
+    )
+    .expect("legacy API submission should resolve");
+    assert_eq!(resolved.submission_id, submission_id);
+    assert_eq!(
+        league_hash_id("reward", &resolved.submission_id),
+        league_hash_id("reward", &submission_id)
+    );
+    assert!(legacy_league_submission_for_request(
+        &league,
+        match_id,
+        entry_id,
+        "@different:local.dev",
+        Some("task-legacy-replay"),
+        body,
+    )
+    .is_none());
+    assert!(legacy_league_submission_for_request(
+        &league,
+        match_id,
+        entry_id,
+        matrix_user_id,
+        None,
+        body,
+    )
+    .is_none());
+
+    let web_created_at = created_at_epoch + 1;
+    let web_submission_id = league_hash_id(
+        "submission",
+        &format!("web:{match_id}:{entry_id}:{web_created_at}:{body}"),
+    );
+    league.submissions.insert(
+        web_submission_id.clone(),
+        LeagueSubmission {
+            submission_id: web_submission_id.clone(),
+            match_id: match_id.to_string(),
+            entry_id: entry_id.to_string(),
+            player_id: "player-legacy-replay".to_string(),
+            matrix_user_id: matrix_user_id.to_string(),
+            task_id: None,
+            body: body.to_string(),
+            score: 86.0,
+            grade: "A".to_string(),
+            reward_amount: 12.0,
+            judge_status: Some("legacy-web".to_string()),
+            payout_status: Some("eligible".to_string()),
+            anti_cheat_flags: Vec::new(),
+            score_events: Vec::new(),
+            created_at_epoch: web_created_at,
+        },
+    );
+    let web_resolved = legacy_league_submission_for_request(
+        &league,
+        match_id,
+        entry_id,
+        matrix_user_id,
+        None,
+        body,
+    )
+    .expect("legacy web submission should resolve");
+    assert_eq!(web_resolved.submission_id, web_submission_id);
+}
+
+#[test]
+fn deterministic_submission_identity_rejects_actor_task_and_tuple_drift() {
+    let submission = LeagueSubmission {
+        submission_id: "submission-deterministic-identity".to_string(),
+        match_id: "daily-dungeon-001".to_string(),
+        entry_id: "entry-deterministic-identity".to_string(),
+        player_id: "player-deterministic-identity".to_string(),
+        matrix_user_id: "@deterministic-identity:local.dev".to_string(),
+        task_id: Some("task-deterministic-identity".to_string()),
+        body: "immutable deterministic report".to_string(),
+        score: 84.0,
+        grade: "A".to_string(),
+        reward_amount: 12.0,
+        judge_status: Some("rubric_hidden_pipeline_v2".to_string()),
+        payout_status: Some("eligible".to_string()),
+        anti_cheat_flags: Vec::new(),
+        score_events: Vec::new(),
+        created_at_epoch: 1_778_700_401,
+    };
+    let exact = (
+        &submission,
+        "daily-dungeon-001",
+        "entry-deterministic-identity",
+        "player-deterministic-identity",
+        "@deterministic-identity:local.dev",
+        Some("task-deterministic-identity"),
+        "immutable deterministic report",
+    );
+    assert!(league_submission_request_identity_matches(
+        exact.0, exact.1, exact.2, exact.3, exact.4, exact.5, exact.6
+    ));
+
+    // Any actor, player, task, or immutable tuple drift must fail closed even when a short
+    // deterministic ID happens to hit the persisted map entry.
+    for (match_id, entry_id, player_id, matrix_user_id, task_id, body) in [
+        (
+            "other-match",
+            "entry-deterministic-identity",
+            "player-deterministic-identity",
+            "@deterministic-identity:local.dev",
+            Some("task-deterministic-identity"),
+            "immutable deterministic report",
+        ),
+        (
+            "daily-dungeon-001",
+            "other-entry",
+            "player-deterministic-identity",
+            "@deterministic-identity:local.dev",
+            Some("task-deterministic-identity"),
+            "immutable deterministic report",
+        ),
+        (
+            "daily-dungeon-001",
+            "entry-deterministic-identity",
+            "other-player",
+            "@deterministic-identity:local.dev",
+            Some("task-deterministic-identity"),
+            "immutable deterministic report",
+        ),
+        (
+            "daily-dungeon-001",
+            "entry-deterministic-identity",
+            "player-deterministic-identity",
+            "@other:local.dev",
+            Some("task-deterministic-identity"),
+            "immutable deterministic report",
+        ),
+        (
+            "daily-dungeon-001",
+            "entry-deterministic-identity",
+            "player-deterministic-identity",
+            "@deterministic-identity:local.dev",
+            Some("other-task"),
+            "immutable deterministic report",
+        ),
+        (
+            "daily-dungeon-001",
+            "entry-deterministic-identity",
+            "player-deterministic-identity",
+            "@deterministic-identity:local.dev",
+            Some("task-deterministic-identity"),
+            "tampered report",
+        ),
+    ] {
+        assert!(!league_submission_request_identity_matches(
+            &submission,
+            match_id,
+            entry_id,
+            player_id,
+            matrix_user_id,
+            task_id,
+            body,
+        ));
+    }
+}
+
+#[test]
+fn legacy_submission_resolver_prefers_exact_terminal_receipt_over_newer_pending() {
+    let mut league = default_league_state();
+    let match_id = "daily-dungeon-001";
+    let entry_id = "entry-terminal-priority";
+    let matrix_user_id = "@terminal-priority:local.dev";
+    let player_id = "player-terminal-priority";
+    let task_id = Some("task-terminal-priority");
+    let body = "same immutable report submitted twice";
+    let old_created_at = 1_778_700_501;
+    let new_created_at = old_created_at + 1;
+    let old_submission_id = league_hash_id(
+        "submission",
+        &format!("{match_id}:{entry_id}:{old_created_at}:{body}"),
+    );
+    let new_submission_id = league_hash_id(
+        "submission",
+        &format!("{match_id}:{entry_id}:{new_created_at}:{body}"),
+    );
+    let old_submission = LeagueSubmission {
+        submission_id: old_submission_id.clone(),
+        match_id: match_id.to_string(),
+        entry_id: entry_id.to_string(),
+        player_id: player_id.to_string(),
+        matrix_user_id: matrix_user_id.to_string(),
+        task_id: task_id.map(ToString::to_string),
+        body: body.to_string(),
+        score: 86.0,
+        grade: "A".to_string(),
+        reward_amount: 12.0,
+        judge_status: Some("legacy".to_string()),
+        payout_status: Some("eligible".to_string()),
+        anti_cheat_flags: Vec::new(),
+        score_events: Vec::new(),
+        created_at_epoch: old_created_at,
+    };
+    let newer_pending_submission = LeagueSubmission {
+        submission_id: new_submission_id.clone(),
+        created_at_epoch: new_created_at,
+        ..old_submission.clone()
+    };
+    league
+        .submissions
+        .insert(old_submission_id.clone(), old_submission.clone());
+    league
+        .submissions
+        .insert(new_submission_id.clone(), newer_pending_submission);
+
+    let old_reward_id = league_hash_id("reward", &old_submission_id);
+    let new_reward_id = league_hash_id("reward", &new_submission_id);
+    league.rewards.push(LeagueReward {
+        reward_id: old_reward_id.clone(),
+        match_id: match_id.to_string(),
+        entry_id: entry_id.to_string(),
+        player_id: player_id.to_string(),
+        matrix_user_id: matrix_user_id.to_string(),
+        amount: 12.0,
+        currency_unit: "credit".to_string(),
+        reason: "legacy terminal reward".to_string(),
+        ledger_status: Some("settled".to_string()),
+        ledger_account_id: None,
+        ledger_entry_id: None,
+        ledger_balance_after: None,
+        ledger_error: None,
+        review_status: Some("approved".to_string()),
+        reviewed_by: None,
+        review_note: None,
+        reviewed_at_epoch: None,
+        created_at_epoch: old_created_at,
+    });
+    league.rewards.push(LeagueReward {
+        reward_id: new_reward_id,
+        match_id: match_id.to_string(),
+        entry_id: entry_id.to_string(),
+        player_id: player_id.to_string(),
+        matrix_user_id: matrix_user_id.to_string(),
+        amount: 12.0,
+        currency_unit: "credit".to_string(),
+        reason: "newer pending reward".to_string(),
+        ledger_status: Some("pending".to_string()),
+        ledger_account_id: None,
+        ledger_entry_id: None,
+        ledger_balance_after: None,
+        ledger_error: None,
+        review_status: None,
+        reviewed_by: None,
+        review_note: None,
+        reviewed_at_epoch: None,
+        created_at_epoch: new_created_at,
+    });
+    let receipt = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
+            format!("receipt:league_reward:{old_reward_id}"),
+            format!("league_reward:{old_reward_id}"),
+            "league_reward_settlement",
+            term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+            term_exchange_protocol::SettlementBackendKind::Cex,
+            term_exchange_protocol::ReceiptStatus::Settled,
+            new_created_at + 1,
+        ),
+        12,
+    );
+    league.term_exchange_receipts.insert(
+        receipt.receipt_id.clone(),
+        TermExchangeReceiptState::from(&receipt),
+    );
+
+    let resolved = legacy_league_submission_for_request(
+        &league,
+        match_id,
+        entry_id,
+        matrix_user_id,
+        task_id,
+        body,
+    )
+    .expect("a legacy submission should resolve");
+    assert_eq!(resolved.submission_id, old_submission_id);
+}
+
+#[test]
+fn legacy_world_completion_retry_resolves_http_and_tactics_ids() {
+    let mut world = WorldState::default();
+    let contract_id = "contract-legacy-replay";
+    let matrix_user_id = "@legacy-world:local.dev";
+    let body = "quality evidence risk deliverable next action";
+    let created_at_epoch = 1_778_700_201;
+    let http_id = league_hash_id(
+        "world-contract-completion",
+        &format!("{contract_id}:{created_at_epoch}:{body}"),
+    );
+    world
+        .world_contract_completions
+        .push(WorldContractCompletion {
+            completion_id: http_id.clone(),
+            contract_id: contract_id.to_string(),
+            matrix_user_id: matrix_user_id.to_string(),
+            body: body.to_string(),
+            score: 84.0,
+            grade: "A".to_string(),
+            reward_amount: 12.0,
+            judge_status: "legacy".to_string(),
+            payout_status: "eligible".to_string(),
+            anti_cheat_flags: Vec::new(),
+            score_events: Vec::new(),
+            ledger_status: Some("pending".to_string()),
+            ledger_account_id: None,
+            ledger_entry_id: None,
+            ledger_balance_after: None,
+            ledger_error: None,
+            created_at_epoch,
+        });
+    let resolved =
+        legacy_world_contract_completion_for_request(&world, contract_id, matrix_user_id, body)
+            .expect("legacy HTTP completion should resolve");
+    assert_eq!(resolved.completion_id, http_id);
+    assert_eq!(
+        legacy_world_contract_completion_for_legacy_prefix(
+            &world,
+            contract_id,
+            matrix_user_id,
+            body,
+            "world-contract-completion",
+        )
+        .expect("HTTP prefix should resolve only HTTP row")
+        .completion_id,
+        http_id
+    );
+
+    let tactics_created_at = created_at_epoch + 1;
+    let tactics_id = league_hash_id(
+        "world-trillionnium-task-completion",
+        &format!("{contract_id}:{tactics_created_at}:{body}"),
+    );
+    world
+        .world_contract_completions
+        .push(WorldContractCompletion {
+            completion_id: tactics_id.clone(),
+            contract_id: contract_id.to_string(),
+            matrix_user_id: matrix_user_id.to_string(),
+            body: body.to_string(),
+            score: 85.0,
+            grade: "A".to_string(),
+            reward_amount: 12.0,
+            judge_status: "legacy-tactics".to_string(),
+            payout_status: "eligible".to_string(),
+            anti_cheat_flags: Vec::new(),
+            score_events: Vec::new(),
+            ledger_status: Some("pending".to_string()),
+            ledger_account_id: None,
+            ledger_entry_id: None,
+            ledger_balance_after: None,
+            ledger_error: None,
+            created_at_epoch: tactics_created_at,
+        });
+    let resolved_latest =
+        legacy_world_contract_completion_for_request(&world, contract_id, matrix_user_id, body)
+            .expect("legacy tactics completion should resolve");
+    assert_eq!(resolved_latest.completion_id, tactics_id);
+    assert_eq!(
+        legacy_world_contract_completion_for_legacy_prefix(
+            &world,
+            contract_id,
+            matrix_user_id,
+            body,
+            "world-trillionnium-task-completion",
+        )
+        .expect("tactics prefix should resolve only tactics row")
+        .completion_id,
+        tactics_id
+    );
+}
+
+#[test]
+fn legacy_completion_retry_prefers_existing_terminal_receipt_over_newer_attempt() {
+    let mut world = WorldState::default();
+    let contract_id = "contract-terminal-preference";
+    let matrix_user_id = "@terminal-preference:local.dev";
+    let body = "terminal preference report";
+    let first_epoch = 1_778_700_401;
+    let second_epoch = first_epoch + 1;
+    let completion = |prefix: &str, created_at_epoch: i64| WorldContractCompletion {
+        completion_id: league_hash_id(prefix, &format!("{contract_id}:{created_at_epoch}:{body}")),
+        contract_id: contract_id.to_string(),
+        matrix_user_id: matrix_user_id.to_string(),
+        body: body.to_string(),
+        score: 84.0,
+        grade: "A".to_string(),
+        reward_amount: 12.0,
+        judge_status: "legacy".to_string(),
+        payout_status: "eligible".to_string(),
+        anti_cheat_flags: Vec::new(),
+        score_events: Vec::new(),
+        ledger_status: Some("pending".to_string()),
+        ledger_account_id: None,
+        ledger_entry_id: None,
+        ledger_balance_after: None,
+        ledger_error: None,
+        created_at_epoch,
+    };
+    let first = completion("world-contract-completion", first_epoch);
+    let second = completion("world-contract-completion", second_epoch);
+    let first_id = first.completion_id.clone();
+    world.world_contract_completions.extend([first, second]);
+    let receipt = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
+            format!("receipt:world_contract_completion:{first_id}"),
+            format!("world_contract_completion:{first_id}"),
+            "world_contract_completion_settlement",
+            term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+            term_exchange_protocol::SettlementBackendKind::Cex,
+            term_exchange_protocol::ReceiptStatus::Settled,
+            second_epoch + 1,
+        ),
+        12,
+    );
+    world.world_term_exchange_receipts.insert(
+        receipt.receipt_id.clone(),
+        TermExchangeReceiptState::from(&receipt),
+    );
+    let resolved =
+        legacy_world_contract_completion_for_request(&world, contract_id, matrix_user_id, body)
+            .expect("terminal legacy completion should resolve");
+    assert_eq!(resolved.completion_id, first_id);
+}
+
+#[test]
+fn legacy_world_tactics_event_retry_resolves_timestamp_identity() {
+    let mut world = WorldState::default();
+    let actor = "@legacy-tactics:local.dev";
+    let command = "attack";
+    let body = "unit=lord target=tile-7";
+    let created_at_epoch = 1_778_700_301;
+    let event_id = league_hash_id(
+        "world-tactics-event",
+        &format!("{actor}:{command}:{created_at_epoch}:{body}"),
+    );
+    world.world_events.push(WorldEvent {
+        event_id: event_id.clone(),
+        actor_matrix_user_id: actor.to_string(),
+        room_id: Some("!legacy:local.dev".to_string()),
+        location_id: "node-7".to_string(),
+        event_kind: "tactics_attack".to_string(),
+        body: body.to_string(),
+        result: "combat_resolved".to_string(),
+        impact_score: 8,
+        cex_task_id: None,
+        cex_status: None,
+        created_at_epoch,
+    });
+    let resolved = legacy_world_tactics_event_for_request(&world, actor, command, body)
+        .expect("legacy tactics event should resolve");
+    assert_eq!(resolved.event_id, event_id);
+    assert!(legacy_world_tactics_event_for_request(&world, actor, "talk_npc", body).is_none());
+}
+
+#[test]
+fn world_tactics_pending_reward_replay_recovers_exact_event_tick() {
+    let mut world = WorldState::default();
+    let matrix_user_id = "@tactics-reward-replay:local.dev";
+    let room_id = Some("!tactics-reward-replay:local.dev");
+    let command = "attack";
+    let unit_id = Some("lord");
+    let target_tile = Some("F5");
+    let body = "recover the deterministic victory after a lost response";
+    let event_id = league_hash_id(
+        "world-tactics-event",
+        &format!("{matrix_user_id}:{command}:{body}"),
+    );
+    let created_at_epoch = 1_778_700_901;
+    let outcome = json!({
+        "accepted": true,
+        "result": "tactics_combat_resolved",
+        "combat_resolution": {"result": "defender_routed"}
+    });
+    let (session, tick) = super::world_tactics::record_world_tactics_simulation_tick_with_event_id(
+        &mut world,
+        matrix_user_id,
+        room_id,
+        command,
+        unit_id,
+        target_tile,
+        None,
+        &outcome,
+        created_at_epoch,
+        Some(&event_id),
+    );
+    assert_eq!(session["victory_state"], "victory");
+    assert_eq!(session["reward_status"], "pending_settlement");
+    assert!(session["reward_event_id"].as_str().is_some());
+    assert_eq!(tick["victory_state_after"], "victory");
+    assert_eq!(tick["reward_status_after"], "pending_settlement");
+    let tick_count_before_replay = world.world_tactics_simulation_ticks.len();
+    world.world_events.push(WorldEvent {
+        event_id: event_id.clone(),
+        actor_matrix_user_id: matrix_user_id.to_string(),
+        room_id: room_id.map(ToString::to_string),
+        location_id: "mirror-city-square".to_string(),
+        event_kind: "tactics_attack".to_string(),
+        body: body.to_string(),
+        result: "tactics_combat_resolved".to_string(),
+        impact_score: 8,
+        cex_task_id: None,
+        cex_status: None,
+        created_at_epoch,
+    });
+
+    let (replayed_session, replayed_tick) =
+        super::world_tactics::pending_world_tactics_replay_snapshot(
+            &mut world,
+            matrix_user_id,
+            room_id,
+            command,
+            unit_id,
+            target_tile,
+            &event_id,
+            Some("tactics_combat_resolved"),
+            created_at_epoch,
+        )
+        .expect("exact replay should recover the pending victory reward");
+    assert_eq!(replayed_session["session_id"], session["session_id"]);
+    assert_eq!(
+        replayed_session["reward_event_id"],
+        session["reward_event_id"]
+    );
+    assert_eq!(replayed_tick["tick_id"], tick["tick_id"]);
+    assert_eq!(
+        world.world_tactics_simulation_ticks.len(),
+        tick_count_before_replay
+    );
+
+    let unrelated_event_id = league_hash_id(
+        "world-tactics-event",
+        &format!("{matrix_user_id}:talk_npc:unrelated"),
+    );
+    assert!(super::world_tactics::pending_world_tactics_replay_snapshot(
+        &mut world,
+        matrix_user_id,
+        room_id,
+        "talk_npc",
+        unit_id,
+        target_tile,
+        &unrelated_event_id,
+        Some("tactics_social_action"),
+        created_at_epoch,
+    )
+    .is_none());
+}
+
+#[tokio::test]
+async fn world_tactics_event_id_collision_fails_closed_before_command_mutation() {
+    let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
+    let actor = "@tactics-event-collision:local.dev";
+    let room_id = "!tactics-event-collision:local.dev";
+    let command = "end_turn";
+    let body = "immutable tactics event request";
+    let event_id = league_hash_id("world-tactics-event", &format!("{actor}:{command}:{body}"));
+    {
+        let mut league = state.inner.league_state.lock().await;
+        league.world.world_events.push(WorldEvent {
+            event_id: event_id.clone(),
+            // Same deterministic id, but a different immutable actor tuple.
+            actor_matrix_user_id: "@different-actor:local.dev".to_string(),
+            room_id: Some(room_id.to_string()),
+            location_id: "mirror-city-square".to_string(),
+            event_kind: "tactics_end_turn".to_string(),
+            body: body.to_string(),
+            result: "old-event".to_string(),
+            impact_score: 0,
+            cex_task_id: None,
+            cex_status: None,
+            created_at_epoch: 1_778_700_701,
+        });
+    }
+    let app = build_router(state.clone());
+    let (status, response) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/tactics/command",
+        &[],
+        json!({
+            "matrix_user_id": actor,
+            "room_id": room_id,
+            "command": command,
+            "body": body,
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "collision response: {response}"
+    );
+    assert_eq!(
+        response["error"],
+        "world tactics event_id is already bound to a different payload"
+    );
+    assert_eq!(response["event_id"], event_id);
+    let league = state.inner.league_state.lock().await;
+    assert_eq!(league.world.world_events.len(), 1);
+    assert!(league.world.world_tactics_sessions.is_empty());
+    assert!(league.world.world_tactics_simulation_ticks.is_empty());
+    assert!(!league
+        .world
+        .world_trillionnium_characters
+        .contains_key(actor));
+}
+
+#[tokio::test]
+async fn world_tactics_completion_id_collision_fails_closed_before_command_mutation() {
+    let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
+    let actor = "@tactics-completion-collision:local.dev";
+    let room_id = "!tactics-completion-collision:local.dev";
+    let contract_id = "world-task-contract-collision";
+    let body = "Trillionnium completion report with deliverable evidence, risk controls, next action, and self-review.";
+    let completion_id = league_hash_id(
+        "world-trillionnium-task-completion",
+        &format!("{contract_id}:{actor}:{body}"),
+    );
+    {
+        let mut league = state.inner.league_state.lock().await;
+        league.world.world_contracts.push(WorldContract {
+            contract_id: contract_id.to_string(),
+            event_id: "world-task-offer-collision".to_string(),
+            actor_matrix_user_id: actor.to_string(),
+            location_id: "mirror-city-square".to_string(),
+            task_id: "trillionnium-task:courier_letter".to_string(),
+            title: "Collision guard task".to_string(),
+            body: "Open task for deterministic completion collision test".to_string(),
+            status: "trillionnium_task_offered".to_string(),
+            cex_status: Some("trillionnium_task_pending_completion".to_string()),
+            value_score: 8,
+            created_at_epoch: 1_778_700_702,
+        });
+        league
+            .world
+            .world_contract_completions
+            .push(WorldContractCompletion {
+                completion_id: completion_id.clone(),
+                contract_id: contract_id.to_string(),
+                // Same id, but a different immutable actor tuple.
+                matrix_user_id: "@different-actor:local.dev".to_string(),
+                body: body.to_string(),
+                score: 80.0,
+                grade: "B".to_string(),
+                reward_amount: 8.0,
+                judge_status: "fixture".to_string(),
+                payout_status: "eligible".to_string(),
+                anti_cheat_flags: Vec::new(),
+                score_events: Vec::new(),
+                ledger_status: Some("pending".to_string()),
+                ledger_account_id: None,
+                ledger_entry_id: None,
+                ledger_balance_after: None,
+                ledger_error: None,
+                created_at_epoch: 1_778_700_703,
+            });
+    }
+    let app = build_router(state.clone());
+    let (status, response) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/tactics/command",
+        &[],
+        json!({
+            "matrix_user_id": actor,
+            "room_id": room_id,
+            "command": "complete_task",
+            "unit_id": "lord",
+            "task_archetype_id": "courier_letter",
+            "osm_game_overlay_id": "trillionnium-world-node:mirror-city-square",
+            "body": body,
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "collision response: {response}"
+    );
+    assert_eq!(
+        response["error"],
+        "world tactics completion_id is already bound to a different payload"
+    );
+    assert_eq!(response["completion_id"], completion_id);
+    let league = state.inner.league_state.lock().await;
+    assert_eq!(league.world.world_contracts.len(), 1);
+    assert_eq!(
+        league.world.world_contracts[0].status,
+        "trillionnium_task_offered"
+    );
+    assert_eq!(league.world.world_contract_completions.len(), 1);
+    assert!(!league
+        .world
+        .world_trillionnium_characters
+        .contains_key(actor));
+    assert!(league
+        .world
+        .world_events
+        .iter()
+        .all(|event| event.actor_matrix_user_id != actor));
+}
+
+#[tokio::test]
+async fn contract_endpoint_recovers_tactics_completion_without_duplicate_row_or_intent() {
+    let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
+    let actor = "@tactics-http-recovery:local.dev";
+    let room_id = "!tactics-http-recovery:local.dev";
+    let contract_id = "world-task-contract-http-recovery";
+    let body = "Trillionnium completion report with deliverable evidence, risk controls, next action, and self-review.";
+    let completion_id = league_hash_id(
+        "world-trillionnium-task-completion",
+        &format!("{contract_id}:{actor}:{body}"),
+    );
+    {
+        let mut league = state.inner.league_state.lock().await;
+        league.world.world_contracts.push(WorldContract {
+            contract_id: contract_id.to_string(),
+            event_id: "world-task-offer-http-recovery".to_string(),
+            actor_matrix_user_id: actor.to_string(),
+            location_id: "mirror-city-square".to_string(),
+            task_id: "trillionnium-task:courier_letter".to_string(),
+            title: "HTTP recovery task".to_string(),
+            body: "Recover a tactics completion through the contract authority".to_string(),
+            status: "trillionnium_task_completion_pending_settlement".to_string(),
+            cex_status: Some("settlement_pending".to_string()),
+            value_score: 8,
+            created_at_epoch: 1_778_701_100,
+        });
+        league
+            .world
+            .world_contract_completions
+            .push(WorldContractCompletion {
+                completion_id: completion_id.clone(),
+                contract_id: contract_id.to_string(),
+                matrix_user_id: actor.to_string(),
+                body: body.to_string(),
+                score: 84.0,
+                grade: "A".to_string(),
+                reward_amount: 8.0,
+                judge_status: "deterministic_fixture".to_string(),
+                payout_status: "eligible".to_string(),
+                anti_cheat_flags: Vec::new(),
+                score_events: Vec::new(),
+                ledger_status: Some("pending".to_string()),
+                ledger_account_id: None,
+                ledger_entry_id: None,
+                ledger_balance_after: None,
+                ledger_error: None,
+                created_at_epoch: 1_778_701_101,
+            });
+    }
+    let app = build_router(state.clone());
+    let (status, response) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/contracts/{contract_id}/complete"),
+        &[],
+        json!({
+            "matrix_user_id": actor,
+            "room_id": room_id,
+            "body": body,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "recovery response: {response}");
+    assert_eq!(response["completion"]["completion_id"], completion_id);
+
+    let league = state.inner.league_state.lock().await;
+    assert_eq!(league.world.world_contract_completions.len(), 1);
+    assert_eq!(
+        league.world.world_contract_completions[0].completion_id,
+        completion_id
+    );
+    // The in-memory fixture has no bound Ledger account, so the retry may be held/failed; it must
+    // nevertheless reuse the original row and operation identity rather than append a duplicate.
+    assert!(matches!(
+        league.world.world_contract_completions[0]
+            .ledger_status
+            .as_deref(),
+        Some("failed_identity")
+            | Some("skipped_missing_account")
+            | Some("skipped_missing_room")
+            | Some("failed_ledger")
+            | Some("held_review")
+    ));
+}
+
+#[tokio::test]
+async fn world_contract_completion_id_collision_fails_closed_before_projection() {
+    let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
+    let actor = "@contract-completion-collision:local.dev";
+    let contract_id = "world-contract-http-collision";
+    let body = "Contract report with final deliverable, evidence source, risk controls, next action, and self-review.";
+    let completion_id = league_hash_id(
+        "world-contract-completion",
+        &format!("{contract_id}:{actor}:{body}"),
+    );
+    {
+        let mut league = state.inner.league_state.lock().await;
+        league.world.world_contracts.push(WorldContract {
+            contract_id: contract_id.to_string(),
+            event_id: "world-http-offer-collision".to_string(),
+            actor_matrix_user_id: actor.to_string(),
+            location_id: "mirror-city-square".to_string(),
+            task_id: "task-http-collision".to_string(),
+            title: "HTTP completion collision guard".to_string(),
+            body: "Open world contract for collision testing".to_string(),
+            status: "open".to_string(),
+            cex_status: Some("Running".to_string()),
+            value_score: 17,
+            created_at_epoch: 1_778_700_704,
+        });
+        league
+            .world
+            .world_contract_completions
+            .push(WorldContractCompletion {
+                completion_id: completion_id.clone(),
+                contract_id: contract_id.to_string(),
+                matrix_user_id: actor.to_string(),
+                // Same id, but a different immutable report body.
+                body: "different immutable report body".to_string(),
+                score: 80.0,
+                grade: "B".to_string(),
+                reward_amount: 8.0,
+                judge_status: "fixture".to_string(),
+                payout_status: "eligible".to_string(),
+                anti_cheat_flags: Vec::new(),
+                score_events: Vec::new(),
+                ledger_status: Some("pending".to_string()),
+                ledger_account_id: None,
+                ledger_entry_id: None,
+                ledger_balance_after: None,
+                ledger_error: None,
+                created_at_epoch: 1_778_700_705,
+            });
+    }
+    let app = build_router(state.clone());
+    let (status, response) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/contracts/{contract_id}/complete"),
+        &[],
+        json!({
+            "matrix_user_id": actor,
+            "body": body,
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "collision response: {response}"
+    );
+    assert_eq!(
+        response["error"],
+        "world contract completion_id is already bound to a different payload"
+    );
+    assert_eq!(response["completion_id"], completion_id);
+    let league = state.inner.league_state.lock().await;
+    assert_eq!(league.world.world_contracts[0].status, "open");
+    assert_eq!(
+        league.world.world_contracts[0].cex_status.as_deref(),
+        Some("Running")
+    );
+    assert_eq!(league.world.world_contract_completions.len(), 1);
+    assert!(!league.players_by_matrix_user.contains_key(actor));
+    assert!(league.world.world_economy_events.is_empty());
+}
+
+#[test]
+fn legacy_display_projection_fails_closed_on_non_finite_or_overflowing_state() {
+    assert_eq!(checked_legacy_display_add(5.0, 12), Some(17.0));
+    assert_eq!(checked_legacy_display_add(f64::NAN, 12), None);
+    assert_eq!(checked_legacy_display_add(f64::INFINITY, 12), None);
+    assert_eq!(checked_legacy_display_add(-1.0, 12), None);
+    assert_eq!(checked_legacy_display_add(9_223_372_036_854.0, 1), None);
 }
 
 #[test]
@@ -893,6 +1819,11 @@ fn term_exchange_receipts_shadow_sql_preserves_status_and_progression_class() {
         term_exchange_protocol::ReceiptStatus::ApprovedRelease,
         1_778_600_001,
     );
+    league_receipt.evidence = json!({
+        "intent": {
+            "amount_credits": 42,
+        }
+    });
     league_receipt.settlement_reference = Some("league-settlement-ref".to_string());
     league_receipt.ledger_entry_id = Some("league-ledger-entry".to_string());
     league.term_exchange_receipts.insert(
@@ -925,6 +1856,14 @@ fn term_exchange_receipts_shadow_sql_preserves_status_and_progression_class() {
     assert!(sql.contains("\"receipt_id\":\"world-receipt-failed-ledger\""));
     assert!(sql.contains("\"status\":\"failed_ledger\""));
     assert!(sql.contains("\"progression_class\":\"recoverable_hold\""));
+    assert!(sql.contains("\"amount_credits\":42"));
+    assert!(sql.contains("\"amount_credits\":null"));
+    assert!(sql.contains("amount_credits bigint"));
+    assert!(sql.contains("on conflict (receipt_id) do nothing"));
+    assert!(sql.contains("league_term_exchange_receipt_events_v1"));
+    assert!(sql.contains("world_term_exchange_receipt_events_v1"));
+    assert!(sql.contains("pg_advisory_xact_lock"));
+    assert!(sql.contains("on conflict (receipt_id, event_sequence) do nothing"));
     assert!(sql.contains("to_timestamp(finalized_at_epoch)"));
 
     let cutover_tables = repository_snapshot
@@ -947,15 +1886,842 @@ fn term_exchange_receipts_shadow_sql_preserves_status_and_progression_class() {
             .sql_cutover_plan
             .get("migration_floor")
             .and_then(Value::as_str),
-        Some("0026_add_term_exchange_receipt_tables.sql")
+        Some("0087_add_term_exchange_receipt_event_history.sql")
     );
 
     let command_sql = normalized_repository_command_shadow_sql(&league.world, "world_buy")
         .unwrap()
         .expect("world_buy should generate command-scoped SQL");
     assert!(command_sql.contains("insert into world_term_exchange_receipts"));
+    assert!(command_sql.contains("insert into world_term_exchange_receipt_events_v1"));
     assert!(command_sql.contains("\"receipt_id\":\"world-receipt-failed-ledger\""));
     assert!(command_sql.contains("term_exchange_receipt_progression_class"));
+}
+
+#[test]
+fn normalized_receipt_projection_migration_preserves_exact_amount_and_append_only_guards() {
+    let migration = std::fs::read_to_string(format!(
+        "{}/../../migrations/0085_harden_term_exchange_receipt_projections.sql",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .expect("normalized receipt projection migration should exist");
+    for table in [
+        "public.league_term_exchange_receipts",
+        "public.world_term_exchange_receipts",
+    ] {
+        assert!(migration.contains(&format!(
+            "{table}\n    add column if not exists amount_credits bigint"
+        )));
+        assert!(migration.contains(&format!("on {table};")));
+    }
+    assert!(migration.contains("amount_credits is null or amount_credits >= 0"));
+    assert!(migration.contains("before update or delete"));
+    assert!(migration.contains("before truncate"));
+    assert!(migration.contains("enable always trigger"));
+    assert!(migration.contains("revoke update, delete, truncate"));
+}
+
+#[test]
+fn native_receipt_amount_backfill_prefers_immutable_evidence_over_default_zero() {
+    let migration = std::fs::read_to_string(format!(
+        "{}/../../migrations/0086_add_trnm_native_receipt_evidence.sql",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .expect("native receipt evidence migration should exist");
+
+    // A partially-applied rollout can leave the newly-added amount column at its
+    // default zero while the immutable receipt JSON already carries a positive
+    // amount.  Keep this precedence contract explicit so a future edit cannot
+    // reintroduce the data-lossing NULL/negative-only backfill.
+    assert!(migration.contains("with resolved_amounts as"));
+    assert!(migration.contains("intent_amount_present"));
+    assert!(migration.contains("intent_amount_valid"));
+    assert!(migration.contains("when intent_amount_valid then intent_amount"));
+    assert!(migration.contains("when intent_amount_present then 0"));
+    assert!(migration.contains("Amount evidence is the\n-- one intentional compatibility repair"));
+    assert!(migration.contains("new writes still reject any mismatch"));
+    assert!(migration.contains("TRNM receipt event amount does not match immutable intent amount"));
+    assert!(migration.contains("TRNM receipt event receipt_id must remain stable for an intent"));
+    assert!(migration.contains("e.amount_credits is distinct from chosen.amount_credits"));
+    assert!(migration.contains("if parsed_value < 0 then"));
+    assert!(migration.contains("return null;"));
+    assert!(migration.contains("r.receipt_json #>> '{evidence,amount_credits}'"));
+    assert!(migration.contains("as resolved_amount"));
+    assert!(migration.contains("normalized_rows.normalized_receipt_json"));
+    let backfill_sql = migration
+        .split_once("with legacy_rows as")
+        .map(|(_, suffix)| suffix)
+        .expect("backfill CTE should be present");
+    let intent_authority_offset = backfill_sql
+        .find("when intent_amount_valid then intent_amount")
+        .expect("backfill should prefer a valid immutable intent amount");
+    let evidence_fallback_offset = backfill_sql
+        .find("else coalesce(evidence_amount, 0)")
+        .expect("backfill should retain evidence only as an audit-only fallback");
+    assert!(
+        intent_authority_offset < evidence_fallback_offset,
+        "backfill amount precedence must keep evidence behind immutable intent"
+    );
+    assert!(
+        migration.contains("valid non-negative amount in the immutable intent is the authority")
+    );
+    assert!(migration.contains("invalid/negative intent amount is fail-closed to zero"));
+    assert!(migration
+        .contains("existing default zero can never overwrite a valid immutable intent value"));
+}
+
+#[test]
+fn normalized_receipt_event_history_migration_backfills_and_chains_hold_to_final() {
+    let migration = std::fs::read_to_string(format!(
+        "{}/../../migrations/0087_add_term_exchange_receipt_event_history.sql",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .expect("normalized receipt event history migration should exist");
+    for table in [
+        "public.league_term_exchange_receipt_events_v1",
+        "public.world_term_exchange_receipt_events_v1",
+    ] {
+        assert!(migration.contains(&format!("create table if not exists {table}")));
+        assert!(migration.contains(&format!("on {table}(receipt_id, event_sequence desc")));
+        assert!(migration.contains(&format!("before truncate on {table}")));
+    }
+    assert!(migration.contains("event_sequence bigint not null"));
+    assert!(migration.contains("previous_receipt_hash"));
+    assert!(migration.contains("receipt_hash text not null"));
+    assert!(
+        migration.contains("event_kind in ('initial', 'backfill', 'hold', 'final', 'transition')")
+    );
+    assert!(migration.contains("recoverable_hold"));
+    assert!(migration.contains("'backfill'"));
+    assert!(migration.contains("receipt event sequence must append contiguously"));
+    assert!(migration.contains("latest_intent_event"));
+    assert!(migration.contains("normalized receipt_id must remain stable for an intent"));
+    assert!(migration.contains("normalized receipt amount must remain stable for an intent"));
+    assert!(
+        migration.contains("normalized receipt amount conflicts with immutable projection amount")
+    );
+    assert!(migration.contains("uq_league_term_exchange_receipt_events_initial_intent_v1"));
+    assert!(migration.contains("multiple receipt_ids for one intent"));
+    assert!(migration.contains("enable always trigger"));
+    assert!(migration.contains("insert into public.league_term_exchange_receipt_events_v1"));
+    assert!(migration.contains("insert into public.world_term_exchange_receipt_events_v1"));
+    assert!(migration.contains("not exists"));
+}
+
+fn receipt_with_exact_amount(
+    mut receipt: term_exchange_protocol::EconomicReceipt,
+    amount_credits: i64,
+) -> term_exchange_protocol::EconomicReceipt {
+    receipt.evidence = json!({
+        "intent": {
+            "amount_credits": amount_credits,
+        }
+    });
+    receipt
+}
+
+/// Install the compact typed receipt that a production fixture would have after a Ledger v2
+/// effect.  Older tests populated only compatibility status strings; value gates intentionally
+/// reject those rows, so integration fixtures that exercise a later leg must seed the immutable
+/// exact receipt explicitly.
+fn insert_world_exact_receipt(
+    world: &mut WorldState,
+    intent_id: &str,
+    status: term_exchange_protocol::ReceiptStatus,
+    amount_credits: i64,
+) {
+    let receipt = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
+            format!("receipt:{intent_id}"),
+            intent_id,
+            "world_commerce_purchase",
+            term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+            term_exchange_protocol::SettlementBackendKind::Cex,
+            status,
+            1_778_650_900,
+        ),
+        amount_credits,
+    );
+    world.world_term_exchange_receipts.insert(
+        receipt.receipt_id.clone(),
+        TermExchangeReceiptState::from(&receipt),
+    );
+}
+
+#[test]
+fn world_purchase_projection_marker_requires_receipt_pair_and_immutable_event_tuple() {
+    let mut world = default_league_state().world;
+    let purchase = WorldPurchase {
+        purchase_id: "purchase-marker-guard".to_string(),
+        listing_id: "listing-marker-guard".to_string(),
+        shop_id: "shop-marker-guard".to_string(),
+        company_id: "company-marker-guard".to_string(),
+        buyer_matrix_user_id: "@marker-buyer:local.dev".to_string(),
+        seller_matrix_user_id: "@marker-seller:local.dev".to_string(),
+        price_credits: 100,
+        status: "reserved".to_string(),
+        ledger_status: Some("settled".to_string()),
+        ledger_account_id: None,
+        ledger_entry_id: None,
+        ledger_balance_after: None,
+        ledger_error: None,
+        buyer_ledger_status: Some("reserved".to_string()),
+        buyer_ledger_account_id: None,
+        buyer_ledger_entry_id: None,
+        buyer_ledger_balance_after: None,
+        buyer_ledger_error: None,
+        buyer_consume_status: Some("pending_acceptance".to_string()),
+        buyer_consume_entry_id: None,
+        buyer_consume_balance_after: None,
+        buyer_consume_error: None,
+        created_at_epoch: 1_778_650_930,
+    };
+    let event_id = league_hash_id(
+        "world-econ",
+        &format!(
+            "{}:{}:{}",
+            purchase.buyer_matrix_user_id, purchase.purchase_id, purchase.created_at_epoch
+        ),
+    );
+    world.world_economy_events.push(WorldEconomyEvent {
+        economy_event_id: event_id.clone(),
+        matrix_user_id: purchase.seller_matrix_user_id.clone(),
+        event_kind: "listing_purchase".to_string(),
+        subject_id: purchase.purchase_id.clone(),
+        credits_delta: 95,
+        reputation_delta: 4,
+        created_at_epoch: purchase.created_at_epoch,
+    });
+
+    // A legacy economy marker alone is not authority for a release.
+    assert_eq!(
+        world_purchase_projection_marker(
+            &world,
+            &purchase,
+            &event_id,
+            &purchase.seller_matrix_user_id,
+            "listing_purchase",
+            95,
+            4,
+        ),
+        Some(false)
+    );
+
+    insert_world_exact_receipt(
+        &mut world,
+        &format!("world_purchase:reserve:{}", purchase.purchase_id),
+        term_exchange_protocol::ReceiptStatus::Reserved,
+        100,
+    );
+    insert_world_exact_receipt(
+        &mut world,
+        &format!("world_purchase:grant:{}", purchase.purchase_id),
+        term_exchange_protocol::ReceiptStatus::Settled,
+        95,
+    );
+    assert_eq!(
+        world_purchase_projection_marker(
+            &world,
+            &purchase,
+            &event_id,
+            &purchase.seller_matrix_user_id,
+            "listing_purchase",
+            95,
+            4,
+        ),
+        Some(true)
+    );
+
+    // Even with exact receipts, mutating the compatibility marker must fail closed.
+    world.world_economy_events[0].credits_delta = 94;
+    assert_eq!(
+        world_purchase_projection_marker(
+            &world,
+            &purchase,
+            &event_id,
+            &purchase.seller_matrix_user_id,
+            "listing_purchase",
+            95,
+            4,
+        ),
+        Some(false)
+    );
+}
+
+#[test]
+fn world_acceptance_projection_marker_requires_exact_consume_receipt() {
+    let mut world = default_league_state().world;
+    let purchase = WorldPurchase {
+        purchase_id: "purchase-accept-marker-guard".to_string(),
+        listing_id: "listing-accept-marker-guard".to_string(),
+        shop_id: "shop-accept-marker-guard".to_string(),
+        company_id: "company-accept-marker-guard".to_string(),
+        buyer_matrix_user_id: "@accept-marker-buyer:local.dev".to_string(),
+        seller_matrix_user_id: "@accept-marker-seller:local.dev".to_string(),
+        price_credits: 60,
+        status: "reserved".to_string(),
+        ledger_status: Some("settled".to_string()),
+        ledger_account_id: None,
+        ledger_entry_id: None,
+        ledger_balance_after: None,
+        ledger_error: None,
+        buyer_ledger_status: Some("reserved".to_string()),
+        buyer_ledger_account_id: None,
+        buyer_ledger_entry_id: None,
+        buyer_ledger_balance_after: None,
+        buyer_ledger_error: None,
+        buyer_consume_status: Some("consumed".to_string()),
+        buyer_consume_entry_id: None,
+        buyer_consume_balance_after: None,
+        buyer_consume_error: None,
+        created_at_epoch: 1_778_650_940,
+    };
+    let acceptance_id = "acceptance-marker-guard";
+    let work_order_id = "work-marker-guard";
+    let acceptance_created_at_epoch = 1_778_650_941;
+    let event_id = league_hash_id(
+        "world-econ",
+        &format!(
+            "{}:{}:{}",
+            purchase.buyer_matrix_user_id, acceptance_id, acceptance_created_at_epoch
+        ),
+    );
+    world.world_economy_events.push(WorldEconomyEvent {
+        economy_event_id: event_id.clone(),
+        matrix_user_id: purchase.seller_matrix_user_id.clone(),
+        event_kind: "work_accepted".to_string(),
+        subject_id: work_order_id.to_string(),
+        credits_delta: 0,
+        reputation_delta: 3,
+        created_at_epoch: acceptance_created_at_epoch,
+    });
+
+    assert_eq!(
+        world_acceptance_projection_marker(
+            &world,
+            &purchase,
+            &event_id,
+            &purchase.seller_matrix_user_id,
+            work_order_id,
+            3,
+            acceptance_created_at_epoch,
+        ),
+        Some(false)
+    );
+    insert_world_exact_receipt(
+        &mut world,
+        &format!("world_purchase:consume:{}", purchase.purchase_id),
+        term_exchange_protocol::ReceiptStatus::Consumed,
+        60,
+    );
+    assert_eq!(
+        world_acceptance_projection_marker(
+            &world,
+            &purchase,
+            &event_id,
+            &purchase.seller_matrix_user_id,
+            work_order_id,
+            3,
+            acceptance_created_at_epoch,
+        ),
+        Some(true)
+    );
+}
+
+#[test]
+fn world_work_delivery_identity_is_stable_and_reopen_scoped() {
+    let mut world = default_league_state().world;
+    let work_order_id = "work-delivery-identity";
+    let matrix_user_id = "@delivery-identity:local.dev";
+    let body = "stable delivery body";
+    let deterministic = world_work_delivery_id(work_order_id, matrix_user_id, 0, body);
+    assert_eq!(
+        deterministic,
+        world_work_delivery_id(work_order_id, matrix_user_id, 0, body)
+    );
+    assert_ne!(
+        deterministic,
+        world_work_delivery_id(work_order_id, matrix_user_id, 1, body)
+    );
+    assert_ne!(
+        deterministic,
+        world_work_delivery_id(work_order_id, matrix_user_id, 0, "different body")
+    );
+
+    world.world_work_deliveries.push(WorldWorkDelivery {
+        delivery_id: deterministic.clone(),
+        work_order_id: work_order_id.to_string(),
+        matrix_user_id: matrix_user_id.to_string(),
+        body: body.to_string(),
+        score: 90.0,
+        judge_status: "passed".to_string(),
+        status: "delivered".to_string(),
+        created_at_epoch: 1_778_650_950,
+    });
+    assert_eq!(
+        world_work_delivery_for_request(
+            &world,
+            work_order_id,
+            matrix_user_id,
+            0,
+            body,
+            "delivered",
+        )
+        .map(|delivery| delivery.delivery_id.as_str()),
+        Some(deterministic.as_str())
+    );
+
+    // A legacy timestamp-derived row is accepted only with a matching immutable tuple and a
+    // delivery terminal/hold state; it is not adopted after a reopen cycle.
+    let legacy_created_at = 1_778_650_951;
+    world.world_work_deliveries.push(WorldWorkDelivery {
+        delivery_id: super::world_commerce_routes::legacy_world_work_delivery_id(
+            work_order_id,
+            matrix_user_id,
+            legacy_created_at,
+        ),
+        work_order_id: work_order_id.to_string(),
+        matrix_user_id: matrix_user_id.to_string(),
+        body: "legacy body".to_string(),
+        score: 80.0,
+        judge_status: "passed".to_string(),
+        status: "delivered".to_string(),
+        created_at_epoch: legacy_created_at,
+    });
+    assert!(world_work_delivery_for_request(
+        &world,
+        work_order_id,
+        matrix_user_id,
+        0,
+        "legacy body",
+        "delivered",
+    )
+    .is_some());
+    assert!(world_work_delivery_for_request(
+        &world,
+        work_order_id,
+        matrix_user_id,
+        1,
+        "legacy body",
+        "open",
+    )
+    .is_none());
+}
+
+#[tokio::test]
+async fn world_work_delivery_retry_reuses_identity_and_projection() {
+    let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
+    let app = build_router(state.clone());
+    let seller = "@delivery-retry-seller:local.dev";
+    let work_order_id = "work-delivery-retry";
+    let purchase_id = "purchase-delivery-retry";
+    let company_id = "company-delivery-retry";
+    let body = "Deliver customer evidence package with source notes, risk controls, next action, and self-review for a stable retry test.";
+    {
+        let mut league = state.inner.league_state.lock().await;
+        league.world.world_companies.push(WorldCompany {
+            company_id: company_id.to_string(),
+            owner_matrix_user_id: seller.to_string(),
+            asset_id: "asset-delivery-retry".to_string(),
+            location_id: "starter-studio".to_string(),
+            name: "Delivery Retry Studio".to_string(),
+            company_kind: "studio".to_string(),
+            status: "operating".to_string(),
+            revenue_score: 10,
+            reputation_score: 10,
+            level: 1,
+            created_at_epoch: 1_778_650_960,
+        });
+        league.world.world_purchases.push(WorldPurchase {
+            purchase_id: purchase_id.to_string(),
+            listing_id: "listing-delivery-retry".to_string(),
+            shop_id: "shop-delivery-retry".to_string(),
+            company_id: company_id.to_string(),
+            buyer_matrix_user_id: "@delivery-retry-buyer:local.dev".to_string(),
+            seller_matrix_user_id: seller.to_string(),
+            price_credits: 100,
+            status: "reserved".to_string(),
+            ledger_status: Some("settled".to_string()),
+            ledger_account_id: Some("seller-account".to_string()),
+            ledger_entry_id: Some("seller-entry".to_string()),
+            ledger_balance_after: Some(95.0),
+            ledger_error: None,
+            buyer_ledger_status: Some("reserved".to_string()),
+            buyer_ledger_account_id: Some("buyer-account".to_string()),
+            buyer_ledger_entry_id: Some("reserve-entry".to_string()),
+            buyer_ledger_balance_after: Some(0.0),
+            buyer_ledger_error: None,
+            buyer_consume_status: Some("pending_acceptance".to_string()),
+            buyer_consume_entry_id: None,
+            buyer_consume_balance_after: None,
+            buyer_consume_error: None,
+            created_at_epoch: 1_778_650_961,
+        });
+        league.world.world_work_orders.push(WorldWorkOrder {
+            work_order_id: work_order_id.to_string(),
+            purchase_id: purchase_id.to_string(),
+            listing_id: "listing-delivery-retry".to_string(),
+            buyer_matrix_user_id: "@delivery-retry-buyer:local.dev".to_string(),
+            seller_matrix_user_id: seller.to_string(),
+            company_id: company_id.to_string(),
+            status: "open".to_string(),
+            brief: "Delivery retry work order".to_string(),
+            value_score: 100,
+            created_at_epoch: 1_778_650_961,
+        });
+        insert_world_exact_receipt(
+            &mut league.world,
+            &format!("world_purchase:grant:{purchase_id}"),
+            term_exchange_protocol::ReceiptStatus::Settled,
+            95,
+        );
+    }
+
+    let (status, first) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/work-orders/{work_order_id}/deliver"),
+        &[],
+        json!({
+            "matrix_user_id": seller,
+            "room_id": "!delivery-retry:local.dev",
+            "body": body,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "first delivery: {first}");
+    assert_eq!(first["work_order"]["status"], "delivered");
+    let first_delivery_id = first["delivery"]["delivery_id"]
+        .as_str()
+        .expect("first delivery id")
+        .to_string();
+
+    let (delivery_count, economy_count, xp, reputation) = {
+        let league = state.inner.league_state.lock().await;
+        let player = league
+            .players_by_matrix_user
+            .get(seller)
+            .expect("first delivery should grant seller progress");
+        (
+            league.world.world_work_deliveries.len(),
+            league.world.world_economy_events.len(),
+            player.xp,
+            player.reputation,
+        )
+    };
+
+    let (status, retry) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/work-orders/{work_order_id}/deliver"),
+        &[],
+        json!({
+            "matrix_user_id": seller,
+            "room_id": "!delivery-retry:local.dev",
+            "body": body,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "delivery retry: {retry}");
+    assert_eq!(retry["work_order"]["status"], "delivered");
+    assert_eq!(retry["delivery"]["delivery_id"], first_delivery_id);
+
+    let league = state.inner.league_state.lock().await;
+    assert_eq!(league.world.world_work_deliveries.len(), delivery_count);
+    assert_eq!(league.world.world_economy_events.len(), economy_count);
+    let player = league
+        .players_by_matrix_user
+        .get(seller)
+        .expect("seller remains present after retry");
+    assert_eq!(player.xp, xp);
+    assert_eq!(player.reputation, reputation);
+}
+
+#[test]
+fn term_exchange_receipt_memory_projection_is_monotonic_and_identity_bound() {
+    let mut league = default_league_state();
+    let receipt_id = "receipt:memory-monotonic";
+    let intent_id = "memory-monotonic";
+    let hold = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
+            receipt_id,
+            intent_id,
+            "world_commerce_purchase",
+            term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+            term_exchange_protocol::SettlementBackendKind::Cex,
+            term_exchange_protocol::ReceiptStatus::HeldReview,
+            1_778_650_910,
+        ),
+        9,
+    );
+    super::record_league_term_exchange_receipt(
+        &mut league,
+        Some(TermExchangeReceiptState::from(&hold)),
+    );
+
+    let final_receipt = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
+            receipt_id,
+            intent_id,
+            "world_commerce_purchase",
+            term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+            term_exchange_protocol::SettlementBackendKind::Cex,
+            term_exchange_protocol::ReceiptStatus::Settled,
+            1_778_650_911,
+        ),
+        9,
+    );
+    super::record_league_term_exchange_receipt(
+        &mut league,
+        Some(TermExchangeReceiptState::from(&final_receipt)),
+    );
+    assert_eq!(
+        league
+            .term_exchange_receipts
+            .get(receipt_id)
+            .expect("receipt should be projected")
+            .status,
+        term_exchange_protocol::ReceiptStatus::Settled
+    );
+
+    // A delayed hold cannot downgrade the terminal snapshot.
+    let late_hold = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
+            receipt_id,
+            intent_id,
+            "world_commerce_purchase",
+            term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+            term_exchange_protocol::SettlementBackendKind::Cex,
+            term_exchange_protocol::ReceiptStatus::HeldReview,
+            1_778_650_912,
+        ),
+        9,
+    );
+    super::record_league_term_exchange_receipt(
+        &mut league,
+        Some(TermExchangeReceiptState::from(&late_hold)),
+    );
+    assert_eq!(
+        league
+            .term_exchange_receipts
+            .get(receipt_id)
+            .expect("terminal receipt should remain projected")
+            .status,
+        term_exchange_protocol::ReceiptStatus::Settled
+    );
+
+    // Reusing a receipt id for another immutable intent is rejected rather than poisoning the
+    // canonical map key.
+    let wrong_intent = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
+            receipt_id,
+            "different-intent",
+            "world_commerce_purchase",
+            term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+            term_exchange_protocol::SettlementBackendKind::Cex,
+            term_exchange_protocol::ReceiptStatus::HeldReview,
+            1_778_650_913,
+        ),
+        9,
+    );
+    super::record_league_term_exchange_receipt(
+        &mut league,
+        Some(TermExchangeReceiptState::from(&wrong_intent)),
+    );
+    let stored = league
+        .term_exchange_receipts
+        .get(receipt_id)
+        .expect("receipt should remain present");
+    assert_eq!(stored.intent_id, intent_id);
+    assert_eq!(
+        stored.status,
+        term_exchange_protocol::ReceiptStatus::Settled
+    );
+
+    // The legal hold -> final transition remains available for a fresh receipt id.
+    let second_id = "receipt:memory-transition";
+    let second_intent = "memory-transition";
+    let second_hold = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
+            second_id,
+            second_intent,
+            "world_commerce_purchase",
+            term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+            term_exchange_protocol::SettlementBackendKind::Cex,
+            term_exchange_protocol::ReceiptStatus::HeldReview,
+            1_778_650_914,
+        ),
+        4,
+    );
+    super::record_league_term_exchange_receipt(
+        &mut league,
+        Some(TermExchangeReceiptState::from(&second_hold)),
+    );
+    let second_final = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
+            second_id,
+            second_intent,
+            "world_commerce_purchase",
+            term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+            term_exchange_protocol::SettlementBackendKind::Cex,
+            term_exchange_protocol::ReceiptStatus::Settled,
+            1_778_650_915,
+        ),
+        4,
+    );
+    super::record_league_term_exchange_receipt(
+        &mut league,
+        Some(TermExchangeReceiptState::from(&second_final)),
+    );
+    assert_eq!(
+        league
+            .term_exchange_receipts
+            .get(second_id)
+            .expect("transition receipt should be projected")
+            .status,
+        term_exchange_protocol::ReceiptStatus::Settled
+    );
+}
+
+#[test]
+fn world_contract_completion_merge_preserves_terminal_projection_on_late_hold() {
+    let mut league = default_league_state();
+    let contract_id = "contract-memory-terminal-merge";
+    let completion_id = "completion-memory-terminal-merge";
+    let matrix_user_id = "@memory-terminal-merge:local.dev";
+    league.world.world_contracts.push(WorldContract {
+        contract_id: contract_id.to_string(),
+        event_id: "event-memory-terminal-merge".to_string(),
+        actor_matrix_user_id: matrix_user_id.to_string(),
+        location_id: "starter-studio".to_string(),
+        task_id: "task-memory-terminal-merge".to_string(),
+        title: "Terminal merge contract".to_string(),
+        body: "contract body".to_string(),
+        status: "completed_pending_settlement".to_string(),
+        cex_status: Some("settlement_pending".to_string()),
+        value_score: 10,
+        created_at_epoch: 1_778_650_920,
+    });
+    let base_completion = WorldContractCompletion {
+        completion_id: completion_id.to_string(),
+        contract_id: contract_id.to_string(),
+        matrix_user_id: matrix_user_id.to_string(),
+        body: "terminal completion body".to_string(),
+        score: 88.0,
+        grade: "A".to_string(),
+        reward_amount: 12.0,
+        judge_status: "passed".to_string(),
+        payout_status: "eligible".to_string(),
+        anti_cheat_flags: Vec::new(),
+        score_events: Vec::new(),
+        ledger_status: Some("settled".to_string()),
+        ledger_account_id: Some("account-memory-terminal".to_string()),
+        ledger_entry_id: Some("entry-memory-terminal".to_string()),
+        ledger_balance_after: Some(12.0),
+        ledger_error: None,
+        created_at_epoch: 1_778_650_921,
+    };
+    let terminal_receipt = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
+            format!("receipt:world_contract_completion:{completion_id}"),
+            format!("world_contract_completion:{completion_id}"),
+            "world_contract_completion_settlement",
+            term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+            term_exchange_protocol::SettlementBackendKind::Cex,
+            term_exchange_protocol::ReceiptStatus::Settled,
+            1_778_650_922,
+        ),
+        12,
+    );
+    let terminal_settlement = LeagueLedgerSettlement {
+        status: "settled".to_string(),
+        account_id: Some("account-memory-terminal".to_string()),
+        entry_id: Some("entry-memory-terminal".to_string()),
+        amount_credits: Some(12),
+        term_exchange_receipt: Some(TermExchangeReceiptState::from(&terminal_receipt)),
+        ..Default::default()
+    };
+    let contract = league
+        .world
+        .world_contracts
+        .first()
+        .expect("contract should be present")
+        .clone();
+    let first = merge_world_contract_completion_settlement(
+        &mut league,
+        &contract,
+        &base_completion,
+        &terminal_settlement,
+        true,
+        false,
+    );
+    assert_eq!(first.ledger_status.as_deref(), Some("settled"));
+    assert_eq!(league.world.world_economy_events.len(), 1);
+    assert_eq!(
+        league
+            .players_by_matrix_user
+            .get(matrix_user_id)
+            .map(|player| player.earned_credits),
+        Some(12.0)
+    );
+    assert_eq!(league.world.world_contracts[0].status, "completed_settled");
+
+    let late_hold_completion = WorldContractCompletion {
+        ledger_status: Some("held_review".to_string()),
+        ledger_account_id: None,
+        ledger_entry_id: None,
+        ledger_balance_after: None,
+        ledger_error: Some("late transient hold".to_string()),
+        ..base_completion.clone()
+    };
+    let late_hold_receipt = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
+            format!("receipt:world_contract_completion:{completion_id}"),
+            format!("world_contract_completion:{completion_id}"),
+            "world_contract_completion_settlement",
+            term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+            term_exchange_protocol::SettlementBackendKind::Cex,
+            term_exchange_protocol::ReceiptStatus::HeldReview,
+            1_778_650_923,
+        ),
+        12,
+    );
+    let late_hold_settlement = LeagueLedgerSettlement {
+        status: "held_review".to_string(),
+        error: Some("late transient hold".to_string()),
+        term_exchange_receipt: Some(TermExchangeReceiptState::from(&late_hold_receipt)),
+        ..Default::default()
+    };
+    let contract = league.world.world_contracts[0].clone();
+    let second = merge_world_contract_completion_settlement(
+        &mut league,
+        &contract,
+        &late_hold_completion,
+        &late_hold_settlement,
+        false,
+        false,
+    );
+    assert_eq!(second.ledger_status.as_deref(), Some("settled"));
+    assert_eq!(league.world.world_economy_events.len(), 1);
+    assert_eq!(
+        league
+            .players_by_matrix_user
+            .get(matrix_user_id)
+            .map(|player| player.earned_credits),
+        Some(12.0)
+    );
+    assert_eq!(league.world.world_contracts[0].status, "completed_settled");
+    assert_eq!(
+        league
+            .world
+            .world_term_exchange_receipts
+            .get(&format!(
+                "receipt:world_contract_completion:{completion_id}"
+            ))
+            .expect("terminal receipt should remain authoritative")
+            .status,
+        term_exchange_protocol::ReceiptStatus::Settled
+    );
 }
 
 #[test]
@@ -977,14 +2743,17 @@ fn typed_term_exchange_progression_class_drives_settlement_helpers() {
     assert!(!hard_fail_settlement.progression_allowed(&["skipped_missing_account"]));
     assert!(!hard_fail_settlement.terminal_skip());
 
-    let terminal_skip_receipt = term_exchange_protocol::EconomicReceipt::new(
-        "receipt:terminal-skip",
-        "intent:terminal-skip",
-        "world_commerce_purchase",
-        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
-        term_exchange_protocol::SettlementBackendKind::Cex,
-        term_exchange_protocol::ReceiptStatus::SkippedZeroSellerNet,
-        1_778_600_004,
+    let terminal_skip_receipt = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
+            "receipt:terminal-skip",
+            "intent:terminal-skip",
+            "world_commerce_purchase",
+            term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+            term_exchange_protocol::SettlementBackendKind::Cex,
+            term_exchange_protocol::ReceiptStatus::SkippedZeroSellerNet,
+            1_778_600_004,
+        ),
+        0,
     );
     let terminal_skip_settlement = LeagueLedgerSettlement {
         status: "skipped_zero_seller_net".to_string(),
@@ -995,7 +2764,8 @@ fn typed_term_exchange_progression_class_drives_settlement_helpers() {
     assert!(terminal_skip_settlement.terminal_skip());
 
     let legacy_synthetic_skip = LeagueLedgerSettlement {
-        status: "skipped_seller_not_settled".to_string(),
+        status: "skipped_zero_seller_net".to_string(),
+        amount_credits: Some(0),
         ..Default::default()
     };
     assert!(legacy_synthetic_skip.terminal_skip());
@@ -1031,14 +2801,17 @@ fn typed_purchase_settlement_receipts_drive_world_commerce_progression() {
     };
     assert!(!world_purchase_seller_settlement_active(&world, &purchase,));
 
-    let settled_receipt = term_exchange_protocol::EconomicReceipt::new(
-        "receipt:world_purchase:grant:purchase-typed-settlement",
-        "world_purchase:grant:purchase-typed-settlement",
-        "world_commerce_purchase",
-        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
-        term_exchange_protocol::SettlementBackendKind::Cex,
-        term_exchange_protocol::ReceiptStatus::Settled,
-        1_778_650_001,
+    let settled_receipt = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
+            "receipt:world_purchase:grant:purchase-typed-settlement",
+            "world_purchase:grant:purchase-typed-settlement",
+            "world_commerce_purchase",
+            term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+            term_exchange_protocol::SettlementBackendKind::Cex,
+            term_exchange_protocol::ReceiptStatus::Settled,
+            1_778_650_001,
+        ),
+        24,
     );
     world.world_term_exchange_receipts.insert(
         settled_receipt.receipt_id.clone(),
@@ -1087,14 +2860,17 @@ fn typed_contract_completion_receipts_drive_world_task_progression() {
     };
     assert!(!world_contract_completion_released(&world, &completion,));
 
-    let settled_receipt = term_exchange_protocol::EconomicReceipt::new(
-        "receipt:world_contract_completion:completion-typed-settlement",
-        "world_contract_completion:completion-typed-settlement",
-        "world_contract_completion",
-        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
-        term_exchange_protocol::SettlementBackendKind::Cex,
-        term_exchange_protocol::ReceiptStatus::Settled,
-        1_778_650_011,
+    let settled_receipt = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
+            "receipt:world_contract_completion:completion-typed-settlement",
+            "world_contract_completion:completion-typed-settlement",
+            "world_contract_completion_settlement",
+            term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+            term_exchange_protocol::SettlementBackendKind::Cex,
+            term_exchange_protocol::ReceiptStatus::Settled,
+            1_778_650_011,
+        ),
+        12,
     );
     world.world_term_exchange_receipts.insert(
         settled_receipt.receipt_id.clone(),
@@ -1106,7 +2882,7 @@ fn typed_contract_completion_receipts_drive_world_task_progression() {
     let hard_fail_receipt = term_exchange_protocol::EconomicReceipt::new(
         "receipt:world_contract_completion:completion-typed-settlement",
         "world_contract_completion:completion-typed-settlement",
-        "world_contract_completion",
+        "world_contract_completion_settlement",
         term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
         term_exchange_protocol::SettlementBackendKind::Cex,
         term_exchange_protocol::ReceiptStatus::SkippedMissingLedgerToken,
@@ -1150,23 +2926,29 @@ fn typed_purchase_reserve_and_consume_receipts_drive_health_helpers() {
     assert!(!world_purchase_buyer_reserve_active(&world, &purchase));
     assert!(!world_purchase_buyer_consume_completed(&world, &purchase));
 
-    let reserve_receipt = term_exchange_protocol::EconomicReceipt::new(
-        "receipt:world_purchase:reserve:purchase-typed-buyer-flow",
-        "world_purchase:reserve:purchase-typed-buyer-flow",
-        "world_commerce_purchase",
-        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
-        term_exchange_protocol::SettlementBackendKind::Cex,
-        term_exchange_protocol::ReceiptStatus::Reserved,
-        1_778_650_021,
+    let reserve_receipt = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
+            "receipt:world_purchase:reserve:purchase-typed-buyer-flow",
+            "world_purchase:reserve:purchase-typed-buyer-flow",
+            "world_commerce_purchase",
+            term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+            term_exchange_protocol::SettlementBackendKind::Cex,
+            term_exchange_protocol::ReceiptStatus::Reserved,
+            1_778_650_021,
+        ),
+        25,
     );
-    let consume_receipt = term_exchange_protocol::EconomicReceipt::new(
-        "receipt:world_purchase:consume:purchase-typed-buyer-flow",
-        "world_purchase:consume:purchase-typed-buyer-flow",
-        "world_commerce_purchase",
-        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
-        term_exchange_protocol::SettlementBackendKind::Cex,
-        term_exchange_protocol::ReceiptStatus::Consumed,
-        1_778_650_022,
+    let consume_receipt = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
+            "receipt:world_purchase:consume:purchase-typed-buyer-flow",
+            "world_purchase:consume:purchase-typed-buyer-flow",
+            "world_commerce_purchase",
+            term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+            term_exchange_protocol::SettlementBackendKind::Cex,
+            term_exchange_protocol::ReceiptStatus::Consumed,
+            1_778_650_022,
+        ),
+        25,
     );
     world.world_term_exchange_receipts.insert(
         reserve_receipt.receipt_id.clone(),
@@ -1248,9 +3030,26 @@ fn typed_reopen_reserve_receipts_drive_health_helpers() {
     world.world_purchases.push(purchase.clone());
     world.world_work_orders.push(work_order);
     world.world_work_reopens.push(reopen.clone());
+    let reopen_reserve_receipt = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
+            "receipt:world_purchase_reopen_reserve:purchase-typed-reopen-reserve:reopen-typed-reserve",
+            "world_purchase_reopen_reserve:purchase-typed-reopen-reserve:reopen-typed-reserve",
+            "world_commerce_purchase",
+            term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+            term_exchange_protocol::SettlementBackendKind::Cex,
+            term_exchange_protocol::ReceiptStatus::Reserved,
+            1_778_650_042,
+        ),
+        25,
+    );
+    world.world_term_exchange_receipts.insert(
+        reopen_reserve_receipt.receipt_id.clone(),
+        TermExchangeReceiptState::from(&reopen_reserve_receipt),
+    );
     assert!(world_work_reopen_reserve_completed(&world, &reopen));
 
-    let hard_fail_reopen_reserve_receipt = term_exchange_protocol::EconomicReceipt::new(
+    let hard_fail_reopen_reserve_receipt = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
         "receipt:world_purchase_reopen_reserve:purchase-typed-reopen-reserve:reopen-typed-reserve",
         "world_purchase_reopen_reserve:purchase-typed-reopen-reserve:reopen-typed-reserve",
         "world_commerce_purchase",
@@ -1258,6 +3057,8 @@ fn typed_reopen_reserve_receipts_drive_health_helpers() {
         term_exchange_protocol::SettlementBackendKind::Cex,
         term_exchange_protocol::ReceiptStatus::MissingLedgerToken,
         1_778_650_043,
+        ),
+        25,
     );
     world.world_term_exchange_receipts.insert(
         hard_fail_reopen_reserve_receipt.receipt_id.clone(),
@@ -1291,14 +3092,17 @@ fn typed_league_reward_receipts_drive_reward_progression() {
     };
     assert!(!league_reward_ledger_released_from_state(&league, &reward));
 
-    let settled_receipt = term_exchange_protocol::EconomicReceipt::new(
-        "receipt:league_reward:reward-typed-progression",
-        "league_reward:reward-typed-progression",
-        "league_reward_settlement",
-        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
-        term_exchange_protocol::SettlementBackendKind::Cex,
-        term_exchange_protocol::ReceiptStatus::Settled,
-        1_778_650_026,
+    let settled_receipt = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
+            "receipt:league_reward:reward-typed-progression",
+            "league_reward:reward-typed-progression",
+            "league_reward_settlement",
+            term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+            term_exchange_protocol::SettlementBackendKind::Cex,
+            term_exchange_protocol::ReceiptStatus::Settled,
+            1_778_650_026,
+        ),
+        12,
     );
     league.term_exchange_receipts.insert(
         settled_receipt.receipt_id.clone(),
@@ -1321,6 +3125,382 @@ fn typed_league_reward_receipts_drive_reward_progression() {
         TermExchangeReceiptState::from(&failed_receipt),
     );
     assert!(!league_reward_ledger_released_from_state(&league, &reward));
+}
+
+#[test]
+fn league_reward_receipt_authority_rejects_identity_status_and_amount_drift() {
+    let mut league = default_league_state();
+    let submission_id = "submission-reward-authority".to_string();
+    let reward_id = league_hash_id("reward", &submission_id);
+    let submission = LeagueSubmission {
+        submission_id: submission_id.clone(),
+        match_id: "daily-dungeon-001".to_string(),
+        entry_id: "entry-reward-authority".to_string(),
+        player_id: "player-reward-authority".to_string(),
+        matrix_user_id: "@authority:local.dev".to_string(),
+        task_id: None,
+        body: "authoritative reward submission".to_string(),
+        score: 88.0,
+        grade: "A".to_string(),
+        reward_amount: 12.0,
+        judge_status: Some("rubric_hidden_pipeline_v2".to_string()),
+        payout_status: Some("eligible".to_string()),
+        anti_cheat_flags: Vec::new(),
+        score_events: Vec::new(),
+        created_at_epoch: 1_778_650_100,
+    };
+    league
+        .submissions
+        .insert(submission_id.clone(), submission.clone());
+    assert!(league_reward_submission_identity_matches(
+        &LeagueReward {
+            reward_id: reward_id.clone(),
+            match_id: submission.match_id.clone(),
+            entry_id: submission.entry_id.clone(),
+            player_id: submission.player_id.clone(),
+            matrix_user_id: submission.matrix_user_id.clone(),
+            amount: 12.0,
+            currency_unit: "credit".to_string(),
+            reason: "authority test".to_string(),
+            ledger_status: None,
+            ledger_account_id: None,
+            ledger_entry_id: None,
+            ledger_balance_after: None,
+            ledger_error: None,
+            review_status: None,
+            reviewed_by: None,
+            review_note: None,
+            reviewed_at_epoch: None,
+            created_at_epoch: 1_778_650_100,
+        },
+        &submission,
+    ));
+    let reward = LeagueReward {
+        reward_id: reward_id.clone(),
+        match_id: submission.match_id.clone(),
+        entry_id: submission.entry_id.clone(),
+        player_id: submission.player_id.clone(),
+        matrix_user_id: submission.matrix_user_id.clone(),
+        amount: 12.0,
+        currency_unit: "credit".to_string(),
+        reason: "authority test".to_string(),
+        ledger_status: Some("settled".to_string()),
+        ledger_account_id: None,
+        ledger_entry_id: None,
+        ledger_balance_after: None,
+        ledger_error: None,
+        review_status: None,
+        reviewed_by: None,
+        review_note: None,
+        reviewed_at_epoch: None,
+        created_at_epoch: 1_778_650_100,
+    };
+    let receipt_id = format!("receipt:league_reward:{reward_id}");
+    let intent_id = format!("league_reward:{reward_id}");
+    let receipt = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
+            receipt_id.clone(),
+            intent_id.clone(),
+            "league_reward_settlement",
+            term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+            term_exchange_protocol::SettlementBackendKind::Cex,
+            term_exchange_protocol::ReceiptStatus::Settled,
+            1_778_650_101,
+        ),
+        12,
+    );
+    league
+        .term_exchange_receipts
+        .insert(receipt_id.clone(), TermExchangeReceiptState::from(&receipt));
+    assert_eq!(
+        league_reward_exact_released_amount_from_state(&league, &reward),
+        Some(12)
+    );
+
+    // A valid amount is not enough if the reward row points at another player.
+    let mut wrong_identity = reward.clone();
+    wrong_identity.matrix_user_id = "@other:local.dev".to_string();
+    assert_eq!(
+        league_reward_exact_released_amount_from_state(&league, &wrong_identity),
+        None
+    );
+
+    // A progression-allowed `reserved` receipt is not proof that a reward was granted.
+    let reserved = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
+            receipt_id.clone(),
+            intent_id.clone(),
+            "league_reward_settlement",
+            term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+            term_exchange_protocol::SettlementBackendKind::Cex,
+            term_exchange_protocol::ReceiptStatus::Reserved,
+            1_778_650_102,
+        ),
+        12,
+    );
+    league.term_exchange_receipts.insert(
+        receipt_id.clone(),
+        TermExchangeReceiptState::from(&reserved),
+    );
+    assert_eq!(
+        league_reward_exact_released_amount_from_state(&league, &reward),
+        None
+    );
+
+    // An arbitrary receipt id hidden behind the canonical map key must not authorize the intent.
+    let mut wrong_receipt_id = receipt;
+    wrong_receipt_id.receipt_id = "receipt:another-reward".to_string();
+    league.term_exchange_receipts.insert(
+        receipt_id,
+        TermExchangeReceiptState::from(&wrong_receipt_id),
+    );
+    assert_eq!(
+        league_reward_exact_released_amount_from_state(&league, &reward),
+        None
+    );
+
+    // A same-amount terminal receipt for another intent must not authorize this reward when it
+    // arrives through the remote-settlement merge path.
+    let wrong_settlement_receipt = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
+            "receipt:league_reward:another-reward",
+            "league_reward:another-reward",
+            "league_reward_settlement",
+            term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+            term_exchange_protocol::SettlementBackendKind::Cex,
+            term_exchange_protocol::ReceiptStatus::Settled,
+            1_778_650_103,
+        ),
+        12,
+    );
+    let wrong_settlement = LeagueLedgerSettlement {
+        status: "settled".to_string(),
+        amount_credits: Some(12),
+        term_exchange_receipt: Some(TermExchangeReceiptState::from(&wrong_settlement_receipt)),
+        ..Default::default()
+    };
+    assert!(!super::league_routes::league_reward_ledger_released(
+        None,
+        &reward,
+        Some(&wrong_settlement),
+    ));
+}
+
+#[test]
+fn league_reward_retry_does_not_downgrade_a_persisted_terminal_receipt() {
+    let mut league = default_league_state();
+    let matrix_user_id = "@retry-terminal:local.dev".to_string();
+    let submission_id = "submission-retry-terminal".to_string();
+    let reward_id = league_hash_id("reward", &submission_id);
+    let match_id = "daily-dungeon-001".to_string();
+    let entry_id = "entry-retry-terminal".to_string();
+    let player_id = "player-retry-terminal".to_string();
+    league.players_by_matrix_user.insert(
+        matrix_user_id.clone(),
+        LeaguePlayer {
+            player_id: player_id.clone(),
+            matrix_user_id: matrix_user_id.clone(),
+            display_name: "Retry Terminal".to_string(),
+            class_tag: "summoner".to_string(),
+            rank_tier: "Bronze I".to_string(),
+            rating: 1000,
+            xp: 0,
+            reputation: 0,
+            battles: 0,
+            submissions: 0,
+            wins: 0,
+            earned_credits: 0.0,
+            created_at_epoch: 1_778_650_200,
+        },
+    );
+    league.entries.insert(
+        format!("{match_id}\u{1f}{matrix_user_id}"),
+        LeagueMatchEntry {
+            entry_id: entry_id.clone(),
+            match_id: match_id.clone(),
+            player_id: player_id.clone(),
+            matrix_user_id: matrix_user_id.clone(),
+            status: "joined".to_string(),
+            battles_started: 0,
+            submissions: 0,
+            best_score: 0.0,
+            rewards_earned: 0.0,
+            joined_at_epoch: 1_778_650_200,
+        },
+    );
+    let submission = LeagueSubmission {
+        submission_id: submission_id.clone(),
+        match_id: match_id.clone(),
+        entry_id: entry_id.clone(),
+        player_id: player_id.clone(),
+        matrix_user_id: matrix_user_id.clone(),
+        task_id: None,
+        body: "terminal receipt retry".to_string(),
+        score: 84.0,
+        grade: "A".to_string(),
+        reward_amount: 12.0,
+        judge_status: Some("rubric_hidden_pipeline_v2".to_string()),
+        payout_status: Some("eligible".to_string()),
+        anti_cheat_flags: Vec::new(),
+        score_events: Vec::new(),
+        created_at_epoch: 1_778_650_201,
+    };
+    league
+        .submissions
+        .insert(submission_id.clone(), submission.clone());
+    let mut reward = LeagueReward {
+        reward_id: reward_id.clone(),
+        match_id,
+        entry_id,
+        player_id,
+        matrix_user_id,
+        amount: 12.0,
+        currency_unit: "credit".to_string(),
+        reason: "terminal retry".to_string(),
+        ledger_status: Some("settled".to_string()),
+        ledger_account_id: Some("account-retry-terminal".to_string()),
+        ledger_entry_id: Some("entry-retry-terminal".to_string()),
+        ledger_balance_after: Some(12.0),
+        ledger_error: None,
+        review_status: None,
+        reviewed_by: None,
+        review_note: None,
+        reviewed_at_epoch: None,
+        created_at_epoch: 1_778_650_201,
+    };
+    league.rewards.push(reward.clone());
+    let mut terminal_receipt = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
+            format!("receipt:league_reward:{reward_id}"),
+            format!("league_reward:{reward_id}"),
+            "league_reward_settlement",
+            term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+            term_exchange_protocol::SettlementBackendKind::Cex,
+            term_exchange_protocol::ReceiptStatus::Settled,
+            1_778_650_202,
+        ),
+        12,
+    );
+    terminal_receipt.ledger_entry_id = Some("entry-retry-terminal".to_string());
+    league.term_exchange_receipts.insert(
+        terminal_receipt.receipt_id.clone(),
+        TermExchangeReceiptState::from(&terminal_receipt),
+    );
+    let incoming_hold = LeagueLedgerSettlement {
+        status: "skipped_missing_room".to_string(),
+        error: Some("retry had no room".to_string()),
+        term_exchange_receipt: Some(TermExchangeReceiptState::from(&{
+            let mut receipt = term_exchange_protocol::EconomicReceipt::new(
+                terminal_receipt.receipt_id.clone(),
+                terminal_receipt.intent_id.clone(),
+                "league_reward_settlement",
+                term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+                term_exchange_protocol::SettlementBackendKind::Cex,
+                term_exchange_protocol::ReceiptStatus::SkippedMissingRoom,
+                1_778_650_203,
+            );
+            receipt.evidence = json!({"intent": {"amount_credits": 12}});
+            receipt
+        })),
+        ..Default::default()
+    };
+    super::league_routes::merge_league_reward_settlement(
+        &mut league,
+        &mut reward,
+        &submission,
+        &incoming_hold,
+    );
+
+    assert_eq!(reward.ledger_status.as_deref(), Some("settled"));
+    assert_eq!(
+        reward.ledger_entry_id.as_deref(),
+        Some("entry-retry-terminal")
+    );
+    let stored_reward = league
+        .rewards
+        .iter()
+        .find(|stored| stored.reward_id == reward_id)
+        .expect("terminal reward should remain stored");
+    assert_eq!(stored_reward.ledger_status.as_deref(), Some("settled"));
+    let stored_receipt = league
+        .term_exchange_receipts
+        .get(&terminal_receipt.receipt_id)
+        .expect("terminal receipt should remain stored");
+    assert_eq!(
+        stored_receipt.status,
+        term_exchange_protocol::ReceiptStatus::Settled
+    );
+    let player = league
+        .players_by_matrix_user
+        .get("@retry-terminal:local.dev")
+        .expect("player should remain stored");
+    assert_eq!(player.submissions, 1);
+    assert_eq!(player.earned_credits, 12.0);
+    assert_eq!(league.inventory_items.len(), 1);
+}
+
+#[tokio::test]
+async fn league_reward_settlement_rejects_valid_amount_drift_before_ledger_call() {
+    let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
+    let submission_id = "submission-amount-drift".to_string();
+    let submission = LeagueSubmission {
+        submission_id: submission_id.clone(),
+        match_id: "daily-dungeon-001".to_string(),
+        entry_id: "entry-amount-drift".to_string(),
+        player_id: "player-amount-drift".to_string(),
+        matrix_user_id: "@amount-drift:local.dev".to_string(),
+        task_id: None,
+        body: "amount drift must fail closed".to_string(),
+        score: 84.0,
+        grade: "A".to_string(),
+        reward_amount: 12.0,
+        judge_status: Some("rubric_hidden_pipeline_v2".to_string()),
+        payout_status: Some("eligible".to_string()),
+        anti_cheat_flags: Vec::new(),
+        score_events: Vec::new(),
+        created_at_epoch: 1_778_650_300,
+    };
+    let reward = LeagueReward {
+        reward_id: league_hash_id("reward", &submission_id),
+        match_id: submission.match_id.clone(),
+        entry_id: submission.entry_id.clone(),
+        player_id: submission.player_id.clone(),
+        matrix_user_id: submission.matrix_user_id.clone(),
+        amount: 13.0,
+        currency_unit: "credit".to_string(),
+        reason: "amount drift".to_string(),
+        ledger_status: Some("pending".to_string()),
+        ledger_account_id: None,
+        ledger_entry_id: None,
+        ledger_balance_after: None,
+        ledger_error: None,
+        review_status: None,
+        reviewed_by: None,
+        review_note: None,
+        reviewed_at_epoch: None,
+        created_at_epoch: 1_778_650_300,
+    };
+    let payload = super::LeagueSubmitRequest {
+        matrix_user_id: submission.matrix_user_id.clone(),
+        room_id: Some("!amount-drift:local.dev".to_string()),
+        task_id: None,
+        body: submission.body.clone(),
+    };
+    let settlement = super::league_routes::settle_league_reward_with_ledger(
+        &state,
+        &payload,
+        &submission.matrix_user_id,
+        &submission,
+        &reward,
+    )
+    .await;
+    assert_eq!(settlement.status, "failed_ledger");
+    assert_eq!(
+        settlement.error.as_deref(),
+        Some("league reward amount does not match immutable submission amount")
+    );
+    assert!(settlement.term_exchange_receipt.is_none());
+    assert!(settlement.amount_credits.is_none());
 }
 
 #[test]
@@ -1382,16 +3562,20 @@ fn typed_refund_and_chargeback_receipts_drive_world_reopen_progression() {
         &work_order.work_order_id,
     ));
 
-    let refund_receipt = term_exchange_protocol::EconomicReceipt::new(
-        "receipt:world_purchase:refund:purchase-typed-recovery:rejection-typed-recovery",
-        "world_purchase:refund:purchase-typed-recovery:rejection-typed-recovery",
-        "world_commerce_purchase",
-        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
-        term_exchange_protocol::SettlementBackendKind::Cex,
-        term_exchange_protocol::ReceiptStatus::Refunded,
-        1_778_650_033,
+    let refund_receipt = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
+            "receipt:world_purchase:refund:purchase-typed-recovery:rejection-typed-recovery",
+            "world_purchase:refund:purchase-typed-recovery:rejection-typed-recovery",
+            "world_commerce_purchase",
+            term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+            term_exchange_protocol::SettlementBackendKind::Cex,
+            term_exchange_protocol::ReceiptStatus::Refunded,
+            1_778_650_033,
+        ),
+        25,
     );
-    let chargeback_receipt = term_exchange_protocol::EconomicReceipt::new(
+    let chargeback_receipt = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
         "receipt:world_purchase_seller_chargeback_consume:purchase-typed-recovery:rejection-typed-recovery",
         "world_purchase_seller_chargeback_consume:purchase-typed-recovery:rejection-typed-recovery",
         "world_commerce_purchase",
@@ -1399,6 +3583,8 @@ fn typed_refund_and_chargeback_receipts_drive_world_reopen_progression() {
         term_exchange_protocol::SettlementBackendKind::Cex,
         term_exchange_protocol::ReceiptStatus::SellerChargebackConsumed,
         1_778_650_034,
+        ),
+        24,
     );
     world.world_term_exchange_receipts.insert(
         refund_receipt.receipt_id.clone(),
@@ -1432,6 +3618,288 @@ fn typed_refund_and_chargeback_receipts_drive_world_reopen_progression() {
         &world,
         &purchase,
         &work_order.work_order_id,
+    ));
+}
+
+#[test]
+fn world_value_gates_require_exact_typed_receipt_amounts() {
+    let mut world = default_league_state().world;
+    let purchase = WorldPurchase {
+        purchase_id: "purchase-exact-amount-gates".to_string(),
+        listing_id: "listing-exact-amount-gates".to_string(),
+        shop_id: "shop-exact-amount-gates".to_string(),
+        company_id: "company-exact-amount-gates".to_string(),
+        buyer_matrix_user_id: "@buyer:local.dev".to_string(),
+        seller_matrix_user_id: "@seller:local.dev".to_string(),
+        price_credits: 25,
+        status: "reserved".to_string(),
+        ledger_status: Some("settled".to_string()),
+        ledger_account_id: None,
+        ledger_entry_id: None,
+        ledger_balance_after: None,
+        ledger_error: None,
+        buyer_ledger_status: Some("reserved".to_string()),
+        buyer_ledger_account_id: None,
+        buyer_ledger_entry_id: None,
+        buyer_ledger_balance_after: None,
+        buyer_ledger_error: None,
+        buyer_consume_status: Some("consumed".to_string()),
+        buyer_consume_entry_id: None,
+        buyer_consume_balance_after: None,
+        buyer_consume_error: None,
+        created_at_epoch: 1_778_650_050,
+    };
+
+    let insert_receipt = |world: &mut WorldState,
+                          intent_id: &str,
+                          status: term_exchange_protocol::ReceiptStatus,
+                          amount_credits: i64| {
+        let receipt = receipt_with_exact_amount(
+            term_exchange_protocol::EconomicReceipt::new(
+                format!("receipt:{intent_id}"),
+                intent_id,
+                "world_commerce_purchase",
+                term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+                term_exchange_protocol::SettlementBackendKind::Cex,
+                status,
+                1_778_650_051,
+            ),
+            amount_credits,
+        );
+        world.world_term_exchange_receipts.insert(
+            receipt.receipt_id.clone(),
+            TermExchangeReceiptState::from(&receipt),
+        );
+    };
+
+    let reserve_intent = format!("world_purchase:reserve:{}", purchase.purchase_id);
+    insert_receipt(
+        &mut world,
+        &reserve_intent,
+        term_exchange_protocol::ReceiptStatus::Reserved,
+        24,
+    );
+    assert!(!world_purchase_buyer_reserve_active(&world, &purchase));
+    insert_receipt(
+        &mut world,
+        &reserve_intent,
+        term_exchange_protocol::ReceiptStatus::Reserved,
+        25,
+    );
+    assert!(world_purchase_buyer_reserve_active(&world, &purchase));
+
+    let consume_intent = format!("world_purchase:consume:{}", purchase.purchase_id);
+    insert_receipt(
+        &mut world,
+        &consume_intent,
+        term_exchange_protocol::ReceiptStatus::Consumed,
+        24,
+    );
+    assert!(!world_purchase_buyer_consume_completed(&world, &purchase));
+    insert_receipt(
+        &mut world,
+        &consume_intent,
+        term_exchange_protocol::ReceiptStatus::Consumed,
+        25,
+    );
+    assert!(world_purchase_buyer_consume_completed(&world, &purchase));
+
+    let refund_intent = format!(
+        "world_purchase:refund:{}:rejection-exact-amount-gates",
+        purchase.purchase_id
+    );
+    insert_receipt(
+        &mut world,
+        &refund_intent,
+        term_exchange_protocol::ReceiptStatus::Refunded,
+        24,
+    );
+    assert!(
+        !super::world_commerce_routes::world_purchase_buyer_refund_completed(
+            &world,
+            &purchase,
+            Some("rejection-exact-amount-gates"),
+        )
+    );
+    insert_receipt(
+        &mut world,
+        &refund_intent,
+        term_exchange_protocol::ReceiptStatus::Refunded,
+        25,
+    );
+    assert!(
+        super::world_commerce_routes::world_purchase_buyer_refund_completed(
+            &world,
+            &purchase,
+            Some("rejection-exact-amount-gates"),
+        )
+    );
+
+    let grant_intent = format!("world_purchase:grant:{}", purchase.purchase_id);
+    insert_receipt(
+        &mut world,
+        &grant_intent,
+        term_exchange_protocol::ReceiptStatus::Settled,
+        25,
+    );
+    assert!(!world_purchase_seller_settlement_active(&world, &purchase));
+    insert_receipt(
+        &mut world,
+        &grant_intent,
+        term_exchange_protocol::ReceiptStatus::Settled,
+        24,
+    );
+    assert!(world_purchase_seller_settlement_active(&world, &purchase));
+
+    let chargeback_intent = format!(
+        "world_purchase_seller_chargeback_consume:{}:rejection-exact-amount-gates",
+        purchase.purchase_id
+    );
+    insert_receipt(
+        &mut world,
+        &chargeback_intent,
+        term_exchange_protocol::ReceiptStatus::SellerChargebackConsumed,
+        25,
+    );
+    assert!(!world_purchase_seller_chargeback_cleared(
+        &world,
+        &purchase,
+        Some("rejection-exact-amount-gates"),
+    ));
+    insert_receipt(
+        &mut world,
+        &chargeback_intent,
+        term_exchange_protocol::ReceiptStatus::SellerChargebackConsumed,
+        24,
+    );
+    assert!(world_purchase_seller_chargeback_cleared(
+        &world,
+        &purchase,
+        Some("rejection-exact-amount-gates"),
+    ));
+}
+
+#[test]
+fn world_zero_seller_skip_and_missing_purchase_refunds_fail_closed() {
+    let mut world = default_league_state().world;
+    let purchase = WorldPurchase {
+        purchase_id: "purchase-zero-seller-net".to_string(),
+        listing_id: "listing-zero-seller-net".to_string(),
+        shop_id: "shop-zero-seller-net".to_string(),
+        company_id: "company-zero-seller-net".to_string(),
+        buyer_matrix_user_id: "@buyer:local.dev".to_string(),
+        seller_matrix_user_id: "@seller:local.dev".to_string(),
+        price_credits: 1,
+        status: "rejected_refunded".to_string(),
+        ledger_status: Some("skipped_zero_seller_net".to_string()),
+        ledger_account_id: None,
+        ledger_entry_id: None,
+        ledger_balance_after: None,
+        ledger_error: None,
+        buyer_ledger_status: Some("reserved".to_string()),
+        buyer_ledger_account_id: None,
+        buyer_ledger_entry_id: None,
+        buyer_ledger_balance_after: None,
+        buyer_ledger_error: None,
+        buyer_consume_status: Some("refunded".to_string()),
+        buyer_consume_entry_id: None,
+        buyer_consume_balance_after: None,
+        buyer_consume_error: None,
+        created_at_epoch: 1_778_650_060,
+    };
+    let chargeback_intent = format!(
+        "world_purchase_seller_chargeback_consume:{}:reject-zero-seller-net",
+        purchase.purchase_id
+    );
+    let insert_skip = |world: &mut WorldState, amount: Option<i64>| {
+        let mut receipt = term_exchange_protocol::EconomicReceipt::new(
+            format!("receipt:{chargeback_intent}"),
+            &chargeback_intent,
+            "world_commerce_purchase",
+            term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+            term_exchange_protocol::SettlementBackendKind::Cex,
+            term_exchange_protocol::ReceiptStatus::SkippedZeroSellerNet,
+            1_778_650_061,
+        );
+        if let Some(amount) = amount {
+            receipt = receipt_with_exact_amount(receipt, amount);
+        }
+        world.world_term_exchange_receipts.insert(
+            receipt.receipt_id.clone(),
+            TermExchangeReceiptState::from(&receipt),
+        );
+    };
+
+    insert_skip(&mut world, None);
+    assert!(!world_purchase_seller_chargeback_cleared(
+        &world,
+        &purchase,
+        Some("reject-zero-seller-net"),
+    ));
+    insert_skip(&mut world, Some(1));
+    assert!(!world_purchase_seller_chargeback_cleared(
+        &world,
+        &purchase,
+        Some("reject-zero-seller-net"),
+    ));
+    insert_skip(&mut world, Some(0));
+    assert!(world_purchase_seller_chargeback_cleared(
+        &world,
+        &purchase,
+        Some("reject-zero-seller-net"),
+    ));
+
+    let missing_typed_skip = LeagueLedgerSettlement {
+        status: "skipped_zero_seller_net".to_string(),
+        term_exchange_receipt: Some(TermExchangeReceiptState::from(
+            &term_exchange_protocol::EconomicReceipt::new(
+                "receipt:missing-amount-skip",
+                "intent:missing-amount-skip",
+                "world_commerce_purchase",
+                term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+                term_exchange_protocol::SettlementBackendKind::Cex,
+                term_exchange_protocol::ReceiptStatus::SkippedZeroSellerNet,
+                1_778_650_062,
+            ),
+        )),
+        ..Default::default()
+    };
+    assert!(!world_settlement_is_zero_seller_net_skip(
+        &missing_typed_skip,
+        0
+    ));
+    let exact_skip = LeagueLedgerSettlement {
+        status: "skipped_zero_seller_net".to_string(),
+        amount_credits: Some(0),
+        ..Default::default()
+    };
+    assert!(world_settlement_is_zero_seller_net_skip(&exact_skip, 0));
+
+    let missing_purchase_rejection = WorldWorkRejection {
+        rejection_id: "rejection-missing-purchase".to_string(),
+        work_order_id: "work-order-missing-purchase".to_string(),
+        matrix_user_id: "@buyer:local.dev".to_string(),
+        body: "missing purchase".to_string(),
+        status: "rejected_refunded".to_string(),
+        refund_status: "refunded".to_string(),
+        created_at_epoch: 1_778_650_063,
+    };
+    assert!(!world_work_rejection_refund_completed(
+        &world,
+        &missing_purchase_rejection,
+    ));
+    let missing_purchase_cancellation = WorldWorkCancellation {
+        cancellation_id: "cancellation-missing-purchase".to_string(),
+        work_order_id: "work-order-missing-purchase".to_string(),
+        matrix_user_id: "@buyer:local.dev".to_string(),
+        body: "missing purchase".to_string(),
+        status: "cancelled_refunded".to_string(),
+        refund_status: "refunded".to_string(),
+        created_at_epoch: 1_778_650_064,
+    };
+    assert!(!world_work_cancellation_refund_completed(
+        &world,
+        &missing_purchase_cancellation,
     ));
 }
 
@@ -1718,12 +4186,17 @@ fn normalized_repository_world_home_read_model_declares_direct_sql_seam() {
     assert!(read_model_sql.contains("from world_map_nodes"));
     assert!(read_model_sql.contains("league_term_exchange_receipts"));
     assert!(read_model_sql.contains("world_term_exchange_receipts"));
+    assert!(read_model_sql.contains("world_term_exchange_receipt_events_v1"));
+    assert!(read_model_sql.contains("league_term_exchange_receipt_events_v1"));
+    assert!(read_model_sql.contains("event_sequence desc, event_id desc"));
+    assert!(read_model_sql.contains("world_receipt_source"));
     assert!(read_model_sql.contains("world_term_exchange_receipt_progression_classes"));
     assert!(read_model_sql.contains("latest_event_ids"));
     assert!(read_model_sql.contains("latest_world_term_exchange_receipts"));
     assert!(read_model_sql.contains("term_exchange_receipts"));
     assert!(read_model_sql.contains("term_exchange_receipt_projection"));
     assert!(read_model_sql.contains("trillionnium_term_exchange_receipt_projection_v1"));
+    assert!(read_model_sql.contains("'amount_credits', amount_credits"));
     let contract = normalized_repository_read_model_contract_json();
     assert_eq!(
         contract.get("contract_version").and_then(Value::as_str),
@@ -1750,10 +4223,14 @@ fn normalized_repository_world_home_read_model_declares_direct_sql_seam() {
     assert!(feed_read_model_sql.contains("from world_work_acceptances"));
     assert!(feed_read_model_sql.contains("league_term_exchange_receipts"));
     assert!(feed_read_model_sql.contains("world_term_exchange_receipts"));
+    assert!(feed_read_model_sql.contains("league_term_exchange_receipt_events_v1"));
+    assert!(feed_read_model_sql.contains("world_term_exchange_receipt_events_v1"));
+    assert!(feed_read_model_sql.contains("event_sequence desc, event_id desc"));
     assert!(feed_read_model_sql.contains("term_exchange_receipt_progression_classes"));
     assert!(feed_read_model_sql.contains("term_exchange_receipts"));
     assert!(feed_read_model_sql.contains("term_exchange_receipt_projection"));
     assert!(feed_read_model_sql.contains("trillionnium_term_exchange_receipt_projection_v1"));
+    assert!(feed_read_model_sql.contains("'amount_credits', amount_credits"));
     assert!(feed_read_model_sql.contains("latest_feed_items"));
     assert_eq!(
         contract
@@ -1781,6 +4258,13 @@ fn normalized_repository_world_home_read_model_declares_direct_sql_seam() {
     assert!(world_home_receipt_probe_fields
         .iter()
         .any(|field| field.as_str() == Some("term_exchange_receipt_projection")));
+    assert!(contract
+        .get("world_home")
+        .and_then(|world_home| world_home.get("receipt_fields"))
+        .and_then(Value::as_array)
+        .is_some_and(|fields| fields
+            .iter()
+            .any(|field| field.as_str() == Some("amount_credits"))));
     let client_feed_receipt_probe_fields = contract
         .get("client_feed")
         .and_then(|client_feed| client_feed.get("receipt_probe_fields"))
@@ -1793,6 +4277,13 @@ fn normalized_repository_world_home_read_model_declares_direct_sql_seam() {
     assert!(client_feed_receipt_probe_fields
         .iter()
         .any(|field| field.as_str() == Some("term_exchange_receipts")));
+    assert!(contract
+        .get("client_feed")
+        .and_then(|client_feed| client_feed.get("receipt_fields"))
+        .and_then(Value::as_array)
+        .is_some_and(|fields| fields
+            .iter()
+            .any(|field| field.as_str() == Some("amount_credits"))));
     assert!(client_feed_receipt_probe_fields
         .iter()
         .any(|field| field.as_str() == Some("term_exchange_receipt_projection")));
@@ -1935,6 +4426,11 @@ fn test_state(
     AppState {
         inner: Arc::new(AppStateInner {
             http: Client::new(),
+            ledger_http: Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(Duration::from_secs(20))
+                .build()
+                .expect("test Ledger HTTP client must build"),
             config,
             identity_binding_store: RwLock::new(IdentityBindingStore {
                 metadata: IdentityBindingMetadata {
@@ -2533,6 +5029,46 @@ async fn game_account_password_auth_rate_limits_repeated_attempts() {
 }
 
 #[tokio::test]
+async fn term_exchange_backend_rejects_negative_amount_before_remote_call() {
+    let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
+    let request = TermExchangeLedgerActionRequest {
+        term_id: "league_reward_settlement".to_string(),
+        term_version: "v1".to_string(),
+        domain: "trillionnium_league".to_string(),
+        intent_id: "negative-amount-test".to_string(),
+        intent_kind: term_exchange_protocol::EconomicIntentKind::ReleaseReward,
+        room_id: None,
+        matrix_user_id: "@negative-amount:local.dev".to_string(),
+        account_id_override: None,
+        message: "negative amount must fail closed".to_string(),
+        failure_context: "negative amount test".to_string(),
+        ledger_action: "grant".to_string(),
+        success_status: "settled".to_string(),
+        idempotency_key: "negative-amount-test".to_string(),
+        idempotency_scope: "negative-amount-test".to_string(),
+        reference_id: None,
+        amount_credits: -1,
+        amount_validation_error: None,
+        currency: "credits".to_string(),
+        metadata: json!({}),
+        extra_ledger_body: serde_json::Map::new(),
+    };
+    let receipt = CexTermExchangeBackend
+        .execute_ledger_action(&state, request)
+        .await;
+    assert_eq!(receipt.raw_status, "failed_ledger");
+    assert_eq!(receipt.amount_credits, None);
+    assert_eq!(
+        receipt.receipt.status,
+        term_exchange_protocol::ReceiptStatus::FailedLedger
+    );
+    assert_eq!(
+        receipt.error.as_deref(),
+        Some("settlement amount_credits must be non-negative")
+    );
+}
+
+#[tokio::test]
 async fn term_exchange_kernel_manifest_declares_cex_as_first_backend() {
     let app = build_router(AppState::new(test_config()));
     let (status, body) = send_identity_request(
@@ -2610,13 +5146,24 @@ async fn term_exchange_kernel_manifest_declares_cex_as_first_backend() {
     );
     assert_eq!(
         body["state_persistence"]["normalized_sql_migration_floor"],
-        "0026_add_term_exchange_receipt_tables.sql"
+        "0087_add_term_exchange_receipt_event_history.sql"
     );
     assert!(body["state_persistence"]["normalized_sql_receipt_tables"]
         .as_array()
         .unwrap()
         .iter()
         .any(|value| value.as_str() == Some("world_term_exchange_receipts")));
+    assert!(
+        body["state_persistence"]["normalized_sql_receipt_event_tables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value.as_str() == Some("world_term_exchange_receipt_events_v1"))
+    );
+    assert_eq!(
+        body["state_persistence"]["sql_receipt_event_history_mode"],
+        "append_distinct_snapshots_with_sequence_and_hash_chain"
+    );
     assert!(body["state_persistence"]["sql_shadow_preserves"]
         .as_array()
         .unwrap()
@@ -3799,14 +6346,17 @@ fn world_client_surfaces_expose_projection_layer_contracts() {
 #[test]
 fn world_home_projects_term_exchange_receipt_state() {
     let mut league = default_league_state();
-    let mut receipt = term_exchange_protocol::EconomicReceipt::new(
-        "world-receipt-home-1",
-        "world-intent-home-1",
-        "world_commerce_lifecycle",
-        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
-        term_exchange_protocol::SettlementBackendKind::Cex,
-        term_exchange_protocol::ReceiptStatus::FailedLedger,
-        1_777_300_001,
+    let mut receipt = receipt_with_exact_amount(
+        term_exchange_protocol::EconomicReceipt::new(
+            "world-receipt-home-1",
+            "world-intent-home-1",
+            "world_commerce_lifecycle",
+            term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+            term_exchange_protocol::SettlementBackendKind::Cex,
+            term_exchange_protocol::ReceiptStatus::FailedLedger,
+            1_777_300_001,
+        ),
+        37,
     );
     receipt.reason = Some("temporary ledger outage".to_string());
     league.world.world_term_exchange_receipts.insert(
@@ -3840,6 +6390,11 @@ fn world_home_projects_term_exchange_receipt_state() {
             .and_then(Value::as_str),
         Some("failed_ledger")
     );
+    assert_eq!(
+        home.pointer("/term_exchange_receipt_projection/latest_receipts/0/amount_credits")
+            .and_then(Value::as_i64),
+        Some(37)
+    );
 }
 
 #[test]
@@ -3858,6 +6413,7 @@ fn world_home_can_overlay_normalized_receipt_read_model() {
         "settlement_reference": "sql-settlement-1",
         "ledger_entry_id": "sql-ledger-1",
         "reason": null,
+        "amount_credits": 90,
         "finalized_at_epoch": 1_778_631_001,
     });
     let read_model = json!({
@@ -3910,6 +6466,11 @@ fn world_home_can_overlay_normalized_receipt_read_model() {
         home.pointer("/term_exchange_receipt_projection/runtime_read_model_source")
             .and_then(Value::as_str),
         Some("normalized_sql_world_home_read_model")
+    );
+    assert_eq!(
+        home.pointer("/term_exchange_receipts/sql-world-receipt-1/amount_credits")
+            .and_then(Value::as_i64),
+        Some(90)
     );
 }
 
@@ -5483,7 +8044,23 @@ fn world_tactics_projection_binds_trillionnium_state_to_osm_objectives() {
 
 #[tokio::test]
 async fn world_tactics_command_endpoint_validates_training_place_and_mutates_character() {
-    let state = AppState::new(test_config());
+    let (ledger_base_url, ledger_admin_token) = start_real_ledger_service_for_world_e2e().await;
+    let http = Client::new();
+    let account_id =
+        create_real_ledger_account(&http, &ledger_base_url, &ledger_admin_token, 1_000.0).await;
+    let mut bindings = IdentityBindings::default();
+    bindings.matrix_users.insert(
+        "@alice:local.dev".to_string(),
+        IdentityBindingEntry {
+            product_user_id: None,
+            org_id: Some("world-tactics-test-org".to_string()),
+            account_id: Some(account_id),
+        },
+    );
+    let mut config = test_config();
+    config.ledger_base_url = ledger_base_url;
+    config.ledger_admin_token = Some(ledger_admin_token);
+    let state = test_state(config, bindings, HashMap::new());
     let app = build_router(state.clone());
 
     let (blocked_status, blocked) = send_json_request(
@@ -5577,6 +8154,56 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
         trained["outcome"]["source_of_truth"],
         "rust_mentor_training_validator"
     );
+
+    // Replaying an ordinary tactics event must be read-only.  In particular, it must not borrow
+    // the actor's latest session/tick and accidentally settle a victory reward belonging to a
+    // different command.
+    let before_replay_counts = {
+        let league = state.inner.league_state.lock().await;
+        (
+            league.world.world_events.len(),
+            league.world.world_tactics_sessions.len(),
+            league.world.world_tactics_simulation_ticks.len(),
+            league.world.world_economy_events.len(),
+        )
+    };
+    let (training_replay_status, training_replay) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/tactics/command",
+        &[],
+        json!({
+            "matrix_user_id": "@alice:local.dev",
+            "room_id": "!world:local.dev",
+            "command": "train_skill",
+            "unit_id": "lord",
+            "target_tile": "G8",
+            "skill_id": "basic_unarmed",
+            "npc_id": "npc-street-compass-sifu",
+            "osm_game_overlay_id": "trillionnium-world-node:mirror-city-square",
+            "body": "mentor training with the Street Compass Sifu"
+        }),
+    )
+    .await;
+    assert_eq!(training_replay_status, StatusCode::OK);
+    assert_eq!(training_replay["outcome"]["accepted"], false);
+    assert_eq!(training_replay["outcome"]["replay"], true);
+    assert_eq!(training_replay["simulation_tick"], Value::Null);
+    assert_eq!(training_replay["tactics_session"], Value::Null);
+    assert_eq!(
+        training_replay["tactics_reward_settlement"]["status"],
+        "not_eligible"
+    );
+    let after_replay_counts = {
+        let league = state.inner.league_state.lock().await;
+        (
+            league.world.world_events.len(),
+            league.world.world_tactics_sessions.len(),
+            league.world.world_tactics_simulation_ticks.len(),
+            league.world.world_economy_events.len(),
+        )
+    };
+    assert_eq!(after_replay_counts, before_replay_counts);
 
     let (wrong_slot_status, wrong_slot) = send_json_request(
         &app,
@@ -6214,7 +8841,7 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
     assert_eq!(completion["outcome"]["payout_status"], "eligible");
     assert_eq!(
         completion["trillionnium_task_completion"]["ledger_status"],
-        "skipped_missing_account"
+        "failed_ledger"
     );
     assert_eq!(
         completion["trillionnium_task_completion"]["payout_status"],
@@ -6228,6 +8855,15 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
         0
     );
 
+    let before_repeat_completion_counts = {
+        let league = state.inner.league_state.lock().await;
+        (
+            league.world.world_events.len(),
+            league.world.world_tactics_sessions.len(),
+            league.world.world_tactics_simulation_ticks.len(),
+            league.world.world_economy_events.len(),
+        )
+    };
     let (repeat_status, repeat_completion) = send_json_request(
         &app,
         "POST",
@@ -6250,6 +8886,28 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
     assert_eq!(
         repeat_completion["outcome"]["result"],
         "task_completion_requires_offer"
+    );
+    // The event log has no durable event-to-tick foreign key.  A completion retry must therefore
+    // not project the actor's latest (possibly unrelated) tactics session/tick or enqueue another
+    // victory reward.  Settlement recovery remains owned by the contract-completion endpoint.
+    assert_eq!(repeat_completion["simulation_tick"], Value::Null);
+    assert_eq!(repeat_completion["tactics_session"], Value::Null);
+    assert_eq!(
+        repeat_completion["tactics_reward_settlement"]["status"],
+        "not_eligible"
+    );
+    let after_repeat_completion_counts = {
+        let league = state.inner.league_state.lock().await;
+        (
+            league.world.world_events.len(),
+            league.world.world_tactics_sessions.len(),
+            league.world.world_tactics_simulation_ticks.len(),
+            league.world.world_economy_events.len(),
+        )
+    };
+    assert_eq!(
+        after_repeat_completion_counts,
+        before_repeat_completion_counts
     );
 
     let (wrong_objective_status, wrong_objective_completion) = send_json_request(
@@ -6395,7 +9053,7 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
         .any(|entry| entry
             .ledger_status
             .as_deref()
-            .is_some_and(|status| status == "skipped_missing_account")));
+            .is_some_and(|status| status == "failed_ledger")));
     let player = guard
         .players_by_matrix_user
         .get("@alice:local.dev")
@@ -9013,6 +11671,7 @@ fn client_feed_can_overlay_normalized_receipt_read_model() {
         "settlement_reference": "sql-feed-settlement-1",
         "ledger_entry_id": "sql-feed-ledger-1",
         "reason": null,
+        "amount_credits": 80,
         "finalized_at_epoch": 1_778_631_101,
     });
     let read_model = json!({
@@ -9088,6 +11747,10 @@ fn client_feed_can_overlay_normalized_receipt_read_model() {
         receipt_item.get("action_label").and_then(Value::as_str),
         Some("查看结算")
     );
+    assert_eq!(
+        receipt_item.get("amount_credits").and_then(Value::as_i64),
+        Some(80)
+    );
 }
 
 #[test]
@@ -9105,6 +11768,7 @@ fn client_app_can_overlay_normalized_receipt_read_model() {
         "settlement_reference": "sql-app-settlement-1",
         "ledger_entry_id": "sql-app-ledger-1",
         "reason": null,
+        "amount_credits": 70,
         "finalized_at_epoch": 1_778_631_201,
     });
     let read_model = json!({
@@ -9192,6 +11856,16 @@ fn client_app_can_overlay_normalized_receipt_read_model() {
         item.get("feed_kind").and_then(Value::as_str) == Some("term_exchange_receipt")
             && item.get("receipt_id").and_then(Value::as_str) == Some("sql-app-receipt-1")
     }));
+    let app_receipt_item = feed_items
+        .iter()
+        .find(|item| item.get("receipt_id").and_then(Value::as_str) == Some("sql-app-receipt-1"))
+        .expect("normalized client-app receipt feed item");
+    assert_eq!(
+        app_receipt_item
+            .get("amount_credits")
+            .and_then(Value::as_i64),
+        Some(70)
+    );
 
     let mut malformed_app = client_app_json(&league, "@alice:local.dev");
     malformed_app
@@ -12609,6 +15283,12 @@ async fn world_accept_does_not_release_reputation_without_buyer_consume() {
             value_score: 90,
             created_at_epoch: 1_777_897_950,
         });
+        insert_world_exact_receipt(
+            &mut league.world,
+            &format!("world_purchase:grant:{purchase_id}"),
+            term_exchange_protocol::ReceiptStatus::Settled,
+            86,
+        );
     }
 
     let (status, acceptance) = send_json_request(
@@ -13005,6 +15685,12 @@ async fn world_reject_does_not_release_refund_progression_without_seller_chargeb
             value_score: 70,
             created_at_epoch: 1_777_897_981,
         });
+        insert_world_exact_receipt(
+            &mut league.world,
+            &format!("world_purchase:grant:{purchase_id}"),
+            term_exchange_protocol::ReceiptStatus::Settled,
+            67,
+        );
     }
 
     let (status, rejection) = send_json_request(
@@ -13232,6 +15918,12 @@ async fn world_cancel_does_not_release_refund_progression_without_seller_chargeb
             value_score: 65,
             created_at_epoch: 1_777_897_982,
         });
+        insert_world_exact_receipt(
+            &mut league.world,
+            &format!("world_purchase:grant:{purchase_id}"),
+            term_exchange_protocol::ReceiptStatus::Settled,
+            62,
+        );
     }
 
     let (status, cancellation) = send_json_request(
@@ -13425,6 +16117,22 @@ async fn world_reopen_does_not_emit_progression_without_buyer_reserve() {
             value_score: 55,
             created_at_epoch: 1_777_897_980,
         });
+        let rejection_id = league_hash_id(
+            "world-rejection",
+            &format!("{}:{}:0", work_order_id, buyer_matrix_user_id),
+        );
+        insert_world_exact_receipt(
+            &mut league.world,
+            &format!("world_purchase:refund:{purchase_id}:{rejection_id}"),
+            term_exchange_protocol::ReceiptStatus::Refunded,
+            55,
+        );
+        insert_world_exact_receipt(
+            &mut league.world,
+            &format!("world_purchase_seller_chargeback_consume:{purchase_id}:{rejection_id}"),
+            term_exchange_protocol::ReceiptStatus::SellerChargebackConsumed,
+            53,
+        );
     }
 
     let (status, reopen) = send_json_request(
@@ -13536,6 +16244,22 @@ async fn world_reopen_does_not_open_without_seller_resettlement() {
             value_score: 75,
             created_at_epoch: 1_777_897_985,
         });
+        let rejection_id = league_hash_id(
+            "world-rejection",
+            &format!("{}:{}:0", work_order_id, buyer_matrix_user_id),
+        );
+        insert_world_exact_receipt(
+            &mut league.world,
+            &format!("world_purchase:refund:{purchase_id}:{rejection_id}"),
+            term_exchange_protocol::ReceiptStatus::Refunded,
+            75,
+        );
+        insert_world_exact_receipt(
+            &mut league.world,
+            &format!("world_purchase_seller_chargeback_consume:{purchase_id}:{rejection_id}"),
+            term_exchange_protocol::ReceiptStatus::SellerChargebackConsumed,
+            72,
+        );
     }
 
     let (status, reopen) = send_json_request(
@@ -13604,7 +16328,10 @@ async fn world_reopen_does_not_open_without_seller_resettlement() {
         cancel["seller_chargeback_status"],
         "skipped_seller_not_settled"
     );
-    assert_eq!(cancel["purchase"]["status"], "cancelled_refunded");
+    assert_eq!(
+        cancel["purchase"]["status"], "cancelled_refunded",
+        "cancel payload: {cancel:#}"
+    );
 
     let buyer_account = get_real_ledger_account(
         &http,
@@ -13812,6 +16539,12 @@ async fn world_delivery_review_hold_does_not_grant_faction_or_seller_progress() 
             value_score: 80,
             created_at_epoch: 1_777_897_990,
         });
+        insert_world_exact_receipt(
+            &mut league.world,
+            &format!("world_purchase:grant:{purchase_id}"),
+            term_exchange_protocol::ReceiptStatus::Settled,
+            76,
+        );
     }
 
     let (status, delivery) = send_json_request(
@@ -14874,6 +17607,23 @@ async fn league_review_cannot_reapprove_or_reject_released_reward() {
             reviewed_at_epoch: Some(1_777_897_902),
             created_at_epoch: 1_777_897_901,
         });
+        let mut released_receipt = receipt_with_exact_amount(
+            term_exchange_protocol::EconomicReceipt::new(
+                format!("receipt:league_reward:{reward_id}"),
+                format!("league_reward:{reward_id}"),
+                "league_reward_settlement",
+                term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+                term_exchange_protocol::SettlementBackendKind::Cex,
+                term_exchange_protocol::ReceiptStatus::Duplicate,
+                1_777_897_903,
+            ),
+            7,
+        );
+        released_receipt.ledger_entry_id = Some("ledger-entry-once".to_string());
+        league.term_exchange_receipts.insert(
+            released_receipt.receipt_id.clone(),
+            TermExchangeReceiptState::from(&released_receipt),
+        );
     }
 
     let (status, approval) = send_json_request(
@@ -15071,7 +17821,9 @@ async fn world_contract_completion_requires_ledger_settlement_before_progression
         .find(|contract| contract.contract_id == "world-contract-unsettled-payout")
         .expect("stored contract");
     assert_eq!(stored_contract.value_score, initial_contract_value);
-    assert_eq!(stored_contract.status, "completed_skipped_missing_room");
+    // Missing room prevents the Ledger effect, so the contract remains retryable rather than
+    // projecting a terminal `completed_*` compatibility status.
+    assert_eq!(stored_contract.status, "settlement_blocked");
     assert_eq!(
         stored_contract.cex_status.as_deref(),
         Some("settlement_blocked")

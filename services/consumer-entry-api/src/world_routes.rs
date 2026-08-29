@@ -75,7 +75,7 @@ pub(super) fn world_action_kind(body: &str) -> (&'static str, &'static str, i64)
 
 fn world_action_quality_signal(body: &str) -> (i64, Vec<&'static str>) {
     let lower = body.to_ascii_lowercase();
-    let mut score = 0;
+    let mut score: i64 = 0;
     let mut missing = Vec::new();
     let signals = [
         (
@@ -105,13 +105,13 @@ fn world_action_quality_signal(body: &str) -> (i64, Vec<&'static str>) {
     ];
     for (signal, present) in signals {
         if present {
-            score += 1;
+            score = score.saturating_add(1);
         } else {
             missing.push(signal);
         }
     }
     if body.chars().count() >= 80 {
-        score += 1;
+        score = score.saturating_add(1);
     }
     (score, missing)
 }
@@ -250,6 +250,86 @@ fn world_action_playability_outcome(
         "telemetry_step": format!("world_action_{kind}_{success_tier}"),
     });
     (outcome, result_text, final_impact)
+}
+
+fn world_action_explicit_event_id(
+    payload: &WorldActionRequest,
+    matrix_user_id: &str,
+) -> Option<String> {
+    payload
+        .event_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|event_id| {
+            league_hash_id(
+                "world-event",
+                &format!("request:{matrix_user_id}:{event_id}"),
+            )
+        })
+}
+
+/// Build the append-only identity for a World action attempt.
+///
+/// A Matrix event id is the caller-owned idempotency identity when one is available.  Browser and
+/// legacy HTTP callers do not always provide one, however; those requests receive a distinct
+/// state-derived attempt identity so an unkeyed cooldown attempt is not silently conflated with a
+/// later intentional action.  Only caller-keyed events are eligible for an early replay path.
+fn world_action_event_id(
+    world: &WorldState,
+    payload: &WorldActionRequest,
+    matrix_user_id: &str,
+    room_id: Option<&str>,
+    location_id: &str,
+    kind: &str,
+    body: &str,
+    playability_outcome: &Value,
+    impact: i64,
+) -> String {
+    if let Some(event_id) = world_action_explicit_event_id(payload, matrix_user_id) {
+        return event_id;
+    }
+
+    let normalized_body = body.trim().to_ascii_lowercase();
+    let success_tier = playability_outcome
+        .get("success_tier")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let payout_status = playability_outcome
+        .get("payout_status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let status = playability_outcome
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let cex_task_id = payload
+        .cex_task_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("");
+    let room_id = room_id.unwrap_or("");
+    let identity_base = format!(
+        "attempt:{matrix_user_id}:{room_id}:{location_id}:{kind}:{normalized_body}:{cex_task_id}:{status}:{success_tier}:{payout_status}"
+    );
+    let prior_equivalent_attempts = world
+        .world_events
+        .iter()
+        .filter(|event| {
+            event.actor_matrix_user_id == matrix_user_id
+                && event.room_id.as_deref().unwrap_or("") == room_id
+                && event.location_id == location_id
+                && event.event_kind == kind
+                && event.body.trim().to_ascii_lowercase() == normalized_body
+                && event.impact_score == impact
+                && event.result.contains(&format!("Outcome={success_tier}"))
+        })
+        .count();
+    league_hash_id(
+        "world-event",
+        &format!("{identity_base}:{prior_equivalent_attempts}"),
+    )
 }
 
 fn world_default_location_for_kind(kind: &str) -> &'static str {
@@ -1314,6 +1394,79 @@ async fn record_world_action(
             .filter(|location_id| league.world.world_locations.contains_key(*location_id))
             .unwrap_or_else(|| world_default_location_for_kind(kind))
             .to_string();
+        // A caller-supplied Matrix event id is the canonical replay key.  Resolve it before
+        // computing a new cooldown outcome or creating any projections.  This is deliberately
+        // fail-closed on a payload collision: the same key may not be reused for another action.
+        if let Some(canonical_event_id) = world_action_explicit_event_id(&payload, &matrix_user_id)
+        {
+            if let Some(existing_event) = league
+                .world
+                .world_events
+                .iter()
+                .find(|event| event.event_id == canonical_event_id)
+                .cloned()
+            {
+                let identity_matches = existing_event.actor_matrix_user_id == matrix_user_id
+                    && existing_event.room_id == payload.room_id
+                    && existing_event.location_id == location_id
+                    && existing_event.event_kind == kind
+                    && existing_event.body == body;
+                if !identity_matches {
+                    return Err((
+                        StatusCode::CONFLICT,
+                        Json(json!({
+                            "error": "world action event_id is already bound to a different payload",
+                            "event_id": payload.event_id,
+                        })),
+                    )
+                        .into_response());
+                }
+                let telemetry_event_id =
+                    league_hash_id("world-playability-telemetry", &existing_event.event_id);
+                let telemetry_event = league
+                    .world
+                    .world_economy_events
+                    .iter()
+                    .find(|event| event.economy_event_id == telemetry_event_id)
+                    .cloned()
+                    .unwrap_or_else(|| WorldEconomyEvent {
+                        economy_event_id: telemetry_event_id,
+                        matrix_user_id: matrix_user_id.clone(),
+                        event_kind: "playability_telemetry".to_string(),
+                        subject_id: "world_action_replay".to_string(),
+                        credits_delta: 0,
+                        reputation_delta: 0,
+                        created_at_epoch: existing_event.created_at_epoch,
+                    });
+                let replay_outcome = json!({
+                    "contract_version": TRILLIONNIUM_WORLD_ACTION_ENGINE_CONTRACT_VERSION,
+                    "status": "replayed",
+                    "replay": true,
+                    "action_kind": existing_event.event_kind,
+                    "final_impact": existing_event.impact_score,
+                    "reward_delta_xp": existing_event.impact_score,
+                    "reward_delta_reputation": telemetry_event.reputation_delta,
+                    "reward_delta_rating": 0,
+                    "payout_status": "replayed",
+                    "telemetry_step": telemetry_event.subject_id,
+                });
+                let created_contract = league
+                    .world
+                    .world_contracts
+                    .iter()
+                    .find(|contract| contract.event_id == existing_event.event_id)
+                    .cloned();
+                let home = world_home_json(&league);
+                return Ok((
+                    league.clone(),
+                    existing_event,
+                    created_contract,
+                    home,
+                    replay_outcome,
+                    telemetry_event,
+                ));
+            }
+        }
         let now = Utc::now().timestamp();
         let (playability_outcome, resolved_result, impact) = world_action_playability_outcome(
             &league,
@@ -1338,11 +1491,19 @@ async fn record_world_action(
         } else {
             None
         };
+        let event_id = world_action_event_id(
+            &league.world,
+            &payload,
+            &matrix_user_id,
+            payload.room_id.as_deref(),
+            &location_id,
+            kind,
+            &body,
+            &playability_outcome,
+            impact,
+        );
         let event = WorldEvent {
-            event_id: league_hash_id(
-                "world-event",
-                &format!("{}:{}:{}", matrix_user_id, now, body),
-            ),
+            event_id,
             actor_matrix_user_id: matrix_user_id.clone(),
             room_id: payload.room_id.clone(),
             location_id: location_id.clone(),
@@ -1417,18 +1578,15 @@ async fn record_world_action(
             .unwrap_or_else(|| (impact / 3).max(1));
         if released {
             let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
-            player.xp += impact;
-            player.reputation += reward_delta_reputation;
-            player.rating += reward_delta_rating;
+            player.xp = player.xp.saturating_add(impact);
+            player.reputation = player.reputation.saturating_add(reward_delta_reputation);
+            player.rating = player.rating.saturating_add(reward_delta_rating);
             league
                 .players_by_matrix_user
                 .insert(matrix_user_id.clone(), player);
         }
         let telemetry_event = WorldEconomyEvent {
-            economy_event_id: league_hash_id(
-                "world-playability-telemetry",
-                &format!("{}:{}:{}", matrix_user_id, event.event_id, now),
-            ),
+            economy_event_id: league_hash_id("world-playability-telemetry", &event.event_id),
             matrix_user_id: matrix_user_id.clone(),
             event_kind: "playability_telemetry".to_string(),
             subject_id: playability_outcome
@@ -1440,8 +1598,24 @@ async fn record_world_action(
             reputation_delta: reward_delta_reputation,
             created_at_epoch: now,
         };
-        league.world.world_events.push(event.clone());
-        if released {
+        // Event identity is deterministic for the command payload.  Keep the append-only
+        // compatibility stream idempotent as well; a replay after a lost response must not create
+        // a second event row even though the surrounding session/tick projection is retried.
+        if !league
+            .world
+            .world_events
+            .iter()
+            .any(|existing| existing.event_id == event.event_id)
+        {
+            league.world.world_events.push(event.clone());
+        }
+        if released
+            && !league
+                .world
+                .world_economy_events
+                .iter()
+                .any(|existing| existing.economy_event_id == telemetry_event.economy_event_id)
+        {
             league
                 .world
                 .world_economy_events
@@ -1484,6 +1658,17 @@ pub(super) async fn post_world_action(
         Err(response) => return response,
     };
     let (kind, _result, _impact) = world_action_kind(&body);
+    let keyed_replay_exists =
+        if let Some(event_id) = world_action_explicit_event_id(&payload, &matrix_user_id) {
+            let league = state.inner.league_state.lock().await;
+            league
+                .world
+                .world_events
+                .iter()
+                .any(|event| event.event_id == event_id)
+        } else {
+            false
+        };
     let held_by_review = if kind == "contract" && payload.cex_task_id.is_none() {
         let league = state.inner.league_state.lock().await;
         let (base_kind, base_result, base_impact) = world_action_kind(&body);
@@ -1503,7 +1688,11 @@ pub(super) async fn post_world_action(
     } else {
         false
     };
-    let task = if kind == "contract" && payload.cex_task_id.is_none() && !held_by_review {
+    let task = if kind == "contract"
+        && payload.cex_task_id.is_none()
+        && !held_by_review
+        && !keyed_replay_exists
+    {
         match create_world_contract_task(&state, &headers, &payload, &matrix_user_id, &body).await {
             Ok(task) => {
                 payload.cex_task_id = Some(task.task_id.clone());
@@ -1551,6 +1740,73 @@ pub(super) async fn post_world_action(
 
 fn world_trillionnium_task_id(task_archetype_id: &str) -> String {
     format!("trillionnium-task:{task_archetype_id}")
+}
+
+/// Compare every immutable field represented by a deterministic tactics event identity before
+/// accepting an idempotent replay.  A hash hit with a different tuple is a caller/data collision,
+/// not a replay; callers must fail closed before the command handler mutates World state.
+pub(super) fn world_tactics_event_identity_matches(
+    event: &WorldEvent,
+    matrix_user_id: &str,
+    room_id: Option<&str>,
+    location_id: &str,
+    command: &str,
+    event_body: &str,
+) -> bool {
+    event.actor_matrix_user_id == matrix_user_id
+        && event.room_id.as_deref() == room_id
+        && event.location_id == location_id
+        && event.event_kind == format!("tactics_{command}")
+        && event.body == event_body
+}
+
+fn world_tactics_event_id_collision_response(event_id: &str) -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(json!({
+            "error": "world tactics event_id is already bound to a different payload",
+            "event_id": event_id,
+        })),
+    )
+        .into_response()
+}
+
+/// Resolve a tactics event written before v12 switched to deterministic request identities.
+///
+/// The old event id included the creation timestamp.  Require the actor, command-derived event
+/// kind, exact body and a hash recomputed from the persisted timestamp before treating it as a
+/// replay; otherwise an unrelated/corrupt event could be adopted as the caller's idempotency
+/// record.
+pub(super) fn legacy_world_tactics_event_for_request(
+    world: &WorldState,
+    matrix_user_id: &str,
+    command: &str,
+    event_body: &str,
+) -> Option<WorldEvent> {
+    let expected_kind = format!("tactics_{command}");
+    world
+        .world_events
+        .iter()
+        .filter(|event| {
+            event.actor_matrix_user_id == matrix_user_id
+                && event.event_kind == expected_kind
+                && event.body == event_body
+        })
+        .filter(|event| {
+            league_hash_id(
+                "world-tactics-event",
+                &format!(
+                    "{}:{}:{}:{}",
+                    matrix_user_id, command, event.created_at_epoch, event_body
+                ),
+            ) == event.event_id
+        })
+        .max_by(|left, right| {
+            left.created_at_epoch
+                .cmp(&right.created_at_epoch)
+                .then_with(|| left.event_id.cmp(&right.event_id))
+        })
+        .cloned()
 }
 
 fn latest_open_trillionnium_task_contract_index(
@@ -1661,6 +1917,63 @@ fn judge_trillionnium_task_completion(
     }
 }
 
+#[derive(Debug, Clone)]
+struct PendingWorldTacticsReward {
+    session_id: String,
+    tick_id: String,
+    reward_event_id: String,
+    matrix_user_id: String,
+    room_id: Option<String>,
+    reward_credits: i64,
+    reward_xp: i64,
+    created_at_epoch: i64,
+}
+
+/// Settle the fixed tactics victory reward through the same exact Ledger v2 adapter used by
+/// commerce and contract completion.  The in-memory game session remains pending until the
+/// typed receipt is authenticated, so a timeout/5xx can only produce a recoverable hold.
+async fn settle_world_tactics_reward_with_ledger(
+    state: &AppState,
+    pending: &PendingWorldTacticsReward,
+) -> LeagueLedgerSettlement {
+    CexTermExchangeBackend
+        .execute_ledger_action(
+            state,
+            TermExchangeLedgerActionRequest {
+                term_id: "world_tactics_victory_reward".to_string(),
+                term_version: "v1".to_string(),
+                domain: "trillionnium_world".to_string(),
+                intent_id: format!("world_tactics_reward:{}", pending.reward_event_id),
+                intent_kind: term_exchange_protocol::EconomicIntentKind::ReleaseReward,
+                room_id: pending.room_id.clone(),
+                matrix_user_id: pending.matrix_user_id.clone(),
+                account_id_override: None,
+                message: "world tactics victory reward settlement".to_string(),
+                failure_context:
+                    "matrix identity could not be resolved for tactics reward settlement"
+                        .to_string(),
+                ledger_action: "grant".to_string(),
+                success_status: "settled".to_string(),
+                idempotency_key: format!("world_tactics_reward:{}", pending.reward_event_id),
+                idempotency_scope: "world_tactics_reward".to_string(),
+                reference_id: Some(pending.reward_event_id.clone()),
+                amount_credits: pending.reward_credits,
+                amount_validation_error: None,
+                currency: "credits".to_string(),
+                metadata: json!({
+                    "session_id": pending.session_id,
+                    "tick_id": pending.tick_id,
+                    "reward_event_id": pending.reward_event_id,
+                    "reward_xp": pending.reward_xp,
+                    "source": "rust_tactics_victory_reward",
+                }),
+                extra_ledger_body: Map::new(),
+            },
+        )
+        .await
+        .into_legacy_settlement()
+}
+
 async fn record_world_tactics_command(
     state: &AppState,
     payload: WorldTacticsCommandRequest,
@@ -1696,27 +2009,33 @@ async fn record_world_tactics_command(
         .filter(|value| !value.is_empty())
         .map(|value| validate_text_payload(value, state.config().max_text_chars))
         .transpose()?;
-    let (mut snapshot, pending_settlement) = {
+    // Tactics command identity is derived before taking the world lock.  The same normalized
+    // payload therefore addresses one immutable event across retries, independent of wall-clock
+    // time.  In particular, a task completion retry must not advance the simulation a second
+    // time while the original Ledger outcome is being recovered through the contract endpoint.
+    let event_body = body.clone().unwrap_or_else(|| {
+        format!(
+            "tactics command={} unit={} tile={} skill={}",
+            command,
+            payload.unit_id.as_deref().unwrap_or("lord"),
+            payload.target_tile.as_deref().unwrap_or("none"),
+            payload
+                .skill_id
+                .as_deref()
+                .or(payload.item_id.as_deref())
+                .or(payload.target_slot.as_deref())
+                .or(payload.npc_id.as_deref())
+                .or(payload.task_archetype_id.as_deref())
+                .unwrap_or("none")
+        )
+    });
+    let requested_event_id = league_hash_id(
+        "world-tactics-event",
+        &format!("{}:{}:{}", matrix_user_id, command, event_body),
+    );
+    let (mut snapshot, pending_settlement, pending_tactics_reward) = {
         let mut league = state.inner.league_state.lock().await;
         let now = Utc::now().timestamp();
-        let mut outcome = apply_world_tactics_command(
-            &mut league.world,
-            &matrix_user_id,
-            &command,
-            payload.unit_id.as_deref(),
-            payload.target_tile.as_deref(),
-            payload.skill_id.as_deref(),
-            payload.item_id.as_deref(),
-            payload.target_slot.as_deref(),
-            payload.npc_id.as_deref(),
-            payload.task_archetype_id.as_deref(),
-            payload.osm_game_overlay_id.as_deref(),
-            now,
-        );
-        let mut accepted = outcome
-            .get("accepted")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
         let location_id = payload
             .osm_game_overlay_id
             .as_deref()
@@ -1724,29 +2043,148 @@ async fn record_world_tactics_command(
             .filter(|node_id| league.world.world_locations.contains_key(*node_id))
             .unwrap_or_else(|| world_default_location_for_kind("tactics"))
             .to_string();
-        let event_body = body.unwrap_or_else(|| {
-            format!(
-                "tactics command={} unit={} tile={} skill={}",
-                command,
-                payload.unit_id.as_deref().unwrap_or("lord"),
-                payload.target_tile.as_deref().unwrap_or("none"),
-                payload
-                    .skill_id
-                    .as_deref()
-                    .or(payload.item_id.as_deref())
-                    .or(payload.target_slot.as_deref())
-                    .or(payload.npc_id.as_deref())
-                    .or(payload.task_archetype_id.as_deref())
-                    .unwrap_or("none")
+        // Resolve a deterministic id hit before invoking the command handler.  A hash hit with a
+        // different immutable tuple is a collision, not a replay; returning here keeps character,
+        // session, tick, relationship, and resource projections untouched.
+        let existing_event_by_id = league
+            .world
+            .world_events
+            .iter()
+            .find(|existing| existing.event_id == requested_event_id)
+            .cloned();
+        if let Some(existing_event) = existing_event_by_id.as_ref() {
+            if !world_tactics_event_identity_matches(
+                existing_event,
+                &matrix_user_id,
+                payload.room_id.as_deref(),
+                &location_id,
+                &command,
+                &event_body,
+            ) {
+                return Err(world_tactics_event_id_collision_response(
+                    &requested_event_id,
+                ));
+            }
+        }
+        // A complete_task command has a second deterministic identity for its contract
+        // completion.  Check that identity before `apply_world_tactics_command` can touch the
+        // character or any simulation state.  An existing exact tuple remains a replay candidate;
+        // only a same-id/different-tuple row is rejected here.
+        if command == "complete_task" {
+            let task_archetype_id = payload
+                .task_archetype_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("courier_letter");
+            if let Some(contract_index) = latest_open_trillionnium_task_contract_index(
+                &league.world,
+                &matrix_user_id,
+                task_archetype_id,
+            ) {
+                let contract_id = league.world.world_contracts[contract_index]
+                    .contract_id
+                    .clone();
+                let deterministic_completion_id = league_hash_id(
+                    "world-trillionnium-task-completion",
+                    &format!("{}:{}:{}", contract_id, matrix_user_id, event_body),
+                );
+                if let Some(existing_completion) = league
+                    .world
+                    .world_contract_completions
+                    .iter()
+                    .find(|completion| completion.completion_id == deterministic_completion_id)
+                {
+                    if !super::world_commerce_routes::world_contract_completion_identity_matches(
+                        existing_completion,
+                        &contract_id,
+                        &matrix_user_id,
+                        &event_body,
+                    ) {
+                        return Err(
+                            super::world_commerce_routes::world_contract_completion_id_collision_response(
+                                &deterministic_completion_id,
+                                "world tactics completion_id is already bound to a different payload",
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+        let replayed_event = existing_event_by_id.or_else(|| {
+            super::world_routes::legacy_world_tactics_event_for_request(
+                &league.world,
+                &matrix_user_id,
+                &command,
+                &event_body,
             )
         });
-        let event_id = league_hash_id(
-            "world-tactics-event",
-            &format!("{}:{}:{}:{}", matrix_user_id, command, now, event_body),
-        );
+        // Any exact event replay (including a legacy timestamp-derived event) is read-only.  The
+        // old implementation only special-cased `complete_task`, which allowed retries of attack,
+        // movement and social commands to append another tick/relationship/resource mutation.
+        // Keep the persisted event id as the effective identity so downstream reward/contract
+        // intents also reuse their original keys.  Keep the two flags separate: ordinary event
+        // replays must not borrow the latest tactics session/tick (or trigger its reward), while a
+        // complete_task replay retains the established contract-endpoint hand-off response.
+        let event_replay = replayed_event.is_some();
+        let event_id = replayed_event
+            .as_ref()
+            .map(|event| event.event_id.clone())
+            .unwrap_or_else(|| requested_event_id.clone());
+        let mut outcome = if event_replay {
+            json!({
+                "contract_version": TRILLIONNIUM_TACTICS_COMMAND_OUTCOME_CONTRACT_VERSION,
+                "accepted": false,
+                "replay": true,
+                "command": command,
+                "unit_id": payload.unit_id.as_deref().unwrap_or("lord"),
+                "target_tile": payload.target_tile.as_deref(),
+                "task_archetype_id": payload.task_archetype_id.as_deref().unwrap_or("courier_letter"),
+                // Preserve the established complete_task replay contract (callers use this
+                // result to discover that the offer must be completed through the contract
+                // endpoint), while ordinary command replays can expose the stored event result.
+                "result": if command == "complete_task" {
+                    "task_completion_requires_offer".to_string()
+                } else {
+                    replayed_event
+                        .as_ref()
+                        .map(|event| event.result.clone())
+                        .unwrap_or_else(|| "tactics_event_already_recorded".to_string())
+                },
+                "rejection_reason": "tactics_event_already_recorded",
+                "replayed_event_id": event_id,
+                "retry_authority": if command == "complete_task" {
+                    "world_contract_completion_endpoint"
+                } else {
+                    "tactics_event_replay"
+                },
+                "source_of_truth": "rust_trillionnium_task_completion_handler",
+                "web_role": "intent_only_visualization_input",
+            })
+        } else {
+            apply_world_tactics_command(
+                &mut league.world,
+                &matrix_user_id,
+                &command,
+                payload.unit_id.as_deref(),
+                payload.target_tile.as_deref(),
+                payload.skill_id.as_deref(),
+                payload.item_id.as_deref(),
+                payload.target_slot.as_deref(),
+                payload.npc_id.as_deref(),
+                payload.task_archetype_id.as_deref(),
+                payload.osm_game_overlay_id.as_deref(),
+                now,
+            )
+        };
+        let mut accepted = outcome
+            .get("accepted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let mut created_contract = None;
         let mut created_completion = None;
         let mut completion_contract_for_settlement = None;
+        let mut pending_tactics_reward = None;
 
         if accepted && command == "offer_task" {
             let task_archetype_id = outcome
@@ -1807,28 +2245,59 @@ async fn record_world_tactics_command(
                         &event_body,
                         now,
                     );
-                    let completion = WorldContractCompletion {
-                        completion_id: league_hash_id(
-                            "world-trillionnium-task-completion",
-                            &format!("{}:{}:{}", contract.contract_id, now, event_body),
-                        ),
-                        contract_id: contract.contract_id.clone(),
-                        matrix_user_id: matrix_user_id.clone(),
-                        body: event_body.clone(),
-                        score: judgement.score,
-                        grade: judgement.grade.clone(),
-                        reward_amount: judgement.reward_amount,
-                        judge_status: judgement.judge_status.clone(),
-                        payout_status: judgement.payout_status.clone(),
-                        anti_cheat_flags: judgement.anti_cheat_flags.clone(),
-                        score_events: judgement.score_events.clone(),
-                        ledger_status: Some("pending".to_string()),
-                        ledger_account_id: None,
-                        ledger_entry_id: None,
-                        ledger_balance_after: None,
-                        ledger_error: None,
-                        created_at_epoch: now,
-                    };
+                    let deterministic_completion_id = league_hash_id(
+                        "world-trillionnium-task-completion",
+                        &format!("{}:{}:{}", contract.contract_id, matrix_user_id, event_body),
+                    );
+                    let existing_completion_by_id = league
+                        .world
+                        .world_contract_completions
+                        .iter()
+                        .find(|existing| existing.completion_id == deterministic_completion_id)
+                        .cloned();
+                    if let Some(existing_completion) = existing_completion_by_id.as_ref() {
+                        if !super::world_commerce_routes::world_contract_completion_identity_matches(
+                            existing_completion,
+                            &contract.contract_id,
+                            &matrix_user_id,
+                            &event_body,
+                        ) {
+                            return Err(
+                                super::world_commerce_routes::world_contract_completion_id_collision_response(
+                                    &deterministic_completion_id,
+                                    "world tactics completion_id is already bound to a different payload",
+                                ),
+                            );
+                        }
+                    }
+                    let completion = existing_completion_by_id.or_else(|| {
+                            super::world_commerce_routes::legacy_world_contract_completion_for_legacy_prefix(
+                                &league.world,
+                                &contract.contract_id,
+                                &matrix_user_id,
+                                &event_body,
+                                "world-trillionnium-task-completion",
+                            )
+                        })
+                        .unwrap_or_else(|| WorldContractCompletion {
+                            completion_id: deterministic_completion_id.clone(),
+                            contract_id: contract.contract_id.clone(),
+                            matrix_user_id: matrix_user_id.clone(),
+                            body: event_body.clone(),
+                            score: judgement.score,
+                            grade: judgement.grade.clone(),
+                            reward_amount: judgement.reward_amount,
+                            judge_status: judgement.judge_status.clone(),
+                            payout_status: judgement.payout_status.clone(),
+                            anti_cheat_flags: judgement.anti_cheat_flags.clone(),
+                            score_events: judgement.score_events.clone(),
+                            ledger_status: Some("pending".to_string()),
+                            ledger_account_id: None,
+                            ledger_entry_id: None,
+                            ledger_balance_after: None,
+                            ledger_error: None,
+                            created_at_epoch: now,
+                        });
                     let pending_release = completion.payout_status == "eligible";
                     let stored_contract = &mut league.world.world_contracts[contract_index];
                     stored_contract.status = if pending_release {
@@ -1854,10 +2323,17 @@ async fn record_world_tactics_command(
                     outcome["ledger_reward_requires_settlement"] = json!(true);
                     outcome["review_hold_gate_enforced"] = json!(true);
                     outcome["anti_cheese_gate_enforced"] = json!(true);
-                    league
+                    if !league
                         .world
                         .world_contract_completions
-                        .push(completion.clone());
+                        .iter()
+                        .any(|existing| existing.completion_id == completion.completion_id)
+                    {
+                        league
+                            .world
+                            .world_contract_completions
+                            .push(completion.clone());
+                    }
                     completion_contract_for_settlement = Some((contract, completion.clone()));
                     created_completion = Some(completion);
                 }
@@ -1888,20 +2364,27 @@ async fn record_world_tactics_command(
                 "tactics_command_rejected"
             })
             .to_string();
-        let event = WorldEvent {
+        let event = replayed_event.clone().unwrap_or_else(|| WorldEvent {
             event_id,
             actor_matrix_user_id: matrix_user_id.clone(),
             room_id: payload.room_id.clone(),
             location_id: location_id.clone(),
             event_kind: format!("tactics_{command}"),
-            body: event_body,
+            body: event_body.clone(),
             result,
             impact_score: if accepted { 8 } else { 0 },
             cex_task_id: None,
             cex_status: None,
             created_at_epoch: now,
-        };
-        league.world.world_events.push(event.clone());
+        });
+        if !league
+            .world
+            .world_events
+            .iter()
+            .any(|existing| existing.event_id == event.event_id)
+        {
+            league.world.world_events.push(event.clone());
+        }
         if accepted {
             let relationship_target = outcome
                 .get("npc_id")
@@ -1926,20 +2409,28 @@ async fn record_world_tactics_command(
                 "attack" => 2,
                 _ => 8,
             };
-            league.world.world_relationships.push(WorldRelationship {
-                relationship_id: league_hash_id(
-                    "world-tactics-rel",
-                    &format!(
-                        "{}:{}:{}:{}",
-                        matrix_user_id, relationship_target, command, now
-                    ),
+            let relationship_id = league_hash_id(
+                "world-tactics-rel",
+                &format!(
+                    "{}:{}:{}",
+                    matrix_user_id, relationship_target, event.event_id
                 ),
-                from_id: matrix_user_id.clone(),
-                to_id: relationship_target.clone(),
-                relation_kind: relationship_kind.clone(),
-                strength: relationship_strength,
-                updated_at_epoch: now,
-            });
+            );
+            if !league
+                .world
+                .world_relationships
+                .iter()
+                .any(|existing| existing.relationship_id == relationship_id)
+            {
+                league.world.world_relationships.push(WorldRelationship {
+                    relationship_id,
+                    from_id: matrix_user_id.clone(),
+                    to_id: relationship_target.clone(),
+                    relation_kind: relationship_kind.clone(),
+                    strength: relationship_strength,
+                    updated_at_epoch: now,
+                });
+            }
             let social_npcs = trillionnium_npc_fixtures_json(
                 &league.world,
                 &matrix_user_id,
@@ -2062,17 +2553,41 @@ async fn record_world_tactics_command(
                     .unwrap_or(Value::Null);
             }
         }
-        let (mut tactics_session, simulation_tick) = record_world_tactics_simulation_tick(
-            &mut league.world,
-            &matrix_user_id,
-            payload.room_id.as_deref(),
-            &command,
-            payload.unit_id.as_deref(),
-            payload.target_tile.as_deref(),
-            payload.osm_game_overlay_id.as_deref(),
-            &outcome,
-            now,
-        );
+        let (tactics_session, simulation_tick) = if event_replay {
+            // An exact replay is read-only, but it may also be the first request after a process
+            // crashed between the pre-Ledger snapshot and the reward response.  Recover only the
+            // session/tick proven to belong to this event; unrelated replays remain null and can
+            // never borrow the actor's latest victory reward.
+            replayed_event
+                .as_ref()
+                .and_then(|replayed_event| {
+                    pending_world_tactics_replay_snapshot(
+                        &mut league.world,
+                        &matrix_user_id,
+                        payload.room_id.as_deref(),
+                        &command,
+                        payload.unit_id.as_deref(),
+                        payload.target_tile.as_deref(),
+                        &replayed_event.event_id,
+                        Some(replayed_event.result.as_str()),
+                        replayed_event.created_at_epoch,
+                    )
+                })
+                .unwrap_or((Value::Null, Value::Null))
+        } else {
+            record_world_tactics_simulation_tick_with_event_id(
+                &mut league.world,
+                &matrix_user_id,
+                payload.room_id.as_deref(),
+                &command,
+                payload.unit_id.as_deref(),
+                payload.target_tile.as_deref(),
+                payload.osm_game_overlay_id.as_deref(),
+                &outcome,
+                now,
+                Some(event.event_id.as_str()),
+            )
+        };
         let mut tactics_reward_settlement = json!({
             "contract_version": TRILLIONNIUM_TACTICS_REWARD_SETTLEMENT_CONTRACT_VERSION,
             "status": "not_eligible",
@@ -2094,49 +2609,41 @@ async fn record_world_tactics_command(
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string();
-            let reward_event_id = league_hash_id(
-                "world-tactics-victory-reward",
-                &format!("{}:{}:{}", matrix_user_id, session_id, tick_id),
-            );
+            // New sessions reserve the reward identity before the network call.  Keep the
+            // historical derivation as a compatibility fallback for snapshots created before
+            // that reservation field was populated.
+            let reward_event_id = tactics_session
+                .get("reward_event_id")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+                .unwrap_or_else(|| {
+                    league_hash_id(
+                        "world-tactics-victory-reward",
+                        &format!("{}:{}:{}", matrix_user_id, session_id, tick_id),
+                    )
+                });
             let reward_credits = 5;
             let reward_xp = 12;
-            let already_settled = league
+            let existing_reward_event = league
                 .world
                 .world_economy_events
                 .iter()
                 .any(|event| event.economy_event_id == reward_event_id);
-            if !already_settled {
-                let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
-                player.earned_credits += reward_credits as f64;
-                player.xp += reward_xp;
-                player.reputation += 1;
-                player.rating += 1;
-                league
-                    .players_by_matrix_user
-                    .insert(matrix_user_id.clone(), player);
-                league.world.world_economy_events.push(WorldEconomyEvent {
-                    economy_event_id: reward_event_id.clone(),
-                    matrix_user_id: matrix_user_id.clone(),
-                    event_kind: "tactics_victory_reward".to_string(),
-                    subject_id: session_id.clone(),
-                    credits_delta: reward_credits,
-                    reputation_delta: 1,
-                    created_at_epoch: now,
-                });
-            }
-            if let Some(updated_session) = mark_world_tactics_reward_settled(
-                &mut league.world,
-                &session_id,
-                &reward_event_id,
+            // Do not mutate balances or mark the session settled while the exact Ledger call is
+            // outstanding. The pending descriptor is executed after this state lock is released.
+            pending_tactics_reward = Some(PendingWorldTacticsReward {
+                session_id: session_id.clone(),
+                tick_id: tick_id.clone(),
+                reward_event_id: reward_event_id.clone(),
+                matrix_user_id: matrix_user_id.clone(),
+                room_id: payload.room_id.clone(),
                 reward_credits,
                 reward_xp,
-                now,
-            ) {
-                tactics_session = updated_session;
-            }
+                created_at_epoch: now,
+            });
             tactics_reward_settlement = json!({
                 "contract_version": TRILLIONNIUM_TACTICS_REWARD_SETTLEMENT_CONTRACT_VERSION,
-                "status": if already_settled { "duplicate_settled" } else { "settled" },
+                "status": "pending_ledger",
                 "reward_event_id": reward_event_id,
                 "session_id": session_id,
                 "tick_id": tick_id,
@@ -2144,8 +2651,10 @@ async fn record_world_tactics_command(
                 "xp_delta": reward_xp,
                 "reputation_delta": 1,
                 "source_of_truth": "rust_tactics_reward_settlement",
-                "settlement_owner": "world_state_and_league_player_projection",
-                "ledger_required": false,
+                "settlement_owner": "cex_ledger_v2_then_world_state_projection",
+                "ledger_required": true,
+                "amount_authority": "amount_credits",
+                "existing_legacy_event": existing_reward_event,
                 "duplicate_safe": true,
                 "web_role": "intent_only_visualization_input",
             });
@@ -2173,8 +2682,16 @@ async fn record_world_tactics_command(
                 tactics_reward_settlement,
             ),
             completion_contract_for_settlement,
+            pending_tactics_reward,
         )
     };
+    // Both completion settlement and victory reward descriptors are created while the world
+    // state lock is held, but their Ledger calls happen after it is released.  Flush that pending
+    // state first so a crash/lost response can resume the same immutable operation identity rather
+    // than issuing a fresh remote debit/credit on the next command.
+    if pending_settlement.is_some() || pending_tactics_reward.is_some() {
+        persist_league_state_after_command(state, &snapshot.0, "world_tactics_command").await?;
+    }
     if let Some((contract, mut completion)) = pending_settlement {
         let settlement_payload = WorldContractCompleteRequest {
             matrix_user_id: matrix_user_id.clone(),
@@ -2191,67 +2708,42 @@ async fn record_world_tactics_command(
         .await;
         let exact_reward_credits =
             whole_credits_from_compatibility_amount(completion.reward_amount);
-        let settlement_completed = settlement.progression_allowed(&["settled", "duplicate"])
-            && exact_reward_credits.is_ok();
+        let settlement_completed = settlement.progression_allowed_for_term(
+            "world_contract_completion_settlement",
+            &["settled", "duplicate"],
+        ) && settlement.amount_credits
+            == exact_reward_credits.as_ref().ok().copied();
+        let settlement_zero_reward_skipped =
+            world_commerce_routes::world_settlement_is_zero_reward_skip(
+                &settlement,
+                exact_reward_credits.as_ref().ok().copied(),
+            );
         completion.ledger_status = Some(settlement.status.clone());
-        completion.ledger_account_id = settlement.account_id;
-        completion.ledger_entry_id = settlement.entry_id;
+        completion.ledger_account_id = settlement.account_id.clone();
+        completion.ledger_entry_id = settlement.entry_id.clone();
         completion.ledger_balance_after = settlement.balance_after;
-        completion.ledger_error = settlement.error;
-        let settlement_receipt = settlement.term_exchange_receipt.clone();
+        completion.ledger_error = settlement.error.clone();
         let mut final_snapshot = {
             let mut league = state.inner.league_state.lock().await;
-            record_world_term_exchange_receipt(&mut league.world, settlement_receipt);
+            // Both the tactics and direct contract routes release the world lock while calling
+            // Ledger.  Merge the response against the currently persisted row instead of blindly
+            // replacing it: a delayed hold/failure must not downgrade an already receipt-backed
+            // terminal completion, and either historical reward marker must suppress a duplicate
+            // compatibility projection.
+            let merged_completion =
+                world_commerce_routes::merge_world_contract_completion_settlement(
+                    &mut league,
+                    &contract,
+                    &completion,
+                    &settlement,
+                    settlement_completed,
+                    settlement_zero_reward_skipped,
+                );
             let indexes = build_world_indexes(&league.world);
-            let mut updated_contract = snapshot.4.clone();
-            indexes.replace_contract_completion_by_id(&mut league.world, &completion);
-            if settlement_completed {
-                let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
-                player.earned_credits += completion.reward_amount;
-                player.xp += completion.score.round() as i64;
-                player.reputation += (completion.score / 12.0).round() as i64;
-                player.rating += ((completion.score - 50.0) / 4.0).round() as i64;
-                league
-                    .players_by_matrix_user
-                    .insert(matrix_user_id.clone(), player);
-                league.world.world_economy_events.push(WorldEconomyEvent {
-                    economy_event_id: league_hash_id(
-                        "world-trillionnium-task-reward",
-                        &completion.completion_id,
-                    ),
-                    matrix_user_id: matrix_user_id.clone(),
-                    event_kind: "trillionnium_task_reward".to_string(),
-                    subject_id: contract.contract_id.clone(),
-                    credits_delta: exact_reward_credits
-                        .expect("successful settlement must carry an exact whole-credit reward"),
-                    reputation_delta: (completion.score / 12.0).round() as i64,
-                    created_at_epoch: completion.created_at_epoch,
-                });
-            }
-            if let Some(contract_index) = indexes.contract_index(&contract.contract_id) {
-                let mut stored_contract = league.world.world_contracts[contract_index].clone();
-                stored_contract.status = match completion.ledger_status.as_deref() {
-                    Some("settled") | Some("duplicate") => "completed_settled".to_string(),
-                    Some("held_review") => "review_hold".to_string(),
-                    Some(status) => format!("completed_{status}"),
-                    None => stored_contract.status.clone(),
-                };
-                stored_contract.cex_status = Some(match completion.ledger_status.as_deref() {
-                    Some("settled") | Some("duplicate") => "completed".to_string(),
-                    Some("held_review") => "review_hold".to_string(),
-                    Some("skipped_zero_reward") => "completed_no_reward".to_string(),
-                    Some(_) => "settlement_blocked".to_string(),
-                    None => stored_contract
-                        .cex_status
-                        .clone()
-                        .unwrap_or_else(|| "settlement_pending".to_string()),
-                });
-                if settlement_completed {
-                    stored_contract.value_score += (completion.score / 10.0).round() as i64;
-                }
-                indexes.replace_contract_by_id(&mut league.world, &stored_contract);
-                updated_contract = Some(stored_contract);
-            }
+            let updated_contract = indexes
+                .contract(&league.world, &contract.contract_id)
+                .cloned()
+                .or_else(|| snapshot.4.clone());
             let home = world_home_json(&league);
             (
                 league.clone(),
@@ -2259,17 +2751,126 @@ async fn record_world_tactics_command(
                 snapshot.2.clone(),
                 home,
                 updated_contract,
-                Some(completion.clone()),
+                Some(merged_completion),
                 snapshot.6.clone(),
                 snapshot.7.clone(),
                 snapshot.8.clone(),
             )
         };
-        final_snapshot.2["ledger_status"] = json!(settlement.status);
+        // The merge may have retained an earlier terminal completion when this response was a
+        // late hold/failure.  Return that authoritative row, rather than echoing the stale remote
+        // status that arrived last.
+        if let Some(merged_completion) = final_snapshot.5.clone() {
+            completion = merged_completion;
+        }
+        final_snapshot.2["ledger_status"] = json!(completion
+            .ledger_status
+            .clone()
+            .unwrap_or_else(|| settlement.status.clone()));
         final_snapshot.2["ledger_entry_id"] = json!(completion.ledger_entry_id.clone());
         final_snapshot.2["ledger_error"] = json!(completion.ledger_error.clone());
         final_snapshot.2["trillionnium_task_completion"] = json!(completion);
         snapshot = final_snapshot;
+    }
+    if let Some(pending) = pending_tactics_reward {
+        let settlement = settle_world_tactics_reward_with_ledger(state, &pending).await;
+        let settlement_status = settlement.status.clone();
+        let exact_amount_matches = settlement.amount_credits == Some(pending.reward_credits);
+        let settlement_completed = settlement.progression_allowed_for_term(
+            "world_tactics_victory_reward",
+            &["settled", "duplicate"],
+        ) && exact_amount_matches
+            && settlement
+                .amount_credits
+                .and_then(exact_credits_to_legacy_display)
+                .is_some();
+        let settlement_error = settlement.error.clone().or_else(|| {
+            (!exact_amount_matches
+                && settlement.progression_allowed_for_term(
+                    "world_tactics_victory_reward",
+                    &["settled", "duplicate"],
+                ))
+            .then(|| "Ledger receipt amount does not match tactics reward authority".to_string())
+        });
+        let settlement_receipt = settlement.term_exchange_receipt.clone();
+        let (updated_league, updated_home, updated_session) = {
+            let mut league = state.inner.league_state.lock().await;
+            record_world_term_exchange_receipt(&mut league.world, settlement_receipt);
+            let mut session_value = snapshot.6.clone();
+            if settlement_completed {
+                let event_exists = league
+                    .world
+                    .world_economy_events
+                    .iter()
+                    .any(|event| event.economy_event_id == pending.reward_event_id);
+                if !event_exists {
+                    let mut player =
+                        ensure_league_player(&mut league, &pending.matrix_user_id, None);
+                    // Compatibility projection only: the exact Ledger receipt is authoritative.
+                    if let Some(next) = checked_legacy_display_add(
+                        player.earned_credits,
+                        settlement.amount_credits.unwrap_or_default(),
+                    ) {
+                        player.earned_credits = next;
+                    }
+                    player.xp = player.xp.saturating_add(pending.reward_xp);
+                    player.reputation = player.reputation.saturating_add(1);
+                    player.rating = player.rating.saturating_add(1);
+                    league
+                        .players_by_matrix_user
+                        .insert(pending.matrix_user_id.clone(), player);
+                    league.world.world_economy_events.push(WorldEconomyEvent {
+                        economy_event_id: pending.reward_event_id.clone(),
+                        matrix_user_id: pending.matrix_user_id.clone(),
+                        event_kind: "tactics_victory_reward".to_string(),
+                        subject_id: pending.session_id.clone(),
+                        credits_delta: pending.reward_credits,
+                        reputation_delta: 1,
+                        created_at_epoch: pending.created_at_epoch,
+                    });
+                }
+                if let Some(updated) = mark_world_tactics_reward_settled(
+                    &mut league.world,
+                    &pending.session_id,
+                    &pending.reward_event_id,
+                    pending.reward_credits,
+                    pending.reward_xp,
+                    pending.created_at_epoch,
+                ) {
+                    session_value = updated;
+                }
+            }
+            let home = world_home_json(&league);
+            (league.clone(), home, session_value)
+        };
+        snapshot.0 = updated_league;
+        snapshot.3 = updated_home;
+        snapshot.6 = updated_session;
+        snapshot.8 = json!({
+            "contract_version": TRILLIONNIUM_TACTICS_REWARD_SETTLEMENT_CONTRACT_VERSION,
+            "status": if settlement_completed {
+                if settlement_status == "duplicate" { "duplicate_settled" } else { "settled" }
+            } else {
+                settlement_status.as_str()
+            },
+            "reward_event_id": pending.reward_event_id,
+            "session_id": pending.session_id,
+            "tick_id": pending.tick_id,
+            "credits_delta": pending.reward_credits,
+            "xp_delta": pending.reward_xp,
+            "reputation_delta": 1,
+            "source_of_truth": "rust_tactics_reward_settlement",
+            "settlement_owner": "cex_ledger_v2_then_world_state_projection",
+            "ledger_required": true,
+            "amount_authority": "amount_credits",
+            "ledger_status": settlement_status,
+            "ledger_entry_id": settlement.entry_id,
+            "ledger_account_id": settlement.account_id,
+            "ledger_error": settlement_error,
+            "duplicate_safe": true,
+            "web_role": "intent_only_visualization_input",
+        });
+        snapshot.2["tactics_reward_settlement"] = snapshot.8.clone();
     }
     Ok(snapshot)
 }

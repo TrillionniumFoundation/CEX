@@ -44,6 +44,7 @@ jobs:
       GATE_MODE: ${{ inputs.mode }}
       BOOTSTRAP_ENV: ${{ inputs.bootstrap_env }}
       UPLOAD_ARTIFACTS: ${{ inputs.upload_artifacts }}
+      OPERATOR_NOTE: ${{ inputs.note }}
     defaults:
       run:
         shell: powershell
@@ -63,18 +64,18 @@ jobs:
       - name: Record workflow inputs
         run: |
           @(
-            "mode=${{ inputs.mode }}"
-            "bootstrap_env=${{ inputs.bootstrap_env }}"
-            "upload_artifacts=${{ inputs.upload_artifacts }}"
-            "note=${{ inputs.note }}"
+            ("mode={0}" -f $env:GATE_MODE)
+            ("bootstrap_env={0}" -f $env:BOOTSTRAP_ENV)
+            ("upload_artifacts={0}" -f $env:UPLOAD_ARTIFACTS)
+            ("note={0}" -f $env:OPERATOR_NOTE)
           ) | Set-Content -LiteralPath (Join-Path $env:ARTIFACT_ROOT 'dispatch-inputs.txt') -Encoding UTF8
 
       - name: Show operator note
         if: ${{ inputs.note != '' }}
         run: |
           $notePath = Join-Path $env:ARTIFACT_ROOT 'operator-note.txt'
-          Write-Host "operator-note=${{ inputs.note }}"
-          Set-Content -LiteralPath $notePath -Value "${{ inputs.note }}" -Encoding UTF8
+          Write-Host ("operator-note={0}" -f $env:OPERATOR_NOTE)
+          Set-Content -LiteralPath $notePath -Value $env:OPERATOR_NOTE -Encoding UTF8
 
       - name: Bootstrap + validate self-hosted runner
         run: |

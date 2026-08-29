@@ -806,6 +806,7 @@ pub(super) fn term_exchange_receipt_feed_item_json(receipt: &Value) -> Value {
         "backend_kind": receipt.get("backend_kind").cloned().unwrap_or(Value::Null),
         "status": status,
         "progression_class": progression_class,
+        "amount_credits": receipt.get("amount_credits").cloned().unwrap_or(Value::Null),
         "title": format!("Term Exchange receipt {}", receipt_id),
         "summary": format!("{} · {}", status, progression_class),
         "detail": format!("receipt {} · status {} · progression {}", receipt_id, status, progression_class),

@@ -198,6 +198,7 @@ pub(super) fn world_term_exchange_receipt_snapshot_json(
     receipt: &TermExchangeReceiptState,
 ) -> Value {
     json!({
+        "protocol_version": &receipt.protocol_version,
         "receipt_id": &receipt.receipt_id,
         "intent_id": &receipt.intent_id,
         "term_id": &receipt.term_id,
@@ -208,6 +209,7 @@ pub(super) fn world_term_exchange_receipt_snapshot_json(
         "settlement_reference": &receipt.settlement_reference,
         "ledger_entry_id": &receipt.ledger_entry_id,
         "reason": &receipt.reason,
+        "amount_credits": receipt.amount_credits,
         "finalized_at_epoch": receipt.finalized_at_epoch,
     })
 }

@@ -86,9 +86,17 @@ impl PostgresLedgerRepository {
 
         if let Some((stored_intent_id, stored_hash, stored_receipt)) =
             sqlx::query_as::<_, (String, String, Option<Value>)>(
-                "select i.intent_id, i.payload_hash, r.receipt_json
-             from trnm_economic_intents i
-             left join trnm_economic_receipts r on r.intent_id = i.intent_id
+                "select i.intent_id, i.payload_hash,
+             coalesce(
+                 (select e.receipt_json
+             from public.trnm_economic_receipt_events_v1 e
+                   where e.intent_id = i.intent_id
+                   order by e.event_sequence desc, e.event_id desc
+                   limit 1),
+                 r.receipt_json
+             ) as receipt_json
+             from public.trnm_economic_intents i
+             left join public.trnm_economic_receipts r on r.intent_id = i.intent_id
              where i.intent_id = $1 or (i.idempotency_scope = $2 and i.idempotency_key = $3)
              order by (i.intent_id = $1) desc
              limit 1
@@ -137,6 +145,10 @@ impl PostgresLedgerRepository {
 
         let account_id = intent_account_id(intent)?;
         let amount = intent.amount_credits.unwrap_or_default();
+        // Receipt evidence carries a non-negative display-safe amount.  The operation itself
+        // still receives the raw intent amount so invalid negative requests fail/skip through
+        // their normal typed path without making evidence persistence fail closed with a 500.
+        let evidence_amount = amount.max(0);
         let mut receipt = EconomicReceipt::from_intent(
             format!("cex-native-receipt:{}", intent.intent_id),
             intent,
@@ -150,6 +162,9 @@ impl PostgresLedgerRepository {
             "authority": "cex-ledger-postgres",
             "atomic_intent_receipt": true,
             "payload_hash": payload_hash,
+            // Keep the exact whole-credit authority in the receipt evidence so downstream CEX /
+            // World projections never have to infer value from a compatibility display field.
+            "amount_credits": evidence_amount,
         });
 
         let result = match intent.kind {
@@ -232,7 +247,7 @@ impl PostgresLedgerRepository {
             }
         };
         result?;
-        persist_native_receipt(&mut tx, intent, &receipt).await?;
+        persist_native_receipt(&mut tx, intent, &receipt, &payload_hash, evidence_amount).await?;
         tx.commit()
             .await
             .map_err(|error| db_error("commit TRNM native-economy transaction", error))?;
@@ -969,7 +984,26 @@ impl PostgresLedgerRepository {
             LedgerActionError::RepositoryUnavailable("postgres pool not initialized".to_string())
         })?;
         let values = sqlx::query_scalar::<_, Value>(
-            "select receipt_json from trnm_economic_receipts order by finalized_at, receipt_id",
+            "with latest_events as (
+                 select distinct on (intent_id)
+                        receipt_json, finalized_at, receipt_id, event_id
+                   from public.trnm_economic_receipt_events_v1
+                  order by intent_id, event_sequence desc, event_id desc
+             )
+             select latest.receipt_json
+               from (
+                   select receipt_json, finalized_at, receipt_id, event_id
+                     from latest_events
+                   union all
+                   select r.receipt_json, r.finalized_at, r.receipt_id, 0::bigint as event_id
+                     from public.trnm_economic_receipts r
+                    where not exists (
+                              select 1
+                                from public.trnm_economic_receipt_events_v1 e
+                               where e.intent_id = r.intent_id
+                          )
+               ) latest
+              order by latest.finalized_at, latest.receipt_id, latest.event_id",
         )
         .fetch_all(pool)
         .await
@@ -1003,11 +1037,13 @@ impl PostgresLedgerRepository {
         for seller in &sellers {
             release_matured_seller_holds(&mut tx, *seller).await?;
         }
-        let receipt_count =
-            sqlx::query_scalar::<_, i64>("select count(*)::bigint from trnm_economic_receipts")
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(|error| db_error("count TRNM receipts", error))?;
+        let receipt_count = sqlx::query_scalar::<_, i64>(
+            "select count(distinct intent_id)::bigint
+               from public.trnm_economic_receipt_events_v1",
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|error| db_error("count TRNM receipts", error))?;
         let overdue_holds = sqlx::query_scalar::<_, i64>(
             "select count(*)::bigint from trnm_escrow_trades
              where status = 'committed' and seller_hold_released = false
@@ -1921,6 +1957,8 @@ async fn persist_native_receipt(
     tx: &mut Transaction<'_, Postgres>,
     intent: &EconomicIntent,
     receipt: &EconomicReceipt,
+    payload_hash: &str,
+    amount: i64,
 ) -> Result<(), LedgerActionError> {
     let receipt_json = serde_json::to_value(receipt)
         .map_err(|error| LedgerActionError::Other(error.to_string()))?;
@@ -1932,18 +1970,16 @@ async fn persist_native_receipt(
         .ok()
         .and_then(|value| value.as_str().map(ToString::to_string))
         .unwrap_or_else(|| "unknown".to_string());
+
+    // Keep the 0027 row as an immutable compatibility seed.  A retry after a
+    // recoverable hold must never rewrite that row; its new snapshot is
+    // appended below to the native receipt event stream.
     sqlx::query(
-        "insert into trnm_economic_receipts (
+        "insert into public.trnm_economic_receipts (
              receipt_id, intent_id, protocol_version, idempotency_scope, idempotency_key,
              progression_class, status, receipt_json, finalized_at
          ) values ($1, $2, $3, $4, $5, $6, $7, $8, to_timestamp($9::double precision))
-         on conflict (intent_id) do update set
-             receipt_id = excluded.receipt_id,
-             progression_class = excluded.progression_class,
-             status = excluded.status,
-             receipt_json = excluded.receipt_json,
-             finalized_at = excluded.finalized_at,
-             updated_at = now()",
+         on conflict (intent_id) do nothing",
     )
     .bind(&receipt.receipt_id)
     .bind(&intent.intent_id)
@@ -1957,6 +1993,50 @@ async fn persist_native_receipt(
     .execute(&mut **tx)
     .await
     .map_err(|error| db_error("persist TRNM economic receipt", error))?;
+
+    let previous_progression = sqlx::query_scalar::<_, String>(
+        "select e.progression_class
+           from public.trnm_economic_receipt_events_v1 e
+          where e.intent_id = $1
+          order by e.event_sequence desc, e.event_id desc
+          limit 1",
+    )
+    .bind(&intent.intent_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|error| db_error("load previous TRNM receipt evidence", error))?;
+    let event_kind = receipt_event_kind(previous_progression.as_deref());
+    sqlx::query(
+        "insert into public.trnm_economic_receipt_events_v1 (
+             intent_id, event_sequence, intent_hash, receipt_id, protocol_version,
+             idempotency_scope, idempotency_key, progression_class, status,
+             amount_credits, receipt_json, receipt_hash, event_kind, finalized_at
+         )
+         select $1,
+                coalesce(max(event_sequence), 0) + 1,
+                $2, $3, $4, $5, $6, $7, $8, $9,
+                $10,
+                encode(digest($10::jsonb::text, 'sha256'), 'hex'),
+                $11,
+                to_timestamp($12::double precision)
+           from public.trnm_economic_receipt_events_v1
+          where intent_id = $1",
+    )
+    .bind(&intent.intent_id)
+    .bind(payload_hash)
+    .bind(&receipt.receipt_id)
+    .bind(&receipt.protocol_version)
+    .bind(&intent.idempotency_key.scope)
+    .bind(&intent.idempotency_key.key)
+    .bind(&progression)
+    .bind(&status)
+    .bind(amount)
+    .bind(&receipt_json)
+    .bind(event_kind)
+    .bind(receipt.finalized_at_epoch as f64)
+    .execute(&mut **tx)
+    .await
+    .map_err(|error| db_error("append TRNM receipt evidence", error))?;
     sqlx::query(
         "update trnm_economic_intents set status = $2, updated_at = now() where intent_id = $1",
     )
@@ -1966,6 +2046,14 @@ async fn persist_native_receipt(
     .await
     .map_err(|error| db_error("finalize TRNM economic intent", error))?;
     Ok(())
+}
+
+fn receipt_event_kind(previous_progression: Option<&str>) -> &'static str {
+    match previous_progression {
+        None => "initial",
+        Some("recoverable_hold") => "recoverable_hold_retry",
+        Some(_) => "progression",
+    }
 }
 
 fn db_error(context: &str, error: sqlx::Error) -> LedgerActionError {
@@ -2021,5 +2109,18 @@ mod credential_tests {
         assert_eq!(reserve, replay);
         assert_ne!(reserve, consume);
         assert!(!reserve.is_nil());
+    }
+
+    #[test]
+    fn recoverable_hold_retries_append_a_new_evidence_event() {
+        assert_eq!(receipt_event_kind(None), "initial");
+        assert_eq!(
+            receipt_event_kind(Some("recoverable_hold")),
+            "recoverable_hold_retry"
+        );
+        assert_eq!(
+            receipt_event_kind(Some("progression_allowed")),
+            "progression"
+        );
     }
 }

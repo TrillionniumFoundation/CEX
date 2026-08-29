@@ -242,15 +242,20 @@ pub(super) fn term_exchange_kernel_manifest_json(state: &AppState) -> Value {
                 "settlement_reference",
                 "ledger_entry_id",
                 "reason",
+                "amount_credits",
                 "finalized_at_epoch"
             ],
             "legacy_status_compatibility": true,
             "state_json_persisted": true,
             "normalized_sql_shadow_status": "receipt_tables_shadowed",
-            "normalized_sql_migration_floor": "0026_add_term_exchange_receipt_tables.sql",
+            "normalized_sql_migration_floor": "0087_add_term_exchange_receipt_event_history.sql",
             "normalized_sql_receipt_tables": [
                 "league_term_exchange_receipts",
                 "world_term_exchange_receipts"
+            ],
+            "normalized_sql_receipt_event_tables": [
+                "league_term_exchange_receipt_events_v1",
+                "world_term_exchange_receipt_events_v1"
             ],
             "sql_shadow_preserves": [
                 "status",
@@ -262,6 +267,7 @@ pub(super) fn term_exchange_kernel_manifest_json(state: &AppState) -> Value {
             "sql_direct_write_status": "typed_sqlx_receipt_upserts_active",
             "sql_direct_write_helper": "upsert_normalized_term_exchange_receipt_tables",
             "sql_direct_write_mode": "typed_sqlx_receipt_upserts_from_repository_snapshot",
+            "sql_receipt_event_history_mode": "append_distinct_snapshots_with_sequence_and_hash_chain",
             "progression_source": "ReceiptProgressionClass_prefers_typed_receipts_with_legacy_status_fallback",
             "normalized_receipt_read_model_probe_status": "receipt_projection_objects_exposed_in_world_home_client_feed_and_client_app",
             "runtime_receipt_projection_status": "typed_receipts_drive_world_commerce_recovery_and_sql_read_model_surfaces"
@@ -337,7 +343,11 @@ pub(super) async fn post_trnm_economic_intent(
         "{}/v1/trnm/economy/intents",
         state.config().ledger_base_url.trim_end_matches('/')
     );
-    let mut request = state.inner.http.post(url).header("x-admin-token", token);
+    let mut request = state
+        .inner
+        .ledger_http
+        .post(url)
+        .header("x-admin-token", token);
     request = if let Some(session) = player_session {
         request.header("x-trnm-player-session", session)
     } else {
@@ -354,11 +364,21 @@ pub(super) async fn post_trnm_economic_intent(
         }
     };
     let status = response.status();
+    let body = match read_bounded_ledger_body(response).await {
+        Ok(body) => body,
+        Err(error) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": format!("persistent ledger response invalid: {error}")})),
+            )
+                .into_response()
+        }
+    };
     if !status.is_success() {
-        let value = response.json::<Value>().await.unwrap_or(Value::Null);
+        let value = serde_json::from_str::<Value>(&body).unwrap_or(Value::Null);
         return (StatusCode::BAD_GATEWAY, Json(value)).into_response();
     }
-    let receipt = match response.json::<EconomicReceipt>().await {
+    let receipt = match serde_json::from_str::<EconomicReceipt>(&body) {
         Ok(receipt) => receipt,
         Err(error) => {
             return (
@@ -415,7 +435,11 @@ pub(super) async fn post_trnm_wallet_snapshot(
         "{}/v1/trnm/economy/wallet",
         state.config().ledger_base_url.trim_end_matches('/')
     );
-    let mut request = state.inner.http.post(url).header("x-admin-token", token);
+    let mut request = state
+        .inner
+        .ledger_http
+        .post(url)
+        .header("x-admin-token", token);
     request = if let Some(session) = player_session {
         request.header("x-trnm-player-session", session)
     } else {
@@ -432,7 +456,17 @@ pub(super) async fn post_trnm_wallet_snapshot(
         }
     };
     let status = response.status();
-    let value = response.json::<Value>().await.unwrap_or(Value::Null);
+    let body = match read_bounded_ledger_body(response).await {
+        Ok(body) => body,
+        Err(error) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": format!("ledger wallet response invalid: {error}")})),
+            )
+                .into_response()
+        }
+    };
+    let value = serde_json::from_str::<Value>(&body).unwrap_or(Value::Null);
     if !status.is_success() {
         return (StatusCode::BAD_GATEWAY, Json(value)).into_response();
     }
@@ -468,14 +502,22 @@ pub(super) async fn post_trnm_receipt_projection_rebuild(
     let receipts =
         match state
             .inner
-            .http
+            .ledger_http
             .get(url)
             .header("x-admin-token", token)
             .send()
             .await
         {
             Ok(response) if response.status().is_success() => {
-                match response.json::<Vec<EconomicReceipt>>().await {
+                let body = match read_bounded_ledger_body(response).await {
+                    Ok(body) => body,
+                    Err(error) => return (
+                        StatusCode::BAD_GATEWAY,
+                        Json(json!({"error": format!("invalid receipt rebuild payload: {error}")})),
+                    )
+                        .into_response(),
+                };
+                match serde_json::from_str::<Vec<EconomicReceipt>>(&body) {
                     Ok(receipts) => receipts,
                     Err(error) => return (
                         StatusCode::BAD_GATEWAY,
