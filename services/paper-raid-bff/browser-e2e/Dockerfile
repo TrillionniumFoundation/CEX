@@ -8,8 +8,10 @@ COPY services/paper-raid-bff/browser-e2e/package-lock.json ./package-lock.json
 RUN npm ci --ignore-scripts --no-audit --no-fund --omit=dev \
     && npm cache clean --force
 COPY services/paper-raid-bff/browser-e2e/e2e.mjs ./e2e.mjs
+COPY services/paper-raid-bff/browser-e2e/mobile-a11y.mjs ./mobile-a11y.mjs
+COPY services/paper-raid-bff/browser-e2e/mock-hepta.mjs ./mock-hepta.mjs
 LABEL org.opencontainers.image.title="Hepta Paper Raid Browser E2E" \
-      org.opencontainers.image.description="Disposable three-context Playwright gate for Paper Raid" \
+      org.opencontainers.image.description="Disposable pinned-Chromium gates for Paper Raid" \
       org.opencontainers.image.source="https://github.com/TrillionniumFoundation/CEX" \
       org.opencontainers.image.version="1.49.1" \
       org.opencontainers.image.licenses="MIT" \

@@ -65,6 +65,8 @@ for (const marker of [
   'class="practice-step-status"',
   '<ol role="list">',
   ':where(a,button,input,textarea,select,summary,[tabindex]):focus-visible',
+  '--focus-backdrop:#070b12',
+  'box-shadow:0 0 0 9px var(--focus-backdrop)',
   '<aside id="toast" aria-hidden="true" hidden>',
 ]) assert.ok(html.includes(marker), `missing static accessibility marker: ${marker}`);
 assert.equal(html.includes('<aside id="toast" aria-live="polite"'), false);
@@ -101,6 +103,7 @@ class FakeElement {
     this.disabled = false;
     this.hidden = false;
     this.open = false;
+    this.focused = false;
     this.selectorResults = new Map();
   }
 
@@ -188,7 +191,7 @@ class FakeElement {
     return null;
   }
 
-  focus() {}
+  focus() { this.focused = true; }
   scrollIntoView() {}
 }
 
@@ -207,7 +210,8 @@ const document = {
     return tagName === "details" ? new FakeDetailsElement() : new FakeElement(tagName);
   },
   querySelector(selector) {
-    return selector === "#toast" ? toast : null;
+    if (selector === "#toast") return toast;
+    return body.selectorResults.get(selector) ?? null;
   },
   querySelectorAll() {
     return [];
@@ -290,5 +294,103 @@ assert.equal(captain, sameCaptain, "same-step reload signature must remain stabl
 assert.notEqual(captain, evidence, "a new practice step must not inherit the prior submit focus");
 assert.match(captain, /"practiceAction":"captain_plan"/);
 assert.match(captain, /"practiceVersion":"1"/);
+
+const firstRadio = new FakeElement("input", {
+  attributes: { type: "radio", name: "choice", value: "audit_highest_risk_claim" },
+});
+const secondRadio = new FakeElement("input", {
+  attributes: { type: "radio", name: "choice", value: "audit_evidence_chain_first" },
+});
+assert.notEqual(
+  context.playerFocusSignature(firstRadio),
+  context.playerFocusSignature(secondRadio),
+  "same-name radio choices must retain distinct non-secret focus signatures",
+);
+
+const priorForm = new FakeElement("form", {
+  classes: ["practice-advance-form", "primary-action"],
+  dataset: { practiceAction: "captain_plan", practiceVersion: "1" },
+});
+const priorButton = new FakeElement("button", {
+  classes: ["practice-primary-action"],
+  attributes: { type: "submit" },
+});
+body.replaceChildren(priorForm);
+priorForm.append(priorButton);
+assert.equal(context.savePlayerFocusContext(priorButton), true);
+const nextForm = new FakeElement("form", {
+  classes: ["practice-advance-form", "primary-action"],
+  dataset: { practiceAction: "evidence_assessment", practiceVersion: "2" },
+});
+const nextField = new FakeElement("input", { attributes: { type: "radio" } });
+nextForm.selectorResults.set(
+  "input:not([type=hidden]):not([disabled]), select:not([disabled]), textarea:not([disabled])",
+  nextField,
+);
+body.replaceChildren(nextForm);
+nextForm.append(nextField);
+body.selectorResults.set(
+  ".practice-advance-form.primary-action,.practice-agent-wait.primary-action,.practice-start-form.primary-action,.practice-complete.primary-action,.practice-abandoned.primary-action",
+  nextForm,
+);
+assert.equal(context.restorePlayerFocusContext("reload"), false);
+assert.equal(context.focusProgressedPracticeAction("reload"), true);
+assert.equal(nextField.focused, true, "a progressed practice reload must focus the new first input");
+
+const waiting = new FakeElement("section", {
+  classes: ["practice-agent-wait", "primary-action"],
+});
+const waitingLink = new FakeElement("a", {
+  classes: ["practice-primary-action"],
+  attributes: { href: "/league/practice" },
+});
+body.replaceChildren(waiting);
+waiting.append(waitingLink);
+assert.equal(context.savePlayerFocusContext(waitingLink), true);
+const interpretationForm = new FakeElement("form", {
+  classes: ["practice-advance-form", "primary-action"],
+  dataset: { practiceAction: "experiment_interpretation", practiceVersion: "4" },
+});
+const interpretationField = new FakeElement("input", {
+  attributes: { type: "radio", name: "choice", value: "result_matches_claim" },
+});
+interpretationForm.selectorResults.set(
+  "input:not([type=hidden]):not([disabled]), select:not([disabled]), textarea:not([disabled])",
+  interpretationField,
+);
+body.replaceChildren(interpretationForm);
+interpretationForm.append(interpretationField);
+body.selectorResults.set(
+  ".practice-advance-form.primary-action,.practice-agent-wait.primary-action,.practice-start-form.primary-action,.practice-complete.primary-action,.practice-abandoned.primary-action",
+  interpretationForm,
+);
+assert.equal(context.restorePlayerFocusContext("navigate"), false);
+assert.equal(context.focusProgressedPracticeAction("navigate"), true);
+assert.equal(
+  interpretationField.focused,
+  true,
+  "the same-path Agent status navigation must focus the first interpretation input",
+);
+
+body.replaceChildren(priorForm);
+priorForm.append(priorButton);
+assert.equal(context.savePlayerFocusContext(priorButton), true);
+body.replaceChildren(interpretationForm);
+body.selectorResults.set(
+  ".practice-advance-form.primary-action,.practice-agent-wait.primary-action,.practice-start-form.primary-action,.practice-complete.primary-action,.practice-abandoned.primary-action",
+  interpretationForm,
+);
+assert.equal(
+  context.focusProgressedPracticeAction("navigate"),
+  false,
+  "ordinary navigations must not consume a stale mutation focus context",
+);
+
+for (const marker of [
+  'Closed-Alpha access key / <span lang="zh-Hans">封闭 Alpha 访问密钥</span>',
+  'Enter Paper Raid / <span lang="zh-Hans">进入论文远征</span>',
+  'Local signing key / <span lang="zh-Hans">本地签名密钥</span>',
+  'No in-memory key / <span lang="zh-Hans">当前无内存密钥</span>',
+]) assert.ok(html.includes(marker), `missing bilingual page-shell language marker: ${marker}`);
 
 console.log("paper-raid-bff P1 static accessibility gate: ok");
