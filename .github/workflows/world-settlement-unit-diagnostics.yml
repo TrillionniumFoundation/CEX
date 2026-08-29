@@ -18,9 +18,9 @@ concurrency:
 
 jobs:
   diagnose:
-    name: world-settlement-unit-diagnostics/exact-world-lib
+    name: world-settlement-unit-diagnostics/exact-world-tests
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - name: Checkout diagnostic definition
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -64,33 +64,49 @@ jobs:
           rustc --version --verbose
           cargo --version --verbose
 
-      - name: Capture exact library contract output
-        id: test
+      - name: Capture every ownership and unit contract separately
         working-directory: world/trillionnium
         shell: bash
         run: |
           set -uo pipefail
-          mkdir -p ../../run/world-unit-diagnostics
-          cargo metadata --locked --no-deps --format-version 1 \
-            > ../../run/world-unit-diagnostics/metadata.json \
-            2> ../../run/world-unit-diagnostics/metadata.stderr
+          out='../../run/world-unit-diagnostics'
+          mkdir -p "$out"
+          cargo metadata --locked --no-deps --format-version 1 > "$out/metadata.json" 2> "$out/metadata.stderr"
           metadata_rc=$?
-          printf '%s\n' "$metadata_rc" > ../../run/world-unit-diagnostics/metadata.exit-code
-          if (( metadata_rc != 0 )); then
-            exit "$metadata_rc"
-          fi
+          printf '%s\n' "$metadata_rc" > "$out/metadata.exit-code"
           cargo fmt --all
           fmt_rc=$?
-          printf '%s\n' "$fmt_rc" > ../../run/world-unit-diagnostics/rustfmt.exit-code
-          if (( fmt_rc != 0 )); then
-            exit "$fmt_rc"
+          printf '%s\n' "$fmt_rc" > "$out/rustfmt.exit-code"
+
+          run_case() {
+            name="$1"
+            shift
+            printf '%q ' "$@" > "$out/${name}.command"
+            printf '\n' >> "$out/${name}.command"
+            "$@" \
+              > >(tee "$out/${name}.stdout") \
+              2> >(tee "$out/${name}.stderr" >&2)
+            rc=$?
+            printf '%s\n' "$rc" > "$out/${name}.exit-code"
+            printf '%s\t%s\n' "$name" "$rc" >> "$out/results.tsv"
+          }
+
+          : > "$out/results.tsv"
+          if (( metadata_rc == 0 && fmt_rc == 0 )); then
+            run_case lib cargo test -p trnm-game-server --lib --locked
+            run_case entitlement-signer cargo test -p trnm-game-server --bin trnm-entitlement-signer --locked
+            run_case game-server-boundary cargo test -p trnm-game-server --test settlement_game_server_boundary --locked
+            run_case remote-identity cargo test -p trnm-game-server --test settlement_remote_identity_contract --locked
+            run_case worker-contract cargo test -p trnm-game-server --test settlement_worker_contract --locked
+            run_case fault-model cargo test -p trnm-game-server --test settlement_fault_model --locked
+          else
+            printf 'preflight\t1\n' >> "$out/results.tsv"
           fi
-          cargo test -p trnm-game-server --lib --locked --no-fail-fast \
-            > >(tee ../../run/world-unit-diagnostics/cargo-test.stdout) \
-            2> >(tee ../../run/world-unit-diagnostics/cargo-test.stderr >&2)
-          rc=$?
-          printf '%s\n' "$rc" > ../../run/world-unit-diagnostics/cargo-test.exit-code
-          exit "$rc"
+          awk -F '\t' '$2 != 0 {failed=1} END {print failed ? "failed" : "passed"}' "$out/results.tsv" > "$out/overall-status"
+          cat "$out/results.tsv"
+          # Diagnostic workflow always uploads its evidence. The machine-readable
+          # result, not this job conclusion, identifies the failing command.
+          exit 0
 
       - name: Write diagnostic manifest
         if: always()
@@ -104,9 +120,17 @@ jobs:
           import hashlib, json, os
           from pathlib import Path
           root = Path('run/world-unit-diagnostics')
+          rows = []
+          results = root / 'results.tsv'
+          if results.is_file():
+              for line in results.read_text().splitlines():
+                  if not line.strip():
+                      continue
+                  name, rc = line.split('\t', 1)
+                  rows.append({'name': name, 'exit_code': int(rc)})
           files = sorted(path for path in root.rglob('*') if path.is_file())
           payload = {
-              'schema': 'trnm_world_settlement_unit_diagnostics_v1',
+              'schema': 'trnm_world_settlement_unit_diagnostics_v2',
               'repository': os.environ['WORLD_REPOSITORY'],
               'commit': os.environ['WORLD_COMMIT'],
               'tree': os.environ['WORLD_TREE'],
@@ -114,6 +138,8 @@ jobs:
               'workflow_run_attempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
               'diagnostic_only': True,
               'promotion_effect': 'none',
+              'results': rows,
+              'all_passed': bool(rows) and all(row['exit_code'] == 0 for row in rows),
               'sha256': {
                   str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
                   for path in files
@@ -133,7 +159,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: world-unit-diagnostics-${{ steps.lock.outputs.commit }}
+          name: world-unit-diagnostics-v2-${{ steps.lock.outputs.commit }}
           path: run/world-unit-diagnostics/
           if-no-files-found: error
           retention-days: 7
