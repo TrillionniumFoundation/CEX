@@ -58,10 +58,9 @@ jobs:
       - name: Apply only reviewed deterministic fixes
         run: |
           set -euo pipefail
-          migration=world/trillionnium/crates/trnm-game-server/migrations/0018_online_settlement_operator_controls_v1.sql
-          database_test=world/trillionnium/crates/trnm-game-server/tests/settlement_database_contract.rs
           test "$(git -C world hash-object trillionnium/crates/trnm-game-server/migrations/0018_online_settlement_operator_controls_v1.sql)" = cc9d7705d68a49ca0e2527359f6b0ace63c963dd
           test "$(git -C world hash-object trillionnium/crates/trnm-game-server/tests/settlement_database_contract.rs)" = 5433c7cf351500ab99801d6c33ebe6cd020dcacd
+          test "$(git -C world hash-object trillionnium/crates/trnm-game-server/tests/settlement_operator_controls_database.rs)" = 46bdd04c1ff4d68518a4a96c02ee86310043465f
           python3 - <<'PY'
           from pathlib import Path
 
@@ -93,6 +92,46 @@ jobs:
           if text.count(old) != 1:
               raise SystemExit(f"unused binding marker count was {text.count(old)}, expected 1")
           database_test.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          operator_test = Path("world/trillionnium/crates/trnm-game-server/tests/settlement_operator_controls_database.rs")
+          text = operator_test.read_text(encoding="utf-8")
+          old = """        \"delete from public.trnm_online_settlement_operator_policy_revisions\",
+                  \"truncate public.trnm_online_settlement_operator_policy_revisions\",
+              ] {
+                  let error = sqlx::query::query(statement)
+                      .execute(&pool)
+                      .await
+                      .unwrap_err();
+                  assert_sqlstate(error, \"55000\");
+              }
+          """
+          new = """        \"delete from public.trnm_online_settlement_operator_policy_revisions\",
+              ] {
+                  let error = sqlx::query::query(statement)
+                      .execute(&pool)
+                      .await
+                      .unwrap_err();
+                  assert_sqlstate(error, \"55000\");
+              }
+
+              let policy_truncate = sqlx::query::query(
+                  \"truncate public.trnm_online_settlement_operator_policy_revisions\",
+              )
+              .execute(&pool)
+              .await
+              .unwrap_err();
+              let sqlx::Error::Database(database) = policy_truncate else {
+                  panic!(\"expected PostgreSQL truncate rejection, got {policy_truncate}\");
+              };
+              assert!(
+                  matches!(database.code().as_deref(), Some(\"55000\" | \"0A000\")),
+                  \"expected append-only trigger or FK-first truncate rejection, got {:?}\",
+                  database.code()
+              );
+          """
+          if text.count(old) != 1:
+              raise SystemExit(f"policy truncate assertion marker count was {text.count(old)}, expected 1")
+          operator_test.write_text(text.replace(old, new, 1), encoding="utf-8")
           PY
           git -C world diff --check
 
@@ -125,6 +164,7 @@ jobs:
           mkdir -p remediation/trillionnium/crates/trnm-game-server/src
           cp world/trillionnium/crates/trnm-game-server/migrations/0018_online_settlement_operator_controls_v1.sql remediation/trillionnium/crates/trnm-game-server/migrations/
           cp world/trillionnium/crates/trnm-game-server/tests/settlement_database_contract.rs remediation/trillionnium/crates/trnm-game-server/tests/
+          cp world/trillionnium/crates/trnm-game-server/tests/settlement_operator_controls_database.rs remediation/trillionnium/crates/trnm-game-server/tests/
           cp world/trillionnium/crates/trnm-game-server/src/cex.rs remediation/trillionnium/crates/trnm-game-server/src/
           git -C world diff --binary --full-index > remediation/remediation.patch
           git -C world diff --name-only > remediation/changed-files.txt
