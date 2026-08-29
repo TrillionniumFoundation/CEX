@@ -1,0 +1,140 @@
+name: world-settlement-unit-diagnostics
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - ci/world-settlement-capture-boundary-v1
+    paths:
+      - '.github/workflows/world-settlement-unit-diagnostics.yml'
+      - 'evidence/world-settlement-external-lock.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: world-settlement-unit-diagnostics-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    name: world-settlement-unit-diagnostics/exact-world-lib
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout diagnostic definition
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Load exact World identity
+        id: lock
+        run: |
+          set -euo pipefail
+          jq -e '
+            .schema == "trnm_world_cex_settlement_external_lock_v1" and
+            (.world.commit | test("^[0-9a-f]{40}$")) and
+            (.world.tree | test("^[0-9a-f]{40}$")) and
+            .promotion_effect == "none" and
+            .trusted_settlement == false and
+            .public_online == false and
+            .public_player_market == false
+          ' evidence/world-settlement-external-lock.json >/dev/null
+          echo "repository=$(jq -r '.world.repository' evidence/world-settlement-external-lock.json)" >> "$GITHUB_OUTPUT"
+          echo "commit=$(jq -r '.world.commit' evidence/world-settlement-external-lock.json)" >> "$GITHUB_OUTPUT"
+          echo "tree=$(jq -r '.world.tree' evidence/world-settlement-external-lock.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact World candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ steps.lock.outputs.repository }}
+          ref: ${{ steps.lock.outputs.commit }}
+          path: world
+          persist-credentials: false
+
+      - name: Verify exact World identity
+        run: |
+          set -euo pipefail
+          test "$(git -C world rev-parse HEAD)" = '${{ steps.lock.outputs.commit }}'
+          test "$(git -C world rev-parse 'HEAD^{tree}')" = '${{ steps.lock.outputs.tree }}'
+          git -C world diff --exit-code
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
+          rustup default 1.98.0
+          rustc --version --verbose
+          cargo --version --verbose
+
+      - name: Capture exact library contract output
+        id: test
+        working-directory: world/trillionnium
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p ../../run/world-unit-diagnostics
+          cargo metadata --locked --no-deps --format-version 1 \
+            > ../../run/world-unit-diagnostics/metadata.json \
+            2> ../../run/world-unit-diagnostics/metadata.stderr
+          metadata_rc=$?
+          printf '%s\n' "$metadata_rc" > ../../run/world-unit-diagnostics/metadata.exit-code
+          if (( metadata_rc != 0 )); then
+            exit "$metadata_rc"
+          fi
+          cargo fmt --all
+          fmt_rc=$?
+          printf '%s\n' "$fmt_rc" > ../../run/world-unit-diagnostics/rustfmt.exit-code
+          if (( fmt_rc != 0 )); then
+            exit "$fmt_rc"
+          fi
+          cargo test -p trnm-game-server --lib --locked --no-fail-fast \
+            > >(tee ../../run/world-unit-diagnostics/cargo-test.stdout) \
+            2> >(tee ../../run/world-unit-diagnostics/cargo-test.stderr >&2)
+          rc=$?
+          printf '%s\n' "$rc" > ../../run/world-unit-diagnostics/cargo-test.exit-code
+          exit "$rc"
+
+      - name: Write diagnostic manifest
+        if: always()
+        env:
+          WORLD_REPOSITORY: ${{ steps.lock.outputs.repository }}
+          WORLD_COMMIT: ${{ steps.lock.outputs.commit }}
+          WORLD_TREE: ${{ steps.lock.outputs.tree }}
+        run: |
+          mkdir -p run/world-unit-diagnostics
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path('run/world-unit-diagnostics')
+          files = sorted(path for path in root.rglob('*') if path.is_file())
+          payload = {
+              'schema': 'trnm_world_settlement_unit_diagnostics_v1',
+              'repository': os.environ['WORLD_REPOSITORY'],
+              'commit': os.environ['WORLD_COMMIT'],
+              'tree': os.environ['WORLD_TREE'],
+              'workflow_run_id': int(os.environ['GITHUB_RUN_ID']),
+              'workflow_run_attempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
+              'diagnostic_only': True,
+              'promotion_effect': 'none',
+              'sha256': {
+                  str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+                  for path in files
+              },
+          }
+          canonical = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()
+          payload['payload_sha256'] = hashlib.sha256(canonical).hexdigest()
+          (root / 'manifest.json').write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
+          PY
+          (
+            cd run/world-unit-diagnostics
+            find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+            sha256sum --check SHA256SUMS
+          )
+
+      - name: Upload exact diagnostic output
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: world-unit-diagnostics-${{ steps.lock.outputs.commit }}
+          path: run/world-unit-diagnostics/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 9
