@@ -1,0 +1,89 @@
+name: world-settlement-lock-refresh
+
+# Deliberately manual-only. Automatic push refresh created a bot-authored commit
+# loop whose pull_request checks concluded action_required without allocating jobs.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: world-settlement-lock-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    if: github.actor != 'github-actions[bot]'
+    name: world-settlement-lock-refresh/current-candidates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout relay branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ci/world-settlement-capture-boundary-v1
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Resolve current immutable candidates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          world_branch='fix/world-settlement-gap-closure-v1'
+          cex_branch='fix/cex-settlement-receipt-lookup-v1'
+          world_json="$(curl --fail --silent --show-error \
+            -H 'Accept: application/vnd.github+json' \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            "https://api.github.com/repos/TrillionniumFoundation/Trillionnium-World/branches/${world_branch//\//%2F}")"
+          cex_json="$(curl --fail --silent --show-error \
+            -H 'Accept: application/vnd.github+json' \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            "https://api.github.com/repos/TrillionniumFoundation/CEX/branches/${cex_branch//\//%2F}")"
+          world_commit="$(jq -er '.commit.sha | select(test("^[0-9a-f]{40}$"))' <<<"$world_json")"
+          world_tree="$(jq -er '.commit.commit.tree.sha | select(test("^[0-9a-f]{40}$"))' <<<"$world_json")"
+          cex_commit="$(jq -er '.commit.sha | select(test("^[0-9a-f]{40}$"))' <<<"$cex_json")"
+          cex_tree="$(jq -er '.commit.commit.tree.sha | select(test("^[0-9a-f]{40}$"))' <<<"$cex_json")"
+          jq -n \
+            --arg world_commit "$world_commit" \
+            --arg world_tree "$world_tree" \
+            --arg cex_commit "$cex_commit" \
+            --arg cex_tree "$cex_tree" \
+            '{
+              schema: "trnm_world_cex_settlement_external_lock_v1",
+              world: {
+                repository: "TrillionniumFoundation/Trillionnium-World",
+                branch: "fix/world-settlement-gap-closure-v1",
+                commit: $world_commit,
+                tree: $world_tree
+              },
+              cex_owner: {
+                repository: "TrillionniumFoundation/CEX",
+                branch: "fix/cex-settlement-receipt-lookup-v1",
+                commit: $cex_commit,
+                tree: $cex_tree
+              },
+              promotion_effect: "none",
+              native_world_actions_run: false,
+              trusted_settlement: false,
+              public_online: false,
+              public_player_market: false
+            }' > evidence/world-settlement-external-lock.json
+          python3 -m json.tool evidence/world-settlement-external-lock.json >/dev/null
+
+      - name: Commit only a changed exact lock
+        run: |
+          set -euo pipefail
+          git diff --check
+          if git diff --quiet -- evidence/world-settlement-external-lock.json; then
+            echo 'Component lock is already current.'
+            exit 0
+          fi
+          test "$(git diff --name-only | tr -d '\r')" = 'evidence/world-settlement-external-lock.json'
+          git add evidence/world-settlement-external-lock.json
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'ci(settlement): refresh exact World and CEX component lock'
+          git push origin HEAD:ci/world-settlement-capture-boundary-v1

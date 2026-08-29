@@ -1,0 +1,65 @@
+name: world-remediation-publish-v1
+
+on:
+  push:
+    branches:
+      - ci/world-settlement-capture-boundary-v1
+    paths:
+      - .github/workflows/world-remediation-publish-v1.yml
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: world-remediation-publish-v1
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: world-remediation-publish-v1/exact-blobs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout publishing branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ci/world-settlement-capture-boundary-v1
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Download the proven remediation artifact
+        run: |
+          set -euo pipefail
+          gh run download 33237360983 \
+            --repo TrillionniumFoundation/CEX \
+            --name world-source-remediation-v3-ad0fd637 \
+            --dir publish
+          (cd publish && sha256sum --check SHA256SUMS)
+
+      - name: Materialize exact Git blobs
+        run: |
+          set -euo pipefail
+          destination=evidence/world-source-remediation-v3/files
+          rm -rf "$destination"
+          mkdir -p "$destination"
+          cp -a publish/trillionnium/. "$destination/trillionnium/"
+          cp publish/identity.txt publish/changed-files.txt publish/remediation.patch publish/SHA256SUMS \
+            evidence/world-source-remediation-v3/
+          test "$(git hash-object "$destination/trillionnium/crates/trnm-game-server/build.rs")" = 5548ef89424270c1462956d0e19b661b5b7ee080
+          test "$(git hash-object "$destination/trillionnium/crates/trnm-game-server/migrations/0018_online_settlement_operator_controls_v1.sql")" = 7e8611ecca2f625234acbb9a7250c990ac9a7afb
+          test "$(git hash-object "$destination/trillionnium/crates/trnm-game-server/src/cex.rs")" = 97556ddb32a97be2307f21b2248e149d1a3b2a2c
+          test "$(git hash-object "$destination/trillionnium/crates/trnm-game-server/tests/settlement_database_contract.rs")" = 314dc75142886bd647c4a4a81a9793ddeba150cd
+          test "$(git hash-object "$destination/trillionnium/crates/trnm-game-server/tests/settlement_operator_controls_database.rs")" = 776217374a5bfd94786919bb8d30ec1fccd2ce1e
+
+      - name: Commit exact blob mirror
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add evidence/world-source-remediation-v3
+          git commit -m 'evidence(settlement): mirror proven World remediation blobs'
+          git push origin HEAD:ci/world-settlement-capture-boundary-v1

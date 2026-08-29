@@ -1,0 +1,8 @@
+d948621eaf763ded4ad72dc3c1e485f116ca33ce876fff58b30f4d869bc376e6  ./changed-files.txt
+b03a1551a103d35f14caeb2d41024458f8a31c7ae22e5d229443f0d727dcaf00  ./identity.txt
+88cffcf4641e3bf017d1ddb61dcb1b9bd1eb065e950f4d7297d6156685fea490  ./remediation.patch
+256f2bac0487df449c313ca499b2a7aa50d7fa26f763ad60e6509776b4e5305e  ./trillionnium/crates/trnm-game-server/build.rs
+7f23d0448b85992ac116606ded4631819024108b0188843aad6d79ca65202ff4  ./trillionnium/crates/trnm-game-server/migrations/0018_online_settlement_operator_controls_v1.sql
+614c2b97d88e43da427d0c928b3092fdca00b751d1d0edc0f80e7d7c2522dcf2  ./trillionnium/crates/trnm-game-server/src/cex.rs
+79c01ac01ba2dd18498476cb7807c18eefed4f335349fafa5eaacb3f8c84bde4  ./trillionnium/crates/trnm-game-server/tests/settlement_database_contract.rs
+b84726d1bcfa5b68b7c97d95fbd044b308a8566bd87a470214d2de127f9a70e7  ./trillionnium/crates/trnm-game-server/tests/settlement_operator_controls_database.rs
