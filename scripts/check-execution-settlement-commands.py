@@ -156,6 +156,10 @@ if api:
     ):
         if marker in api:
             PROBLEMS.append(f"api.rs contains retired Ledger settlement marker: {marker}")
+    if re.search(r"\bledger_(?:reserved|refunded)\s*=", api):
+        PROBLEMS.append(
+            "api.rs writes compatibility-only Invocation Ledger flags after v12 cutover"
+        )
 
     for marker in (
         "fn ensure_no_legacy_settlement(",
@@ -195,6 +199,17 @@ if api:
                     "start_execution_in_db contains provider/Ledger network I/O marker: "
                     f"{marker}"
                 )
+
+    retry_match = re.search(
+        r"async\s+fn\s+retry_execution_in_db\([\s\S]*?(?=\nasync\s+fn\s+requeue_execution_in_db)",
+        api,
+    )
+    if not retry_match:
+        PROBLEMS.append("api.rs retry_execution_in_db function cannot be isolated")
+    elif "ensure_no_legacy_settlement" not in retry_match.group(0):
+        PROBLEMS.append(
+            "retry_execution_in_db must fail closed before touching a legacy reservation"
+        )
 
 require(
     "scripts/check-execution-settlement-commands-postgres.sh",

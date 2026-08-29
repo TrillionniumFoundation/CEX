@@ -140,6 +140,11 @@ struct ProviderRoute {
     org_id: Option<String>,
 }
 
+// These helpers are transport-boundary functions: callers need to return the
+// fully formed Axum response (including status, headers, and JSON body) on any
+// database failure.  The lint allowance is deliberately scoped to each helper
+// instead of disabling the check for the crate.
+#[allow(clippy::result_large_err)]
 async fn load_provider_route(
     state: &AppState,
     execution_id: Uuid,
@@ -174,6 +179,7 @@ async fn load_provider_route(
     }))
 }
 
+#[allow(clippy::result_large_err)]
 async fn enqueue_provider_command(
     state: &AppState,
     execution_id: Uuid,
@@ -437,8 +443,13 @@ fn classify_provider_error(message: &str) -> ProviderErrorClassification {
     }
     if upstream_status.is_some_and(|status| (500..=599).contains(&status)) {
         return ProviderErrorClassification {
-            outcome: "retry_wait",
-            code: "provider_upstream_unavailable",
+            // A 5xx response does not prove that the provider did not execute
+            // the request.  Migration 0082 deliberately permits retry_wait
+            // only with definitive-not-executed evidence, so preserve the
+            // possible side-effect boundary as an explicit reconciliation
+            // incident instead of allowing an unsafe automatic replay.
+            outcome: "reconcile_required",
+            code: "provider_unknown_remote_outcome",
             http_status: upstream_status,
             retry_after_seconds: None,
         };
@@ -635,5 +646,9 @@ mod tests {
             classify_provider_error("provider upstream returned status 401: denied").outcome,
             "dead_letter"
         );
+        let unavailable =
+            classify_provider_error("provider upstream returned status 503: unavailable");
+        assert_eq!(unavailable.outcome, "reconcile_required");
+        assert_eq!(unavailable.code, "provider_unknown_remote_outcome");
     }
 }
