@@ -14,11 +14,11 @@ jobs:
         with:
           ref: feature/settlement-all-blockers-closure-v1
           fetch-depth: 0
-      - run: python3 scripts/patch-p0-audit-outbox-fixture.py
+      - run: python3 scripts/patch-execution-settlement-fixture.py
       - run: git diff --check
       - run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add scripts/check-p0-migrations-postgres.sh
-          git commit -m "fix(ci): isolate Audit outbox lifecycle fixture"
+          git add scripts/check-execution-settlement-commands-postgres.sh
+          git commit -m "fix(ci): use exact account opening in settlement fixture"
           git push origin HEAD:feature/settlement-all-blockers-closure-v1
