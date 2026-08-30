@@ -23,11 +23,16 @@ observer also records and checks the exact Git tree and re-reads the candidate b
 snapshot. The shared candidate-trigger sequence is the sole committed freeze authority; secondary
 qualification-freeze markers are forbidden.
 
-The hosted-gate checker performs the only hosted latest-run selection. The strict collector injects
-that exact, job-validated snapshot into the evidence core in-process; the exact-attempt verifier
-and hosted-gate attestation consume the same frozen context. A freshness verifier revalidates the
-run/attempt set after job proof, before manifest generation, and after manifest publication. No
-later step may silently select or substitute a different rerun.
+The hosted-gate checker performs the only hosted latest-run selection. “Latest” is determined by
+immutable run creation identity (`created_at`, then GitHub run number, run id and run attempt), never
+by mutable completion metadata such as `updated_at`. Consequently, an older run that finishes late
+cannot mask a newer failed, cancelled, skipped or active run. The evidence core and freshness
+verifier consume the same shared ordering primitive, and offline regressions cover this inversion.
+
+The strict collector injects that exact, job-validated snapshot into the evidence core in-process;
+the exact-attempt verifier and hosted-gate attestation consume the same frozen context. A freshness
+verifier revalidates the run/attempt set after job proof, before manifest generation, and after
+manifest publication. No later step may silently select or substitute a different rerun.
 
 The aggregate workflow records nine required governance contexts (the five constituent gates,
 the four repository/Rust/Hepta/aggregate contexts) and fails closed when any is absent. Exact-state
