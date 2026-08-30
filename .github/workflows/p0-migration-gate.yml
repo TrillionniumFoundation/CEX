@@ -22,6 +22,10 @@ on:
       - 'scripts/check-trnm-settlement-receipt-lookup-http.sh'
       - 'scripts/check-trnm-economy-settlement-contract.py'
       - 'scripts/test-trnm-economy-settlement-status-negative.py'
+      - 'scripts/check-strict-release-evidence-wiring.py'
+      - 'scripts/check-release-evidence-contract.py'
+      - 'scripts/p0-release-evidence-strict.py'
+      - 'scripts/verify-hosted-run-execution.py'
       - 'services/trnm-economy-service/migrations/settlement_v1.sql'
       - 'services/trnm-economy-service/**'
       - 'docs/status/trnm-economy-settlement-v1.json'
@@ -71,6 +75,9 @@ jobs:
 
       - name: Candidate tree hygiene
         run: python3 scripts/check-p0-release-candidate-hygiene.py
+
+      - name: Strict release evidence wiring
+        run: python3 scripts/check-strict-release-evidence-wiring.py
 
       - name: Static migration contract
         run: python3 scripts/check-p0-migrations.py
