@@ -1,8 +1,8 @@
 {
   "schema": "cex.p0-candidate-trigger.v1",
   "plan": "CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
-  "sequence": 21,
-  "purpose": "Qualify one exact v12 tree after fail-closed manifest evidence-set enforcement, canonical X1-X8 preservation, UTC and strict-integer identity validation, actual hosted runner/job/required-step attestation, exact local-evidence commit/tree binding, parser-complete workflow action pinning across quoted/block/flow forms and local composite actions, typed intent/receipt/backend revalidation, native append-only receipt history, Hepta complete-suite durability and lint ownership, and production-profile credential separation.",
+  "sequence": 22,
+  "purpose": "Qualify one exact v12 tree after explicit manifest inclusion and cross-binding of local evidence and real hosted runner/job/required-step attestations, fail-closed evidence-set and canonical X1-X8 enforcement, parser-complete recursive workflow action pinning, typed intent/receipt/backend revalidation, native append-only receipt history, Hepta complete-suite durability and lint ownership, and production-profile credential separation.",
   "qualification_scope": "repository-exact-money-control-plane-plus-hepta-durability-doc-integrity-full-suite-lint-receipt-recovery-and-trnm-production-config-hardening",
   "production_authorization": "not_granted"
 }
