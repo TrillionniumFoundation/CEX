@@ -1,8 +1,8 @@
 {
   "schema": "cex.p0-candidate-trigger.v1",
   "plan": "CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
-  "sequence": 26,
-  "purpose": "Qualify one exact v12 tree after eliminating the deterministic 15-versus-13 release-evidence split brain: the canonical manifest contains exactly thirteen ordered records ending in local-evidence-binding and hosted-gate-execution, while repository-governance and hosted-run-execution remain mandatory exact-tree payload-only attestations. Retain the sole shared candidate-freeze authority, local evidence cross-binding, real hosted runner/job/required-step verification, latest-authoritative-run precedence, parser-complete recursive workflow action pinning, typed receipt and migration-0087 partial-upgrade hardening, canonical X1-X8 enforcement, waiver-free qualification, and template/CLI/JSON-Schema parity.",
+  "sequence": 27,
+  "purpose": "Qualify one exact v12 tree after single-pass hosted-run selection, in-place payload re-indexing for governance and exact-attempt execution attestations, deterministic thirteen-record manifest evidence, strict runner/job/required-step proof, canonical migration-head and X1-X8 enforcement, waiver-free qualification, parser-complete workflow trust, and typed receipt plus migration-0087 partial-upgrade hardening.",
   "qualification_scope": "repository-exact-money-control-plane-plus-hepta-durability-doc-integrity-full-suite-lint-receipt-recovery-and-trnm-production-config-hardening",
   "production_authorization": "not_granted"
 }

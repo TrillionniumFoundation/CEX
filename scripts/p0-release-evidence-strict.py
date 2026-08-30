@@ -5,6 +5,11 @@ The canonical generator produces exactly thirteen ordered manifest evidence
 records. This wrapper keeps repository-governance and exact-attempt hosted job
 execution as payload-only attestations: it validates and indexes them without
 adding a second pair of manifest records that would split the schema contract.
+
+Hosted runs are selected exactly once. After the payload-only attestations are
+written, the wrapper refreshes the payload index in place so a later workflow
+run cannot be selected into the final context while the execution attestation
+still describes an earlier set.
 """
 
 from __future__ import annotations
@@ -15,6 +20,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +60,10 @@ def sha256_file(path: Path) -> str:
     return "sha256:" + digest.hexdigest()
 
 
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def run_legacy(arguments: list[str]) -> None:
     subprocess.run([sys.executable, str(LEGACY), *arguments], cwd=ROOT, check=True)
 
@@ -61,6 +71,74 @@ def run_legacy(arguments: list[str]) -> None:
 def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def read_json_object(path: Path, label: str) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise SystemExit(f"cannot read {label}: {error}") from error
+    if not isinstance(value, dict):
+        raise SystemExit(f"{label} must be a JSON object")
+    return value
+
+
+def require_nonempty_string(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise SystemExit(f"{label} must be a non-empty string")
+    return value
+
+
+def require_positive_int(value: Any, label: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise SystemExit(f"{label} must be a positive integer")
+    return value
+
+
+def refresh_payload_index(
+    *,
+    context_path: Path,
+    evidence_dir: Path,
+) -> dict[str, Any]:
+    """Re-index the existing single-pass evidence set without reselecting runs."""
+
+    context = read_json_object(context_path, "strict release context")
+    repository = require_nonempty_string(context.get("repository"), "context.repository")
+    branch = require_nonempty_string(context.get("branch"), "context.branch")
+    commit_sha = require_nonempty_string(context.get("commit_sha"), "context.commit_sha")
+    tree_sha = require_nonempty_string(context.get("tree_sha"), "context.tree_sha")
+    workflow_run_id = require_positive_int(
+        context.get("workflow_run_id"), "context.workflow_run_id"
+    )
+    workflow_run_attempt = require_positive_int(
+        context.get("workflow_run_attempt"), "context.workflow_run_attempt"
+    )
+    payload_name = require_nonempty_string(context.get("payload_name"), "context.payload_name")
+
+    files: dict[str, str] = {}
+    for path in sorted(evidence_dir.rglob("*")):
+        if path.is_file() and path.name != "payload-index.json":
+            files[path.relative_to(evidence_dir).as_posix()] = sha256_file(path)
+
+    payload_index_path = evidence_dir / "payload-index.json"
+    write_json(
+        payload_index_path,
+        {
+            "schema": "cex.p0-release-evidence-payload.v1",
+            "repository": repository,
+            "branch": branch,
+            "commit_sha": commit_sha,
+            "tree_sha": tree_sha,
+            "workflow_run_id": workflow_run_id,
+            "workflow_run_attempt": workflow_run_attempt,
+            "payload_name": payload_name,
+            "generated_at": utc_now(),
+            "files": files,
+        },
+    )
+    files["payload-index.json"] = sha256_file(payload_index_path)
+    context["files"] = files
+    return context
 
 
 def collect(args: argparse.Namespace) -> int:
@@ -78,8 +156,8 @@ def collect(args: argparse.Namespace) -> int:
         "--server-url", args.server_url,
     ]
 
-    # First pass resolves the exact successful hosted runs and produces the
-    # canonical local-binding and hosted-gate-execution attestations.
+    # Single pass: resolve and cross-bind one exact hosted-run set. Never call
+    # the collector again after the execution attestation has been generated.
     run_legacy(forwarded)
 
     evidence_dir = args.evidence_dir.resolve()
@@ -87,8 +165,8 @@ def collect(args: argparse.Namespace) -> int:
     governance_path = evidence_dir / "repository-governance.json"
     if not governance_path.is_file():
         raise SystemExit("repository governance evidence is missing")
-    governance = json.loads(governance_path.read_text(encoding="utf-8"))
-    if not isinstance(governance, dict) or governance.get("ok") is not True:
+    governance = read_json_object(governance_path, "repository governance evidence")
+    if governance.get("ok") is not True:
         raise SystemExit("repository governance evidence is not successful")
     if governance.get("repository") != args.repository:
         raise SystemExit("repository governance evidence is bound to another repository")
@@ -113,18 +191,21 @@ def collect(args: argparse.Namespace) -> int:
         env=os.environ.copy(),
     )
 
-    # Re-run collection so the payload index and release context cover the two
-    # payload-only attestations. The manifest remains the canonical thirteen
-    # records emitted by p0-release-evidence.py.
-    run_legacy(forwarded)
-    context = json.loads(context_path.read_text(encoding="utf-8"))
-    files = context.get("files") if isinstance(context, dict) else None
+    # The selected hosted gate set is now frozen in context. Recompute only the
+    # payload digests so governance and execution attestations are covered.
+    context = refresh_payload_index(
+        context_path=context_path,
+        evidence_dir=evidence_dir,
+    )
+    files = context.get("files")
     if not isinstance(files, dict):
         raise SystemExit("strict release context lacks a files index")
 
     payload_only: dict[str, str] = {}
     for relative in PAYLOAD_ONLY_ATTESTATIONS:
         path = evidence_dir / relative
+        if not path.is_file():
+            raise SystemExit(f"payload-only attestation is missing: {relative}")
         expected = sha256_file(path)
         if files.get(relative) != expected:
             raise SystemExit(f"strict release context did not index {relative}")
@@ -146,10 +227,8 @@ def manifest(args: argparse.Namespace) -> int:
     ]
     run_legacy(forwarded)
 
-    context = json.loads(args.context.read_text(encoding="utf-8"))
-    manifest_value = json.loads(args.output.read_text(encoding="utf-8"))
-    if not isinstance(context, dict) or not isinstance(manifest_value, dict):
-        raise SystemExit("strict manifest inputs must be JSON objects")
+    context = read_json_object(args.context, "strict release context")
+    manifest_value = read_json_object(args.output, "generated candidate manifest")
     files = context.get("files")
     evidence = manifest_value.get("evidence")
     if not isinstance(files, dict) or not isinstance(evidence, list):

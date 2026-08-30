@@ -31,7 +31,9 @@ jobs:
         run: python3 scripts/check-development-docs.py
 
       - name: Strict release evidence wiring
-        run: python3 scripts/check-strict-release-evidence-wiring.py
+        run: |
+          python3 scripts/check-strict-release-evidence-wiring.py
+          python3 scripts/test-p0-release-evidence-strict.py
 
       - name: Emit exact-tree integrity record
         run: |
