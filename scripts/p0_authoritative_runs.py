@@ -13,14 +13,42 @@ from datetime import datetime, timezone
 from typing import Any
 
 
-def _non_negative_int(value: Any) -> int:
-    """Return a defensive non-negative integer for secondary tie-breakers."""
+def _positive_int(name: str, value: Any) -> int:
+    """Parse one immutable positive integer identity or fail closed."""
 
-    try:
-        parsed = int(value or 0)
-    except (TypeError, ValueError):
+    if isinstance(value, bool):
+        raise ValueError(f"authoritative workflow run has invalid {name}")
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str) and value.strip():
+        try:
+            parsed = int(value.strip(), 10)
+        except ValueError as error:
+            raise ValueError(
+                f"authoritative workflow run has invalid {name}"
+            ) from error
+    else:
+        raise ValueError(f"authoritative workflow run lacks {name}")
+    if parsed <= 0:
+        raise ValueError(f"authoritative workflow run has non-positive {name}")
+    return parsed
+
+
+def _optional_positive_int(name: str, value: Any) -> int:
+    """Parse an optional legacy tie-breaker without accepting malformed data.
+
+    GitHub REST workflow-run payloads include ``run_number``. A few immutable
+    offline fixtures created before that field became part of the shared
+    authority contract omit it, so absence remains a neutral final tie-breaker.
+    A present value is still required to be a real positive integer. Distinct
+    same-timestamp runs are ordered first by their globally unique immutable
+    run ``id``, preventing a missing legacy run number from making an older run
+    outrank a newer one.
+    """
+
+    if value is None or value == "":
         return 0
-    return parsed if parsed >= 0 else 0
+    return _positive_int(name, value)
 
 
 def _created_at(value: Any) -> datetime:
@@ -41,21 +69,23 @@ def _created_at(value: Any) -> datetime:
 def authoritative_run_sort_key(run: dict[str, Any]) -> tuple[datetime, int, int, int]:
     """Order runs by immutable creation identity, never by completion time.
 
-    ``created_at`` is the primary authority. ``run_number`` and ``id`` break
-    the rare same-timestamp tie between distinct runs, while ``run_attempt``
-    orders reruns of the same run. ``updated_at`` is deliberately absent.
+    ``created_at`` is the primary authority. The positive globally unique run
+    ``id`` breaks same-timestamp ties between distinct runs, ``run_attempt``
+    orders reruns of the same run, and the positive optional ``run_number`` is
+    retained only as a final consistency tie-breaker for legacy offline
+    fixtures. ``updated_at`` is deliberately absent.
     """
 
     return (
         _created_at(run.get("created_at")),
-        _non_negative_int(run.get("run_number")),
-        _non_negative_int(run.get("id")),
-        _non_negative_int(run.get("run_attempt")),
+        _positive_int("id", run.get("id")),
+        _positive_int("run_attempt", run.get("run_attempt")),
+        _optional_positive_int("run_number", run.get("run_number")),
     )
 
 
 def self_test() -> list[str]:
-    """Exercise the late-finish inversion and rerun tie-breakers offline."""
+    """Exercise late-finish, malformed-identity, and same-second inversions."""
 
     failures: list[str] = []
     older = {
@@ -86,12 +116,34 @@ def self_test() -> list[str]:
     if authoritative_run_sort_key(rerun) <= authoritative_run_sort_key(newer):
         failures.append("a newer attempt of the same run did not outrank its prior attempt")
 
-    malformed = dict(newer)
-    malformed["created_at"] = "not-a-timestamp"
-    try:
-        authoritative_run_sort_key(malformed)
-    except ValueError:
-        pass
-    else:
-        failures.append("malformed created_at did not fail closed")
+    same_second_older = {
+        **older,
+        "id": 200,
+        "run_number": 999,
+        "created_at": "2026-08-30T01:00:00Z",
+    }
+    same_second_newer_without_number = {
+        **newer,
+        "id": 201,
+        "run_number": None,
+        "created_at": "2026-08-30T01:00:00Z",
+    }
+    if authoritative_run_sort_key(same_second_newer_without_number) <= authoritative_run_sort_key(
+        same_second_older
+    ):
+        failures.append("a newer same-second run id was masked by a legacy run number")
+
+    malformed_cases = (
+        ("created_at", {**newer, "created_at": "not-a-timestamp"}),
+        ("id", {**newer, "id": "not-an-id"}),
+        ("run_attempt", {**newer, "run_attempt": 0}),
+        ("run_number", {**newer, "run_number": -1}),
+    )
+    for label, malformed in malformed_cases:
+        try:
+            authoritative_run_sort_key(malformed)
+        except ValueError:
+            pass
+        else:
+            failures.append(f"malformed {label} did not fail closed")
     return failures
