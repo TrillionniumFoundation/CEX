@@ -7,6 +7,7 @@ use ledger_service::{
     build_router, repository::postgres::PostgresLedgerRepository, state::AppState,
 };
 use serde_json::{json, Value};
+use term_exchange_protocol::TERM_EXCHANGE_PROTOCOL_VERSION;
 use tower::util::ServiceExt;
 use uuid::Uuid;
 
@@ -17,6 +18,17 @@ fn test_state() -> AppState {
         Some("local-dev-admin-token".to_string()),
         vec!["ledger:manage".to_string(), "ledger:read".to_string()],
         Vec::new(),
+    )
+}
+
+fn persistence_required_test_state() -> AppState {
+    AppState::new_for_tests_configured(
+        PostgresLedgerRepository::new_placeholder(),
+        false,
+        Some("local-dev-admin-token".to_string()),
+        vec!["ledger:manage".to_string(), "ledger:read".to_string()],
+        Vec::new(),
+        false,
     )
 }
 
@@ -173,6 +185,33 @@ fn exact_effect_request(
         "reference_id": Uuid::new_v4(),
         "idempotency_scope": format!("http-flow:{account_id}:{operation_kind}"),
         "idempotency_key": idempotency_key,
+    })
+}
+
+fn native_intent_request(account_id: Uuid) -> Value {
+    json!({
+        "intent": {
+            "protocol_version": TERM_EXCHANGE_PROTOCOL_VERSION,
+            "intent_id": format!("placeholder-intent-{account_id}"),
+            "term_id": "placeholder-test-term",
+            "term_version": "1",
+            "domain": "trnm_game",
+            "kind": "reserve",
+            "idempotency_key": {
+                "scope": "placeholder-test",
+                "key": format!("reserve-{account_id}")
+            },
+            "actors": [{
+                "actor_id": "placeholder-player",
+                "actor_kind": "player",
+                "account_id": account_id.to_string()
+            }],
+            "assets": [],
+            "amount_credits": 1,
+            "currency": "wallet_credits",
+            "metadata": {},
+            "created_at_epoch": 0
+        }
     })
 }
 
@@ -346,6 +385,128 @@ async fn fail_fast_placeholder_repository_rejects_memory_only_account_creation()
         .await
         .account_openings_by_account
         .is_empty());
+}
+
+#[tokio::test]
+async fn placeholder_without_explicit_test_opt_in_rejects_exact_account_opening() {
+    let state = persistence_required_test_state();
+    let app = build_router(state.clone());
+    let account_id = Uuid::new_v4();
+
+    let (status, body) = send_json(
+        app,
+        "POST",
+        "/v2/accounts",
+        exact_account_request(account_id, 100_000_000),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["code"], "ledger_operation_persistence_unavailable");
+    assert!(state.accounts.read().await.is_empty());
+    assert!(state.entries.read().await.is_empty());
+    assert!(state
+        .exact_memory
+        .read()
+        .await
+        .account_openings_by_account
+        .is_empty());
+}
+
+#[tokio::test]
+async fn placeholder_without_explicit_test_opt_in_rejects_exact_effect() {
+    let state = persistence_required_test_state();
+    let app = build_router(state.clone());
+    let account_id = Uuid::new_v4();
+
+    let (status, body) = send_json(
+        app,
+        "POST",
+        "/v2/ledger/effects",
+        exact_effect_request(account_id, "grant", 1_000_000, "placeholder-effect"),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["code"], "ledger_operation_persistence_unavailable");
+    assert!(state.accounts.read().await.is_empty());
+    assert!(state.entries.read().await.is_empty());
+    assert!(state
+        .exact_memory
+        .read()
+        .await
+        .effects_by_operation
+        .is_empty());
+}
+
+#[tokio::test]
+async fn placeholder_without_explicit_test_opt_in_rejects_native_intent() {
+    let state = persistence_required_test_state();
+    let app = build_router(state.clone());
+    let account_id = Uuid::new_v4();
+
+    let (status, _) = send_json(
+        app,
+        "POST",
+        "/v1/trnm/economy/intents",
+        native_intent_request(account_id),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(state.accounts.read().await.is_empty());
+    assert!(state.entries.read().await.is_empty());
+    assert!(state.idempotency_keys.read().await.is_empty());
+}
+
+#[tokio::test]
+async fn placeholder_without_explicit_test_opt_in_rejects_wallet_snapshot_fallback() {
+    let state = persistence_required_test_state();
+    let app = build_router(state.clone());
+    let account_id = Uuid::new_v4();
+
+    let (status, _) = send_json(
+        app,
+        "POST",
+        "/v1/trnm/economy/wallet",
+        json!({
+            "actor_id": "placeholder-player",
+            "account_id": account_id,
+            "reconciliation_cursor": 1
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(state.accounts.read().await.is_empty());
+    assert!(state.entries.read().await.is_empty());
+}
+
+#[tokio::test]
+async fn placeholder_without_explicit_test_opt_in_rejects_value_entitlement_issue() {
+    let state = persistence_required_test_state();
+    let app = build_router(state.clone());
+    let account_id = Uuid::new_v4();
+
+    let (status, _) = send_json_with_headers(
+        app,
+        "POST",
+        "/v1/trnm/economy/entitlements",
+        &[("x-trnm-game-authority", "test-game-authority-token")],
+        json!({
+            "actor_id": "placeholder-player",
+            "account_id": account_id,
+            "source": "battle",
+            "source_id": "battle-id",
+            "intent_id": "placeholder-intent",
+            "amount_credits": 1
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(state.accounts.read().await.is_empty());
+    assert!(state.entries.read().await.is_empty());
 }
 
 #[tokio::test]

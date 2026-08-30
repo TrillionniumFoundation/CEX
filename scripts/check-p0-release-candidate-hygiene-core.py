@@ -122,6 +122,11 @@ def workflow_paths() -> list[Path]:
 def action_pin_problem(use: str) -> str | None:
     """Return a fail-closed pin error for one GitHub Actions ``uses`` value."""
 
+    if use == "./.github/workflows" or use.startswith("./.github/workflows/"):
+        return (
+            "local reusable workflow references are forbidden; inline the job "
+            "or use a reviewed pinned workflow"
+        )
     if use.startswith("./"):
         return None
     if use.startswith("docker://"):
@@ -148,7 +153,7 @@ def validate_action_pin_checker() -> None:
 
     cases = (
         ("./.github/actions/local", True),
-        ("./.github/workflows/local-reusable.yml", True),
+        ("./.github/workflows/local-reusable.yml", False),
         ("actions/checkout@" + "a" * 40, True),
         (
             "owner/repository/.github/workflows/reusable.yml@" + "b" * 40,

@@ -1,52 +1,169 @@
 begin;
 
+-- Serialize the catalog-aware repair with the adjacent receipt migrations.
+-- The guards intentionally use check-then-create/repair paths; one
+-- transaction-scoped lock prevents concurrent migration runners from both
+-- observing a missing column/constraint and racing to install the authority
+-- objects.
+select pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('cex:migration:term-exchange-receipt-schema', 0)
+);
+
 -- migration-check: allow-destructive
 
 -- Normalized Term Exchange receipts are projections of immutable protocol
 -- receipts.  Keep the exact whole-credit amount when it is present, while
 -- leaving the column nullable so rows written before this migration remain
 -- readable (and continue to fail closed at value-authority gates).
-alter table if exists public.league_term_exchange_receipts
-    add column if not exists amount_credits bigint;
-alter table if exists public.world_term_exchange_receipts
-    add column if not exists amount_credits bigint;
-
-do $function$
+-- `ADD COLUMN IF NOT EXISTS` compares only the column name.  Validate the
+-- exact integer authority and existing values before accepting a column left
+-- by an interrupted or hand-authored rollout; a numeric/float column could
+-- otherwise admit fractional credits while reporting a successful migration.
+do $amount_schema_guard$
+declare
+    table_spec record;
+    table_oid oid;
+    relation_kind "char";
+    relation_persistence "char";
+    relation_is_partition boolean;
+    amount_attnum smallint;
+    amount_type oid;
+    amount_notnull boolean;
+    amount_identity text;
+    amount_generated text;
+    amount_default_oid oid;
+    has_invalid_value boolean;
+    constraint_type "char";
+    constraint_validated boolean;
+    constraint_expression text;
+    expected_constraint_expression constant text := '((amount_creditsisnull)or(amount_credits>=0))';
 begin
-    if to_regclass('public.league_term_exchange_receipts') is not null
-       and not exists (
-           select 1
-             from pg_catalog.pg_constraint constraint_row
-             join pg_catalog.pg_class table_row
-               on table_row.oid = constraint_row.conrelid
-             join pg_catalog.pg_namespace schema_row
-               on schema_row.oid = table_row.relnamespace
-            where schema_row.nspname = 'public'
-              and table_row.relname = 'league_term_exchange_receipts'
-              and constraint_row.conname = 'league_term_exchange_receipts_amount_credits_nonnegative_v1'
-       ) then
-        alter table public.league_term_exchange_receipts
-            add constraint league_term_exchange_receipts_amount_credits_nonnegative_v1
-            check (amount_credits is null or amount_credits >= 0);
-    end if;
-    if to_regclass('public.world_term_exchange_receipts') is not null
-       and not exists (
-           select 1
-             from pg_catalog.pg_constraint constraint_row
-             join pg_catalog.pg_class table_row
-               on table_row.oid = constraint_row.conrelid
-             join pg_catalog.pg_namespace schema_row
-               on schema_row.oid = table_row.relnamespace
-            where schema_row.nspname = 'public'
-              and table_row.relname = 'world_term_exchange_receipts'
-              and constraint_row.conname = 'world_term_exchange_receipts_amount_credits_nonnegative_v1'
-       ) then
-        alter table public.world_term_exchange_receipts
-            add constraint world_term_exchange_receipts_amount_credits_nonnegative_v1
-            check (amount_credits is null or amount_credits >= 0);
-    end if;
+    for table_spec in
+        select *
+          from (values
+              (
+                  'league_term_exchange_receipts'::text,
+                  'league'::text,
+                  'league_term_exchange_receipts_amount_credits_nonnegative_v1'::text
+              ),
+              (
+                  'world_term_exchange_receipts'::text,
+                  'world'::text,
+                  'world_term_exchange_receipts_amount_credits_nonnegative_v1'::text
+              )
+          ) as allowed_tables(table_name, label, constraint_name)
+    loop
+        table_oid := to_regclass('public.' || table_spec.table_name);
+        if table_oid is null then
+            raise exception 'normalized % receipt projection table is missing', table_spec.label;
+        end if;
+        select c.relkind, c.relpersistence, c.relispartition
+          into relation_kind, relation_persistence, relation_is_partition
+          from pg_catalog.pg_class c
+         where c.oid = table_oid;
+        if relation_kind is distinct from 'r'
+           or relation_persistence is distinct from 'p'
+           or relation_is_partition then
+            raise exception
+                'normalized % receipt projection relation is not a permanent ordinary table',
+                table_spec.label;
+        end if;
+
+        select a.attnum,
+               a.atttypid,
+               a.attnotnull,
+               a.attidentity::text,
+               a.attgenerated::text,
+               ad.oid
+          into amount_attnum, amount_type, amount_notnull,
+               amount_identity, amount_generated, amount_default_oid
+          from pg_catalog.pg_attribute a
+          left join pg_catalog.pg_attrdef ad
+            on ad.adrelid = a.attrelid
+           and ad.adnum = a.attnum
+         where a.attrelid = table_oid
+           and a.attname = 'amount_credits'
+           and not a.attisdropped;
+        if amount_attnum is null then
+            execute format(
+                'alter table public.%I add column amount_credits bigint',
+                table_spec.table_name
+            );
+            select a.attnum,
+                   a.atttypid,
+                   a.attnotnull,
+                   a.attidentity::text,
+                   a.attgenerated::text,
+                   ad.oid
+              into amount_attnum, amount_type, amount_notnull,
+                   amount_identity, amount_generated, amount_default_oid
+              from pg_catalog.pg_attribute a
+              left join pg_catalog.pg_attrdef ad
+                on ad.adrelid = a.attrelid
+               and ad.adnum = a.attnum
+             where a.attrelid = table_oid
+               and a.attname = 'amount_credits'
+               and not a.attisdropped;
+        end if;
+        if amount_type is distinct from 'int8'::regtype then
+            raise exception
+                'normalized % receipt amount_credits must be bigint', table_spec.label;
+        end if;
+        if amount_notnull
+           or coalesce(amount_identity, '') <> ''
+           or coalesce(amount_generated, '') <> ''
+           or amount_default_oid is not null then
+            raise exception
+                'normalized % receipt amount_credits column has incompatible nullability/default/generated shape',
+                table_spec.label;
+        end if;
+
+        execute format(
+            'select exists (
+                 select 1
+                   from public.%I
+                  where amount_credits is not null
+                    and amount_credits < 0
+             )',
+            table_spec.table_name
+        ) into has_invalid_value;
+        if has_invalid_value then
+            raise exception
+                'normalized % receipt amount_credits contains a negative value',
+                table_spec.label;
+        end if;
+
+        select c.contype,
+               c.convalidated,
+               regexp_replace(
+                   lower(coalesce(pg_get_expr(c.conbin, c.conrelid), '')),
+                   '[[:space:]]+',
+                   '',
+                   'g'
+               )
+          into constraint_type, constraint_validated, constraint_expression
+          from pg_catalog.pg_constraint c
+         where c.conrelid = table_oid
+           and c.conname = table_spec.constraint_name;
+        if found then
+            if constraint_type is distinct from 'c'
+               or constraint_validated is distinct from true
+               or constraint_expression is distinct from expected_constraint_expression then
+                raise exception
+                    'normalized % receipt amount constraint is not canonical',
+                    table_spec.label;
+            end if;
+        else
+            execute format(
+                'alter table public.%I add constraint %I ' ||
+                'check (amount_credits is null or amount_credits >= 0)',
+                table_spec.table_name,
+                table_spec.constraint_name
+            );
+        end if;
+    end loop;
 end
-$function$;
+$amount_schema_guard$;
 
 -- Mutation is represented by a new receipt row.  In particular, a replay or
 -- a snapshot projection must use INSERT ... ON CONFLICT DO NOTHING; UPDATE,

@@ -1,5 +1,13 @@
 begin;
 
+-- Use the same transaction-scoped migration lock as 0085/0087.  Several
+-- catalog guards below deliberately replace or create keys, defaults, and
+-- provenance constraints after inspecting their current shape; serializing
+-- those check-then-repair paths keeps concurrent runners deterministic.
+select pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('cex:migration:term-exchange-receipt-schema', 0)
+);
+
 -- migration-check: allow-destructive
 -- Reviewed rollback posture: this migration is expand-only.  The marker is
 -- required because PostgreSQL TRUNCATE triggers/privileges are mentioned in
@@ -51,6 +59,30 @@ create table if not exists public.trnm_economic_receipt_events_v1 (
         unique (intent_id, event_sequence)
 );
 
+-- `CREATE TABLE IF NOT EXISTS` only compares the relation name.  A view,
+-- partitioned table, foreign table, or an unlogged/temporary relation at the
+-- published name is not an authority table that this migration can safely
+-- repair.  Reject it before any later statement tries to treat the relation as
+-- a heap table (which would otherwise produce an opaque ALTER/INSERT error).
+do $native_history_relation_guard$
+declare
+    relation_kind text;
+    relation_persistence text;
+    relation_is_partition boolean;
+begin
+    select c.relkind::text, c.relpersistence::text, c.relispartition
+      into relation_kind, relation_persistence, relation_is_partition
+      from pg_catalog.pg_class c
+     where c.oid = to_regclass('public.trnm_economic_receipt_events_v1');
+    if relation_kind is distinct from 'r'
+       or relation_persistence is distinct from 'p'
+       or relation_is_partition then
+        raise exception
+            'TRNM native receipt event relation is not a permanent ordinary table';
+    end if;
+end
+$native_history_relation_guard$;
+
 -- Check the existing authority rows independently of the constraint name.  A
 -- partially-created table may already carry a same-named but weaker check;
 -- malformed hashes must abort this transaction before any schema repair or
@@ -74,19 +106,34 @@ $intent_hash_guard$;
 -- not retrofit that action on a table left behind by an interrupted runner;
 -- the catalog guard below handles that boundary explicitly.
 do $intent_hash_constraint$
+declare
+    constraint_type "char";
+    constraint_validated boolean;
+    constraint_expression text;
 begin
-    if not exists (
-        select 1
-          from pg_catalog.pg_constraint c
-         where c.conrelid = 'public.trnm_economic_intents'::regclass
-           and c.conname = 'trnm_economic_intents_payload_hash_v1'
-    ) then
+    select c.contype,
+           c.convalidated,
+           regexp_replace(
+               lower(coalesce(pg_get_expr(c.conbin, c.conrelid), '')),
+               '[[:space:]]+', '', 'g'
+           )
+      into constraint_type, constraint_validated, constraint_expression
+      from pg_catalog.pg_constraint c
+     where c.conrelid = 'public.trnm_economic_intents'::regclass
+       and c.conname = 'trnm_economic_intents_payload_hash_v1';
+    if not found then
         alter table public.trnm_economic_intents
             add constraint trnm_economic_intents_payload_hash_v1
             check (
                 payload_hash is not null
                 and payload_hash ~ '^[0-9a-f]{64}$'
             );
+    elsif constraint_type is distinct from 'c'
+       or constraint_validated is distinct from true
+       or constraint_expression is distinct from
+          '((payload_hashisnotnull)and(payload_hash~''^[0-9a-f]{64}$''::text))' then
+        raise exception
+            'TRNM economic intent payload_hash constraint is not canonical';
     end if;
 end
 $intent_hash_constraint$;
@@ -211,6 +258,10 @@ declare
     has_event_key boolean;
     has_intent_sequence_key boolean;
     duplicate_values boolean;
+    event_key_opclasses oid[];
+    event_key_collations oid[];
+    intent_sequence_opclasses oid[];
+    intent_sequence_collations oid[];
 begin
     select a.attnum, a.atttypid, a.attnotnull
       into event_attnum, event_type, event_notnull
@@ -243,6 +294,48 @@ begin
         raise exception 'TRNM native receipt event identity key columns must be NOT NULL';
     end if;
 
+    -- Record the default btree operator class and each column's declared
+    -- collation.  Matching only attnums lets a text_pattern_ops/C-collated
+    -- index masquerade as the canonical identity key.
+    select array_agg(opc.oid order by key_part.ordinality),
+           array_agg(a.attcollation order by key_part.ordinality)
+      into event_key_opclasses, event_key_collations
+      from unnest(array[event_attnum]::smallint[]) with ordinality
+           as key_part(attnum, ordinality)
+      join pg_catalog.pg_attribute a
+        on a.attrelid = event_table
+       and a.attnum = key_part.attnum
+       and not a.attisdropped
+      join pg_catalog.pg_opclass opc
+        on opc.opcintype = a.atttypid
+       and opc.opcdefault
+      join pg_catalog.pg_am am
+        on am.oid = opc.opcmethod
+       and am.amname = 'btree'
+       and opc.opcnamespace = 'pg_catalog'::regnamespace;
+    select array_agg(opc.oid order by key_part.ordinality),
+           array_agg(a.attcollation order by key_part.ordinality)
+      into intent_sequence_opclasses, intent_sequence_collations
+      from unnest(array[intent_attnum, sequence_attnum]::smallint[]) with ordinality
+           as key_part(attnum, ordinality)
+      join pg_catalog.pg_attribute a
+        on a.attrelid = event_table
+       and a.attnum = key_part.attnum
+       and not a.attisdropped
+      join pg_catalog.pg_opclass opc
+        on opc.opcintype = a.atttypid
+       and opc.opcdefault
+      join pg_catalog.pg_am am
+        on am.oid = opc.opcmethod
+       and am.amname = 'btree'
+       and opc.opcnamespace = 'pg_catalog'::regnamespace;
+    if event_key_opclasses is null
+       or event_key_collations is null
+       or intent_sequence_opclasses is null
+       or intent_sequence_collations is null then
+        raise exception 'TRNM native receipt event identity key operator classes/collations are unavailable';
+    end if;
+
     execute format(
         'select exists (select 1 from public.trnm_economic_receipt_events_v1 where event_id is null)'
     ) into duplicate_values;
@@ -270,15 +363,39 @@ begin
 
     select exists (
         select 1
-          from pg_catalog.pg_index i
-         where i.indrelid = event_table
+         from pg_catalog.pg_class index_class
+          join pg_catalog.pg_index i on i.indexrelid = index_class.oid
+          join pg_catalog.pg_am am on am.oid = index_class.relam
+         where index_class.relkind = 'i'
+           and index_class.relpersistence = 'p'
+           and not index_class.relispartition
+           and index_class.relowner = (
+               select target.relowner
+                 from pg_catalog.pg_class target
+                where target.oid = event_table
+           )
+           and am.amname = 'btree'
+           and i.indrelid = event_table
            and i.indisunique
            and i.indisvalid
            and i.indisready
+           and i.indislive
            and i.indimmediate
            and i.indpred is null
+           and i.indexprs is null
            and i.indnkeyatts = 1
+           and i.indnatts = 1
            and i.indkey[0] = event_attnum
+           and (
+               select array_agg(key_part.opclass_oid order by key_part.ordinality)
+                 from unnest(i.indclass::oid[]) with ordinality
+                      as key_part(opclass_oid, ordinality)
+           ) = event_key_opclasses
+           and (
+               select array_agg(key_part.collation_oid order by key_part.ordinality)
+                 from unnest(i.indcollation::oid[]) with ordinality
+                      as key_part(collation_oid, ordinality)
+           ) = event_key_collations
     ) into has_event_key;
     if not has_event_key then
         raise exception 'TRNM native receipt event_id key is missing a valid unique index';
@@ -286,16 +403,40 @@ begin
 
     select exists (
         select 1
-          from pg_catalog.pg_index i
-         where i.indrelid = event_table
+         from pg_catalog.pg_class index_class
+          join pg_catalog.pg_index i on i.indexrelid = index_class.oid
+          join pg_catalog.pg_am am on am.oid = index_class.relam
+         where index_class.relkind = 'i'
+           and index_class.relpersistence = 'p'
+           and not index_class.relispartition
+           and index_class.relowner = (
+               select target.relowner
+                 from pg_catalog.pg_class target
+                where target.oid = event_table
+           )
+           and am.amname = 'btree'
+           and i.indrelid = event_table
            and i.indisunique
            and i.indisvalid
            and i.indisready
+           and i.indislive
            and i.indimmediate
            and i.indpred is null
+           and i.indexprs is null
            and i.indnkeyatts = 2
+           and i.indnatts = 2
            and i.indkey[0] = intent_attnum
            and i.indkey[1] = sequence_attnum
+           and (
+               select array_agg(key_part.opclass_oid order by key_part.ordinality)
+                 from unnest(i.indclass::oid[]) with ordinality
+                      as key_part(opclass_oid, ordinality)
+           ) = intent_sequence_opclasses
+           and (
+               select array_agg(key_part.collation_oid order by key_part.ordinality)
+                 from unnest(i.indcollation::oid[]) with ordinality
+                      as key_part(collation_oid, ordinality)
+           ) = intent_sequence_collations
     ) into has_intent_sequence_key;
     if not has_intent_sequence_key then
         raise exception 'TRNM native receipt intent/sequence key is missing a valid unique index';
@@ -378,6 +519,16 @@ begin
     sequence_oid := to_regclass(sequence_qualified);
     if sequence_oid is null then
         raise exception 'TRNM native receipt event event_id sequence is missing';
+    end if;
+    if not exists (
+        select 1
+          from pg_catalog.pg_class c
+         where c.oid = sequence_oid
+           and c.relkind = 'S'
+           and c.relpersistence = 'p'
+    ) then
+        raise exception
+            'TRNM native receipt event event_id sequence is not a permanent sequence';
     end if;
     select s.seqtypid, s.seqincrement, s.seqmax, s.seqmin, s.seqcycle
       into sequence_type, sequence_increment, sequence_max, sequence_min, sequence_cycle
@@ -564,6 +715,8 @@ declare
     index_oid oid;
     canonical boolean := false;
     predicate text;
+    receipt_opclasses oid[];
+    receipt_collations oid[];
 begin
     select a.attnum
       into receipt_attnum
@@ -575,9 +728,29 @@ begin
         raise exception 'TRNM native receipt event receipt_id column is missing';
     end if;
 
+    select array_agg(opc.oid order by key_part.ordinality),
+           array_agg(a.attcollation order by key_part.ordinality)
+      into receipt_opclasses, receipt_collations
+      from unnest(array[receipt_attnum]::smallint[]) with ordinality
+           as key_part(attnum, ordinality)
+      join pg_catalog.pg_attribute a
+        on a.attrelid = event_table
+       and a.attnum = key_part.attnum
+       and not a.attisdropped
+      join pg_catalog.pg_opclass opc
+        on opc.opcintype = a.atttypid
+       and opc.opcdefault
+      join pg_catalog.pg_am am
+        on am.oid = opc.opcmethod
+       and am.amname = 'btree'
+       and opc.opcnamespace = 'pg_catalog'::regnamespace;
+    if receipt_opclasses is null or receipt_collations is null then
+        raise exception 'TRNM native receipt initial index operator class/collation is unavailable';
+    end if;
+
     select c.oid
       into index_oid
-      from pg_catalog.pg_class c
+     from pg_catalog.pg_class c
       join pg_catalog.pg_namespace n on n.oid = c.relnamespace
      where n.nspname = 'public'
        and c.relname = 'idx_trnm_receipt_events_receipt_id_initial_v1';
@@ -585,10 +758,23 @@ begin
         select i.indisunique
                and i.indisvalid
                and i.indisready
+               and i.indislive
                and i.indimmediate
                and i.indpred is not null
+               and i.indexprs is null
                and i.indnkeyatts = 1
-               and i.indkey[0] = receipt_attnum,
+               and i.indnatts = 1
+               and i.indkey[0] = receipt_attnum
+               and (
+                   select array_agg(key_part.opclass_oid order by key_part.ordinality)
+                     from unnest(i.indclass::oid[]) with ordinality
+                          as key_part(opclass_oid, ordinality)
+               ) = receipt_opclasses
+               and (
+                   select array_agg(key_part.collation_oid order by key_part.ordinality)
+                     from unnest(i.indcollation::oid[]) with ordinality
+                          as key_part(collation_oid, ordinality)
+               ) = receipt_collations,
                regexp_replace(
                    lower(coalesce(pg_get_expr(i.indpred, i.indrelid), '')),
                    '[[:space:]]+',
@@ -596,8 +782,20 @@ begin
                    'g'
                )
           into canonical, predicate
-          from pg_catalog.pg_index i
-         where i.indexrelid = index_oid;
+         from pg_catalog.pg_class index_class
+          join pg_catalog.pg_index i on i.indexrelid = index_class.oid
+          join pg_catalog.pg_am am on am.oid = index_class.relam
+         where i.indexrelid = index_oid
+           and index_class.relkind = 'i'
+           and index_class.relpersistence = 'p'
+           and not index_class.relispartition
+           and index_class.relowner = (
+               select target.relowner
+                 from pg_catalog.pg_class target
+                where target.oid = event_table
+           )
+           and am.amname = 'btree'
+           and i.indrelid = event_table;
         if canonical is distinct from true
            or predicate is distinct from '(event_sequence=1)' then
             raise exception
@@ -611,17 +809,308 @@ begin
 end
 $native_initial_receipt_index_guard$;
 
-create index if not exists idx_trnm_receipt_events_latest_v1
-    on public.trnm_economic_receipt_events_v1(intent_id, event_sequence desc, event_id desc);
+-- Performance indexes are published by name as well as by shape.  A plain
+-- `CREATE INDEX IF NOT EXISTS` only compares that schema-scoped name, so a
+-- same-named object on another table (or an invalid/wrongly ordered index)
+-- could otherwise make a partial upgrade report success while leaving the
+-- native history lookup path incomplete.
+do $native_performance_index_guard$
+declare
+    index_spec record;
+    event_table oid := 'public.trnm_economic_receipt_events_v1'::regclass;
+    index_oid oid;
+    index_is_canonical boolean;
+    expected_attnums smallint[];
+    expected_opclasses oid[];
+    expected_collations oid[];
+    expected_column_count integer;
+    matched_column_count integer;
+begin
+    for index_spec in
+        select *
+          from (values
+              (
+                  'idx_trnm_receipt_events_latest_v1'::text,
+                  array['intent_id', 'event_sequence', 'event_id']::text[],
+                  array[0, 3, 3]::smallint[],
+                  'intent_id, event_sequence desc, event_id desc'::text
+              ),
+              (
+                  'idx_trnm_receipt_events_finalized_v1'::text,
+                  array['finalized_at', 'event_id']::text[],
+                  array[3, 3]::smallint[],
+                  'finalized_at desc, event_id desc'::text
+              )
+          ) as allowed_indexes(index_name, index_columns, index_options, index_sql)
+    loop
+        expected_column_count := cardinality(index_spec.index_columns);
+        select array_agg(a.attnum order by column_spec.ordinality)::smallint[],
+               array_agg(opc.oid order by column_spec.ordinality)::oid[],
+               array_agg(a.attcollation order by column_spec.ordinality)::oid[],
+               count(a.attnum)::integer
+          into expected_attnums, expected_opclasses, expected_collations,
+               matched_column_count
+          from unnest(index_spec.index_columns) with ordinality as column_spec(column_name, ordinality)
+          left join pg_catalog.pg_attribute a
+            on a.attrelid = event_table
+           and a.attname = column_spec.column_name
+           and not a.attisdropped
+          join pg_catalog.pg_opclass opc
+            on opc.opcintype = a.atttypid
+           and opc.opcdefault
+           and opc.opcnamespace = 'pg_catalog'::regnamespace
+          join pg_catalog.pg_am am
+            on am.oid = opc.opcmethod
+           and am.amname = 'btree';
+        if matched_column_count <> expected_column_count then
+            raise exception 'TRNM native receipt history is missing a performance-index column';
+        end if;
+        if expected_opclasses is null or expected_collations is null then
+            raise exception 'TRNM native receipt history performance-index operator class/collation is unavailable';
+        end if;
 
-create index if not exists idx_trnm_receipt_events_finalized_v1
-    on public.trnm_economic_receipt_events_v1(finalized_at desc, event_id desc);
+        -- Inspect all relation kinds so a table/view/sequence occupying the
+        -- canonical name is an explicit conflict, not an ignored notice.
+        select c.oid
+          into index_oid
+          from pg_catalog.pg_class c
+          join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+         where n.nspname = 'public'
+           and c.relname = index_spec.index_name;
+        if index_oid is not null then
+            select exists (
+                select 1
+                 from pg_catalog.pg_class c
+                  join pg_catalog.pg_index i on i.indexrelid = c.oid
+                  join pg_catalog.pg_am am on am.oid = c.relam
+                 where c.oid = index_oid
+                   and c.relkind = 'i'
+                   and c.relpersistence = 'p'
+                   and not c.relispartition
+                   and c.relowner = (
+                       select target.relowner
+                         from pg_catalog.pg_class target
+                        where target.oid = event_table
+                   )
+                   and am.amname = 'btree'
+                   and i.indrelid = event_table
+                   and not i.indisunique
+                   and not i.indisprimary
+                   and not i.indisexclusion
+                   and i.indisvalid
+                   and i.indisready
+                   and i.indislive
+                   and i.indimmediate
+                   and i.indpred is null
+                   and i.indexprs is null
+                   and i.indnkeyatts = expected_column_count
+                   and i.indnatts = expected_column_count
+                   and (
+                       select array_agg(key_part.attnum::smallint order by key_part.ordinality)
+                         from unnest(i.indkey) with ordinality as key_part(attnum, ordinality)
+                   ) = expected_attnums
+                   and (
+                       select array_agg(option_part.option_value::smallint order by option_part.ordinality)
+                         from unnest(i.indoption) with ordinality as option_part(option_value, ordinality)
+                   ) = index_spec.index_options
+                   and (
+                       select array_agg(opclass_part.opclass_oid order by opclass_part.ordinality)
+                         from unnest(i.indclass::oid[]) with ordinality
+                              as opclass_part(opclass_oid, ordinality)
+                   ) = expected_opclasses
+                   and (
+                       select array_agg(collation_part.collation_oid order by collation_part.ordinality)
+                         from unnest(i.indcollation::oid[]) with ordinality
+                              as collation_part(collation_oid, ordinality)
+                   ) = expected_collations
+            ) into index_is_canonical;
+            if index_is_canonical is distinct from true then
+                raise exception
+                    'TRNM native receipt history has an incompatible performance index %',
+                    index_spec.index_name;
+            end if;
+        else
+            execute format(
+                'create index %I on public.trnm_economic_receipt_events_v1 (%s)',
+                index_spec.index_name,
+                index_spec.index_sql
+            );
+        end if;
+    end loop;
+end
+$native_performance_index_guard$;
 
 -- An interrupted rollout may have created the event table before the amount column was added.
 -- Make the upgrade path explicit and backfill only from immutable intent/evidence bytes; unknown
 -- legacy amounts become zero and therefore fail closed at value-bearing consumers.
 alter table public.trnm_economic_receipt_events_v1
     add column if not exists amount_credits bigint;
+
+-- Audit the complete native history catalog before compatibility DML runs.
+-- Name-only CREATE/ALTER statements do not retrofit a column's type, generated
+-- status, or default.  In particular, accepting an integer/numeric amount or
+-- a timestamp-without-time-zone would let a partial writer persist values that
+-- the Rust i64/timestamptz contract cannot represent.  Defaults used by the
+-- runtime's omitted-column INSERT paths are repaired only when they are absent;
+-- a present but different default is a semantic conflict and fails closed.
+do $native_history_catalog_guard$
+declare
+    event_table oid := to_regclass('public.trnm_economic_receipt_events_v1');
+    relation_kind text;
+    relation_persistence text;
+    relation_is_partition boolean;
+    actual_column_count integer;
+    column_spec record;
+    column_type oid;
+    column_identity text;
+    column_generated text;
+    column_default text;
+    column_default_oid oid;
+    normalized_default text;
+    expected_columns constant text[] := array[
+        'event_id', 'intent_id', 'event_sequence', 'intent_hash', 'receipt_id',
+        'protocol_version', 'idempotency_scope', 'idempotency_key',
+        'progression_class', 'status', 'amount_credits', 'receipt_json',
+        'receipt_hash', 'event_kind', 'finalized_at', 'created_at'
+    ]::text[];
+begin
+    select c.relkind::text, c.relpersistence::text, c.relispartition
+      into relation_kind, relation_persistence, relation_is_partition
+      from pg_catalog.pg_class c
+     where c.oid = event_table;
+    if relation_kind is distinct from 'r'
+       or relation_persistence is distinct from 'p'
+       or relation_is_partition then
+        raise exception
+            'TRNM native receipt event relation is not a permanent ordinary table';
+    end if;
+
+    select count(*)::integer
+      into actual_column_count
+      from pg_catalog.pg_attribute a
+     where a.attrelid = event_table
+       and a.attnum > 0
+       and not a.attisdropped;
+    if actual_column_count <> cardinality(expected_columns) then
+        raise exception
+            'TRNM native receipt event column shape is not canonical (expected %, found %)',
+            cardinality(expected_columns), actual_column_count;
+    end if;
+
+    for column_spec in
+        select *
+          from (values
+              ('event_id'::text, 'int8'::regtype, 'event'::text),
+              ('intent_id'::text, 'text'::regtype, 'none'::text),
+              ('event_sequence'::text, 'int8'::regtype, 'none'::text),
+              ('intent_hash'::text, 'text'::regtype, 'none'::text),
+              ('receipt_id'::text, 'text'::regtype, 'none'::text),
+              ('protocol_version'::text, 'text'::regtype, 'none'::text),
+              ('idempotency_scope'::text, 'text'::regtype, 'none'::text),
+              ('idempotency_key'::text, 'text'::regtype, 'none'::text),
+              ('progression_class'::text, 'text'::regtype, 'none'::text),
+              ('status'::text, 'text'::regtype, 'none'::text),
+              ('amount_credits'::text, 'int8'::regtype, 'zero'::text),
+              ('receipt_json'::text, 'jsonb'::regtype, 'none'::text),
+              ('receipt_hash'::text, 'text'::regtype, 'none'::text),
+              ('event_kind'::text, 'text'::regtype, 'initial'::text),
+              ('finalized_at'::text, 'timestamptz'::regtype, 'none'::text),
+              ('created_at'::text, 'timestamptz'::regtype, 'now'::text)
+          ) as expected(column_name, expected_type, default_kind)
+    loop
+        select a.atttypid,
+               a.attidentity::text,
+               a.attgenerated::text,
+               coalesce(pg_get_expr(ad.adbin, ad.adrelid), ''),
+               ad.oid
+          into column_type, column_identity, column_generated,
+               column_default, column_default_oid
+          from pg_catalog.pg_attribute a
+          left join pg_catalog.pg_attrdef ad
+            on ad.adrelid = a.attrelid
+           and ad.adnum = a.attnum
+         where a.attrelid = event_table
+           and a.attname = column_spec.column_name
+           and not a.attisdropped;
+        if not found then
+            raise exception
+                'TRNM native receipt event required column is missing: %',
+                column_spec.column_name;
+        end if;
+        if column_type <> column_spec.expected_type then
+            raise exception
+                'TRNM native receipt event column % has incompatible type',
+                column_spec.column_name;
+        end if;
+        if coalesce(column_generated, '') <> '' then
+            raise exception
+                'TRNM native receipt event column % must not be a generated column',
+                column_spec.column_name;
+        end if;
+
+        normalized_default := regexp_replace(
+            lower(coalesce(column_default, '')), '[[:space:]]+', '', 'g'
+        );
+        case column_spec.default_kind
+            when 'event' then
+                -- Existing plain bigint/serial defaults are supported for
+                -- interrupted deployments; the sequence guard below proves
+                -- that such a default is owned, private, and monotonic.
+                if column_identity not in ('', 'd') then
+                    raise exception
+                        'TRNM native receipt event event_id identity mode is not generated-by-default';
+                end if;
+                if column_identity = ''
+                   and (column_default_oid is null
+                        or normalized_default !~ '^nextval\(.+\)$') then
+                    raise exception
+                        'TRNM native receipt event event_id has no identity or sequence default';
+                end if;
+            when 'zero' then
+                if column_identity <> '' then
+                    raise exception
+                        'TRNM native receipt event amount_credits must not be an identity column';
+                end if;
+                if column_default_oid is null then
+                    execute 'alter table public.trnm_economic_receipt_events_v1 alter column amount_credits set default 0';
+                elsif normalized_default !~ '^(0|0::int8|0::bigint)$' then
+                    raise exception
+                        'TRNM native receipt event amount_credits default is not canonical';
+                end if;
+            when 'initial' then
+                if column_identity <> '' then
+                    raise exception
+                        'TRNM native receipt event event_kind must not be an identity column';
+                end if;
+                if column_default_oid is null then
+                    execute 'alter table public.trnm_economic_receipt_events_v1 alter column event_kind set default ''initial''';
+                elsif normalized_default !~ '^''initial''(::text)?$' then
+                    raise exception
+                        'TRNM native receipt event event_kind default is not canonical';
+                end if;
+            when 'now' then
+                if column_identity <> '' then
+                    raise exception
+                        'TRNM native receipt event created_at must not be an identity column';
+                end if;
+                if column_default_oid is null then
+                    execute 'alter table public.trnm_economic_receipt_events_v1 alter column created_at set default now()';
+                elsif normalized_default !~ '^(now\(\)|current_timestamp)(::timestampwithtimezone)?$' then
+                    raise exception
+                        'TRNM native receipt event created_at default is not canonical';
+                end if;
+            when 'none' then
+                if column_identity <> '' or column_default_oid is not null then
+                    raise exception
+                        'TRNM native receipt event column % has an unexpected generated/default expression',
+                        column_spec.column_name;
+                end if;
+            else
+                raise exception 'TRNM native receipt event catalog guard has an unknown default kind';
+        end case;
+    end loop;
+end
+$native_history_catalog_guard$;
 
 -- Do not turn an explicitly malformed JSON value into an apparently valid
 -- empty object during the compatibility backfill.  Missing legacy evidence
@@ -912,16 +1401,22 @@ $function$;
 do $legacy_provenance_relation_guard$
 declare
     relation_kind text;
+    relation_persistence text;
+    relation_is_partition boolean;
 begin
-    select c.relkind::text
-      into relation_kind
+    select c.relkind::text, c.relpersistence::text, c.relispartition
+      into relation_kind, relation_persistence, relation_is_partition
       from pg_catalog.pg_class c
       join pg_catalog.pg_namespace n on n.oid = c.relnamespace
      where n.nspname = 'public'
        and c.relname = 'trnm_economic_receipt_legacy_fallback_provenance_v1';
-    if found and relation_kind <> 'r' then
+    if found and (
+           relation_kind <> 'r'
+           or relation_persistence <> 'p'
+           or relation_is_partition
+       ) then
         raise exception
-            'TRNM legacy fallback provenance name is occupied by a non-table relation';
+            'TRNM legacy fallback provenance name is not a permanent ordinary table';
     end if;
 end
 $legacy_provenance_relation_guard$;
@@ -958,6 +1453,8 @@ declare
     event_table oid := to_regclass('public.trnm_economic_receipt_events_v1');
     legacy_table oid := to_regclass('public.trnm_economic_receipts');
     relation_kind text;
+    relation_persistence text;
+    relation_is_partition boolean;
     actual_column_count integer;
     expected_column_count constant integer := 6;
     column_name text;
@@ -975,6 +1472,8 @@ declare
     has_source_unique boolean;
     source_index_oid oid;
     index_is_canonical boolean;
+    source_opclasses oid[];
+    source_collations oid[];
     primary_key_name text :=
         'trnm_receipt_legacy_fallback_provenance_event_id_pkey_v1';
     source_index_name text :=
@@ -991,12 +1490,15 @@ begin
         raise exception 'TRNM legacy fallback provenance authority tables are missing';
     end if;
 
-    select c.relkind::text
-      into relation_kind
+    select c.relkind::text, c.relpersistence::text, c.relispartition
+      into relation_kind, relation_persistence, relation_is_partition
       from pg_catalog.pg_class c
      where c.oid = provenance_table;
-    if relation_kind <> 'r' then
-        raise exception 'TRNM legacy fallback provenance relation is not an ordinary table';
+    if relation_kind <> 'r'
+       or relation_persistence <> 'p'
+       or relation_is_partition then
+        raise exception
+            'TRNM legacy fallback provenance relation is not a permanent ordinary table';
     end if;
 
     select count(*)::integer
@@ -1090,6 +1592,27 @@ begin
     if event_attnum is null or legacy_attnum is null
        or event_ref_attnum is null or legacy_ref_attnum is null then
         raise exception 'TRNM legacy fallback provenance key columns are missing';
+    end if;
+
+    select array_agg(opc.oid order by key_part.ordinality),
+           array_agg(a.attcollation order by key_part.ordinality)
+      into source_opclasses, source_collations
+      from unnest(array[legacy_attnum]::smallint[]) with ordinality
+           as key_part(attnum, ordinality)
+      join pg_catalog.pg_attribute a
+        on a.attrelid = provenance_table
+       and a.attnum = key_part.attnum
+       and not a.attisdropped
+      join pg_catalog.pg_opclass opc
+        on opc.opcintype = a.atttypid
+       and opc.opcdefault
+       and opc.opcnamespace = 'pg_catalog'::regnamespace
+      join pg_catalog.pg_am am
+        on am.oid = opc.opcmethod
+       and am.amname = 'btree';
+    if source_opclasses is null or source_collations is null then
+        raise exception
+            'TRNM legacy fallback provenance source index operator class/collation is unavailable';
     end if;
 
     -- Check nullable/duplicate keys before promoting NOT NULL or adding a
@@ -1345,14 +1868,38 @@ begin
         select i.indisunique
                and i.indisvalid
                and i.indisready
+               and i.indislive
                and i.indimmediate
                and i.indpred is null
+               and i.indexprs is null
                and i.indnkeyatts = 1
+               and i.indnatts = 1
                and i.indrelid = provenance_table
                and i.indkey[0] = legacy_attnum
+               and (
+                   select array_agg(key_part.opclass_oid order by key_part.ordinality)
+                     from unnest(i.indclass::oid[]) with ordinality
+                          as key_part(opclass_oid, ordinality)
+               ) = source_opclasses
+               and (
+                   select array_agg(key_part.collation_oid order by key_part.ordinality)
+                     from unnest(i.indcollation::oid[]) with ordinality
+                          as key_part(collation_oid, ordinality)
+               ) = source_collations
           into index_is_canonical
-          from pg_catalog.pg_index i
-         where i.indexrelid = source_index_oid;
+          from pg_catalog.pg_class index_class
+          join pg_catalog.pg_index i on i.indexrelid = index_class.oid
+          join pg_catalog.pg_am am on am.oid = index_class.relam
+         where i.indexrelid = source_index_oid
+           and index_class.relkind = 'i'
+           and index_class.relpersistence = 'p'
+           and not index_class.relispartition
+           and index_class.relowner = (
+               select target.relowner
+                 from pg_catalog.pg_class target
+                where target.oid = provenance_table
+           )
+           and am.amname = 'btree';
         if index_is_canonical is distinct from true then
             raise exception
                 'TRNM legacy fallback provenance source index is not canonical';
@@ -1672,18 +2219,28 @@ alter table public.trnm_economic_receipt_events_v1
     alter column amount_credits set default 0,
     alter column amount_credits set not null;
 do $constraint$
+declare
+    constraint_type "char";
+    constraint_validated boolean;
+    constraint_expression text;
 begin
-    if not exists (
-        select 1
-          from pg_catalog.pg_constraint c
-          join pg_catalog.pg_class t on t.oid = c.conrelid
-          join pg_catalog.pg_namespace n on n.oid = t.relnamespace
-         where n.nspname = 'public'
-           and t.relname = 'trnm_economic_receipt_events_v1'
-           and c.conname = 'trnm_receipt_events_amount_v1'
-    ) then
+    select c.contype,
+           c.convalidated,
+           regexp_replace(
+               lower(coalesce(pg_get_expr(c.conbin, c.conrelid), '')),
+               '[[:space:]]+', '', 'g'
+           )
+      into constraint_type, constraint_validated, constraint_expression
+      from pg_catalog.pg_constraint c
+     where c.conrelid = 'public.trnm_economic_receipt_events_v1'::regclass
+       and c.conname = 'trnm_receipt_events_amount_v1';
+    if not found then
         alter table public.trnm_economic_receipt_events_v1
             add constraint trnm_receipt_events_amount_v1 check (amount_credits >= 0);
+    elsif constraint_type is distinct from 'c'
+       or constraint_validated is distinct from true
+       or constraint_expression is distinct from '(amount_credits>=0)' then
+        raise exception 'TRNM native receipt amount constraint is not canonical';
     end if;
 end
 $constraint$;
@@ -2710,6 +3267,16 @@ begin
     if sequence_oid is null then
         raise exception
             'TRNM native receipt event event_id sequence is missing';
+    end if;
+    if not exists (
+        select 1
+          from pg_catalog.pg_class c
+         where c.oid = sequence_oid
+           and c.relkind = 'S'
+           and c.relpersistence = 'p'
+    ) then
+        raise exception
+            'TRNM native receipt event event_id sequence is not a permanent sequence';
     end if;
     select s.seqtypid, s.seqincrement, s.seqmax, s.seqmin, s.seqcycle
       into sequence_type, sequence_increment, sequence_max,

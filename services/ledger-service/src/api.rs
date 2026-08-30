@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -629,6 +629,11 @@ pub async fn post_trnm_value_entitlement_issue(
     if let Err(error) = authorize_game_authority(&state, &headers) {
         return unauthorized_response(error.0);
     }
+    if !state.value_write_available() {
+        return repository_unavailable_response(
+            "persistent ledger is required before issuing wallet value entitlements",
+        );
+    }
     if request.amount_credits <= 0
         || request.amount_credits > BATTLE_WALLET_REWARD_PER_EVENT_CAP
         || !matches!(request.source, ValueEntitlementSource::Battle)
@@ -778,7 +783,7 @@ pub async fn post_trnm_economic_intent(
         .await
     {
         Ok(receipt) => (StatusCode::OK, Json(receipt)).into_response(),
-        Err(LedgerActionError::RepositoryUnavailable(_)) if !state.fail_fast => {
+        Err(LedgerActionError::RepositoryUnavailable(_)) if state.memory_fallback_enabled() => {
             match execute_trnm_intent_in_memory(&state, &request.intent).await {
                 Ok(receipt) => (StatusCode::OK, Json(receipt)).into_response(),
                 Err(response) => response,
@@ -998,19 +1003,15 @@ pub async fn post_trnm_wallet_snapshot(
         .await
     {
         Ok(snapshot) => (StatusCode::OK, Json::<WalletSnapshot>(snapshot)).into_response(),
-        Err(LedgerActionError::RepositoryUnavailable(_)) if !state.fail_fast => {
+        Err(LedgerActionError::RepositoryUnavailable(_)) if state.memory_fallback_enabled() => {
             let accounts = state.accounts.read().await;
             match accounts.get(&account_id) {
-                Some(account) => (
-                    StatusCode::OK,
-                    Json(WalletSnapshot {
-                        account_id: account_id.to_string(),
-                        available_credits: (account.balance - account.reserved).round() as i64,
-                        reserved_credits: account.reserved.round() as i64,
-                        observed_at_cursor: request.reconciliation_cursor,
-                    }),
-                )
-                    .into_response(),
+                Some(account) => local_wallet_snapshot_response(WalletSnapshot {
+                    account_id: account_id.to_string(),
+                    available_credits: (account.balance - account.reserved).round() as i64,
+                    reserved_credits: account.reserved.round() as i64,
+                    observed_at_cursor: request.reconciliation_cursor,
+                }),
                 None => {
                     repository_error_response(LedgerActionError::AccountNotFound).into_response()
                 }
@@ -1018,6 +1019,15 @@ pub async fn post_trnm_wallet_snapshot(
         }
         Err(error) => repository_error_response(error).into_response(),
     }
+}
+
+fn local_wallet_snapshot_response(snapshot: WalletSnapshot) -> Response {
+    let mut response = (StatusCode::OK, Json(snapshot)).into_response();
+    response.headers_mut().insert(
+        "x-ledger-local-dev-fallback",
+        HeaderValue::from_static("true"),
+    );
+    response
 }
 
 async fn authorize_trnm_economy_intent(
@@ -1428,15 +1438,10 @@ pub async fn create_account(
     };
 
     if let Err(err) = state.repository.create_account(&record).await {
-        if state.fail_fast {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("create_account repository failure: {err}"),
-                    message: None,
-                }),
-            )
-                .into_response();
+        if !state.memory_fallback_enabled() {
+            return repository_unavailable_response(format!(
+                "create_account repository failure: {err}"
+            ));
         }
     }
 
@@ -1533,8 +1538,10 @@ async fn apply_action(state: AppState, req: LedgerActionRequest, action: &str) -
     };
 
     match apply_action_via_repository(&state, &entry).await {
-        Ok(account) => return success_response(state.fail_fast, account, entry).into_response(),
-        Err(err) if should_fallback_to_memory(&err, state.fail_fast) => {}
+        Ok(account) => {
+            return success_response(state.fail_fast, false, account, entry).into_response()
+        }
+        Err(err) if should_fallback_to_memory(&err, &state) => {}
         Err(err) => return repository_error_response(err).into_response(),
     }
 
@@ -1583,18 +1590,16 @@ async fn load_account_record(
 ) -> Result<Option<AccountRecord>, Response> {
     match state.repository.get_account(id).await {
         Ok(Some(account)) => return Ok(Some(account)),
-        Ok(None) => {}
-        Err(err) if state.fail_fast => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("get_account repository failure: {err}"),
-                    message: None,
-                }),
-            )
-                .into_response())
+        Ok(None) if state.memory_fallback_enabled() => {}
+        Ok(None) => return Ok(None),
+        Err(err) if state.memory_fallback_enabled() => {
+            let _ = err;
         }
-        Err(_) => {}
+        Err(err) => {
+            return Err(repository_unavailable_response(format!(
+                "get_account repository failure: {err}"
+            )))
+        }
     }
 
     let map = state.accounts.read().await;
@@ -1652,17 +1657,20 @@ async fn apply_action_via_repository(
     Ok(account)
 }
 
-fn should_fallback_to_memory(err: &LedgerActionError, fail_fast: bool) -> bool {
-    if fail_fast {
-        return false;
-    }
-
-    matches!(err, LedgerActionError::RepositoryUnavailable(_))
+fn should_fallback_to_memory(err: &LedgerActionError, state: &AppState) -> bool {
+    state.memory_fallback_enabled() && matches!(err, LedgerActionError::RepositoryUnavailable(_))
 }
 
 fn repository_error_response(err: LedgerActionError) -> (StatusCode, Json<ErrorResponse>) {
     match err {
-        LedgerActionError::RepositoryUnavailable(message) | LedgerActionError::Other(message) => (
+        LedgerActionError::RepositoryUnavailable(message) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: message,
+                message: None,
+            }),
+        ),
+        LedgerActionError::Other(message) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: message,
@@ -1711,7 +1719,24 @@ fn repository_error_response(err: LedgerActionError) -> (StatusCode, Json<ErrorR
     }
 }
 
+fn repository_unavailable_response(message: impl Into<String>) -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ErrorResponse {
+            error: message.into(),
+            message: None,
+        }),
+    )
+        .into_response()
+}
+
 async fn apply_action_in_memory(state: AppState, entry: LedgerEntryRecord) -> Response {
+    if !state.memory_fallback_enabled() {
+        return repository_unavailable_response(
+            "in-memory ledger value writes require an explicit service-local test opt-in",
+        );
+    }
+
     if let Some(key) = &entry.idempotency_key {
         if let Ok(Some(_)) = state.repository.find_by_idempotency_key(key).await {
             return (
@@ -1830,11 +1855,12 @@ async fn apply_action_in_memory(state: AppState, entry: LedgerEntryRecord) -> Re
     if let Some(key) = &entry.idempotency_key {
         state.idempotency_keys.write().await.insert(key.clone());
     }
-    success_response(state.fail_fast, updated_account, entry).into_response()
+    success_response(state.fail_fast, true, updated_account, entry).into_response()
 }
 
 fn success_response(
     fail_fast: bool,
+    local_dev_fallback: bool,
     account: AccountRecord,
     entry: LedgerEntryRecord,
 ) -> (StatusCode, Json<serde_json::Value>) {
@@ -1843,7 +1869,9 @@ fn success_response(
         Json(json!({
             "account": account,
             "entry": entry,
-            "fail_fast": fail_fast
+            "fail_fast": fail_fast,
+            "persistent": !local_dev_fallback,
+            "local_dev_fallback": local_dev_fallback
         })),
     )
 }

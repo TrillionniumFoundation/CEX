@@ -69,6 +69,29 @@ pub enum ServiceKind {
     Audit,
 }
 
+/// Parse a boolean environment value using the same normalization everywhere in
+/// the service startup path.  Keeping this helper public prevents a binary's
+/// post-guard configuration code from accidentally treating a value accepted by
+/// the production guard (for example `ON` or ` true `) as false.
+pub fn parse_bool_value(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+/// Read a boolean environment flag with the shared normalization rules.
+/// Invalid values retain the historical service behavior (false when a value
+/// is present), while the strict production guard rejects invalid values before
+/// state construction.
+pub fn env_flag(name: &str, default: bool) -> bool {
+    match env::var(name) {
+        Ok(raw) => parse_bool_value(&raw).unwrap_or(false),
+        Err(_) => default,
+    }
+}
+
 impl ServiceKind {
     fn fail_fast_env(self) -> &'static str {
         match self {
@@ -323,14 +346,12 @@ fn require_explicit_true(name: &str) -> Result<(), StartupError> {
 }
 
 fn parse_bool(name: &str, raw: &str) -> Result<bool, StartupError> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Ok(true),
-        "0" | "false" | "no" | "off" => Ok(false),
-        _ => Err(StartupError::new(
+    parse_bool_value(raw).ok_or_else(|| {
+        StartupError::new(
             "invalid_boolean_configuration",
             format!("{name} must be one of true/false, 1/0, yes/no, or on/off"),
-        )),
-    }
+        )
+    })
 }
 
 fn validate_no_weak_credentials() -> Result<(), StartupError> {
@@ -555,6 +576,23 @@ mod tests {
         assert!(parse_timeout_seconds(Some("0")).is_err());
         assert!(parse_timeout_seconds(Some("61")).is_err());
         assert!(parse_timeout_seconds(Some("five")).is_err());
+    }
+
+    #[test]
+    fn boolean_values_share_trimmed_case_insensitive_normalization() {
+        for raw in ["1", "true", "TRUE", "TrUe", " yes ", "YES", "on", "ON"] {
+            assert_eq!(parse_bool_value(raw), Some(true), "raw={raw:?}");
+        }
+        for raw in ["0", "false", "FALSE", "FaLsE", " no ", "NO", "off", "OFF"] {
+            assert_eq!(parse_bool_value(raw), Some(false), "raw={raw:?}");
+        }
+    }
+
+    #[test]
+    fn malformed_boolean_values_are_not_coerced_to_true() {
+        for raw in ["", "maybe", "truthy", "2", "true-ish"] {
+            assert_eq!(parse_bool_value(raw), None, "raw={raw:?}");
+        }
     }
 
     #[test]

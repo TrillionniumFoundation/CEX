@@ -6,6 +6,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -18,13 +19,35 @@ STRICT_WRAPPER = ROOT / "scripts/p0-release-evidence-strict.py"
 CANONICAL_GENERATOR = ROOT / "scripts/p0-release-evidence.py"
 LOCAL_BINDER = ROOT / "scripts/bind-p0-local-evidence.py"
 HOSTED_CHECKER = ROOT / "scripts/check-hosted-gate-execution.py"
+HOSTED_CHECKER_IMPL = ROOT / "scripts/check-hosted-gate-execution-impl.py"
 EXECUTION_VERIFIER = ROOT / "scripts/verify-hosted-run-execution.py"
 SNAPSHOT_FRESHNESS = ROOT / "scripts/verify-hosted-snapshot-freshness.py"
+SNAPSHOT_FRESHNESS_IMPL = ROOT / "scripts/verify-hosted-snapshot-freshness-impl.py"
+EVIDENCE_CORE = ROOT / "scripts/p0-release-evidence-core.py"
+EVIDENCE_CORE_IMPL = ROOT / "scripts/p0-release-evidence-core-impl.py"
 CONTRACT = ROOT / "scripts/check-release-evidence-contract.py"
 PRIMARY_CONTRACT = ROOT / "scripts/check-release-baseline-manifest.py"
 TEMPLATE = ROOT / "docs/templates/cex-release-baseline-manifest-v1.json"
 SCHEMA = ROOT / "docs/schemas/cex-release-baseline-manifest-v1.schema.json"
 PROBLEMS: list[str] = []
+
+RELEASE_WRAPPER_BOUNDARIES = {
+    HOSTED_CHECKER: (
+        HOSTED_CHECKER_IMPL,
+        ("authoritative_run_sort_key", "_IMPLEMENTATION_SELF_TEST = self_test"),
+        ("latest_authoritative_run_is_binding", "build_frozen_attestation"),
+    ),
+    EVIDENCE_CORE: (
+        EVIDENCE_CORE_IMPL,
+        ("authoritative_run_sort_key", "_IMPLEMENTATION_SELF_TEST = self_test"),
+        ("tree_sha = payload.get(\"tree_sha\")", "def revalidate_gate_runs("),
+    ),
+    SNAPSHOT_FRESHNESS: (
+        SNAPSHOT_FRESHNESS_IMPL,
+        ("authoritative_order_self_test", "_IMPLEMENTATION_SELF_TEST = self_test"),
+        ("latest_authoritative_run_is_binding", "detail-status-drift"),
+    ),
+}
 
 
 def require_file(path: Path) -> str:
@@ -41,6 +64,84 @@ def require_markers(path: Path, *markers: str) -> None:
             PROBLEMS.append(
                 f"{path.relative_to(ROOT).as_posix()} lacks strict evidence marker: {marker}"
             )
+
+
+def verify_failure_diagnostics_isolation() -> None:
+    """Reject failure uploads that enter the frozen canonical payload tree."""
+
+    content = require_file(WORKFLOW)
+    if not content:
+        return
+    lines = content.splitlines()
+    starts = [
+        index
+        for index, line in enumerate(lines)
+        if re.match(r"^\s*-\s+name:\s*Upload failure diagnostics\s*$", line)
+    ]
+    if len(starts) != 1:
+        PROBLEMS.append(
+            "p0-release-candidate-gate.yml must contain exactly one "
+            "Upload failure diagnostics step"
+        )
+        return
+    start = starts[0]
+    step_indent = len(lines[start]) - len(lines[start].lstrip())
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        line = lines[index]
+        indent = len(line) - len(line.lstrip())
+        if indent <= step_indent and re.match(r"^\s*-\s+name:\s*", line):
+            end = index
+            break
+    body = "\n".join(lines[start + 1 : end])
+    if not re.search(r"(?m)^\s*if:\s*failure\(\)\s*$", body):
+        PROBLEMS.append(
+            "failure diagnostics upload must remain conditional on failure()"
+        )
+    path_values = re.findall(
+        r"(?m)^\s*path:\s*([^#\s]+)\s*(?:#.*)?$", body
+    )
+    if path_values != ["run/p0-release-support"]:
+        PROBLEMS.append(
+            "failure diagnostics upload must use only run/p0-release-support; "
+            f"got {path_values!r}"
+        )
+
+
+def verify_release_wrapper_boundaries() -> None:
+    """Ensure split release adapters execute their checked-in implementations."""
+
+    generic = (
+        'globals()["__name__"] = f"{_ORIGINAL_MODULE_NAME}.__impl__"',
+        "_SOURCE = read_regular_nofollow(_IMPL_PATH)",
+        'exec(compile(_SOURCE, str(_IMPL_PATH), "exec", dont_inherit=True), globals())',
+        'globals()["__name__"] = _ORIGINAL_MODULE_NAME',
+        "read_regular_nofollow",
+    )
+    for wrapper, (implementation, wrapper_markers, implementation_markers) in RELEASE_WRAPPER_BOUNDARIES.items():
+        wrapper_name = wrapper.relative_to(ROOT).as_posix()
+        implementation_name = implementation.relative_to(ROOT).as_posix()
+        if wrapper.is_symlink() or not wrapper.is_file():
+            PROBLEMS.append(f"release-evidence wrapper is not a regular file: {wrapper_name}")
+            continue
+        if implementation.is_symlink() or not implementation.is_file():
+            PROBLEMS.append(
+                f"release-evidence implementation is not a regular file: {implementation_name}"
+            )
+            continue
+        wrapper_text = wrapper.read_text(encoding="utf-8")
+        implementation_text = implementation.read_text(encoding="utf-8")
+        expected_assignment = f'_IMPL_PATH = _SCRIPT_DIR / "{implementation.name}"'
+        if wrapper_text.count(expected_assignment) != 1:
+            PROBLEMS.append(
+                f"{wrapper_name} must assign its implementation exactly once: {expected_assignment}"
+            )
+        for marker in generic + wrapper_markers:
+            if marker not in wrapper_text:
+                PROBLEMS.append(f"{wrapper_name} lacks wrapper boundary marker: {marker}")
+        for marker in implementation_markers:
+            if marker not in implementation_text:
+                PROBLEMS.append(f"{implementation_name} lacks implementation marker: {marker}")
 
 
 def load_contract_module() -> Any:
@@ -273,26 +374,67 @@ def local_fixture(name: str, module: Any, source: dict[str, str]) -> dict[str, A
         "tree_sha": source["tree_sha"],
     }
     if name == "candidate-hygiene":
-        return {**common, "problems": []}
+        workflow_scope = module.canonical_workflow_scope(ROOT)
+        return {
+            **common,
+            "problems": [],
+            # These values mirror check-p0-release-candidate-hygiene-core.py;
+            # keeping them in the fixture exercises the same canonical
+            # authority/workflow binding as a hosted producer record.
+            "plan": module.CANDIDATE_ACTIVE_PLAN,
+            "addendum": module.CANDIDATE_ACTIVE_ADDENDUM,
+            "authoritative_workflows": list(module.HOSTED_WORKFLOW_PATHS.values()),
+            "release_workflow": module.EXPECTED_AGGREGATE_RELEASE_WORKFLOW,
+            "workflow_pin_scope": workflow_scope,
+            "shared_trigger": module.TRIGGER_PATH,
+            "documentation_contract": "ok",
+            "migration_head": module.migration_state(ROOT)[0],
+            "workflow_trust": {
+                "status": "ok",
+                "workflow_count": len(workflow_scope),
+                "local_action_descriptor_count": 0,
+            },
+            "candidate_trigger_authority": {
+                "path": "docs/release-evidence/p0-candidate-trigger.json",
+                "sole_authority": True,
+                "secondary_freeze_markers": [],
+            },
+        }
     if name == "repository-integrity":
+        repository_root = Path(module.__file__).parent.parent
+        integrity_digests = module.repository_integrity_expected_digests(repository_root)
         return {
             **common,
             "repository_commit_sha": source["commit_sha"],
             "repository_tree_sha": source["tree_sha"],
             "generated_at": "2026-08-30T00:00:00Z",
-            "active_plan": "CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
-            "active_addendum": "none",
+            "active_plan": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
+            "active_addendum": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md",
             "migration_head": "0087_add_term_exchange_receipt_event_history.sql",
             "production_authorization": "not_granted",
-            "digests": {},
-            "documentation_check": {"status": "ok", "ok": True, "problems": []},
+            "digests": integrity_digests,
+            "documentation_check": {
+                "schema": "cex.development-doc-check.v1",
+                "status": "ok",
+                "active_plan": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
+                "active_addendum": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md",
+                "migration_head": "0087_add_term_exchange_receipt_event_history.sql",
+                "requirements": 18,
+                "repository_qualification_result": "PENDING_EXACT_SHA_HOSTED_EVIDENCE",
+                "repository_qualification_authority": "generated_candidate_manifest_only",
+                "production_authorization": "not_granted",
+                "problems": [],
+            },
         }
     if name == "hepta-postgres-integration":
         return {
             **common,
-            "mode": "fixture",
+            # The aggregate release workflow intentionally records its
+            # recovery-only rerun; the Rust service gate separately proves
+            # full mode through its authoritative hosted job.
+            "mode": "recovery-only",
             "postgres_required": True,
-            "lint_policy": "strict",
+            "lint_policy": module.HEPTA_LINT_POLICY,
             "completed_at": "2026-08-30T00:00:00Z",
             "checks": sorted(module.HEPTA_REQUIRED_CHECKS),
         }
@@ -306,17 +448,22 @@ def local_fixture(name: str, module: Any, source: dict[str, str]) -> dict[str, A
             "checks": sorted(module.LIFECYCLE_REQUIRED_CHECKS),
         }
     if name == "exact-ledger-soak":
+        iterations = module.MIN_EXACT_SOAK_ITERATIONS
+        entry_count = 1 + iterations * module.EXACT_SOAK_LEDGER_ENTRIES_PER_ITERATION
         return {
             "schema": module.LOCAL_SCHEMAS[name],
             "ok": True,
-            "iterations": 1,
-            "account_id": "fixture-account",
-            "balance_minor": 0,
+            "iterations": iterations,
+            "account_id": module.EXACT_SOAK_ACCOUNT_ID,
+            "balance_minor": (
+                module.EXACT_SOAK_INITIAL_BALANCE_MINOR
+                + iterations * module.EXACT_SOAK_GRANT_MINOR_PER_ITERATION
+            ),
             "reserved_minor": 0,
-            "ledger_entry_count": 0,
-            "distinct_operation_count": 0,
+            "ledger_entry_count": entry_count,
+            "distinct_operation_count": entry_count,
             "compatibility_entry_count": 0,
-            "audit_effect_count": 0,
+            "audit_effect_count": entry_count,
             "started_at_epoch": 1,
             "ended_at_epoch": 2,
             "duration_seconds": 1,
@@ -324,7 +471,23 @@ def local_fixture(name: str, module: Any, source: dict[str, str]) -> dict[str, A
             "tree_sha": source["tree_sha"],
         }
     if name == "backup-restore":
-        restore_state = {"fixture": "ok"}
+        restore_state = {
+            "public_table_count": 1,
+            "organization_count": 1,
+            "account_count": 1,
+            "ledger_entry_count": 0,
+            "audit_outbox_count": 0,
+            "soak_account": {
+                "account_id": "90000000-0000-4000-8000-000000000101",
+                "balance_minor": 0,
+                "reserved_minor": 0,
+                "currency_unit": "TRNM",
+                "currency_scale": 6,
+            },
+            "soak_operation_count": 0,
+            "soak_ledger_sha256": "sha256:" + "4" * 64,
+            "soak_audit_sha256": "sha256:" + "4" * 64,
+        }
         return {
             "schema": module.LOCAL_SCHEMAS[name],
             "ok": True,
@@ -399,18 +562,21 @@ def governance_fixture(module: Any, context: dict[str, Any], source: dict[str, A
         "branch_protection_enabled": False,
         "candidate_branch_protection_enabled": False,
         "default_branch_protection_enabled": False,
+        "default_branch_required_status_contexts": [],
         "candidate_legacy_required_checks_enforced": False,
         "candidate_ruleset_required_checks_enforced": False,
         "required_candidate_checks_enforced": False,
+        "rulesets_http_status": 200,
         "rulesets_readable": True,
         "rulesets": [],
         "candidate_rulesets": [],
         "ruleset_count": 0,
         "candidate_ruleset_count": 0,
-        "candidate_required_status_contexts": desired,
-        "actual_required_status_contexts": desired,
+        "candidate_required_status_contexts": sorted(desired),
+        "actual_required_status_contexts": sorted(desired),
         "desired_required_status_contexts": desired,
         "repository_candidate_enforcement": "not_enforced",
+        "interpretation": "This is an observation of GitHub controls. Source files and CI prose do not create branch protection or ruleset enforcement.",
     }
 
 
@@ -442,6 +608,8 @@ def execution_fixture(
                 "runner_name": f"fixture-runner-{next_job_id}",
                 "runner_group_id": None,
                 "runner_group_name": None,
+                "started_at": "2026-08-30T00:00:01Z",
+                "completed_at": "2026-08-30T00:00:02Z",
                 "labels": [expected["runner_label"]],
                 "steps": [
                     {
@@ -497,6 +665,7 @@ def execution_fixture(
 def sbom_fixture(context: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
     return {
         "spdxVersion": "SPDX-2.3",
+        "dataLicense": "CC0-1.0",
         "SPDXID": "SPDXRef-DOCUMENT",
         "name": f"CEX P0 candidate {source['commit_sha']}",
         "documentNamespace": (
@@ -506,8 +675,34 @@ def sbom_fixture(context: dict[str, Any], source: dict[str, Any]) -> dict[str, A
         "creationInfo": {
             "created": "2026-08-30T00:00:00Z",
             "creators": ["Tool: cex-p0-release-evidence"],
+            "licenseListVersion": "3.25",
         },
-        "packages": [{"SPDXID": "SPDXRef-Package-fixture", "name": "fixture"}],
+        "packages": [
+            {
+                "SPDXID": "SPDXRef-Package-fixture",
+                "name": "fixture",
+                "versionInfo": "1.0.0",
+                "downloadLocation": "NOASSERTION",
+                "filesAnalyzed": False,
+                "licenseConcluded": "NOASSERTION",
+                "licenseDeclared": "NOASSERTION",
+                "copyrightText": "NOASSERTION",
+                "externalRefs": [
+                    {
+                        "referenceCategory": "PACKAGE-MANAGER",
+                        "referenceType": "purl",
+                        "referenceLocator": "pkg:cargo/fixture@1.0.0",
+                    }
+                ],
+            }
+        ],
+        "relationships": [
+            {
+                "spdxElementId": "SPDXRef-DOCUMENT",
+                "relationshipType": "DESCRIBES",
+                "relatedSpdxElement": "SPDXRef-Package-fixture",
+            }
+        ],
     }
 
 
@@ -700,6 +895,7 @@ def materialize_fixture(
             "conclusion": "success",
             "created_at": source_gate["created_at"],
             "updated_at": source_gate["updated_at"],
+            "selection_policy": "latest_authoritative_run_is_binding",
             "jobs": [
                 {
                     "job_id": job["job_id"],
@@ -817,6 +1013,27 @@ def run_contract_self_tests() -> None:
         module = load_contract_module()
         execution = load_execution_module()
         strict = load_strict_module()
+        if strict.nofollow_supported():
+            # The final contract dynamically loads declarative verifier code.
+            # A symlink at that boundary must be rejected before any bytes are
+            # executed; otherwise an attacker could replace the required-job
+            # map while retaining a self-consistent evidence payload.
+            with tempfile.TemporaryDirectory(prefix="cex-contract-loader-") as directory:
+                loader_root = Path(directory)
+                loader_target = loader_root / "target.py"
+                loader_link = loader_root / "link.py"
+                loader_target.write_text("value = 1\n", encoding="utf-8")
+                loader_link.symlink_to(loader_target)
+                try:
+                    module.load_module_nofollow(
+                        loader_link,
+                        "cex_contract_loader_symlink_test",
+                        "symlink loader self-test",
+                    )
+                except module.ContractError:
+                    pass
+                else:
+                    PROBLEMS.append("strict evidence no-follow module loader accepted a symlink")
         execution_failures = execution.self_test()
         if execution_failures:
             PROBLEMS.extend(
@@ -927,20 +1144,6 @@ def run_contract_self_tests() -> None:
             )
             extra_path.unlink()
 
-            secret_path = evidence_root / "candidate-hygiene.json"
-            secret_original_text = secret_path.read_text(encoding="utf-8")
-            secret_payload = json.loads(secret_original_text)
-            secret_payload["token"] = "fixture-secret-that-must-not-ship"
-            write_json(secret_path, secret_payload)
-            expect_context_rejected(
-                module,
-                "secret-like-payload-content",
-                disk_base,
-                disk_context,
-                evidence_root,
-            )
-            secret_path.write_text(secret_original_text, encoding="utf-8")
-
             swapped = copy.deepcopy(disk_base)
             swapped["evidence"][0]["uri"] = (
                 "gh://TrillionniumFoundation/CEX/actions/runs/99999/attempts/1"
@@ -1015,14 +1218,86 @@ def run_contract_self_tests() -> None:
                 index_path.write_text(original_index_text, encoding="utf-8")
 
             forged_file_case(
+                "secret-like-payload-content",
+                "candidate-hygiene.json",
+                lambda value: value.update(token="fixture-secret-that-must-not-ship"),
+            )
+            forged_file_case(
+                "unknown-local-producer-field",
+                "candidate-hygiene.json",
+                lambda value: value.update(operator_note="harmless-looking extra field"),
+            )
+            forged_file_case(
+                "credential-bearing-uri",
+                "repository-integrity.json",
+                lambda value: value.update(
+                    active_plan="postgres://cex:fixture-secret@db.internal/prod"
+                ),
+            )
+            forged_file_case(
+                "unknown-candidate-trust-field",
+                "candidate-hygiene.json",
+                lambda value: value["workflow_trust"].update(note="unexpected"),
+            )
+            forged_file_case(
+                "unknown-integrity-digest-field",
+                "repository-integrity.json",
+                lambda value: value["digests"].update(note="unexpected"),
+            )
+            forged_file_case(
+                "unknown-integrity-documentation-field",
+                "repository-integrity.json",
+                lambda value: value["documentation_check"].update(note="unexpected"),
+            )
+            forged_file_case(
+                "unknown-hosted-gate-field",
+                "hosted-gates/p0-migration-gate.json",
+                lambda value: value.update(note="unexpected"),
+            )
+            forged_file_case(
                 "forged-governance-payload",
                 "repository-governance.json",
                 lambda value: value.update(candidate_tree_matches_commit=False),
             )
             forged_file_case(
+                "unknown-governance-ruleset-field",
+                "repository-governance.json",
+                lambda value: (
+                    value["rulesets"].append(
+                        {
+                            "id": 1,
+                            "name": "fixture",
+                            "target": "branch",
+                            "enforcement": "active",
+                            "active": True,
+                            "applies_to_candidate_branch": False,
+                            "required_status_contexts": [],
+                            "bypass_state": "none",
+                            "note": "unexpected",
+                        }
+                    ),
+                    value.update(ruleset_count=1),
+                ),
+            )
+            forged_file_case(
                 "nonempty-candidate-hygiene-problems",
                 "candidate-hygiene.json",
                 lambda value: value.update(problems=["forged warning"]),
+            )
+            forged_file_case(
+                "candidate-plan-not-bound",
+                "candidate-hygiene.json",
+                lambda value: value.update(plan="CEX-DEVELOPMENT-PLAN-2026-08-28-v11.md"),
+            )
+            forged_file_case(
+                "candidate-workflow-scope-not-bound",
+                "candidate-hygiene.json",
+                lambda value: value.update(workflow_pin_scope=[]),
+            )
+            forged_file_case(
+                "candidate-trigger-not-bound",
+                "candidate-hygiene.json",
+                lambda value: value.update(shared_trigger="docs/release-evidence/other-trigger.json"),
             )
             forged_file_case(
                 "failed-documentation-check",
@@ -1039,6 +1314,20 @@ def run_contract_self_tests() -> None:
                 ),
             )
             forged_file_case(
+                "unknown-execution-job-field",
+                "hosted-run-execution.json",
+                lambda value: value["gates"][module.HOSTED_GATE_NAMES[0]]["jobs"][0].update(
+                    note="unexpected"
+                ),
+            )
+            forged_file_case(
+                "unknown-execution-step-field",
+                "hosted-run-execution.json",
+                lambda value: value["gates"][module.HOSTED_GATE_NAMES[0]]["jobs"][0]["steps"][0].update(
+                    note="unexpected"
+                ),
+            )
+            forged_file_case(
                 "forged-hosted-gate-attestation",
                 "hosted-gate-execution.json",
                 lambda value: value["gates"][module.HOSTED_WORKFLOW_PATHS[module.HOSTED_GATE_NAMES[0]]]["jobs"][0].update(
@@ -1046,10 +1335,152 @@ def run_contract_self_tests() -> None:
                 ),
             )
             forged_file_case(
+                "unknown-hosted-attestation-job-field",
+                "hosted-gate-execution.json",
+                lambda value: value["gates"][module.HOSTED_WORKFLOW_PATHS[module.HOSTED_GATE_NAMES[0]]]["jobs"][0].update(
+                    note="unexpected"
+                ),
+            )
+            forged_file_case(
+                "unknown-local-binding-record-field",
+                "local-evidence-binding.json",
+                lambda value: value["records"]["candidate-hygiene"].update(
+                    note="unexpected"
+                ),
+            )
+            forged_file_case(
                 "duplicate-hosted-gate-job",
                 "hosted-gate-execution.json",
                 lambda value: value["gates"][module.HOSTED_WORKFLOW_PATHS[module.HOSTED_GATE_NAMES[0]]]["jobs"].append(
                     copy.deepcopy(value["gates"][module.HOSTED_WORKFLOW_PATHS[module.HOSTED_GATE_NAMES[0]]]["jobs"][0])
+                ),
+            )
+            forged_file_case(
+                "unknown-sbom-package-field",
+                "sbom.spdx.json",
+                lambda value: value["packages"][0].update(note="unexpected"),
+            )
+            forged_file_case(
+                "unknown-provenance-build-field",
+                "provenance.intoto.json",
+                lambda value: value["predicate"]["buildDefinition"].update(note="unexpected"),
+            )
+            forged_file_case(
+                "repository-integrity-digest-not-bound",
+                "repository-integrity.json",
+                lambda value: value["digests"].update(
+                    cargo_lock="sha256:" + "4" * 64
+                ),
+            )
+            forged_file_case(
+                "sbom-license-not-canonical",
+                "sbom.spdx.json",
+                lambda value: value.update(dataLicense="MIT"),
+            )
+            forged_file_case(
+                "sbom-duplicate-package-id",
+                "sbom.spdx.json",
+                lambda value: value["packages"].append(copy.deepcopy(value["packages"][0])),
+            )
+            forged_file_case(
+                "sbom-relationship-set-mismatch",
+                "sbom.spdx.json",
+                lambda value: value.update(relationships=[]),
+            )
+            forged_file_case(
+                "provenance-build-type-not-canonical",
+                "provenance.intoto.json",
+                lambda value: value["predicate"]["buildDefinition"].update(
+                    buildType="https://example.invalid/evil"
+                ),
+            )
+            forged_file_case(
+                "provenance-duplicate-dependency",
+                "provenance.intoto.json",
+                lambda value: value["predicate"]["buildDefinition"]["resolvedDependencies"].append(
+                    copy.deepcopy(
+                        value["predicate"]["buildDefinition"]["resolvedDependencies"][0]
+                    )
+                ),
+            )
+            forged_file_case(
+                "provenance-unknown-dependency-uri",
+                "provenance.intoto.json",
+                lambda value: value["predicate"]["buildDefinition"]["resolvedDependencies"][1].update(
+                    uri="file:unexpected"
+                ),
+            )
+            forged_file_case(
+                "hepta-mode-not-canonical",
+                "hepta-postgres-integration.json",
+                lambda value: value.update(mode="full"),
+            )
+            forged_file_case(
+                "hepta-lint-policy-not-canonical",
+                "hepta-postgres-integration.json",
+                lambda value: value.update(lint_policy="strict"),
+            )
+            forged_file_case(
+                "soak-iterations-below-workflow-floor",
+                "exact-ledger-soak.json",
+                lambda value: value.update(iterations=249),
+            )
+            forged_file_case(
+                "soak-balance-invariant-mismatch",
+                "exact-ledger-soak.json",
+                lambda value: value.update(balance_minor=0),
+            )
+            forged_file_case(
+                "soak-negative-count",
+                "exact-ledger-soak.json",
+                lambda value: value.update(ledger_entry_count=-1),
+            )
+            forged_file_case(
+                "soak-account-not-uuid",
+                "exact-ledger-soak.json",
+                lambda value: value.update(account_id="not-a-uuid"),
+            )
+            forged_file_case(
+                "backup-empty-dump",
+                "backup-restore.json",
+                lambda value: value.update(dump_bytes=0),
+            )
+            forged_file_case(
+                "backup-empty-archive",
+                "backup-restore.json",
+                lambda value: value.update(archive_items=0),
+            )
+            forged_file_case(
+                "governance-ruleset-status-mismatch",
+                "repository-governance.json",
+                lambda value: value.update(rulesets_http_status=500),
+            )
+            forged_file_case(
+                "governance-duplicate-context",
+                "repository-governance.json",
+                lambda value: value["actual_required_status_contexts"].append(
+                    value["actual_required_status_contexts"][0]
+                ),
+            )
+            forged_file_case(
+                "execution-null-job-timestamp",
+                "hosted-run-execution.json",
+                lambda value: value["gates"][module.HOSTED_GATE_NAMES[0]]["jobs"][0].update(
+                    started_at=None
+                ),
+            )
+            forged_file_case(
+                "execution-duplicate-step-number",
+                "hosted-run-execution.json",
+                lambda value: value["gates"][module.HOSTED_GATE_NAMES[0]]["jobs"][0]["steps"][1].update(
+                    number=value["gates"][module.HOSTED_GATE_NAMES[0]]["jobs"][0]["steps"][0]["number"]
+                ),
+            )
+            forged_file_case(
+                "hosted-attestation-label-type",
+                "hosted-gate-execution.json",
+                lambda value: value["gates"][module.HOSTED_WORKFLOW_PATHS[module.HOSTED_GATE_NAMES[0]]]["jobs"][0].update(
+                    runner_labels=[1]
                 ),
             )
 
@@ -1099,6 +1530,8 @@ def run_contract_self_tests() -> None:
 
 
 def main() -> int:
+    verify_failure_diagnostics_isolation()
+    verify_release_wrapper_boundaries()
     template_contract_self_test()
     require_markers(
         WORKFLOW,
@@ -1117,6 +1550,8 @@ def main() -> int:
         "Revalidate frozen latest hosted snapshot before manifest",
         "Revalidate frozen latest hosted snapshot after manifest publication",
         "python3 scripts/verify-hosted-snapshot-freshness.py",
+        "Upload failure diagnostics",
+        "path: run/p0-release-support",
     )
     require_markers(
         STRICT_WRAPPER,
@@ -1149,12 +1584,35 @@ def main() -> int:
         "augment_manifest",
     )
     require_markers(
+        EVIDENCE_CORE,
+        "read_regular_nofollow",
+        "p0-release-evidence-core-impl.py",
+        "authoritative_run_sort_key",
+        "__impl__",
+        "exec(compile",
+    )
+    require_markers(
+        EVIDENCE_CORE_IMPL,
+        "tree_sha = payload.get(\"tree_sha\")",
+        "lacks a valid exact tree_sha",
+        "def revalidate_gate_runs(",
+        "release-evidence core self-test failed",
+    )
+    require_markers(
         LOCAL_BINDER,
         "producer_tree = payload.get(\"tree_sha\")",
         "local-evidence-binding.v1",
     )
     require_markers(
         HOSTED_CHECKER,
+        "read_regular_nofollow",
+        "check-hosted-gate-execution-impl.py",
+        "authoritative_run_sort_key",
+        "__impl__",
+        "exec(compile",
+    )
+    require_markers(
+        HOSTED_CHECKER_IMPL,
         "latest_authoritative_run_is_binding",
         "no real runner was allocated",
         "build_frozen_attestation",
@@ -1174,12 +1632,21 @@ def main() -> int:
     )
     require_markers(
         SNAPSHOT_FRESHNESS,
+        "read_regular_nofollow",
+        "verify-hosted-snapshot-freshness-impl.py",
+        "authoritative_order_self_test",
+        "__impl__",
+        "exec(compile",
+    )
+    require_markers(
+        SNAPSHOT_FRESHNESS_IMPL,
         "cex.hosted-gate-selection-binding.v1",
         "latest_authoritative_run_is_binding",
         "latest_run_states",
         "paged_collection",
         "newer-success",
         "newer-rerun-attempt",
+        "detail-status-drift",
         "read_json_nofollow",
         "read_regular_nofollow",
         "workflow_revalidation_count",

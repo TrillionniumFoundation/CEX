@@ -5,15 +5,23 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.util
 import json
 import re
 import sys
+import types
+import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-_SCRIPT_DIR = Path(__file__).resolve().parent
+# Keep the script location lexical until no-follow checks have run.  Resolving
+# here would make a symlinked verifier path look like an ordinary file and
+# would also let the dynamic loader below select a sibling outside the
+# checked-out tree.
+_SCRIPT_PATH = Path(__file__)
+if not _SCRIPT_PATH.is_absolute():
+    _SCRIPT_PATH = Path.cwd() / _SCRIPT_PATH
+_SCRIPT_DIR = _SCRIPT_PATH.parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 from evidence_safe_io import (  # noqa: E402
@@ -25,6 +33,7 @@ from evidence_safe_io import (  # noqa: E402
 
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+RAW_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 BRANCH_RE = re.compile(
     r"^(?!/)(?!.*//)(?!.*\.\.)(?!.*(?:^|/)\.(?:/|$))"
     r"(?!.*(?:^|/)\.\.(?:/|$))(?!.*@\{)(?!refs/)(?!HEAD$)(?!.*/$)"
@@ -72,6 +81,51 @@ HOSTED_WORKFLOW_PATHS = {
     "p0-provider-reconciliation-gate": ".github/workflows/p0-provider-reconciliation-gate.yml",
 }
 MIGRATION_RE = re.compile(r"^(\d{4})_[a-z0-9][a-z0-9._-]*\.sql$")
+TRIGGER_PATH = "docs/release-evidence/p0-candidate-trigger.json"
+DEVELOPMENT_AUTHORITY_PATH = "docs/development-doc-authority-v1.json"
+DEVELOPMENT_CANONICAL_DOCUMENT_KEYS = frozenset(
+    {
+        "entrypoint",
+        "component_status",
+        "traceability",
+        "hepta_state_machines",
+        "threat_model",
+        "clean_deployment_acceptance",
+        "slo_recovery",
+        "protocol_compatibility",
+        "trnm_production_credentials",
+    }
+)
+REPOSITORY_INTEGRITY_DIGEST_FIELDS = frozenset(
+    {
+        "cargo_lock",
+        "migration_chain",
+        "authoritative_workflows",
+        "canonical_documents",
+        "candidate_trigger",
+        "qualification_freeze",
+        "root_readme_observed_only",
+    }
+)
+EXPECTED_AGGREGATE_RELEASE_WORKFLOW = ".github/workflows/p0-release-candidate-gate.yml"
+CANDIDATE_ACTIVE_PLAN = "CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"
+CANDIDATE_ACTIVE_ADDENDUM = "CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md"
+HEPTA_AGGREGATE_MODE = "recovery-only"
+HEPTA_LINT_POLICY = "exact_body_hash_plus_inherited_trait_cleanup"
+MIN_EXACT_SOAK_ITERATIONS = 250
+EXACT_SOAK_ACCOUNT_ID = "90000000-0000-4000-8000-000000000101"
+EXACT_SOAK_INITIAL_BALANCE_MINOR = 1_000_000_000
+EXACT_SOAK_GRANT_MINOR_PER_ITERATION = 1_000
+EXACT_SOAK_LEDGER_ENTRIES_PER_ITERATION = 3
+PROVENANCE_BUILD_TYPE = (
+    "https://github.com/TrillionniumFoundation/CEX/"
+    "p0-release-candidate-gate/v1"
+)
+SPDX_ID_RE = re.compile(r"^SPDXRef-[A-Za-z0-9.-]+$")
+UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-"
+    r"[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+)
 LOCAL_EVIDENCE = {
     "candidate-hygiene": "candidate-hygiene.json",
     "repository-integrity": "repository-integrity.json",
@@ -114,13 +168,33 @@ SECRET_LIKE_PATH_RE = re.compile(
 )
 SECRET_LIKE_FIELD_RE = re.compile(
     r"(?i)^(?:password|passwd|secret|token|access[_-]?token|api[_-]?key|"
-    r"client[_-]?secret|private[_-]?key|credential|credentials|database[_-]?url)$"
+    r"client[_-]?secret|private[_-]?key|credential|credentials|database[_-]?url|"
+    r"dsn|connection[_-]?string|aws[_-]?secret[_-]?access[_-]?key|"
+    r"secret[_-]?access[_-]?key|secret[_-]?key|signing[_-]?key|"
+    r"session[_-]?token|jwt|cookie|authorization|auth[_-]?header)$"
 )
 SECRET_VALUE_RE = re.compile(
     r"(?i)(?:-----BEGIN [^-\r\n]*PRIVATE KEY-----|"
     r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|"
     r"AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{20,})\b|"
     r"\bBearer\s+[A-Za-z0-9._~+/=-]{24,})"
+)
+# A credential-bearing URI is unsafe even when it is hidden under an
+# otherwise innocuous field name (for example ``note`` or ``active_plan``).
+# Evidence may contain ordinary HTTPS/gh/artifact URLs, but no canonical URI
+# contains user-info credentials before ``@``.
+SECRET_URI_RE = re.compile(
+    r"(?i)(?:\b[a-z][a-z0-9+.-]{1,31}:)?//[^\s/?#\"'<>]*@"
+)
+SECRET_QUERY_RE = re.compile(
+    r"(?i)(?:[?&](?:password|passwd|secret|token|access[_-]?token|api[_-]?key|"
+    r"client[_-]?secret|private[_-]?key|credential|credentials|dsn|"
+    r"connection[_-]?string|aws[_-]?secret[_-]?access[_-]?key|"
+    r"secret[_-]?access[_-]?key|secret[_-]?key|signing[_-]?key|"
+    r"session[_-]?token|jwt|cookie|authorization)="
+    r"(?![&\s#\"']|none(?:&|#|\"|')|null(?:&|#|\"|')|"
+    r"redacted(?:&|#|\"|')|masked(?:&|#|\"|')|"
+    r"not_granted(?:&|#|\"|'))[^&#\s\"']+)"
 )
 REDACTED_SECRET_VALUES = {
     "",
@@ -225,7 +299,12 @@ EXPECTED_LIFECYCLE_CHECKS = [
     "term-exchange-receipt-partial-upgrade-regression",
 ]
 LOCAL_REQUIRED_FIELDS = {
-    "candidate-hygiene": {"schema", "status", "ok", "problems", "commit_sha", "tree_sha"},
+    "candidate-hygiene": {
+        "schema", "status", "ok", "problems", "commit_sha", "tree_sha",
+        "plan", "addendum", "authoritative_workflows", "release_workflow",
+        "workflow_pin_scope", "shared_trigger", "documentation_contract",
+        "migration_head", "workflow_trust", "candidate_trigger_authority",
+    },
     "repository-integrity": {
         "schema", "status", "ok", "commit_sha", "tree_sha", "repository_commit_sha",
         "repository_tree_sha", "generated_at", "active_plan", "active_addendum",
@@ -248,6 +327,137 @@ LOCAL_REQUIRED_FIELDS = {
         "restore_database_retained",
     },
 }
+# Local evidence files are producer records, not extensible annotation bags.
+# Keep an explicit closed vocabulary so an attacker cannot add a field that is
+# later uploaded without passing the producer-level contract.  Nested records
+# are validated by their dedicated checks and by the recursive secret scanner.
+LOCAL_ALLOWED_FIELDS = {
+    "candidate-hygiene": {
+        "schema", "status", "ok", "problems", "commit_sha", "tree_sha",
+        "plan", "addendum", "authoritative_workflows", "release_workflow",
+        "workflow_pin_scope", "shared_trigger", "documentation_contract",
+        "migration_head", "workflow_trust", "candidate_trigger_authority",
+    },
+    "repository-integrity": {
+        "schema", "status", "ok", "commit_sha", "tree_sha",
+        "repository_commit_sha", "repository_tree_sha", "generated_at",
+        "active_plan", "active_addendum", "migration_head",
+        "production_authorization", "digests", "documentation_check",
+    },
+    "hepta-postgres-integration": {
+        "schema", "status", "ok", "commit_sha", "tree_sha", "mode",
+        "postgres_required", "lint_policy", "completed_at", "checks",
+    },
+    "migration-and-lifecycle-matrix": {
+        "schema", "ok", "commit_sha", "tree_sha", "completed_at", "checks",
+    },
+    "exact-ledger-soak": {
+        "schema", "ok", "iterations", "account_id", "balance_minor",
+        "reserved_minor", "ledger_entry_count", "distinct_operation_count",
+        "compatibility_entry_count", "audit_effect_count", "started_at_epoch",
+        "ended_at_epoch", "duration_seconds", "commit_sha", "tree_sha",
+    },
+    "backup-restore": {
+        "schema", "ok", "source", "restored", "dump_sha256", "dump_bytes",
+        "archive_items", "started_at_epoch", "ended_at_epoch", "duration_seconds",
+        "commit_sha", "tree_sha", "restore_database_retained",
+    },
+}
+HOSTED_GATE_ALLOWED_FIELDS = {
+    "schema", "name", "workflow_path", "repository", "branch", "head_sha",
+    "head_branch", "run_id", "run_attempt", "event", "status", "conclusion",
+    "created_at", "updated_at", "html_url",
+}
+CONTEXT_HOSTED_GATE_ALLOWED_FIELDS = {
+    "repository", "branch", "head_branch", "head_sha", "workflow_path", "event",
+    "status", "conclusion", "run_id", "run_attempt", "created_at", "updated_at",
+    "sha256",
+}
+GOVERNANCE_ALLOWED_FIELDS = {
+    "schema", "ok", "repository", "commit_sha", "tree_sha", "observed_at",
+    "default_branch", "candidate_branch", "candidate_branch_commit_sha",
+    "candidate_commit_matches_branch", "candidate_branch_commit_sha_final",
+    "candidate_branch_stable_during_observation", "candidate_tree_matches_commit",
+    "default_branch_protected", "candidate_branch_protected",
+    "branch_protection_enabled", "candidate_branch_protection_enabled",
+    "default_branch_protection_enabled", "default_branch_required_status_contexts",
+    "actual_required_status_contexts", "candidate_required_status_contexts",
+    "desired_required_status_contexts", "candidate_legacy_required_checks_enforced",
+    "candidate_ruleset_required_checks_enforced", "required_candidate_checks_enforced",
+    "rulesets_http_status", "rulesets_readable", "ruleset_count", "rulesets",
+    "candidate_ruleset_count", "candidate_rulesets", "repository_candidate_enforcement",
+    "production_authorization", "interpretation",
+}
+GOVERNANCE_RULESET_FIELDS = {
+    "id", "name", "target", "enforcement", "active", "applies_to_candidate_branch",
+    "required_status_contexts", "bypass_state",
+}
+EXECUTION_ALLOWED_FIELDS = {
+    "schema", "status", "ok", "repository", "branch", "commit_sha", "tree_sha",
+    "verified_at", "gates",
+}
+EXECUTION_GATE_ALLOWED_FIELDS = {
+    "repository", "branch", "head_branch", "head_sha", "event", "run_id",
+    "run_attempt", "workflow_path", "status", "created_at", "updated_at", "jobs",
+    "jobs_sha256",
+}
+EXECUTION_JOB_ALLOWED_FIELDS = {
+    "job_id", "run_id", "name", "head_sha", "run_attempt", "status", "conclusion",
+    "runner_id", "runner_name", "runner_group_id", "runner_group_name", "labels",
+    "required_runner_label", "required_steps", "started_at", "completed_at", "steps",
+    "record_sha256",
+}
+EXECUTION_STEP_ALLOWED_FIELDS = {
+    "name", "number", "status", "conclusion", "started_at", "completed_at",
+}
+HOSTED_ATTESTATION_ALLOWED_FIELDS = {
+    "schema", "status", "ok", "repository", "branch", "commit_sha", "tree_sha",
+    "selection_policy", "generated_at", "gates",
+}
+HOSTED_ATTESTATION_GATE_ALLOWED_FIELDS = {
+    "run_id", "run_attempt", "event", "head_branch", "head_sha", "status",
+    "conclusion", "created_at", "updated_at", "selection_policy", "jobs",
+}
+HOSTED_ATTESTATION_JOB_ALLOWED_FIELDS = {
+    "job_id", "name", "runner_id", "runner_name", "runner_labels", "status",
+    "conclusion", "required_steps", "observed_step_count",
+}
+LOCAL_BINDING_ALLOWED_FIELDS = {
+    "schema", "status", "ok", "repository", "branch", "commit_sha", "tree_sha",
+    "workflow_run_id", "workflow_run_attempt", "generated_at", "records",
+}
+LOCAL_BINDING_RECORD_ALLOWED_FIELDS = {
+    "path", "sha256", "producer_schema", "producer_commit_sha", "producer_tree_sha",
+    "status", "ok",
+}
+CONTEXT_ATTESTATION_ALLOWED_FIELDS = {"path", "sha256"}
+SBOM_ALLOWED_FIELDS = {
+    "spdxVersion", "dataLicense", "SPDXID", "name", "documentNamespace",
+    "creationInfo", "packages", "relationships",
+}
+SBOM_CREATION_INFO_ALLOWED_FIELDS = {"created", "creators", "licenseListVersion"}
+SBOM_PACKAGE_ALLOWED_FIELDS = {
+    "SPDXID", "name", "versionInfo", "downloadLocation", "filesAnalyzed",
+    "licenseConcluded", "licenseDeclared", "copyrightText", "externalRefs", "checksums",
+}
+SBOM_EXTERNAL_REF_ALLOWED_FIELDS = {"referenceCategory", "referenceType", "referenceLocator"}
+SBOM_CHECKSUM_ALLOWED_FIELDS = {"algorithm", "checksumValue"}
+SBOM_RELATIONSHIP_ALLOWED_FIELDS = {
+    "spdxElementId", "relationshipType", "relatedSpdxElement",
+}
+PROVENANCE_ALLOWED_FIELDS = {"_type", "subject", "predicateType", "predicate"}
+PROVENANCE_SUBJECT_ALLOWED_FIELDS = {"name", "digest"}
+PROVENANCE_BUILD_ALLOWED_FIELDS = {
+    "buildType", "externalParameters", "internalParameters", "resolvedDependencies",
+}
+PROVENANCE_EXTERNAL_ALLOWED_FIELDS = {
+    "repository", "branch", "commit_sha", "workflow_run_id", "workflow_run_attempt",
+}
+PROVENANCE_INTERNAL_ALLOWED_FIELDS = {"migration_head"}
+PROVENANCE_DEPENDENCY_ALLOWED_FIELDS = {"uri", "digest"}
+PROVENANCE_RUN_DETAILS_ALLOWED_FIELDS = {"builder", "metadata"}
+PROVENANCE_BUILDER_ALLOWED_FIELDS = {"id"}
+PROVENANCE_METADATA_ALLOWED_FIELDS = {"invocationId", "startedOn"}
 # Producer check lists are part of the v12 evidence meaning, not free-form
 # notes.  Derive the sets from the ordered declarations above so the fixture,
 # producer and contract cannot drift silently when a check is added.
@@ -346,6 +556,14 @@ def reject_secret_like_payload(relative: str, raw: bytes, path: str) -> None:
     except UnicodeDecodeError as error:
         raise ContractError(f"{path} is not UTF-8 evidence") from error
     require(not SECRET_VALUE_RE.search(text), f"{path} contains secret-like material")
+    require(
+        not SECRET_URI_RE.search(text),
+        f"{path} contains a credential-bearing URI",
+    )
+    require(
+        not SECRET_QUERY_RE.search(text),
+        f"{path} contains a credential-bearing URI query parameter",
+    )
     try:
         value = json.loads(text)
     except json.JSONDecodeError:
@@ -440,6 +658,209 @@ def migration_state(root: Path) -> tuple[str, str, str]:
     return head.name, sha256_file(head), "sha256:" + digest.hexdigest()
 
 
+def _repository_file(root: Path, relative: Any, path: str) -> Path:
+    """Resolve one authority path without allowing traversal or symlinks."""
+
+    require(
+        isinstance(relative, str) and bool(relative.strip()),
+        f"{path} must be a non-empty repository path",
+    )
+    candidate = Path(relative)
+    require(
+        not candidate.is_absolute()
+        and ".." not in candidate.parts
+        and candidate.as_posix() == relative
+        and relative not in {"", "."},
+        f"{path} is not a canonical repository path",
+    )
+    target = root / candidate
+    try:
+        # Hash/read once here so all authority paths are proven to be real,
+        # single-linked regular files before the aggregate digest is emitted.
+        read_regular_nofollow(target, maximum=2**63 - 1)
+    except (SafeIOError, OSError) as error:
+        raise ContractError(f"{path} cannot be read safely: {error}") from error
+    return target
+
+
+def _repository_digest_set(root: Path, paths: list[Path], path: str) -> str:
+    """Reproduce check-repository-integrity.py's path+bytes digest exactly."""
+
+    require(paths, f"{path} must contain at least one file")
+    relatives: list[str] = []
+    for item in paths:
+        try:
+            relative = item.relative_to(root).as_posix()
+        except ValueError as error:
+            raise ContractError(f"{path} contains a path outside checkout") from error
+        require(
+            relative not in relatives,
+            f"{path} contains duplicate path: {relative}",
+        )
+        relatives.append(relative)
+    digest = hashlib.sha256()
+    for item in sorted(paths, key=lambda candidate: candidate.relative_to(root).as_posix()):
+        relative = item.relative_to(root).as_posix()
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        try:
+            digest.update(read_regular_nofollow(item, maximum=2**63 - 1))
+        except (SafeIOError, OSError) as error:
+            raise ContractError(f"{path} cannot read {relative} safely: {error}") from error
+        digest.update(b"\0")
+    return "sha256:" + digest.hexdigest()
+
+
+def repository_integrity_expected_digests(root: Path) -> dict[str, str | None]:
+    """Compute integrity digests independently from a persisted attestation.
+
+    ``check-repository-integrity.py`` writes these values before the payload is
+    uploaded.  Recomputing them at manifest time prevents a forged JSON record
+    (or a post-producer checkout mutation) from becoming self-consistent merely
+    because its own digest map was edited alongside the payload.
+    """
+
+    root = root if root.is_absolute() else Path.cwd() / root
+    authority_path = _repository_file(root, DEVELOPMENT_AUTHORITY_PATH, "$authority")
+    try:
+        authority_value = read_json_nofollow(authority_path, label="development authority")
+    except (SafeIOError, OSError, json.JSONDecodeError) as error:
+        raise ContractError(f"$authority is not valid JSON: {error}") from error
+    authority = object_at(authority_value, "$authority")
+    require(
+        authority.get("schema") == "cex.development-doc-authority.v1",
+        "$authority.schema is invalid",
+    )
+    require(authority.get("status") == "active", "$authority.status is invalid")
+    require(
+        authority.get("production_authorization") == "not_granted",
+        "$authority production authorization must remain denied",
+    )
+    require(
+        authority.get("shared_trigger") == TRIGGER_PATH,
+        "$authority.shared_trigger is not the shared candidate trigger",
+    )
+    require(
+        authority.get("qualification_freeze") == TRIGGER_PATH,
+        "$authority.qualification_freeze is not the shared candidate trigger",
+    )
+
+    active_plan = _repository_file(root, authority.get("active_plan"), "$authority.active_plan")
+    active_addendum = _repository_file(
+        root, authority.get("active_addendum"), "$authority.active_addendum"
+    )
+    shared_trigger = _repository_file(
+        root, authority.get("shared_trigger"), "$authority.shared_trigger"
+    )
+    freeze = _repository_file(
+        root, authority.get("qualification_freeze"), "$authority.qualification_freeze"
+    )
+    aggregate = _repository_file(
+        root,
+        authority.get("aggregate_release_workflow"),
+        "$authority.aggregate_release_workflow",
+    )
+    require(
+        authority.get("aggregate_release_workflow") == EXPECTED_AGGREGATE_RELEASE_WORKFLOW,
+        "$authority.aggregate_release_workflow is not canonical",
+    )
+
+    canonical_value = authority.get("canonical_documents")
+    canonical = object_at(canonical_value, "$authority.canonical_documents")
+    require(
+        set(canonical) == set(DEVELOPMENT_CANONICAL_DOCUMENT_KEYS),
+        "$authority.canonical_documents set is not canonical",
+    )
+    canonical_paths = [
+        _repository_file(root, canonical[key], f"$authority.canonical_documents.{key}")
+        for key in sorted(canonical)
+    ]
+    canonical_paths.extend([active_plan, active_addendum, authority_path])
+    require(
+        len({item.relative_to(root).as_posix() for item in canonical_paths})
+        == len(canonical_paths),
+        "$authority canonical document paths contain duplicates",
+    )
+
+    workflows_value = authority.get("authoritative_workflows")
+    require(
+        isinstance(workflows_value, list)
+        and all(isinstance(item, str) for item in workflows_value),
+        "$authority.authoritative_workflows must be an array of paths",
+    )
+    # This contract has a fixed five-gate vocabulary.  A changed authority
+    # list must not silently shrink the digest scope while the payload still
+    # claims all five hosted gates were observed.
+    require(
+        workflows_value == list(HOSTED_WORKFLOW_PATHS.values()),
+        "$authority.authoritative_workflows is not the canonical hosted set",
+    )
+    workflow_paths = [
+        _repository_file(root, value, f"$authority.authoritative_workflows[{index}]")
+        for index, value in enumerate(workflows_value)
+    ]
+    workflow_paths.append(aggregate)
+
+    migration_paths = sorted(
+        (root / "migrations").glob("[0-9][0-9][0-9][0-9]_*.sql"),
+        key=lambda item: item.name,
+    )
+    require(migration_paths, "$repository-integrity migrations are empty")
+    for index, migration in enumerate(migration_paths):
+        _repository_file(root, migration.relative_to(root).as_posix(), f"$migrations[{index}]")
+
+    readme = root / "readme.md"
+    if readme.exists() or readme.is_symlink():
+        readme_digest: str | None = sha256_file(readme)
+    else:
+        readme_digest = None
+
+    return {
+        "cargo_lock": sha256_file(root / "Cargo.lock"),
+        "migration_chain": _repository_digest_set(root, migration_paths, "$digests.migration_chain"),
+        "authoritative_workflows": _repository_digest_set(
+            root, workflow_paths, "$digests.authoritative_workflows"
+        ),
+        "canonical_documents": _repository_digest_set(
+            root, canonical_paths, "$digests.canonical_documents"
+        ),
+        "candidate_trigger": sha256_file(shared_trigger),
+        "qualification_freeze": sha256_file(freeze),
+        "root_readme_observed_only": readme_digest,
+    }
+
+
+def canonical_workflow_scope(root: Path) -> list[str]:
+    """Return the exact workflow file set inspected by candidate hygiene.
+
+    The candidate-hygiene producer records this scope so reviewers can see
+    which workflow files were checked for immutable action pins.  Recompute it
+    from the same two extension globs at manifest time and read every member
+    through the no-follow boundary; a forged list (or a symlinked workflow)
+    must not be able to present a smaller trust scope than the checkout
+    actually contains.
+    """
+
+    root = root if root.is_absolute() else Path.cwd() / root
+    workflow_dir = root / ".github" / "workflows"
+    require(
+        workflow_dir.is_dir() and not workflow_dir.is_symlink(),
+        "$candidate-hygiene workflow directory is not a real directory",
+    )
+    paths: dict[str, Path] = {}
+    for pattern in ("*.yml", "*.yaml"):
+        for candidate in workflow_dir.glob(pattern):
+            relative = candidate.relative_to(root).as_posix()
+            require(
+                relative not in paths,
+                f"$candidate-hygiene workflow scope contains duplicate path: {relative}",
+            )
+            _repository_file(root, relative, f"$candidate-hygiene.workflow_pin_scope[{relative}]")
+            paths[relative] = candidate
+    require(paths, "$candidate-hygiene workflow scope is empty")
+    return sorted(paths)
+
+
 def load_json_file(root: Path, relative: str, path: str) -> dict[str, Any]:
     root_absolute = root if root.is_absolute() else Path.cwd() / root
     relative_path = Path(relative)
@@ -455,16 +876,55 @@ def load_json_file(root: Path, relative: str, path: str) -> dict[str, Any]:
     return object_at(value, path)
 
 
+def load_module_nofollow(path: Path, module_name: str, label: str) -> Any:
+    """Execute one repository module from bytes read through a no-follow fd.
+
+    ``importlib.util.spec_from_file_location`` re-opens the path after any
+    preceding ``is_file``/hash check and therefore leaves a symlink/TOCTOU
+    window in the final manifest verifier.  Read the exact regular-file bytes
+    once, compile those bytes, and execute them in an isolated module object.
+    This mirrors the strict collector's immutable core loader and ensures a
+    replaced path cannot change the code that is actually evaluated.
+    """
+
+    try:
+        source = read_regular_nofollow(path)
+    except (SafeIOError, OSError) as error:
+        raise ContractError(f"{label} cannot be loaded safely: {error}") from error
+
+    module = types.ModuleType(module_name)
+    module.__file__ = str(path)
+    module.__package__ = ""
+    module.__spec__ = None
+    previous = sys.modules.pop(module_name, None)
+    sys.modules[module_name] = module
+    try:
+        code = compile(source, str(path), "exec", dont_inherit=True)
+        exec(code, module.__dict__)
+    except SystemExit as error:
+        if previous is None:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = previous
+        raise ContractError(f"{label} could not be executed safely: {error}") from error
+    except Exception as error:
+        if previous is None:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = previous
+        raise ContractError(f"{label} could not be executed safely: {error}") from error
+    return module
+
+
 def load_execution_module() -> Any:
     """Load the single source of truth for the exact hosted job contract."""
 
-    verifier = Path(__file__).resolve().with_name("verify-hosted-run-execution.py")
-    spec = importlib.util.spec_from_file_location("cex_hosted_execution_contract", verifier)
-    require(spec is not None and spec.loader is not None, "cannot load hosted execution verifier")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    verifier = _SCRIPT_DIR / "verify-hosted-run-execution.py"
+    return load_module_nofollow(
+        verifier,
+        "cex_hosted_execution_contract",
+        "hosted execution verifier",
+    )
 
 
 def positive_int(value: Any, path: str) -> int:
@@ -506,7 +966,7 @@ def validate_context_metadata(ctx: dict[str, Any], source: dict[str, Any]) -> No
     utc_timestamp(ctx.get("generated_at"), "$context.generated_at")
     require(ctx.get("qualification_scope") == QUALIFICATION_SCOPE, "$context.qualification_scope is stale")
 
-    root = Path(__file__).resolve().parents[1]
+    root = _SCRIPT_DIR.parent
     cargo_digest = canonical_sha256(ctx.get("cargo_lock_sha256"), "$context.cargo_lock_sha256")
     require(cargo_digest == sha256_file(root / "Cargo.lock"), "$context Cargo.lock digest differs from checkout")
     head_name, head_digest, chain_digest = migration_state(root)
@@ -548,6 +1008,55 @@ def validate_context_metadata(ctx: dict[str, Any], source: dict[str, Any]) -> No
 def nonempty_string(value: Any, path: str) -> str:
     require(isinstance(value, str) and bool(value.strip()), f"{path} must be non-empty")
     return value
+
+
+def nonempty_string_list(value: Any, path: str, *, allow_empty: bool = True) -> list[str]:
+    require(isinstance(value, list), f"{path} must be an array")
+    if not allow_empty:
+        require(bool(value), f"{path} must not be empty")
+    require(
+        all(isinstance(item, str) and bool(item.strip()) for item in value),
+        f"{path} must contain only non-empty strings",
+    )
+    require(len(value) == len(set(value)), f"{path} must not contain duplicates")
+    return value
+
+
+def canonical_sorted_string_list(value: Any, path: str, *, allow_empty: bool = True) -> list[str]:
+    items = nonempty_string_list(value, path, allow_empty=allow_empty)
+    require(items == sorted(items), f"{path} must be sorted canonically")
+    return items
+
+
+def nullable_utc_timestamp(value: Any, path: str) -> None:
+    """Validate an API timestamp that may legitimately be null."""
+
+    require(value is None or isinstance(value, str), f"{path} must be null or a UTC timestamp")
+    if value is not None:
+        utc_timestamp(value, path)
+
+
+def raw_sha256(value: Any, path: str) -> str:
+    raw = nonempty_string(value, path)
+    require(bool(RAW_SHA256_RE.fullmatch(raw)), f"{path} must be a raw lowercase SHA-256")
+    require(raw != "0" * 64, f"{path} must not be a placeholder")
+    return raw
+
+
+def cargo_source_uri(value: Any, path: str) -> str:
+    """Validate a Cargo.lock source without narrowing future Cargo schemes."""
+
+    raw = nonempty_string(value, path)
+    require(not any(character.isspace() for character in raw), f"{path} contains whitespace")
+    if raw == "NOASSERTION":
+        return raw
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+    except ValueError as error:
+        raise ContractError(f"{path} is not a valid source URI: {error}") from error
+    require(bool(parsed.scheme), f"{path} must contain a URI scheme or NOASSERTION")
+    require(not parsed.scheme.lower().startswith("javascript"), f"{path} has a disallowed URI scheme")
+    return raw
 
 
 def canonical_sha256(value: Any, path: str) -> str:
@@ -608,6 +1117,7 @@ def validate_hosted_gate_payload(
     """Validate the JSON attestation emitted for one selected workflow run."""
 
     path = f"$evidence.hosted-gates.{gate_name}"
+    reject_unknown(record, HOSTED_GATE_ALLOWED_FIELDS, path)
     require(record.get("schema") == HOSTED_GATE_SCHEMA, f"{path}.schema is invalid")
     require(record.get("name") == gate_name, f"{path}.name is invalid")
     require(record.get("repository") == source["repository"], f"{path}.repository is invalid")
@@ -631,11 +1141,16 @@ def validate_hosted_gate_payload(
 
 
 def validate_local_payload(
-    name: str, payload: dict[str, Any], source: dict[str, Any]
+    name: str,
+    payload: dict[str, Any],
+    source: dict[str, Any],
+    *,
+    repository_root: Path | None = None,
 ) -> None:
     """Validate the producer-level identity of each local evidence record."""
 
     path = f"$evidence.{name}"
+    reject_unknown(payload, LOCAL_ALLOWED_FIELDS[name], path)
     require_fields(payload, LOCAL_REQUIRED_FIELDS[name], path)
     require(payload.get("schema") == LOCAL_SCHEMAS[name], f"{path}.schema is invalid")
     require(payload.get("ok") is True, f"{path}.ok must be true")
@@ -648,14 +1163,243 @@ def validate_local_payload(
         if name == "candidate-hygiene":
             require(isinstance(payload.get("problems"), list), f"{path}.problems must be an array")
             require(payload["problems"] == [], f"{path}.problems must be empty for a passing candidate")
+
+            # Candidate hygiene is itself a producer attestation.  Merely
+            # reporting an empty problem list is insufficient: bind every
+            # scope/authority field to the active v12 authority document and
+            # to the exact workflow set present in this checkout.  This keeps
+            # a forged record from omitting a workflow (or silently switching
+            # to an historical plan) while retaining ``candidate-hygiene`` as
+            # one canonical local evidence file.
+            candidate_root = repository_root if repository_root is not None else _SCRIPT_DIR.parent
+            authority_path = candidate_root / DEVELOPMENT_AUTHORITY_PATH
+            try:
+                authority_value = read_json_nofollow(
+                    authority_path, label="candidate development authority"
+                )
+            except (SafeIOError, OSError, json.JSONDecodeError) as error:
+                raise ContractError(f"{path} cannot read development authority: {error}") from error
+            authority = object_at(authority_value, "$candidate-authority")
+            require(
+                authority.get("schema") == "cex.development-doc-authority.v1"
+                and authority.get("status") == "active",
+                f"{path} development authority is not active",
+            )
+            require(
+                authority.get("production_authorization") == "not_granted",
+                f"{path} development authority permits production authorization",
+            )
+            active_plan = nonempty_string(
+                authority.get("active_plan"), "$candidate-authority.active_plan"
+            )
+            active_addendum = nonempty_string(
+                authority.get("active_addendum"), "$candidate-authority.active_addendum"
+            )
+            require(
+                active_plan == f"docs/{CANDIDATE_ACTIVE_PLAN}"
+                and Path(active_plan).name == CANDIDATE_ACTIVE_PLAN,
+                f"{path}.plan authority is not canonical v12",
+            )
+            require(
+                active_addendum == f"docs/{CANDIDATE_ACTIVE_ADDENDUM}"
+                and Path(active_addendum).name == CANDIDATE_ACTIVE_ADDENDUM,
+                f"{path}.addendum authority is not canonical v12",
+            )
+            require(
+                payload.get("plan") == CANDIDATE_ACTIVE_PLAN,
+                f"{path}.plan is not bound to the active plan",
+            )
+            require(
+                payload.get("addendum") == CANDIDATE_ACTIVE_ADDENDUM,
+                f"{path}.addendum is not bound to the active addendum",
+            )
+
+            authoritative_workflows = authority.get("authoritative_workflows")
+            require(
+                authoritative_workflows == list(HOSTED_WORKFLOW_PATHS.values()),
+                f"{path}.authoritative_workflows authority is not canonical",
+            )
+            require(
+                payload.get("authoritative_workflows") == authoritative_workflows,
+                f"{path}.authoritative_workflows is not bound to authority",
+            )
+            require(
+                authority.get("aggregate_release_workflow")
+                == EXPECTED_AGGREGATE_RELEASE_WORKFLOW,
+                f"{path}.release_workflow authority is not canonical",
+            )
+            require(
+                payload.get("release_workflow") == EXPECTED_AGGREGATE_RELEASE_WORKFLOW,
+                f"{path}.release_workflow is not canonical",
+            )
+            workflow_scope = canonical_workflow_scope(candidate_root)
+            require(
+                payload.get("workflow_pin_scope") == workflow_scope,
+                f"{path}.workflow_pin_scope is not bound to the checkout",
+            )
+            require(
+                payload.get("shared_trigger") == TRIGGER_PATH
+                and authority.get("shared_trigger") == TRIGGER_PATH
+                and authority.get("qualification_freeze") == TRIGGER_PATH,
+                f"{path}.shared_trigger is not the sole canonical trigger",
+            )
+            require(
+                payload.get("documentation_contract") == "ok",
+                f"{path}.documentation_contract is not successful",
+            )
+            require(
+                payload.get("migration_head") == authority.get("migration_head"),
+                f"{path}.migration_head differs from authority",
+            )
+            current_head, _head_sha, _chain_sha = migration_state(candidate_root)
+            require(
+                payload.get("migration_head") == current_head,
+                f"{path}.migration_head differs from checkout",
+            )
+
+            try:
+                trigger_value = read_json_nofollow(
+                    candidate_root / TRIGGER_PATH, label="candidate trigger"
+                )
+            except (SafeIOError, OSError, json.JSONDecodeError) as error:
+                raise ContractError(f"{path} cannot read candidate trigger: {error}") from error
+            trigger = object_at(trigger_value, "$candidate-trigger")
+            require(
+                trigger.get("schema") == "cex.p0-candidate-trigger.v1"
+                and trigger.get("plan") == CANDIDATE_ACTIVE_PLAN
+                and trigger.get("qualification_scope") == QUALIFICATION_SCOPE
+                and trigger.get("production_authorization") == "not_granted"
+                and isinstance(trigger.get("sequence"), int)
+                and not isinstance(trigger.get("sequence"), bool)
+                and trigger["sequence"] > 0,
+                f"{path}.candidate trigger is not canonical",
+            )
+            workflow_trust = object_at(payload.get("workflow_trust"), f"{path}.workflow_trust")
+            reject_unknown(
+                workflow_trust,
+                {"status", "workflow_count", "local_action_descriptor_count"},
+                f"{path}.workflow_trust",
+            )
+            require(workflow_trust.get("status") == "ok", f"{path}.workflow_trust.status is not successful")
+            require(
+                isinstance(workflow_trust.get("workflow_count"), int)
+                and not isinstance(workflow_trust.get("workflow_count"), bool)
+                and workflow_trust["workflow_count"] == len(workflow_scope),
+                f"{path}.workflow_trust.workflow_count is invalid",
+            )
+            require(
+                isinstance(workflow_trust.get("local_action_descriptor_count"), int)
+                and not isinstance(workflow_trust.get("local_action_descriptor_count"), bool)
+                and workflow_trust["local_action_descriptor_count"] >= 0,
+                f"{path}.workflow_trust.local_action_descriptor_count is invalid",
+            )
+            trigger_authority = object_at(
+                payload.get("candidate_trigger_authority"),
+                f"{path}.candidate_trigger_authority",
+            )
+            reject_unknown(
+                trigger_authority,
+                {"path", "sole_authority", "secondary_freeze_markers"},
+                f"{path}.candidate_trigger_authority",
+            )
+            require(
+                trigger_authority.get("path") == TRIGGER_PATH
+                and trigger_authority.get("sole_authority") is True
+                and trigger_authority.get("secondary_freeze_markers") == [],
+                f"{path}.candidate_trigger_authority is not canonical",
+            )
     if name == "repository-integrity":
         require(payload.get("repository_commit_sha") == source["commit_sha"], f"{path}.repository_commit_sha differs from manifest")
         require(payload.get("repository_tree_sha") == source["tree_sha"], f"{path}.repository_tree_sha differs from manifest")
         require(payload.get("production_authorization") == "not_granted", f"{path}.production_authorization must remain denied")
-        require(isinstance(payload.get("digests"), dict), f"{path}.digests must be an object")
+        digests = object_at(payload.get("digests"), f"{path}.digests")
+        reject_unknown(
+            digests,
+            {
+                "cargo_lock", "migration_chain", "authoritative_workflows",
+                "canonical_documents", "candidate_trigger", "qualification_freeze",
+                "root_readme_observed_only",
+            },
+            f"{path}.digests",
+        )
+        for digest_name in (
+            "cargo_lock", "migration_chain", "authoritative_workflows",
+            "canonical_documents", "candidate_trigger", "qualification_freeze",
+        ):
+            canonical_sha256(digests.get(digest_name), f"{path}.digests.{digest_name}")
+        if digests.get("root_readme_observed_only") is not None:
+            canonical_sha256(
+                digests.get("root_readme_observed_only"),
+                f"{path}.digests.root_readme_observed_only",
+            )
+        expected_digests = repository_integrity_expected_digests(
+            repository_root if repository_root is not None else _SCRIPT_DIR.parent
+        )
+        require(
+            digests == expected_digests,
+            f"{path}.digests are not bound to the current checkout and authority",
+        )
+        try:
+            authority = read_json_nofollow(
+                (repository_root if repository_root is not None else _SCRIPT_DIR.parent)
+                / DEVELOPMENT_AUTHORITY_PATH,
+                label="development authority",
+            )
+        except (SafeIOError, OSError, json.JSONDecodeError) as error:
+            raise ContractError(f"{path} cannot read development authority: {error}") from error
+        authority = object_at(authority, "$authority")
+        require(
+            payload.get("active_plan") == authority.get("active_plan"),
+            f"{path}.active_plan differs from authority",
+        )
+        require(
+            payload.get("active_addendum") == authority.get("active_addendum"),
+            f"{path}.active_addendum differs from authority",
+        )
+        require(
+            payload.get("migration_head") == authority.get("migration_head"),
+            f"{path}.migration_head differs from authority",
+        )
         documentation_check = object_at(payload.get("documentation_check"), f"{path}.documentation_check")
+        reject_unknown(
+            documentation_check,
+            {
+                "schema", "status", "active_plan", "active_addendum", "migration_head",
+                "requirements", "repository_qualification_result",
+                "repository_qualification_authority", "production_authorization", "problems",
+            },
+            f"{path}.documentation_check",
+        )
         require(documentation_check.get("status") == "ok", f"{path}.documentation_check.status is not successful")
         require(documentation_check.get("problems") == [], f"{path}.documentation_check.problems must be empty")
+        require(documentation_check.get("schema") == "cex.development-doc-check.v1", f"{path}.documentation_check.schema is invalid")
+        require(documentation_check.get("production_authorization") == "not_granted", f"{path}.documentation_check.production_authorization is invalid")
+        require(
+            documentation_check.get("active_plan") == authority.get("active_plan"),
+            f"{path}.documentation_check.active_plan differs from authority",
+        )
+        require(
+            documentation_check.get("active_addendum") == authority.get("active_addendum"),
+            f"{path}.documentation_check.active_addendum differs from authority",
+        )
+        require(
+            documentation_check.get("migration_head") == authority.get("migration_head"),
+            f"{path}.documentation_check.migration_head differs from authority",
+        )
+        require(
+            documentation_check.get("requirements") == 18,
+            f"{path}.documentation_check.requirements is invalid",
+        )
+        require(
+            documentation_check.get("repository_qualification_result")
+            == "PENDING_EXACT_SHA_HOSTED_EVIDENCE",
+            f"{path}.documentation_check.repository_qualification_result is invalid",
+        )
+        require(
+            documentation_check.get("repository_qualification_authority")
+            == "generated_candidate_manifest_only",
+            f"{path}.documentation_check.repository_qualification_authority is invalid",
+        )
     if name in {"hepta-postgres-integration", "migration-and-lifecycle-matrix"}:
         require(isinstance(payload.get("checks"), list) and payload["checks"], f"{path}.checks must be non-empty")
         require(
@@ -672,37 +1416,140 @@ def validate_local_payload(
             else LIFECYCLE_REQUIRED_CHECKS
         )
         require(
-            required_checks.issubset(set(payload["checks"])),
-            f"{path}.checks omits one or more required v12 lifecycle checks",
+            set(payload["checks"]) == required_checks,
+            f"{path}.checks does not exactly match the required v12 lifecycle checks",
         )
     if name == "hepta-postgres-integration":
         require(payload.get("postgres_required") is True, f"{path}.postgres_required must be true")
+        require(
+            payload.get("mode") == HEPTA_AGGREGATE_MODE,
+            f"{path}.mode must be exactly {HEPTA_AGGREGATE_MODE}",
+        )
+        require(
+            payload.get("lint_policy") == HEPTA_LINT_POLICY,
+            f"{path}.lint_policy is not the exact Hepta ownership policy",
+        )
     if name == "migration-and-lifecycle-matrix":
         require(
             "term-exchange-receipt-partial-upgrade-regression" in payload["checks"],
             f"{path} omits partial-upgrade regression",
         )
     if name == "exact-ledger-soak":
-        require(positive_int(payload.get("iterations"), f"{path}.iterations") > 0, f"{path}.iterations is invalid")
+        iterations = positive_int(payload.get("iterations"), f"{path}.iterations")
+        require(
+            iterations >= MIN_EXACT_SOAK_ITERATIONS,
+            f"{path}.iterations must be at least {MIN_EXACT_SOAK_ITERATIONS}",
+        )
+        require(
+            isinstance(payload.get("account_id"), str)
+            and UUID_RE.fullmatch(payload["account_id"]) is not None
+            and payload["account_id"] == EXACT_SOAK_ACCOUNT_ID,
+            f"{path}.account_id must be the canonical soak UUID",
+        )
         for field in (
             "balance_minor", "reserved_minor", "ledger_entry_count",
             "distinct_operation_count", "compatibility_entry_count", "audit_effect_count",
             "started_at_epoch", "ended_at_epoch", "duration_seconds",
         ):
-            require(isinstance(payload.get(field), int) and not isinstance(payload.get(field), bool), f"{path}.{field} must be an integer")
-        require(payload["balance_minor"] == 0 and payload["reserved_minor"] == 0, f"{path} final money state is not zero")
+            require(
+                isinstance(payload.get(field), int)
+                and not isinstance(payload.get(field), bool)
+                and payload[field] >= 0,
+                f"{path}.{field} must be a non-negative integer",
+            )
+        expected_balance = (
+            EXACT_SOAK_INITIAL_BALANCE_MINOR
+            + iterations * EXACT_SOAK_GRANT_MINOR_PER_ITERATION
+        )
+        expected_entries = 1 + iterations * EXACT_SOAK_LEDGER_ENTRIES_PER_ITERATION
+        require(
+            payload["balance_minor"] == expected_balance
+            and payload["reserved_minor"] == 0,
+            f"{path} final money state does not match the exact soak invariant",
+        )
         require(payload["compatibility_entry_count"] == 0, f"{path} contains compatibility entries")
         require(payload["ended_at_epoch"] >= payload["started_at_epoch"] and payload["duration_seconds"] == payload["ended_at_epoch"] - payload["started_at_epoch"], f"{path} duration is inconsistent")
-        require(payload["ledger_entry_count"] == payload["distinct_operation_count"] == payload["audit_effect_count"], f"{path} ledger/audit counts are inconsistent")
+        require(
+            payload["ledger_entry_count"]
+            == payload["distinct_operation_count"]
+            == payload["audit_effect_count"]
+            == expected_entries,
+            f"{path} ledger/audit counts are inconsistent with the exact soak invariant",
+        )
     if name == "backup-restore":
-        require(isinstance(payload.get("source"), dict) and isinstance(payload.get("restored"), dict), f"{path}.source/restored must be objects")
+        for fingerprint_name in ("source", "restored"):
+            fingerprint = object_at(payload.get(fingerprint_name), f"{path}.{fingerprint_name}")
+            reject_unknown(
+                fingerprint,
+                {
+                    "public_table_count", "organization_count", "account_count",
+                    "ledger_entry_count", "audit_outbox_count", "soak_account",
+                    "soak_operation_count", "soak_ledger_sha256", "soak_audit_sha256",
+                },
+                f"{path}.{fingerprint_name}",
+            )
+            for count_name in (
+                "public_table_count", "organization_count", "account_count",
+                "ledger_entry_count", "audit_outbox_count", "soak_operation_count",
+            ):
+                require(
+                    isinstance(fingerprint.get(count_name), int)
+                    and not isinstance(fingerprint.get(count_name), bool)
+                    and fingerprint[count_name] >= 0,
+                    f"{path}.{fingerprint_name}.{count_name} is invalid",
+                )
+            soak_account = object_at(
+                fingerprint.get("soak_account"),
+                f"{path}.{fingerprint_name}.soak_account",
+            )
+            reject_unknown(
+                soak_account,
+                {"account_id", "balance_minor", "reserved_minor", "currency_unit", "currency_scale"},
+                f"{path}.{fingerprint_name}.soak_account",
+            )
+            require(
+                isinstance(soak_account.get("account_id"), str)
+                and UUID_RE.fullmatch(soak_account["account_id"]),
+                f"{path}.{fingerprint_name}.soak_account.account_id is invalid",
+            )
+            for amount_name in ("balance_minor", "reserved_minor", "currency_scale"):
+                require(
+                    isinstance(soak_account.get(amount_name), int)
+                    and not isinstance(soak_account.get(amount_name), bool),
+                    f"{path}.{fingerprint_name}.soak_account.{amount_name} is invalid",
+                )
+            require(
+                isinstance(soak_account.get("currency_unit"), str)
+                and bool(soak_account["currency_unit"].strip()),
+                f"{path}.{fingerprint_name}.soak_account.currency_unit is invalid",
+            )
+            canonical_sha256(
+                fingerprint.get("soak_ledger_sha256"),
+                f"{path}.{fingerprint_name}.soak_ledger_sha256",
+            )
+            canonical_sha256(
+                fingerprint.get("soak_audit_sha256"),
+                f"{path}.{fingerprint_name}.soak_audit_sha256",
+            )
         require(payload.get("source") == payload.get("restored"), f"{path} restored state differs from source")
         # The PostgreSQL drill publishes the same canonical ``sha256:``
         # representation used by every other evidence digest.  Reject raw or
         # all-zero values rather than accepting two digest dialects.
         canonical_sha256(payload.get("dump_sha256"), f"{path}.dump_sha256")
-        for field in ("dump_bytes", "archive_items", "started_at_epoch", "ended_at_epoch", "duration_seconds"):
-            require(isinstance(payload.get(field), int) and not isinstance(payload.get(field), bool) and payload[field] >= 0, f"{path}.{field} is invalid")
+        for field in ("dump_bytes", "archive_items"):
+            require(
+                isinstance(payload.get(field), int)
+                and not isinstance(payload.get(field), bool)
+                and payload[field] > 0,
+                f"{path}.{field} must be greater than zero",
+            )
+        for field in ("started_at_epoch", "ended_at_epoch", "duration_seconds"):
+            require(
+                isinstance(payload.get(field), int)
+                and not isinstance(payload.get(field), bool)
+                and payload[field] >= 0,
+                f"{path}.{field} is invalid",
+            )
         require(payload["ended_at_epoch"] >= payload["started_at_epoch"] and payload["duration_seconds"] == payload["ended_at_epoch"] - payload["started_at_epoch"], f"{path} duration is inconsistent")
         require(payload.get("restore_database_retained") is False, f"{path} retained a restore database")
     for field in ("generated_at", "completed_at"):
@@ -714,6 +1561,7 @@ def validate_governance_payload(
     payload: dict[str, Any], ctx: dict[str, Any], source: dict[str, Any]
 ) -> None:
     path = "$evidence.repository-governance"
+    reject_unknown(payload, GOVERNANCE_ALLOWED_FIELDS, path)
     require(payload.get("schema") == GOVERNANCE_SCHEMA, f"{path}.schema is invalid")
     require(payload.get("ok") is True, f"{path}.ok must be true")
     require(payload.get("repository") == source["repository"], f"{path}.repository is invalid")
@@ -727,7 +1575,8 @@ def validate_governance_payload(
     require(payload.get("candidate_tree_matches_commit") is True, f"{path} does not bind the candidate tree")
     require(payload.get("production_authorization") == "not_granted", f"{path} production authorization must remain denied")
     utc_timestamp(payload.get("observed_at"), f"{path}.observed_at")
-    require(isinstance(payload.get("default_branch"), str) and payload["default_branch"], f"{path}.default_branch is invalid")
+    default_branch = nonempty_string(payload.get("default_branch"), f"{path}.default_branch")
+    require(bool(BRANCH_RE.fullmatch(default_branch)), f"{path}.default_branch is not canonical")
     for field in (
         "default_branch_protected", "candidate_branch_protected",
         "branch_protection_enabled", "candidate_branch_protection_enabled",
@@ -738,8 +1587,77 @@ def validate_governance_payload(
         require(isinstance(payload.get(field), bool), f"{path}.{field} must be boolean")
     require(isinstance(payload.get("rulesets"), list), f"{path}.rulesets must be an array")
     require(isinstance(payload.get("candidate_rulesets"), list), f"{path}.candidate_rulesets must be an array")
-    require(payload.get("ruleset_count") == len(payload["rulesets"]), f"{path}.ruleset_count is inconsistent")
-    require(payload.get("candidate_ruleset_count") == len(payload["candidate_rulesets"]), f"{path}.candidate_ruleset_count is inconsistent")
+    collection_ids: dict[str, set[int]] = {"rulesets": set(), "candidate_rulesets": set()}
+    for collection_name in ("rulesets", "candidate_rulesets"):
+        for index, raw_ruleset in enumerate(payload[collection_name]):
+            ruleset = object_at(raw_ruleset, f"{path}.{collection_name}[{index}]")
+            reject_unknown(
+                ruleset,
+                GOVERNANCE_RULESET_FIELDS,
+                f"{path}.{collection_name}[{index}]",
+            )
+            require(
+                isinstance(ruleset.get("id"), int)
+                and not isinstance(ruleset.get("id"), bool)
+                and ruleset["id"] > 0,
+                f"{path}.{collection_name}[{index}].id is invalid",
+            )
+            require(
+                ruleset["id"] not in collection_ids[collection_name],
+                f"{path}.{collection_name}[{index}].id is duplicated",
+            )
+            collection_ids[collection_name].add(ruleset["id"])
+            for field in ("name", "target", "enforcement", "bypass_state"):
+                require(
+                    isinstance(ruleset.get(field), str) and ruleset[field].strip(),
+                    f"{path}.{collection_name}[{index}].{field} is invalid",
+                )
+            for field in ("active", "applies_to_candidate_branch"):
+                require(
+                    isinstance(ruleset.get(field), bool),
+                    f"{path}.{collection_name}[{index}].{field} is invalid",
+                )
+            require(
+                ruleset["enforcement"] in {"active", "evaluate", "disabled"},
+                f"{path}.{collection_name}[{index}].enforcement is invalid",
+            )
+            require(
+                ruleset["active"] is (ruleset["enforcement"] == "active"),
+                f"{path}.{collection_name}[{index}].active is inconsistent",
+            )
+            require(
+                ruleset["bypass_state"] in {"none", "present", "unknown"},
+                f"{path}.{collection_name}[{index}].bypass_state is invalid",
+            )
+            require(
+                isinstance(ruleset.get("required_status_contexts"), list)
+                and all(isinstance(item, str) and item.strip() for item in ruleset["required_status_contexts"]),
+                f"{path}.{collection_name}[{index}].required_status_contexts is invalid",
+            )
+            require(
+                ruleset["required_status_contexts"]
+                == sorted(set(ruleset["required_status_contexts"])),
+                f"{path}.{collection_name}[{index}].required_status_contexts is not canonical",
+            )
+    require(
+        isinstance(payload.get("ruleset_count"), int)
+        and not isinstance(payload.get("ruleset_count"), bool)
+        and payload["ruleset_count"] >= 0
+        and payload["ruleset_count"] == len(payload["rulesets"]),
+        f"{path}.ruleset_count is inconsistent",
+    )
+    require(
+        isinstance(payload.get("candidate_ruleset_count"), int)
+        and not isinstance(payload.get("candidate_ruleset_count"), bool)
+        and payload["candidate_ruleset_count"] >= 0
+        and payload["candidate_ruleset_count"] == len(payload["candidate_rulesets"]),
+        f"{path}.candidate_ruleset_count is inconsistent",
+    )
+    require(
+        payload["candidate_rulesets"]
+        == [item for item in payload["rulesets"] if item["applies_to_candidate_branch"]],
+        f"{path}.candidate_rulesets is not the filtered ruleset observation",
+    )
     require(payload.get("candidate_required_status_contexts") == payload.get("actual_required_status_contexts"), f"{path} required-check context aliases differ")
     require(payload.get("desired_required_status_contexts") == [
         "fresh-postgres-migrations", "repository-integrity",
@@ -754,6 +1672,73 @@ def validate_governance_payload(
     )
     require(payload["required_candidate_checks_enforced"] is expected_enforced, f"{path}.required_candidate_checks_enforced is inconsistent")
     require(payload.get("repository_candidate_enforcement") in {"enforced", "not_enforced", "unverifiable"}, f"{path}.repository_candidate_enforcement is invalid")
+    require(
+        isinstance(payload.get("rulesets_http_status"), int)
+        and not isinstance(payload.get("rulesets_http_status"), bool)
+        and 100 <= payload["rulesets_http_status"] <= 599,
+        f"{path}.rulesets_http_status is invalid",
+    )
+    require(
+        payload["rulesets_readable"] is (payload["rulesets_http_status"] == 200),
+        f"{path}.rulesets_readable is inconsistent with HTTP status",
+    )
+    if not payload["rulesets_readable"]:
+        require(payload["rulesets"] == [], f"{path}.rulesets must be empty when unreadable")
+    for contexts_name in (
+        "default_branch_required_status_contexts",
+        "actual_required_status_contexts",
+        "candidate_required_status_contexts",
+    ):
+        canonical_sorted_string_list(
+            payload.get(contexts_name), f"{path}.{contexts_name}"
+        )
+    nonempty_string_list(
+        payload.get("desired_required_status_contexts"),
+        f"{path}.desired_required_status_contexts",
+        allow_empty=False,
+    )
+    require(
+        payload["branch_protection_enabled"] is payload["candidate_branch_protection_enabled"],
+        f"{path} branch protection aliases differ",
+    )
+    require(
+        payload["candidate_legacy_required_checks_enforced"]
+        is (
+            payload["candidate_branch_protected"]
+            and set(payload["desired_required_status_contexts"]).issubset(
+                set(payload["actual_required_status_contexts"])
+            )
+        ),
+        f"{path}.candidate_legacy_required_checks_enforced is inconsistent",
+    )
+    require(
+        payload["candidate_ruleset_required_checks_enforced"]
+        is any(
+            item["active"]
+            and item["bypass_state"] == "none"
+            and set(payload["desired_required_status_contexts"]).issubset(
+                set(item["required_status_contexts"])
+            )
+            for item in payload["candidate_rulesets"]
+        ),
+        f"{path}.candidate_ruleset_required_checks_enforced is inconsistent",
+    )
+    expected_enforcement = (
+        "enforced"
+        if payload["required_candidate_checks_enforced"]
+        else "not_enforced"
+        if payload["candidate_branch_protected"] or payload["rulesets_readable"]
+        else "unverifiable"
+    )
+    require(
+        payload["repository_candidate_enforcement"] == expected_enforcement,
+        f"{path}.repository_candidate_enforcement is inconsistent",
+    )
+    require(
+        payload.get("interpretation")
+        == "This is an observation of GitHub controls. Source files and CI prose do not create branch protection or ruleset enforcement.",
+        f"{path}.interpretation is invalid",
+    )
     if payload["repository_candidate_enforcement"] == "enforced":
         require(expected_enforced, f"{path} claims enforcement without required checks")
     require(ctx.get("repository") == payload["repository"], f"{path} repository differs from context")
@@ -765,6 +1750,7 @@ def validate_execution_payload(
     """Re-check the exact job/runner/step contract in the persisted verifier output."""
 
     path = "$evidence.hosted-run-execution"
+    reject_unknown(payload, EXECUTION_ALLOWED_FIELDS, path)
     require(payload.get("schema") == EXECUTION_SCHEMA, f"{path}.schema is invalid")
     require(payload.get("status") == "ok" and payload.get("ok") is True, f"{path} is not successful")
     require(payload.get("repository") == source["repository"], f"{path}.repository is invalid")
@@ -777,6 +1763,7 @@ def validate_execution_payload(
     verifier = load_execution_module()
     for gate_name in HOSTED_GATE_NAMES:
         gate = object_at(gates.get(gate_name), f"{path}.gates.{gate_name}")
+        reject_unknown(gate, EXECUTION_GATE_ALLOWED_FIELDS, f"{path}.gates.{gate_name}")
         context_gate = object_at(ctx["hosted_gates"].get(gate_name), f"$context.hosted_gates.{gate_name}")
         require(gate.get("repository") == source["repository"], f"{path}.{gate_name}.repository is invalid")
         require(gate.get("branch") == source["branch"] and gate.get("head_branch") == source["branch"], f"{path}.{gate_name}.branch is invalid")
@@ -784,6 +1771,8 @@ def validate_execution_payload(
         require(gate.get("event") in {"push", "workflow_dispatch"}, f"{path}.{gate_name}.event is invalid")
         require(gate.get("workflow_path") == HOSTED_WORKFLOW_PATHS[gate_name], f"{path}.{gate_name}.workflow_path is invalid")
         require(gate.get("status") == "success", f"{path}.{gate_name}.status is invalid")
+        positive_int(gate.get("run_id"), f"{path}.gates.{gate_name}.run_id")
+        positive_int(gate.get("run_attempt"), f"{path}.gates.{gate_name}.run_attempt")
         require(gate.get("run_id") == context_gate.get("run_id") and gate.get("run_attempt") == context_gate.get("run_attempt"), f"{path}.{gate_name} run identity differs from context")
         for field in ("created_at", "updated_at"):
             utc_timestamp(gate.get(field), f"{path}.gates.{gate_name}.{field}")
@@ -792,15 +1781,159 @@ def validate_execution_payload(
         expected_jobs = verifier.EXPECTED_JOBS[gate_name]
         require(len(jobs) == len(expected_jobs), f"{path}.{gate_name} job count is not canonical")
         require({job.get("name") for job in jobs if isinstance(job, dict)} == set(expected_jobs), f"{path}.{gate_name} job set is not canonical")
+        job_ids: set[int] = set()
         verified_jobs: list[dict[str, Any]] = []
         for job in sorted(jobs, key=lambda item: str(item.get("name") if isinstance(item, dict) else "")):
             job_value = object_at(job, f"{path}.gates.{gate_name}.jobs[]")
+            reject_unknown(
+                job_value,
+                EXECUTION_JOB_ALLOWED_FIELDS,
+                f"{path}.gates.{gate_name}.jobs[]",
+            )
+            for step_index, raw_step in enumerate(job_value.get("steps", [])):
+                step_value = object_at(
+                    raw_step,
+                    f"{path}.gates.{gate_name}.jobs[].steps[{step_index}]",
+                )
+                reject_unknown(
+                    step_value,
+                    EXECUTION_STEP_ALLOWED_FIELDS,
+                    f"{path}.gates.{gate_name}.jobs[].steps[{step_index}]",
+                )
             job_name = job_value.get("name")
             require(
                 isinstance(job_name, str) and job_name.strip(),
                 f"{path}.{gate_name} job name is invalid",
             )
             require(job_name in expected_jobs, f"{path}.{gate_name} contains an unexpected job")
+            job_id = positive_int(
+                job_value.get("job_id"),
+                f"{path}.gates.{gate_name}.{job_name}.job_id",
+            )
+            require(
+                job_id not in job_ids,
+                f"{path}.{gate_name} contains duplicate job id {job_id}",
+            )
+            job_ids.add(job_id)
+            runner_id = positive_int(
+                job_value.get("runner_id"),
+                f"{path}.gates.{gate_name}.{job_name}.runner_id",
+            )
+            nonempty_string(
+                job_value.get("runner_name"),
+                f"{path}.gates.{gate_name}.{job_name}.runner_name",
+            )
+            labels = nonempty_string_list(
+                job_value.get("labels"),
+                f"{path}.gates.{gate_name}.{job_name}.labels",
+                allow_empty=False,
+            )
+            required_runner_label = nonempty_string(
+                job_value.get("required_runner_label"),
+                f"{path}.gates.{gate_name}.{job_name}.required_runner_label",
+            )
+            require(
+                required_runner_label == expected_jobs[job_name]["runner_label"],
+                f"{path}.gates.{gate_name}.{job_name}.required_runner_label is not canonical",
+            )
+            require(
+                required_runner_label in labels,
+                f"{path}.gates.{gate_name}.{job_name} lacks its required runner label",
+            )
+            runner_group_id = job_value.get("runner_group_id")
+            runner_group_name = job_value.get("runner_group_name")
+            if runner_group_id is None:
+                require(
+                    runner_group_name is None,
+                    f"{path}.gates.{gate_name}.{job_name} runner group fields are inconsistent",
+                )
+            else:
+                positive_int(
+                    runner_group_id,
+                    f"{path}.gates.{gate_name}.{job_name}.runner_group_id",
+                )
+                nonempty_string(
+                    runner_group_name,
+                    f"{path}.gates.{gate_name}.{job_name}.runner_group_name",
+                )
+            require(
+                job_value.get("status") == "completed"
+                and job_value.get("conclusion") == "success",
+                f"{path}.gates.{gate_name}.{job_name} is not a completed success",
+            )
+            utc_timestamp(
+                job_value.get("started_at"),
+                f"{path}.gates.{gate_name}.{job_name}.started_at",
+            )
+            utc_timestamp(
+                job_value.get("completed_at"),
+                f"{path}.gates.{gate_name}.{job_name}.completed_at",
+            )
+            required_steps = nonempty_string_list(
+                job_value.get("required_steps"),
+                f"{path}.gates.{gate_name}.{job_name}.required_steps",
+                allow_empty=False,
+            )
+            require(
+                required_steps == sorted(expected_jobs[job_name]["steps"]),
+                f"{path}.gates.{gate_name}.{job_name}.required_steps is not canonical",
+            )
+            steps = job_value.get("steps")
+            require(
+                isinstance(steps, list) and bool(steps),
+                f"{path}.gates.{gate_name}.{job_name}.steps must be non-empty",
+            )
+            step_names: set[str] = set()
+            step_numbers: set[int] = set()
+            for step_index, raw_step in enumerate(steps):
+                step_value = object_at(
+                    raw_step,
+                    f"{path}.gates.{gate_name}.{job_name}.steps[{step_index}]",
+                )
+                step_name = nonempty_string(
+                    step_value.get("name"),
+                    f"{path}.gates.{gate_name}.{job_name}.steps[{step_index}].name",
+                )
+                require(
+                    step_name not in step_names,
+                    f"{path}.gates.{gate_name}.{job_name}.steps contain duplicate names",
+                )
+                step_names.add(step_name)
+                step_number = positive_int(
+                    step_value.get("number"),
+                    f"{path}.gates.{gate_name}.{job_name}.steps[{step_index}].number",
+                )
+                require(
+                    step_number not in step_numbers,
+                    f"{path}.gates.{gate_name}.{job_name}.steps contain duplicate numbers",
+                )
+                step_numbers.add(step_number)
+                require(
+                    step_value.get("status") == "completed",
+                    f"{path}.gates.{gate_name}.{job_name}.steps[{step_index}].status is invalid",
+                )
+                require(
+                    step_value.get("conclusion") in {"success", "skipped"},
+                    f"{path}.gates.{gate_name}.{job_name}.steps[{step_index}].conclusion is invalid",
+                )
+                nullable_utc_timestamp(
+                    step_value.get("started_at"),
+                    f"{path}.gates.{gate_name}.{job_name}.steps[{step_index}].started_at",
+                )
+                nullable_utc_timestamp(
+                    step_value.get("completed_at"),
+                    f"{path}.gates.{gate_name}.{job_name}.steps[{step_index}].completed_at",
+                )
+                if step_value.get("conclusion") == "success":
+                    require(
+                        step_value.get("started_at") is not None
+                        and step_value.get("completed_at") is not None,
+                        f"{path}.gates.{gate_name}.{job_name}.steps[{step_index}] success lacks timestamps",
+                    )
+            require(
+                set(required_steps).issubset(step_names),
+                f"{path}.gates.{gate_name}.{job_name} omits a required step",
+            )
             raw_job = dict(job_value)
             raw_job["id"] = raw_job.get("job_id")
             try:
@@ -812,7 +1945,7 @@ def validate_execution_payload(
                     run_attempt=context_gate["run_attempt"],
                     expected=expected_jobs[job_name],
                 )
-            except (KeyError, TypeError, ValueError) as error:
+            except (KeyError, TypeError, ValueError, SystemExit) as error:
                 raise ContractError(
                     f"{path}.{gate_name}/{job_name} has malformed job evidence: {error}"
                 ) from error
@@ -827,6 +1960,7 @@ def validate_local_binding_payload(
     """Validate the canonical local-evidence binding attestation."""
 
     path = "$evidence.local-evidence-binding"
+    reject_unknown(payload, LOCAL_BINDING_ALLOWED_FIELDS, path)
     require(payload.get("schema") == LOCAL_BINDING_SCHEMA, f"{path}.schema is invalid")
     require(payload.get("status") == "ok" and payload.get("ok") is True, f"{path} is not successful")
     for field in ("repository", "branch", "commit_sha", "tree_sha"):
@@ -839,6 +1973,11 @@ def validate_local_binding_payload(
     files = object_at(ctx.get("files"), "$context.files")
     for name, relative in LOCAL_EVIDENCE.items():
         record = object_at(records.get(name), f"{path}.records.{name}")
+        reject_unknown(
+            record,
+            LOCAL_BINDING_RECORD_ALLOWED_FIELDS,
+            f"{path}.records.{name}",
+        )
         require(record.get("path") == relative, f"{path}.records.{name}.path is invalid")
         digest = canonical_sha256(record.get("sha256"), f"{path}.records.{name}.sha256")
         require(files.get(relative) == digest, f"{path}.records.{name} digest differs from context")
@@ -847,11 +1986,16 @@ def validate_local_binding_payload(
 
 
 def validate_hosted_gate_execution_payload(
-    payload: dict[str, Any], ctx: dict[str, Any], source: dict[str, Any]
+    payload: dict[str, Any],
+    ctx: dict[str, Any],
+    source: dict[str, Any],
+    *,
+    execution_payload: dict[str, Any] | None = None,
 ) -> None:
     """Validate the canonical hosted-gate job/runner attestation."""
 
     path = "$evidence.hosted-gate-execution"
+    reject_unknown(payload, HOSTED_ATTESTATION_ALLOWED_FIELDS, path)
     require(payload.get("schema") == HOSTED_GATE_EXECUTION_SCHEMA, f"{path}.schema is invalid")
     require(payload.get("status") == "ok" and payload.get("ok") is True, f"{path} is not successful")
     for field in ("repository", "branch", "commit_sha", "tree_sha"):
@@ -863,19 +2007,40 @@ def validate_hosted_gate_execution_payload(
     require(set(gates) == expected_paths, f"{path}.gates set is not canonical")
     context_gates = object_at(ctx.get("hosted_gates"), "$context.hosted_gates")
     # Import the checker only for its declarative required-job map.  It does
-    # not contact GitHub during validation.
-    checker_path = Path(__file__).resolve().with_name("check-hosted-gate-execution.py")
-    spec = importlib.util.spec_from_file_location("cex_hosted_gate_checker_contract", checker_path)
-    require(spec is not None and spec.loader is not None, f"{path} cannot load hosted gate contract")
-    checker = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(checker)
+    # not contact GitHub during validation.  Execute the exact bytes through
+    # the no-follow loader so a replaced/symlinked checkout path cannot swap
+    # the required-job contract after a lexical path check.
+    checker_path = _SCRIPT_DIR / "check-hosted-gate-execution.py"
+    checker = load_module_nofollow(
+        checker_path,
+        "cex_hosted_gate_checker_contract",
+        f"{path} hosted gate contract",
+    )
+    execution_gates: dict[str, Any] | None = None
+    if execution_payload is not None:
+        execution_gates = object_at(
+            execution_payload.get("gates"),
+            "$evidence.hosted-run-execution.gates",
+        )
     for gate_name, workflow_path in HOSTED_WORKFLOW_PATHS.items():
         summary = object_at(gates.get(workflow_path), f"{path}.gates.{workflow_path}")
+        reject_unknown(
+            summary,
+            HOSTED_ATTESTATION_GATE_ALLOWED_FIELDS,
+            f"{path}.gates.{workflow_path}",
+        )
         context_gate = object_at(context_gates.get(gate_name), f"$context.hosted_gates.{gate_name}")
-        for field in ("run_id", "run_attempt", "event", "head_branch", "head_sha", "status", "conclusion", "created_at", "updated_at"):
+        for field in (
+            "run_id", "run_attempt", "event", "head_branch", "head_sha",
+            "status", "conclusion", "created_at", "updated_at",
+        ):
             expected = context_gate.get(field)
             actual = summary.get(field)
             require(actual == expected, f"{path}.gates.{workflow_path}.{field} differs from context")
+        require(
+            summary.get("selection_policy") == HOSTED_GATE_SELECTION_POLICY,
+            f"{path}.gates.{workflow_path}.selection_policy is invalid",
+        )
         require(summary.get("head_branch") == source["branch"], f"{path}.gates.{workflow_path}.branch is invalid")
         require(summary.get("head_sha") == source["commit_sha"], f"{path}.gates.{workflow_path}.head_sha is invalid")
         require(summary.get("event") in {"push", "workflow_dispatch"}, f"{path}.gates.{workflow_path}.event is invalid")
@@ -900,21 +2065,89 @@ def validate_hosted_gate_execution_payload(
         )
         by_name = dict(zip(job_names, jobs))
         require(set(by_name) == set(expected_jobs), f"{path}.gates.{workflow_path}.jobs set is not canonical")
+        job_ids: set[int] = set()
         for job_name, contract in expected_jobs.items():
             job = object_at(by_name.get(job_name), f"{path}.gates.{workflow_path}.jobs.{job_name}")
-            require(isinstance(job.get("job_id"), int) and job["job_id"] > 0, f"{path}.{job_name}.job_id is invalid")
-            require(isinstance(job.get("runner_id"), int) and job["runner_id"] > 0, f"{path}.{job_name}.runner_id is invalid")
+            reject_unknown(
+                job,
+                HOSTED_ATTESTATION_JOB_ALLOWED_FIELDS,
+                f"{path}.gates.{workflow_path}.jobs.{job_name}",
+            )
+            require(
+                isinstance(job.get("job_id"), int)
+                and not isinstance(job.get("job_id"), bool)
+                and job["job_id"] > 0,
+                f"{path}.{job_name}.job_id is invalid",
+            )
+            require(job["job_id"] not in job_ids, f"{path}.{workflow_path}.jobs contain duplicate job ids")
+            job_ids.add(job["job_id"])
+            require(
+                isinstance(job.get("runner_id"), int)
+                and not isinstance(job.get("runner_id"), bool)
+                and job["runner_id"] > 0,
+                f"{path}.{job_name}.runner_id is invalid",
+            )
             require(isinstance(job.get("runner_name"), str) and job["runner_name"].strip(), f"{path}.{job_name}.runner_name is invalid")
             require(job.get("status") == "completed", f"{path}.{job_name}.status is invalid")
             require(job.get("conclusion") == "success", f"{path}.{job_name}.conclusion is invalid")
             runner_labels = job.get("runner_labels")
-            require(isinstance(runner_labels, list), f"{path}.{job_name}.runner_labels is invalid")
+            require(
+                isinstance(runner_labels, list)
+                and bool(runner_labels)
+                and all(isinstance(item, str) and item.strip() for item in runner_labels)
+                and len(runner_labels) == len(set(runner_labels)),
+                f"{path}.{job_name}.runner_labels is invalid",
+            )
             require(
                 contract.get("runner_label") in runner_labels,
                 f"{path}.{job_name} lacks required runner label {contract.get('runner_label')!r}",
             )
-            require(job.get("required_steps") == sorted(contract["steps"]), f"{path}.{job_name}.required_steps is invalid")
-            require(isinstance(job.get("observed_step_count"), int) and job["observed_step_count"] >= len(contract["steps"]), f"{path}.{job_name}.observed_step_count is invalid")
+            required_steps = nonempty_string_list(
+                job.get("required_steps"),
+                f"{path}.{job_name}.required_steps",
+                allow_empty=False,
+            )
+            require(
+                required_steps == sorted(contract["steps"]),
+                f"{path}.{job_name}.required_steps is invalid",
+            )
+            require(
+                isinstance(job.get("observed_step_count"), int)
+                and not isinstance(job.get("observed_step_count"), bool)
+                and job["observed_step_count"] >= len(contract["steps"]),
+                f"{path}.{job_name}.observed_step_count is invalid",
+            )
+            if execution_payload is not None:
+                execution_gate = object_at(
+                    execution_gates.get(gate_name) if execution_gates is not None else None,
+                    f"$evidence.hosted-run-execution.gates.{gate_name}",
+                )
+                execution_jobs = execution_gate.get("jobs")
+                require(
+                    isinstance(execution_jobs, list),
+                    f"$evidence.hosted-run-execution.gates.{gate_name}.jobs is invalid",
+                )
+                matching = [
+                    candidate
+                    for candidate in execution_jobs
+                    if isinstance(candidate, dict) and candidate.get("name") == job_name
+                ]
+                require(
+                    len(matching) == 1,
+                    f"{path}.{workflow_path}.jobs.{job_name} is not bound to execution evidence",
+                )
+                execution_job = matching[0]
+                require(
+                    job.get("job_id") == execution_job.get("job_id")
+                    and job.get("runner_id") == execution_job.get("runner_id")
+                    and job.get("runner_name") == execution_job.get("runner_name")
+                    and job.get("runner_labels") == execution_job.get("labels")
+                    and job.get("status") == execution_job.get("status")
+                    and job.get("conclusion") == execution_job.get("conclusion")
+                    and job.get("required_steps") == execution_job.get("required_steps")
+                    and job.get("observed_step_count") == len(execution_job.get("steps", [])),
+                    f"{path}.{workflow_path}.jobs.{job_name} differs from execution evidence",
+                )
 
 
 def validate_context_binding(
@@ -965,6 +2198,12 @@ def validate_context_binding(
     files = validate_payload_file_names(ctx["files"])
     hosted = object_at(ctx["hosted_gates"], "$context.hosted_gates")
     require(set(hosted) == set(HOSTED_GATE_NAMES), "$context hosted gate set is not canonical")
+    for gate_name, raw_record in hosted.items():
+        reject_unknown(
+            object_at(raw_record, f"$context.hosted_gates.{gate_name}"),
+            CONTEXT_HOSTED_GATE_ALLOWED_FIELDS,
+            f"$context.hosted_gates.{gate_name}",
+        )
     # The hosted checker selection is an immutable binding, not a convenience
     # summary.  It prevents a later freshness check from silently substituting
     # another run while retaining the same-looking gate records.
@@ -1057,6 +2296,11 @@ def validate_context_binding(
         )
         expected_files[relative] = digest
         attestation = object_at(attestations.get(name), f"$context.attestations.{name}")
+        reject_unknown(
+            attestation,
+            CONTEXT_ATTESTATION_ALLOWED_FIELDS,
+            f"$context.attestations.{name}",
+        )
         require(attestation.get("path") == relative, f"$context.attestations.{name}.path is invalid")
         require(attestation.get("sha256") == digest, f"$context.attestations.{name}.sha256 differs from manifest")
 
@@ -1165,30 +2409,176 @@ def validate_context_binding(
         hosted_execution_file = load_json_file(
             root, ATTESTATION_EVIDENCE["hosted-gate-execution"], "$evidence.hosted-gate-execution"
         )
-        validate_hosted_gate_execution_payload(hosted_execution_file, ctx, source)
+        validate_hosted_gate_execution_payload(
+            hosted_execution_file,
+            ctx,
+            source,
+            execution_payload=execution_file,
+        )
 
         sbom = load_json_file(root, "sbom.spdx.json", "$evidence.sbom")
+        reject_unknown(sbom, SBOM_ALLOWED_FIELDS, "$evidence.sbom")
         require(sbom.get("spdxVersion") == "SPDX-2.3", "$evidence.sbom.spdxVersion is invalid")
+        require(sbom.get("dataLicense") == "CC0-1.0", "$evidence.sbom.dataLicense is invalid")
         require(sbom.get("SPDXID") == "SPDXRef-DOCUMENT", "$evidence.sbom.SPDXID is invalid")
         require(sbom.get("name") == f"CEX P0 candidate {source['commit_sha']}", "$evidence.sbom.name is not candidate-bound")
         require(sbom.get("documentNamespace") == f"https://github.com/{source['repository']}/p0-sbom/{source['commit_sha']}/{ctx['workflow_run_id']}/attempt/{ctx['workflow_run_attempt']}", "$evidence.sbom namespace is not candidate-bound")
         require(isinstance(sbom.get("packages"), list) and sbom["packages"], "$evidence.sbom.packages is empty")
         creation_info = object_at(sbom.get("creationInfo"), "$evidence.sbom.creationInfo")
+        reject_unknown(creation_info, SBOM_CREATION_INFO_ALLOWED_FIELDS, "$evidence.sbom.creationInfo")
         utc_timestamp(creation_info.get("created"), "$evidence.sbom.creationInfo.created")
-        require("Tool: cex-p0-release-evidence" in creation_info.get("creators", []), "$evidence.sbom creator is invalid")
+        require(
+            creation_info.get("creators") == ["Tool: cex-p0-release-evidence"],
+            "$evidence.sbom creator is invalid",
+        )
+        require(
+            creation_info.get("licenseListVersion") == "3.25",
+            "$evidence.sbom license list version is invalid",
+        )
+        package_ids: list[str] = []
+        for index, raw_package in enumerate(sbom["packages"]):
+            package = object_at(raw_package, f"$evidence.sbom.packages[{index}]")
+            reject_unknown(package, SBOM_PACKAGE_ALLOWED_FIELDS, f"$evidence.sbom.packages[{index}]")
+            for field in (
+                "SPDXID", "name", "versionInfo", "downloadLocation",
+                "licenseConcluded", "licenseDeclared", "copyrightText",
+            ):
+                require(
+                    isinstance(package.get(field), str) and package[field].strip(),
+                    f"$evidence.sbom.packages[{index}].{field} is invalid",
+                )
+            package_id = package["SPDXID"]
+            require(
+                bool(SPDX_ID_RE.fullmatch(package_id))
+                and package_id != "SPDXRef-DOCUMENT"
+                and package_id not in package_ids,
+                f"$evidence.sbom.packages[{index}].SPDXID is invalid or duplicated",
+            )
+            package_ids.append(package_id)
+            require(
+                not any(character.isspace() for character in package["name"])
+                and not any(character.isspace() for character in package["versionInfo"]),
+                f"$evidence.sbom.packages[{index}] name/version contains whitespace",
+            )
+            cargo_source_uri(
+                package["downloadLocation"],
+                f"$evidence.sbom.packages[{index}].downloadLocation",
+            )
+            require(
+                package["licenseConcluded"] == "NOASSERTION"
+                and package["licenseDeclared"] == "NOASSERTION"
+                and package["copyrightText"] == "NOASSERTION",
+                f"$evidence.sbom.packages[{index}] license/copyright fields are not canonical",
+            )
+            require(
+                package.get("filesAnalyzed") is False,
+                f"$evidence.sbom.packages[{index}].filesAnalyzed is invalid",
+            )
+            external_refs = package.get("externalRefs")
+            require(
+                isinstance(external_refs, list) and len(external_refs) == 1,
+                f"$evidence.sbom.packages[{index}].externalRefs is invalid",
+            )
+            for ref_index, raw_ref in enumerate(external_refs):
+                ref = object_at(raw_ref, f"$evidence.sbom.packages[{index}].externalRefs[{ref_index}]")
+                reject_unknown(
+                    ref,
+                    SBOM_EXTERNAL_REF_ALLOWED_FIELDS,
+                    f"$evidence.sbom.packages[{index}].externalRefs[{ref_index}]",
+                )
+                require(
+                    all(isinstance(ref.get(field), str) and ref[field].strip() for field in SBOM_EXTERNAL_REF_ALLOWED_FIELDS),
+                    f"$evidence.sbom.packages[{index}].externalRefs[{ref_index}] is invalid",
+                )
+                require(
+                    ref["referenceCategory"] == "PACKAGE-MANAGER"
+                    and ref["referenceType"] == "purl"
+                    and ref["referenceLocator"]
+                    == (
+                        "pkg:cargo/"
+                        + urllib.parse.quote(package["name"])
+                        + "@"
+                        + urllib.parse.quote(package["versionInfo"])
+                    ),
+                    f"$evidence.sbom.packages[{index}].externalRefs[{ref_index}] is not canonical Cargo purl",
+                )
+            if "checksums" in package:
+                checksums = package["checksums"]
+                require(
+                    isinstance(checksums, list) and len(checksums) == 1,
+                    f"$evidence.sbom.packages[{index}].checksums is invalid",
+                )
+                for checksum_index, raw_checksum in enumerate(checksums):
+                    checksum = object_at(raw_checksum, f"$evidence.sbom.packages[{index}].checksums[{checksum_index}]")
+                    reject_unknown(
+                        checksum,
+                        SBOM_CHECKSUM_ALLOWED_FIELDS,
+                        f"$evidence.sbom.packages[{index}].checksums[{checksum_index}]",
+                    )
+                    require(
+                        checksum.get("algorithm") == "SHA256"
+                        and isinstance(checksum.get("checksumValue"), str)
+                        and RAW_SHA256_RE.fullmatch(checksum["checksumValue"])
+                        and checksum["checksumValue"] != "0" * 64,
+                        f"$evidence.sbom.packages[{index}].checksums[{checksum_index}] is invalid",
+                    )
+        relationships = sbom.get("relationships")
+        require(
+            isinstance(relationships, list) and len(relationships) == len(package_ids),
+            "$evidence.sbom.relationships is invalid",
+        )
+        related_ids: list[str] = []
+        for index, raw_relationship in enumerate(relationships):
+            relationship = object_at(raw_relationship, f"$evidence.sbom.relationships[{index}]")
+            reject_unknown(
+                relationship,
+                SBOM_RELATIONSHIP_ALLOWED_FIELDS,
+                f"$evidence.sbom.relationships[{index}]",
+            )
+            require(
+                all(isinstance(relationship.get(field), str) and relationship[field].strip() for field in SBOM_RELATIONSHIP_ALLOWED_FIELDS),
+                f"$evidence.sbom.relationships[{index}] is invalid",
+            )
+            require(
+                relationship["spdxElementId"] == "SPDXRef-DOCUMENT"
+                and relationship["relationshipType"] == "DESCRIBES"
+                and relationship["relatedSpdxElement"] in package_ids
+                and relationship["relatedSpdxElement"] not in related_ids
+                and relationship["relatedSpdxElement"] == package_ids[index],
+                f"$evidence.sbom.relationships[{index}] is not canonical",
+            )
+            related_ids.append(relationship["relatedSpdxElement"])
 
         provenance = load_json_file(root, "provenance.intoto.json", "$evidence.provenance")
+        reject_unknown(provenance, PROVENANCE_ALLOWED_FIELDS, "$evidence.provenance")
         require(provenance.get("_type") == "https://in-toto.io/Statement/v1", "$evidence.provenance._type is invalid")
         require(provenance.get("predicateType") == "https://slsa.dev/provenance/v1", "$evidence.provenance.predicateType is invalid")
         subjects = provenance.get("subject")
         require(isinstance(subjects, list) and len(subjects) == 1, "$evidence.provenance.subject is invalid")
         subject = object_at(subjects[0], "$evidence.provenance.subject[0]")
+        reject_unknown(subject, PROVENANCE_SUBJECT_ALLOWED_FIELDS, "$evidence.provenance.subject[0]")
         require(subject.get("name") == source["repository"], "$evidence.provenance subject name is invalid")
         subject_digest = object_at(subject.get("digest"), "$evidence.provenance.subject.digest")
+        reject_unknown(subject_digest, {"gitCommit", "gitTree"}, "$evidence.provenance.subject.digest")
         require(subject_digest.get("gitCommit") == source["commit_sha"] and subject_digest.get("gitTree") == source["tree_sha"], "$evidence.provenance subject is not candidate-bound")
         predicate = object_at(provenance.get("predicate"), "$evidence.provenance.predicate")
         build_definition = object_at(predicate.get("buildDefinition"), "$evidence.provenance.buildDefinition")
+        reject_unknown(predicate, {"buildDefinition", "runDetails"}, "$evidence.provenance.predicate")
+        require(
+            set(predicate) == {"buildDefinition", "runDetails"},
+            "$evidence.provenance.predicate is incomplete",
+        )
+        reject_unknown(build_definition, PROVENANCE_BUILD_ALLOWED_FIELDS, "$evidence.provenance.buildDefinition")
+        require(
+            set(build_definition) == set(PROVENANCE_BUILD_ALLOWED_FIELDS),
+            "$evidence.provenance.buildDefinition is incomplete",
+        )
+        require(
+            build_definition.get("buildType") == PROVENANCE_BUILD_TYPE,
+            "$evidence.provenance.buildType is invalid",
+        )
         external_parameters = object_at(build_definition.get("externalParameters"), "$evidence.provenance.externalParameters")
+        reject_unknown(external_parameters, PROVENANCE_EXTERNAL_ALLOWED_FIELDS, "$evidence.provenance.externalParameters")
         require(external_parameters == {
             "repository": source["repository"],
             "branch": source["branch"],
@@ -1196,20 +2586,95 @@ def validate_context_binding(
             "workflow_run_id": ctx["workflow_run_id"],
             "workflow_run_attempt": ctx["workflow_run_attempt"],
         }, "$evidence.provenance external parameters are not candidate-bound")
-        require(object_at(build_definition.get("internalParameters"), "$evidence.provenance.internalParameters").get("migration_head") == ctx["migration_head"], "$evidence.provenance migration head is invalid")
+        internal_parameters = object_at(build_definition.get("internalParameters"), "$evidence.provenance.internalParameters")
+        reject_unknown(internal_parameters, PROVENANCE_INTERNAL_ALLOWED_FIELDS, "$evidence.provenance.internalParameters")
+        require(
+            set(internal_parameters) == set(PROVENANCE_INTERNAL_ALLOWED_FIELDS),
+            "$evidence.provenance.internalParameters is incomplete",
+        )
+        require(internal_parameters.get("migration_head") == ctx["migration_head"], "$evidence.provenance migration head is invalid")
         dependencies = build_definition.get("resolvedDependencies")
-        require(isinstance(dependencies, list), "$evidence.provenance resolvedDependencies is invalid")
-        dependency_map = {item.get("uri"): item for item in dependencies if isinstance(item, dict)}
-        git_dependency = dependency_map.get(f"git+https://github.com/{source['repository']}@{source['commit_sha']}")
+        require(
+            isinstance(dependencies, list) and len(dependencies) == 3,
+            "$evidence.provenance resolvedDependencies must contain exactly three entries",
+        )
+        dependency_uris: list[str] = []
+        dependency_map: dict[str, dict[str, Any]] = {}
+        expected_git_uri = f"git+https://github.com/{source['repository']}@{source['commit_sha']}"
+        expected_dependency_uris = [expected_git_uri, "file:Cargo.lock", "file:migrations/"]
+        for index, raw_dependency in enumerate(dependencies):
+            dependency = object_at(raw_dependency, f"$evidence.provenance.resolvedDependencies[{index}]")
+            reject_unknown(
+                dependency,
+                PROVENANCE_DEPENDENCY_ALLOWED_FIELDS,
+                f"$evidence.provenance.resolvedDependencies[{index}]",
+            )
+            digest = object_at(dependency.get("digest"), f"$evidence.provenance.resolvedDependencies[{index}].digest")
+            uri = nonempty_string(
+                dependency.get("uri"),
+                f"$evidence.provenance.resolvedDependencies[{index}].uri",
+            )
+            require(
+                uri not in dependency_uris,
+                f"$evidence.provenance.resolvedDependencies contains duplicate URI: {uri}",
+            )
+            dependency_uris.append(uri)
+            dependency_map[uri] = dependency
+            if uri == expected_git_uri:
+                reject_unknown(digest, {"gitCommit", "gitTree"}, f"$evidence.provenance.resolvedDependencies[{index}].digest")
+                require(
+                    digest.get("gitCommit") == source["commit_sha"]
+                    and digest.get("gitTree") == source["tree_sha"],
+                    f"$evidence.provenance.resolvedDependencies[{index}].digest is not candidate-bound",
+                )
+            elif uri in {"file:Cargo.lock", "file:migrations/"}:
+                reject_unknown(digest, {"sha256"}, f"$evidence.provenance.resolvedDependencies[{index}].digest")
+                raw_sha256(
+                    digest.get("sha256"),
+                    f"$evidence.provenance.resolvedDependencies[{index}].digest.sha256",
+                )
+            else:
+                raise ContractError(
+                    f"$evidence.provenance.resolvedDependencies[{index}].uri is not canonical"
+                )
+        require(
+            dependency_uris == expected_dependency_uris,
+            "$evidence.provenance resolvedDependencies order/set is not canonical",
+        )
+        git_dependency = dependency_map.get(expected_git_uri)
         require(isinstance(git_dependency, dict), "$evidence.provenance git dependency is missing")
-        require(object_at(git_dependency.get("digest"), "$evidence.provenance git digest").get("gitTree") == source["tree_sha"], "$evidence.provenance git tree is invalid")
+        require(
+            object_at(git_dependency.get("digest"), "$evidence.provenance git digest").get("gitCommit")
+            == source["commit_sha"]
+            and object_at(git_dependency.get("digest"), "$evidence.provenance git digest").get("gitTree")
+            == source["tree_sha"],
+            "$evidence.provenance git digest is invalid",
+        )
         cargo_dependency = object_at(dependency_map.get("file:Cargo.lock"), "$evidence.provenance Cargo.lock dependency")
-        require(object_at(cargo_dependency.get("digest"), "$evidence.provenance Cargo.lock digest").get("sha256") == ctx["cargo_lock_sha256"][7:], "$evidence.provenance Cargo.lock digest is invalid")
+        require(
+            object_at(cargo_dependency.get("digest"), "$evidence.provenance Cargo.lock digest").get("sha256")
+            == ctx["cargo_lock_sha256"][7:],
+            "$evidence.provenance Cargo.lock digest is invalid",
+        )
         migration_dependency = object_at(dependency_map.get("file:migrations/"), "$evidence.provenance migrations dependency")
-        require(object_at(migration_dependency.get("digest"), "$evidence.provenance migration digest").get("sha256") == ctx["migration_chain_sha256"][7:], "$evidence.provenance migration digest is invalid")
+        require(
+            object_at(migration_dependency.get("digest"), "$evidence.provenance migration digest").get("sha256")
+            == ctx["migration_chain_sha256"][7:],
+            "$evidence.provenance migration digest is invalid",
+        )
         run_details = object_at(predicate.get("runDetails"), "$evidence.provenance.runDetails")
-        require(object_at(run_details.get("builder"), "$evidence.provenance builder").get("id") == "https://github.com/actions/runner", "$evidence.provenance builder is invalid")
+        reject_unknown(run_details, PROVENANCE_RUN_DETAILS_ALLOWED_FIELDS, "$evidence.provenance.runDetails")
+        require(
+            set(run_details) == set(PROVENANCE_RUN_DETAILS_ALLOWED_FIELDS),
+            "$evidence.provenance.runDetails is incomplete",
+        )
+        builder = object_at(run_details.get("builder"), "$evidence.provenance builder")
+        reject_unknown(builder, PROVENANCE_BUILDER_ALLOWED_FIELDS, "$evidence.provenance builder")
+        require(set(builder) == set(PROVENANCE_BUILDER_ALLOWED_FIELDS), "$evidence.provenance builder is incomplete")
+        require(builder.get("id") == "https://github.com/actions/runner", "$evidence.provenance builder is invalid")
         metadata = object_at(run_details.get("metadata"), "$evidence.provenance metadata")
+        reject_unknown(metadata, PROVENANCE_METADATA_ALLOWED_FIELDS, "$evidence.provenance metadata")
+        require(set(metadata) == set(PROVENANCE_METADATA_ALLOWED_FIELDS), "$evidence.provenance metadata is incomplete")
         require(metadata.get("invocationId") == f"{ctx['server_url']}/{source['repository']}/actions/runs/{ctx['workflow_run_id']}/attempts/{ctx['workflow_run_attempt']}", "$evidence.provenance invocation is not candidate-bound")
         utc_timestamp(metadata.get("startedOn"), "$evidence.provenance metadata.startedOn")
 
@@ -1409,7 +2874,7 @@ def main() -> int:
             context = read_json_nofollow(args.context, label="release context")
         evidence_dir = args.evidence_dir
         if evidence_dir is not None and not evidence_dir.is_absolute():
-            evidence_dir = Path(__file__).resolve().parents[1] / evidence_dir
+            evidence_dir = _SCRIPT_DIR.parent / evidence_dir
         validate_manifest(value, context=context, evidence_dir=evidence_dir)
     except (
         OSError,

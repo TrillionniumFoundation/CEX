@@ -15,12 +15,6 @@ const SHARED_RUNTIME_GUARD_SERVICE_KINDS: [ServiceKind; 5] = [
     ServiceKind::Audit,
 ];
 
-fn env_flag(name: &str, default: bool) -> bool {
-    std::env::var(name)
-        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
-        .unwrap_or(default)
-}
-
 #[tokio::main]
 async fn main() {
     init_tracing();
@@ -41,7 +35,7 @@ async fn main() {
         startup.identity_static_fallback_disabled
     );
 
-    let fail_fast = env_flag("LEDGER_FAIL_FAST", false);
+    let fail_fast = runtime_guard::env_flag("LEDGER_FAIL_FAST", false);
 
     let (repository, operation_pool): (LedgerRepositoryHandle, _) =
         match PostgresLedgerRepository::connect_from_env().await {

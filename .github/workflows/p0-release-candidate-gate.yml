@@ -355,6 +355,11 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: cex-p0-candidate-failure-${{ github.sha }}-${{ github.run_attempt }}
-          path: run/p0-release-evidence
+          # Failure diagnostics are intentionally outside the frozen,
+          # canonical payload namespace.  The evidence directory can contain
+          # partially generated or operator-controlled files after a failed
+          # step; uploading it wholesale would turn those files into release
+          # evidence by accident.
+          path: run/p0-release-support
           if-no-files-found: ignore
           retention-days: 14

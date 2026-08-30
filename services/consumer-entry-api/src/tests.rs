@@ -1905,13 +1905,19 @@ fn normalized_receipt_projection_migration_preserves_exact_amount_and_append_onl
         env!("CARGO_MANIFEST_DIR")
     ))
     .expect("normalized receipt projection migration should exist");
+    // The amount-column repair is catalog-aware: it resolves the allow-listed
+    // table name and executes a quoted ALTER only when the column is absent.
+    // Keep this contract pinned without requiring the old literal
+    // `ADD COLUMN IF NOT EXISTS` text (which cannot detect type/default drift).
+    assert!(migration.contains("alter table public.%I add column amount_credits bigint"));
     for table in [
         "public.league_term_exchange_receipts",
         "public.world_term_exchange_receipts",
     ] {
-        assert!(migration.contains(&format!(
-            "{table}\n    add column if not exists amount_credits bigint"
-        )));
+        let table_name = table
+            .strip_prefix("public.")
+            .expect("normalized receipt table should be in public schema");
+        assert!(migration.contains(&format!("'{table_name}'::text")));
         assert!(migration.contains(&format!("on {table};")));
     }
     assert!(migration.contains("amount_credits is null or amount_credits >= 0"));
@@ -1984,9 +1990,26 @@ fn normalized_receipt_event_history_migration_backfills_and_chains_hold_to_final
         "public.world_term_exchange_receipt_events_v1",
     ] {
         assert!(migration.contains(&format!("create table if not exists {table}")));
-        assert!(migration.contains(&format!("on {table}(receipt_id, event_sequence desc")));
         assert!(migration.contains(&format!("before truncate on {table}")));
     }
+    // Performance keys are now installed through a catalog-aware guard so a
+    // same-named decoy/wrong-shape index cannot be accepted by
+    // `CREATE INDEX IF NOT EXISTS`.  Keep the published key names and order
+    // vectors pinned without depending on the old literal CREATE statements.
+    assert!(migration.contains("do $history_performance_index_guard$"));
+    for index_name in [
+        "idx_league_term_exchange_receipt_events_latest_v1",
+        "idx_league_term_exchange_receipt_events_finalized_v1",
+        "idx_league_term_exchange_receipt_events_intent_v1",
+        "idx_world_term_exchange_receipt_events_latest_v1",
+        "idx_world_term_exchange_receipt_events_finalized_v1",
+        "idx_world_term_exchange_receipt_events_intent_v1",
+    ] {
+        assert!(migration.contains(index_name));
+    }
+    assert!(migration.contains("receipt_id, event_sequence desc, event_id desc"));
+    assert!(migration.contains("array_agg(opc.oid order by column_spec.ordinality)"));
+    assert!(migration.contains("array_agg(a.attcollation order by column_spec.ordinality)"));
     assert!(migration.contains("event_sequence bigint not null"));
     assert!(migration.contains("previous_receipt_hash"));
     assert!(migration.contains("receipt_hash text not null"));

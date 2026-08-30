@@ -1,10 +1,14 @@
 begin;
 
--- Serialize concurrent 0087 runners.  The migration is transactional, but a
--- plain partial history table can require creation/adoption of a backing
--- sequence; without one small transaction-scoped lock two runners could both
--- observe the sequence as absent and race while assigning ownership.
-select pg_advisory_xact_lock(hashtextextended('cex:migration:0087:receipt-history', 0));
+-- Serialize concurrent receipt-schema migration runners.  The migrations are
+-- transactional, but a plain partial history table can require
+-- creation/adoption of a backing sequence; without one transaction-scoped
+-- lock two runners could both observe the sequence as absent and race while
+-- assigning ownership.  0085 and 0086 take this same lock so the whole
+-- receipt-schema repair boundary is serialized.
+select pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended('cex:migration:term-exchange-receipt-schema', 0)
+);
 
 -- migration-check: allow-destructive
 -- Reviewed rollback posture: this migration is expand-only.  The only
@@ -115,6 +119,9 @@ declare
     table_spec record;
     history_oid oid;
     projection_oid oid;
+    relation_kind text;
+    relation_persistence text;
+    relation_is_partition boolean;
     event_attnum smallint;
     event_type oid;
     event_identity text;
@@ -146,6 +153,9 @@ declare
     has_projection_duplicate boolean;
     projection_index_name text;
     projection_index_relation oid;
+    projection_index_is_canonical boolean;
+    projection_key_opclasses oid[];
+    projection_key_collations oid[];
 begin
     for table_spec in
         select *
@@ -158,6 +168,17 @@ begin
         if history_oid is null then
             raise exception
                 'normalized % receipt history table is missing', table_spec.label;
+        end if;
+        select c.relkind::text, c.relpersistence::text, c.relispartition
+          into relation_kind, relation_persistence, relation_is_partition
+          from pg_catalog.pg_class c
+         where c.oid = history_oid;
+        if relation_kind is distinct from 'r'
+           or relation_persistence is distinct from 'p'
+           or relation_is_partition then
+            raise exception
+                'normalized % receipt history relation is not a permanent ordinary table',
+                table_spec.label;
         end if;
 
         -- Locate event_id through the catalog first so a partial table that
@@ -253,9 +274,15 @@ begin
              where n.nspname = 'public'
                and c.relname = sequence_name;
             if sequence_oid is not null then
-                if (select c.relkind from pg_catalog.pg_class c where c.oid = sequence_oid) <> 'S' then
+                if not exists (
+                    select 1
+                      from pg_catalog.pg_class c
+                     where c.oid = sequence_oid
+                       and c.relkind = 'S'
+                       and c.relpersistence = 'p'
+                ) then
                     raise exception
-                        'normalized % receipt history event_id sequence name is occupied by a non-sequence relation',
+                        'normalized % receipt history event_id sequence is not a permanent sequence',
                         table_spec.label;
                 end if;
             else
@@ -278,9 +305,15 @@ begin
                         table_spec.label;
                 end if;
             end if;
-            if (select c.relkind from pg_catalog.pg_class c where c.oid = sequence_oid) <> 'S' then
+            if not exists (
+                select 1
+                  from pg_catalog.pg_class c
+                 where c.oid = sequence_oid
+                   and c.relkind = 'S'
+                   and c.relpersistence = 'p'
+            ) then
                 raise exception
-                    'normalized % receipt history event_id sequence name is occupied by a non-sequence relation',
+                    'normalized % receipt history event_id sequence is not a permanent sequence',
                     table_spec.label;
             end if;
             -- Never steal a sequence that is owned by, or referenced by the
@@ -424,6 +457,17 @@ begin
                 'normalized % receipt history event_id default/identity sequence is missing',
                 table_spec.label;
         end if;
+        if not exists (
+            select 1
+              from pg_catalog.pg_class c
+             where c.oid = sequence_oid
+               and c.relkind = 'S'
+               and c.relpersistence = 'p'
+        ) then
+            raise exception
+                'normalized % receipt history event_id sequence is not a permanent sequence',
+                table_spec.label;
+        end if;
         select s.seqtypid, s.seqincrement, s.seqmax, s.seqmin, s.seqcycle
           into sequence_type, sequence_increment, sequence_max,
                sequence_min, sequence_cycle
@@ -558,6 +602,17 @@ begin
             raise exception
                 'normalized % receipt projection table is missing', table_spec.label;
         end if;
+        select c.relkind::text, c.relpersistence::text, c.relispartition
+          into relation_kind, relation_persistence, relation_is_partition
+          from pg_catalog.pg_class c
+         where c.oid = projection_oid;
+        if relation_kind is distinct from 'r'
+           or relation_persistence is distinct from 'p'
+           or relation_is_partition then
+            raise exception
+                'normalized % receipt projection relation is not a permanent ordinary table',
+                table_spec.label;
+        end if;
         select a.attnum, a.atttypid, a.attnotnull
           into projection_receipt_attnum, projection_receipt_type,
                projection_receipt_notnull
@@ -595,31 +650,122 @@ begin
             );
         end if;
 
+        -- Match the default btree operator class and the column's declared
+        -- collation as well as the key attribute.  An otherwise valid-looking
+        -- text_pattern_ops or explicitly-C-collated index is not the canonical
+        -- receipt identity index and must not be adopted as authority.
+        select array_agg(opc.oid order by key_part.ordinality),
+               array_agg(a.attcollation order by key_part.ordinality)
+          into projection_key_opclasses, projection_key_collations
+          from unnest(array[projection_receipt_attnum]::smallint[]) with ordinality
+               as key_part(attnum, ordinality)
+          join pg_catalog.pg_attribute a
+            on a.attrelid = projection_oid
+           and a.attnum = key_part.attnum
+           and not a.attisdropped
+          join pg_catalog.pg_opclass opc
+            on opc.opcintype = a.atttypid
+           and opc.opcdefault
+           and opc.opcnamespace = 'pg_catalog'::regnamespace
+          join pg_catalog.pg_am am
+            on am.oid = opc.opcmethod
+           and am.amname = 'btree';
+        if projection_key_opclasses is null or projection_key_collations is null then
+            raise exception
+                'normalized % receipt projection identity key operator class/collation is unavailable',
+                table_spec.label;
+        end if;
+
         -- A primary key/unique constraint from 0026 satisfies this check.  A
         -- partially-created table may instead have only a non-constraint
         -- unique index, which is also valid authority as long as it is global
         -- (not partial) and covers receipt_id alone.
         select exists (
             select 1
-             from pg_catalog.pg_index i
-             where i.indrelid = projection_oid
+             from pg_catalog.pg_class index_class
+             join pg_catalog.pg_index i on i.indexrelid = index_class.oid
+             join pg_catalog.pg_am am on am.oid = index_class.relam
+             where index_class.relkind = 'i'
+               and index_class.relpersistence = 'p'
+               and not index_class.relispartition
+               and index_class.relowner = (
+                   select target.relowner
+                     from pg_catalog.pg_class target
+                    where target.oid = projection_oid
+               )
+               and am.amname = 'btree'
+               and i.indrelid = projection_oid
                and i.indisunique
                and i.indisvalid
                and i.indisready
+               and i.indislive
                and i.indimmediate
                and i.indpred is null
+               and i.indexprs is null
                and i.indnkeyatts = 1
+               and i.indnatts = 1
                and i.indkey[0] = projection_receipt_attnum
+               and (
+                   select array_agg(key_part.opclass_oid order by key_part.ordinality)
+                     from unnest(i.indclass::oid[]) with ordinality
+                          as key_part(opclass_oid, ordinality)
+               ) = projection_key_opclasses
+               and (
+                   select array_agg(key_part.collation_oid order by key_part.ordinality)
+                     from unnest(i.indcollation::oid[]) with ordinality
+                          as key_part(collation_oid, ordinality)
+               ) = projection_key_collations
         ) into has_projection_unique;
-        if not has_projection_unique then
-            projection_index_name := 'uq_' || table_spec.projection_table || '_receipt_id_v1';
-            select c.oid
-              into projection_index_relation
-              from pg_catalog.pg_class c
-              join pg_catalog.pg_namespace n on n.oid = c.relnamespace
-             where n.nspname = 'public'
-               and c.relname = projection_index_name;
-            if projection_index_relation is not null then
+        -- Inspect the canonical fallback name even when another valid unique
+        -- index already proves the functional invariant.  Otherwise a table,
+        -- view, or wrong-table index occupying this schema-scoped name would be
+        -- skipped by the `if not has_projection_unique` branch.
+        projection_index_name := 'uq_' || table_spec.projection_table || '_receipt_id_v1';
+        select c.oid
+          into projection_index_relation
+          from pg_catalog.pg_class c
+          join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+         where n.nspname = 'public'
+           and c.relname = projection_index_name;
+        if projection_index_relation is not null then
+            select exists (
+                select 1
+                  from pg_catalog.pg_class index_class
+                  join pg_catalog.pg_index i on i.indexrelid = index_class.oid
+                  join pg_catalog.pg_am am on am.oid = index_class.relam
+                 where index_class.oid = projection_index_relation
+                   and index_class.relkind = 'i'
+                   and index_class.relpersistence = 'p'
+                   and not index_class.relispartition
+                   and index_class.relowner = (
+                       select target.relowner
+                         from pg_catalog.pg_class target
+                        where target.oid = projection_oid
+                   )
+                   and am.amname = 'btree'
+                   and i.indrelid = projection_oid
+                   and i.indisunique
+                   and i.indisvalid
+                   and i.indisready
+                   and i.indislive
+                   and i.indimmediate
+                   and i.indpred is null
+                   and i.indexprs is null
+                   and i.indnkeyatts = 1
+                   and i.indnatts = 1
+                   and i.indkey[0] = projection_receipt_attnum
+                   and (
+                       select array_agg(key_part.opclass_oid order by key_part.ordinality)
+                         from unnest(i.indclass::oid[]) with ordinality
+                              as key_part(opclass_oid, ordinality)
+                   ) = projection_key_opclasses
+                   and (
+                       select array_agg(key_part.collation_oid order by key_part.ordinality)
+                         from unnest(i.indcollation::oid[]) with ordinality
+                              as key_part(collation_oid, ordinality)
+                   ) = projection_key_collations
+            ) into projection_index_is_canonical;
+            if projection_index_is_canonical is distinct from true then
                 -- CREATE INDEX IF NOT EXISTS only compares the relation name;
                 -- it would silently retain an invalid or differently-shaped
                 -- object and leave receipt identity non-unique.
@@ -627,6 +773,7 @@ begin
                     'normalized % receipt projection has an incompatible receipt_id key',
                     table_spec.label;
             end if;
+        elsif not has_projection_unique then
             execute format(
                 'create unique index %I on public.%I (receipt_id)',
                 projection_index_name,
@@ -637,25 +784,366 @@ begin
 end
 $history_schema_guard$;
 
-create index if not exists idx_league_term_exchange_receipt_events_latest_v1
-    on public.league_term_exchange_receipt_events_v1(receipt_id, event_sequence desc, event_id desc);
-create index if not exists idx_league_term_exchange_receipt_events_finalized_v1
-    on public.league_term_exchange_receipt_events_v1(finalized_at desc, event_id desc);
-create index if not exists idx_league_term_exchange_receipt_events_intent_v1
-    on public.league_term_exchange_receipt_events_v1(intent_id, finalized_at desc, event_id desc);
-create unique index if not exists uq_league_term_exchange_receipt_events_initial_intent_v1
-    on public.league_term_exchange_receipt_events_v1(intent_id)
-    where event_sequence = 1;
+-- Preflight the typed catalog before any wide `record`-based row validator is
+-- planned.  PostgreSQL caches a PL/pgSQL record-field expression's composite
+-- type; if one lane has (for example) `timestamp` while the other has
+-- `timestamptz`, the later validator can otherwise fail with an internal
+-- cached-plan type error instead of the migration's controlled schema error.
+-- This pass deliberately defers nullability until after the row audit (the
+-- partial-upgrade path may still contain NULLs), but it checks every column's
+-- exact type/generated/default shape and repairs only omitted runtime defaults.
+do $history_catalog_type_preflight$
+declare
+    table_spec record;
+    history_oid oid;
+    relation_kind text;
+    relation_persistence text;
+    relation_is_partition boolean;
+    actual_column_count integer;
+    column_spec record;
+    column_type oid;
+    column_identity text;
+    column_generated text;
+    column_default text;
+    column_default_oid oid;
+    normalized_default text;
+    expected_columns constant integer := 20;
+begin
+    for table_spec in
+        select *
+          from (values
+              ('league_term_exchange_receipt_events_v1'::text, 'league'::text),
+              ('world_term_exchange_receipt_events_v1'::text, 'world'::text)
+          ) as allowed_tables(history_table, label)
+    loop
+        history_oid := to_regclass('public.' || table_spec.history_table);
+        select c.relkind::text, c.relpersistence::text, c.relispartition
+          into relation_kind, relation_persistence, relation_is_partition
+          from pg_catalog.pg_class c
+         where c.oid = history_oid;
+        if relation_kind is distinct from 'r'
+           or relation_persistence is distinct from 'p'
+           or relation_is_partition then
+            raise exception
+                'normalized % receipt history relation is not a permanent ordinary table',
+                table_spec.label;
+        end if;
+        select count(*)::integer
+          into actual_column_count
+          from pg_catalog.pg_attribute a
+         where a.attrelid = history_oid
+           and a.attnum > 0
+           and not a.attisdropped;
+        if actual_column_count <> expected_columns then
+            raise exception
+                'normalized % receipt history column shape is not canonical (expected %, found %)',
+                table_spec.label, expected_columns, actual_column_count;
+        end if;
 
-create index if not exists idx_world_term_exchange_receipt_events_latest_v1
-    on public.world_term_exchange_receipt_events_v1(receipt_id, event_sequence desc, event_id desc);
-create index if not exists idx_world_term_exchange_receipt_events_finalized_v1
-    on public.world_term_exchange_receipt_events_v1(finalized_at desc, event_id desc);
-create index if not exists idx_world_term_exchange_receipt_events_intent_v1
-    on public.world_term_exchange_receipt_events_v1(intent_id, finalized_at desc, event_id desc);
-create unique index if not exists uq_world_term_exchange_receipt_events_initial_intent_v1
-    on public.world_term_exchange_receipt_events_v1(intent_id)
-    where event_sequence = 1;
+        for column_spec in
+            select *
+              from (values
+                  ('event_id'::text, 'int8'::regtype, 'event'::text),
+                  ('receipt_id'::text, 'text'::regtype, 'none'::text),
+                  ('event_sequence'::text, 'int8'::regtype, 'none'::text),
+                  ('event_kind'::text, 'text'::regtype, 'initial'::text),
+                  ('previous_receipt_hash'::text, 'text'::regtype, 'none'::text),
+                  ('protocol_version'::text, 'text'::regtype, 'none'::text),
+                  ('intent_id'::text, 'text'::regtype, 'none'::text),
+                  ('term_id'::text, 'text'::regtype, 'none'::text),
+                  ('backend_id'::text, 'text'::regtype, 'none'::text),
+                  ('backend_kind'::text, 'text'::regtype, 'none'::text),
+                  ('status'::text, 'text'::regtype, 'none'::text),
+                  ('progression_class'::text, 'text'::regtype, 'none'::text),
+                  ('settlement_reference'::text, 'text'::regtype, 'none'::text),
+                  ('ledger_entry_id'::text, 'text'::regtype, 'none'::text),
+                  ('reason'::text, 'text'::regtype, 'none'::text),
+                  ('amount_credits'::text, 'int8'::regtype, 'none'::text),
+                  ('finalized_at'::text, 'timestamptz'::regtype, 'none'::text),
+                  ('receipt_json'::text, 'jsonb'::regtype, 'none'::text),
+                  ('receipt_hash'::text, 'text'::regtype, 'none'::text),
+                  ('created_at'::text, 'timestamptz'::regtype, 'now'::text)
+              ) as expected(column_name, expected_type, default_kind)
+        loop
+            select a.atttypid,
+                   a.attidentity::text,
+                   a.attgenerated::text,
+                   coalesce(pg_get_expr(ad.adbin, ad.adrelid), ''),
+                   ad.oid
+              into column_type, column_identity, column_generated,
+                   column_default, column_default_oid
+              from pg_catalog.pg_attribute a
+              left join pg_catalog.pg_attrdef ad
+                on ad.adrelid = a.attrelid
+               and ad.adnum = a.attnum
+             where a.attrelid = history_oid
+               and a.attname = column_spec.column_name
+               and not a.attisdropped;
+            if not found then
+                raise exception
+                    'normalized % receipt history required column is missing: %',
+                    table_spec.label, column_spec.column_name;
+            end if;
+            if column_type <> column_spec.expected_type then
+                raise exception
+                    'normalized % receipt history column % has incompatible type',
+                    table_spec.label, column_spec.column_name;
+            end if;
+            if coalesce(column_generated, '') <> '' then
+                raise exception
+                    'normalized % receipt history column % must not be generated',
+                    table_spec.label, column_spec.column_name;
+            end if;
+            normalized_default := regexp_replace(
+                lower(coalesce(column_default, '')), '[[:space:]]+', '', 'g'
+            );
+            case column_spec.default_kind
+                when 'event' then
+                    if column_identity not in ('', 'd') then
+                        raise exception
+                            'normalized % receipt history event_id identity mode is not generated-by-default',
+                            table_spec.label;
+                    end if;
+                    if column_identity = ''
+                       and (column_default_oid is null
+                            or normalized_default !~ '^nextval\(.+\)$') then
+                        raise exception
+                            'normalized % receipt history event_id has no identity or sequence default',
+                            table_spec.label;
+                    end if;
+                when 'initial' then
+                    if column_identity <> '' then
+                        raise exception
+                            'normalized % receipt history event_kind must not be an identity column',
+                            table_spec.label;
+                    end if;
+                    if column_default_oid is null then
+                        execute format(
+                            'alter table public.%I alter column event_kind set default ''initial''',
+                            table_spec.history_table
+                        );
+                    elsif normalized_default !~ '^''initial''(::text)?$' then
+                        raise exception
+                            'normalized % receipt history event_kind default is not canonical',
+                            table_spec.label;
+                    end if;
+                when 'now' then
+                    if column_identity <> '' then
+                        raise exception
+                            'normalized % receipt history created_at must not be an identity column',
+                            table_spec.label;
+                    end if;
+                    if column_default_oid is null then
+                        execute format(
+                            'alter table public.%I alter column created_at set default now()',
+                            table_spec.history_table
+                        );
+                    elsif normalized_default !~ '^(now\(\)|current_timestamp)(::timestampwithtimezone)?$' then
+                        raise exception
+                            'normalized % receipt history created_at default is not canonical',
+                            table_spec.label;
+                    end if;
+                when 'none' then
+                    if column_identity <> '' or column_default_oid is not null then
+                        raise exception
+                            'normalized % receipt history column % has an unexpected generated/default expression',
+                            table_spec.label, column_spec.column_name;
+                    end if;
+                else
+                    raise exception
+                        'normalized % receipt history catalog preflight has an unknown default kind',
+                        table_spec.label;
+            end case;
+        end loop;
+    end loop;
+end
+$history_catalog_type_preflight$;
+
+-- Performance indexes are not authority by themselves, but their canonical
+-- names are part of the published schema.  `CREATE INDEX IF NOT EXISTS` only
+-- compares a schema-scoped relation name; a same-named index on another table,
+-- a non-index relation, or an invalid/wrongly-ordered index would otherwise
+-- produce a silent success while leaving the history catalog incomplete.
+do $history_performance_index_guard$
+declare
+    index_spec record;
+    history_oid oid;
+    index_oid oid;
+    index_is_canonical boolean;
+    expected_attnums smallint[];
+    expected_opclasses oid[];
+    expected_collations oid[];
+    expected_column_count integer;
+    matched_column_count integer;
+begin
+    for index_spec in
+        select *
+          from (values
+              (
+                  'league_term_exchange_receipt_events_v1'::text,
+                  'league'::text,
+                  'idx_league_term_exchange_receipt_events_latest_v1'::text,
+                  array['receipt_id', 'event_sequence', 'event_id']::text[],
+                  array[0, 3, 3]::smallint[],
+                  'receipt_id, event_sequence desc, event_id desc'::text
+              ),
+              (
+                  'league_term_exchange_receipt_events_v1'::text,
+                  'league'::text,
+                  'idx_league_term_exchange_receipt_events_finalized_v1'::text,
+                  array['finalized_at', 'event_id']::text[],
+                  array[3, 3]::smallint[],
+                  'finalized_at desc, event_id desc'::text
+              ),
+              (
+                  'league_term_exchange_receipt_events_v1'::text,
+                  'league'::text,
+                  'idx_league_term_exchange_receipt_events_intent_v1'::text,
+                  array['intent_id', 'finalized_at', 'event_id']::text[],
+                  array[0, 3, 3]::smallint[],
+                  'intent_id, finalized_at desc, event_id desc'::text
+              ),
+              (
+                  'world_term_exchange_receipt_events_v1'::text,
+                  'world'::text,
+                  'idx_world_term_exchange_receipt_events_latest_v1'::text,
+                  array['receipt_id', 'event_sequence', 'event_id']::text[],
+                  array[0, 3, 3]::smallint[],
+                  'receipt_id, event_sequence desc, event_id desc'::text
+              ),
+              (
+                  'world_term_exchange_receipt_events_v1'::text,
+                  'world'::text,
+                  'idx_world_term_exchange_receipt_events_finalized_v1'::text,
+                  array['finalized_at', 'event_id']::text[],
+                  array[3, 3]::smallint[],
+                  'finalized_at desc, event_id desc'::text
+              ),
+              (
+                  'world_term_exchange_receipt_events_v1'::text,
+                  'world'::text,
+                  'idx_world_term_exchange_receipt_events_intent_v1'::text,
+                  array['intent_id', 'finalized_at', 'event_id']::text[],
+                  array[0, 3, 3]::smallint[],
+                  'intent_id, finalized_at desc, event_id desc'::text
+              )
+          ) as allowed_indexes(
+              history_table, label, index_name, index_columns, index_options, index_sql
+          )
+    loop
+        history_oid := to_regclass('public.' || index_spec.history_table);
+        if history_oid is null then
+            raise exception
+                'normalized % receipt history table is missing for performance index',
+                index_spec.label;
+        end if;
+
+        expected_column_count := cardinality(index_spec.index_columns);
+        select array_agg(a.attnum order by column_spec.ordinality)::smallint[],
+               array_agg(opc.oid order by column_spec.ordinality)::oid[],
+               array_agg(a.attcollation order by column_spec.ordinality)::oid[],
+               count(a.attnum)::integer
+          into expected_attnums, expected_opclasses, expected_collations,
+               matched_column_count
+          from unnest(index_spec.index_columns) with ordinality as column_spec(column_name, ordinality)
+          left join pg_catalog.pg_attribute a
+            on a.attrelid = history_oid
+           and a.attname = column_spec.column_name
+           and not a.attisdropped
+          join pg_catalog.pg_opclass opc
+            on opc.opcintype = a.atttypid
+           and opc.opcdefault
+           and opc.opcnamespace = 'pg_catalog'::regnamespace
+          join pg_catalog.pg_am am_expected
+            on am_expected.oid = opc.opcmethod
+           and am_expected.amname = 'btree';
+        if matched_column_count <> expected_column_count then
+            raise exception
+                'normalized % receipt history is missing a performance-index column',
+                index_spec.label;
+        end if;
+        if expected_opclasses is null or expected_collations is null then
+            raise exception
+                'normalized % receipt history performance-index operator class/collation is unavailable',
+                index_spec.label;
+        end if;
+
+        -- Look up any relation kind.  A table/view/sequence with the canonical
+        -- name must be a hard conflict rather than an object to ignore.
+        select c.oid
+          into index_oid
+          from pg_catalog.pg_class c
+          join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+         where n.nspname = 'public'
+           and c.relname = index_spec.index_name;
+        if index_oid is not null then
+            select exists (
+                select 1
+                  from pg_catalog.pg_class c
+                  join pg_catalog.pg_index i on i.indexrelid = c.oid
+                  join pg_catalog.pg_am am on am.oid = c.relam
+                 where c.oid = index_oid
+                   and c.relkind = 'i'
+                   and c.relpersistence = 'p'
+                   and not c.relispartition
+                   and c.relowner = (
+                       select target.relowner
+                         from pg_catalog.pg_class target
+                        where target.oid = history_oid
+                   )
+                   and am.amname = 'btree'
+                   and i.indrelid = history_oid
+                   and not i.indisunique
+                   and not i.indisprimary
+                   and not i.indisexclusion
+                   and i.indisvalid
+                   and i.indisready
+                   and i.indislive
+                   and i.indimmediate
+                   and i.indpred is null
+                   and i.indexprs is null
+                   and i.indnkeyatts = expected_column_count
+                   and i.indnatts = expected_column_count
+                   and (
+                       select array_agg(key_part.attnum::smallint order by key_part.ordinality)
+                         from unnest(i.indkey) with ordinality as key_part(attnum, ordinality)
+                   ) = expected_attnums
+                   and (
+                       select array_agg(option_part.option_value::smallint order by option_part.ordinality)
+                         from unnest(i.indoption) with ordinality as option_part(option_value, ordinality)
+                   ) = index_spec.index_options
+                   and (
+                       select array_agg(opclass_part.opclass_oid order by opclass_part.ordinality)
+                         from unnest(i.indclass::oid[]) with ordinality
+                              as opclass_part(opclass_oid, ordinality)
+                   ) = expected_opclasses
+                   and (
+                       select array_agg(collation_part.collation_oid order by collation_part.ordinality)
+                         from unnest(i.indcollation::oid[]) with ordinality
+                              as collation_part(collation_oid, ordinality)
+                   ) = expected_collations
+            ) into index_is_canonical;
+            if index_is_canonical is distinct from true then
+                raise exception
+                    'normalized % receipt history has an incompatible performance index %',
+                    index_spec.label, index_spec.index_name;
+            end if;
+        else
+            execute format(
+                'create index %I on public.%I (%s)',
+                index_spec.index_name,
+                index_spec.history_table,
+                index_spec.index_sql
+            );
+        end if;
+    end loop;
+end
+$history_performance_index_guard$;
+
+-- The initial-intent indexes are installed by the catalog-aware
+-- `history_constraint_guard` below.  Keeping a raw CREATE INDEX IF NOT EXISTS
+-- here would let a same-named object on another relation (or a wrong predicate)
+-- be silently accepted before that guard gets a chance to inspect it.
 
 -- A partially-applied rollout may already contain history rows.  Do not
 -- silently preserve a forked intent under two receipt ids: abort the upgrade
@@ -1205,6 +1693,191 @@ begin
 end
 $history_notnull_guard$;
 
+-- The row validator and NOT NULL promotion above establish value safety, but
+-- they do not prove that a same-named column has the published catalog shape.
+-- `CREATE TABLE IF NOT EXISTS` leaves wrong types, generated columns, and
+-- defaults untouched.  Audit every column before installing the append trigger;
+-- repair only the omitted defaults used by runtime INSERT paths, and reject a
+-- present-but-different expression or any extra column.
+do $history_catalog_shape_guard$
+declare
+    table_spec record;
+    history_oid oid;
+    relation_kind text;
+    relation_persistence text;
+    relation_is_partition boolean;
+    actual_column_count integer;
+    column_spec record;
+    column_type oid;
+    column_notnull boolean;
+    column_identity text;
+    column_generated text;
+    column_default text;
+    column_default_oid oid;
+    normalized_default text;
+    expected_columns constant integer := 20;
+begin
+    for table_spec in
+        select *
+          from (values
+              ('league_term_exchange_receipt_events_v1'::text, 'league'::text),
+              ('world_term_exchange_receipt_events_v1'::text, 'world'::text)
+          ) as allowed_tables(history_table, label)
+    loop
+        history_oid := to_regclass('public.' || table_spec.history_table);
+        select c.relkind::text, c.relpersistence::text, c.relispartition
+          into relation_kind, relation_persistence, relation_is_partition
+          from pg_catalog.pg_class c
+         where c.oid = history_oid;
+        if relation_kind is distinct from 'r'
+           or relation_persistence is distinct from 'p'
+           or relation_is_partition then
+            raise exception
+                'normalized % receipt history relation is not a permanent ordinary table',
+                table_spec.label;
+        end if;
+
+        select count(*)::integer
+          into actual_column_count
+          from pg_catalog.pg_attribute a
+         where a.attrelid = history_oid
+           and a.attnum > 0
+           and not a.attisdropped;
+        if actual_column_count <> expected_columns then
+            raise exception
+                'normalized % receipt history column shape is not canonical (expected %, found %)',
+                table_spec.label, expected_columns, actual_column_count;
+        end if;
+
+        for column_spec in
+            select *
+              from (values
+                  ('event_id'::text, 'int8'::regtype, true, 'event'::text),
+                  ('receipt_id'::text, 'text'::regtype, true, 'none'::text),
+                  ('event_sequence'::text, 'int8'::regtype, true, 'none'::text),
+                  ('event_kind'::text, 'text'::regtype, true, 'initial'::text),
+                  ('previous_receipt_hash'::text, 'text'::regtype, false, 'none'::text),
+                  ('protocol_version'::text, 'text'::regtype, true, 'none'::text),
+                  ('intent_id'::text, 'text'::regtype, true, 'none'::text),
+                  ('term_id'::text, 'text'::regtype, true, 'none'::text),
+                  ('backend_id'::text, 'text'::regtype, true, 'none'::text),
+                  ('backend_kind'::text, 'text'::regtype, true, 'none'::text),
+                  ('status'::text, 'text'::regtype, true, 'none'::text),
+                  ('progression_class'::text, 'text'::regtype, true, 'none'::text),
+                  ('settlement_reference'::text, 'text'::regtype, false, 'none'::text),
+                  ('ledger_entry_id'::text, 'text'::regtype, false, 'none'::text),
+                  ('reason'::text, 'text'::regtype, false, 'none'::text),
+                  ('amount_credits'::text, 'int8'::regtype, false, 'none'::text),
+                  ('finalized_at'::text, 'timestamptz'::regtype, true, 'none'::text),
+                  ('receipt_json'::text, 'jsonb'::regtype, true, 'none'::text),
+                  ('receipt_hash'::text, 'text'::regtype, true, 'none'::text),
+                  ('created_at'::text, 'timestamptz'::regtype, true, 'now'::text)
+              ) as expected(column_name, expected_type, expected_notnull, default_kind)
+        loop
+            select a.atttypid,
+                   a.attnotnull,
+                   a.attidentity::text,
+                   a.attgenerated::text,
+                   coalesce(pg_get_expr(ad.adbin, ad.adrelid), ''),
+                   ad.oid
+              into column_type, column_notnull, column_identity,
+                   column_generated, column_default, column_default_oid
+              from pg_catalog.pg_attribute a
+              left join pg_catalog.pg_attrdef ad
+                on ad.adrelid = a.attrelid
+               and ad.adnum = a.attnum
+             where a.attrelid = history_oid
+               and a.attname = column_spec.column_name
+               and not a.attisdropped;
+            if not found then
+                raise exception
+                    'normalized % receipt history required column is missing: %',
+                    table_spec.label, column_spec.column_name;
+            end if;
+            if column_type <> column_spec.expected_type then
+                raise exception
+                    'normalized % receipt history column % has incompatible type',
+                    table_spec.label, column_spec.column_name;
+            end if;
+            if column_notnull is distinct from column_spec.expected_notnull then
+                raise exception
+                    'normalized % receipt history column % has incompatible nullability',
+                    table_spec.label, column_spec.column_name;
+            end if;
+            if coalesce(column_generated, '') <> '' then
+                raise exception
+                    'normalized % receipt history column % must not be generated',
+                    table_spec.label, column_spec.column_name;
+            end if;
+
+            normalized_default := regexp_replace(
+                lower(coalesce(column_default, '')), '[[:space:]]+', '', 'g'
+            );
+            case column_spec.default_kind
+                when 'event' then
+                    -- Plain bigint/serial defaults remain supported for
+                    -- interrupted deployments; the schema guard has already
+                    -- proved ownership and sequence safety.
+                    if column_identity not in ('', 'd') then
+                        raise exception
+                            'normalized % receipt history event_id identity mode is not generated-by-default',
+                            table_spec.label;
+                    end if;
+                    if column_identity = ''
+                       and (column_default_oid is null
+                            or normalized_default !~ '^nextval\(.+\)$') then
+                        raise exception
+                            'normalized % receipt history event_id has no identity or sequence default',
+                            table_spec.label;
+                    end if;
+                when 'initial' then
+                    if column_identity <> '' then
+                        raise exception
+                            'normalized % receipt history event_kind must not be an identity column',
+                            table_spec.label;
+                    end if;
+                    if column_default_oid is null then
+                        execute format(
+                            'alter table public.%I alter column event_kind set default ''initial''',
+                            table_spec.history_table
+                        );
+                    elsif normalized_default !~ '^''initial''(::text)?$' then
+                        raise exception
+                            'normalized % receipt history event_kind default is not canonical',
+                            table_spec.label;
+                    end if;
+                when 'now' then
+                    if column_identity <> '' then
+                        raise exception
+                            'normalized % receipt history created_at must not be an identity column',
+                            table_spec.label;
+                    end if;
+                    if column_default_oid is null then
+                        execute format(
+                            'alter table public.%I alter column created_at set default now()',
+                            table_spec.history_table
+                        );
+                    elsif normalized_default !~ '^(now\(\)|current_timestamp)(::timestampwithtimezone)?$' then
+                        raise exception
+                            'normalized % receipt history created_at default is not canonical',
+                            table_spec.label;
+                    end if;
+                when 'none' then
+                    if column_identity <> '' or column_default_oid is not null then
+                        raise exception
+                            'normalized % receipt history column % has an unexpected generated/default expression',
+                            table_spec.label, column_spec.column_name;
+                    end if;
+                else
+                    raise exception
+                        'normalized % receipt history catalog guard has an unknown default kind',
+                        table_spec.label;
+            end case;
+        end loop;
+    end loop;
+end
+$history_catalog_shape_guard$;
+
 -- Add one independently-owned shape constraint for partial tables that were
 -- created without the canonical per-field checks.  The trigger below handles
 -- cross-table authority and JSON bindings; this constraint keeps direct SQL
@@ -1299,16 +1972,23 @@ declare
     has_event_primary boolean;
     has_any_primary boolean;
     has_sequence_unique boolean;
-    has_initial_intent_unique boolean;
     duplicate_event_id boolean;
     duplicate_sequence boolean;
     null_key boolean;
     event_index_name text;
     sequence_index_name text;
     index_relation oid;
+    canonical_event_unique boolean;
+    canonical_sequence_unique boolean;
     initial_index_name text;
     initial_index_relation oid;
     named_initial_intent_unique boolean;
+    event_key_opclasses oid[];
+    event_key_collations oid[];
+    sequence_key_opclasses oid[];
+    sequence_key_collations oid[];
+    initial_key_opclasses oid[];
+    initial_key_collations oid[];
 begin
     for table_spec in
         select *
@@ -1348,6 +2028,69 @@ begin
            or intent_type <> 'text'::regtype then
             raise exception
                 'normalized % receipt history identity columns have incompatible types',
+                table_spec.label;
+        end if;
+
+        -- The key audit must require PostgreSQL's default btree operator class
+        -- and each column's declared collation.  Attribute numbers alone let a
+        -- text_pattern_ops or explicitly-C-collated index masquerade as the
+        -- canonical identity key.
+        select array_agg(opc.oid order by key_part.ordinality),
+               array_agg(a.attcollation order by key_part.ordinality)
+          into event_key_opclasses, event_key_collations
+          from unnest(array[event_attnum]::smallint[]) with ordinality
+               as key_part(attnum, ordinality)
+          join pg_catalog.pg_attribute a
+            on a.attrelid = history_oid
+           and a.attnum = key_part.attnum
+           and not a.attisdropped
+          join pg_catalog.pg_opclass opc
+            on opc.opcintype = a.atttypid
+           and opc.opcdefault
+           and opc.opcnamespace = 'pg_catalog'::regnamespace
+          join pg_catalog.pg_am am
+            on am.oid = opc.opcmethod
+           and am.amname = 'btree';
+        select array_agg(opc.oid order by key_part.ordinality),
+               array_agg(a.attcollation order by key_part.ordinality)
+          into sequence_key_opclasses, sequence_key_collations
+          from unnest(array[receipt_attnum, sequence_attnum]::smallint[]) with ordinality
+               as key_part(attnum, ordinality)
+          join pg_catalog.pg_attribute a
+            on a.attrelid = history_oid
+           and a.attnum = key_part.attnum
+           and not a.attisdropped
+          join pg_catalog.pg_opclass opc
+            on opc.opcintype = a.atttypid
+           and opc.opcdefault
+           and opc.opcnamespace = 'pg_catalog'::regnamespace
+          join pg_catalog.pg_am am
+            on am.oid = opc.opcmethod
+           and am.amname = 'btree';
+        select array_agg(opc.oid order by key_part.ordinality),
+               array_agg(a.attcollation order by key_part.ordinality)
+          into initial_key_opclasses, initial_key_collations
+          from unnest(array[intent_attnum]::smallint[]) with ordinality
+               as key_part(attnum, ordinality)
+          join pg_catalog.pg_attribute a
+            on a.attrelid = history_oid
+           and a.attnum = key_part.attnum
+           and not a.attisdropped
+          join pg_catalog.pg_opclass opc
+            on opc.opcintype = a.atttypid
+           and opc.opcdefault
+           and opc.opcnamespace = 'pg_catalog'::regnamespace
+          join pg_catalog.pg_am am
+            on am.oid = opc.opcmethod
+           and am.amname = 'btree';
+        if event_key_opclasses is null
+           or event_key_collations is null
+           or sequence_key_opclasses is null
+           or sequence_key_collations is null
+           or initial_key_opclasses is null
+           or initial_key_collations is null then
+            raise exception
+                'normalized % receipt history identity key operator class/collation is unavailable',
                 table_spec.label;
         end if;
 
@@ -1447,15 +2190,39 @@ begin
 
         select exists (
             select 1
-             from pg_catalog.pg_index i
-             where i.indrelid = history_oid
+             from pg_catalog.pg_class index_class
+             join pg_catalog.pg_index i on i.indexrelid = index_class.oid
+             join pg_catalog.pg_am am on am.oid = index_class.relam
+             where index_class.relkind = 'i'
+               and index_class.relpersistence = 'p'
+               and not index_class.relispartition
+               and index_class.relowner = (
+                   select target.relowner
+                     from pg_catalog.pg_class target
+                    where target.oid = history_oid
+               )
+               and am.amname = 'btree'
+               and i.indrelid = history_oid
                and i.indisunique
                and i.indisvalid
                and i.indisready
+               and i.indislive
                and i.indimmediate
                and i.indpred is null
+               and i.indexprs is null
                and i.indnkeyatts = 1
+               and i.indnatts = 1
                and i.indkey[0] = event_attnum
+               and (
+                   select array_agg(key_part.opclass_oid order by key_part.ordinality)
+                     from unnest(i.indclass::oid[]) with ordinality
+                          as key_part(opclass_oid, ordinality)
+               ) = event_key_opclasses
+               and (
+                   select array_agg(key_part.collation_oid order by key_part.ordinality)
+                     from unnest(i.indcollation::oid[]) with ordinality
+                          as key_part(collation_oid, ordinality)
+               ) = event_key_collations
         ) into has_event_unique;
         select exists (
             select 1
@@ -1470,19 +2237,61 @@ begin
              where c.conrelid = history_oid
                and c.contype = 'p'
         ) into has_any_primary;
-        if not has_event_unique then
-            event_index_name := 'uq_' || table_spec.history_table || '_event_id_v1';
-            select c.oid
-              into index_relation
-              from pg_catalog.pg_class c
-              join pg_catalog.pg_namespace n on n.oid = c.relnamespace
-             where n.nspname = 'public'
-               and c.relname = event_index_name;
-            if index_relation is not null then
+        -- Inspect the canonical fallback name independently of the functional
+        -- `has_event_unique` result.  A valid alternate unique index must not
+        -- hide a same-named table, wrong-table index, INCLUDE index, or
+        -- non-default text operator class left by a partial rollout.
+        event_index_name := 'uq_' || table_spec.history_table || '_event_id_v1';
+        select c.oid
+          into index_relation
+          from pg_catalog.pg_class c
+          join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+         where n.nspname = 'public'
+           and c.relname = event_index_name;
+        if index_relation is not null then
+            select exists (
+                select 1
+                  from pg_catalog.pg_class index_class
+                  join pg_catalog.pg_index i on i.indexrelid = index_class.oid
+                  join pg_catalog.pg_am am on am.oid = index_class.relam
+                 where index_class.oid = index_relation
+                   and index_class.relkind = 'i'
+                   and index_class.relpersistence = 'p'
+                   and not index_class.relispartition
+                   and index_class.relowner = (
+                       select target.relowner
+                         from pg_catalog.pg_class target
+                        where target.oid = history_oid
+                   )
+                   and am.amname = 'btree'
+                   and i.indrelid = history_oid
+                   and i.indisunique
+                   and i.indisvalid
+                   and i.indisready
+                   and i.indislive
+                   and i.indimmediate
+                   and i.indpred is null
+                   and i.indexprs is null
+                   and i.indnkeyatts = 1
+                   and i.indnatts = 1
+                   and i.indkey[0] = event_attnum
+                   and (
+                       select array_agg(key_part.opclass_oid order by key_part.ordinality)
+                         from unnest(i.indclass::oid[]) with ordinality
+                              as key_part(opclass_oid, ordinality)
+                   ) = event_key_opclasses
+                   and (
+                       select array_agg(key_part.collation_oid order by key_part.ordinality)
+                         from unnest(i.indcollation::oid[]) with ordinality
+                              as key_part(collation_oid, ordinality)
+                   ) = event_key_collations
+            ) into canonical_event_unique;
+            if canonical_event_unique is distinct from true then
                 raise exception
                     'normalized % receipt history has an incompatible event_id key',
                     table_spec.label;
             end if;
+        elsif not has_event_unique then
             if not has_event_primary and not has_any_primary then
                 execute format(
                     'alter table public.%I add constraint %I primary key (event_id)',
@@ -1499,30 +2308,97 @@ begin
 
         select exists (
             select 1
-             from pg_catalog.pg_index i
-             where i.indrelid = history_oid
+             from pg_catalog.pg_class index_class
+             join pg_catalog.pg_index i on i.indexrelid = index_class.oid
+             join pg_catalog.pg_am am on am.oid = index_class.relam
+             where index_class.relkind = 'i'
+               and index_class.relpersistence = 'p'
+               and not index_class.relispartition
+               and index_class.relowner = (
+                   select target.relowner
+                     from pg_catalog.pg_class target
+                    where target.oid = history_oid
+               )
+               and am.amname = 'btree'
+               and i.indrelid = history_oid
                and i.indisunique
                and i.indisvalid
                and i.indisready
+               and i.indislive
                and i.indimmediate
                and i.indpred is null
+               and i.indexprs is null
                and i.indnkeyatts = 2
+               and i.indnatts = 2
                and i.indkey[0] = receipt_attnum
                and i.indkey[1] = sequence_attnum
+               and (
+                   select array_agg(key_part.opclass_oid order by key_part.ordinality)
+                     from unnest(i.indclass::oid[]) with ordinality
+                          as key_part(opclass_oid, ordinality)
+               ) = sequence_key_opclasses
+               and (
+                   select array_agg(key_part.collation_oid order by key_part.ordinality)
+                     from unnest(i.indcollation::oid[]) with ordinality
+                          as key_part(collation_oid, ordinality)
+               ) = sequence_key_collations
         ) into has_sequence_unique;
-        if not has_sequence_unique then
-            sequence_index_name := 'uq_' || table_spec.history_table || '_receipt_sequence_v1';
-            select c.oid
-              into index_relation
-              from pg_catalog.pg_class c
-              join pg_catalog.pg_namespace n on n.oid = c.relnamespace
-             where n.nspname = 'public'
-               and c.relname = sequence_index_name;
-            if index_relation is not null then
+        -- Apply the same unconditional canonical-name audit to the
+        -- (receipt_id,event_sequence) fallback key.  Otherwise an alternate
+        -- valid pair index could mask a decoy relation or malformed canonical
+        -- index and let retries report success with catalog drift.
+        sequence_index_name := 'uq_' || table_spec.history_table || '_receipt_sequence_v1';
+        select c.oid
+          into index_relation
+          from pg_catalog.pg_class c
+          join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+         where n.nspname = 'public'
+           and c.relname = sequence_index_name;
+        if index_relation is not null then
+            select exists (
+                select 1
+                  from pg_catalog.pg_class index_class
+                  join pg_catalog.pg_index i on i.indexrelid = index_class.oid
+                  join pg_catalog.pg_am am on am.oid = index_class.relam
+                 where index_class.oid = index_relation
+                   and index_class.relkind = 'i'
+                   and index_class.relpersistence = 'p'
+                   and not index_class.relispartition
+                   and index_class.relowner = (
+                       select target.relowner
+                         from pg_catalog.pg_class target
+                        where target.oid = history_oid
+                   )
+                   and am.amname = 'btree'
+                   and i.indrelid = history_oid
+                   and i.indisunique
+                   and i.indisvalid
+                   and i.indisready
+                   and i.indislive
+                   and i.indimmediate
+                   and i.indpred is null
+                   and i.indexprs is null
+                   and i.indnkeyatts = 2
+                   and i.indnatts = 2
+                   and i.indkey[0] = receipt_attnum
+                   and i.indkey[1] = sequence_attnum
+                   and (
+                       select array_agg(key_part.opclass_oid order by key_part.ordinality)
+                         from unnest(i.indclass::oid[]) with ordinality
+                              as key_part(opclass_oid, ordinality)
+                   ) = sequence_key_opclasses
+                   and (
+                       select array_agg(key_part.collation_oid order by key_part.ordinality)
+                         from unnest(i.indcollation::oid[]) with ordinality
+                              as key_part(collation_oid, ordinality)
+                   ) = sequence_key_collations
+            ) into canonical_sequence_unique;
+            if canonical_sequence_unique is distinct from true then
                 raise exception
                     'normalized % receipt history has an incompatible receipt sequence key',
                     table_spec.label;
             end if;
+        elsif not has_sequence_unique then
             execute format(
                 'create unique index %I on public.%I (receipt_id, event_sequence)',
                 sequence_index_name, table_spec.history_table
@@ -1537,7 +2413,18 @@ begin
         -- suitable index.  `CREATE UNIQUE INDEX IF NOT EXISTS` otherwise lets
         -- a same-named but broader predicate (for example `event_sequence = 1
         -- OR true`) survive and silently weakens the first-event invariant.
-        initial_index_name := 'uq_' || table_spec.history_table || '_initial_intent_v1';
+        -- Keep this name in lockstep with the canonical DDL above.  The table
+        -- relations carry a trailing `_v1`, while the canonical index name
+        -- places `_v1` only at the suffix; deriving it by concatenating the
+        -- full relation name would therefore validate a different object.
+        initial_index_name := case table_spec.label
+            when 'league' then 'uq_league_term_exchange_receipt_events_initial_intent_v1'
+            when 'world' then 'uq_world_term_exchange_receipt_events_initial_intent_v1'
+            else null
+        end;
+        -- Inspect every relation kind here, not only indexes.  A same-named
+        -- table/view makes `CREATE INDEX IF NOT EXISTS` skip; filtering it out
+        -- would let an alternate valid key hide the missing canonical object.
         select c.oid
           into initial_index_relation
           from pg_catalog.pg_class c
@@ -1547,15 +2434,40 @@ begin
         if initial_index_relation is not null then
             select exists (
                 select 1
-                  from pg_catalog.pg_index i
+                  from pg_catalog.pg_class index_class
+                  join pg_catalog.pg_index i on i.indexrelid = index_class.oid
+                  join pg_catalog.pg_am am on am.oid = index_class.relam
                  where i.indexrelid = initial_index_relation
+                   and index_class.relkind = 'i'
+                   and index_class.relpersistence = 'p'
+                   and not index_class.relispartition
+                   and index_class.relowner = (
+                       select target.relowner
+                         from pg_catalog.pg_class target
+                        where target.oid = history_oid
+                   )
+                   and am.amname = 'btree'
+                   and i.indrelid = history_oid
                    and i.indisunique
                    and i.indisvalid
                    and i.indisready
+                   and i.indislive
                    and i.indimmediate
                    and i.indpred is not null
+                   and i.indexprs is null
                    and i.indnkeyatts = 1
+                   and i.indnatts = 1
                    and i.indkey[0] = intent_attnum
+                   and (
+                       select array_agg(key_part.opclass_oid order by key_part.ordinality)
+                         from unnest(i.indclass::oid[]) with ordinality
+                              as key_part(opclass_oid, ordinality)
+                   ) = initial_key_opclasses
+                   and (
+                       select array_agg(key_part.collation_oid order by key_part.ordinality)
+                         from unnest(i.indcollation::oid[]) with ordinality
+                              as key_part(collation_oid, ordinality)
+                   ) = initial_key_collations
                    and regexp_replace(
                        lower(coalesce(pg_get_expr(i.indpred, i.indrelid), '')),
                        '[[:space:]]+', '', 'g'
@@ -1568,23 +2480,11 @@ begin
             end if;
         end if;
 
-        select exists (
-            select 1
-             from pg_catalog.pg_index i
-             where i.indrelid = history_oid
-               and i.indisunique
-               and i.indisvalid
-               and i.indisready
-               and i.indimmediate
-               and i.indpred is not null
-               and i.indnkeyatts = 1
-               and i.indkey[0] = intent_attnum
-               and regexp_replace(
-                   lower(coalesce(pg_get_expr(i.indpred, i.indrelid), '')),
-                   '[[:space:]]+', '', 'g'
-               ) = '(event_sequence=1)'
-        ) into has_initial_intent_unique;
-        if not has_initial_intent_unique then
+        -- The canonical name is part of the published schema.  Even when a
+        -- differently-named partial unique index already proves the functional
+        -- invariant, install the canonical object as well so a successful
+        -- retry cannot leave catalog/name drift hidden behind an alternate.
+        if initial_index_relation is null then
             execute format(
                 'create unique index %I on public.%I (intent_id) where event_sequence = 1',
                 initial_index_name,

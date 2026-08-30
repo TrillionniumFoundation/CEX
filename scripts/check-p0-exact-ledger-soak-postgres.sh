@@ -7,7 +7,9 @@ source "$root/scripts/_dev-helpers.sh"
 cex_load_env
 cex_sync_postgres_env_from_database_url "$DATABASE_URL"
 evidence_dir="${CEX_P0_EVIDENCE_DIR:-$root/run/p0-release-evidence}"
-iterations="${CEX_P0_SOAK_ITERATIONS:-100}"
+# The standalone producer must satisfy the strict release-evidence contract
+# even when the aggregate workflow does not inject an override.
+iterations="${CEX_P0_SOAK_ITERATIONS:-250}"
 
 if ! [[ "$iterations" =~ ^[1-9][0-9]*$ ]] || (( iterations > 5000 )); then
   echo "CEX_P0_SOAK_ITERATIONS must be an integer in 1..5000" >&2

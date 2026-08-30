@@ -639,6 +639,161 @@ create table public.world_term_exchange_receipt_events_v1 (
 SQL
 }
 
+echo "==> conflict: normalized amount column has a fractional numeric shape"
+new_case normalized_amount_type
+normalized_amount_type_db="$CASE_DB"
+run_db_stdin "$normalized_amount_type_db" <<'SQL'
+-- A same-named numeric column must not be accepted as exact credits.
+alter table public.league_term_exchange_receipts
+    add column amount_credits numeric;
+alter table public.world_term_exchange_receipts
+    add column amount_credits numeric;
+update public.league_term_exchange_receipts
+   set amount_credits = 1.5
+ where receipt_id = 'pu-league-known';
+update public.world_term_exchange_receipts
+   set amount_credits = 2.5
+ where receipt_id = 'pu-world-known';
+SQL
+expect_migration_failure "$normalized_amount_type_db" \
+  "normalized fractional amount column type" "$MIGRATION_85" \
+  'normalized league receipt amount_credits must be bigint'
+assert_db "$normalized_amount_type_db" <<'SQL'
+do $check$
+declare
+    league_type text;
+    world_type text;
+    league_amount numeric;
+    world_amount numeric;
+begin
+    select udt_name into league_type
+      from information_schema.columns
+     where table_schema = 'public'
+       and table_name = 'league_term_exchange_receipts'
+       and column_name = 'amount_credits';
+    select udt_name into world_type
+      from information_schema.columns
+     where table_schema = 'public'
+       and table_name = 'world_term_exchange_receipts'
+       and column_name = 'amount_credits';
+    select amount_credits into league_amount
+      from public.league_term_exchange_receipts
+     where receipt_id = 'pu-league-known';
+    select amount_credits into world_amount
+      from public.world_term_exchange_receipts
+     where receipt_id = 'pu-world-known';
+    if league_type is distinct from 'numeric'
+       or world_type is distinct from 'numeric'
+       or league_amount is distinct from 1.5
+       or world_amount is distinct from 2.5 then
+        raise exception 'fractional amount fixture changed during rollback';
+    end if;
+end
+$check$;
+SQL
+echo "    normalized fractional amount shape conflict passed"
+
+echo "==> conflict: normalized amount constraint has a weak predicate"
+new_case normalized_amount_constraint
+normalized_amount_constraint_db="$CASE_DB"
+run_db_stdin "$normalized_amount_constraint_db" <<'SQL'
+alter table public.league_term_exchange_receipts
+    add column amount_credits bigint;
+alter table public.world_term_exchange_receipts
+    add column amount_credits bigint;
+alter table public.league_term_exchange_receipts
+    add constraint league_term_exchange_receipts_amount_credits_nonnegative_v1
+    check (amount_credits >= -999999);
+alter table public.world_term_exchange_receipts
+    add constraint world_term_exchange_receipts_amount_credits_nonnegative_v1
+    check (amount_credits is null or amount_credits >= 0);
+SQL
+expect_migration_failure "$normalized_amount_constraint_db" \
+  "normalized weak amount constraint" "$MIGRATION_85" \
+  'normalized league receipt amount constraint is not canonical'
+assert_db "$normalized_amount_constraint_db" <<'SQL'
+do $check$
+declare
+    league_expression text;
+    world_expression text;
+begin
+    select regexp_replace(
+               lower(coalesce(pg_get_expr(c.conbin, c.conrelid), '')),
+               '[[:space:]]+', '', 'g'
+           )
+      into league_expression
+      from pg_catalog.pg_constraint c
+     where c.conrelid = 'public.league_term_exchange_receipts'::regclass
+       and c.conname = 'league_term_exchange_receipts_amount_credits_nonnegative_v1';
+    select regexp_replace(
+               lower(coalesce(pg_get_expr(c.conbin, c.conrelid), '')),
+               '[[:space:]]+', '', 'g'
+           )
+      into world_expression
+      from pg_catalog.pg_constraint c
+     where c.conrelid = 'public.world_term_exchange_receipts'::regclass
+       and c.conname = 'world_term_exchange_receipts_amount_credits_nonnegative_v1';
+    if position('-999999' in coalesce(league_expression, '')) = 0
+       or world_expression is distinct from '((amount_creditsisnull)or(amount_credits>=0))' then
+        raise exception 'weak amount constraint changed during rollback';
+    end if;
+    if exists (
+        select 1
+          from pg_catalog.pg_trigger
+         where tgrelid in (
+             'public.league_term_exchange_receipts'::regclass,
+             'public.world_term_exchange_receipts'::regclass
+         )
+           and tgname like 'trg_cex_%term_exchange_receipt_%'
+    ) then
+        raise exception 'weak amount rejection installed projection triggers';
+    end if;
+end
+$check$;
+SQL
+echo "    normalized weak amount constraint conflict passed"
+
+echo "==> conflict: normalized amount column has generated/default drift"
+new_case normalized_amount_column_shape
+normalized_amount_column_shape_db="$CASE_DB"
+run_db_stdin "$normalized_amount_column_shape_db" <<'SQL'
+-- The 0085 contract is a nullable, plain bigint column with no default.  A
+-- same-named default/generated column must not be mistaken for that shape.
+alter table public.league_term_exchange_receipts
+    add column amount_credits bigint default 7;
+alter table public.world_term_exchange_receipts
+    add column amount_credits bigint generated always as (0) stored;
+SQL
+expect_migration_failure "$normalized_amount_column_shape_db" \
+  "normalized amount generated/default column shape" "$MIGRATION_85" \
+  'normalized league receipt amount_credits column has incompatible nullability/default/generated shape'
+assert_db "$normalized_amount_column_shape_db" <<'SQL'
+do $check$
+declare
+    league_default text;
+    world_generated text;
+begin
+    select column_default
+      into league_default
+      from information_schema.columns
+     where table_schema = 'public'
+       and table_name = 'league_term_exchange_receipts'
+       and column_name = 'amount_credits';
+    select a.attgenerated::text
+      into world_generated
+      from pg_catalog.pg_attribute a
+     where a.attrelid = 'public.world_term_exchange_receipts'::regclass
+       and a.attname = 'amount_credits';
+    if league_default is null
+       or position('7' in league_default) = 0
+       or world_generated is distinct from 's' then
+        raise exception 'normalized amount generated/default shape changed during rollback';
+    end if;
+end
+$check$;
+SQL
+echo "    normalized generated/default amount shape conflict passed"
+
 echo "==> happy partial upgrade (including an interrupted 0086 table)"
 new_case happy
 happy_db="$CASE_DB"
@@ -1950,6 +2105,368 @@ $check$;
 SQL
 echo "    native event_id shared-sequence conflict passed"
 
+echo "==> conflict: native initial receipt_id index belongs to another table"
+new_case native_initial_index_wrong_table
+native_initial_index_wrong_table_db="$CASE_DB"
+run_db_file "$native_initial_index_wrong_table_db" "$MIGRATION_85" >/dev/null
+run_db_stdin "$native_initial_index_wrong_table_db" <<'SQL'
+-- PostgreSQL index names are schema-scoped, not table-scoped.  A separately
+-- committed/hand-authored rollout can therefore occupy the canonical name on
+-- an unrelated table.  Match the native receipt_id attribute number and
+-- predicate exactly so a name-only catalog lookup would incorrectly accept it.
+create table public.pu_native_initial_index_decoy (
+    dummy_1 text,
+    dummy_2 text,
+    dummy_3 text,
+    dummy_4 text,
+    receipt_id text not null,
+    event_sequence bigint not null
+);
+create unique index idx_trnm_receipt_events_receipt_id_initial_v1
+    on public.pu_native_initial_index_decoy(receipt_id)
+    where event_sequence = 1;
+SQL
+expect_migration_failure "$native_initial_index_wrong_table_db" \
+  "native initial receipt_id index wrong-table ownership" "$MIGRATION_86" \
+  'TRNM native receipt initial receipt_id index is not canonical'
+assert_db "$native_initial_index_wrong_table_db" <<'SQL'
+do $check$
+begin
+    if to_regclass('public.trnm_economic_receipt_events_v1') is not null then
+        raise exception 'wrong-table index rejection left a native event table behind';
+    end if;
+    if not exists (
+        select 1
+          from pg_catalog.pg_class index_class
+          join pg_catalog.pg_namespace index_namespace
+            on index_namespace.oid = index_class.relnamespace
+          join pg_catalog.pg_index index_meta
+            on index_meta.indexrelid = index_class.oid
+         where index_namespace.nspname = 'public'
+           and index_class.relname = 'idx_trnm_receipt_events_receipt_id_initial_v1'
+           and index_meta.indrelid = 'public.pu_native_initial_index_decoy'::regclass
+           and index_meta.indisunique
+           and index_meta.indpred is not null
+    ) then
+        raise exception 'wrong-table index rejection changed or removed the decoy index';
+    end if;
+    if to_regclass('public.pu_native_initial_index_decoy') is null then
+        raise exception 'wrong-table index rejection removed the decoy table';
+    end if;
+end
+$check$;
+SQL
+echo "    native wrong-table initial index conflict passed"
+
+echo "==> conflict: native performance indexes belong to another table"
+new_case native_performance_index_wrong_table
+native_performance_index_wrong_table_db="$CASE_DB"
+run_db_file "$native_performance_index_wrong_table_db" "$MIGRATION_85" >/dev/null
+run_db_file "$native_performance_index_wrong_table_db" "$MIGRATION_86" >/dev/null
+run_db_stdin "$native_performance_index_wrong_table_db" <<'SQL'
+-- Re-run 0086 against a completed native table after moving both published
+-- performance names to an unrelated table.  The decoys use the exact key and
+-- order so only the index owner distinguishes them from the canonical objects.
+drop index public.idx_trnm_receipt_events_latest_v1;
+drop index public.idx_trnm_receipt_events_finalized_v1;
+create table public.pu_native_performance_index_decoy (
+    event_id bigint,
+    intent_id text,
+    event_sequence bigint,
+    finalized_at timestamptz
+);
+create index idx_trnm_receipt_events_latest_v1
+    on public.pu_native_performance_index_decoy(intent_id, event_sequence desc, event_id desc);
+create index idx_trnm_receipt_events_finalized_v1
+    on public.pu_native_performance_index_decoy(finalized_at desc, event_id desc);
+SQL
+expect_migration_failure "$native_performance_index_wrong_table_db" \
+  "native performance indexes wrong-table ownership" "$MIGRATION_86" \
+  'TRNM native receipt history has an incompatible performance index'
+assert_db "$native_performance_index_wrong_table_db" <<'SQL'
+do $check$
+begin
+    if to_regclass('public.trnm_economic_receipt_events_v1') is null
+       or to_regclass('public.pu_native_performance_index_decoy') is null then
+        raise exception 'native performance-index rejection removed fixture objects';
+    end if;
+    if exists (
+        select 1
+          from pg_catalog.pg_index
+         where indexrelid in (
+             'public.idx_trnm_receipt_events_latest_v1'::regclass,
+             'public.idx_trnm_receipt_events_finalized_v1'::regclass
+         )
+           and indrelid = 'public.trnm_economic_receipt_events_v1'::regclass
+    ) then
+        raise exception 'native performance-index rejection recreated indexes on history';
+    end if;
+    if (
+        select count(*)
+          from pg_catalog.pg_class index_class
+          join pg_catalog.pg_namespace index_namespace
+            on index_namespace.oid = index_class.relnamespace
+          join pg_catalog.pg_index index_meta
+            on index_meta.indexrelid = index_class.oid
+         where index_namespace.nspname = 'public'
+           and index_class.relname in (
+               'idx_trnm_receipt_events_latest_v1',
+               'idx_trnm_receipt_events_finalized_v1'
+           )
+           and index_class.relkind = 'i'
+           and index_meta.indrelid = 'public.pu_native_performance_index_decoy'::regclass
+    ) <> 2 then
+        raise exception 'native performance-index rejection changed the decoy catalog';
+    end if;
+end
+$check$;
+SQL
+echo "    native wrong-table performance index conflict passed"
+
+echo "==> conflict: native latest index uses a non-default operator class"
+new_case native_performance_index_opclass
+native_performance_index_opclass_db="$CASE_DB"
+run_db_file "$native_performance_index_opclass_db" "$MIGRATION_85" >/dev/null
+run_db_file "$native_performance_index_opclass_db" "$MIGRATION_86" >/dev/null
+run_db_stdin "$native_performance_index_opclass_db" <<'SQL'
+-- text_pattern_ops changes the operator class while leaving the visible
+-- column/order list unchanged.  It is not the canonical equality/sort index
+-- used by the native latest-receipt lookup.
+drop index public.idx_trnm_receipt_events_latest_v1;
+create index idx_trnm_receipt_events_latest_v1
+    on public.trnm_economic_receipt_events_v1(
+        intent_id text_pattern_ops,
+        event_sequence desc,
+        event_id desc
+    );
+SQL
+expect_migration_failure "$native_performance_index_opclass_db" \
+  "native latest index operator class" "$MIGRATION_86" \
+  'TRNM native receipt history has an incompatible performance index idx_trnm_receipt_events_latest_v1'
+assert_db "$native_performance_index_opclass_db" <<'SQL'
+do $check$
+begin
+    if not exists (
+        select 1
+          from pg_catalog.pg_class index_class
+          join pg_catalog.pg_index index_meta
+            on index_meta.indexrelid = index_class.oid
+          join pg_catalog.pg_opclass opclass_meta
+            on opclass_meta.oid = index_meta.indclass[0]
+         where index_class.relname = 'idx_trnm_receipt_events_latest_v1'
+           and index_meta.indrelid = 'public.trnm_economic_receipt_events_v1'::regclass
+           and opclass_meta.opcname = 'text_pattern_ops'
+    ) then
+        raise exception 'native non-default-opclass fixture changed during rollback';
+    end if;
+end
+$check$;
+SQL
+echo "    native latest non-default operator-class conflict passed"
+
+echo "==> conflict: native identity keys have INCLUDE columns"
+new_case native_key_index_include
+native_key_index_include_db="$CASE_DB"
+run_db_file "$native_key_index_include_db" "$MIGRATION_85" >/dev/null
+run_db_stdin "$native_key_index_include_db" <<'SQL'
+-- INCLUDE columns are not part of a unique index's key.  A name/column-only
+-- catalog test would therefore accept these indexes even though they are not
+-- the canonical key shape required by the native history contract.
+create table public.trnm_economic_receipt_events_v1 (
+    event_id bigint generated by default as identity,
+    intent_id text not null
+        references public.trnm_economic_intents(intent_id)
+        on delete restrict,
+    event_sequence bigint not null,
+    intent_hash text not null,
+    receipt_id text not null,
+    protocol_version text not null,
+    idempotency_scope text not null,
+    idempotency_key text not null,
+    progression_class text not null,
+    status text not null,
+    amount_credits bigint not null default 0,
+    receipt_json jsonb not null,
+    receipt_hash text not null,
+    event_kind text not null default 'initial',
+    finalized_at timestamptz not null,
+    created_at timestamptz not null default now()
+);
+create unique index pu_native_event_id_include_idx
+    on public.trnm_economic_receipt_events_v1(event_id)
+    include (receipt_id);
+create unique index pu_native_intent_sequence_include_idx
+    on public.trnm_economic_receipt_events_v1(intent_id, event_sequence)
+    include (receipt_id);
+SQL
+expect_migration_failure "$native_key_index_include_db" \
+  "native identity key INCLUDE shape" "$MIGRATION_86" \
+  'TRNM native receipt event_id key is missing a valid unique index'
+assert_db "$native_key_index_include_db" <<'SQL'
+do $check$
+begin
+    if (
+        select count(*)
+          from pg_catalog.pg_class index_class
+          join pg_catalog.pg_index index_meta
+            on index_meta.indexrelid = index_class.oid
+         where index_class.relname in (
+                   'pu_native_event_id_include_idx',
+                   'pu_native_intent_sequence_include_idx'
+               )
+           and index_meta.indrelid = 'public.trnm_economic_receipt_events_v1'::regclass
+           and index_meta.indnatts > index_meta.indnkeyatts
+    ) <> 2 then
+        raise exception 'native INCLUDE-index fixture changed during rollback';
+    end if;
+    if exists (
+        select 1
+          from pg_catalog.pg_trigger
+         where tgrelid = 'public.trnm_economic_receipt_events_v1'::regclass
+           and tgname = 'trg_cex_validate_trnm_economic_receipt_event_v1'
+    ) then
+        raise exception 'rejected native INCLUDE key migration installed a trigger';
+    end if;
+end
+$check$;
+SQL
+echo "    native identity key INCLUDE conflict passed"
+
+echo "==> conflict: native provenance source index has INCLUDE columns"
+new_case native_provenance_source_index_include
+native_provenance_source_index_include_db="$CASE_DB"
+run_db_file "$native_provenance_source_index_include_db" "$MIGRATION_85" >/dev/null
+run_db_file "$native_provenance_source_index_include_db" "$MIGRATION_86" >/dev/null
+run_db_stdin "$native_provenance_source_index_include_db" <<'SQL'
+-- The provenance source uniqueness index is a published one-column key.  An
+-- INCLUDE payload must not be mistaken for that exact catalog shape.
+drop index public.uq_trnm_receipt_legacy_fallback_provenance_legacy_receipt_id_v1;
+create unique index uq_trnm_receipt_legacy_fallback_provenance_legacy_receipt_id_v1
+    on public.trnm_economic_receipt_legacy_fallback_provenance_v1(legacy_receipt_id)
+    include (intent_hash);
+SQL
+expect_migration_failure "$native_provenance_source_index_include_db" \
+  "native provenance source INCLUDE shape" "$MIGRATION_86" \
+  'TRNM legacy fallback provenance source index is not canonical'
+assert_db "$native_provenance_source_index_include_db" <<'SQL'
+do $check$
+begin
+    if not exists (
+        select 1
+          from pg_catalog.pg_class index_class
+          join pg_catalog.pg_index index_meta
+            on index_meta.indexrelid = index_class.oid
+         where index_class.relname =
+                   'uq_trnm_receipt_legacy_fallback_provenance_legacy_receipt_id_v1'
+           and index_meta.indrelid =
+                   'public.trnm_economic_receipt_legacy_fallback_provenance_v1'::regclass
+           and index_meta.indnatts > index_meta.indnkeyatts
+    ) then
+        raise exception 'native provenance INCLUDE index changed during rollback';
+    end if;
+    if to_regclass('public.trnm_economic_receipt_legacy_fallback_provenance_v1') is null then
+        raise exception 'native provenance INCLUDE rejection removed the ledger';
+    end if;
+end
+$check$;
+SQL
+echo "    native provenance source INCLUDE conflict passed"
+
+echo "==> conflict: native history amount column type drift"
+new_case native_history_amount_type
+native_history_amount_type_db="$CASE_DB"
+run_db_file "$native_history_amount_type_db" "$MIGRATION_85" >/dev/null
+run_db_file "$native_history_amount_type_db" "$MIGRATION_86" >/dev/null
+run_db_stdin "$native_history_amount_type_db" <<'SQL'
+-- A completed rollout can still be followed by an independently committed
+-- catalog edit.  Re-running 0086 must reject an integer amount rather than
+-- treating the same-named column as the bigint authority.
+alter table public.trnm_economic_receipt_events_v1
+    alter column amount_credits type integer
+    using amount_credits::integer;
+SQL
+expect_migration_failure "$native_history_amount_type_db" \
+  "native history amount column type drift" "$MIGRATION_86" \
+  'TRNM native receipt event column amount_credits has incompatible type'
+assert_db "$native_history_amount_type_db" <<'SQL'
+do $check$
+begin
+    if (select udt_name
+          from information_schema.columns
+         where table_schema = 'public'
+           and table_name = 'trnm_economic_receipt_events_v1'
+           and column_name = 'amount_credits') is distinct from 'int4' then
+        raise exception 'native amount type drift fixture changed during rollback';
+    end if;
+end
+$check$;
+SQL
+echo "    native amount type drift was rejected and rolled back"
+
+echo "==> conflict: native history timestamp column type drift"
+new_case native_history_timestamp_type
+native_history_timestamp_type_db="$CASE_DB"
+run_db_file "$native_history_timestamp_type_db" "$MIGRATION_85" >/dev/null
+run_db_file "$native_history_timestamp_type_db" "$MIGRATION_86" >/dev/null
+run_db_stdin "$native_history_timestamp_type_db" <<'SQL'
+alter table public.trnm_economic_receipt_events_v1
+    alter column finalized_at type timestamp without time zone
+    using finalized_at at time zone 'UTC';
+SQL
+expect_migration_failure "$native_history_timestamp_type_db" \
+  "native history timestamp column type drift" "$MIGRATION_86" \
+  'TRNM native receipt event column finalized_at has incompatible type'
+assert_db "$native_history_timestamp_type_db" <<'SQL'
+do $check$
+begin
+    if (select udt_name
+          from information_schema.columns
+         where table_schema = 'public'
+           and table_name = 'trnm_economic_receipt_events_v1'
+           and column_name = 'finalized_at') is distinct from 'timestamp' then
+        raise exception 'native timestamp type drift fixture changed during rollback';
+    end if;
+end
+$check$;
+SQL
+echo "    native timestamp type drift was rejected and rolled back"
+
+echo "==> repair: native history omitted-column defaults"
+new_case native_history_default_repair
+native_history_default_repair_db="$CASE_DB"
+run_db_file "$native_history_default_repair_db" "$MIGRATION_85" >/dev/null
+run_db_file "$native_history_default_repair_db" "$MIGRATION_86" >/dev/null
+run_db_stdin "$native_history_default_repair_db" <<'SQL'
+alter table public.trnm_economic_receipt_events_v1
+    alter column amount_credits drop default,
+    alter column event_kind drop default,
+    alter column created_at drop default;
+SQL
+run_db_file "$native_history_default_repair_db" "$MIGRATION_86" >/dev/null
+assert_db "$native_history_default_repair_db" <<'SQL'
+do $check$
+declare
+    amount_default text;
+    event_kind_default text;
+    created_at_default text;
+begin
+    select max(column_default) filter (where column_name = 'amount_credits'),
+           max(column_default) filter (where column_name = 'event_kind'),
+           max(column_default) filter (where column_name = 'created_at')
+      into amount_default, event_kind_default, created_at_default
+      from information_schema.columns
+     where table_schema = 'public'
+       and table_name = 'trnm_economic_receipt_events_v1';
+    if amount_default is distinct from '0'
+       or event_kind_default is distinct from '''initial''::text'
+       or created_at_default is distinct from 'now()' then
+        raise exception 'native omitted-column defaults were not repaired';
+    end if;
+end
+$check$;
+SQL
+echo "    native omitted-column defaults were repaired"
+
 echo "==> repair: native same-named weak shape constraint"
 new_case native_shape_guard
 native_shape_guard_db="$CASE_DB"
@@ -2627,6 +3144,569 @@ end
 $check$;
 SQL
 echo "    normalized weak shape constraint was replaced and enforced"
+
+echo "==> conflict: normalized initial intent index belongs to another table"
+new_case normalized_initial_index_wrong_table
+normalized_initial_index_wrong_table_db="$CASE_DB"
+run_db_file "$normalized_initial_index_wrong_table_db" "$MIGRATION_85" >/dev/null
+create_partial_term_history_tables "$normalized_initial_index_wrong_table_db"
+run_db_stdin "$normalized_initial_index_wrong_table_db" <<'SQL'
+-- The canonical initial-intent index names are schema-scoped.  Keep a valid
+-- differently named key on each history table so the migration cannot simply
+-- create a replacement after discovering the decoy.  The decoy mirrors the
+-- canonical key's attribute number, uniqueness, and predicate, differing only
+-- in its owning table; a name-only catalog guard would accept it.
+create unique index pu_league_initial_intent_valid_idx
+    on public.league_term_exchange_receipt_events_v1(intent_id)
+    where event_sequence = 1;
+create unique index pu_world_initial_intent_valid_idx
+    on public.world_term_exchange_receipt_events_v1(intent_id)
+    where event_sequence = 1;
+create table public.pu_normalized_initial_index_decoy (
+    dummy_1 text,
+    dummy_2 text,
+    dummy_3 text,
+    dummy_4 text,
+    dummy_5 text,
+    dummy_6 text,
+    intent_id text not null,
+    event_sequence bigint not null
+);
+create unique index uq_league_term_exchange_receipt_events_initial_intent_v1
+    on public.pu_normalized_initial_index_decoy(intent_id)
+    where event_sequence = 1;
+SQL
+expect_migration_failure "$normalized_initial_index_wrong_table_db" \
+  "normalized initial intent index wrong-table ownership" "$MIGRATION_87" \
+  'normalized league receipt history has an incompatible initial intent key'
+assert_db "$normalized_initial_index_wrong_table_db" <<'SQL'
+do $check$
+begin
+    if to_regclass('public.league_term_exchange_receipt_events_v1') is null
+       or to_regclass('public.world_term_exchange_receipt_events_v1') is null
+       or to_regclass('public.pu_normalized_initial_index_decoy') is null then
+        raise exception 'wrong-table initial-intent rejection removed partial fixture objects';
+    end if;
+    if not exists (
+        select 1
+          from pg_catalog.pg_class index_class
+          join pg_catalog.pg_namespace index_namespace
+            on index_namespace.oid = index_class.relnamespace
+          join pg_catalog.pg_index index_meta
+            on index_meta.indexrelid = index_class.oid
+         where index_namespace.nspname = 'public'
+           and index_class.relname = 'uq_league_term_exchange_receipt_events_initial_intent_v1'
+           and index_meta.indrelid = 'public.pu_normalized_initial_index_decoy'::regclass
+           and index_meta.indisunique
+           and index_meta.indpred is not null
+    ) then
+        raise exception 'wrong-table initial-intent rejection changed or removed the decoy index';
+    end if;
+    if not exists (
+        select 1
+          from pg_catalog.pg_index index_meta
+         where index_meta.indexrelid = 'public.pu_league_initial_intent_valid_idx'::regclass
+           and index_meta.indrelid = 'public.league_term_exchange_receipt_events_v1'::regclass
+    ) or not exists (
+        select 1
+          from pg_catalog.pg_index index_meta
+         where index_meta.indexrelid = 'public.pu_world_initial_intent_valid_idx'::regclass
+           and index_meta.indrelid = 'public.world_term_exchange_receipt_events_v1'::regclass
+    ) then
+        raise exception 'wrong-table initial-intent rejection changed valid history indexes';
+    end if;
+    if exists (
+        select 1
+          from pg_catalog.pg_trigger
+         where tgrelid in (
+             'public.league_term_exchange_receipt_events_v1'::regclass,
+             'public.world_term_exchange_receipt_events_v1'::regclass
+         )
+           and tgname like 'trg_cex_validate_%term_exchange_receipt_event_v1'
+    ) then
+        raise exception 'wrong-table initial-intent rejection installed history triggers';
+    end if;
+end
+$check$;
+SQL
+echo "    normalized wrong-table initial-intent conflict passed"
+
+echo "==> conflict: normalized initial intent canonical name belongs to a table"
+new_case normalized_initial_index_table_collision
+normalized_initial_index_table_collision_db="$CASE_DB"
+run_db_file "$normalized_initial_index_table_collision_db" "$MIGRATION_85" >/dev/null
+create_partial_term_history_tables "$normalized_initial_index_table_collision_db"
+run_db_stdin "$normalized_initial_index_table_collision_db" <<'SQL'
+-- A table can occupy an index's schema-scoped canonical name.  Keep a valid
+-- alternate key so a guard that filters out non-index relations would proceed
+-- after CREATE INDEX IF NOT EXISTS silently skipped the canonical index.
+create unique index pu_league_initial_intent_table_collision_valid_idx
+    on public.league_term_exchange_receipt_events_v1(intent_id)
+    where event_sequence = 1;
+create unique index pu_world_initial_intent_table_collision_valid_idx
+    on public.world_term_exchange_receipt_events_v1(intent_id)
+    where event_sequence = 1;
+create table public.uq_league_term_exchange_receipt_events_initial_intent_v1 (
+    marker text
+);
+SQL
+expect_migration_failure "$normalized_initial_index_table_collision_db" \
+  "normalized initial intent canonical-name table collision" "$MIGRATION_87" \
+  'normalized league receipt history has an incompatible initial intent key'
+assert_db "$normalized_initial_index_table_collision_db" <<'SQL'
+do $check$
+begin
+    if to_regclass('public.league_term_exchange_receipt_events_v1') is null
+       or to_regclass('public.world_term_exchange_receipt_events_v1') is null
+       or to_regclass('public.uq_league_term_exchange_receipt_events_initial_intent_v1') is null then
+        raise exception 'table-collision rejection removed partial fixture objects';
+    end if;
+    if not exists (
+        select 1
+          from pg_catalog.pg_class relation_class
+          join pg_catalog.pg_namespace relation_namespace
+            on relation_namespace.oid = relation_class.relnamespace
+         where relation_namespace.nspname = 'public'
+           and relation_class.relname = 'uq_league_term_exchange_receipt_events_initial_intent_v1'
+           and relation_class.relkind = 'r'
+    ) then
+        raise exception 'table-collision rejection changed the canonical-name table';
+    end if;
+    if not exists (
+        select 1
+          from pg_catalog.pg_index index_meta
+         where index_meta.indexrelid = 'public.pu_league_initial_intent_table_collision_valid_idx'::regclass
+           and index_meta.indrelid = 'public.league_term_exchange_receipt_events_v1'::regclass
+    ) or not exists (
+        select 1
+          from pg_catalog.pg_index index_meta
+         where index_meta.indexrelid = 'public.pu_world_initial_intent_table_collision_valid_idx'::regclass
+           and index_meta.indrelid = 'public.world_term_exchange_receipt_events_v1'::regclass
+    ) then
+        raise exception 'table-collision rejection changed valid history indexes';
+    end if;
+    if exists (
+        select 1
+          from pg_catalog.pg_trigger
+         where tgrelid in (
+             'public.league_term_exchange_receipt_events_v1'::regclass,
+             'public.world_term_exchange_receipt_events_v1'::regclass
+         )
+           and tgname like 'trg_cex_validate_%term_exchange_receipt_event_v1'
+    ) then
+        raise exception 'table-collision rejection installed history triggers';
+    end if;
+end
+$check$;
+SQL
+echo "    normalized canonical-name table collision passed"
+
+echo "==> conflict: normalized performance indexes belong to another table"
+new_case normalized_performance_index_wrong_table
+normalized_performance_index_wrong_table_db="$CASE_DB"
+run_db_file "$normalized_performance_index_wrong_table_db" "$MIGRATION_85" >/dev/null
+create_partial_term_history_tables "$normalized_performance_index_wrong_table_db"
+run_db_stdin "$normalized_performance_index_wrong_table_db" <<'SQL'
+-- All six canonical performance names are schema-scoped.  Recreate their
+-- exact key/order shapes on an unrelated table so a name-only guard would
+-- accept every object while leaving the history tables without those indexes.
+create table public.pu_normalized_performance_index_decoy (
+    event_id bigint,
+    receipt_id text,
+    event_sequence bigint,
+    finalized_at timestamptz,
+    intent_id text
+);
+create index idx_league_term_exchange_receipt_events_latest_v1
+    on public.pu_normalized_performance_index_decoy(receipt_id, event_sequence desc, event_id desc);
+create index idx_league_term_exchange_receipt_events_finalized_v1
+    on public.pu_normalized_performance_index_decoy(finalized_at desc, event_id desc);
+create index idx_league_term_exchange_receipt_events_intent_v1
+    on public.pu_normalized_performance_index_decoy(intent_id, finalized_at desc, event_id desc);
+create index idx_world_term_exchange_receipt_events_latest_v1
+    on public.pu_normalized_performance_index_decoy(receipt_id, event_sequence desc, event_id desc);
+create index idx_world_term_exchange_receipt_events_finalized_v1
+    on public.pu_normalized_performance_index_decoy(finalized_at desc, event_id desc);
+create index idx_world_term_exchange_receipt_events_intent_v1
+    on public.pu_normalized_performance_index_decoy(intent_id, finalized_at desc, event_id desc);
+SQL
+expect_migration_failure "$normalized_performance_index_wrong_table_db" \
+  "normalized performance indexes wrong-table ownership" "$MIGRATION_87" \
+  'normalized league receipt history has an incompatible performance index'
+assert_db "$normalized_performance_index_wrong_table_db" <<'SQL'
+do $check$
+declare
+    decoy_oid oid := 'public.pu_normalized_performance_index_decoy'::regclass;
+    decoy_owner oid;
+    canonical_names text[] := array[
+        'idx_league_term_exchange_receipt_events_latest_v1',
+        'idx_league_term_exchange_receipt_events_finalized_v1',
+        'idx_league_term_exchange_receipt_events_intent_v1',
+        'idx_world_term_exchange_receipt_events_latest_v1',
+        'idx_world_term_exchange_receipt_events_finalized_v1',
+        'idx_world_term_exchange_receipt_events_intent_v1'
+    ];
+begin
+    select relowner into decoy_owner from pg_catalog.pg_class where oid = decoy_oid;
+    if decoy_oid is null
+       or to_regclass('public.league_term_exchange_receipt_events_v1') is null
+       or to_regclass('public.world_term_exchange_receipt_events_v1') is null then
+        raise exception 'performance-index rejection removed partial fixture objects';
+    end if;
+    if (
+        select count(*)
+          from pg_catalog.pg_class index_class
+          join pg_catalog.pg_namespace index_namespace
+            on index_namespace.oid = index_class.relnamespace
+          join pg_catalog.pg_index index_meta
+            on index_meta.indexrelid = index_class.oid
+         where index_namespace.nspname = 'public'
+           and index_class.relname = any(canonical_names)
+           and index_class.relkind = 'i'
+           and index_class.relowner = decoy_owner
+           and index_meta.indrelid = decoy_oid
+    ) <> cardinality(canonical_names) then
+        raise exception 'performance-index rejection changed the decoy index catalog';
+    end if;
+    if exists (
+        select 1
+          from pg_catalog.pg_class index_class
+          join pg_catalog.pg_namespace index_namespace
+            on index_namespace.oid = index_class.relnamespace
+          join pg_catalog.pg_index index_meta
+            on index_meta.indexrelid = index_class.oid
+         where index_namespace.nspname = 'public'
+           and index_class.relname = any(canonical_names)
+           and index_meta.indrelid in (
+               'public.league_term_exchange_receipt_events_v1'::regclass,
+               'public.world_term_exchange_receipt_events_v1'::regclass
+           )
+    ) then
+        raise exception 'performance-index rejection left a canonical index on history';
+    end if;
+end
+$check$;
+SQL
+echo "    normalized performance wrong-table index conflict passed"
+
+echo "==> conflict: normalized projection key uses a non-default operator class"
+new_case normalized_projection_key_opclass
+normalized_projection_key_opclass_db="$CASE_DB"
+run_db_file "$normalized_projection_key_opclass_db" "$MIGRATION_85" >/dev/null
+run_db_file "$normalized_projection_key_opclass_db" "$MIGRATION_87" >/dev/null
+run_db_stdin "$normalized_projection_key_opclass_db" <<'SQL'
+-- Keep the published fallback name but change the text operator class.  A
+-- column/uniqueness-only probe would accept this as the projection authority.
+alter table public.league_term_exchange_receipts
+    drop constraint league_term_exchange_receipts_pkey;
+create unique index uq_league_term_exchange_receipts_receipt_id_v1
+    on public.league_term_exchange_receipts(receipt_id text_pattern_ops);
+SQL
+expect_migration_failure "$normalized_projection_key_opclass_db" \
+  "normalized projection key operator class" "$MIGRATION_87" \
+  'normalized league receipt projection has an incompatible receipt_id key'
+assert_db "$normalized_projection_key_opclass_db" <<'SQL'
+do $check$
+begin
+    if not exists (
+        select 1
+          from pg_catalog.pg_class index_class
+          join pg_catalog.pg_index index_meta
+            on index_meta.indexrelid = index_class.oid
+          join pg_catalog.pg_opclass opclass_meta
+            on opclass_meta.oid = index_meta.indclass[0]
+         where index_class.relname = 'uq_league_term_exchange_receipts_receipt_id_v1'
+           and index_meta.indrelid = 'public.league_term_exchange_receipts'::regclass
+           and opclass_meta.opcname = 'text_pattern_ops'
+    ) then
+        raise exception 'normalized projection operator-class fixture changed during rollback';
+    end if;
+end
+$check$;
+SQL
+echo "    normalized projection non-default operator-class conflict passed"
+
+echo "==> conflict: normalized projection canonical key name collides with a decoy relation"
+new_case normalized_projection_key_canonical_name_collision
+normalized_projection_key_canonical_name_collision_db="$CASE_DB"
+run_db_file "$normalized_projection_key_canonical_name_collision_db" "$MIGRATION_85" >/dev/null
+run_db_file "$normalized_projection_key_canonical_name_collision_db" "$MIGRATION_87" >/dev/null
+run_db_stdin "$normalized_projection_key_canonical_name_collision_db" <<'SQL'
+-- The projection primary key is a valid alternate authority.  Occupy the
+-- published fallback name with a table anyway; a name-only guard nested under
+-- `if not has_projection_unique` would incorrectly skip this conflict.
+create table public.uq_league_term_exchange_receipts_receipt_id_v1 (
+    marker text
+);
+SQL
+expect_migration_failure "$normalized_projection_key_canonical_name_collision_db" \
+  "normalized projection canonical-name decoy relation" "$MIGRATION_87" \
+  'normalized league receipt projection has an incompatible receipt_id key'
+assert_db "$normalized_projection_key_canonical_name_collision_db" <<'SQL'
+do $check$
+declare
+    relation_kind "char";
+begin
+    select c.relkind
+      into relation_kind
+      from pg_catalog.pg_class c
+      join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public'
+       and c.relname = 'uq_league_term_exchange_receipts_receipt_id_v1';
+    if relation_kind is distinct from 'r'
+       or to_regclass('public.league_term_exchange_receipts') is null
+       or not exists (
+           select 1
+             from pg_catalog.pg_index i
+            where i.indrelid = 'public.league_term_exchange_receipts'::regclass
+              and i.indisunique
+              and i.indnkeyatts = 1
+              and i.indnatts = 1
+       ) then
+        raise exception 'projection canonical-name decoy rejection changed valid catalog objects';
+    end if;
+end
+$check$;
+SQL
+echo "    normalized projection canonical-name decoy conflict passed"
+
+echo "==> conflict: normalized initial-intent key uses a non-default operator class"
+new_case normalized_initial_index_opclass
+normalized_initial_index_opclass_db="$CASE_DB"
+run_db_file "$normalized_initial_index_opclass_db" "$MIGRATION_85" >/dev/null
+run_db_file "$normalized_initial_index_opclass_db" "$MIGRATION_87" >/dev/null
+run_db_stdin "$normalized_initial_index_opclass_db" <<'SQL'
+-- The sequence-one intent key has a published canonical name and predicate;
+-- changing only text's operator class must still be rejected.
+drop index public.uq_league_term_exchange_receipt_events_initial_intent_v1;
+create unique index uq_league_term_exchange_receipt_events_initial_intent_v1
+    on public.league_term_exchange_receipt_events_v1(intent_id text_pattern_ops)
+    where event_sequence = 1;
+SQL
+expect_migration_failure "$normalized_initial_index_opclass_db" \
+  "normalized initial-intent key operator class" "$MIGRATION_87" \
+  'normalized league receipt history has an incompatible initial intent key'
+assert_db "$normalized_initial_index_opclass_db" <<'SQL'
+do $check$
+begin
+    if not exists (
+        select 1
+          from pg_catalog.pg_class index_class
+          join pg_catalog.pg_index index_meta
+            on index_meta.indexrelid = index_class.oid
+          join pg_catalog.pg_opclass opclass_meta
+            on opclass_meta.oid = index_meta.indclass[0]
+         where index_class.relname = 'uq_league_term_exchange_receipt_events_initial_intent_v1'
+           and index_meta.indrelid = 'public.league_term_exchange_receipt_events_v1'::regclass
+           and opclass_meta.opcname = 'text_pattern_ops'
+    ) then
+        raise exception 'normalized initial-intent operator-class fixture changed during rollback';
+    end if;
+end
+$check$;
+SQL
+echo "    normalized initial-intent non-default operator-class conflict passed"
+
+echo "==> conflict: normalized event_id canonical key name collides with a decoy relation"
+new_case normalized_event_key_canonical_name_collision
+normalized_event_key_canonical_name_collision_db="$CASE_DB"
+run_db_file "$normalized_event_key_canonical_name_collision_db" "$MIGRATION_85" >/dev/null
+run_db_file "$normalized_event_key_canonical_name_collision_db" "$MIGRATION_87" >/dev/null
+run_db_stdin "$normalized_event_key_canonical_name_collision_db" <<'SQL'
+-- A completed history has a valid primary-key event_id index, so the
+-- canonical fallback name is not needed for the functional invariant.  A
+-- same-named table must nevertheless be rejected; otherwise a retry would
+-- silently preserve catalog/name drift behind that alternate valid key.
+create table public.uq_league_term_exchange_receipt_events_v1_event_id_v1 (
+    marker text
+);
+SQL
+expect_migration_failure "$normalized_event_key_canonical_name_collision_db" \
+  "normalized event_id canonical-name decoy relation" "$MIGRATION_87" \
+  'normalized league receipt history has an incompatible event_id key'
+assert_db "$normalized_event_key_canonical_name_collision_db" <<'SQL'
+do $check$
+declare
+    relation_kind "char";
+begin
+    select c.relkind
+      into relation_kind
+      from pg_catalog.pg_class c
+      join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public'
+       and c.relname = 'uq_league_term_exchange_receipt_events_v1_event_id_v1';
+    if relation_kind is distinct from 'r'
+       or to_regclass('public.league_term_exchange_receipt_events_v1') is null
+       or not exists (
+           select 1
+             from pg_catalog.pg_index i
+            where i.indrelid = 'public.league_term_exchange_receipt_events_v1'::regclass
+              and i.indisunique
+              and i.indnkeyatts = 1
+              and i.indnatts = 1
+       ) then
+        raise exception 'event_id canonical-name decoy rejection changed valid catalog objects';
+    end if;
+end
+$check$;
+SQL
+echo "    normalized event_id canonical-name decoy conflict passed"
+
+echo "==> conflict: normalized receipt-sequence canonical key name collides with a decoy relation"
+new_case normalized_sequence_key_canonical_name_collision
+normalized_sequence_key_canonical_name_collision_db="$CASE_DB"
+run_db_file "$normalized_sequence_key_canonical_name_collision_db" "$MIGRATION_85" >/dev/null
+run_db_file "$normalized_sequence_key_canonical_name_collision_db" "$MIGRATION_87" >/dev/null
+run_db_stdin "$normalized_sequence_key_canonical_name_collision_db" <<'SQL'
+-- The completed history already has a valid (receipt_id,event_sequence)
+-- uniqueness constraint.  Keep that alternate authority in place while
+-- occupying the published fallback name with a table; a name-only
+-- IF-NOT-EXISTS path must not let this decoy hide.
+create table public.uq_league_term_exchange_receipt_events_v1_receipt_sequence_v1 (
+    marker text
+);
+SQL
+expect_migration_failure "$normalized_sequence_key_canonical_name_collision_db" \
+  "normalized receipt-sequence canonical-name decoy relation" "$MIGRATION_87" \
+  'normalized league receipt history has an incompatible receipt sequence key'
+assert_db "$normalized_sequence_key_canonical_name_collision_db" <<'SQL'
+do $check$
+declare
+    relation_kind "char";
+begin
+    select c.relkind
+      into relation_kind
+      from pg_catalog.pg_class c
+      join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public'
+       and c.relname = 'uq_league_term_exchange_receipt_events_v1_receipt_sequence_v1';
+    if relation_kind is distinct from 'r'
+       or to_regclass('public.league_term_exchange_receipt_events_v1') is null
+       or not exists (
+           select 1
+             from pg_catalog.pg_index i
+            where i.indrelid = 'public.league_term_exchange_receipt_events_v1'::regclass
+              and i.indisunique
+              and i.indnkeyatts = 2
+              and i.indnatts = 2
+       ) then
+        raise exception 'receipt-sequence canonical-name decoy rejection changed valid catalog objects';
+    end if;
+end
+$check$;
+SQL
+echo "    normalized receipt-sequence canonical-name decoy conflict passed"
+
+echo "==> conflict: normalized performance index uses an explicit non-default collation"
+new_case normalized_performance_index_collation
+normalized_performance_index_collation_db="$CASE_DB"
+run_db_file "$normalized_performance_index_collation_db" "$MIGRATION_85" >/dev/null
+run_db_file "$normalized_performance_index_collation_db" "$MIGRATION_87" >/dev/null
+run_db_stdin "$normalized_performance_index_collation_db" <<'SQL'
+-- An explicit C collation changes the index's catalog collation vector while
+-- leaving the visible key/order list unchanged.  It must not be adopted as
+-- the default-collation history lookup index.
+drop index public.idx_league_term_exchange_receipt_events_latest_v1;
+create index idx_league_term_exchange_receipt_events_latest_v1
+    on public.league_term_exchange_receipt_events_v1(
+        intent_id collate "C",
+        event_sequence desc,
+        event_id desc
+    );
+SQL
+expect_migration_failure "$normalized_performance_index_collation_db" \
+  "normalized performance index collation" "$MIGRATION_87" \
+  'normalized league receipt history has an incompatible performance index idx_league_term_exchange_receipt_events_latest_v1'
+assert_db "$normalized_performance_index_collation_db" <<'SQL'
+do $check$
+begin
+    if not exists (
+        select 1
+          from pg_catalog.pg_class index_class
+          join pg_catalog.pg_index index_meta
+            on index_meta.indexrelid = index_class.oid
+          join pg_catalog.pg_collation collation_meta
+            on collation_meta.oid = index_meta.indcollation[0]
+         where index_class.relname = 'idx_league_term_exchange_receipt_events_latest_v1'
+           and index_meta.indrelid = 'public.league_term_exchange_receipt_events_v1'::regclass
+           and collation_meta.collname = 'C'
+    ) then
+        raise exception 'normalized performance collation fixture changed during rollback';
+    end if;
+end
+$check$;
+SQL
+echo "    normalized performance non-default-collation conflict passed"
+
+echo "==> conflict: normalized history timestamp column type drift"
+new_case normalized_history_timestamp_type
+normalized_history_timestamp_type_db="$CASE_DB"
+run_db_file "$normalized_history_timestamp_type_db" "$MIGRATION_85" >/dev/null
+run_db_file "$normalized_history_timestamp_type_db" "$MIGRATION_87" >/dev/null
+run_db_stdin "$normalized_history_timestamp_type_db" <<'SQL'
+-- A timestamp without time zone is not interchangeable with the published
+-- timestamptz history authority; a replay around a DST/offset boundary would
+-- otherwise change the finalized instant.
+alter table public.league_term_exchange_receipt_events_v1
+    alter column finalized_at type timestamp without time zone
+    using finalized_at at time zone 'UTC';
+SQL
+expect_migration_failure "$normalized_history_timestamp_type_db" \
+  "normalized history timestamp column type drift" "$MIGRATION_87" \
+  'normalized league receipt history column finalized_at has incompatible type'
+assert_db "$normalized_history_timestamp_type_db" <<'SQL'
+do $check$
+begin
+    if (select udt_name
+          from information_schema.columns
+         where table_schema = 'public'
+           and table_name = 'league_term_exchange_receipt_events_v1'
+           and column_name = 'finalized_at') is distinct from 'timestamp' then
+        raise exception 'normalized timestamp type drift fixture changed during rollback';
+    end if;
+end
+$check$;
+SQL
+echo "    normalized timestamp type drift was rejected and rolled back"
+
+echo "==> repair: normalized history omitted-column defaults"
+new_case normalized_history_default_repair
+normalized_history_default_repair_db="$CASE_DB"
+run_db_file "$normalized_history_default_repair_db" "$MIGRATION_85" >/dev/null
+run_db_file "$normalized_history_default_repair_db" "$MIGRATION_87" >/dev/null
+run_db_stdin "$normalized_history_default_repair_db" <<'SQL'
+alter table public.league_term_exchange_receipt_events_v1
+    alter column event_kind drop default,
+    alter column created_at drop default;
+alter table public.world_term_exchange_receipt_events_v1
+    alter column event_kind drop default,
+    alter column created_at drop default;
+SQL
+run_db_file "$normalized_history_default_repair_db" "$MIGRATION_87" >/dev/null
+assert_db "$normalized_history_default_repair_db" <<'SQL'
+do $check$
+declare
+    missing_defaults integer;
+begin
+    select count(*)
+      into missing_defaults
+      from information_schema.columns
+     where table_schema = 'public'
+       and table_name in (
+           'league_term_exchange_receipt_events_v1',
+           'world_term_exchange_receipt_events_v1'
+       )
+       and (
+           (column_name = 'event_kind' and column_default is distinct from '''initial''::text')
+           or (column_name = 'created_at' and column_default is distinct from 'now()')
+       );
+    if missing_defaults <> 0 then
+        raise exception 'normalized omitted-column defaults were not repaired';
+    end if;
+end
+$check$;
+SQL
+echo "    normalized omitted-column defaults were repaired"
 
 echo "==> conflict: normalized history event_id uses an unowned sequence"
 new_case partial_history_unowned_sequence

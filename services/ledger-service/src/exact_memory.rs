@@ -31,7 +31,7 @@ pub async fn open_account(
     headers: HeaderMap,
     Json(request): Json<OpenAccountV2Request>,
 ) -> Response {
-    if state.operation_pool.is_some() || state.fail_fast {
+    if state.operation_pool.is_some() || !state.memory_fallback_enabled() {
         return account_control::open_account_v2(State(state), headers, Json(request)).await;
     }
     let admin = match authorize_ledger_admin(&state, &headers, &["ledger:manage"]) {
@@ -282,7 +282,7 @@ pub async fn get_account(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    if state.operation_pool.is_some() || state.fail_fast {
+    if state.operation_pool.is_some() || !state.memory_fallback_enabled() {
         return account_control::get_account_exact(Path(account_id), State(state), headers).await;
     }
     if account_id.is_nil() {
@@ -318,7 +318,7 @@ pub async fn apply_effect(
     headers: HeaderMap,
     Json(request): Json<LedgerEffectRequestV1>,
 ) -> Response {
-    if state.operation_pool.is_some() || state.fail_fast {
+    if state.operation_pool.is_some() || !state.memory_fallback_enabled() {
         return ledger_effects::apply_effect(State(state), headers, Json(request)).await;
     }
     let admin = match authorize_ledger_admin(&state, &headers, &["ledger:manage"]) {
@@ -530,6 +530,8 @@ pub async fn apply_effect(
     let created_at = Utc::now().to_rfc3339();
     let response = json!({
         "replayed": false,
+        "persistent": false,
+        "local_dev_fallback": true,
         "account": {
             "account_id": request.account_id,
             "org_id": org_id,
@@ -592,7 +594,7 @@ pub async fn get_effect(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    if state.operation_pool.is_some() || state.fail_fast {
+    if state.operation_pool.is_some() || !state.memory_fallback_enabled() {
         return ledger_effects::get_effect(Path(operation_id), State(state), headers).await;
     }
     let admin = match authorize_ledger_admin(&state, &headers, &["ledger:read", "ledger:manage"]) {
@@ -621,7 +623,7 @@ pub async fn list_trace(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    if state.operation_pool.is_some() || state.fail_fast {
+    if state.operation_pool.is_some() || !state.memory_fallback_enabled() {
         return ledger_effects::list_trace(Path(trace_id), State(state), headers).await;
     }
     let admin = match authorize_ledger_admin(&state, &headers, &["ledger:read", "ledger:manage"]) {
@@ -661,6 +663,8 @@ fn opening_response(record: &Value, replayed: bool) -> Value {
     let account = &record["account_state"];
     json!({
         "replayed": replayed,
+        "persistent": false,
+        "local_dev_fallback": true,
         "schema_version": ACCOUNT_OPENING_SCHEMA_V1,
         "account": {
             "account_id": account["account_id"],
@@ -684,6 +688,8 @@ fn money_response(record: &Value) -> Value {
         "mode": "shadow",
         "eligible": false,
         "stop_reason": "service_local_exact_memory",
+        "persistent": false,
+        "local_dev_fallback": true,
         "account_id": account["account_id"],
         "org_id": account["org_id"],
         "currency_unit": account["currency_unit"],

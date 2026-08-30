@@ -11,7 +11,14 @@ from pathlib import Path
 from typing import Iterable
 from unittest import mock
 
-ROOT = Path(__file__).resolve().parents[1]
+# Keep the invocation path lexical until the symlink boundary has been checked.
+# ``Path(__file__).resolve()`` would turn a checked-out symlink into its target
+# before this checker could report it, causing the checker to inspect a
+# different tree from the one the workflow invoked.
+_THIS_FILE = Path(__file__)
+if not _THIS_FILE.is_absolute():
+    _THIS_FILE = Path.cwd() / _THIS_FILE
+ROOT = _THIS_FILE.parent.parent
 WORKFLOW_GLOBS = (".github/workflows/*.yml", ".github/workflows/*.yaml")
 AUTHORITATIVE_WORKFLOWS = {
     ".github/workflows/p0-migration-gate.yml",
@@ -46,6 +53,36 @@ CORE_PATHS = {
     "scripts/check-p0-release-candidate-hygiene-core.py",
     "scripts/check-release-baseline-manifest-core.py",
     "scripts/p0-release-evidence-core.py",
+}
+# These files are executed (directly or as a subprocess) by the exact-tree
+# qualification path, or are loaded for their declarative contracts.  A
+# workflow can otherwise invoke a checked-out symlink and run bytes from
+# outside the candidate tree even when every ``uses:`` reference is pinned.
+# Keep this separate from ``CORE_PATHS``: the latter is also used to detect a
+# workflow that bypasses its fail-closed wrapper, whereas direct execution of
+# the other entries is intentional.
+REQUIRED_EXECUTED_SCRIPTS = {
+    "scripts/bind-p0-local-evidence.py",
+    "scripts/check-development-docs.py",
+    "scripts/check-hosted-gate-execution.py",
+    "scripts/check-p0-release-candidate-hygiene.py",
+    "scripts/check-p0-release-candidate-hygiene-core.py",
+    "scripts/check-release-baseline-manifest.py",
+    "scripts/check-release-baseline-manifest-core.py",
+    "scripts/check-release-baseline-manifest-contract.py",
+    "scripts/check-release-baseline-manifest-contract-core.py",
+    "scripts/check-release-evidence-contract.py",
+    "scripts/check-repository-integrity.py",
+    "scripts/check-strict-release-evidence-wiring.py",
+    "scripts/check-workflow-trust.py",
+    "scripts/evidence_safe_io.py",
+    "scripts/observe-repository-governance.py",
+    "scripts/p0-release-evidence.py",
+    "scripts/p0-release-evidence-core.py",
+    "scripts/p0-release-evidence-strict.py",
+    "scripts/test-p0-release-evidence-strict.py",
+    "scripts/verify-hosted-run-execution.py",
+    "scripts/verify-hosted-snapshot-freshness.py",
 }
 PINNED_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 PINNED_DOCKER_RE = re.compile(r"^docker://[^\s@]+(?:[:][^\s@]+)?@sha256:[0-9a-f]{64}$")
@@ -409,6 +446,32 @@ def resolve_local_use(use: str, *, require_exists: bool) -> Path | None:
     if not re.fullmatch(r"[A-Za-z0-9._/-]+", relative_raw):
         raise ValueError("local uses path contains unsupported characters")
 
+    # GitHub resolves ``jobs.<id>.uses: ./.github/workflows/foo.yml`` as a
+    # reusable workflow invocation, not as a local composite-action
+    # descriptor.  The lightweight scanner below deliberately does not parse
+    # reusable-workflow job graphs, so accepting this form would create a
+    # recursive trust blind spot: an unpinned action in the referenced file
+    # could execute without being inspected.  Keep the trusted subset
+    # explicit and fail closed until reusable workflows have a complete,
+    # immutable traversal implementation.
+    if len(segments) >= 2 and segments[:2] == [".github", "workflows"]:
+        raise ValueError(
+            "local reusable workflow references are forbidden; inline the job "
+            "or use a reviewed pinned workflow"
+        )
+
+    # Resolve the target only after checking every lexical path component.
+    # ``Path.resolve()`` follows symlinks, so checking the resolved target
+    # alone would accept an in-checkout symlink (for example
+    # ``./local-action`` -> ``./vendor/action``).  That lets a mutable link be
+    # swapped between the workflow scan and action execution, and it can also
+    # hide an untracked directory behind an otherwise contained path.
+    lexical = ROOT
+    for segment in segments:
+        lexical = lexical / segment
+        if lexical.is_symlink():
+            raise ValueError("local uses path components must not be symlinks")
+
     repository_root = ROOT.resolve()
     target = (ROOT / relative_raw).resolve()
     try:
@@ -420,11 +483,6 @@ def resolve_local_use(use: str, *, require_exists: bool) -> Path | None:
         return target
 
     if target.is_file():
-        if (
-            target.suffix in {".yml", ".yaml"}
-            and target.parent == (ROOT / ".github/workflows").resolve()
-        ):
-            return None
         raise ValueError("local uses file must be a top-level reusable workflow")
 
     if not target.is_dir():
@@ -627,9 +685,52 @@ def validate_authoritative_events(path: Path, text: str) -> None:
                     break
 
 
+def immutable_script_problems(
+    root: Path, *, skip: Iterable[str] = ()
+) -> list[str]:
+    """Return symlink/missing diagnostics for every Python script boundary.
+
+    The required set catches a deleted qualification-chain dependency; the
+    directory enumeration catches a newly added helper without requiring a
+    second hand-maintained allow-list.  Paths are intentionally kept lexical
+    so ``is_symlink`` observes the checkout entry itself.
+    """
+
+    problems: list[str] = []
+    paths = set(REQUIRED_EXECUTED_SCRIPTS)
+    scripts_root = root / "scripts"
+    if scripts_root.is_symlink():
+        problems.append("scripts directory must not be a symlink")
+    elif not scripts_root.is_dir():
+        problems.append("missing scripts directory")
+    else:
+        try:
+            paths.update(
+                path.relative_to(root).as_posix()
+                for path in scripts_root.iterdir()
+                if path.name.endswith(".py")
+            )
+        except OSError as error:
+            problems.append(f"cannot enumerate immutable Python scripts: {error}")
+
+    skipped = set(skip)
+    for path in sorted(paths):
+        if path in skipped:
+            continue
+        target = root / path
+        if target.is_symlink():
+            problems.append(f"immutable executed script must not be a symlink: {path}")
+        elif not target.is_file():
+            problems.append(f"missing immutable executed script: {path}")
+    return problems
+
+
 def validate_wrappers(workflow_texts: dict[str, str]) -> None:
     for path, markers in WRAPPER_MARKERS.items():
         full = ROOT / path
+        if full.is_symlink():
+            PROBLEMS.append(f"{path} must not be a symlink")
+            continue
         if not full.is_file():
             PROBLEMS.append(f"missing fail-closed wrapper: {path}")
             continue
@@ -642,8 +743,17 @@ def validate_wrappers(workflow_texts: dict[str, str]) -> None:
             if marker not in text:
                 PROBLEMS.append(f"{path} lacks required delegation marker: {marker}")
 
+    # Wrapper/core paths were checked above so retain their more specific
+    # diagnostics and avoid emitting duplicate symlink/missing messages.
+    already_checked = set(WRAPPER_MARKERS) | set(CORE_PATHS)
+    for problem in immutable_script_problems(ROOT, skip=already_checked):
+        PROBLEMS.append(problem)
+
     for path in CORE_PATHS:
-        if not (ROOT / path).is_file():
+        target = ROOT / path
+        if target.is_symlink():
+            PROBLEMS.append(f"immutable core implementation must not be a symlink: {path}")
+        elif not target.is_file():
             PROBLEMS.append(f"missing immutable core implementation: {path}")
 
     for workflow_path, text in workflow_texts.items():
@@ -700,11 +810,16 @@ def self_test() -> None:
     problem, _ = action_pin_problem("./../escape", require_local_exists=False)
     if not problem:
         PROBLEMS.append("workflow trust local path traversal self-test failed")
+    problem, _ = action_pin_problem(
+        "./.github/workflows/local-reusable.yml", require_local_exists=False
+    )
+    if "local reusable workflow references are forbidden" not in (problem or ""):
+        PROBLEMS.append("workflow trust local reusable workflow self-test failed")
     problem, _ = action_pin_problem("actions/checkout@" + "0" * 40, require_local_exists=False)
     if not problem:
         PROBLEMS.append("workflow trust all-zero action SHA self-test failed")
 
-    # Exercise both local-descriptor containment guards without depending on
+    # Exercise local-path and local-descriptor containment guards without depending on
     # platform-specific permission to create symlinks (the hygiene check also
     # runs on the hosted Windows lane).  The mocked lstat-style result models
     # a descriptor candidate that is replaced by a symlink in the checkout.
@@ -719,7 +834,12 @@ def self_test() -> None:
         original_root = ROOT
         try:
             globals()["ROOT"] = test_root
-            with mock.patch.object(Path, "is_symlink", return_value=True):
+            descriptor_path = action_dir / "action.yml"
+            with mock.patch.object(
+                Path,
+                "is_symlink",
+                new=lambda candidate: candidate == descriptor_path,
+            ):
                 symlink_problem, _ = action_pin_problem("./local-action")
         finally:
             globals()["ROOT"] = original_root
@@ -727,6 +847,19 @@ def self_test() -> None:
             PROBLEMS.append(
                 "workflow trust local descriptor symlink self-test failed"
             )
+
+        try:
+            globals()["ROOT"] = test_root
+            with mock.patch.object(
+                Path,
+                "is_symlink",
+                new=lambda candidate: candidate == action_dir,
+            ):
+                path_symlink_problem, _ = action_pin_problem("./local-action")
+        finally:
+            globals()["ROOT"] = original_root
+        if path_symlink_problem != "local uses path components must not be symlinks":
+            PROBLEMS.append("workflow trust local path symlink self-test failed")
 
         outside = Path(directory) / "outside-action.yml"
         outside.write_text("name: outside\n", encoding="utf-8")
@@ -740,6 +873,56 @@ def self_test() -> None:
             PROBLEMS.append(
                 "workflow trust local descriptor containment self-test failed"
             )
+
+    # The release path executes several Python helpers and dynamically loads
+    # two of them for their declarative contracts.  Exercise the immutable
+    # script boundary with a temporary checkout so a symlink or a deleted
+    # dependency cannot silently disappear from the trust result.  Symlink
+    # creation is unavailable on some Windows runners; the mock models the
+    # same lstat result there while still testing the diagnostic path.
+    with tempfile.TemporaryDirectory(prefix="cex-workflow-script-boundary-") as directory:
+        test_root = Path(directory) / "repo"
+        scripts_root = test_root / "scripts"
+        scripts_root.mkdir(parents=True)
+        for required_path in REQUIRED_EXECUTED_SCRIPTS:
+            target = test_root / required_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("# self-test\n", encoding="utf-8")
+
+        symlink_relative = "scripts/check-release-evidence-contract.py"
+        missing_relative = "scripts/check-hosted-gate-execution.py"
+        symlink_path = test_root / symlink_relative
+        symlink_path.unlink()
+        outside = Path(directory) / "outside.py"
+        outside.write_text("# outside\n", encoding="utf-8")
+        symlink_supported = True
+        try:
+            symlink_path.symlink_to(outside)
+        except (OSError, NotImplementedError):
+            symlink_supported = False
+        (test_root / missing_relative).unlink()
+
+        if symlink_supported:
+            boundary_problems = immutable_script_problems(test_root)
+        else:
+            with mock.patch.object(
+                Path,
+                "is_symlink",
+                side_effect=lambda candidate: candidate == symlink_path,
+            ):
+                boundary_problems = immutable_script_problems(test_root)
+        if not any(
+            item.endswith(symlink_relative)
+            and "must not be a symlink" in item
+            for item in boundary_problems
+        ):
+            PROBLEMS.append("workflow trust immutable-script symlink self-test failed")
+        if not any(
+            item.endswith(missing_relative)
+            and "missing immutable executed script" in item
+            for item in boundary_problems
+        ):
+            PROBLEMS.append("workflow trust immutable-script missing self-test failed")
 
     for sample in (
         "on:\n  pull_request:\n",
@@ -782,11 +965,19 @@ def main() -> int:
 
     workflow_paths: set[Path] = set()
     for pattern in WORKFLOW_GLOBS:
-        workflow_paths.update(path for path in ROOT.glob(pattern) if path.is_file())
+        # A workflow symlink can redirect this checker to bytes outside the
+        # candidate tree.  Include it in the scan so it is reported rather
+        # than silently omitted by ``Path.is_file()``.
+        workflow_paths.update(
+            path for path in ROOT.glob(pattern) if path.is_file() or path.is_symlink()
+        )
 
     workflow_texts: dict[str, str] = {}
     for path in sorted(workflow_paths):
         label = relative(path)
+        if path.is_symlink():
+            PROBLEMS.append(f"{label}: workflow must not be a symlink")
+            continue
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as error:

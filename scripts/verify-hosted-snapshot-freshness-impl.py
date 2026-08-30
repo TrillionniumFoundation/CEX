@@ -366,15 +366,23 @@ def self_test() -> list[str]:
         first_path = WORKFLOW_PATHS[first_gate]
         base = next(run for run in runs if run["path"] == first_path)
         negative_cases = {
-            "newer-failure": {**base, "id": 900, "conclusion": "failure", "created_at": "2026-08-30T01:00:00Z", "updated_at": "2026-08-30T01:01:00Z"},
-            "newer-active": {**base, "id": 901, "status": "in_progress", "conclusion": None, "created_at": "2026-08-30T02:00:00Z", "updated_at": "2026-08-30T02:01:00Z"},
-            "newer-success": {**base, "id": 902, "created_at": "2026-08-30T03:00:00Z", "updated_at": "2026-08-30T03:01:00Z"},
-            "newer-rerun-attempt": {**base, "run_attempt": 2, "updated_at": "2026-08-30T04:01:00Z"},
-            "detail-status-drift": {**base, "conclusion": "cancelled", "updated_at": "2026-08-30T05:01:00Z"},
+            "newer-failure": ([*runs, {**base, "id": 900, "conclusion": "failure", "created_at": "2026-08-30T01:00:00Z", "updated_at": "2026-08-30T01:01:00Z"}],),
+            "newer-active": ([*runs, {**base, "id": 901, "status": "in_progress", "conclusion": None, "created_at": "2026-08-30T02:00:00Z", "updated_at": "2026-08-30T02:01:00Z"}],),
+            "newer-success": ([*runs, {**base, "id": 902, "created_at": "2026-08-30T03:00:00Z", "updated_at": "2026-08-30T03:01:00Z"}],),
+            "newer-rerun-attempt": ([*runs, {**base, "run_attempt": 2, "updated_at": "2026-08-30T04:01:00Z"}],),
+            # A detail response can report a changed terminal state while the
+            # run id/creation identity stays the same.  Model that faithfully
+            # by replacing the list record, rather than appending a duplicate
+            # that the deterministic selector is allowed to ignore.
+            "detail-status-drift": ([
+                {**run, "conclusion": "cancelled", "updated_at": "2026-08-30T05:01:00Z"}
+                if run["id"] == base["id"] else run
+                for run in runs
+            ],),
         }
-        for label, newer in negative_cases.items():
+        for label, (case_runs,) in negative_cases.items():
             try:
-                verify_latest_snapshot(context, "unused", selector_module=selector, runs_override=[*runs, newer])
+                verify_latest_snapshot(context, "unused", selector_module=selector, runs_override=case_runs)
             except SystemExit:
                 pass
             else:

@@ -3,7 +3,9 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use shared_config::{build_admin_principal_map, load_ledger_scoped_admin_tokens, AdminPrincipal};
+use shared_config::{
+    build_admin_principal_map, load_ledger_scoped_admin_tokens, runtime_guard, AdminPrincipal,
+};
 use sqlx::PgPool;
 use std::{
     collections::{HashMap, HashSet},
@@ -32,9 +34,9 @@ pub struct LedgerEntryRecord {
     pub idempotency_key: Option<String>,
 }
 
-/// Exact-memory state exists only for non-production service-local tests that do not
-/// provision PostgreSQL. It preserves immutable request comparison and scoped
-/// idempotency; production-like profiles still require `operation_pool`.
+/// Exact-memory state exists only for explicitly opted-in service-local tests
+/// that do not provision PostgreSQL. It preserves immutable request comparison
+/// and scoped idempotency; runtime state never treats it as value authority.
 #[derive(Debug, Default)]
 pub struct ExactMemoryLedger {
     pub account_openings_by_account: HashMap<Uuid, Value>,
@@ -64,6 +66,10 @@ pub struct AppState {
     pub repository: LedgerRepositoryHandle,
     pub operation_pool: Option<PgPool>,
     pub fail_fast: bool,
+    /// In-memory value mutation is an explicit service-local test opt-in.  The
+    /// runtime constructor always leaves this disabled, including local/dev
+    /// processes, so a placeholder repository cannot become write authority.
+    pub(crate) allow_memory_fallback: bool,
     pub require_explicit_ledger_trace: bool,
     pub admin_tokens: Arc<HashMap<String, AdminPrincipal>>,
     pub entitlement_signing_secret: Arc<String>,
@@ -85,9 +91,7 @@ impl AppState {
         repository: LedgerRepositoryHandle,
         operation_pool: Option<PgPool>,
     ) -> Self {
-        let fail_fast = std::env::var("LEDGER_FAIL_FAST")
-            .map(|v| v == "true" || v == "1")
-            .unwrap_or(false);
+        let fail_fast = runtime_guard::env_flag("LEDGER_FAIL_FAST", false);
 
         Self {
             accounts: Arc::new(RwLock::new(HashMap::new())),
@@ -97,7 +101,11 @@ impl AppState {
             repository,
             operation_pool,
             fail_fast,
-            require_explicit_ledger_trace: env_flag("LEDGER_V2_REQUIRE_EXPLICIT_TRACE", fail_fast),
+            allow_memory_fallback: false,
+            require_explicit_ledger_trace: runtime_guard::env_flag(
+                "LEDGER_V2_REQUIRE_EXPLICIT_TRACE",
+                fail_fast,
+            ),
             admin_tokens: Arc::new(load_admin_tokens()),
             entitlement_signing_secret: Arc::new(required_secret(
                 "TRNM_VALUE_ENTITLEMENT_SIGNING_SECRET",
@@ -119,8 +127,11 @@ impl AppState {
                 fail_fast,
                 "local-development-player-session-secret-change-me",
             )),
-            require_player_session: env_flag("TRNM_REQUIRE_PLAYER_SESSION", fail_fast),
-            allow_system_economy_operations: env_flag(
+            require_player_session: runtime_guard::env_flag(
+                "TRNM_REQUIRE_PLAYER_SESSION",
+                fail_fast,
+            ),
+            allow_system_economy_operations: runtime_guard::env_flag(
                 "TRNM_ALLOW_SYSTEM_ECONOMY_OPERATIONS",
                 false,
             ),
@@ -137,6 +148,20 @@ impl AppState {
         admin_token: Option<String>,
         scopes: Vec<String>,
         org_ids: Vec<String>,
+    ) -> Self {
+        Self::new_for_tests_configured(repository, fail_fast, admin_token, scopes, org_ids, true)
+    }
+
+    /// Construct service-local test state and explicitly choose whether the
+    /// compatibility in-memory value authority is enabled.  Production/runtime
+    /// code must use [`Self::new_with_operation_pool`], which never enables it.
+    pub fn new_for_tests_configured(
+        repository: LedgerRepositoryHandle,
+        fail_fast: bool,
+        admin_token: Option<String>,
+        scopes: Vec<String>,
+        org_ids: Vec<String>,
+        allow_memory_fallback: bool,
     ) -> Self {
         let admin_tokens = admin_token
             .into_iter()
@@ -170,6 +195,7 @@ impl AppState {
             repository,
             operation_pool: None,
             fail_fast,
+            allow_memory_fallback,
             require_explicit_ledger_trace: false,
             admin_tokens: Arc::new(admin_tokens),
             entitlement_signing_secret: Arc::new("test-entitlement-secret".to_string()),
@@ -182,6 +208,14 @@ impl AppState {
             product_org_id: Uuid::parse_str("00000000-0000-0000-0000-00000000ce01")
                 .expect("test product org UUID"),
         }
+    }
+
+    pub(crate) fn memory_fallback_enabled(&self) -> bool {
+        self.allow_memory_fallback && !self.fail_fast
+    }
+
+    pub(crate) fn value_write_available(&self) -> bool {
+        self.operation_pool.is_some() || self.memory_fallback_enabled()
     }
 }
 
@@ -221,13 +255,6 @@ fn load_entitlement_issuer_registry(fail_fast: bool) -> HashMap<String, Entitlem
         panic!("entitlement issuer registry requires at least one active key");
     }
     registry.keys
-}
-
-fn env_flag(name: &str, default: bool) -> bool {
-    std::env::var(name)
-        .ok()
-        .map(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes" | "YES"))
-        .unwrap_or(default)
 }
 
 fn required_uuid(name: &str, default: &str) -> Uuid {

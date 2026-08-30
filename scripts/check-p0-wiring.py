@@ -43,6 +43,66 @@ AUTHORITATIVE_POSTGRES_SCRIPTS = (
     "scripts/backfill-audit-source-baselines.sh",
 )
 
+# The release-evidence selectors were split into a small checked-in adapter and
+# an implementation body so the creation-order fix can remain a narrow seam.
+# Keep both sides in the P0 static contract: checking only the adapter's
+# docstring/markers would let the implementation disappear (or be replaced by
+# a symlink) while all workflow checks still appeared green.
+RELEASE_WRAPPER_BOUNDARIES = {
+    "scripts/p0-release-evidence-core.py": {
+        "implementation": "scripts/p0-release-evidence-core-impl.py",
+        "wrapper_markers": (
+            "read_regular_nofollow",
+            "authoritative_run_sort_key",
+            "_IMPLEMENTATION_SELF_TEST = self_test",
+            "return authoritative_run_sort_key(run)",
+        ),
+        "implementation_markers": (
+            "tree_sha = payload.get(\"tree_sha\")",
+            "lacks a valid exact tree_sha",
+            "def revalidate_gate_runs(",
+            "release-evidence core self-test failed",
+        ),
+    },
+    "scripts/check-hosted-gate-execution.py": {
+        "implementation": "scripts/check-hosted-gate-execution-impl.py",
+        "wrapper_markers": (
+            "read_regular_nofollow",
+            "authoritative_run_sort_key",
+            "_IMPLEMENTATION_SELF_TEST = self_test",
+            "return authoritative_run_sort_key(run)",
+        ),
+        "implementation_markers": (
+            "latest_authoritative_run_is_binding",
+            "no real runner was allocated",
+            "build_frozen_attestation",
+            "--context and --execution must be supplied together",
+            "disables run re-selection",
+        ),
+    },
+    "scripts/verify-hosted-snapshot-freshness.py": {
+        "implementation": "scripts/verify-hosted-snapshot-freshness-impl.py",
+        "wrapper_markers": (
+            "read_regular_nofollow",
+            "authoritative_order_self_test",
+            "_IMPLEMENTATION_SELF_TEST = self_test",
+            "failures.extend(authoritative_order_self_test())",
+        ),
+        "implementation_markers": (
+            "cex.hosted-gate-selection-binding.v1",
+            "latest_authoritative_run_is_binding",
+            "latest_run_states",
+            "paged_collection",
+            "newer-success",
+            "newer-rerun-attempt",
+            "detail-status-drift",
+            "read_json_nofollow",
+            "read_regular_nofollow",
+            "workflow_revalidation_count",
+        ),
+    },
+}
+
 
 def read_text(relative_path: str) -> str:
     path = ROOT / relative_path
@@ -80,6 +140,124 @@ def forbid_regex(relative_path: str, *patterns: tuple[str, str]) -> None:
 def forbid_path(relative_path: str) -> None:
     if (ROOT / relative_path).exists():
         PROBLEMS.append(f"obsolete/conflicting path must not exist: {relative_path}")
+
+
+def verify_release_failure_diagnostics_isolation() -> None:
+    """Keep failure artifacts outside the frozen canonical evidence payload.
+
+    The aggregate workflow may leave partially written files behind when a
+    step fails.  Only the support namespace is allowed on the best-effort
+    failure upload; the canonical payload is frozen and consumed as release
+    evidence, so uploading that directory from a failure path would create a
+    provenance/secret-boundary bypass.
+    """
+
+    content = read_text(RELEASE_WORKFLOW)
+    if not content:
+        return
+    lines = content.splitlines()
+    starts = [
+        index
+        for index, line in enumerate(lines)
+        if re.match(r"^\s*-\s+name:\s*Upload failure diagnostics\s*$", line)
+    ]
+    if len(starts) != 1:
+        PROBLEMS.append(
+            f"{RELEASE_WORKFLOW} must contain exactly one Upload failure diagnostics step"
+        )
+        return
+
+    start = starts[0]
+    step_indent = len(lines[start]) - len(lines[start].lstrip())
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        line = lines[index]
+        indent = len(line) - len(line.lstrip())
+        if indent <= step_indent and re.match(r"^\s*-\s+name:\s*", line):
+            end = index
+            break
+    body = "\n".join(lines[start + 1 : end])
+    if not re.search(r"(?m)^\s*if:\s*failure\(\)\s*$", body):
+        PROBLEMS.append(
+            f"{RELEASE_WORKFLOW} failure diagnostics step must remain conditional on failure()"
+        )
+    path_values = re.findall(
+        r"(?m)^\s*path:\s*([^#\s]+)\s*(?:#.*)?$", body
+    )
+    if path_values != ["run/p0-release-support"]:
+        PROBLEMS.append(
+            f"{RELEASE_WORKFLOW} failure diagnostics must upload only "
+            f"run/p0-release-support (got {path_values!r})"
+        )
+
+
+def verify_release_wrapper_boundaries() -> None:
+    """Verify the checked-in release adapters load the intended implementations.
+
+    The wrappers execute implementation bytes dynamically.  A marker check on
+    the wrapper alone is therefore insufficient: a missing, swapped, or
+    symlinked ``*-impl.py`` could retain the visible adapter markers while
+    changing the code that actually runs.  Keep this check deliberately
+    lexical and static so it works on both Linux and Windows qualification
+    runners; the runtime no-follow loader remains the second line of defence.
+    """
+
+    generic_wrapper_markers = (
+        'globals()["__name__"] = f"{_ORIGINAL_MODULE_NAME}.__impl__"',
+        "_SOURCE = read_regular_nofollow(_IMPL_PATH)",
+        'exec(compile(_SOURCE, str(_IMPL_PATH), "exec", dont_inherit=True), globals())',
+        'globals()["__name__"] = _ORIGINAL_MODULE_NAME',
+    )
+    for wrapper_relative, contract in RELEASE_WRAPPER_BOUNDARIES.items():
+        implementation_relative = contract["implementation"]
+        wrapper_path = ROOT / wrapper_relative
+        implementation_path = ROOT / implementation_relative
+
+        # Do not let Path.is_file() follow a symlink at either execution
+        # boundary.  The wrappers themselves use a no-follow read at runtime,
+        # so a symlink here would otherwise be an easy source/loader drift.
+        wrapper_is_real = wrapper_path.is_file() and not wrapper_path.is_symlink()
+        implementation_is_real = (
+            implementation_path.is_file() and not implementation_path.is_symlink()
+        )
+        if wrapper_path.is_symlink():
+            PROBLEMS.append(f"release-evidence wrapper must not be a symlink: {wrapper_relative}")
+        elif not wrapper_path.is_file():
+            PROBLEMS.append(f"missing release-evidence wrapper: {wrapper_relative}")
+        if implementation_path.is_symlink():
+            PROBLEMS.append(
+                "release-evidence implementation must not be a symlink: "
+                f"{implementation_relative}"
+            )
+        elif not implementation_path.is_file():
+            PROBLEMS.append(
+                f"missing release-evidence implementation: {implementation_relative}"
+            )
+        if not wrapper_is_real or not implementation_is_real:
+            continue
+
+        wrapper_text = read_text(wrapper_relative)
+        implementation_text = read_text(implementation_relative)
+
+        # Require one exact implementation assignment.  Merely mentioning a
+        # filename in a comment/docstring is not enough to establish the load
+        # boundary used by the adapter.
+        expected_assignment = (
+            f'_IMPL_PATH = _SCRIPT_DIR / "{Path(implementation_relative).name}"'
+        )
+        if wrapper_text.count(expected_assignment) != 1:
+            PROBLEMS.append(
+                f"{wrapper_relative} must assign its canonical implementation exactly once: "
+                f"{expected_assignment}"
+            )
+        for marker in generic_wrapper_markers + tuple(contract["wrapper_markers"]):
+            if marker not in wrapper_text:
+                PROBLEMS.append(f"{wrapper_relative} lacks wrapper boundary marker: {marker}")
+        for marker in contract["implementation_markers"]:
+            if marker not in implementation_text:
+                PROBLEMS.append(
+                    f"{implementation_relative} lacks implementation marker: {marker}"
+                )
 
 
 def latest_migration() -> tuple[str, str]:
@@ -640,6 +818,8 @@ def verify_development_documents() -> None:
 
 
 def verify_gates_and_plan() -> None:
+    verify_release_wrapper_boundaries()
+    verify_release_failure_diagnostics_isolation()
     require_text(
         "scripts/check-repository-integrity.py",
         '"commit_sha": commit_sha',
@@ -650,28 +830,15 @@ def verify_gates_and_plan() -> None:
         "producer_tree = payload.get(\"tree_sha\")",
         "missing a valid exact tree_sha",
     )
-    require_text(
-        "scripts/p0-release-evidence-core.py",
-        "tree_sha = payload.get(\"tree_sha\")",
-        "lacks a valid exact tree_sha",
-        "def revalidate_gate_runs(",
-        "release-evidence core self-test failed",
-    )
+    # Semantic core/snapshot markers are checked on their implementation
+    # files by verify_release_wrapper_boundaries(); the adapter markers are
+    # checked there as well, keeping this section tied to executable bytes.
     require_text(
         "scripts/p0-release-evidence-strict.py",
         "frozen_runs_from_attestation",
         "run_core_collect_frozen(",
         "immutable core attempted to select hosted runs more than once",
         "The hosted checker is the sole latest-run selector",
-    )
-    require_text(
-        "scripts/verify-hosted-snapshot-freshness.py",
-        "cex.hosted-gate-selection-binding.v1",
-        "latest_authoritative_run_is_binding",
-        "latest_run_states",
-        "paged_collection",
-        "read_json_nofollow",
-        "read_regular_nofollow",
     )
     for producer in (
         "scripts/check-hepta-postgres-integration.sh",
@@ -782,6 +949,8 @@ def verify_gates_and_plan() -> None:
         "Revalidate frozen latest hosted snapshot before manifest",
         "Revalidate frozen latest hosted snapshot after manifest publication",
         "python3 scripts/verify-hosted-snapshot-freshness.py",
+        "Upload failure diagnostics",
+        "path: run/p0-release-support",
     )
     require_text(
         ACTIVE_PLAN,
