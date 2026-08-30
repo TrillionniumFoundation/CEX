@@ -13,8 +13,12 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/p0-release-candidate-gate.yml"
 STRICT_WRAPPER = ROOT / "scripts/p0-release-evidence-strict.py"
+CANONICAL_GENERATOR = ROOT / "scripts/p0-release-evidence.py"
 EXECUTION_VERIFIER = ROOT / "scripts/verify-hosted-run-execution.py"
 CONTRACT = ROOT / "scripts/check-release-evidence-contract.py"
+PRIMARY_CONTRACT = ROOT / "scripts/check-release-baseline-manifest.py"
+TEMPLATE = ROOT / "docs/templates/cex-release-baseline-manifest-v1.json"
+SCHEMA = ROOT / "docs/schemas/cex-release-baseline-manifest-v1.schema.json"
 PROBLEMS: list[str] = []
 
 
@@ -34,6 +38,15 @@ def require_markers(path: Path, *markers: str) -> None:
             )
 
 
+def forbid_markers(path: Path, *markers: str) -> None:
+    text = require_file(path)
+    for marker in markers:
+        if marker in text:
+            PROBLEMS.append(
+                f"{path.relative_to(ROOT).as_posix()} contains split-brain marker: {marker}"
+            )
+
+
 def load_contract_module() -> Any:
     spec = importlib.util.spec_from_file_location("cex_release_contract", CONTRACT)
     if spec is None or spec.loader is None:
@@ -50,9 +63,9 @@ def valid_manifest(module: Any) -> dict[str, Any]:
     digest = "sha256:" + "3" * 64
     payload = f"cex-p0-evidence-{sha}-attempt-1"
     evidence = []
-    for name in sorted(module.EXPECTED_EVIDENCE):
+    for name in module.EXPECTED_EVIDENCE:
         if name.startswith("hosted:"):
-            uri = f"gh://TrillionniumFoundation/CEX/actions/runs/1/attempts/1"
+            uri = "gh://TrillionniumFoundation/CEX/actions/runs/1/attempts/1"
         else:
             uri = f"artifact://{payload}/{name}.json"
         evidence.append(
@@ -90,7 +103,10 @@ def valid_manifest(module: Any) -> dict[str, Any]:
             "artifacts": [
                 {
                     "name": payload,
-                    "uri": f"gh://TrillionniumFoundation/CEX/actions/runs/1/attempts/1/artifacts/{payload}",
+                    "uri": (
+                        "gh://TrillionniumFoundation/CEX/actions/runs/1/"
+                        f"attempts/1/artifacts/{payload}"
+                    ),
                     "sha256": digest,
                 }
             ],
@@ -147,9 +163,34 @@ def run_contract_self_tests() -> None:
         missing_job_proof["evidence"] = [
             item
             for item in missing_job_proof["evidence"]
-            if item["name"] != "hosted-run-execution"
+            if item["name"] != "hosted-gate-execution"
         ]
         expect_rejected(module, "missing hosted execution proof", missing_job_proof)
+
+        reordered_evidence = copy.deepcopy(base)
+        reordered_evidence["evidence"][0], reordered_evidence["evidence"][1] = (
+            reordered_evidence["evidence"][1],
+            reordered_evidence["evidence"][0],
+        )
+        expect_rejected(module, "reordered evidence", reordered_evidence)
+
+        fifteen_records = copy.deepcopy(base)
+        for name in ("repository-governance", "hosted-run-execution"):
+            fifteen_records["evidence"].append(
+                {
+                    "name": name,
+                    "status": "pass",
+                    "uri": f"artifact://payload/{name}.json",
+                    "sha256": "sha256:" + "3" * 64,
+                    "waiver": None,
+                }
+            )
+        expect_rejected(module, "fifteen-record split brain", fifteen_records)
+
+        stale_pair = copy.deepcopy(base)
+        stale_pair["evidence"][-2]["name"] = "repository-governance"
+        stale_pair["evidence"][-1]["name"] = "hosted-run-execution"
+        expect_rejected(module, "stale attestation pair", stale_pair)
 
         reordered_external = copy.deepcopy(base)
         reordered_external["external_gates"]["items"].reverse()
@@ -162,8 +203,36 @@ def run_contract_self_tests() -> None:
         mutable_uri = copy.deepcopy(base)
         mutable_uri["evidence"][0]["uri"] = "file:///tmp/evidence.json"
         expect_rejected(module, "mutable evidence URI", mutable_uri)
+
+        non_utc = copy.deepcopy(base)
+        non_utc["generated_at"] = "2026-08-30T00:00:00+01:00"
+        expect_rejected(module, "non-UTC candidate timestamp", non_utc)
     except Exception as error:  # fail closed with a useful diagnostic
         PROBLEMS.append(f"strict evidence contract self-test crashed: {error}")
+
+
+def validate_template_order() -> None:
+    raw = require_file(TEMPLATE)
+    if not raw:
+        return
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as error:
+        PROBLEMS.append(f"candidate template is invalid JSON: {error}")
+        return
+    try:
+        module = load_contract_module()
+    except Exception as error:
+        PROBLEMS.append(f"cannot load evidence order for template check: {error}")
+        return
+    evidence = value.get("evidence") if isinstance(value, dict) else None
+    names = [
+        item.get("name")
+        for item in evidence
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    ] if isinstance(evidence, list) else []
+    if names != list(module.EXPECTED_EVIDENCE):
+        PROBLEMS.append("candidate template evidence order is not canonical thirteen")
 
 
 def main() -> int:
@@ -178,9 +247,24 @@ def main() -> int:
     require_markers(
         STRICT_WRAPPER,
         "verify-hosted-run-execution.py",
+        "PAYLOAD_ONLY_ATTESTATIONS",
+        "CANONICAL_EVIDENCE_ORDER",
         "repository-governance.json",
         "hosted-run-execution.json",
+        "payload-only attestations leaked into manifest evidence",
         "run_legacy(forwarded)",
+    )
+    forbid_markers(
+        STRICT_WRAPPER,
+        '("repository-governance", "repository-governance.json")',
+        '("hosted-run-execution", "hosted-run-execution.json")',
+        "evidence.append(",
+    )
+    require_markers(
+        CANONICAL_GENERATOR,
+        '"local-evidence-binding": "local-evidence-binding.json"',
+        '"hosted-gate-execution": "hosted-gate-execution.json"',
+        "augment_manifest",
     )
     require_markers(
         EXECUTION_VERIFIER,
@@ -195,13 +279,38 @@ def main() -> int:
         "waivers are forbidden",
         "EXPECTED_EVIDENCE",
         "EXPECTED_EXTERNAL_GATES",
+        "local-evidence-binding",
+        "hosted-gate-execution",
+        "canonical ordered thirteen-record contract",
         "repository-qualification-automation",
+        "FORBIDDEN_SPLIT_BRAIN_EVIDENCE",
+        "payload-only attestations must not become extra manifest evidence",
     )
+    require_markers(
+        PRIMARY_CONTRACT,
+        '"local-evidence-binding"',
+        '"hosted-gate-execution"',
+        "JSON Schema",
+    )
+    require_markers(
+        SCHEMA,
+        '"const":"local-evidence-binding"',
+        '"const":"hosted-gate-execution"',
+        '"minItems":13',
+        '"maxItems":13',
+    )
+
     run_contract_self_tests()
+    validate_template_order()
 
     result = {
-        "schema": "cex.strict-release-evidence-wiring-check.v1",
+        "schema": "cex.strict-release-evidence-wiring-check.v2",
         "status": "failed" if PROBLEMS else "ok",
+        "canonical_evidence_count": 13,
+        "payload_only_attestations": [
+            "repository-governance.json",
+            "hosted-run-execution.json",
+        ],
         "problems": PROBLEMS,
     }
     print(json.dumps(result, indent=2, sort_keys=True))

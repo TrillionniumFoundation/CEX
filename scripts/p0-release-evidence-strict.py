@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Strict wrapper around the v12 P0 evidence collector and manifest generator.
 
-The legacy generator remains the implementation source for SBOM, provenance and
-hosted-run selection.  This wrapper adds the final fail-closed controls that
-must not be optional: exact-attempt job execution verification, exact-tree
-binding of governance evidence, and first-class manifest entries for both.
+The canonical generator produces exactly thirteen ordered manifest evidence
+records. This wrapper keeps repository-governance and exact-attempt hosted job
+execution as payload-only attestations: it validates and indexes them without
+adding a second pair of manifest records that would split the schema contract.
 """
 
 from __future__ import annotations
@@ -21,6 +21,29 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 LEGACY = ROOT / "scripts/p0-release-evidence.py"
 VERIFY_EXECUTION = ROOT / "scripts/verify-hosted-run-execution.py"
+PAYLOAD_ONLY_ATTESTATIONS = (
+    "repository-governance.json",
+    "hosted-run-execution.json",
+)
+CANONICAL_EVIDENCE_ORDER = (
+    "hosted:p0-migration-gate",
+    "hosted:rust-service-gate",
+    "hosted:p0-gateway-exact-reserve-gate",
+    "hosted:p0-execution-settlement-gate",
+    "hosted:p0-provider-reconciliation-gate",
+    "candidate-hygiene",
+    "repository-integrity",
+    "hepta-postgres-integration",
+    "migration-and-lifecycle-matrix",
+    "exact-ledger-soak",
+    "backup-restore",
+    "local-evidence-binding",
+    "hosted-gate-execution",
+)
+FORBIDDEN_SPLIT_BRAIN_EVIDENCE = {
+    "repository-governance",
+    "hosted-run-execution",
+}
 
 
 def sha256_file(path: Path) -> str:
@@ -55,7 +78,8 @@ def collect(args: argparse.Namespace) -> int:
         "--server-url", args.server_url,
     ]
 
-    # First pass resolves the exact successful hosted runs into a context file.
+    # First pass resolves the exact successful hosted runs and produces the
+    # canonical local-binding and hosted-gate-execution attestations.
     run_legacy(forwarded)
 
     evidence_dir = args.evidence_dir.resolve()
@@ -90,18 +114,23 @@ def collect(args: argparse.Namespace) -> int:
     )
 
     # Re-run collection so the payload index and release context cover the two
-    # newly verified evidence files.  Hosted-run selection is deterministic for
-    # the exact branch/SHA and prefers a completed success.
+    # payload-only attestations. The manifest remains the canonical thirteen
+    # records emitted by p0-release-evidence.py.
     run_legacy(forwarded)
     context = json.loads(context_path.read_text(encoding="utf-8"))
     files = context.get("files") if isinstance(context, dict) else None
     if not isinstance(files, dict):
         raise SystemExit("strict release context lacks a files index")
-    for relative in ("repository-governance.json", "hosted-run-execution.json"):
+
+    payload_only: dict[str, str] = {}
+    for relative in PAYLOAD_ONLY_ATTESTATIONS:
         path = evidence_dir / relative
         expected = sha256_file(path)
         if files.get(relative) != expected:
             raise SystemExit(f"strict release context did not index {relative}")
+        payload_only[relative] = expected
+    context["payload_only_attestations"] = payload_only
+    write_json(context_path, context)
     print(context_path)
     return 0
 
@@ -126,30 +155,30 @@ def manifest(args: argparse.Namespace) -> int:
     if not isinstance(files, dict) or not isinstance(evidence, list):
         raise SystemExit("strict manifest inputs lack files/evidence")
 
-    existing_names = {
+    names = [
         item.get("name")
         for item in evidence
         if isinstance(item, dict) and isinstance(item.get("name"), str)
-    }
-    for name, relative in (
-        ("repository-governance", "repository-governance.json"),
-        ("hosted-run-execution", "hosted-run-execution.json"),
-    ):
-        if name in existing_names:
-            raise SystemExit(f"strict evidence entry already exists: {name}")
-        digest = files.get(relative)
-        if not isinstance(digest, str):
-            raise SystemExit(f"strict release context lacks digest for {relative}")
-        evidence.append(
-            {
-                "name": name,
-                "status": "pass",
-                "uri": f"artifact://{args.payload_name}/{relative}",
-                "sha256": digest,
-                "waiver": None,
-            }
+    ]
+    if names != list(CANONICAL_EVIDENCE_ORDER):
+        raise SystemExit(
+            "generated candidate manifest is not the canonical ordered thirteen-record contract"
         )
-    write_json(args.output, manifest_value)
+    if FORBIDDEN_SPLIT_BRAIN_EVIDENCE.intersection(names):
+        raise SystemExit("payload-only attestations leaked into manifest evidence")
+
+    payload_only = context.get("payload_only_attestations")
+    if not isinstance(payload_only, dict) or set(payload_only) != set(
+        PAYLOAD_ONLY_ATTESTATIONS
+    ):
+        raise SystemExit("strict release context lacks the payload-only attestation set")
+    for relative in PAYLOAD_ONLY_ATTESTATIONS:
+        digest = payload_only.get(relative)
+        if not isinstance(digest, str) or files.get(relative) != digest:
+            raise SystemExit(
+                f"strict release context lacks the exact payload-only digest for {relative}"
+            )
+
     print(args.output)
     return 0
 
