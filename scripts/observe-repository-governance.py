@@ -13,10 +13,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# This list is the union of every authoritative constituent job required by
+# check-hosted-gate-execution.py plus the aggregate candidate qualification job.
+# Omitting a constituent job can otherwise create a false governance pass.
 DESIRED_CHECKS = [
     "fresh-postgres-migrations",
+    "repository-integrity",
     "service-local-gate-linux",
     "service-local-gate-windows",
+    "hepta-postgres-integration",
     "gateway-exact-reserve",
     "execution-settlement",
     "provider-reconciliation",
@@ -47,6 +52,22 @@ def request_json(url: str, token: str) -> tuple[int, Any]:
         except (UnicodeDecodeError, json.JSONDecodeError):
             payload = {"message": str(error)}
         return int(error.code), payload
+
+
+def required_checks_are_enforced(
+    protected: bool,
+    actual_contexts: list[str] | set[str],
+) -> bool:
+    """Return true only when every exact constituent and aggregate job is required."""
+
+    if len(DESIRED_CHECKS) != len(set(DESIRED_CHECKS)):
+        raise SystemExit("desired required status contexts contain duplicates")
+    observed = {
+        value
+        for value in actual_contexts
+        if isinstance(value, str) and value
+    }
+    return bool(protected) and set(DESIRED_CHECKS).issubset(observed)
 
 
 def main() -> int:
@@ -104,7 +125,11 @@ def main() -> int:
             }
         )
 
-    required_checks_enforced = protected and set(DESIRED_CHECKS).issubset(actual_contexts)
+    required_checks_enforced = required_checks_are_enforced(
+        protected,
+        actual_contexts,
+    )
+    missing_required_contexts = sorted(set(DESIRED_CHECKS) - set(actual_contexts))
     if required_checks_enforced:
         enforcement = "enforced"
     elif protected or rulesets_readable:
@@ -123,6 +148,7 @@ def main() -> int:
         "branch_protection_enabled": bool(protection.get("enabled")),
         "actual_required_status_contexts": actual_contexts,
         "desired_required_status_contexts": DESIRED_CHECKS,
+        "missing_required_status_contexts": missing_required_contexts,
         "required_candidate_checks_enforced": required_checks_enforced,
         "rulesets_http_status": rulesets_status,
         "rulesets_readable": rulesets_readable,
