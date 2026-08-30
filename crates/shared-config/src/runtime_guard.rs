@@ -81,15 +81,24 @@ pub fn parse_bool_value(raw: &str) -> Option<bool> {
     }
 }
 
+/// Resolve a possibly-present boolean value with the shared normalization
+/// rules.  Malformed input falls back to the caller-supplied fail-closed
+/// default; production-like startup validation rejects malformed values before
+/// service state is constructed.
+fn env_flag_value(raw: Option<&str>, default: bool) -> bool {
+    raw.and_then(parse_bool_value).unwrap_or(default)
+}
+
 /// Read a boolean environment flag with the shared normalization rules.
-/// Invalid values retain the historical service behavior (false when a value
-/// is present), while the strict production guard rejects invalid values before
-/// state construction.
+///
+/// The supplied default is part of the security contract.  In particular,
+/// safety controls whose production default is `true` must not be disabled by
+/// a misspelled value such as `tru` or `enabled`.  Production-like profiles
+/// additionally reject malformed values and explicitly-disabled required
+/// controls in `validate_production_boolean_configuration`.
 pub fn env_flag(name: &str, default: bool) -> bool {
-    match env::var(name) {
-        Ok(raw) => parse_bool_value(&raw).unwrap_or(false),
-        Err(_) => default,
-    }
+    let raw = env::var(name).ok();
+    env_flag_value(raw.as_deref(), default)
 }
 
 impl ServiceKind {
@@ -266,6 +275,7 @@ fn resolve_profile_values(
 fn validate_production_posture(service: ServiceKind) -> Result<(), StartupError> {
     require_non_empty("DATABASE_URL")?;
     require_explicit_true(service.fail_fast_env())?;
+    validate_production_boolean_configuration(service)?;
     validate_no_weak_credentials()?;
     validate_admin_configuration(service)?;
 
@@ -278,6 +288,58 @@ fn validate_production_posture(service: ServiceKind) -> Result<(), StartupError>
         ));
     }
 
+    Ok(())
+}
+
+fn validate_production_boolean_configuration(
+    service: ServiceKind,
+) -> Result<(), StartupError> {
+    if !matches!(service, ServiceKind::Ledger) {
+        return Ok(());
+    }
+
+    // These controls default to LEDGER_FAIL_FAST in AppState and therefore
+    // resolve to true in every production-like ledger.  An explicit false
+    // would weaken exact trace or player/session ownership at the point where
+    // startup is expected to be fail-closed, so reject it rather than silently
+    // changing the authority model.
+    for name in [
+        "LEDGER_V2_REQUIRE_EXPLICIT_TRACE",
+        "TRNM_REQUIRE_PLAYER_SESSION",
+    ] {
+        require_true_or_unset(name, get_trimmed_env(name).as_deref())?;
+    }
+
+    // System operations have an explicit production use in the dedicated TRNM
+    // launcher, while the general production default remains false.  Both
+    // boolean values are valid, but malformed input must never be coerced into
+    // another authority posture.
+    validate_optional_boolean(
+        "TRNM_ALLOW_SYSTEM_ECONOMY_OPERATIONS",
+        get_trimmed_env("TRNM_ALLOW_SYSTEM_ECONOMY_OPERATIONS").as_deref(),
+    )?;
+
+    Ok(())
+}
+
+fn require_true_or_unset(name: &str, raw: Option<&str>) -> Result<(), StartupError> {
+    let Some(raw) = raw else {
+        return Ok(());
+    };
+    if parse_bool(name, raw)? {
+        Ok(())
+    } else {
+        Err(StartupError::new(
+            "production_control_disabled",
+            format!("{name} must not be false in production-like ledger profiles"),
+        ))
+    }
+}
+
+fn validate_optional_boolean(name: &str, raw: Option<&str>) -> Result<(), StartupError> {
+    if let Some(raw) = raw {
+        parse_bool(name, raw)?;
+    }
     Ok(())
 }
 
@@ -593,6 +655,35 @@ mod tests {
         for raw in ["", "maybe", "truthy", "2", "true-ish"] {
             assert_eq!(parse_bool_value(raw), None, "raw={raw:?}");
         }
+    }
+
+    #[test]
+    fn malformed_environment_flags_keep_the_fail_closed_default() {
+        assert!(env_flag_value(Some("not-a-boolean"), true));
+        assert!(!env_flag_value(Some("not-a-boolean"), false));
+        assert!(env_flag_value(None, true));
+        assert!(!env_flag_value(None, false));
+    }
+
+    #[test]
+    fn production_ledger_controls_reject_false_and_malformed_values() {
+        assert!(require_true_or_unset("CONTROL", None).is_ok());
+        assert!(require_true_or_unset("CONTROL", Some("ON")).is_ok());
+
+        let disabled = require_true_or_unset("CONTROL", Some("false")).unwrap_err();
+        assert_eq!(disabled.code, "production_control_disabled");
+
+        let malformed = require_true_or_unset("CONTROL", Some("enabled")).unwrap_err();
+        assert_eq!(malformed.code, "invalid_boolean_configuration");
+
+        assert!(validate_optional_boolean("OPTIONAL", None).is_ok());
+        assert!(validate_optional_boolean("OPTIONAL", Some("false")).is_ok());
+        assert_eq!(
+            validate_optional_boolean("OPTIONAL", Some("sometimes"))
+                .unwrap_err()
+                .code,
+            "invalid_boolean_configuration"
+        );
     }
 
     #[test]

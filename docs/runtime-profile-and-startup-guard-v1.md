@@ -63,7 +63,19 @@ fail-fast 启动护栏；它不会形成一个可绕过护栏的独立 profile�
 
 `IDENTITY_FAIL_FAST` 目前由 startup guard 执行数据库和配置预检；后续 identity repository 改造后应下沉到服务状态构造器。
 
-### 3.3 禁止值
+### 3.3 Ledger 精确权限布尔控制
+
+production-like Ledger 在构造服务状态前还必须校验下列布尔控制：
+
+- `LEDGER_V2_REQUIRE_EXPLICIT_TRACE`：未配置时采用 fail-closed 的 `true`；显式 `false` 被拒绝；
+- `TRNM_REQUIRE_PLAYER_SESSION`：未配置时采用 fail-closed 的 `true`；显式 `false` 被拒绝；
+- `TRNM_ALLOW_SYSTEM_ECONOMY_OPERATIONS`：通用 production 默认 `false`，专用 TRNM launcher 可在独立认证边界内显式设为 `true`。
+
+所有上述变量只接受 `true/false`、`1/0`、`yes/no` 或 `on/off`（大小写与首尾空白归一化）。
+拼写错误或其他值不得降级为 `false` 后改变 authority；production-like 启动必须以配置错误退出。
+非 production-like 路径遇到非法值时回退到调用方声明的安全默认值，而不是固定回退到 `false`。
+
+### 3.4 禁止值
 
 production-like 会拒绝关键配置中出现以下已知不安全片段：
 
@@ -84,7 +96,7 @@ production-like 会拒绝关键配置中出现以下已知不安全片段：
 - game authority、session 和 entitlement signing secret；
 - JSON token bundle。
 
-### 3.4 Identity static fallback 过渡措施
+### 3.5 Identity static fallback 过渡措施
 
 production-like 禁止显式配置 `IDENTITY_STATIC_API_KEYS_JSON`。
 
@@ -133,6 +145,9 @@ IDENTITY_FAIL_FAST=true
 LEDGER_FAIL_FAST=true
 EXECUTION_FAIL_FAST=true
 AUDIT_FAIL_FAST=true
+LEDGER_V2_REQUIRE_EXPLICIT_TRACE=true
+TRNM_REQUIRE_PLAYER_SESSION=true
+TRNM_ALLOW_SYSTEM_ECONOMY_OPERATIONS=false
 DATABASE_URL=postgres://...
 ```
 
@@ -162,6 +177,9 @@ DATABASE_URL=postgres://...
 - production-like 判定；
 - weak credential 检测；
 - fail-fast 解析；
+- 非法布尔值保留调用方 fail-closed 默认；
+- production-like Ledger 拒绝关闭 explicit-trace/player-session 控制；
+- production-like Ledger 拒绝非法 optional boolean；
 - timeout 边界。
 
 数据库预检在 integration gate 中使用临时 PostgreSQL 覆盖成功、拒绝和超时路径。
