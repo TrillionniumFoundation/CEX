@@ -15,12 +15,32 @@ const SHARED_RUNTIME_GUARD_SERVICE_KINDS: [ServiceKind; 5] = [
     ServiceKind::Audit,
 ];
 
-#[tokio::main]
-async fn main() {
-    init_tracing();
+fn main() {
     debug_assert!(SHARED_RUNTIME_GUARD_SERVICE_KINDS.contains(&ServiceKind::Ledger));
 
-    let startup = match runtime_guard::enforce(ServiceKind::Ledger).await {
+    // SAFETY: this is the first startup action, before tracing, Tokio, or any
+    // application worker thread is initialized.
+    let prepared = match unsafe { runtime_guard::prepare_process_environment(ServiceKind::Ledger) } {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            eprintln!("ledger-service startup rejected: {error}");
+            std::process::exit(runtime_guard::CONFIG_ERROR_EXIT_CODE);
+        }
+    };
+
+    init_tracing();
+    let runtime = match runtime_guard::build_multi_thread_runtime() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("ledger-service async runtime initialization failed: {error}");
+            std::process::exit(runtime_guard::CONFIG_ERROR_EXIT_CODE);
+        }
+    };
+    runtime.block_on(run(prepared));
+}
+
+async fn run(prepared: runtime_guard::PreparedStartup) {
+    let startup = match runtime_guard::enforce_prepared(prepared).await {
         Ok(startup) => startup,
         Err(error) => {
             eprintln!("ledger-service startup rejected: {error}");

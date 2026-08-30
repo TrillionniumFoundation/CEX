@@ -7,11 +7,30 @@ use shared_tracing::init_tracing;
 use sqlx::postgres::PgPoolOptions;
 use std::{env, process, time::Duration};
 
-#[tokio::main]
-async fn main() {
-    init_tracing();
+fn main() {
+    // SAFETY: this is the first startup action, before tracing, Tokio, or any
+    // application worker thread is initialized.
+    let prepared = match unsafe { runtime_guard::prepare_process_environment(ServiceKind::Audit) } {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            eprintln!("{DISPATCHER_SERVICE_ID} startup rejected: {error}");
+            process::exit(runtime_guard::CONFIG_ERROR_EXIT_CODE);
+        }
+    };
 
-    let startup = match runtime_guard::enforce(ServiceKind::Audit).await {
+    init_tracing();
+    let runtime = match runtime_guard::build_multi_thread_runtime() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("{DISPATCHER_SERVICE_ID} async runtime initialization failed: {error}");
+            process::exit(runtime_guard::CONFIG_ERROR_EXIT_CODE);
+        }
+    };
+    runtime.block_on(run(prepared));
+}
+
+async fn run(prepared: runtime_guard::PreparedStartup) {
+    let startup = match runtime_guard::enforce_prepared(prepared).await {
         Ok(startup) => startup,
         Err(error) => {
             eprintln!("{DISPATCHER_SERVICE_ID} startup rejected: {error}");

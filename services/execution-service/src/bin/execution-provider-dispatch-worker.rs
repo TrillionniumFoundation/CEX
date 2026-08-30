@@ -2,11 +2,31 @@ use execution_service::{provider_dispatch, validate_internal_service_auth};
 use shared_config::runtime_guard::{self, ServiceKind};
 use shared_tracing::init_tracing;
 
-#[tokio::main]
-async fn main() {
-    init_tracing();
+fn main() {
+    // SAFETY: this is the first startup action, before tracing, Tokio, or any
+    // application worker thread is initialized.
+    let prepared =
+        match unsafe { runtime_guard::prepare_process_environment(ServiceKind::Execution) } {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                eprintln!("provider-dispatch-worker startup rejected: {error}");
+                std::process::exit(runtime_guard::CONFIG_ERROR_EXIT_CODE);
+            }
+        };
 
-    let startup = match runtime_guard::enforce(ServiceKind::Execution).await {
+    init_tracing();
+    let runtime = match runtime_guard::build_multi_thread_runtime() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("provider-dispatch-worker async runtime initialization failed: {error}");
+            std::process::exit(runtime_guard::CONFIG_ERROR_EXIT_CODE);
+        }
+    };
+    runtime.block_on(run(prepared));
+}
+
+async fn run(prepared: runtime_guard::PreparedStartup) {
+    let startup = match runtime_guard::enforce_prepared(prepared).await {
         Ok(startup) => startup,
         Err(error) => {
             eprintln!("provider-dispatch-worker startup rejected: {error}");
