@@ -1,8 +1,8 @@
 {
   "schema": "cex.p0-candidate-trigger.v1",
   "plan": "CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
-  "sequence": 28,
-  "purpose": "Qualify one exact v12 tree after making check-hosted-gate-execution.py the sole latest-authoritative workflow-run selector, injecting that immutable snapshot into the evidence core without a second GitHub API selection, binding the selected run IDs and attestation digest into release context, and requiring all eight constituent job contexts plus aggregate repository-candidate-qualification in governance evidence. Retain deterministic thirteen-record manifest evidence, strict runner/job/required-step proof, canonical migration-head and X1-X8 enforcement, waiver-free qualification, parser-complete workflow trust, and typed receipt plus migration-0087 partial-upgrade hardening.",
+  "sequence": 29,
+  "purpose": "Qualify one exact v12 tree after closing the final latest-run time-of-check/time-of-use gap: the frozen authoritative workflow run/attempt set is digest-bound to hosted-gate-execution evidence, revalidated without substitution against the current latest branch/SHA runs during exact-job verification, checked again before manifest generation, and checked after manifest artifact publication. Any newer success, failure, cancellation, skip or active rerun invalidates the candidate. Retain sole-snapshot core injection, deterministic thirteen-record manifest evidence, all eight constituent plus aggregate governance contexts, strict runner/job/required-step proof, canonical migration-head and X1-X8 enforcement, waiver-free qualification, parser-complete workflow trust, and typed receipt plus migration-0087 partial-upgrade hardening.",
   "qualification_scope": "repository-exact-money-control-plane-plus-hepta-durability-doc-integrity-full-suite-lint-receipt-recovery-and-trnm-production-config-hardening",
   "production_authorization": "not_granted"
 }

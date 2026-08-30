@@ -238,6 +238,15 @@ jobs:
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --server-url "$GITHUB_SERVER_URL"
 
+      - name: Revalidate frozen latest hosted snapshot after exact-job verification
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/verify-hosted-snapshot-freshness.py \
+            --context run/p0-release-context.json
+
       - name: Upload immutable evidence payload
         id: payload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -247,6 +256,15 @@ jobs:
           if-no-files-found: error
           compression-level: 6
           retention-days: 90
+
+      - name: Revalidate frozen latest hosted snapshot before manifest
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/verify-hosted-snapshot-freshness.py \
+            --context run/p0-release-context.json
 
       - name: Generate and validate candidate manifest
         shell: bash
@@ -275,6 +293,15 @@ jobs:
           compression-level: 0
           retention-days: 90
 
+      - name: Revalidate frozen latest hosted snapshot after manifest publication
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/verify-hosted-snapshot-freshness.py \
+            --context run/p0-release-context.json
+
       - name: Publish qualification summary
         shell: bash
         env:
@@ -288,6 +315,7 @@ jobs:
             echo "- Migration head: \`0087_add_term_exchange_receipt_event_history.sql\`"
             echo '- Scope: repository exact-money control plane + TRNM receipt recovery + Hepta PostgreSQL recovery + document integrity'
             echo '- Hosted evidence: exact branch/SHA/run-attempt, real runner allocation and non-empty successful jobs/steps verified'
+            echo '- Latest-run freshness: the frozen constituent run/attempt set was revalidated before manifest generation and after manifest publication'
             echo '- Development authority: active v12 plan plus implementation addendum, machine-validated'
             echo '- Hepta: strict restart, disjoint claim, wrong-owner rejection and expired-lease recovery qualified'
             echo '- GitHub branch/ruleset state: recorded in repository-governance.json; no enforcement is inferred from source code'
