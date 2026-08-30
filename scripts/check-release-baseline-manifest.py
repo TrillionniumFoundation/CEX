@@ -15,6 +15,7 @@ CORE = ROOT / "scripts/check-release-baseline-manifest-core.py"
 STRICT = ROOT / "scripts/check-release-baseline-manifest-contract.py"
 SCHEMA = ROOT / "docs/schemas/cex-release-baseline-manifest-v1.schema.json"
 ACTIVE_MIGRATION_HEAD = "0087_add_term_exchange_receipt_event_history.sql"
+ACTIVE_STATUSES = ("draft", "candidate")
 EXPECTED_EVIDENCE = (
     "hosted:p0-migration-gate",
     "hosted:rust-service-gate",
@@ -80,6 +81,13 @@ def validate_active_head(path: Path) -> list[str]:
             "manifest database.migration_head must equal the active v12 head "
             f"{ACTIVE_MIGRATION_HEAD!r}"
         )
+    if data.get("status") not in ACTIVE_STATUSES:
+        problems.append(
+            "active v12 manifest status must be draft or candidate; "
+            "released/revoked lifecycle states are not implemented"
+        )
+    if data.get("revocation") is not None:
+        problems.append("active v12 manifest revocation must be null")
     return problems
 
 
@@ -92,10 +100,49 @@ def nested(value: Any, *keys: str) -> Any:
     return current
 
 
+def conditional(schema: dict[str, Any], status: str) -> dict[str, Any] | None:
+    all_of = schema.get("allOf")
+    if not isinstance(all_of, list):
+        return None
+    for item in all_of:
+        if not isinstance(item, dict):
+            continue
+        if nested(item, "if", "properties", "status", "const") == status:
+            then = item.get("then")
+            return then if isinstance(then, dict) else None
+    return None
+
+
+def evidence_names_from_condition(condition: dict[str, Any] | None) -> list[Any]:
+    prefix = nested(condition, "properties", "evidence", "prefixItems")
+    values: list[Any] = []
+    if not isinstance(prefix, list):
+        return values
+    for item in prefix:
+        all_parts = item.get("allOf") if isinstance(item, dict) else None
+        contract = (
+            all_parts[1]
+            if isinstance(all_parts, list)
+            and len(all_parts) > 1
+            and isinstance(all_parts[1], dict)
+            else {}
+        )
+        values.append(nested(contract, "properties", "name", "const"))
+    return values
+
+
 def validate_schema_contract(path: Path = SCHEMA) -> list[str]:
     schema, problems = read_object(path, "release manifest JSON Schema")
     if schema is None:
         return problems
+
+    status_values = nested(schema, "properties", "status", "enum")
+    if status_values != list(ACTIVE_STATUSES):
+        problems.append(
+            "JSON Schema status must contain only the implemented draft/candidate states"
+        )
+    if nested(schema, "properties", "revocation", "type") != "null":
+        problems.append("JSON Schema revocation must be null in active v12")
 
     migration_head = nested(
         schema,
@@ -145,30 +192,29 @@ def validate_schema_contract(path: Path = SCHEMA) -> list[str]:
     if external_values != list(EXTERNAL_GATES):
         problems.append("JSON Schema external gates are not canonical X1-X8")
 
-    all_of = schema.get("allOf")
-    candidate_then: dict[str, Any] | None = None
-    if isinstance(all_of, list):
-        for item in all_of:
-            if not isinstance(item, dict):
-                continue
-            if nested(item, "if", "properties", "status", "const") == "candidate":
-                candidate_then = item.get("then") if isinstance(item.get("then"), dict) else None
-                break
-    prefix = nested(candidate_then, "properties", "evidence", "prefixItems")
-    evidence_values: list[Any] = []
-    if isinstance(prefix, list):
-        for item in prefix:
-            all_parts = item.get("allOf") if isinstance(item, dict) else None
-            contract = (
-                all_parts[1]
-                if isinstance(all_parts, list)
-                and len(all_parts) > 1
-                and isinstance(all_parts[1], dict)
-                else {}
+    for status in ACTIVE_STATUSES:
+        condition = conditional(schema, status)
+        if condition is None:
+            problems.append(f"JSON Schema lacks the {status} lifecycle condition")
+            continue
+        names = evidence_names_from_condition(condition)
+        if names != list(EXPECTED_EVIDENCE):
+            problems.append(
+                f"JSON Schema {status} evidence set/order is not canonical"
             )
-            evidence_values.append(nested(contract, "properties", "name", "const"))
-    if evidence_values != list(EXPECTED_EVIDENCE):
-        problems.append("JSON Schema candidate evidence set/order is not canonical")
+        min_items = nested(condition, "properties", "evidence", "minItems")
+        max_items = nested(condition, "properties", "evidence", "maxItems")
+        trailing = nested(condition, "properties", "evidence", "items")
+        if min_items != len(EXPECTED_EVIDENCE) or max_items != len(
+            EXPECTED_EVIDENCE
+        ):
+            problems.append(
+                f"JSON Schema {status} evidence cardinality is not exact"
+            )
+        if trailing is not False:
+            problems.append(
+                f"JSON Schema {status} evidence permits trailing entries"
+            )
     return problems
 
 
@@ -179,17 +225,47 @@ def self_test() -> list[str]:
     with tempfile.TemporaryDirectory(prefix="cex-active-head-") as directory:
         path = Path(directory) / "manifest.json"
         path.write_text(
-            json.dumps({"database": {"migration_head": ACTIVE_MIGRATION_HEAD}}),
+            json.dumps(
+                {
+                    "status": "candidate",
+                    "database": {"migration_head": ACTIVE_MIGRATION_HEAD},
+                    "revocation": None,
+                }
+            ),
             encoding="utf-8",
         )
         if validate_active_head(path):
-            failures.append("valid active migration head was rejected")
-        path.write_text(
-            json.dumps({"database": {"migration_head": "0086_stale.sql"}}),
-            encoding="utf-8",
-        )
-        if not validate_active_head(path):
-            failures.append("stale migration head was accepted")
+            failures.append("valid active migration head/status was rejected")
+
+        for label, value in (
+            (
+                "stale migration",
+                {
+                    "status": "candidate",
+                    "database": {"migration_head": "0086_stale.sql"},
+                    "revocation": None,
+                },
+            ),
+            (
+                "unimplemented lifecycle",
+                {
+                    "status": "released",
+                    "database": {"migration_head": ACTIVE_MIGRATION_HEAD},
+                    "revocation": None,
+                },
+            ),
+            (
+                "revocation payload",
+                {
+                    "status": "candidate",
+                    "database": {"migration_head": ACTIVE_MIGRATION_HEAD},
+                    "revocation": {"reason": "not active"},
+                },
+            ),
+        ):
+            path.write_text(json.dumps(value), encoding="utf-8")
+            if not validate_active_head(path):
+                failures.append(f"negative self-test accepted {label}")
     return failures
 
 
@@ -236,6 +312,8 @@ def main() -> int:
         "status": "failed" if problems else "ok",
         "manifest": str(args.manifest),
         "expected_migration_head": ACTIVE_MIGRATION_HEAD,
+        "active_statuses": list(ACTIVE_STATUSES),
+        "required_evidence_order": list(EXPECTED_EVIDENCE),
         "schema_contract": "ok",
         "problems": problems,
     }

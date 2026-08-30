@@ -6,7 +6,7 @@
   "production_authorization": "not_granted",
   "project_id": "hepta-control-plane",
   "release_id": "cex-p0-template",
-  "generated_at": "2026-08-29T00:00:00Z",
+  "generated_at": "2026-08-30T00:00:00Z",
   "source": {
     "repository": "TrillionniumFoundation/CEX",
     "branch": "REPLACE_BRANCH",
@@ -30,63 +30,70 @@
   },
   "evidence": [
     {
-      "name": "hosted-ci",
+      "name": "hosted:p0-migration-gate",
       "status": "pending",
       "uri": null,
       "sha256": null,
       "waiver": null
     },
     {
-      "name": "0066_add_invocation_ledger_contract.sql-contract",
+      "name": "hosted:rust-service-gate",
       "status": "pending",
       "uri": null,
       "sha256": null,
       "waiver": null
     },
     {
-      "name": "0081_exact-authority-and-role-guards",
+      "name": "hosted:p0-gateway-exact-reserve-gate",
       "status": "pending",
       "uri": null,
       "sha256": null,
       "waiver": null
     },
     {
-      "name": "0082_provider-unknown-outcome-reconciliation",
+      "name": "hosted:p0-execution-settlement-gate",
       "status": "pending",
       "uri": null,
       "sha256": null,
       "waiver": null
     },
     {
-      "name": "0083_audit-baseline-uuid-cursor",
+      "name": "hosted:p0-provider-reconciliation-gate",
       "status": "pending",
       "uri": null,
       "sha256": null,
       "waiver": null
     },
     {
-      "name": "0084_provider-reconciliation-terminal-replay",
+      "name": "candidate-hygiene",
       "status": "pending",
       "uri": null,
       "sha256": null,
       "waiver": null
     },
     {
-      "name": "0087_term-exchange-receipt-event-history",
+      "name": "repository-integrity",
       "status": "pending",
       "uri": null,
       "sha256": null,
       "waiver": null
     },
     {
-      "name": "p0-audit-outbox-lifecycle-fixture",
+      "name": "hepta-postgres-integration",
       "status": "pending",
       "uri": null,
       "sha256": null,
       "waiver": null
     },
     {
-      "name": "migration-upgrade",
+      "name": "migration-and-lifecycle-matrix",
+      "status": "pending",
+      "uri": null,
+      "sha256": null,
+      "waiver": null
+    },
+    {
+      "name": "exact-ledger-soak",
       "status": "pending",
       "uri": null,
       "sha256": null,
@@ -100,7 +107,14 @@
       "waiver": null
     },
     {
-      "name": "soak",
+      "name": "local-evidence-binding",
+      "status": "pending",
+      "uri": null,
+      "sha256": null,
+      "waiver": null
+    },
+    {
+      "name": "hosted-gate-execution",
       "status": "pending",
       "uri": null,
       "sha256": null,
@@ -111,14 +125,14 @@
   "external_gates": {
     "status": "independent_approval_required",
     "items": [
-      "X1: production-like backup and restore rehearsal",
-      "X2: deployment/cutover and rollback rehearsal",
-      "X3: real provider reconciliation artifacts",
+      "X1: production-like backup and restore rehearsal against representative data volume and the real storage topology",
+      "X2: deployment/cutover and rollback rehearsal with real service identities, network policy and secret custody",
+      "X3: real provider reconciliation artifacts for success, definite non-execution and indeterminate outcome",
       "X4: credential issuance, rotation, revocation and break-glass custody review",
-      "X5: sustained production-like soak/endurance run",
+      "X5: sustained production-like soak/endurance run with queue age, retry, reconciliation, parity and Audit delivery SLOs",
       "X6: independent security, operations and financial-control review",
-      "X7: legal, commercial or provider approvals",
-      "X8: final human go/no-go decision"
+      "X7: legal, commercial or provider approvals where the production integration requires them",
+      "X8: final human go/no-go decision bound to the immutable release candidate"
     ]
   },
   "revocation": null
