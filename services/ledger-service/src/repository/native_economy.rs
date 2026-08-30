@@ -19,6 +19,7 @@ use super::{
     postgres::PostgresLedgerRepository, LedgerActionError, TrnmPlayerIdentityRecord,
     TrnmPlayerSessionRecord,
 };
+use crate::receipt_lookup::{resolve_stored_receipt_for_listing, StoredReceiptBinding};
 const DEFAULT_SELLER_REVERSIBLE_WINDOW_SECONDS: i64 = 86_400;
 const MAX_SELLER_REVERSIBLE_WINDOW_SECONDS: i64 = 30 * 86_400;
 const EXACT_LEDGER_SOURCE_SERVICE: &str = "ledger-service";
@@ -983,38 +984,134 @@ impl PostgresLedgerRepository {
         let pool = self.pool.as_ref().ok_or_else(|| {
             LedgerActionError::RepositoryUnavailable("postgres pool not initialized".to_string())
         })?;
-        let values = sqlx::query_scalar::<_, Value>(
+        let rows = sqlx::query_as::<
+            _,
+            (
+                Option<String>,
+                Option<String>,
+                Option<Value>,
+                Option<Value>,
+                Option<String>,
+                Option<Value>,
+            ),
+        >(
             "with latest_events as (
-                 select distinct on (intent_id)
-                        receipt_json, finalized_at, receipt_id, event_id
-                   from public.trnm_economic_receipt_events_v1
-                  order by intent_id, event_sequence desc, event_id desc
+                 select distinct on (e.intent_id)
+                        e.intent_id,
+                        e.event_id,
+                        e.receipt_id,
+                        e.receipt_json,
+                        e.finalized_at,
+                        jsonb_build_object(
+                            'event_id', e.event_id,
+                            'intent_id', e.intent_id,
+                            'event_sequence', e.event_sequence,
+                            'intent_hash', e.intent_hash,
+                            'receipt_id', e.receipt_id,
+                            'protocol_version', e.protocol_version,
+                            'idempotency_scope', e.idempotency_scope,
+                            'idempotency_key', e.idempotency_key,
+                            'amount_credits', e.amount_credits,
+                            'receipt_hash', e.receipt_hash,
+                            'receipt_hash_actual',
+                                encode(digest(e.receipt_json::text, 'sha256'), 'hex'),
+                            'event_kind', e.event_kind,
+                            'finalized_at_epoch',
+                                extract(epoch from e.finalized_at)::bigint,
+                            'receipt_json', e.receipt_json,
+                            'legacy_fallback_provenance', (
+                                select jsonb_build_object(
+                                    'event_id', p.event_id,
+                                    'legacy_receipt_id', p.legacy_receipt_id,
+                                    'legacy_receipt_json_sha256',
+                                        p.legacy_receipt_json_sha256,
+                                    'legacy_receipt_json_sha256_actual',
+                                        case when r.receipt_json is null then null
+                                             else encode(
+                                                 digest(r.receipt_json::text, 'sha256'),
+                                                 'hex'
+                                             )
+                                        end,
+                                    'legacy_receipt_json', r.receipt_json,
+                                    'intent_hash', p.intent_hash,
+                                    'amount_credits', p.amount_credits
+                                )
+                                  from public.trnm_economic_receipt_legacy_fallback_provenance_v1 p
+                                  left join public.trnm_economic_receipts r
+                                    on r.receipt_id = p.legacy_receipt_id
+                                 where p.event_id = e.event_id
+                            )
+                        ) as native_event_json
+                   from public.trnm_economic_receipt_events_v1 e
+                  order by e.intent_id, e.event_sequence desc, e.event_id desc
+             ), bindings as (
+                 select latest.intent_id,
+                        i.payload_hash,
+                        i.intent_json,
+                        latest.native_event_json,
+                        latest.receipt_id,
+                        latest.receipt_json,
+                        latest.finalized_at,
+                        latest.event_id
+                   from latest_events latest
+                   left join public.trnm_economic_intents i
+                     on i.intent_id = latest.intent_id
+                 union all
+                 select r.intent_id,
+                        i.payload_hash,
+                        i.intent_json,
+                        null::jsonb as native_event_json,
+                        r.receipt_id,
+                        r.receipt_json,
+                        r.finalized_at,
+                        0::bigint as event_id
+                   from public.trnm_economic_receipts r
+                   left join public.trnm_economic_intents i
+                     on i.intent_id = r.intent_id
+                  where not exists (
+                            select 1
+                              from public.trnm_economic_receipt_events_v1 e
+                             where e.intent_id = r.intent_id
+                        )
              )
-             select latest.receipt_json
-               from (
-                   select receipt_json, finalized_at, receipt_id, event_id
-                     from latest_events
-                   union all
-                   select r.receipt_json, r.finalized_at, r.receipt_id, 0::bigint as event_id
-                     from public.trnm_economic_receipts r
-                    where not exists (
-                              select 1
-                                from public.trnm_economic_receipt_events_v1 e
-                               where e.intent_id = r.intent_id
-                          )
-               ) latest
-              order by latest.finalized_at, latest.receipt_id, latest.event_id",
+             select intent_id, payload_hash, intent_json, native_event_json,
+                    receipt_id, receipt_json
+               from bindings
+              order by finalized_at, receipt_id, event_id",
         )
         .fetch_all(pool)
         .await
         .map_err(|error| db_error("list TRNM economic receipts", error))?;
-        values
-            .into_iter()
-            .map(|value| {
-                serde_json::from_value(value).map_err(|error| {
-                    LedgerActionError::Other(format!("decode TRNM receipt failed: {error}"))
-                })
-            })
+        rows.into_iter()
+            .map(
+                |(
+                    intent_id,
+                    payload_hash,
+                    intent_json,
+                    native_event_json,
+                    receipt_id,
+                    receipt_json,
+                )| {
+                    let binding = StoredReceiptBinding::from_database_parts(
+                        intent_id,
+                        payload_hash,
+                        intent_json,
+                        native_event_json,
+                        receipt_id,
+                        receipt_json,
+                    )
+                    .map_err(|error| {
+                        LedgerActionError::Other(format!(
+                            "decode TRNM receipt binding failed: {error}"
+                        ))
+                    })?;
+                    resolve_stored_receipt_for_listing(binding).map_err(|error| {
+                        LedgerActionError::Other(format!(
+                            "TRNM receipt binding failed integrity validation: {error}"
+                        ))
+                    })
+                },
+            )
             .collect()
     }
 

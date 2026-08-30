@@ -17,6 +17,7 @@ on:
       - 'crates/**'
       - 'services/execution-service/**'
       - 'scripts/check-provider-reconciliation-postgres.sh'
+      - 'scripts/_dev-helpers.sh'
       - 'docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md'
       - 'docs/templates/cex-release-baseline-manifest-v1.json'
       - 'docs/release-evidence/p0-candidate-trigger.json'
@@ -65,10 +66,19 @@ jobs:
             docs/templates/cex-release-baseline-manifest-v1.json --allow-template
 
       - name: Apply fresh migration chain
+        shell: bash
         run: |
+          set -euo pipefail
+          # Keep the migration client on the same credential-safe path as the
+          # repository scripts.  In particular, do not put DATABASE_URL (and
+          # its password) in a psql argv entry or bypass the helper's Docker
+          # fallback/target checks.
+          source scripts/_dev-helpers.sh
+          cex_load_env
+          cex_sync_postgres_env_from_database_url "$DATABASE_URL"
           while IFS= read -r migration; do
             echo "applying $(basename "$migration")"
-            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$migration" >/dev/null
+            cex_psql_stdin -X -v ON_ERROR_STOP=1 -f - < "$migration" >/dev/null
           done < <(find migrations -maxdepth 1 -type f \
             -name '[0-9][0-9][0-9][0-9]_*.sql' | sort)
 

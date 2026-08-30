@@ -48,7 +48,12 @@ BLOCK_USES_RE = re.compile(
     r'''^\s*(?:-\s*)?(?:uses|"uses"|'uses')\s*:\s*(?P<value>.*?)\s*$'''
 )
 FLOW_USES_RE = re.compile(
-    r'''(?:^|[{,])\s*(?:uses|"uses"|'uses')\s*:'''
+    # A block mapping starts with the `uses:` key at the beginning of a
+    # physical line (possibly after a list dash); that is valid YAML and is
+    # handled by BLOCK_USES_RE below.  Only a `{`/`,` delimiter proves that
+    # the key is embedded in a flow-style mapping.  Including `^` here would
+    # classify every ordinary block-form action as flow syntax.
+    r'''[{,]\s*(?:uses|"uses"|'uses')\s*:'''
 )
 ANY_USES_KEY_RE = re.compile(r'''(?:uses|"uses"|'uses')\s*:''')
 FORBIDDEN_EVENT_RE = re.compile(

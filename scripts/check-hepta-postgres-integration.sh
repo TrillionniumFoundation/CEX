@@ -51,7 +51,9 @@ fi
 
 if [[ -n "$EVIDENCE" ]]; then
   mkdir -p "$(dirname "$EVIDENCE")"
-  python3 - "$EVIDENCE" "${GITHUB_SHA:-unknown}" "$MODE" <<'PY'
+  root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+  tree_sha=$(git -C "$root" rev-parse 'HEAD^{tree}')
+  python3 - "$EVIDENCE" "${GITHUB_SHA:-unknown}" "$tree_sha" "$MODE" <<'PY'
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -62,7 +64,8 @@ Path(sys.argv[1]).write_text(json.dumps({
     "status": "ok",
     "ok": True,
     "commit_sha": sys.argv[2],
-    "mode": sys.argv[3],
+    "tree_sha": sys.argv[3],
+    "mode": sys.argv[4],
     "postgres_required": True,
     "lint_policy": "exact_body_hash_plus_inherited_trait_cleanup",
     "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),

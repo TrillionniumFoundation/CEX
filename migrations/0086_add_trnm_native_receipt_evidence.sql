@@ -862,6 +862,712 @@ begin
 end
 $function$;
 
+-- Preserve provenance for the one compatibility case that can recover a
+-- positive amount without an immutable `amount_credits` key.  Native/live
+-- writers use the same receipt JSON shape but must never be allowed to claim
+-- that legacy evidence authority, so lookup requires this reserved marker
+-- when the native event stream is selected.  Existing non-marker values are
+-- left untouched: a pre-existing conflicting marker remains a corrupt binding
+-- instead of being silently upgraded during retry.  The marker is applied
+-- only by the legacy-projection INSERT below; rows already present in the
+-- native event table are not granted new authority merely from their shape.
+create or replace function public.cex_trnm_mark_legacy_amount_fallback_v1(
+    raw_value jsonb,
+    should_mark boolean
+)
+returns jsonb
+language plpgsql
+immutable
+set search_path = pg_catalog, public
+as $function$
+begin
+    if not coalesce(should_mark, false)
+       or raw_value is null
+       or jsonb_typeof(raw_value) is distinct from 'object'
+       or jsonb_typeof(raw_value -> 'evidence') is distinct from 'object'
+       or (raw_value -> 'evidence') ? '_cex_legacy_amount_fallback' then
+        return raw_value;
+    end if;
+    return jsonb_set(
+        raw_value,
+        '{evidence,_cex_legacy_amount_fallback}',
+        'true'::jsonb,
+        true
+    );
+end
+$function$;
+
+-- A JSON marker alone cannot distinguish a row created by this migration from
+-- a pre-existing native row that copied the same legacy-looking envelope.  Keep
+-- a small, append-only provenance ledger for the compatibility exception.  It
+-- is populated only from the INSERT ... RETURNING batch below and is checked
+-- again on retries, so a successful first run remains replayable without
+-- granting authority to a row that merely happens to have the marker.
+
+-- `CREATE TABLE IF NOT EXISTS` emits only a notice when a relation with the
+-- requested name already exists.  A view/sequence/foreign table at this name
+-- is not a partially-applied provenance ledger that can be repaired safely;
+-- reject it before the CREATE statement so the failure is explicit and the
+-- transaction leaves the pre-existing object untouched.
+do $legacy_provenance_relation_guard$
+declare
+    relation_kind text;
+begin
+    select c.relkind::text
+      into relation_kind
+      from pg_catalog.pg_class c
+      join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public'
+       and c.relname = 'trnm_economic_receipt_legacy_fallback_provenance_v1';
+    if found and relation_kind <> 'r' then
+        raise exception
+            'TRNM legacy fallback provenance name is occupied by a non-table relation';
+    end if;
+end
+$legacy_provenance_relation_guard$;
+
+create table if not exists public.trnm_economic_receipt_legacy_fallback_provenance_v1 (
+    event_id bigint primary key
+        references public.trnm_economic_receipt_events_v1(event_id)
+        on delete restrict,
+    legacy_receipt_id text not null
+        references public.trnm_economic_receipts(receipt_id)
+        on delete restrict,
+    legacy_receipt_json_sha256 text not null
+        check (legacy_receipt_json_sha256 ~ '^[0-9a-f]{64}$'),
+    intent_hash text not null
+        check (intent_hash ~ '^[0-9a-f]{64}$'),
+    amount_credits bigint not null
+        check (amount_credits >= 0),
+    created_at timestamptz not null default now()
+);
+
+-- `CREATE TABLE IF NOT EXISTS` does not prove that a relation left behind by a
+-- separately-committed/older runner has the provenance contract above.  This
+-- guard is deliberately catalog- and row-based: it accepts canonical
+-- auto-named PostgreSQL constraints, repairs only the mechanical NOT NULL/FK
+-- pieces after all existing rows have been checked, and rejects extra columns,
+-- weakened keys, forged source hashes, or an orphaned event.  A failed check is
+-- inside the migration transaction, so a hostile partial table is preserved
+-- exactly as it was for operator inspection.
+do $legacy_provenance_shape_guard$
+declare
+    provenance_table oid := to_regclass(
+        'public.trnm_economic_receipt_legacy_fallback_provenance_v1'
+    );
+    event_table oid := to_regclass('public.trnm_economic_receipt_events_v1');
+    legacy_table oid := to_regclass('public.trnm_economic_receipts');
+    relation_kind text;
+    actual_column_count integer;
+    expected_column_count constant integer := 6;
+    column_name text;
+    column_type oid;
+    expected_type oid;
+    column_notnull boolean;
+    column_identity text;
+    column_default text;
+    column_default_oid oid;
+    event_attnum smallint;
+    legacy_attnum smallint;
+    event_ref_attnum smallint;
+    legacy_ref_attnum smallint;
+    has_primary_key boolean;
+    has_source_unique boolean;
+    source_index_oid oid;
+    index_is_canonical boolean;
+    primary_key_name text :=
+        'trnm_receipt_legacy_fallback_provenance_event_id_pkey_v1';
+    source_index_name text :=
+        'uq_trnm_receipt_legacy_fallback_provenance_legacy_receipt_id_v1';
+    shape_name text := 'trnm_receipt_legacy_fallback_provenance_shape_v1';
+    canonical_event_fk boolean := false;
+    canonical_legacy_fk boolean := false;
+    safe_event_fk_names text[] := array[]::text[];
+    safe_legacy_fk_names text[] := array[]::text[];
+    constraint_name text;
+    fk record;
+begin
+    if provenance_table is null or event_table is null or legacy_table is null then
+        raise exception 'TRNM legacy fallback provenance authority tables are missing';
+    end if;
+
+    select c.relkind::text
+      into relation_kind
+      from pg_catalog.pg_class c
+     where c.oid = provenance_table;
+    if relation_kind <> 'r' then
+        raise exception 'TRNM legacy fallback provenance relation is not an ordinary table';
+    end if;
+
+    select count(*)::integer
+      into actual_column_count
+      from pg_catalog.pg_attribute a
+     where a.attrelid = provenance_table
+       and a.attnum > 0
+       and not a.attisdropped;
+    if actual_column_count <> expected_column_count then
+        raise exception
+            'TRNM legacy fallback provenance column shape is not canonical (expected %, found %)',
+            expected_column_count, actual_column_count;
+    end if;
+
+    foreach column_name in array array[
+        'event_id', 'legacy_receipt_id', 'legacy_receipt_json_sha256',
+        'intent_hash', 'amount_credits', 'created_at'
+    ]::text[]
+    loop
+        select a.atttypid,
+               a.attnotnull,
+               a.attidentity::text,
+               coalesce(pg_get_expr(ad.adbin, ad.adrelid), ''),
+               ad.oid
+          into column_type, column_notnull, column_identity,
+               column_default, column_default_oid
+          from pg_catalog.pg_attribute a
+          left join pg_catalog.pg_attrdef ad
+            on ad.adrelid = a.attrelid
+           and ad.adnum = a.attnum
+         where a.attrelid = provenance_table
+           and a.attname = column_name
+           and not a.attisdropped;
+        if not found then
+            raise exception
+                'TRNM legacy fallback provenance required column is missing: %', column_name;
+        end if;
+
+        expected_type := case
+            when column_name in ('event_id', 'amount_credits') then 'int8'::regtype
+            when column_name = 'created_at' then 'timestamptz'::regtype
+            else 'text'::regtype
+        end;
+        if column_type <> expected_type then
+            raise exception
+                'TRNM legacy fallback provenance column % has incompatible type', column_name;
+        end if;
+        if coalesce(column_identity, '') <> '' then
+            raise exception
+                'TRNM legacy fallback provenance column % must not be an identity column',
+                column_name;
+        end if;
+        if column_name = 'created_at' then
+            if column_default_oid is null
+               or regexp_replace(lower(column_default), '[[:space:]]+', '', 'g')
+                    !~ '^(now\(\)|current_timestamp)(::timestampwithtimezone)?$' then
+                raise exception
+                    'TRNM legacy fallback provenance created_at default is not canonical';
+            end if;
+        elsif column_default_oid is not null then
+            raise exception
+                'TRNM legacy fallback provenance column % has an unexpected default',
+                column_name;
+        end if;
+    end loop;
+
+    select a.attnum
+      into event_attnum
+      from pg_catalog.pg_attribute a
+     where a.attrelid = provenance_table
+       and a.attname = 'event_id'
+       and not a.attisdropped;
+    select a.attnum
+      into legacy_attnum
+      from pg_catalog.pg_attribute a
+     where a.attrelid = provenance_table
+       and a.attname = 'legacy_receipt_id'
+       and not a.attisdropped;
+    select a.attnum
+      into event_ref_attnum
+      from pg_catalog.pg_attribute a
+     where a.attrelid = event_table
+       and a.attname = 'event_id'
+       and not a.attisdropped;
+    select a.attnum
+      into legacy_ref_attnum
+      from pg_catalog.pg_attribute a
+     where a.attrelid = legacy_table
+       and a.attname = 'receipt_id'
+       and not a.attisdropped;
+    if event_attnum is null or legacy_attnum is null
+       or event_ref_attnum is null or legacy_ref_attnum is null then
+        raise exception 'TRNM legacy fallback provenance key columns are missing';
+    end if;
+
+    -- Check nullable/duplicate keys before promoting NOT NULL or adding a
+    -- primary key to an older partial table.
+    if exists (
+        select 1
+          from public.trnm_economic_receipt_legacy_fallback_provenance_v1
+         where event_id is null
+            or legacy_receipt_id is null
+            or legacy_receipt_json_sha256 is null
+            or intent_hash is null
+            or amount_credits is null
+            or created_at is null
+    ) then
+        raise exception 'TRNM legacy fallback provenance contains NULL required values';
+    end if;
+    if exists (
+        select 1
+          from public.trnm_economic_receipt_legacy_fallback_provenance_v1
+         group by event_id
+        having count(*) > 1
+    ) then
+        raise exception 'TRNM legacy fallback provenance contains duplicate event_ids';
+    end if;
+    if exists (
+        select 1
+          from public.trnm_economic_receipt_legacy_fallback_provenance_v1
+         group by legacy_receipt_id
+        having count(*) > 1
+    ) then
+        raise exception 'TRNM legacy fallback provenance contains duplicate legacy receipt_ids';
+    end if;
+
+    -- Validate every durable authorization row against both immutable tables.
+    -- Avoid casting JSON text to bigint here: a hostile overflow string must
+    -- produce a clean rejection rather than aborting in an implicit cast.
+    if exists (
+        select 1
+          from public.trnm_economic_receipt_legacy_fallback_provenance_v1 p
+          left join public.trnm_economic_receipt_events_v1 e
+            on e.event_id = p.event_id
+          left join public.trnm_economic_receipts r
+            on r.receipt_id = p.legacy_receipt_id
+          left join public.trnm_economic_intents i
+            on i.intent_id = e.intent_id
+         where e.event_id is null
+            or r.receipt_id is null
+            or i.intent_id is null
+            or btrim(p.legacy_receipt_id) = ''
+            or p.legacy_receipt_json_sha256 !~ '^[0-9a-f]{64}$'
+            or p.intent_hash !~ '^[0-9a-f]{64}$'
+            or p.amount_credits < 0
+            or p.legacy_receipt_id is distinct from e.receipt_id
+            or p.intent_hash is distinct from e.intent_hash
+            or p.intent_hash is distinct from i.payload_hash
+            or p.amount_credits is distinct from e.amount_credits
+            or e.event_sequence is distinct from 1
+            or e.event_kind is distinct from 'initial'
+            or e.receipt_json is null
+            or jsonb_typeof(e.receipt_json) is distinct from 'object'
+            or e.receipt_hash is distinct from
+                encode(digest(e.receipt_json::text, 'sha256'), 'hex')
+            or e.receipt_json #> '{evidence,_cex_legacy_amount_fallback}'
+                is distinct from 'true'::jsonb
+            or jsonb_typeof(e.receipt_json #> '{evidence,amount_credits}')
+                is distinct from 'number'
+            or (e.receipt_json #>> '{evidence,amount_credits}') !~ '^[0-9]+$'
+            or e.receipt_json #> '{evidence,amount_credits}'
+                is distinct from to_jsonb(e.amount_credits)
+            or r.receipt_json is null
+            or jsonb_typeof(r.receipt_json) is distinct from 'object'
+            or jsonb_typeof(r.receipt_json -> 'receipt_id') is distinct from 'string'
+            or btrim(r.receipt_json ->> 'receipt_id') = ''
+            or r.receipt_json ->> 'receipt_id' is distinct from p.legacy_receipt_id
+            or jsonb_typeof(r.receipt_json -> 'intent_id') is distinct from 'string'
+            or btrim(r.receipt_json ->> 'intent_id') = ''
+            or r.receipt_json ->> 'intent_id' is distinct from e.intent_id
+            or jsonb_typeof(r.receipt_json #> '{evidence,amount_credits}')
+                is distinct from 'number'
+            or (r.receipt_json #>> '{evidence,amount_credits}') !~ '^[0-9]+$'
+            or r.receipt_json #> '{evidence,amount_credits}'
+                is distinct from to_jsonb(p.amount_credits)
+            or p.legacy_receipt_json_sha256 is distinct from
+                encode(digest(r.receipt_json::text, 'sha256'), 'hex')
+            or coalesce(i.intent_json ? 'amount_credits', false)
+            or (
+                jsonb_typeof(r.receipt_json #> '{evidence}') = 'object'
+                and (r.receipt_json #> '{evidence}') ? '_cex_legacy_amount_fallback'
+            )
+    ) then
+        raise exception
+            'TRNM legacy fallback provenance row does not match immutable receipt evidence';
+    end if;
+
+    -- Accept a canonical primary key regardless of PostgreSQL's generated
+    -- constraint name.  A partial table without one is repaired only after
+    -- the duplicate/null audit above; a primary key on another column is a
+    -- contract conflict and is never silently replaced.
+    if exists (
+        select 1
+          from pg_catalog.pg_constraint c
+         where c.conrelid = provenance_table
+           and c.contype = 'p'
+           and (
+               c.conkey is distinct from array[event_attnum]::smallint[]
+               or not c.convalidated
+               or c.condeferrable
+               or c.condeferred
+           )
+    ) then
+        raise exception 'TRNM legacy fallback provenance primary key is not canonical';
+    end if;
+    select exists (
+        select 1
+          from pg_catalog.pg_constraint c
+         where c.conrelid = provenance_table
+           and c.contype = 'p'
+           and c.conkey = array[event_attnum]::smallint[]
+           and c.convalidated
+           and not c.condeferrable
+           and not c.condeferred
+    ) into has_primary_key;
+    if not has_primary_key then
+        if exists (
+            select 1
+              from pg_catalog.pg_constraint c
+             where c.conrelid = provenance_table
+               and c.conname = primary_key_name
+        ) then
+            raise exception 'TRNM legacy fallback provenance primary-key name is occupied';
+        end if;
+        execute format(
+            'alter table public.trnm_economic_receipt_legacy_fallback_provenance_v1 ' ||
+            'add constraint %I primary key (event_id)',
+            primary_key_name
+        );
+    end if;
+
+    -- Promote all six fields to the structural shape after row validation.
+    foreach column_name in array array[
+        'event_id', 'legacy_receipt_id', 'legacy_receipt_json_sha256',
+        'intent_hash', 'amount_credits', 'created_at'
+    ]::text[]
+    loop
+        select a.attnotnull
+          into column_notnull
+          from pg_catalog.pg_attribute a
+         where a.attrelid = provenance_table
+           and a.attname = column_name
+           and not a.attisdropped;
+        if not column_notnull then
+            execute format(
+                'alter table public.trnm_economic_receipt_legacy_fallback_provenance_v1 ' ||
+                'alter column %I set not null',
+                column_name
+            );
+        end if;
+    end loop;
+
+    -- Every FK must bind the documented single column to the correct parent
+    -- with validated, immediate, explicit RESTRICT semantics.  Immediate
+    -- NO ACTION from an older 0086 attempt is equivalent and is repaired;
+    -- CASCADE/SET NULL/deferred or unrelated FKs fail closed.
+    for fk in
+        select c.conname,
+               c.convalidated,
+               c.confdeltype,
+               c.confupdtype,
+               c.condeferrable,
+               c.condeferred,
+               c.confrelid,
+               c.conkey,
+               c.confkey
+          from pg_catalog.pg_constraint c
+         where c.conrelid = provenance_table
+           and c.contype = 'f'
+    loop
+        if fk.confrelid = event_table
+           and fk.conkey = array[event_attnum]::smallint[]
+           and fk.confkey = array[event_ref_attnum]::smallint[] then
+            if not fk.convalidated or fk.condeferrable or fk.condeferred then
+                raise exception
+                    'TRNM legacy fallback provenance event foreign key is not validated/immediate';
+            elsif fk.confdeltype = 'a' and fk.confupdtype = 'a' then
+                safe_event_fk_names := array_append(safe_event_fk_names, fk.conname);
+            elsif fk.confdeltype = 'r' and fk.confupdtype = 'a' then
+                canonical_event_fk := true;
+            else
+                raise exception
+                    'TRNM legacy fallback provenance event foreign key has unsafe actions';
+            end if;
+        elsif fk.confrelid = legacy_table
+              and fk.conkey = array[legacy_attnum]::smallint[]
+              and fk.confkey = array[legacy_ref_attnum]::smallint[] then
+            if not fk.convalidated or fk.condeferrable or fk.condeferred then
+                raise exception
+                    'TRNM legacy fallback provenance source foreign key is not validated/immediate';
+            elsif fk.confdeltype = 'a' and fk.confupdtype = 'a' then
+                safe_legacy_fk_names := array_append(safe_legacy_fk_names, fk.conname);
+            elsif fk.confdeltype = 'r' and fk.confupdtype = 'a' then
+                canonical_legacy_fk := true;
+            else
+                raise exception
+                    'TRNM legacy fallback provenance source foreign key has unsafe actions';
+            end if;
+        else
+            raise exception
+                'TRNM legacy fallback provenance contains an unrelated foreign key';
+        end if;
+    end loop;
+
+    foreach constraint_name in array safe_event_fk_names
+    loop
+        execute format(
+            'alter table public.trnm_economic_receipt_legacy_fallback_provenance_v1 ' ||
+            'drop constraint %I', constraint_name
+        );
+    end loop;
+    foreach constraint_name in array safe_legacy_fk_names
+    loop
+        execute format(
+            'alter table public.trnm_economic_receipt_legacy_fallback_provenance_v1 ' ||
+            'drop constraint %I', constraint_name
+        );
+    end loop;
+    if not canonical_event_fk then
+        execute format(
+            'alter table public.trnm_economic_receipt_legacy_fallback_provenance_v1 ' ||
+            'add constraint %I foreign key (event_id) references ' ||
+            'public.trnm_economic_receipt_events_v1(event_id) on delete restrict',
+            'trnm_receipt_legacy_fallback_provenance_event_fk_v1'
+        );
+    end if;
+    if not canonical_legacy_fk then
+        execute format(
+            'alter table public.trnm_economic_receipt_legacy_fallback_provenance_v1 ' ||
+            'add constraint %I foreign key (legacy_receipt_id) references ' ||
+            'public.trnm_economic_receipts(receipt_id) on delete restrict',
+            'trnm_receipt_legacy_fallback_provenance_source_fk_v1'
+        );
+    end if;
+
+    -- A provenance source receipt can authorize only one event.  Validate any
+    -- pre-existing object by catalog shape; a same-named weaker/partial index
+    -- is an authority conflict, not an object to trust.
+    select c.oid
+      into source_index_oid
+      from pg_catalog.pg_class c
+      join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public'
+       and c.relname = source_index_name;
+    if source_index_oid is not null then
+        select i.indisunique
+               and i.indisvalid
+               and i.indisready
+               and i.indimmediate
+               and i.indpred is null
+               and i.indnkeyatts = 1
+               and i.indrelid = provenance_table
+               and i.indkey[0] = legacy_attnum
+          into index_is_canonical
+          from pg_catalog.pg_index i
+         where i.indexrelid = source_index_oid;
+        if index_is_canonical is distinct from true then
+            raise exception
+                'TRNM legacy fallback provenance source index is not canonical';
+        end if;
+        has_source_unique := true;
+    else
+        create unique index uq_trnm_receipt_legacy_fallback_provenance_legacy_receipt_id_v1
+            on public.trnm_economic_receipt_legacy_fallback_provenance_v1(legacy_receipt_id);
+        has_source_unique := true;
+    end if;
+    if not has_source_unique then
+        raise exception 'TRNM legacy fallback provenance source uniqueness is missing';
+    end if;
+
+    -- Keep one stable, independently-owned CHECK as the future-write contract.
+    -- The canonical CREATE TABLE checks may have PostgreSQL-generated names;
+    -- they remain useful but are not trusted as the only shape proof.
+    if exists (
+        select 1
+          from pg_catalog.pg_constraint c
+         where c.conrelid = provenance_table
+           and c.conname = shape_name
+           and c.contype <> 'c'
+    ) then
+        raise exception
+            'TRNM legacy fallback provenance shape object is not a CHECK constraint';
+    end if;
+    if exists (
+        select 1
+          from pg_catalog.pg_constraint c
+         where c.conrelid = provenance_table
+           and c.conname = shape_name
+           and c.contype = 'c'
+    ) then
+        execute format(
+            'alter table public.trnm_economic_receipt_legacy_fallback_provenance_v1 ' ||
+            'drop constraint %I', shape_name
+        );
+    end if;
+    execute format(
+        'alter table public.trnm_economic_receipt_legacy_fallback_provenance_v1 ' ||
+        'add constraint %I check (' ||
+        'btrim(legacy_receipt_id) <> '''' ' ||
+        'and legacy_receipt_json_sha256 ~ ''^[0-9a-f]{64}$'' ' ||
+        'and intent_hash ~ ''^[0-9a-f]{64}$'' ' ||
+        'and amount_credits >= 0)',
+        shape_name
+    );
+end
+$legacy_provenance_shape_guard$;
+
+-- Provenance is an internal migration ledger, not an application write API.
+-- The migration owner can append records; ordinary roles may inspect them but
+-- cannot forge, rewrite, or truncate the authorization source.
+revoke insert, update, delete, truncate
+    on table public.trnm_economic_receipt_legacy_fallback_provenance_v1
+    from public;
+
+-- Privilege revocation is not the integrity boundary: a service role may own
+-- the table or receive an explicit INSERT grant, and a replication/superuser
+-- path can bypass ordinary ACL checks.  Validate every provenance INSERT
+-- against the immutable event, seed receipt, and intent rows.  The trigger
+-- function is defined here and the trigger is (re)installed immediately after
+-- the migration-only marker update below; that ordering lets the first pass
+-- attach provenance before the marker while keeping the committed table fully
+-- protected.  It is enabled ALWAYS so replica-mode writes cannot skip it.
+create or replace function public.cex_validate_trnm_legacy_fallback_provenance_insert_v1()
+returns trigger
+language plpgsql
+security invoker
+set search_path = pg_catalog, public
+as $function$
+declare
+    event_row record;
+    source_row record;
+    intent_row record;
+begin
+    if new.event_id is null
+       or new.legacy_receipt_id is null
+       or btrim(new.legacy_receipt_id) = ''
+       or new.legacy_receipt_json_sha256 is null
+       or new.legacy_receipt_json_sha256 !~ '^[0-9a-f]{64}$'
+       or new.intent_hash is null
+       or new.intent_hash !~ '^[0-9a-f]{64}$'
+       or new.amount_credits is null
+       or new.amount_credits < 0 then
+        raise exception using
+            errcode = '23514',
+            message = 'TRNM legacy fallback provenance row shape is invalid';
+    end if;
+
+    select e.event_id,
+           e.intent_id,
+           e.event_sequence,
+           e.event_kind,
+           e.intent_hash,
+           e.receipt_id,
+           e.amount_credits,
+           e.receipt_json,
+           e.receipt_hash
+      into event_row
+      from public.trnm_economic_receipt_events_v1 e
+     where e.event_id = new.event_id;
+    if not found then
+        raise exception
+            'TRNM legacy fallback provenance event does not exist';
+    end if;
+    if event_row.event_sequence is distinct from 1
+       or event_row.event_kind is distinct from 'initial'
+       or event_row.receipt_id is distinct from new.legacy_receipt_id
+       or event_row.intent_hash is distinct from new.intent_hash
+       or event_row.amount_credits is distinct from new.amount_credits
+       or event_row.receipt_json is null
+       or jsonb_typeof(event_row.receipt_json) is distinct from 'object'
+       or event_row.receipt_hash is distinct from
+            encode(digest(event_row.receipt_json::text, 'sha256'), 'hex')
+       or event_row.receipt_json #> '{evidence,_cex_legacy_amount_fallback}'
+            is distinct from 'true'::jsonb
+       or jsonb_typeof(event_row.receipt_json #> '{evidence,amount_credits}')
+            is distinct from 'number'
+       or (event_row.receipt_json #>> '{evidence,amount_credits}') !~ '^[0-9]+$'
+       or event_row.receipt_json #> '{evidence,amount_credits}'
+            is distinct from to_jsonb(new.amount_credits) then
+        raise exception
+            'TRNM legacy fallback provenance event binding is invalid';
+    end if;
+
+    select i.intent_id,
+           i.payload_hash,
+           i.intent_json
+      into intent_row
+      from public.trnm_economic_intents i
+     where i.intent_id = event_row.intent_id;
+    if not found
+       or intent_row.payload_hash is distinct from new.intent_hash
+       or coalesce(intent_row.intent_json ? 'amount_credits', false) then
+        raise exception
+            'TRNM legacy fallback provenance immutable intent binding is invalid';
+    end if;
+
+    select r.receipt_id,
+           r.intent_id,
+           r.receipt_json
+      into source_row
+      from public.trnm_economic_receipts r
+     where r.receipt_id = new.legacy_receipt_id;
+    if not found
+       or source_row.intent_id is distinct from event_row.intent_id
+       or source_row.receipt_json is null
+       or jsonb_typeof(source_row.receipt_json) is distinct from 'object'
+       or jsonb_typeof(source_row.receipt_json -> 'receipt_id') is distinct from 'string'
+       or btrim(source_row.receipt_json ->> 'receipt_id') = ''
+       or source_row.receipt_json ->> 'receipt_id'
+            is distinct from new.legacy_receipt_id
+       or jsonb_typeof(source_row.receipt_json -> 'intent_id') is distinct from 'string'
+       or btrim(source_row.receipt_json ->> 'intent_id') = ''
+       or source_row.receipt_json ->> 'intent_id'
+            is distinct from event_row.intent_id
+       or jsonb_typeof(source_row.receipt_json #> '{evidence,amount_credits}')
+            is distinct from 'number'
+       or (source_row.receipt_json #>> '{evidence,amount_credits}') !~ '^[0-9]+$'
+       or source_row.receipt_json #> '{evidence,amount_credits}'
+            is distinct from to_jsonb(new.amount_credits)
+       or new.legacy_receipt_json_sha256 is distinct from
+            encode(digest(source_row.receipt_json::text, 'sha256'), 'hex')
+       or (
+           jsonb_typeof(source_row.receipt_json #> '{evidence}') = 'object'
+           and (source_row.receipt_json #> '{evidence}') ? '_cex_legacy_amount_fallback'
+       ) then
+        raise exception
+            'TRNM legacy fallback provenance source binding is invalid';
+    end if;
+    return new;
+end
+$function$;
+
+create or replace function public.cex_reject_trnm_legacy_fallback_provenance_mutation_v1()
+returns trigger
+language plpgsql
+security invoker
+set search_path = pg_catalog, public
+as $function$
+begin
+    raise exception using
+        errcode = '55000',
+        message = 'TRNM legacy fallback provenance is append-only';
+end
+$function$;
+
+drop trigger if exists trg_cex_reject_trnm_legacy_fallback_provenance_mutation_v1
+    on public.trnm_economic_receipt_legacy_fallback_provenance_v1;
+create trigger trg_cex_reject_trnm_legacy_fallback_provenance_mutation_v1
+before update or delete on public.trnm_economic_receipt_legacy_fallback_provenance_v1
+for each statement
+execute function public.cex_reject_trnm_legacy_fallback_provenance_mutation_v1();
+
+drop trigger if exists trg_cex_reject_trnm_legacy_fallback_provenance_truncate_v1
+    on public.trnm_economic_receipt_legacy_fallback_provenance_v1;
+create trigger trg_cex_reject_trnm_legacy_fallback_provenance_truncate_v1
+before truncate on public.trnm_economic_receipt_legacy_fallback_provenance_v1
+for each statement
+execute function public.cex_reject_trnm_legacy_fallback_provenance_mutation_v1();
+
+alter table public.trnm_economic_receipt_legacy_fallback_provenance_v1
+    enable always trigger trg_cex_reject_trnm_legacy_fallback_provenance_mutation_v1;
+alter table public.trnm_economic_receipt_legacy_fallback_provenance_v1
+    enable always trigger trg_cex_reject_trnm_legacy_fallback_provenance_truncate_v1;
+
+-- A successful earlier run may already have the semantic INSERT trigger.  The
+-- backfill below first records the durable source and then adds the reserved
+-- JSON marker, so temporarily remove that trigger inside this transaction and
+-- recreate it after the marker update.  Any failure rolls the drop back.
+drop trigger if exists trg_cex_validate_trnm_legacy_fallback_provenance_insert_v1
+    on public.trnm_economic_receipt_legacy_fallback_provenance_v1;
+
 -- Reconcile every partially-created row, not only NULL/negative columns.  A
 -- valid non-negative amount in the immutable intent is the authority; an
 -- invalid/negative intent amount is fail-closed to zero (an explicit-NULL
@@ -1004,6 +1710,14 @@ begin
     end if;
     if new.receipt_id is null or btrim(new.receipt_id) = '' then
         raise exception 'TRNM receipt event receipt_id must be non-empty';
+    end if;
+    -- `_cex_legacy_amount_fallback` is migration-only provenance.  A live
+    -- native INSERT must never be able to self-authorize legacy evidence by
+    -- copying this reserved key into its JSON envelope.
+    if jsonb_typeof(new.receipt_json -> 'evidence') = 'object'
+       and (new.receipt_json -> 'evidence') ? '_cex_legacy_amount_fallback' then
+        raise exception
+            'TRNM legacy amount fallback marker is reserved for migration backfill';
     end if;
 
     -- Serialize all writers for one receipt identity before reading the
@@ -1258,6 +1972,33 @@ before insert on public.trnm_economic_receipt_events_v1
 for each row
 execute function public.cex_validate_trnm_economic_receipt_event_v1();
 
+-- Keep the compatibility provenance boundary explicit.  The temporary table
+-- contains only event ids returned by the legacy-projection INSERT in this
+-- invocation; it is never populated from the native table's shape.  The
+-- semantic guard below therefore rejects a reserved marker that arrived from
+-- a live/native writer or from a manually edited pre-existing row.
+create temporary table pg_temp.cex_trnm_legacy_amount_fallback_batch_v1 (
+    event_id bigint primary key
+) on commit drop;
+truncate table pg_temp.cex_trnm_legacy_amount_fallback_batch_v1;
+
+-- A source envelope that already contains the migration-only key is not a
+-- legacy input we can safely interpret.  Reject it before the backfill rather
+-- than allowing the normalizer to preserve a forged marker.
+do $legacy_source_marker_guard$
+begin
+    if exists (
+        select 1
+          from public.trnm_economic_receipts r
+         where jsonb_typeof(r.receipt_json -> 'evidence') = 'object'
+           and (r.receipt_json -> 'evidence') ? '_cex_legacy_amount_fallback'
+    ) then
+        raise exception
+            'TRNM legacy amount fallback marker is reserved for migration backfill';
+    end if;
+end
+$legacy_source_marker_guard$;
+
 -- Backfill the first immutable snapshot for rows written by 0027.  Resolve
 -- the amount with the same immutable-intent-first precedence used above before
 -- constructing the JSON/hash.  The NOT-EXISTS guard makes the expand migration
@@ -1330,34 +2071,161 @@ with legacy_rows as (
                expected_finalized_at_epoch
            ) as normalized_receipt_json
       from resolved_rows
+), inserted_rows as (
+    -- Insert an unmarked canonical row first.  The validation trigger is still
+    -- installed at this point and intentionally rejects the reserved marker;
+    -- provenance is attached by the narrowly-scoped UPDATE below after the
+    -- data-modifying CTE has recorded exactly which rows this INSERT created.
+    insert into public.trnm_economic_receipt_events_v1 (
+        intent_id, event_sequence, intent_hash, receipt_id, protocol_version,
+        idempotency_scope, idempotency_key, progression_class, status, amount_credits, receipt_json,
+        receipt_hash, event_kind, finalized_at, created_at
+    )
+    select normalized_rows.intent_id,
+           1,
+           normalized_rows.payload_hash,
+           normalized_rows.receipt_id,
+           normalized_rows.protocol_version,
+           normalized_rows.idempotency_scope,
+           normalized_rows.idempotency_key,
+           normalized_rows.progression_class,
+           normalized_rows.status,
+           normalized_rows.resolved_amount,
+           normalized_rows.normalized_receipt_json,
+           encode(digest(normalized_rows.normalized_receipt_json::text, 'sha256'), 'hex'),
+           'initial',
+           normalized_rows.finalized_at,
+           normalized_rows.created_at
+      from normalized_rows
+     where not exists (
+               select 1
+                 from public.trnm_economic_receipt_events_v1 e
+                where e.intent_id = normalized_rows.intent_id
+                  and e.event_sequence = 1
+           )
+    returning event_id
 )
-insert into public.trnm_economic_receipt_events_v1 (
-    intent_id, event_sequence, intent_hash, receipt_id, protocol_version,
-    idempotency_scope, idempotency_key, progression_class, status, amount_credits, receipt_json,
-    receipt_hash, event_kind, finalized_at, created_at
+insert into pg_temp.cex_trnm_legacy_amount_fallback_batch_v1 (event_id)
+select event_id
+  from inserted_rows;
+
+-- Persist the authorization source before attaching the JSON marker.  An
+-- existing record with different source bytes is left for the semantic guard
+-- below to reject; ON CONFLICT DO NOTHING is intentionally not an overwrite.
+insert into public.trnm_economic_receipt_legacy_fallback_provenance_v1 (
+    event_id, legacy_receipt_id, legacy_receipt_json_sha256, intent_hash,
+    amount_credits
 )
-select normalized_rows.intent_id,
-       1,
-       normalized_rows.payload_hash,
-       normalized_rows.receipt_id,
-       normalized_rows.protocol_version,
-       normalized_rows.idempotency_scope,
-       normalized_rows.idempotency_key,
-       normalized_rows.progression_class,
-       normalized_rows.status,
-       normalized_rows.resolved_amount,
-       normalized_rows.normalized_receipt_json,
-       encode(digest(normalized_rows.normalized_receipt_json::text, 'sha256'), 'hex'),
-       'initial',
-       normalized_rows.finalized_at,
-       normalized_rows.created_at
-  from normalized_rows
- where not exists (
-           select 1
-             from public.trnm_economic_receipt_events_v1 e
-            where e.intent_id = normalized_rows.intent_id
-             and e.event_sequence = 1
-       );
+select e.event_id,
+       r.receipt_id,
+       encode(digest(r.receipt_json::text, 'sha256'), 'hex'),
+       i.payload_hash,
+       public.cex_trnm_nonnegative_jsonb_bigint_or_null_v1(
+           r.receipt_json #> '{evidence,amount_credits}'
+       )
+  from public.trnm_economic_receipt_events_v1 e
+  join pg_temp.cex_trnm_legacy_amount_fallback_batch_v1 b
+    on b.event_id = e.event_id
+  join public.trnm_economic_receipts r
+    on r.intent_id = e.intent_id
+   and r.receipt_id = e.receipt_id
+  join public.trnm_economic_intents i
+    on i.intent_id = e.intent_id
+ where not coalesce(i.intent_json ? 'amount_credits', false)
+   and public.cex_trnm_nonnegative_jsonb_bigint_or_null_v1(
+           r.receipt_json #> '{evidence,amount_credits}'
+       ) is not null
+on conflict (event_id) do nothing;
+
+-- Only audit-only legacy rows with a valid non-negative evidence amount may
+-- receive the compatibility authority marker.  Join back to the immutable
+-- 0027 source rows rather than marking every event returned by the INSERT (the
+-- batch also contains explicit/invalid amount cases).  The mutation guard has
+-- not yet been installed, while the INSERT validation trigger above has
+-- already protected the initial unmarked write.
+update public.trnm_economic_receipt_events_v1 e
+   set receipt_json = public.cex_trnm_mark_legacy_amount_fallback_v1(
+           e.receipt_json,
+           true
+       ),
+       receipt_hash = encode(
+           digest(
+               public.cex_trnm_mark_legacy_amount_fallback_v1(
+                   e.receipt_json,
+                   true
+               )::text,
+               'sha256'
+           ),
+           'hex'
+       )
+  from public.trnm_economic_receipts r
+  join public.trnm_economic_intents i using (intent_id)
+ where e.event_id in (
+           select b.event_id
+             from pg_temp.cex_trnm_legacy_amount_fallback_batch_v1 b
+       )
+   and r.intent_id = e.intent_id
+   and r.receipt_id = e.receipt_id
+   and not coalesce(i.intent_json ? 'amount_credits', false)
+   and public.cex_trnm_nonnegative_jsonb_bigint_or_null_v1(
+           r.receipt_json #> '{evidence,amount_credits}'
+       ) is not null;
+
+create trigger trg_cex_validate_trnm_legacy_fallback_provenance_insert_v1
+before insert on public.trnm_economic_receipt_legacy_fallback_provenance_v1
+for each row
+execute function public.cex_validate_trnm_legacy_fallback_provenance_insert_v1();
+alter table public.trnm_economic_receipt_legacy_fallback_provenance_v1
+    enable always trigger trg_cex_validate_trnm_legacy_fallback_provenance_insert_v1;
+
+/*
+ * The INSERT CTE above and the durable provenance ledger are deliberately the
+ * only sources of batch membership.  A reserved marker outside those records
+ * is an authority forgery, even if the row happens to have the same legacy JSON
+ * shape.  This check runs before the append-only mutation trigger is installed,
+ * so the migration can repair only its own compatibility rows (including a
+ * previously completed run being retried).
+ */
+do $legacy_marker_semantics_guard$
+begin
+    if exists (
+        select 1
+          from public.trnm_economic_receipt_events_v1 e
+         where jsonb_typeof(e.receipt_json -> 'evidence') = 'object'
+           and (e.receipt_json -> 'evidence') ? '_cex_legacy_amount_fallback'
+           and (
+               jsonb_typeof(e.receipt_json #> '{evidence,_cex_legacy_amount_fallback}')
+                   is distinct from 'boolean'
+               or e.receipt_json #>> '{evidence,_cex_legacy_amount_fallback}'
+                   is distinct from 'true'
+               or not exists (
+                   select 1
+                     from public.trnm_economic_receipt_legacy_fallback_provenance_v1 p
+                     join public.trnm_economic_receipts r
+                       on r.receipt_id = p.legacy_receipt_id
+                     join public.trnm_economic_intents i
+                       on i.intent_id = e.intent_id
+                    where p.event_id = e.event_id
+                      and p.legacy_receipt_id = e.receipt_id
+                      and p.legacy_receipt_json_sha256 =
+                          encode(digest(r.receipt_json::text, 'sha256'), 'hex')
+                      and p.intent_hash = e.intent_hash
+                      and p.amount_credits = e.amount_credits
+                      and r.intent_id = e.intent_id
+                      and not coalesce(i.intent_json ? 'amount_credits', false)
+                      and e.event_sequence = 1
+                      and e.event_kind = 'initial'
+                      and public.cex_trnm_nonnegative_jsonb_bigint_or_null_v1(
+                              r.receipt_json #> '{evidence,amount_credits}'
+                          ) = e.amount_credits
+               )
+           )
+    ) then
+        raise exception
+            'TRNM legacy amount fallback marker is not authorized by this migration INSERT batch';
+    end if;
+end
+$legacy_marker_semantics_guard$;
 
 -- Existing rows were present before the INSERT trigger was installed.  Verify
 -- them explicitly after compatibility normalization so a conflicting legacy
@@ -2043,6 +2911,7 @@ execute function public.cex_reject_trnm_economic_receipt_event_mutation_v1();
 drop function public.cex_trnm_normalize_receipt_json_v1(
     jsonb, text, text, text, text, text, text, text, bigint, bigint
 );
+drop function public.cex_trnm_mark_legacy_amount_fallback_v1(jsonb, boolean);
 -- A pre-v12 attempt used the shorter eight-argument helper signature.  If
 -- that attempt committed its function before being interrupted, CREATE OR
 -- REPLACE with the expanded signature leaves an overload behind.  It is a

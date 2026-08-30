@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${DATABASE_URL:?DATABASE_URL is required}"
-
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+source "$root/scripts/_dev-helpers.sh"
+: "${DATABASE_URL:?DATABASE_URL is required}"
+cex_load_env
+cex_sync_postgres_env_from_database_url "$DATABASE_URL"
 evidence_dir="${CEX_P0_EVIDENCE_DIR:-$root/run/p0-release-evidence}"
 work_dir=$(mktemp -d /tmp/cex-trnm-receipt-lookup.XXXXXX)
 ledger_binary="${CEX_LEDGER_BINARY:-$root/target/debug/ledger-service}"
@@ -47,12 +49,16 @@ start_ledger() {
   local bind_addr="$1"
   local database_url="$2"
   local log_file="$3"
-  env \
+  # Keep the connection URI in the child environment rather than passing it
+  # through the external `env` utility (where it would be visible in argv).
+  # The URI itself is intentionally retained here: sqlx consumes the password
+  # from DATABASE_URL, while all psql probes below use the helper's
+  # credential-stripped URL plus PGPASSWORD.
+  DATABASE_URL="$database_url" \
     CEX_RUNTIME_PROFILE=dev \
     APP_ENV=dev \
     LEDGER_FAIL_FAST=false \
     LEDGER_BIND_ADDR="$bind_addr" \
-    DATABASE_URL="$database_url" \
     TRNM_GAME_AUTHORITY_TOKEN="$game_authority_token" \
     "$ledger_binary" >>"$log_file" 2>&1 &
   ledger_pid=$!
@@ -127,7 +133,7 @@ assert payload["error"]["code"] == sys.argv[2], payload
 PY
 }
 
-psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+cex_psql_stdin -X \
   -v org_id="$org_id" \
   -v account_id="$account_id" \
   -v trace_id="$trace_id" <<'SQL'
@@ -233,7 +239,7 @@ PY
 
 committed=0
 for _ in $(seq 1 120); do
-  committed=$(psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -At \
+  committed=$(cex_psql_stdin -X -At \
     -v intent_id="$response_loss_intent" <<'SQL'
 select count(*)
   from public.trnm_economic_receipt_events_v1
@@ -299,7 +305,7 @@ lookup "$base_url" p0-receipt-lookup-never-created "$response_loss_hash" 404 \
   "$work_dir/not-found.json"
 assert_error_code "$work_dir/not-found.json" intent_receipt_not_found
 
-psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+cex_psql_stdin -X \
   -v intent_id="$pending_intent" \
   -v payload_hash="$pending_hash" \
   -v intent_json="$(<"$work_dir/pending.intent.json")" <<'SQL'
@@ -345,7 +351,7 @@ lookup "$unavailable_url" "$response_loss_intent" "$response_loss_hash" 503 \
 assert_error_code "$work_dir/database-unavailable.json" receipt_lookup_unavailable
 stop_ledger
 
-raw_database=$(psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -At \
+raw_database=$(cex_psql_stdin -X -At \
   -v account_id="$account_id" \
   -v response_loss_intent="$response_loss_intent" \
   -v concurrent_intent="$concurrent_intent" <<'SQL'

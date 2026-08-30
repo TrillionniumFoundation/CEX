@@ -114,12 +114,16 @@ def main() -> int:
             "lookup does not require the typed CEX backend kind",
         ),
         (
-            "fn fail_closed_receipt_amount",
+            "fn expected_receipt_amount",
             "lookup does not mirror writer/backfill fail-closed amount normalization",
         ),
         (
             "intent.amount_credits.unwrap_or_default().max(0)",
             "lookup fail-closed amount normalization does not match the native writer",
+        ),
+        (
+            "LEGACY_AMOUNT_FALLBACK_EVIDENCE_KEY",
+            "lookup does not bind compatibility amount fallback to migration provenance",
         ),
         (
             "negative_legacy_amount_uses_same_fail_closed_evidence_amount_as_writer",
@@ -132,6 +136,14 @@ def main() -> int:
         (
             "native_event_pair_never_falls_back_to_legacy_columns",
             "lookup lacks regression coverage for native row pair integrity",
+        ),
+        (
+            "native_omitted_amount_positive_evidence_is_not_value_authority",
+            "lookup lacks regression coverage for unmarked native omitted-amount evidence",
+        ),
+        (
+            "native_non_initial_sequence_cannot_authorize_legacy_amount",
+            "lookup lacks regression coverage for non-sequence-one fallback provenance",
         ),
     ):
         require(problems, marker in module, message)
@@ -217,6 +229,9 @@ def main() -> int:
         "event_sequence bigint not null",
         "unique (intent_id, event_sequence)",
         "cex_validate_trnm_economic_receipt_event_v1",
+        "trnm_economic_receipt_legacy_fallback_provenance_v1",
+        "cex_trnm_legacy_amount_fallback_batch_v1",
+        "trnm legacy amount fallback marker is reserved for migration backfill",
         "cex_reject_trnm_economic_receipt_event_mutation_v1",
         "before update or delete on public.trnm_economic_receipt_events_v1",
         "before truncate on public.trnm_economic_receipt_events_v1",

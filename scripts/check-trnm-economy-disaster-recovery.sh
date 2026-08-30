@@ -43,10 +43,14 @@ if [[ "$TRNM_DR_CALLER_PGPASSWORD_SET" == "1" ]]; then
   TRNM_DR_DOCKER_PASSWORD="$TRNM_DR_CALLER_PGPASSWORD"
 elif [[ "${CEX_DATABASE_URL_PASSWORD_PRESENT:-0}" == "1" ]]; then
   TRNM_DR_DOCKER_PASSWORD="${CEX_POSTGRES_PASSWORD:-}"
+elif [[ ${PGPASSWORD+x} ]]; then
+  TRNM_DR_DOCKER_PASSWORD="$PGPASSWORD"
 elif [[ "$TRNM_DR_CALLER_CEX_PASSWORD_SET" == "1" ]]; then
   TRNM_DR_DOCKER_PASSWORD="$TRNM_DR_CALLER_CEX_PASSWORD"
-else
+elif [[ "${CEX_POSTGRES_PASSWORD_EXPLICIT:-0}" == "1" ]]; then
   TRNM_DR_DOCKER_PASSWORD="${CEX_POSTGRES_PASSWORD:-}"
+else
+  TRNM_DR_DOCKER_PASSWORD=""
 fi
 # `cex_psql_stdin` is used for the primary-database probes below.  Keep its
 # Docker/local credential view aligned with the same precedence decision.
@@ -60,6 +64,55 @@ RESTORE_DB="cex_trnm_restore_${RANDOM}_$$"
 WORK_DIR="$(mktemp -d /tmp/cex-trnm-dr.XXXXXX)"
 SECONDARY_PID=""
 CURRENT_PHASE="bootstrap"
+TRNM_DR_RESTORE_DB_CREATED=0
+
+TRNM_DR_DOCKER_PASSWORD_SET=0
+if [[ "$TRNM_DR_CALLER_PGPASSWORD_SET" == "1" \
+      || "$TRNM_DR_CALLER_CEX_PASSWORD_SET" == "1" \
+      || "${CEX_DATABASE_URL_PASSWORD_PRESENT:-0}" == "1" \
+      || "${CEX_POSTGRES_PASSWORD_EXPLICIT:-0}" == "1" ]]; then
+  TRNM_DR_DOCKER_PASSWORD_SET=1
+fi
+
+trnm_dr_docker_exec() {
+  if [[ "$TRNM_DR_DOCKER_PASSWORD_SET" == "1" ]]; then
+    cex_docker_exec_with_password "$TRNM_DR_DOCKER_PASSWORD" "$@"
+  else
+    cex_docker exec "$@"
+  fi
+}
+
+# Install cleanup immediately after mktemp.  All validation below can fail
+# before a database or child process exists, but the diagnostic directory must
+# still be removed on every exit path.
+cleanup() {
+  local status=$?
+  set +e
+  if [[ -n "$SECONDARY_PID" ]]; then
+    if kill -0 "$SECONDARY_PID" >/dev/null 2>&1; then
+      kill "$SECONDARY_PID" >/dev/null 2>&1 || true
+      local deadline=$((SECONDS + 10))
+      while kill -0 "$SECONDARY_PID" >/dev/null 2>&1 && (( SECONDS < deadline )); do
+        sleep 0.2
+      done
+      if kill -0 "$SECONDARY_PID" >/dev/null 2>&1; then
+        kill -KILL "$SECONDARY_PID" >/dev/null 2>&1 || true
+      fi
+    fi
+    wait "$SECONDARY_PID" >/dev/null 2>&1 || true
+    SECONDARY_PID=""
+  fi
+  if [[ "$TRNM_DR_RESTORE_DB_CREATED" == "1" ]] && cex_can_use_docker_postgres; then
+    trnm_dr_docker_exec "$CEX_POSTGRES_CONTAINER_NAME" dropdb -U "$CEX_POSTGRES_USER" \
+      --if-exists "$RESTORE_DB" >/dev/null 2>&1 || true
+  fi
+  rm -rf -- "$WORK_DIR" || true
+  if [[ "$status" -ne 0 ]]; then
+    echo "TRNM economy DR gate failed in phase ${CURRENT_PHASE:-unknown}" >&2
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
 
 # This drill intentionally uses the repository's Docker PostgreSQL instance
 # for both the source and restored databases.  A remote URI cannot be safely
@@ -70,43 +123,15 @@ if ! cex_postgres_host_is_local; then
   echo "refusing non-local DATABASE_URL for TRNM economy DR check (Docker-local drill; credentials redacted)" >&2
   exit 1
 fi
-if ! cex_can_use_docker_postgres; then
+if ! cex_can_use_docker_postgres || ! cex_postgres_docker_socket_is_target; then
   echo "TRNM economy DR check requires a usable Docker PostgreSQL container" >&2
   exit 1
 fi
-
-TRNM_DR_DOCKER_PASSWORD_SET=0
-if [[ -n "$TRNM_DR_DOCKER_PASSWORD" \
-      || "$TRNM_DR_CALLER_PGPASSWORD_SET" == "1" \
-      || "$TRNM_DR_CALLER_CEX_PASSWORD_SET" == "1" \
-      || "${CEX_DATABASE_URL_PASSWORD_PRESENT:-0}" == "1" ]]; then
-  TRNM_DR_DOCKER_PASSWORD_SET=1
-fi
-
-trnm_dr_docker_exec() {
-  if [[ "$TRNM_DR_DOCKER_PASSWORD_SET" == "1" ]]; then
-    cex_docker exec -e "PGPASSWORD=$TRNM_DR_DOCKER_PASSWORD" "$@"
-  else
-    cex_docker exec "$@"
-  fi
-}
 
 if [[ ! "$RESTORE_DB" =~ ^[A-Za-z_][A-Za-z0-9_]*$ || ${#RESTORE_DB} -gt 63 ]]; then
   echo "unsafe TRNM economy DR restore database name: $RESTORE_DB" >&2
   exit 1
 fi
-
-cleanup() {
-  if [[ -n "$SECONDARY_PID" ]]; then
-    kill "$SECONDARY_PID" >/dev/null 2>&1 || true
-    wait "$SECONDARY_PID" >/dev/null 2>&1 || true
-    SECONDARY_PID=""
-  fi
-  trnm_dr_docker_exec "$CEX_POSTGRES_CONTAINER_NAME" dropdb -U "$CEX_POSTGRES_USER" \
-    --if-exists "$RESTORE_DB" >/dev/null 2>&1 || true
-  rm -rf -- "$WORK_DIR" || true
-}
-trap 'status=$?; if [[ $status -ne 0 ]]; then echo "TRNM economy DR gate failed in phase $CURRENT_PHASE" >&2; fi; cleanup; exit $status' EXIT
 
 CURRENT_PHASE="logical-backup"
 trnm_dr_docker_exec \
@@ -117,8 +142,9 @@ trnm_dr_docker_exec \
 test -s "$WORK_DIR/cex.dump"
 trnm_dr_docker_exec \
   "$CEX_POSTGRES_CONTAINER_NAME" createdb -U "$CEX_POSTGRES_USER" "$RESTORE_DB"
+TRNM_DR_RESTORE_DB_CREATED=1
 if [[ "$TRNM_DR_DOCKER_PASSWORD_SET" == "1" ]]; then
-  cex_docker exec -i -e "PGPASSWORD=$TRNM_DR_DOCKER_PASSWORD" \
+  cex_docker_exec_with_password_stdin "$TRNM_DR_DOCKER_PASSWORD" \
     "$CEX_POSTGRES_CONTAINER_NAME" \
     pg_restore -U "$CEX_POSTGRES_USER" -d "$RESTORE_DB" --no-owner --no-privileges <"$WORK_DIR/cex.dump"
 else
@@ -136,7 +162,7 @@ primary_counts="$(cex_psql_stdin -Atc "select json_build_object(
   'escrows',(select count(*) from trnm_escrow_trades),
   'identities',(select count(*) from trnm_player_identities));")"
 if [[ "$TRNM_DR_DOCKER_PASSWORD_SET" == "1" ]]; then
-  restored_counts="$(cex_docker exec -e "PGPASSWORD=$TRNM_DR_DOCKER_PASSWORD" \
+  restored_counts="$(cex_docker_exec_with_password "$TRNM_DR_DOCKER_PASSWORD" \
   "$CEX_POSTGRES_CONTAINER_NAME" psql -U "$CEX_POSTGRES_USER" -d "$RESTORE_DB" -Atc "select json_build_object(
   'intents',(select count(*) from trnm_economic_intents),
   'receipts',(select count(*) from trnm_economic_receipts),
@@ -159,13 +185,32 @@ jq -e --argjson restored "$restored_counts" '. == $restored' <<<"$primary_counts
 ledger_binary="$CEX_PROJECT_ROOT/target/release/ledger-service"
 [[ -x "$ledger_binary" ]] || cargo build --release -p ledger-service
 CURRENT_PHASE="secondary-ledger-start"
-DATABASE_URL="$(cex_effective_database_url)" LEDGER_FAIL_FAST=true \
-  LEDGER_BIND_ADDR=127.0.0.1:7012 LEDGER_ADMIN_TOKEN="$ADMIN_TOKEN" \
-  TRNM_VALUE_ENTITLEMENT_SIGNING_SECRET="trnm-entitlement-signing-v1:$IDENTITY_ADMIN_TOKEN" \
-  TRNM_GAME_AUTHORITY_TOKEN="${TRNM_GAME_AUTHORITY_TOKEN:-trnm-game-authority-v1:$IDENTITY_ADMIN_TOKEN}" \
-  TRNM_PLAYER_SESSION_SIGNING_SECRET="trnm-player-session-signing-v1:$IDENTITY_ADMIN_TOKEN" \
-  TRNM_REQUIRE_PLAYER_SESSION=true TRNM_ALLOW_SYSTEM_ECONOMY_OPERATIONS=true \
-  "$ledger_binary" >"$WORK_DIR/secondary-ledger.log" 2>&1 &
+# The service's SQLx client reads PGPASSWORD when the URI omits a password.
+# Keep the URI credential-stripped in the child environment and select the
+# password through an environment assignment (never a command-line argument).
+TRNM_DR_DATABASE_URL_SAFE="$(cex_database_url_without_password "$(cex_effective_database_url)")"
+trnm_dr_start_secondary() {
+  if [[ "$TRNM_DR_DOCKER_PASSWORD_SET" == "1" ]]; then
+    DATABASE_URL="$TRNM_DR_DATABASE_URL_SAFE" PGPASSWORD="$TRNM_DR_DOCKER_PASSWORD" \
+      LEDGER_FAIL_FAST=true LEDGER_BIND_ADDR=127.0.0.1:7012 \
+      LEDGER_ADMIN_TOKEN="$ADMIN_TOKEN" \
+      TRNM_VALUE_ENTITLEMENT_SIGNING_SECRET="trnm-entitlement-signing-v1:$IDENTITY_ADMIN_TOKEN" \
+      TRNM_GAME_AUTHORITY_TOKEN="${TRNM_GAME_AUTHORITY_TOKEN:-trnm-game-authority-v1:$IDENTITY_ADMIN_TOKEN}" \
+      TRNM_PLAYER_SESSION_SIGNING_SECRET="trnm-player-session-signing-v1:$IDENTITY_ADMIN_TOKEN" \
+      TRNM_REQUIRE_PLAYER_SESSION=true TRNM_ALLOW_SYSTEM_ECONOMY_OPERATIONS=true \
+      "$ledger_binary"
+  else
+    env -u PGPASSWORD DATABASE_URL="$TRNM_DR_DATABASE_URL_SAFE" \
+      LEDGER_FAIL_FAST=true LEDGER_BIND_ADDR=127.0.0.1:7012 \
+      LEDGER_ADMIN_TOKEN="$ADMIN_TOKEN" \
+      TRNM_VALUE_ENTITLEMENT_SIGNING_SECRET="trnm-entitlement-signing-v1:$IDENTITY_ADMIN_TOKEN" \
+      TRNM_GAME_AUTHORITY_TOKEN="${TRNM_GAME_AUTHORITY_TOKEN:-trnm-game-authority-v1:$IDENTITY_ADMIN_TOKEN}" \
+      TRNM_PLAYER_SESSION_SIGNING_SECRET="trnm-player-session-signing-v1:$IDENTITY_ADMIN_TOKEN" \
+      TRNM_REQUIRE_PLAYER_SESSION=true TRNM_ALLOW_SYSTEM_ECONOMY_OPERATIONS=true \
+      "$ledger_binary"
+  fi
+}
+trnm_dr_start_secondary >"$WORK_DIR/secondary-ledger.log" 2>&1 &
 SECONDARY_PID=$!
 for _ in $(seq 1 60); do
   curl -fsS "$SECONDARY_URL/v1/trnm/economy/readiness" >/dev/null 2>&1 && break

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +16,41 @@ CORE = ROOT / "scripts/check-release-baseline-manifest-core.py"
 STRICT = ROOT / "scripts/check-release-baseline-manifest-contract.py"
 SCHEMA = ROOT / "docs/schemas/cex-release-baseline-manifest-v1.schema.json"
 ACTIVE_MIGRATION_HEAD = "0087_add_term_exchange_receipt_event_history.sql"
+CANONICAL_BRANCH_PATTERN = (
+    r"^(?!/)(?!.*//)(?!.*\.\.)(?!.*(?:^|/)\.(?:/|$))"
+    r"(?!.*(?:^|/)\.\.(?:/|$))(?!.*@\{)(?!refs/)(?!HEAD$)(?!.*/$)"
+    r"[A-Za-z0-9._/-]+$"
+)
+HOSTED_EVIDENCE_URI_PATTERN = (
+    r"^gh://TrillionniumFoundation/CEX/actions/runs/"
+    r"[1-9][0-9]*/attempts/[1-9][0-9]*$"
+)
+PAYLOAD_ARTIFACT_NAME_PATTERN = (
+    r"^cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*$"
+)
+PAYLOAD_ARTIFACT_URI_PATTERN = (
+    r"^gh://TrillionniumFoundation/CEX/actions/runs/"
+    r"[1-9][0-9]*/attempts/[1-9][0-9]*/artifacts/"
+    r"cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*$"
+)
+SBOM_URI_PATTERN = (
+    r"^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/"
+    r"sbom\.spdx\.json$"
+)
+PROVENANCE_URI_PATTERN = (
+    r"^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/"
+    r"provenance\.intoto\.json$"
+)
+LOCAL_EVIDENCE_URI_PATTERNS = {
+    "candidate-hygiene": r"^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/candidate-hygiene\.json$",
+    "repository-integrity": r"^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/repository-integrity\.json$",
+    "hepta-postgres-integration": r"^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/hepta-postgres-integration\.json$",
+    "migration-and-lifecycle-matrix": r"^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/database-lifecycle\.json$",
+    "exact-ledger-soak": r"^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/exact-ledger-soak\.json$",
+    "backup-restore": r"^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/backup-restore\.json$",
+    "local-evidence-binding": r"^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/local-evidence-binding\.json$",
+    "hosted-gate-execution": r"^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/hosted-gate-execution\.json$",
+}
 ACTIVE_STATUSES = ("draft", "candidate")
 EXPECTED_EVIDENCE = (
     "hosted:p0-migration-gate",
@@ -144,6 +180,12 @@ def validate_schema_contract(path: Path = SCHEMA) -> list[str]:
     if nested(schema, "properties", "revocation", "type") != "null":
         problems.append("JSON Schema revocation must be null in active v12")
 
+    branch_pattern = nested(
+        schema, "properties", "source", "properties", "branch", "pattern"
+    )
+    if branch_pattern != CANONICAL_BRANCH_PATTERN:
+        problems.append("JSON Schema source.branch pattern is not the canonical branch contract")
+
     migration_head = nested(
         schema,
         "properties",
@@ -215,6 +257,98 @@ def validate_schema_contract(path: Path = SCHEMA) -> list[str]:
             problems.append(
                 f"JSON Schema {status} evidence permits trailing entries"
             )
+        if status == "candidate":
+            artifacts = nested(
+                condition,
+                "properties",
+                "build",
+                "properties",
+                "artifacts",
+            )
+            artifact_prefix = (
+                artifacts.get("prefixItems")
+                if isinstance(artifacts, dict)
+                else None
+            )
+            if not isinstance(artifact_prefix, list) or not artifact_prefix:
+                problems.append(
+                    "JSON Schema candidate payload artifact contract is missing"
+                )
+            else:
+                artifact_item = artifact_prefix[0]
+                artifact_parts = (
+                    artifact_item.get("allOf")
+                    if isinstance(artifact_item, dict)
+                    else None
+                )
+                artifact_contract = (
+                    artifact_parts[1]
+                    if isinstance(artifact_parts, list)
+                    and len(artifact_parts) > 1
+                    and isinstance(artifact_parts[1], dict)
+                    else artifact_item
+                )
+                artifact_name_pattern = nested(
+                    artifact_contract, "properties", "name", "pattern"
+                )
+                artifact_uri_pattern = nested(
+                    artifact_contract, "properties", "uri", "pattern"
+                )
+                if artifact_name_pattern != PAYLOAD_ARTIFACT_NAME_PATTERN:
+                    problems.append(
+                        "JSON Schema candidate payload artifact name pattern is stale"
+                    )
+                if artifact_uri_pattern != PAYLOAD_ARTIFACT_URI_PATTERN:
+                    problems.append(
+                        "JSON Schema candidate payload artifact URI pattern is stale"
+                    )
+
+            prefix = nested(condition, "properties", "evidence", "prefixItems")
+            if not isinstance(prefix, list):
+                continue
+            for item in prefix:
+                parts = item.get("allOf") if isinstance(item, dict) else None
+                contract = (
+                    parts[1]
+                    if isinstance(parts, list)
+                    and len(parts) > 1
+                    and isinstance(parts[1], dict)
+                    else {}
+                )
+                name = nested(contract, "properties", "name", "const")
+                actual_pattern = nested(contract, "properties", "uri", "pattern")
+                expected_pattern = (
+                    HOSTED_EVIDENCE_URI_PATTERN
+                    if isinstance(name, str) and name in EXPECTED_EVIDENCE[:5]
+                    else LOCAL_EVIDENCE_URI_PATTERNS.get(name)
+                )
+                if expected_pattern is None or actual_pattern != expected_pattern:
+                    problems.append(
+                        f"JSON Schema candidate evidence URI pattern is stale: {name!r}"
+                    )
+
+            for field, expected_pattern in (
+                (
+                    "sbom",
+                    SBOM_URI_PATTERN,
+                ),
+                (
+                    "provenance",
+                    PROVENANCE_URI_PATTERN,
+                ),
+            ):
+                actual_pattern = nested(
+                    condition,
+                    "properties",
+                    "build",
+                    "properties",
+                    field,
+                    "properties",
+                    "uri",
+                    "pattern",
+                )
+                if actual_pattern != expected_pattern:
+                    problems.append(f"JSON Schema candidate build.{field}.uri pattern is stale")
     return problems
 
 
@@ -266,6 +400,46 @@ def self_test() -> list[str]:
             path.write_text(json.dumps(value), encoding="utf-8")
             if not validate_active_head(path):
                 failures.append(f"negative self-test accepted {label}")
+
+    for value in (
+        "feature/hepta-production-baseline-p0",
+        "REPLACE_BRANCH",
+        "release.v12-rc_1",
+    ):
+        if re.fullmatch(CANONICAL_BRANCH_PATTERN, value) is None:
+            failures.append(f"canonical branch pattern rejected valid value {value!r}")
+    for value in (
+        "/leading",
+        "trailing/",
+        "feature//duplicate",
+        "feature/../escape",
+        "feature/./dot",
+        "refs/heads/main",
+        "HEAD",
+        "feature/@{bad}",
+    ):
+        if re.fullmatch(CANONICAL_BRANCH_PATTERN, value) is not None:
+            failures.append(f"canonical branch pattern accepted invalid value {value!r}")
+
+    uri_patterns = (
+        (
+            HOSTED_EVIDENCE_URI_PATTERN,
+            "gh://TrillionniumFoundation/CEX/actions/runs/123/attempts/2",
+            "gh://TrillionniumFoundation/CEX/actions/runs/0/attempts/2",
+        ),
+        (
+            PAYLOAD_ARTIFACT_URI_PATTERN,
+            "gh://TrillionniumFoundation/CEX/actions/runs/123/attempts/2/artifacts/cex-p0-evidence-"
+            + "a" * 40
+            + "-attempt-2",
+            "file:///tmp/cex-p0-evidence",
+        ),
+    )
+    for pattern, valid, invalid in uri_patterns:
+        if re.fullmatch(pattern, valid) is None:
+            failures.append(f"URI pattern rejected valid value {valid!r}")
+        if re.fullmatch(pattern, invalid) is not None:
+            failures.append(f"URI pattern accepted invalid value {invalid!r}")
     return failures
 
 

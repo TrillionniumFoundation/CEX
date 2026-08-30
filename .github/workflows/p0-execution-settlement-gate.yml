@@ -17,6 +17,7 @@ on:
       - 'services/execution-service/**'
       - 'scripts/check-execution-settlement-commands.py'
       - 'scripts/check-execution-settlement-commands-postgres.sh'
+      - 'scripts/_dev-helpers.sh'
       - 'docs/execution-ledger-settlement-commands-v1.md'
       - 'docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md'
       - 'docs/templates/cex-release-baseline-manifest-v1.json'

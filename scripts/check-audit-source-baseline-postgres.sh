@@ -2,11 +2,14 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+source "$root/scripts/_dev-helpers.sh"
 : "${DATABASE_URL:?DATABASE_URL is required}"
+cex_load_env
+cex_sync_postgres_env_from_database_url "$DATABASE_URL"
 
 python3 "$root/scripts/check-p0-migrations.py"
 
-psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+cex_psql_stdin -X <<'SQL'
 begin;
 
 insert into public.organizations (org_id, name)

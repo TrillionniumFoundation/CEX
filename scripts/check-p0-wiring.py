@@ -24,6 +24,19 @@ AUTHORITATIVE_WORKFLOWS = (
     ".github/workflows/p0-provider-reconciliation-gate.yml",
 )
 RELEASE_WORKFLOW = ".github/workflows/p0-release-candidate-gate.yml"
+AUTHORITATIVE_POSTGRES_SCRIPTS = (
+    "scripts/check-p0-migrations-postgres.sh",
+    "scripts/check-audit-source-baseline-postgres.sh",
+    "scripts/check-ledger-operation-identity-postgres.sh",
+    "scripts/check-invocation-ledger-contract-postgres.sh",
+    "scripts/check-invocation-ledger-terminal-postgres.sh",
+    "scripts/check-gateway-exact-reserve-postgres.sh",
+    "scripts/check-execution-settlement-commands-postgres.sh",
+    "scripts/check-provider-reconciliation-postgres.sh",
+    "scripts/check-p0-exact-ledger-soak-postgres.sh",
+    "scripts/check-trnm-settlement-receipt-lookup-http.sh",
+    "scripts/backfill-audit-source-baselines.sh",
+)
 
 
 def read_text(relative_path: str) -> str:
@@ -50,6 +63,13 @@ def forbid_text(relative_path: str, *needles: str) -> None:
     for needle in needles:
         if needle in content:
             PROBLEMS.append(f"{relative_path} contains forbidden marker: {needle}")
+
+
+def forbid_regex(relative_path: str, *patterns: tuple[str, str]) -> None:
+    content = read_text(relative_path)
+    for pattern, label in patterns:
+        if re.search(pattern, content, flags=re.MULTILINE):
+            PROBLEMS.append(f"{relative_path} contains forbidden pattern: {label}")
 
 
 def forbid_path(relative_path: str) -> None:
@@ -191,10 +211,18 @@ def verify_exact_contracts() -> None:
         "scripts/_dev-helpers.sh",
         "cex_sync_postgres_env_from_database_url",
         "CEX_POSTGRES_PASSWORD",
-        # The helper quotes the assignment so passwords containing shell
-        # metacharacters remain literal.  Keep the contract tied to that
-        # actual invocation rather than a brittle unquoted substring.
-        'PGPASSWORD="$CEX_POSTGRES_PASSWORD"',
+        "dangerous_query_keys",
+        "cex_docker_exec_with_password",
+        "cex_docker_exec_with_password_stdin",
+        "cex_docker_run_with_password",
+        "cex_docker_run_with_password_stdin",
+        "cex_postgres_docker_socket_is_target",
+        "--env-file",
+        # Passwords are now carried through the generic decoded-password
+        # variable or a Docker env-file; never require a literal secret-bearing
+        # command argument in this static contract.
+        'PGPASSWORD="$psql_password"',
+        'PGPASSWORD="$readiness_password"',
     )
     # The normalized runtime probe must honor an explicitly supplied
     # DATABASE_URL even though it loads the repository's .env for the rest of
@@ -248,10 +276,21 @@ def verify_exact_contracts() -> None:
         "RECEIPT_CALLER_DATABASE_URL=\"${DATABASE_URL-}\"",
         "RECEIPT_CALLER_DATABASE_URL_SET=0",
         'export DATABASE_URL=\"$RECEIPT_CALLER_DATABASE_URL\"',
-        "RECEIPT_DB_URI_TEMPLATE",
-        "urlunsplit",
+        "RECEIPT_DB_URI_SCHEME",
+        "RECEIPT_DB_URI_SAFE_NETLOC",
+        "RECEIPT_DB_URI_QUERY",
+        "parse_qsl",
+        "dangerous_query_keys",
         "RECEIPT_DOCKER_PSQL_PASSWORD",
         "docker_psql_stdin",
+        "cex_docker_exec_with_password_stdin",
+        "cex_postgres_docker_socket_is_target",
+    )
+    require_text(
+        "scripts/check-p0-backup-restore-postgres.sh",
+        "cex_database_url_for_database",
+        "run_with_postgres_password",
+        "trap cleanup EXIT",
     )
     require_text(
         "crates/shared-types/src/ledger_v2.rs",
@@ -322,6 +361,211 @@ def verify_exact_contracts() -> None:
             )
 
 
+def verify_database_url_isolation_contract() -> None:
+    """Exercise URL rewriting/loader precedence without touching PostgreSQL."""
+
+    probe = r'''
+set -euo pipefail
+source scripts/_dev-helpers.sh
+safe="$(cex_database_url_for_database tmp_probe \
+  'postgres://foo__CEX_DATABASE__bar:pw@127.0.0.1:55432/base?sslmode=disable&connect_timeout=5&application_name=sentinel__CEX_DATABASE__')"
+[[ "$safe" == 'postgres://foo__CEX_DATABASE__bar:pw@127.0.0.1:55432/tmp_probe?sslmode=disable&connect_timeout=5&application_name=sentinel__CEX_DATABASE__' ]]
+if cex_database_url_for_database tmp_probe \
+  'postgres://u:p@127.0.0.1:55432/base?dbname=production' >/dev/null 2>&1; then
+  exit 11
+fi
+if cex_database_url_without_password \
+  'postgres://@127.0.0.1:55432/base' >/dev/null 2>&1; then
+  exit 13
+fi
+if cex_database_url_for_database tmp_probe \
+  'postgres://127.0.0.1:55432/base' >/dev/null 2>&1; then
+  exit 14
+fi
+if cex_sync_postgres_env_from_database_url \
+  'postgres://u:p@127.0.0.0:55432/base?host=production' >/dev/null 2>&1; then
+  exit 12
+fi
+export CEX_POSTGRES_CONTAINER_NAME=caller-container
+export CEX_POSTGRES_CONTAINER_NAME_PRESET=1
+export DATABASE_URL='postgres://caller:pw@127.0.0.1:55432/caller_db'
+export LEDGER_BASE_URL='http://caller.example.test'
+cex_load_env
+[[ "$CEX_POSTGRES_CONTAINER_NAME" == caller-container ]]
+[[ "$DATABASE_URL" == 'postgres://caller:pw@127.0.0.1:55432/caller_db' ]]
+[[ "$LEDGER_BASE_URL" == 'http://caller.example.test' ]]
+
+# A repository `.env` may contain a stale PGPASSWORD.  It must not shadow a
+# caller-selected URI password, while an explicitly exported caller password
+# remains the conventional libpq override.
+env_file="$(mktemp)"
+trap 'rm -f -- "$env_file"' EXIT
+printf '%s\n' 'PGPASSWORD=from-env' >"$env_file"
+(
+  # With no DATABASE_URL and no env file, the helper's built-in local
+  # postgres:postgres endpoint still needs its password supplied separately
+  # after the URI is stripped from argv.
+  unset DATABASE_URL PGPASSWORD CEX_POSTGRES_PASSWORD CEX_POSTGRES_USER CEX_POSTGRES_DB
+  export CEX_ENV_FILE=/dev/null
+  source scripts/_dev-helpers.sh
+  cex_load_env
+  [[ "${CEX_DATABASE_URL_SYNCED:-0}" == "0" ]]
+  cex_postgres_password_is_set
+  [[ "$(cex_postgres_password_value)" == postgres ]]
+)
+(
+  # A synchronized passwordless URI must remain passwordless; the helper's
+  # convenience postgres value is not allowed to leak into PGPASSWORD.
+  unset PGPASSWORD CEX_POSTGRES_PASSWORD CEX_POSTGRES_USER CEX_POSTGRES_DB
+  export CEX_ENV_FILE=/dev/null
+  export DATABASE_URL='postgres://uri-user@127.0.0.1:55432/uri_db'
+  source scripts/_dev-helpers.sh
+  cex_load_env
+  [[ "${CEX_DATABASE_URL_SYNCED:-0}" == "1" ]]
+  [[ "${CEX_DATABASE_URL_PASSWORD_PRESENT:-0}" == "0" ]]
+  [[ "${CEX_POSTGRES_PASSWORD}" == postgres ]]
+  if cex_postgres_password_is_set; then
+    exit 21
+  fi
+)
+(
+  # PostgreSQL defaults an omitted URI port to 5432.  Synchronization must
+  # expose that effective port so Docker/socket and TCP target checks do not
+  # reject a valid default-port URL as an unknown server.
+  unset PGPASSWORD CEX_POSTGRES_PASSWORD CEX_POSTGRES_USER CEX_POSTGRES_DB
+  export CEX_ENV_FILE=/dev/null
+  export DATABASE_URL='postgres://uri-user:uri-password@127.0.0.1/uri_db'
+  source scripts/_dev-helpers.sh
+  cex_load_env
+  [[ "$CEX_POSTGRES_HOST" == 127.0.0.1 ]]
+  [[ "$CEX_POSTGRES_PORT" == 5432 ]]
+)
+(
+  # An explicitly empty CEX_POSTGRES_PASSWORD is a caller-selected credential
+  # and must not be replaced by the helper's convenience `postgres` default.
+  # This matters for a passwordless URI where an implicit fallback would make
+  # libpq authenticate with the wrong secret (or defeat peer/.pgpass auth).
+  unset DATABASE_URL PGPASSWORD CEX_POSTGRES_PASSWORD CEX_POSTGRES_USER CEX_POSTGRES_DB
+  unset CEX_DATABASE_URL_SYNCED CEX_DATABASE_URL_PASSWORD_PRESENT CEX_DATABASE_URL_PASSWORD_SET_BY_SYNC
+  export CEX_ENV_FILE=/dev/null
+  export CEX_POSTGRES_PASSWORD=''
+  export DATABASE_URL='postgres://uri-user@127.0.0.1/uri_db'
+  source scripts/_dev-helpers.sh
+  cex_load_env
+  [[ "${CEX_POSTGRES_PASSWORD+x}" == x ]]
+  [[ "$CEX_POSTGRES_PASSWORD" == "" ]]
+  [[ "${CEX_POSTGRES_PASSWORD_EXPLICIT:-0}" == 1 ]]
+  cex_postgres_password_is_set
+  [[ "$(cex_postgres_password_value)" == "" ]]
+)
+(
+  unset PGPASSWORD
+  export CEX_ENV_FILE="$env_file"
+  export DATABASE_URL='postgres://uri-user:uri-password@127.0.0.1:55432/uri_db'
+  source scripts/_dev-helpers.sh
+  cex_load_env
+  cex_sync_postgres_env_from_database_url "$DATABASE_URL"
+  [[ ! ${PGPASSWORD+x} ]]
+  [[ "$CEX_POSTGRES_PASSWORD" == uri-password ]]
+)
+(
+  export PGPASSWORD=caller-password
+  export CEX_ENV_FILE="$env_file"
+  export DATABASE_URL='postgres://uri-user:uri-password@127.0.0.1:55432/uri_db'
+  source scripts/_dev-helpers.sh
+  cex_load_env
+  cex_sync_postgres_env_from_database_url "$DATABASE_URL"
+  [[ "$PGPASSWORD" == caller-password ]]
+)
+'''
+    try:
+        result = subprocess.run(
+            ["bash", "-c", probe],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+    except OSError as error:
+        PROBLEMS.append(f"database URL isolation probe could not run: {error}")
+    else:
+        if result.returncode != 0:
+            PROBLEMS.append(
+                "database URL isolation probe failed: " + result.stdout.strip()
+            )
+
+
+def verify_postgres_argv_contract() -> None:
+    """Keep hosted P0 PostgreSQL probes from exposing URI credentials in argv."""
+
+    for script in AUTHORITATIVE_POSTGRES_SCRIPTS:
+        require_text(
+            script,
+            "source \"$root/scripts/_dev-helpers.sh\"",
+            "cex_load_env",
+            "cex_sync_postgres_env_from_database_url",
+            "cex_psql_stdin",
+        )
+        # A URI may contain credentials, so it must never be handed directly
+        # to psql or to Docker's `-e PGPASSWORD=...` argv.  cex_psql_stdin
+        # performs credential stripping and carries the password separately.
+        forbid_regex(
+            script,
+            (r"\bpsql\s+['\"]?\$\{?DATABASE_URL", 'psql "$DATABASE_URL"'),
+            (r"\b(?:docker|cex_docker)\b[^\n]*-e\s+PGPASSWORD=", "Docker PGPASSWORD argv"),
+        )
+
+    # The backup drill uses pg_dump/pg_restore as well as psql; all connection
+    # URLs must be derived from the password-free BASE_URL_SAFE value.
+    require_text(
+        "scripts/check-p0-backup-restore-postgres.sh",
+        "BASE_URL_SAFE=",
+        "run_with_postgres_password",
+        "cex_database_url_without_password",
+    )
+    forbid_regex(
+        "scripts/check-p0-backup-restore-postgres.sh",
+        (r"\b(?:psql|pg_dump|pg_restore)\s+['\"]?\$\{?BASE_URL(?:\W|$)",
+         "database client receives unsanitized BASE_URL"),
+        (r"\b(?:psql|pg_dump|pg_restore)\s+['\"]?\$\{?DATABASE_URL",
+         'database client receives DATABASE_URL'),
+    )
+
+    # The provider workflow has its own fresh-migration loop.  Keep it on the
+    # same helper path so a future edit cannot reintroduce a credential-bearing
+    # `psql "$DATABASE_URL"` invocation outside the shell-script inventory.
+    require_text(
+        ".github/workflows/p0-provider-reconciliation-gate.yml",
+        "source scripts/_dev-helpers.sh",
+        "cex_load_env",
+        "cex_sync_postgres_env_from_database_url",
+        "cex_psql_stdin -X -v ON_ERROR_STOP=1 -f - < \"$migration\"",
+    )
+    forbid_regex(
+        ".github/workflows/p0-provider-reconciliation-gate.yml",
+        (r"\bpsql\s+['\"]?\$\{?DATABASE_URL", 'workflow psql receives DATABASE_URL'),
+        (r"\b(?:docker|cex_docker)\b[^\n]*-e\s+PGPASSWORD=", "workflow Docker PGPASSWORD argv"),
+    )
+
+
+def verify_release_evidence_self_test() -> None:
+    """Run the in-process exact-SHA/rerun binding regression fixture."""
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/p0-release-evidence-core.py"), "self-test"],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    if result.returncode != 0:
+        PROBLEMS.append(
+            "p0-release-evidence-core self-test failed: " + result.stdout.strip()
+        )
+
+
 def verify_development_documents() -> None:
     result = subprocess.run(
         [sys.executable, str(ROOT / DOC_CHECKER)],
@@ -340,6 +584,52 @@ def verify_gates_and_plan() -> None:
         "scripts/check-repository-integrity.py",
         '"commit_sha": commit_sha',
         '"tree_sha": tree_sha',
+    )
+    require_text(
+        "scripts/bind-p0-local-evidence.py",
+        "producer_tree = payload.get(\"tree_sha\")",
+        "missing a valid exact tree_sha",
+    )
+    require_text(
+        "scripts/p0-release-evidence-core.py",
+        "tree_sha = payload.get(\"tree_sha\")",
+        "lacks a valid exact tree_sha",
+        "def revalidate_gate_runs(",
+        "release-evidence core self-test failed",
+    )
+    for producer in (
+        "scripts/check-hepta-postgres-integration.sh",
+        "scripts/check-p0-exact-ledger-soak-postgres.sh",
+        "scripts/check-p0-backup-restore-postgres.sh",
+    ):
+        require_text(producer, '"tree_sha"')
+    require_text(
+        "scripts/observe-repository-governance.py",
+        "--candidate-branch",
+        "candidate_branch",
+        "candidate_ruleset_count",
+        "ruleset_applies_to_branch",
+        "request_rulesets",
+        "ruleset_bypass_state",
+        "pagination exceeded 1000 pages",
+    )
+    require_text(
+        "scripts/check-release-baseline-manifest.py",
+        "CANONICAL_BRANCH_PATTERN",
+        "HOSTED_EVIDENCE_URI_PATTERN",
+        "PAYLOAD_ARTIFACT_NAME_PATTERN",
+        "PAYLOAD_ARTIFACT_URI_PATTERN",
+        "SBOM_URI_PATTERN",
+        "PROVENANCE_URI_PATTERN",
+        "LOCAL_EVIDENCE_URI_PATTERNS",
+        "JSON Schema source.branch pattern",
+        "JSON Schema candidate payload artifact URI pattern",
+        "JSON Schema candidate evidence URI pattern",
+    )
+    require_text(
+        "docs/schemas/cex-release-baseline-manifest-v1.schema.json",
+        "cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*",
+        "gh://TrillionniumFoundation/CEX/actions/runs/[1-9][0-9]*/attempts/[1-9][0-9]*",
     )
     require_text(
         ".github/workflows/rust-service-gate.yml",
@@ -387,6 +677,12 @@ def verify_gates_and_plan() -> None:
         "term-exchange-receipt-partial-upgrade-regression",
         "scripts/check-development-docs.py",
         "scripts/check-repository-integrity.py",
+        "scripts/observe-repository-governance.py",
+        "--candidate-branch",
+        "CANDIDATE_BRANCH",
+        "candidate branch/ruleset state",
+        '"tree_sha": sys.argv[3]',
+        "CANDIDATE_TREE",
         "scripts/check-hepta-postgres-integration.sh --mode recovery-only",
         "scripts/check-trnm-economy-settlement-contract.py",
         "scripts/test-trnm-economy-settlement-status-negative.py",
@@ -427,6 +723,9 @@ def main() -> int:
     verify_candidate_trigger()
     verify_core()
     verify_exact_contracts()
+    verify_database_url_isolation_contract()
+    verify_postgres_argv_contract()
+    verify_release_evidence_self_test()
     verify_development_documents()
     verify_gates_and_plan()
     result = {
@@ -435,7 +734,7 @@ def main() -> int:
         "addendum": Path(ACTIVE_ADDENDUM).name,
         "migration_number": migration_number,
         "migration_head": migration_filename,
-        "checks": 6,
+        "checks": 7,
         "problems": PROBLEMS,
     }
     print(json.dumps(result, ensure_ascii=False, indent=2))

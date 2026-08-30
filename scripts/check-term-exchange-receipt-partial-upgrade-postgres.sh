@@ -28,6 +28,8 @@ if [[ ${CEX_POSTGRES_PASSWORD+x} ]]; then
   RECEIPT_CALLER_CEX_PASSWORD_SET=1
 fi
 RECEIPT_PSQL_PASSWORD=""
+RECEIPT_PSQL_PASSWORD_SET=0
+RECEIPT_DOCKER_PSQL_PASSWORD=""
 # Keep an explicit caller URL authoritative while still importing the rest of
 # the repository's local/container defaults from `.env`.
 RECEIPT_CALLER_DATABASE_URL="${DATABASE_URL-}"
@@ -61,11 +63,12 @@ if ! command -v python3 >/dev/null 2>&1; then
   echo "receipt partial-upgrade check requires python3 for PostgreSQL URI handling" >&2
   exit 1
 fi
-if ! RECEIPT_DB_URI_PARTS="$(python3 - "$BASE_URL" <<'PY'
-from urllib.parse import unquote, urlsplit, urlunsplit
+if ! RECEIPT_DB_URI_PARTS="$(python3 - 3<<<"$BASE_URL" <<'PY'
+from urllib.parse import parse_qsl, unquote, urlsplit
+import os
 import sys
 
-raw_url = sys.argv[1]
+raw_url = os.fdopen(3, encoding="utf-8").read().rstrip("\n")
 if any(ord(char) < 0x20 or ord(char) == 0x7f for char in raw_url):
     raise SystemExit("DATABASE_URL contains a control character")
 source = urlsplit(raw_url)
@@ -74,7 +77,10 @@ if source.scheme not in {"postgres", "postgresql"} or not source.netloc or not s
 if source.fragment:
     raise SystemExit("DATABASE_URL fragments are not supported")
 try:
-    port = source.port
+    # PostgreSQL's default port is 5432 when the URI omits one.  Preserve that
+    # effective target so the Docker socket guard cannot mistake an omitted
+    # port for an unknown/non-matching server.
+    port = source.port or 5432
 except ValueError as error:
     raise SystemExit(f"DATABASE_URL has an invalid port: {error}") from error
 
@@ -82,30 +88,57 @@ user = unquote(source.username or "")
 password = unquote(source.password or "")
 host = source.hostname or ""
 database = unquote(source.path.lstrip("/"))
+if not user:
+    raise SystemExit("DATABASE_URL must include a user for Docker/local parity")
 for label, value in (("user", user), ("password", password), ("database", database), ("host", host)):
     if any(ord(char) < 0x20 or ord(char) == 0x7f or char == "\t" for char in value):
         raise SystemExit(f"DATABASE_URL {label} contains a control character")
+dangerous_query_keys = {
+    "dbname", "database", "host", "hostaddr", "port", "user", "password",
+    "service", "options", "replication", "target_session_attrs",
+    "load_balance_hosts", "load_balance_host_type", "passfile",
+    "sslcert", "sslkey", "sslrootcert", "sslcrl", "sslcrldir",
+    "sslpassword", "gssencmode", "channel_binding",
+}
+for key, value in parse_qsl(source.query, keep_blank_values=True, strict_parsing=True):
+    key = unquote(key).lower()
+    value = unquote(value)
+    if key in dangerous_query_keys:
+        raise SystemExit(f"DATABASE_URL query parameter is not allowed: {key}")
+    if any(ord(char) < 0x20 or ord(char) == 0x7f for char in key + value):
+        raise SystemExit("DATABASE_URL query contains a control character")
 
-# A safe database-name marker is replaced by the shell helper below.  Keep the
-# original netloc so percent-encoded credentials and IPv6 brackets survive.
-template = urlunsplit((source.scheme, source.netloc, "/__CEX_DATABASE__", source.query, ""))
+# Preserve the raw username/host-port spelling while removing only the
+# password component.  This value is used for every psql argument below; the
+# decoded password is carried separately through PGPASSWORD/env-file.
+safe_netloc = source.netloc
+if "@" in safe_netloc:
+    userinfo, hostport = safe_netloc.rsplit("@", 1)
+    safe_netloc = f"{userinfo.split(':', 1)[0]}@{hostport}"
+
 # Unit separator preserves empty optional user/password fields when Bash reads
 # the result; tabs are treated as whitespace and would collapse them.
-print("\x1f".join((template, user, password,
+print("\x1f".join((source.scheme, safe_netloc, source.query, user, password,
                    "1" if source.password is not None else "0",
-                   host, str(port or ""))))
+                   host, str(port))))
 PY
 )"; then
   echo "cannot parse DATABASE_URL for receipt partial-upgrade check" >&2
   exit 1
 fi
-IFS=$'\x1f' read -r RECEIPT_DB_URI_TEMPLATE RECEIPT_DB_URI_USER \
-  RECEIPT_DB_URI_PASSWORD RECEIPT_DB_URI_PASSWORD_PRESENT \
+IFS=$'\x1f' read -r RECEIPT_DB_URI_SCHEME RECEIPT_DB_URI_NETLOC \
+  RECEIPT_DB_URI_QUERY RECEIPT_DB_URI_USER RECEIPT_DB_URI_PASSWORD \
+  RECEIPT_DB_URI_PASSWORD_PRESENT \
   RECEIPT_DB_URI_HOST RECEIPT_DB_URI_PORT <<<"$RECEIPT_DB_URI_PARTS"
-if [[ -z "$RECEIPT_DB_URI_TEMPLATE" || -z "$RECEIPT_DB_URI_HOST" ]]; then
+RECEIPT_DB_URI_SAFE_NETLOC="$RECEIPT_DB_URI_NETLOC"
+if [[ -z "$RECEIPT_DB_URI_SCHEME" || -z "$RECEIPT_DB_URI_NETLOC" || -z "$RECEIPT_DB_URI_HOST" ]]; then
   echo "DATABASE_URL URI parsing returned incomplete connection details" >&2
   exit 1
 fi
+export CEX_DATABASE_URL_SYNCED=1
+export CEX_DATABASE_URL_PASSWORD_PRESENT="$RECEIPT_DB_URI_PASSWORD_PRESENT"
+export CEX_POSTGRES_HOST="$RECEIPT_DB_URI_HOST"
+export CEX_POSTGRES_PORT="$RECEIPT_DB_URI_PORT"
 # libpq gives PGPASSWORD precedence over a URI password.  Restore an explicit
 # caller override after `.env` loading, but clear an env-file value when the
 # selected DATABASE_URL already contains credentials.
@@ -117,23 +150,34 @@ elif [[ "$RECEIPT_CALLER_CEX_PASSWORD_SET" == "1" \
 fi
 # Prefer an explicit caller PGPASSWORD.  Otherwise a password embedded in the
 # URL is authoritative and must not be replaced by a stale value imported from
-# `.env`; Docker receives the decoded value while local libpq reads it directly
-# from the URI.  With no URL password, retain an explicitly supplied
-# CEX_POSTGRES_PASSWORD or a non-default value loaded from the env file.
+# `.env`; both local libpq and Docker receive the decoded value separately from
+# the stripped URI.  With no URL password, retain an explicitly supplied
+# CEX_POSTGRES_PASSWORD or a password loaded from the env file.  Presence is
+# tracked separately so an intentionally empty password is still passed.
 if [[ "$RECEIPT_CALLER_PGPASSWORD_SET" == "1" ]]; then
   RECEIPT_PSQL_PASSWORD="$RECEIPT_CALLER_PGPASSWORD"
+  RECEIPT_PSQL_PASSWORD_SET=1
   RECEIPT_DOCKER_PSQL_PASSWORD="$RECEIPT_CALLER_PGPASSWORD"
 elif [[ "$RECEIPT_DB_URI_PASSWORD_PRESENT" == "1" ]]; then
+  RECEIPT_PSQL_PASSWORD="$RECEIPT_DB_URI_PASSWORD"
+  RECEIPT_PSQL_PASSWORD_SET=1
   RECEIPT_DOCKER_PSQL_PASSWORD="$RECEIPT_DB_URI_PASSWORD"
-  RECEIPT_PSQL_PASSWORD=""
+elif [[ ${PGPASSWORD+x} ]]; then
+  # With a passwordless URI, an explicitly loaded environment PGPASSWORD is
+  # still the selected libpq credential.  Preserve it for both local psql and
+  # the Docker fallback; otherwise the latter silently drops the env-file
+  # password and authenticates with an unintended socket default.
+  RECEIPT_PSQL_PASSWORD="$PGPASSWORD"
+  RECEIPT_PSQL_PASSWORD_SET=1
+  RECEIPT_DOCKER_PSQL_PASSWORD="$PGPASSWORD"
 elif [[ "$RECEIPT_CALLER_CEX_PASSWORD_SET" == "1" ]]; then
   RECEIPT_PSQL_PASSWORD="$RECEIPT_CALLER_CEX_PASSWORD"
+  RECEIPT_PSQL_PASSWORD_SET=1
   RECEIPT_DOCKER_PSQL_PASSWORD="$RECEIPT_CALLER_CEX_PASSWORD"
-elif [[ "${CEX_POSTGRES_PASSWORD:-postgres}" != "postgres" ]]; then
-  RECEIPT_PSQL_PASSWORD="$CEX_POSTGRES_PASSWORD"
-  RECEIPT_DOCKER_PSQL_PASSWORD="$CEX_POSTGRES_PASSWORD"
-else
-  RECEIPT_DOCKER_PSQL_PASSWORD=""
+elif [[ "${CEX_POSTGRES_PASSWORD_EXPLICIT:-0}" == "1" ]]; then
+  RECEIPT_PSQL_PASSWORD="${CEX_POSTGRES_PASSWORD:-}"
+  RECEIPT_PSQL_PASSWORD_SET=1
+  RECEIPT_DOCKER_PSQL_PASSWORD="$RECEIPT_PSQL_PASSWORD"
 fi
 RECEIPT_DOCKER_PSQL_USER="${RECEIPT_DB_URI_USER:-${CEX_POSTGRES_USER:-postgres}}"
 
@@ -211,9 +255,14 @@ db_url() {
     echo "unsafe database name: $database" >&2
     return 2
   fi
-  # Keep credentials, host, query options (for example sslmode), and fragment
-  # intact while replacing only the database path.
-  printf '%s\n' "${RECEIPT_DB_URI_TEMPLATE/__CEX_DATABASE__/$database}"
+  # The scheme/netloc/query were parsed and validated above.  Assemble the
+  # path structurally so a literal `__CEX_DATABASE__` in credentials or query
+  # data can never be rewritten accidentally.
+  local rewritten="${RECEIPT_DB_URI_SCHEME}://${RECEIPT_DB_URI_SAFE_NETLOC}/${database}"
+  if [[ -n "$RECEIPT_DB_URI_QUERY" ]]; then
+    rewritten+="?${RECEIPT_DB_URI_QUERY}"
+  fi
+  printf '%s\n' "$rewritten"
 }
 
 docker_psql() {
@@ -226,12 +275,17 @@ docker_psql() {
     # PostgreSQL endpoint.  In that case use the full URI so host/port and
     # query options are honored instead of assuming the container socket.
     args=(psql "$(db_url "$database")" -X -v ON_ERROR_STOP=1)
+  elif ! cex_postgres_docker_socket_is_target; then
+    echo "Docker PostgreSQL container port does not match DATABASE_URL; refusing socket fallback" >&2
+    return 2
   fi
   if [[ -n "$RECEIPT_DOCKER_PSQL_PASSWORD" \
         || "$RECEIPT_DB_URI_PASSWORD_PRESENT" == "1" \
         || "$RECEIPT_CALLER_PGPASSWORD_SET" == "1" \
-        || "$RECEIPT_CALLER_CEX_PASSWORD_SET" == "1" ]]; then
-    cex_docker exec -e "PGPASSWORD=$RECEIPT_DOCKER_PSQL_PASSWORD" \
+        || "$RECEIPT_CALLER_CEX_PASSWORD_SET" == "1" \
+        || "$RECEIPT_PSQL_PASSWORD_SET" == "1" \
+        || "${CEX_POSTGRES_PASSWORD_EXPLICIT:-0}" == "1" ]]; then
+    cex_docker_exec_with_password "$RECEIPT_DOCKER_PSQL_PASSWORD" \
       "$CEX_POSTGRES_CONTAINER_NAME" "${args[@]}" "$@"
   else
     cex_docker exec "$CEX_POSTGRES_CONTAINER_NAME" "${args[@]}" "$@"
@@ -245,12 +299,17 @@ docker_psql_stdin() {
   if [[ -n "$RECEIPT_DB_URI_HOST" && "$RECEIPT_DB_URI_HOST" != "localhost" \
         && "$RECEIPT_DB_URI_HOST" != "127.0.0.1" && "$RECEIPT_DB_URI_HOST" != "::1" ]]; then
     args=(psql "$(db_url "$database")" -X -v ON_ERROR_STOP=1)
+  elif ! cex_postgres_docker_socket_is_target; then
+    echo "Docker PostgreSQL container port does not match DATABASE_URL; refusing socket fallback" >&2
+    return 2
   fi
   if [[ -n "$RECEIPT_DOCKER_PSQL_PASSWORD" \
         || "$RECEIPT_DB_URI_PASSWORD_PRESENT" == "1" \
         || "$RECEIPT_CALLER_PGPASSWORD_SET" == "1" \
-        || "$RECEIPT_CALLER_CEX_PASSWORD_SET" == "1" ]]; then
-    cex_docker exec -i -e "PGPASSWORD=$RECEIPT_DOCKER_PSQL_PASSWORD" \
+        || "$RECEIPT_CALLER_CEX_PASSWORD_SET" == "1" \
+        || "$RECEIPT_PSQL_PASSWORD_SET" == "1" \
+        || "${CEX_POSTGRES_PASSWORD_EXPLICIT:-0}" == "1" ]]; then
+    cex_docker_exec_with_password_stdin "$RECEIPT_DOCKER_PSQL_PASSWORD" \
       "$CEX_POSTGRES_CONTAINER_NAME" "${args[@]}" "$@"
   else
     cex_docker exec -i "$CEX_POSTGRES_CONTAINER_NAME" "${args[@]}" "$@"
@@ -260,7 +319,7 @@ docker_psql_stdin() {
 run_admin_sql() {
   local sql="$1"
   if cex_has_local_psql; then
-    if [[ -n "$RECEIPT_PSQL_PASSWORD" ]]; then
+    if [[ "$RECEIPT_PSQL_PASSWORD_SET" == "1" ]]; then
       PGPASSWORD="$RECEIPT_PSQL_PASSWORD" \
         psql "$(db_url postgres)" -X -v ON_ERROR_STOP=1 -c "$sql"
     else
@@ -280,7 +339,7 @@ run_db_stdin() {
   local database="$1"
   shift
   if cex_has_local_psql; then
-    if [[ -n "$RECEIPT_PSQL_PASSWORD" ]]; then
+    if [[ "$RECEIPT_PSQL_PASSWORD_SET" == "1" ]]; then
       PGPASSWORD="$RECEIPT_PSQL_PASSWORD" \
         psql "$(db_url "$database")" -X -v ON_ERROR_STOP=1 "$@"
     else
@@ -627,6 +686,15 @@ insert into public.trnm_economic_receipt_events_v1 (
     'native-happy', 'progression_allowed', 'settled', 0,
     '{"intent_id":"pu-intent-native-happy","receipt_id":"pu-receipt-native-happy","protocol_version":"term_exchange_protocol_v1","status":"settled","progression_class":"progression_allowed"}'::jsonb,
     'stale-partial-hash', 'initial', '2026-01-01T00:00:00Z'
+), (
+    -- A native-looking row that predates completion of 0086 must be repaired
+    -- but may not receive the compatibility marker: its provenance is not
+    -- provably the migration's legacy-projection INSERT path.
+    'pu-intent-native-fallback', 1, repeat('b', 64),
+    'pu-receipt-native-fallback', 'term_exchange_protocol_v1', 'pu-scope',
+    'native-fallback', 'progression_allowed', 'settled', 0,
+    '{"intent_id":"pu-intent-native-fallback","receipt_id":"pu-receipt-native-fallback","protocol_version":"term_exchange_protocol_v1","status":"settled","progression_class":"progression_allowed","evidence":{"amount_credits":9}}'::jsonb,
+    'stale-partial-fallback-hash', 'initial', '2026-01-01T00:00:01Z'
 );
 SQL
 
@@ -691,7 +759,8 @@ begin
      where intent_id = 'pu-intent-native-happy';
     if amount_value is distinct from 37
        or evidence_value #>> '{amount_credits}' is distinct from '37'
-       or evidence_value #>> '{payload_hash}' is distinct from repeat('a', 64) then
+       or evidence_value #>> '{payload_hash}' is distinct from repeat('a', 64)
+       or evidence_value ? '_cex_legacy_amount_fallback' then
         raise exception 'immutable native amount/evidence backfill mismatch';
     end if;
 
@@ -701,8 +770,8 @@ begin
      where intent_id = 'pu-intent-native-fallback';
     if amount_value is distinct from 9
        or evidence_value #>> '{amount_credits}' is distinct from '9'
-       or evidence_value #>> '{payload_hash}' is distinct from repeat('b', 64) then
-        raise exception 'legacy evidence amount fallback mismatch';
+       or evidence_value ? '_cex_legacy_amount_fallback' then
+        raise exception 'pre-existing native fallback row received migration authority marker';
     end if;
 
     select amount_credits
@@ -857,6 +926,48 @@ do $direct_insert_guards$
 declare
     rejected boolean;
 begin
+    -- The migration-only evidence marker cannot be self-authored by a live
+    -- native writer, even when every other envelope field is internally
+    -- consistent.  This probe runs after 0086/0087 install the runtime INSERT
+    -- trigger and must fail before a row is committed.
+    rejected := false;
+    begin
+        with payload as (
+            select jsonb_build_object(
+                'intent_id', 'pu-intent-native-cross',
+                'receipt_id', 'pu-native-forged-marker',
+                'protocol_version', 'term_exchange_protocol_v1',
+                'term_id', 'pu-term-native-cross',
+                'backend_id', 'cex-settlement-backend',
+                'backend_kind', 'cex',
+                'status', 'settled',
+                'progression_class', 'progression_allowed',
+                'finalized_at_epoch', extract(epoch from timestamptz '2026-01-01T00:07:01Z')::bigint,
+                'evidence', jsonb_build_object(
+                    'payload_hash', repeat('f', 64),
+                    'amount_credits', 0,
+                    '_cex_legacy_amount_fallback', true
+                )
+            ) as receipt_json
+        )
+        insert into public.trnm_economic_receipt_events_v1 (
+            intent_id, event_sequence, intent_hash, receipt_id, protocol_version,
+            idempotency_scope, idempotency_key, progression_class, status,
+            amount_credits, receipt_json, receipt_hash, event_kind, finalized_at
+        )
+        select 'pu-intent-native-cross', 1, repeat('f', 64),
+               'pu-native-forged-marker', 'term_exchange_protocol_v1',
+               'pu-scope', 'native-cross', 'progression_allowed', 'settled',
+               0, receipt_json, encode(digest(receipt_json::text, 'sha256'), 'hex'),
+               'initial', '2026-01-01T00:07:01Z'
+          from payload;
+    exception when others then
+        rejected := position('reserved for migration backfill' in lower(sqlerrm)) > 0;
+    end;
+    if not rejected then
+        raise exception 'native INSERT accepted the migration-only fallback marker';
+    end if;
+
     -- A receipt already bound to pu-intent-native-happy cannot be claimed by
     -- another intent, even when that intent carries a self-consistent hash and
     -- JSON snapshot.
@@ -1154,6 +1265,92 @@ end
 $direct_insert_guards$;
 SQL
 echo "    happy partial upgrade passed"
+
+echo "==> legacy projection INSERT provenance marker"
+new_case legacy_backfill_marker
+legacy_backfill_marker_db="$CASE_DB"
+run_db_file "$legacy_backfill_marker_db" "$MIGRATION_85" >/dev/null
+# Isolate this case from the native fixture rows copied from base_db.  The
+# target below is the only audit-only legacy receipt, so exactly one event may
+# carry the migration-only marker.  No native event is pre-seeded for it.
+run_db_stdin "$legacy_backfill_marker_db" <<'SQL'
+delete from public.trnm_economic_receipts
+ where intent_id like 'pu-intent-native-%';
+delete from public.trnm_economic_intents
+ where intent_id like 'pu-intent-native-%';
+insert into public.trnm_economic_intents (
+    intent_id, protocol_version, idempotency_scope, idempotency_key,
+    payload_hash, intent_json, status
+) values (
+    'pu-intent-legacy-marker', 'term_exchange_protocol_v1', 'pu-scope',
+    'legacy-marker', repeat('9', 64),
+    '{"intent_id":"pu-intent-legacy-marker","protocol_version":"term_exchange_protocol_v1","term_id":"pu-term-legacy-marker","kind":"audit"}'::jsonb,
+    'accepted'
+);
+insert into public.trnm_economic_receipts (
+    receipt_id, intent_id, protocol_version, idempotency_scope,
+    idempotency_key, progression_class, status, receipt_json, finalized_at
+) values (
+    'pu-receipt-legacy-marker', 'pu-intent-legacy-marker',
+    'term_exchange_protocol_v1', 'pu-scope', 'legacy-marker',
+    'progression_allowed', 'settled',
+    '{"intent_id":"pu-intent-legacy-marker","receipt_id":"pu-receipt-legacy-marker","protocol_version":"term_exchange_protocol_v1","status":"settled","progression_class":"progression_allowed","evidence":{"amount_credits":42}}'::jsonb,
+    '2026-01-01T00:09:00Z'
+);
+SQL
+run_db_file "$legacy_backfill_marker_db" "$MIGRATION_86" >/dev/null
+assert_db "$legacy_backfill_marker_db" <<'SQL'
+do $marker_check$
+declare
+    marker_value jsonb;
+    amount_value bigint;
+    receipt_hash_value text;
+begin
+    if (select count(*)
+          from public.trnm_economic_receipt_events_v1
+         where receipt_json #> '{evidence,_cex_legacy_amount_fallback}' = 'true'::jsonb) <> 1 then
+        raise exception 'legacy fallback marker was not unique to the inserted batch';
+    end if;
+    select amount_credits,
+           receipt_json #> '{evidence,_cex_legacy_amount_fallback}',
+           receipt_hash
+      into amount_value, marker_value, receipt_hash_value
+      from public.trnm_economic_receipt_events_v1
+     where intent_id = 'pu-intent-legacy-marker';
+    if amount_value is distinct from 42
+       or marker_value is distinct from 'true'::jsonb
+       or receipt_hash_value is distinct from
+          encode(digest((select receipt_json::text
+                           from public.trnm_economic_receipt_events_v1
+                          where intent_id = 'pu-intent-legacy-marker'), 'sha256'), 'hex') then
+        raise exception 'legacy fallback marker amount/hash provenance mismatch';
+    end if;
+end
+$marker_check$;
+SQL
+echo "    legacy projection marker provenance passed"
+# A retry after a successful backfill must not duplicate the authorization row
+# or re-mark an unrelated native event.  Reapply 0086 against the same case and
+# verify the durable provenance ledger remains one-to-one.
+run_db_file "$legacy_backfill_marker_db" "$MIGRATION_86" >/dev/null
+assert_db "$legacy_backfill_marker_db" <<'SQL'
+do $marker_retry_check$
+declare
+    marker_count bigint;
+    provenance_count bigint;
+begin
+    select count(*) into marker_count
+      from public.trnm_economic_receipt_events_v1
+     where receipt_json #> '{evidence,_cex_legacy_amount_fallback}' = 'true'::jsonb;
+    select count(*) into provenance_count
+      from public.trnm_economic_receipt_legacy_fallback_provenance_v1;
+    if marker_count <> 1 or provenance_count <> 1 then
+        raise exception 'legacy fallback provenance retry duplicated authorization';
+    end if;
+end
+$marker_retry_check$;
+SQL
+echo "    legacy projection marker retry idempotence passed"
 
 echo "==> conflict: normalized projection backed by explicit-null native intent"
 new_case normalized_native_null

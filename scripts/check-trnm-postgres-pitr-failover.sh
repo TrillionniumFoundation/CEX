@@ -5,6 +5,26 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/_dev-helpers.sh
 source "$SCRIPT_DIR/_dev-helpers.sh"
 cex_load_env
+if [[ ${DATABASE_URL+x} ]]; then
+  cex_sync_postgres_env_from_database_url "$(cex_effective_database_url)"
+fi
+if [[ "${CEX_DATABASE_URL_SYNCED:-0}" == "1" ]] && ! cex_postgres_host_is_local; then
+  echo "refusing non-local DATABASE_URL: PITR drill uses Docker-local PostgreSQL operations" >&2
+  exit 2
+fi
+if [[ "${CEX_DATABASE_URL_SYNCED:-0}" == "1" ]] \
+   && ! cex_postgres_docker_socket_is_target; then
+  echo "refusing DATABASE_URL whose local port is not the Docker PostgreSQL target" >&2
+  exit 2
+fi
+PITR_POSTGRES_PASSWORD=""
+PITR_POSTGRES_PASSWORD_SET=0
+if cex_postgres_password_is_set; then
+  # Respect an explicitly supplied PGPASSWORD before the decoded URI/.env
+  # credential; the helper has already removed only an imported shadow value.
+  PITR_POSTGRES_PASSWORD="$(cex_postgres_password_value)"
+  PITR_POSTGRES_PASSWORD_SET=1
+fi
 
 RUN_ID="pitr-$(date +%s)-${RANDOM}"
 RESTORE_POINT="trnm_${RUN_ID//-/_}"
@@ -27,9 +47,16 @@ if ! flock -n 9; then
 fi
 
 restore_psql() {
-  cex_docker run --rm --network host -e PGPASSWORD="$CEX_POSTGRES_PASSWORD" postgres:16 \
-    psql -h 127.0.0.1 -p "$RESTORE_PORT" -U "$CEX_POSTGRES_USER" \
-      -d "$CEX_POSTGRES_DB" -v ON_ERROR_STOP=1 "$@"
+  if [[ "$PITR_POSTGRES_PASSWORD_SET" == "1" ]]; then
+    cex_docker_run_with_password "$PITR_POSTGRES_PASSWORD" \
+      --rm --network host postgres:16 \
+      psql -h 127.0.0.1 -p "$RESTORE_PORT" -U "$CEX_POSTGRES_USER" \
+        -d "$CEX_POSTGRES_DB" -v ON_ERROR_STOP=1 "$@"
+  else
+    cex_docker run --rm --network host postgres:16 \
+      psql -h 127.0.0.1 -p "$RESTORE_PORT" -U "$CEX_POSTGRES_USER" \
+        -d "$CEX_POSTGRES_DB" -v ON_ERROR_STOP=1 "$@"
+  fi
 }
 
 cleanup() {
@@ -89,10 +116,18 @@ if [[ -n "$PERSISTENT_BACKUP_ID" ]]; then
     '
 else
   CURRENT_PHASE="create-temporary-base-backup"
-  cex_docker run --rm --network "container:$CEX_POSTGRES_CONTAINER_NAME" \
-    -e PGPASSWORD="$CEX_POSTGRES_PASSWORD" -v "$BASE_VOLUME:/backup" postgres:16 \
-    pg_basebackup -h 127.0.0.1 -U "$CEX_POSTGRES_USER" -D /backup -Fp -Xs -P \
-      --checkpoint=fast --manifest-checksums=SHA256 >/dev/null
+  if [[ "$PITR_POSTGRES_PASSWORD_SET" == "1" ]]; then
+    cex_docker_run_with_password "$PITR_POSTGRES_PASSWORD" \
+      --rm --network "container:$CEX_POSTGRES_CONTAINER_NAME" \
+      -v "$BASE_VOLUME:/backup" postgres:16 \
+      pg_basebackup -h 127.0.0.1 -U "$CEX_POSTGRES_USER" -D /backup -Fp -Xs -P \
+        --checkpoint=fast --manifest-checksums=SHA256 >/dev/null
+  else
+    cex_docker run --rm --network "container:$CEX_POSTGRES_CONTAINER_NAME" \
+      -v "$BASE_VOLUME:/backup" postgres:16 \
+      pg_basebackup -h 127.0.0.1 -U "$CEX_POSTGRES_USER" -D /backup -Fp -Xs -P \
+        --checkpoint=fast --manifest-checksums=SHA256 >/dev/null
+  fi
 fi
 CURRENT_PHASE="verify-base-backup-manifest"
 cex_docker run --rm -v "$BASE_VOLUME:/backup:ro" postgres:16 \

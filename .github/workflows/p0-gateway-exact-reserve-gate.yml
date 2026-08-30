@@ -14,6 +14,7 @@ on:
       - 'scripts/check-gateway-exact-reserve.py'
       - 'scripts/check-ledger-caller-cutover.py'
       - 'scripts/check-gateway-exact-reserve-postgres.sh'
+      - 'scripts/_dev-helpers.sh'
       - 'scripts/check-p0-release-candidate-hygiene.py'
       - 'docs/gateway-exact-reserve-v1.md'
       - 'docs/ledger-caller-cutover-v1.md'

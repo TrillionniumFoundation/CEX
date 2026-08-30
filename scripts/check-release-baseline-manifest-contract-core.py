@@ -17,6 +17,7 @@ QUALIFICATION_SCOPE = (
 )
 REPOSITORY = "TrillionniumFoundation/CEX"
 PROJECT_ID = "hepta-control-plane"
+ACTIVE_MIGRATION_HEAD = "0087_add_term_exchange_receipt_event_history.sql"
 ZERO_GIT_SHA = "0" * 40
 ZERO_SHA256 = "sha256:" + "0" * 64
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -87,6 +88,8 @@ def valid_branch(value: Any) -> bool:
         return False
     if value.startswith("/") or value.endswith("/") or "//" in value:
         return False
+    if ".." in value or "@{" in value:
+        return False
     if any(segment in {"", ".", ".."} for segment in value.split("/")):
         return False
     if value.startswith("refs/") or value == "HEAD":
@@ -126,6 +129,15 @@ def validate_template(data: dict[str, Any]) -> list[str]:
             problems.append("template branch must remain REPLACE_BRANCH")
         if source.get("commit_sha") != ZERO_GIT_SHA or source.get("tree_sha") != ZERO_GIT_SHA:
             problems.append("template commit/tree must remain explicit all-zero placeholders")
+
+    database = data.get("database")
+    if not is_object(database):
+        problems.append("template database must be an object")
+    elif database.get("migration_head") != ACTIVE_MIGRATION_HEAD:
+        problems.append(
+            "template database.migration_head must equal the active v12 head "
+            f"{ACTIVE_MIGRATION_HEAD!r}"
+        )
 
     build = data.get("build")
     if not is_object(build):
@@ -205,6 +217,15 @@ def validate_candidate(data: dict[str, Any]) -> list[str]:
         problems.append("candidate tree_sha must be a nonzero lowercase Git SHA")
     if data.get("release_id") != f"cex-p0-{commit_sha}":
         problems.append("candidate release_id must be bound to source.commit_sha")
+
+    database = data.get("database")
+    if not is_object(database):
+        problems.append("candidate database must be an object")
+    elif database.get("migration_head") != ACTIVE_MIGRATION_HEAD:
+        problems.append(
+            "candidate database.migration_head must equal the active v12 head "
+            f"{ACTIVE_MIGRATION_HEAD!r}"
+        )
 
     for path, value in (
         ("dependencies.cargo_lock_sha256", (data.get("dependencies") or {}).get("cargo_lock_sha256") if is_object(data.get("dependencies")) else None),
@@ -490,6 +511,10 @@ def self_test() -> list[str]:
     duplicate_uri = copy.deepcopy(fixture)
     duplicate_uri["evidence"][1]["uri"] = duplicate_uri["evidence"][0]["uri"]
     mutations.append(("duplicate evidence URI", duplicate_uri))
+
+    stale_migration = copy.deepcopy(fixture)
+    stale_migration["database"]["migration_head"] = "0086_add_trnm_native_receipt_evidence.sql"
+    mutations.append(("stale migration head", stale_migration))
 
     for name, mutated in mutations:
         if not contract_problems(mutated, False):

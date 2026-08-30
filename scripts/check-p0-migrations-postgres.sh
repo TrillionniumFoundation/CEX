@@ -2,11 +2,14 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+source "$root/scripts/_dev-helpers.sh"
 : "${DATABASE_URL:?DATABASE_URL is required}"
+cex_load_env
+cex_sync_postgres_env_from_database_url "$DATABASE_URL"
 
 python3 "$root/scripts/check-p0-migrations.py"
 
-database_name=$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 \
+database_name=$(cex_psql_stdin -X -A -t \
   -c "select current_database()")
 if [[ ! "$database_name" =~ (test|ci|scratch|tmp) ]] \
   && [[ "${CEX_ALLOW_MIGRATION_TEST_ON_ANY_DATABASE:-0}" != "1" ]]; then
@@ -17,10 +20,10 @@ fi
 
 while IFS= read -r migration; do
   echo "applying $(basename "$migration")"
-  psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$migration" >/dev/null
+  cex_psql_stdin -X -f - < "$migration" >/dev/null
 done < <(find "$root/migrations" -maxdepth 1 -type f -name '[0-9][0-9][0-9][0-9]_*.sql' | sort)
 
-psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+cex_psql_stdin -X <<'SQL'
 begin;
 
 insert into public.organizations (org_id, name)

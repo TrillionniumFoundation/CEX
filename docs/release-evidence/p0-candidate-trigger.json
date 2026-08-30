@@ -1,7 +1,7 @@
 {
   "schema": "cex.p0-candidate-trigger.v1",
   "plan": "CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
-  "sequence": 24,
+  "sequence": 25,
   "purpose": "Qualify one exact v12 tree after explicit manifest inclusion and cross-binding of local evidence and real hosted runner/job/required-step attestations, latest-authoritative-run precedence, parser-complete recursive workflow action pinning, typed receipt and migration-0087 partial-upgrade hardening, canonical migration-head and X1-X8 enforcement, waiver-free qualification, and full parity among the operator template, command-line validators, and JSON Schema: exactly thirteen ordered evidence records and only the implemented draft/candidate lifecycle states.",
   "qualification_scope": "repository-exact-money-control-plane-plus-hepta-durability-doc-integrity-full-suite-lint-receipt-recovery-and-trnm-production-config-hardening",
   "production_authorization": "not_granted"

@@ -151,7 +151,7 @@ def api_json(url: str, token: str) -> dict[str, Any]:
         return json.load(response)
 
 
-def _run_sort_key(run: dict[str, Any]) -> tuple[str, int, int]:
+def _run_sort_key(run: dict[str, Any]) -> tuple[str, str, int, int]:
     """Return a stable newest-first sort key for a workflow run.
 
     GitHub normally returns integer ``id``/``run_attempt`` values, but keeping
@@ -166,6 +166,7 @@ def _run_sort_key(run: dict[str, Any]) -> tuple[str, int, int]:
             return 0
 
     return (
+        str(run.get("updated_at") or ""),
         str(run.get("created_at") or ""),
         as_int(run.get("run_attempt")),
         as_int(run.get("id")),
@@ -276,44 +277,45 @@ def collect_gate_runs(
                 pending.append(f"{name}:missing(branch={branch})")
                 continue
 
-            # A newer cancelled/failed rerun must not erase a valid successful
-            # run for this exact branch and SHA.  Prefer the newest successful
-            # run first, then wait on any active run, and only report a
-            # terminal failure when no success exists.
-            successful = [
-                run
-                for run in candidates
-                if str(run.get("status") or "").lower() == "completed"
-                and str(run.get("conclusion") or "").lower() == "success"
-            ]
-            if successful:
-                selected[name] = max(successful, key=_run_sort_key)
+            # The newest authoritative run is the only run that can qualify
+            # this exact branch/SHA.  An older success must never mask a newer
+            # failed, cancelled, skipped, or in-progress rerun: doing so would
+            # let a candidate silently revert to stale evidence.  This mirrors
+            # check-hosted-gate-execution.py, which independently attests the
+            # same latest-run binding before the wrapper invokes this core.
+            run = max(candidates, key=_run_sort_key)
+            status = str(run.get("status") or "unknown").lower()
+            conclusion = str(run.get("conclusion") or "unknown").lower()
+            if status != "completed":
+                pending.append(
+                    f"{name}:{status}:run={run.get('id')}:"
+                    f"attempt={run.get('run_attempt')}"
+                )
                 continue
-
-            active = [
-                run
-                for run in candidates
-                if str(run.get("status") or "").lower() != "completed"
-            ]
-            if active:
-                run = max(active, key=_run_sort_key)
-                pending.append(f"{name}:{run.get('status') or 'unknown'}")
+            if conclusion != "success":
+                failures.append(
+                    f"{name}:{conclusion}:run={run.get('id')}:"
+                    f"attempt={run.get('run_attempt')}"
+                )
                 continue
-
-            terminal = [
-                run
-                for run in candidates
-                if str(run.get("status") or "").lower() == "completed"
-            ]
-            run = max(terminal, key=_run_sort_key)
-            failures.append(
-                f"{name}:{run.get('conclusion') or 'unknown'}:run={run.get('id')}"
-            )
+            selected[name] = run
 
         if failures:
             raise SystemExit("authoritative hosted gate failed: " + ", ".join(failures))
         if len(selected) == len(REQUIRED_GATES):
-            return selected
+            # The run-list response and the job-level hosted checker are
+            # separate API observations.  Re-read the selected runs (including
+            # the latest-run policy) immediately before treating them as an
+            # immutable evidence snapshot.  A newer rerun, branch move, or
+            # post-selection status change must fail closed instead of being
+            # silently mixed into the manifest.
+            return revalidate_gate_runs(
+                repository,
+                sha,
+                branch,
+                token,
+                selected,
+            )
         print(
             f"gate evidence poll {attempt}/{attempts}: "
             + (", ".join(pending) if pending else "waiting"),
@@ -322,6 +324,285 @@ def collect_gate_runs(
         if attempt < attempts:
             time.sleep(interval_seconds)
     raise SystemExit("timed out waiting for exact-tree authoritative hosted gates")
+
+
+def _run_snapshot(run: dict[str, Any], *, label: str) -> dict[str, Any]:
+    """Extract the immutable identity/status fields used for TOCTOU checks."""
+
+    try:
+        run_id = int(run.get("id"))
+        run_attempt = int(run.get("run_attempt"))
+    except (TypeError, ValueError) as error:
+        raise SystemExit(f"{label} has an invalid run identity") from error
+    if run_id <= 0 or run_attempt <= 0:
+        raise SystemExit(f"{label} has an invalid run identity")
+    required = (
+        "path",
+        "head_sha",
+        "head_branch",
+        "event",
+        "status",
+        "conclusion",
+        "created_at",
+        "updated_at",
+    )
+    missing = [field for field in required if run.get(field) is None]
+    if missing:
+        raise SystemExit(f"{label} is missing run field(s): {', '.join(missing)}")
+    return {
+        "id": run_id,
+        "run_attempt": run_attempt,
+        "path": str(run["path"]),
+        "head_sha": str(run["head_sha"]),
+        "head_branch": str(run["head_branch"]),
+        "event": str(run["event"]),
+        "status": str(run["status"]).lower(),
+        "conclusion": str(run["conclusion"]).lower(),
+        "created_at": str(run["created_at"]),
+        "updated_at": str(run["updated_at"]),
+    }
+
+
+def _assert_run_snapshot_equal(
+    expected: dict[str, Any],
+    observed: dict[str, Any],
+    *,
+    label: str,
+) -> None:
+    expected_snapshot = _run_snapshot(expected, label=f"{label} expected")
+    observed_snapshot = _run_snapshot(observed, label=f"{label} observed")
+    if expected_snapshot != observed_snapshot:
+        raise SystemExit(
+            f"{label} changed during evidence binding: "
+            f"expected={expected_snapshot!r} observed={observed_snapshot!r}"
+        )
+
+
+def revalidate_gate_runs(
+    repository: str,
+    sha: str,
+    branch: str,
+    token: str,
+    selected: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Re-read the latest run and its detail record for every selected gate.
+
+    GitHub exposes run lists and run details through independent eventually
+    consistent endpoints.  Binding a manifest from only the first list result
+    permits a newer rerun (or a metadata/status change) to race the write.  A
+    second latest-run snapshot plus per-run detail comparison makes that race
+    observable and fail closed.  The returned detail records are the values
+    written into the context, so the evidence payload is tied to the final
+    observation rather than an earlier API response.
+    """
+
+    latest_runs = _workflow_runs(repository, sha, branch, token)
+    details: dict[str, dict[str, Any]] = {}
+    for name, workflow_path in REQUIRED_GATES.items():
+        candidates = [
+            run
+            for run in latest_runs
+            if isinstance(run, dict)
+            and run.get("head_sha") == sha
+            and run.get("path") == workflow_path
+            and run.get("head_branch") == branch
+            and run.get("event") in AUTHORITATIVE_RUN_EVENTS
+        ]
+        if not candidates:
+            raise SystemExit(
+                f"hosted gate {name} disappeared during evidence binding"
+            )
+        observed_latest = max(candidates, key=_run_sort_key)
+        expected = selected.get(name)
+        if not isinstance(expected, dict):
+            raise SystemExit(f"hosted gate {name} was not selected")
+        _assert_run_snapshot_equal(
+            expected,
+            observed_latest,
+            label=f"hosted gate {name} latest run",
+        )
+
+        run_id = int(observed_latest["id"])
+        detail_url = f"https://api.github.com/repos/{repository}/actions/runs/{run_id}"
+        detail = api_json(detail_url, token)
+        _assert_run_snapshot_equal(
+            observed_latest,
+            detail,
+            label=f"hosted gate {name} detail",
+        )
+        status = str(detail.get("status") or "unknown").lower()
+        conclusion = str(detail.get("conclusion") or "unknown").lower()
+        if status != "completed" or conclusion != "success":
+            raise SystemExit(
+                f"hosted gate {name} is no longer a completed success "
+                f"({status}/{conclusion})"
+            )
+        details[name] = detail
+
+    # A rerun can be created while the per-run detail requests above are in
+    # flight.  Take one final list snapshot after the last detail response and
+    # compare every gate again; otherwise a newer failed/in-progress run could
+    # appear immediately after the first list response and remain invisible to
+    # this binding pass.  The manifest step invokes this function immediately
+    # before writing, so this final observation is the last run-selection check.
+    final_runs = _workflow_runs(repository, sha, branch, token)
+    for name, workflow_path in REQUIRED_GATES.items():
+        candidates = [
+            run
+            for run in final_runs
+            if isinstance(run, dict)
+            and run.get("head_sha") == sha
+            and run.get("path") == workflow_path
+            and run.get("head_branch") == branch
+            and run.get("event") in AUTHORITATIVE_RUN_EVENTS
+        ]
+        if not candidates:
+            raise SystemExit(f"hosted gate {name} disappeared in final binding snapshot")
+        observed_final = max(candidates, key=_run_sort_key)
+        expected = selected.get(name)
+        if not isinstance(expected, dict):
+            raise SystemExit(f"hosted gate {name} was not selected")
+        _assert_run_snapshot_equal(
+            expected,
+            observed_final,
+            label=f"hosted gate {name} final run",
+        )
+        detail = details[name]
+        _assert_run_snapshot_equal(
+            observed_final,
+            detail,
+            label=f"hosted gate {name} final detail",
+        )
+    return details
+
+
+def self_test() -> list[str]:
+    """Exercise the run-snapshot TOCTOU guard without contacting GitHub.
+
+    The collector is normally driven by GitHub's Actions API, so a regression
+    in the second-observation guard can otherwise remain hidden until a real
+    candidate run.  Keep this fixture entirely in-process: replacing the two
+    API seams lets the test prove that a stable snapshot succeeds while a
+    newer run or a changed detail record fails closed.
+    """
+
+    failures: list[str] = []
+    branch = "feature/evidence"
+    sha = "a" * 40
+    base_runs: list[dict[str, Any]] = []
+    for index, workflow_path in enumerate(REQUIRED_GATES.values(), start=1):
+        base_runs.append(
+            {
+                "id": 1000 + index,
+                "run_attempt": 1,
+                "path": workflow_path,
+                "head_sha": sha,
+                "head_branch": branch,
+                "event": "push",
+                "status": "completed",
+                "conclusion": "success",
+                "created_at": f"2026-08-30T00:0{index}:00Z",
+                "updated_at": f"2026-08-30T00:0{index}:01Z",
+            }
+        )
+    selected = {
+        name: next(run for run in base_runs if run["path"] == workflow_path)
+        for name, workflow_path in REQUIRED_GATES.items()
+    }
+
+    original_runs = _workflow_runs
+    original_api = api_json
+    try:
+        def stable_runs(
+            _repository: str, _sha: str, _branch: str, _token: str
+        ) -> list[dict[str, Any]]:
+            return [dict(run) for run in base_runs]
+
+        def stable_api(url: str, _token: str) -> dict[str, Any]:
+            run_id = int(url.rstrip("/").rsplit("/", 1)[-1])
+            return dict(next(run for run in base_runs if run["id"] == run_id))
+
+        globals()["_workflow_runs"] = stable_runs
+        globals()["api_json"] = stable_api
+        result = revalidate_gate_runs("org/repo", sha, branch, "token", selected)
+        if set(result) != set(REQUIRED_GATES):
+            failures.append("stable run snapshot was not accepted")
+
+        newer_failure = dict(base_runs[0])
+        newer_failure.update(
+            {
+                "id": 9001,
+                "conclusion": "failure",
+                "created_at": "2026-08-30T01:00:00Z",
+                "updated_at": "2026-08-30T01:00:01Z",
+            }
+        )
+
+        def newer_runs(
+            _repository: str, _sha: str, _branch: str, _token: str
+        ) -> list[dict[str, Any]]:
+            return [newer_failure if run["path"] == newer_failure["path"] else dict(run) for run in base_runs]
+
+        globals()["_workflow_runs"] = newer_runs
+        try:
+            revalidate_gate_runs("org/repo", sha, branch, "token", selected)
+        except SystemExit:
+            pass
+        else:
+            failures.append("newer failed rerun was accepted")
+
+        late_snapshot_calls = 0
+
+        def late_newer_runs(
+            _repository: str, _sha: str, _branch: str, _token: str
+        ) -> list[dict[str, Any]]:
+            nonlocal late_snapshot_calls
+            late_snapshot_calls += 1
+            if late_snapshot_calls == 1:
+                return [dict(run) for run in base_runs]
+            return [
+                newer_failure
+                if run["path"] == newer_failure["path"]
+                else dict(run)
+                for run in base_runs
+            ]
+
+        globals()["_workflow_runs"] = late_newer_runs
+        globals()["api_json"] = stable_api
+        try:
+            revalidate_gate_runs("org/repo", sha, branch, "token", selected)
+        except SystemExit:
+            pass
+        else:
+            failures.append("late failed rerun after detail loop was accepted")
+
+        def changed_detail_api(url: str, _token: str) -> dict[str, Any]:
+            payload = stable_api(url, _token)
+            if payload["id"] == base_runs[0]["id"]:
+                payload["status"] = "in_progress"
+                payload["conclusion"] = "unknown"
+            return payload
+
+        globals()["_workflow_runs"] = stable_runs
+        globals()["api_json"] = changed_detail_api
+        try:
+            revalidate_gate_runs("org/repo", sha, branch, "token", selected)
+        except SystemExit:
+            pass
+        else:
+            failures.append("changed run detail was accepted")
+    finally:
+        globals()["_workflow_runs"] = original_runs
+        globals()["api_json"] = original_api
+    return failures
+
+
+def run_self_test(_args: argparse.Namespace) -> int:
+    failures = self_test()
+    if failures:
+        raise SystemExit("release-evidence core self-test failed: " + "; ".join(failures))
+    print(json.dumps({"schema": "cex.p0-release-evidence-core-self-test.v1", "status": "ok"}))
+    return 0
 
 
 def generate_sbom(
@@ -440,7 +721,9 @@ def collect(args: argparse.Namespace) -> int:
         if commit_sha != args.sha:
             raise SystemExit(f"local evidence {name} is not bound to the exact commit")
         tree_sha = payload.get("tree_sha")
-        if tree_sha is not None and tree_sha != args.tree:
+        if not isinstance(tree_sha, str) or not GIT_SHA_RE.fullmatch(tree_sha):
+            raise SystemExit(f"local evidence {name} lacks a valid exact tree_sha")
+        if tree_sha != args.tree:
             raise SystemExit(f"local evidence {name} is bound to a different tree")
 
     attempts = int(os.environ.get("CEX_P0_GATE_POLL_ATTEMPTS", "360"))
@@ -673,6 +956,34 @@ def manifest(args: argparse.Namespace) -> int:
     if not isinstance(context, dict):
         raise SystemExit("release context must be an object")
     validate_hosted_gate_context(context)
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        raise SystemExit(
+            "GITHUB_TOKEN is required to revalidate hosted gate evidence before manifest binding"
+        )
+    selected_context: dict[str, dict[str, Any]] = {}
+    for name, record in context["hosted_gates"].items():
+        if not isinstance(record, dict):
+            raise SystemExit(f"release context hosted gate is invalid: {name}")
+        selected_context[name] = {
+            "id": record.get("run_id"),
+            "run_attempt": record.get("run_attempt"),
+            "path": record.get("workflow_path"),
+            "head_sha": record.get("head_sha"),
+            "head_branch": record.get("head_branch"),
+            "event": record.get("event"),
+            "status": record.get("status"),
+            "conclusion": record.get("conclusion"),
+            "created_at": record.get("created_at"),
+            "updated_at": record.get("updated_at"),
+        }
+    revalidate_gate_runs(
+        str(context["repository"]),
+        str(context["commit_sha"]),
+        str(context["branch"]),
+        token,
+        selected_context,
+    )
     expected_payload_name = context["payload_name"]
     if args.payload_name != expected_payload_name:
         raise SystemExit(
@@ -806,6 +1117,11 @@ def build_parser() -> argparse.ArgumentParser:
     manifest_parser.add_argument("--payload-name", required=True)
     manifest_parser.add_argument("--payload-digest", required=True)
     manifest_parser.set_defaults(function=manifest)
+
+    self_test_parser = subparsers.add_parser(
+        "self-test", help="run deterministic release-evidence binding tests"
+    )
+    self_test_parser.set_defaults(function=run_self_test)
     return parser
 
 

@@ -2,7 +2,10 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+source "$root/scripts/_dev-helpers.sh"
 : "${DATABASE_URL:?DATABASE_URL is required}"
+cex_load_env
+cex_sync_postgres_env_from_database_url "$DATABASE_URL"
 
 source_selector="all"
 batch_size=100
@@ -111,7 +114,7 @@ if ((${#worker_id} < 1 || ${#worker_id} > 128)); then
 fi
 
 if ((status_only)); then
-  psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -P pager=off -c \
+  cex_psql_stdin -X -P pager=off -c \
     "select * from public.cex_audit_source_baseline_status_v1 order by source_service"
   exit 0
 fi
@@ -126,8 +129,7 @@ fi
 
 run_batch() {
   local source_service=$1
-  psql "$DATABASE_URL" \
-    -X -A -t -v ON_ERROR_STOP=1 \
+  cex_psql_stdin -X -A -t \
     -v source_service="$source_service" \
     -v worker_id="$worker_id" \
     -v batch_size="$batch_size" \

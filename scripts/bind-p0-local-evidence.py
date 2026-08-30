@@ -78,7 +78,11 @@ def main() -> int:
         if payload.get("commit_sha") != args.sha:
             raise SystemExit(f"local evidence is not bound to the exact commit: {name}")
         producer_tree = payload.get("tree_sha")
-        if producer_tree is not None and producer_tree != args.tree:
+        if not isinstance(producer_tree, str) or not GIT_SHA_RE.fullmatch(producer_tree):
+            raise SystemExit(
+                f"local evidence {name} is missing a valid exact tree_sha"
+            )
+        if producer_tree != args.tree:
             raise SystemExit(f"local evidence is bound to a different tree: {name}")
         records[name] = {
             "path": relative,

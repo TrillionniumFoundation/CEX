@@ -17,6 +17,7 @@ if [[ ${CEX_POSTGRES_PASSWORD+x} ]]; then
   NORMALIZED_RUNTIME_CALLER_CEX_PASSWORD_SET=1
 fi
 NORMALIZED_RUNTIME_PSQL_PASSWORD=""
+NORMALIZED_RUNTIME_PSQL_PASSWORD_SET=0
 NORMALIZED_RUNTIME_DOCKER_PASSWORD=""
 # Keep track of an explicitly supplied URL separately from its value.  The
 # development helper loads `.env` by exporting every line, so calling it
@@ -49,21 +50,46 @@ fi
 cex_require_cmd cargo curl node >/dev/null
 if [[ "$NORMALIZED_RUNTIME_CALLER_PGPASSWORD_SET" == "1" ]]; then
   NORMALIZED_RUNTIME_PSQL_PASSWORD="$NORMALIZED_RUNTIME_CALLER_PGPASSWORD"
+  NORMALIZED_RUNTIME_PSQL_PASSWORD_SET=1
   NORMALIZED_RUNTIME_DOCKER_PASSWORD="$NORMALIZED_RUNTIME_CALLER_PGPASSWORD"
 elif [[ "${CEX_DATABASE_URL_PASSWORD_PRESENT:-0}" == "1" ]]; then
-  # Local libpq reads the URI password directly; Docker needs the decoded
-  # value because its socket form uses -U/-d rather than the URI.
+  # Both local libpq and Docker receive the decoded password separately from
+  # the credential-stripped URI used in argv.
+  NORMALIZED_RUNTIME_PSQL_PASSWORD="${CEX_POSTGRES_PASSWORD:-}"
+  NORMALIZED_RUNTIME_PSQL_PASSWORD_SET=1
   NORMALIZED_RUNTIME_DOCKER_PASSWORD="${CEX_POSTGRES_PASSWORD:-}"
+elif [[ ${PGPASSWORD+x} ]]; then
+  # With a passwordless URI, an explicitly loaded PGPASSWORD is still the
+  # libpq-selected credential and must be forwarded to Docker fallbacks too.
+  NORMALIZED_RUNTIME_PSQL_PASSWORD="$PGPASSWORD"
+  NORMALIZED_RUNTIME_PSQL_PASSWORD_SET=1
+  NORMALIZED_RUNTIME_DOCKER_PASSWORD="$PGPASSWORD"
 elif [[ "$NORMALIZED_RUNTIME_CALLER_CEX_PASSWORD_SET" == "1" ]]; then
   NORMALIZED_RUNTIME_PSQL_PASSWORD="$NORMALIZED_RUNTIME_CALLER_CEX_PASSWORD"
+  NORMALIZED_RUNTIME_PSQL_PASSWORD_SET=1
   NORMALIZED_RUNTIME_DOCKER_PASSWORD="$NORMALIZED_RUNTIME_CALLER_CEX_PASSWORD"
-else
+elif [[ "${CEX_POSTGRES_PASSWORD_EXPLICIT:-0}" == "1" ]]; then
+  # An env-file may intentionally provide a password when the URI omits one;
+  # use it, but never turn the helper's convenience `postgres` default into an
+  # implicit credential.
   NORMALIZED_RUNTIME_PSQL_PASSWORD="${CEX_POSTGRES_PASSWORD:-}"
+  NORMALIZED_RUNTIME_PSQL_PASSWORD_SET=1
   NORMALIZED_RUNTIME_DOCKER_PASSWORD="$NORMALIZED_RUNTIME_PSQL_PASSWORD"
+else
+  NORMALIZED_RUNTIME_PSQL_PASSWORD=""
+  NORMALIZED_RUNTIME_DOCKER_PASSWORD=""
+fi
+# The runtime child receives a credential-stripped DATABASE_URL.  Carry the
+# decoded password through its environment when one was explicitly selected,
+# so libpq can still authenticate without putting the secret in argv.
+if [[ "$NORMALIZED_RUNTIME_PSQL_PASSWORD_SET" == "1" ]]; then
+  export PGPASSWORD="$NORMALIZED_RUNTIME_PSQL_PASSWORD"
+else
+  unset PGPASSWORD
 fi
 
 run_psql() {
-  if [[ -n "$NORMALIZED_RUNTIME_PSQL_PASSWORD" ]]; then
+  if [[ "$NORMALIZED_RUNTIME_PSQL_PASSWORD_SET" == "1" ]]; then
     PGPASSWORD="$NORMALIZED_RUNTIME_PSQL_PASSWORD" psql "$@"
   else
     psql "$@"
@@ -77,6 +103,7 @@ if [[ ! "$TMP_DB" =~ ^[A-Za-z_][A-Za-z0-9_]*$ || ${#TMP_DB} -gt 63 ]]; then
 fi
 
 BASE_URL="$(cex_effective_database_url)"
+BASE_URL_SAFE="$(cex_database_url_without_password "$BASE_URL")"
 if ! cex_postgres_host_is_local && [[ "${CEX_ALLOW_NONLOCAL_NORMALIZED_RUNTIME_CHECK:-0}" != "1" ]]; then
   echo "refusing non-local DATABASE_URL for normalized runtime check (credentials redacted)" >&2
   echo "set CEX_ALLOW_NONLOCAL_NORMALIZED_RUNTIME_CHECK=1 only for an isolated disposable database" >&2
@@ -87,21 +114,28 @@ docker_psql() {
   local database="$1"
   shift
   local -a args
+  local remote_url
   if [[ "${CEX_POSTGRES_HOST:-}" != "127.0.0.1" \
         && "${CEX_POSTGRES_HOST:-}" != "localhost" \
         && "${CEX_POSTGRES_HOST:-}" != "::1" ]]; then
     # A Docker fallback must not silently switch an explicitly selected remote
-    # host to the local container socket.  Keep the complete URI, including
-    # credentials and query options, in that case.
-    args=(psql "$(cex_database_url_for_database "$database" "$BASE_URL")" -v ON_ERROR_STOP=1)
+    # host to the local container socket.  Keep query options, but strip URI
+    # credentials because argv is observable by other local processes.
+    remote_url="$(cex_database_url_for_database "$database" "$BASE_URL_SAFE")"
+    args=(psql "$remote_url" -v ON_ERROR_STOP=1)
   else
+    if ! cex_postgres_docker_socket_is_target; then
+      echo "Docker PostgreSQL container port does not match DATABASE_URL; refusing socket fallback" >&2
+      return 2
+    fi
     args=(psql -U "$CEX_POSTGRES_USER" -d "$database" -v ON_ERROR_STOP=1)
   fi
   if [[ -n "$NORMALIZED_RUNTIME_DOCKER_PASSWORD" \
         || "${CEX_DATABASE_URL_PASSWORD_PRESENT:-0}" == "1" \
         || "$NORMALIZED_RUNTIME_CALLER_PGPASSWORD_SET" == "1" \
-        || "$NORMALIZED_RUNTIME_CALLER_CEX_PASSWORD_SET" == "1" ]]; then
-    cex_docker exec -e "PGPASSWORD=$NORMALIZED_RUNTIME_DOCKER_PASSWORD" \
+        || "$NORMALIZED_RUNTIME_CALLER_CEX_PASSWORD_SET" == "1" \
+        || "${CEX_POSTGRES_PASSWORD_EXPLICIT:-0}" == "1" ]]; then
+    cex_docker_exec_with_password "$NORMALIZED_RUNTIME_DOCKER_PASSWORD" \
       "$CEX_POSTGRES_CONTAINER_NAME" "${args[@]}" "$@"
   else
     cex_docker exec "$CEX_POSTGRES_CONTAINER_NAME" "${args[@]}" "$@"
@@ -112,18 +146,25 @@ docker_psql_stdin() {
   local database="$1"
   shift
   local -a args
+  local remote_url
   if [[ "${CEX_POSTGRES_HOST:-}" != "127.0.0.1" \
         && "${CEX_POSTGRES_HOST:-}" != "localhost" \
         && "${CEX_POSTGRES_HOST:-}" != "::1" ]]; then
-    args=(psql "$(cex_database_url_for_database "$database" "$BASE_URL")" -v ON_ERROR_STOP=1)
+    remote_url="$(cex_database_url_for_database "$database" "$BASE_URL_SAFE")"
+    args=(psql "$remote_url" -v ON_ERROR_STOP=1)
   else
+    if ! cex_postgres_docker_socket_is_target; then
+      echo "Docker PostgreSQL container port does not match DATABASE_URL; refusing socket fallback" >&2
+      return 2
+    fi
     args=(psql -U "$CEX_POSTGRES_USER" -d "$database" -v ON_ERROR_STOP=1)
   fi
   if [[ -n "$NORMALIZED_RUNTIME_DOCKER_PASSWORD" \
         || "${CEX_DATABASE_URL_PASSWORD_PRESENT:-0}" == "1" \
         || "$NORMALIZED_RUNTIME_CALLER_PGPASSWORD_SET" == "1" \
-        || "$NORMALIZED_RUNTIME_CALLER_CEX_PASSWORD_SET" == "1" ]]; then
-    cex_docker exec -i -e "PGPASSWORD=$NORMALIZED_RUNTIME_DOCKER_PASSWORD" \
+        || "$NORMALIZED_RUNTIME_CALLER_CEX_PASSWORD_SET" == "1" \
+        || "${CEX_POSTGRES_PASSWORD_EXPLICIT:-0}" == "1" ]]; then
+    cex_docker_exec_with_password_stdin "$NORMALIZED_RUNTIME_DOCKER_PASSWORD" \
       "$CEX_POSTGRES_CONTAINER_NAME" "${args[@]}" "$@"
   else
     cex_docker exec -i "$CEX_POSTGRES_CONTAINER_NAME" "${args[@]}" "$@"
@@ -162,13 +203,13 @@ run_admin_sql() {
   local sql="$1"
   if cex_has_local_psql; then
     local admin_url
-    admin_url="$(cex_database_url_for_database postgres "$BASE_URL")"
+    admin_url="$(cex_database_url_for_database postgres "$BASE_URL_SAFE")"
     run_psql "$admin_url" -v ON_ERROR_STOP=1 -c "$sql"
-    return 0
+    return $?
   fi
   if cex_can_use_docker_postgres; then
     docker_psql postgres -c "$sql"
-    return 0
+    return $?
   fi
   echo "no usable postgres client found" >&2
   return 1
@@ -178,13 +219,13 @@ run_tmp_file() {
   local file="$1"
   if cex_has_local_psql; then
     local tmp_url
-    tmp_url="$(cex_database_url_for_database "$TMP_DB" "$BASE_URL")"
+    tmp_url="$(cex_database_url_for_database "$TMP_DB" "$BASE_URL_SAFE")"
     run_psql "$tmp_url" -v ON_ERROR_STOP=1 -f "$file"
-    return 0
+    return $?
   fi
   if cex_can_use_docker_postgres; then
     docker_psql_stdin "$TMP_DB" -f - < "$file"
-    return 0
+    return $?
   fi
   echo "no usable postgres client found" >&2
   return 1
@@ -194,13 +235,13 @@ run_tmp_sql() {
   local sql="$1"
   if cex_has_local_psql; then
     local tmp_url
-    tmp_url="$(cex_database_url_for_database "$TMP_DB" "$BASE_URL")"
+    tmp_url="$(cex_database_url_for_database "$TMP_DB" "$BASE_URL_SAFE")"
     run_psql "$tmp_url" -v ON_ERROR_STOP=1 -c "$sql"
-    return 0
+    return $?
   fi
   if cex_can_use_docker_postgres; then
     docker_psql "$TMP_DB" -c "$sql"
-    return 0
+    return $?
   fi
   echo "no usable postgres client found" >&2
   return 1
@@ -259,7 +300,7 @@ for migration in "$PROJECT_ROOT"/migrations/*.sql; do
   run_tmp_file "$migration" >/dev/null
 done
 
-APP_DB_URL="$(cex_database_url_for_database "$TMP_DB" "$BASE_URL")"
+APP_DB_URL="$(cex_database_url_for_database "$TMP_DB" "$BASE_URL_SAFE")"
 DUAL_WRITE_LOG="$LOG_DIR/consumer-entry-api-dual-write.log"
 DUAL_WRITE_STATE="$TMP_DIR/dual-write-state.json"
 DUAL_WRITE_SQL_SNAPSHOT="$TMP_DIR/dual-write-snapshot.sql"

@@ -157,14 +157,21 @@ jobs:
         run: bash scripts/check-trnm-settlement-receipt-lookup-http.sh
 
       - name: Term Exchange receipt partial-upgrade regression
+        shell: bash
         run: |
+          set -euo pipefail
           bash scripts/check-term-exchange-receipt-partial-upgrade-postgres.sh \
             | tee "$CEX_P0_EVIDENCE_DIR/term-exchange-receipt-partial-upgrade.log"
 
       - name: Record database lifecycle matrix
         shell: bash
+        env:
+          CANDIDATE_TREE: ${{ steps.source.outputs.tree }}
         run: |
-          python3 - "$CEX_P0_EVIDENCE_DIR/database-lifecycle.json" "$GITHUB_SHA" <<'PY'
+          set -euo pipefail
+          [[ "$CANDIDATE_TREE" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CANDIDATE_TREE" == "$(git rev-parse 'HEAD^{tree}')" ]]
+          python3 - "$CEX_P0_EVIDENCE_DIR/database-lifecycle.json" "$GITHUB_SHA" "$CANDIDATE_TREE" <<'PY'
           import json
           from datetime import datetime, timezone
           from pathlib import Path
@@ -174,6 +181,7 @@ jobs:
               "schema": "cex.p0-database-lifecycle.v1",
               "ok": True,
               "commit_sha": sys.argv[2],
+              "tree_sha": sys.argv[3],
               "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
               "checks": [
                   "development-document-authority",
@@ -204,12 +212,14 @@ jobs:
       - name: Observe actual repository governance
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          CANDIDATE_BRANCH: ${{ steps.source.outputs.branch }}
         shell: bash
         run: |
           set -euo pipefail
           python3 scripts/observe-repository-governance.py \
             --repository "$GITHUB_REPOSITORY" \
             --commit-sha "$GITHUB_SHA" \
+            --candidate-branch "$CANDIDATE_BRANCH" \
             --output "$CEX_P0_EVIDENCE_DIR/repository-governance.json"
 
       - name: Bind exact-tree hosted gate evidence
@@ -256,6 +266,7 @@ jobs:
       - name: Generate and validate candidate manifest
         shell: bash
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           PAYLOAD_DIGEST: ${{ steps.payload.outputs.artifact-digest }}
         run: |
           set -euo pipefail
@@ -281,6 +292,7 @@ jobs:
       - name: Publish qualification summary
         shell: bash
         env:
+          CANDIDATE_BRANCH: ${{ steps.source.outputs.branch }}
           CANDIDATE_TREE: ${{ steps.source.outputs.tree }}
         run: |
           {
@@ -292,7 +304,7 @@ jobs:
             echo '- Scope: repository exact-money control plane + TRNM receipt recovery + Hepta PostgreSQL recovery + document integrity'
             echo '- Development authority: active v12 plan plus implementation addendum, machine-validated'
             echo '- Hepta: strict restart, disjoint claim, wrong-owner rejection and expired-lease recovery qualified'
-            echo '- GitHub branch/ruleset state: recorded in repository-governance.json; no enforcement is inferred from source code'
+            echo "- GitHub candidate branch/ruleset state: recorded for \`$CANDIDATE_BRANCH\`; no enforcement is inferred from source code"
             echo '- Production authorization: not granted; independent external gates remain mandatory'
           } >> "$GITHUB_STEP_SUMMARY"
 

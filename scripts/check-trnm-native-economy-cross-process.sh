@@ -45,6 +45,10 @@ elif [[ "${CEX_DATABASE_URL_PASSWORD_PRESENT:-0}" == "1" ]]; then
   # cex_sync_postgres_env_from_database_url already installed the decoded URI
   # password in CEX_POSTGRES_PASSWORD.
   :
+elif [[ ${PGPASSWORD+x} ]]; then
+  # A passwordless URI may still intentionally use an env-file PGPASSWORD;
+  # keep the Docker child on the same libpq credential path.
+  export CEX_POSTGRES_PASSWORD="$PGPASSWORD"
 elif [[ "$TRNM_CROSS_CALLER_CEX_PASSWORD_SET" == "1" ]]; then
   export CEX_POSTGRES_PASSWORD="$TRNM_CROSS_CALLER_CEX_PASSWORD"
 fi

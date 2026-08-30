@@ -16,6 +16,7 @@ RELEASE_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 MIGRATION_RE = re.compile(r"^[0-9]{4}_[a-z0-9][a-z0-9._-]*\.sql$")
 ZERO_GIT_SHA = "0" * 40
 ZERO_SHA256 = "sha256:" + "0" * 64
+ACTIVE_MIGRATION_HEAD = "0087_add_term_exchange_receipt_event_history.sql"
 QUALIFICATION_SCOPE = (
     "repository-exact-money-control-plane-plus-hepta-durability-doc-integrity-full-suite-lint-receipt-recovery-and-trnm-production-config-hardening"
 )
@@ -127,6 +128,11 @@ def validate_manifest(data: Any, allow_template: bool) -> None:
     )
     migration_head = string_at(database.get("migration_head"), "$.database.migration_head")
     require(bool(MIGRATION_RE.fullmatch(migration_head)), "$.database.migration_head is invalid")
+    require(
+        migration_head == ACTIVE_MIGRATION_HEAD,
+        "$.database.migration_head must equal the active v12 head "
+        f"{ACTIVE_MIGRATION_HEAD!r}",
+    )
     validate_sha256(database.get("migration_sha256"), "$.database.migration_sha256", allow_template)
     validate_sha256(
         database.get("migration_chain_sha256"),

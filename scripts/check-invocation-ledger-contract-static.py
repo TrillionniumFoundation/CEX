@@ -57,7 +57,14 @@ require(
 )
 require(
     "docs/templates/cex-release-baseline-manifest-v1.json",
-    "0066_add_invocation_ledger_contract.sql",
+    # The v12 manifest template now has one canonical, ordered
+    # `migration-and-lifecycle-matrix` evidence record rather than a separate
+    # evidence item for every migration.  Migration 0066 remains checked
+    # directly above; bind the template assertion to its canonical aggregate
+    # record and active head instead of requiring a stale filename literal in
+    # the JSON envelope.
+    "migration-and-lifecycle-matrix",
+    "0087_add_term_exchange_receipt_event_history.sql",
 )
 
 print(json.dumps({

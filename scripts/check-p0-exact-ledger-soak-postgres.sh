@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${DATABASE_URL:?DATABASE_URL is required}"
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+source "$root/scripts/_dev-helpers.sh"
+: "${DATABASE_URL:?DATABASE_URL is required}"
+cex_load_env
+cex_sync_postgres_env_from_database_url "$DATABASE_URL"
 evidence_dir="${CEX_P0_EVIDENCE_DIR:-$root/run/p0-release-evidence}"
 iterations="${CEX_P0_SOAK_ITERATIONS:-100}"
 
@@ -14,7 +17,7 @@ fi
 mkdir -p "$evidence_dir"
 started_at_epoch=$(date +%s)
 
-psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -v iterations="$iterations" <<'SQL'
+cex_psql_stdin -X -v iterations="$iterations" <<'SQL'
 begin;
 select set_config('cex.p0_soak_iterations', :'iterations', true);
 
@@ -156,7 +159,8 @@ commit;
 SQL
 
 ended_at_epoch=$(date +%s)
-raw_json=$(psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -Atc "
+tree_sha=$(git -C "$root" rev-parse 'HEAD^{tree}')
+raw_json=$(cex_psql_stdin -X -Atc "
 select json_build_object(
   'schema','cex.p0-exact-ledger-soak.v1',
   'ok',true,
@@ -170,7 +174,7 @@ select json_build_object(
   'audit_effect_count',(select count(*) from public.cex_audit_outbox_v1 where source_service='ledger-service' and envelope ->> 'event_type'='ledger.effect.persisted' and envelope #>> '{payload,account_id}'=accounts.account_id::text)
 ) from public.accounts where account_id='90000000-0000-4000-8000-000000000101';")
 
-python3 - "$evidence_dir/exact-ledger-soak.json" "$raw_json" "$started_at_epoch" "$ended_at_epoch" "${GITHUB_SHA:-unknown}" <<'PY'
+python3 - "$evidence_dir/exact-ledger-soak.json" "$raw_json" "$started_at_epoch" "$ended_at_epoch" "${GITHUB_SHA:-unknown}" "$tree_sha" <<'PY'
 import json
 from pathlib import Path
 import sys
@@ -182,6 +186,7 @@ data.update({
     "ended_at_epoch": int(sys.argv[4]),
     "duration_seconds": int(sys.argv[4]) - int(sys.argv[3]),
     "commit_sha": sys.argv[5],
+    "tree_sha": sys.argv[6],
 })
 path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY

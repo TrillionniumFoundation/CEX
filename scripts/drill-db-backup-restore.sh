@@ -3,6 +3,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+# Preserve an operator-selected target while importing repository defaults.
+# The convenience `.env` is allowed to provide a fallback, but it must never
+# redirect a caller's disposable/production-readiness drill.
+DRILL_CALLER_DATABASE_URL="${DATABASE_URL-}"
+DRILL_CALLER_DATABASE_URL_SET=0
+if [[ ${DATABASE_URL+x} ]]; then
+  DRILL_CALLER_DATABASE_URL_SET=1
+fi
 # shellcheck source=scripts/_dev-helpers.sh
 source "$SCRIPT_DIR/_dev-helpers.sh"
 
@@ -70,10 +78,29 @@ while [[ $# -gt 0 ]]; do
 done
 
 cex_load_env
+if [[ "$DRILL_CALLER_DATABASE_URL_SET" == "1" ]]; then
+  export DATABASE_URL="$DRILL_CALLER_DATABASE_URL"
+fi
+cex_sync_postgres_env_from_database_url "$(cex_effective_database_url)"
 
-if ! cex_can_use_docker_postgres; then
+# This drill is deliberately Docker-local.  Refuse a remote target and a
+# localhost port that is not actually published by the selected container;
+# otherwise a backup could silently come from a different PostgreSQL server.
+if ! cex_postgres_host_is_local; then
+  echo "refusing non-local DATABASE_URL for backup/restore drill (credentials redacted)" >&2
+  exit 2
+fi
+
+if ! cex_can_use_docker_postgres || ! cex_postgres_docker_socket_is_target; then
   echo "no usable Docker Postgres container found; cannot run backup/restore drill" >&2
   exit 1
+fi
+
+DRILL_DOCKER_PASSWORD=""
+DRILL_DOCKER_PASSWORD_SET=0
+if cex_postgres_password_is_set; then
+  DRILL_DOCKER_PASSWORD="$(cex_postgres_password_value)"
+  DRILL_DOCKER_PASSWORD_SET=1
 fi
 
 mkdir -p "$OUT_DIR"
@@ -95,21 +122,46 @@ fi
 RESTORE_CREATED="false"
 current_counts_file=""
 restore_counts_file=""
+counts_diff_file=""
 cleanup() {
   local code=$?
   [[ -z "$current_counts_file" ]] || rm -f "$current_counts_file"
   [[ -z "$restore_counts_file" ]] || rm -f "$restore_counts_file"
+  [[ -z "$counts_diff_file" ]] || rm -f "$counts_diff_file"
   if [[ "$RESTORE_CREATED" == "true" && "$KEEP_RESTORE_DB" != "true" ]]; then
-    cex_docker exec "$CEX_POSTGRES_CONTAINER_NAME" dropdb -U "$CEX_POSTGRES_USER" --if-exists "$RESTORE_DB" >/dev/null 2>&1 || true
+    if [[ "$DRILL_DOCKER_PASSWORD_SET" == "1" ]]; then
+      cex_docker_exec_with_password "$DRILL_DOCKER_PASSWORD" \
+        "$CEX_POSTGRES_CONTAINER_NAME" dropdb -U "$CEX_POSTGRES_USER" \
+        --if-exists "$RESTORE_DB" >/dev/null 2>&1 || true
+    else
+      cex_docker exec "$CEX_POSTGRES_CONTAINER_NAME" dropdb -U "$CEX_POSTGRES_USER" \
+        --if-exists "$RESTORE_DB" >/dev/null 2>&1 || true
+    fi
   fi
   exit "$code"
 }
 trap cleanup EXIT
 
+drill_docker_exec() {
+  if [[ "$DRILL_DOCKER_PASSWORD_SET" == "1" ]]; then
+    cex_docker_exec_with_password "$DRILL_DOCKER_PASSWORD" "$@"
+  else
+    cex_docker exec "$@"
+  fi
+}
+
+drill_docker_exec_stdin() {
+  if [[ "$DRILL_DOCKER_PASSWORD_SET" == "1" ]]; then
+    cex_docker_exec_with_password_stdin "$DRILL_DOCKER_PASSWORD" "$@"
+  else
+    cex_docker exec -i "$@"
+  fi
+}
+
 psql_scalar() {
   local db="$1"
   local sql="$2"
-  cex_docker exec "$CEX_POSTGRES_CONTAINER_NAME" \
+  drill_docker_exec "$CEX_POSTGRES_CONTAINER_NAME" \
     psql -U "$CEX_POSTGRES_USER" -d "$db" -v ON_ERROR_STOP=1 -Atc "$sql"
 }
 
@@ -127,6 +179,7 @@ row_count_sql() {
 
 current_counts_file="$(mktemp)"
 restore_counts_file="$(mktemp)"
+counts_diff_file="$(mktemp)"
 
 for table in "${core_tables[@]}"; do
   if [[ "$(psql_scalar "$CEX_POSTGRES_DB" "$(table_exists_sql "$table")")" == "present" ]]; then
@@ -138,7 +191,7 @@ done
 
 started_at_epoch="$(date +%s)"
 echo "==> writing backup $DUMP_FILE"
-cex_docker exec "$CEX_POSTGRES_CONTAINER_NAME" \
+drill_docker_exec "$CEX_POSTGRES_CONTAINER_NAME" \
   pg_dump -U "$CEX_POSTGRES_USER" -d "$CEX_POSTGRES_DB" -Fc > "$DUMP_FILE"
 
 if [[ ! -s "$DUMP_FILE" ]]; then
@@ -147,12 +200,13 @@ if [[ ! -s "$DUMP_FILE" ]]; then
 fi
 
 echo "==> creating restore database $RESTORE_DB"
-cex_docker exec "$CEX_POSTGRES_CONTAINER_NAME" dropdb -U "$CEX_POSTGRES_USER" --if-exists "$RESTORE_DB" >/dev/null
-cex_docker exec "$CEX_POSTGRES_CONTAINER_NAME" createdb -U "$CEX_POSTGRES_USER" "$RESTORE_DB"
+drill_docker_exec "$CEX_POSTGRES_CONTAINER_NAME" dropdb -U "$CEX_POSTGRES_USER" \
+  --if-exists "$RESTORE_DB" >/dev/null
+drill_docker_exec "$CEX_POSTGRES_CONTAINER_NAME" createdb -U "$CEX_POSTGRES_USER" "$RESTORE_DB"
 RESTORE_CREATED="true"
 
 echo "==> restoring backup into $RESTORE_DB"
-cex_docker exec -i "$CEX_POSTGRES_CONTAINER_NAME" \
+drill_docker_exec_stdin "$CEX_POSTGRES_CONTAINER_NAME" \
   pg_restore -U "$CEX_POSTGRES_USER" -d "$RESTORE_DB" --no-owner --no-privileges < "$DUMP_FILE"
 
 for table in "${core_tables[@]}"; do
@@ -163,8 +217,8 @@ for table in "${core_tables[@]}"; do
   fi
 done
 
-if ! diff -u "$current_counts_file" "$restore_counts_file" >/tmp/cex-db-drill-counts.diff; then
-  cat /tmp/cex-db-drill-counts.diff >&2
+if ! diff -u "$current_counts_file" "$restore_counts_file" >"$counts_diff_file"; then
+  cat "$counts_diff_file" >&2
   echo "restored table counts do not match source" >&2
   exit 1
 fi

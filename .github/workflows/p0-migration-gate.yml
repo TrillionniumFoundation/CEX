@@ -12,6 +12,7 @@ on:
       - 'services/ledger-service/src/receipt_lookup.rs'
       - 'scripts/check-p0-migrations.py'
       - 'scripts/check-p0-migrations-postgres.sh'
+      - 'scripts/_dev-helpers.sh'
       - 'scripts/check-term-exchange-receipt-partial-upgrade-postgres.sh'
       - 'scripts/check-audit-source-baseline-postgres.sh'
       - 'scripts/check-ledger-operation-identity-postgres.sh'

@@ -5,6 +5,24 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/_dev-helpers.sh
 source "$SCRIPT_DIR/_dev-helpers.sh"
 cex_load_env
+if [[ ${DATABASE_URL+x} ]]; then
+  cex_sync_postgres_env_from_database_url "$(cex_effective_database_url)"
+fi
+if [[ "${CEX_DATABASE_URL_SYNCED:-0}" == "1" ]] && ! cex_postgres_host_is_local; then
+  echo "refusing non-local DATABASE_URL: base-backup creation uses Docker-local PostgreSQL operations" >&2
+  exit 2
+fi
+if [[ "${CEX_DATABASE_URL_SYNCED:-0}" == "1" ]] \
+   && ! cex_postgres_docker_socket_is_target; then
+  echo "refusing DATABASE_URL whose local port is not the Docker PostgreSQL target" >&2
+  exit 2
+fi
+BASE_BACKUP_POSTGRES_PASSWORD=""
+BASE_BACKUP_POSTGRES_PASSWORD_SET=0
+if cex_postgres_password_is_set; then
+  BASE_BACKUP_POSTGRES_PASSWORD="$(cex_postgres_password_value)"
+  BASE_BACKUP_POSTGRES_PASSWORD_SET=1
+fi
 
 cex_require_cmd flock jq sha256sum
 
@@ -59,11 +77,11 @@ if (( available_mib < MIN_FREE_MIB )); then
 fi
 
 log_file="$EVIDENCE_DIR/$BACKUP_ID.log"
-cex_docker run --name "$BACKUP_CONTAINER" --rm \
-  --user postgres --network "container:$CEX_POSTGRES_CONTAINER_NAME" \
-  -e PGPASSWORD="$CEX_POSTGRES_PASSWORD" \
-  -e BACKUP_DIR="/backups/$INCOMPLETE_ID" \
-  -e POSTGRES_USER="$CEX_POSTGRES_USER" \
+backup_run_args=(
+  --name "$BACKUP_CONTAINER" --rm
+  --user postgres --network "container:$CEX_POSTGRES_CONTAINER_NAME"
+  -e "BACKUP_DIR=/backups/$INCOMPLETE_ID"
+  -e "POSTGRES_USER=$CEX_POSTGRES_USER"
   -v "$backup_volume:/backups" postgres:16 bash -ceu '
     umask 077
     test ! -e "$BACKUP_DIR"
@@ -73,7 +91,14 @@ cex_docker run --name "$BACKUP_CONTAINER" --rm \
     pg_verifybackup "$BACKUP_DIR"
     sync -f "$BACKUP_DIR/backup_manifest"
     sync -f "$BACKUP_DIR"
-  ' >"$log_file" 2>&1
+  '
+)
+if [[ "$BASE_BACKUP_POSTGRES_PASSWORD_SET" == "1" ]]; then
+  cex_docker_run_with_password "$BASE_BACKUP_POSTGRES_PASSWORD" \
+    "${backup_run_args[@]}" >"$log_file" 2>&1
+else
+  cex_docker run "${backup_run_args[@]}" >"$log_file" 2>&1
+fi
 
 manifest="$(cex_docker run --rm -v "$backup_volume:/backups:ro" postgres:16 \
   cat "/backups/$INCOMPLETE_ID/backup_manifest")"
