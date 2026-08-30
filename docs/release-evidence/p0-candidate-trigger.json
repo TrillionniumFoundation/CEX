@@ -1,8 +1,8 @@
 {
   "schema": "cex.p0-candidate-trigger.v1",
   "plan": "CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
-  "sequence": 18,
-  "purpose": "Qualify one exact v12 tree after typed intent/receipt/backend revalidation, fail-closed negative-amount evidence normalization, native and normalized append-only receipt history, exact-money and retry-collision guards, strict consumer Ledger response binding, Hepta complete-suite durability and lint ownership, repository-wide immutable GitHub Action pinning including self-hosted workflows, production-profile credential separation, portable systemd wiring, branch-bound hosted evidence, and static authority removal of premature repository-closure claims.",
+  "sequence": 19,
+  "purpose": "Qualify one exact v12 tree after typed intent/receipt/backend revalidation, fail-closed negative-amount evidence normalization, native and normalized append-only receipt history, exact-money and retry-collision guards, strict consumer Ledger response binding, Hepta complete-suite durability and lint ownership, repository-wide immutable GitHub Action and Docker digest enforcement with parser self-tests, production-profile credential separation, portable systemd wiring, branch-bound hosted evidence, and static authority removal of premature repository-closure claims.",
   "qualification_scope": "repository-exact-money-control-plane-plus-hepta-durability-doc-integrity-full-suite-lint-receipt-recovery-and-trnm-production-config-hardening",
   "production_authorization": "not_granted"
 }

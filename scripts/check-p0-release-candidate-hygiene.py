@@ -67,10 +67,12 @@ TEMPORARY_WORKFLOW_PATTERNS = (
     ".github/workflows/*gap-closure-validate*.yaml",
 )
 ACTION_USE = re.compile(
-    r"^\s*uses:\s*([^#\s]+)@([^\s#]+)\s*(?:#.*)?$", re.MULTILINE
+    r"^\s*(?:-\s*)?uses:\s*([^#\s]+)\s*(?:#.*)?$", re.MULTILINE
 )
 PINNED_ACTION_REF = re.compile(r"^[0-9a-f]{40}$")
-PINNED_DOCKER_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+PINNED_DOCKER_USE = re.compile(
+    r"^docker://[^@\s]+@sha256:[0-9a-f]{64}$"
+)
 PULL_REQUEST_EVENT = re.compile(r"(?m)^\s{2}pull_request:\s*$")
 MIGRATION_RE = re.compile(r"^(\d{4})_[a-z0-9][a-z0-9._-]*\.sql$")
 
@@ -117,6 +119,68 @@ def workflow_paths() -> list[Path]:
     return sorted(paths, key=relative)
 
 
+def action_pin_problem(use: str) -> str | None:
+    """Return a fail-closed pin error for one GitHub Actions ``uses`` value."""
+
+    if use.startswith("./"):
+        return None
+    if use.startswith("docker://"):
+        if PINNED_DOCKER_USE.fullmatch(use):
+            return None
+        return (
+            f"{use}; docker actions must use "
+            "docker://<immutable-image>@sha256:<64 lowercase hex>"
+        )
+
+    action, separator, ref = use.rpartition("@")
+    if action and separator and PINNED_ACTION_REF.fullmatch(ref):
+        return None
+    return f"{use}; external actions must use a 40-character lowercase commit SHA"
+
+
+def validate_action_pin_checker() -> None:
+    """Self-test all supported immutable and mutable reference classes."""
+
+    cases = (
+        ("./.github/actions/local", True),
+        ("./.github/workflows/local-reusable.yml", True),
+        ("actions/checkout@" + "a" * 40, True),
+        (
+            "owner/repository/.github/workflows/reusable.yml@" + "b" * 40,
+            True,
+        ),
+        ("docker://ghcr.io/example/image@sha256:" + "c" * 64, True),
+        ("actions/checkout@v4", False),
+        ("owner/repository/.github/workflows/reusable.yml@main", False),
+        ("docker://alpine:3.20", False),
+        ("docker://ghcr.io/example/image@sha256:abc", False),
+        ("${{ matrix.action }}", False),
+    )
+    for use, expected_valid in cases:
+        actual_valid = action_pin_problem(use) is None
+        if actual_valid != expected_valid:
+            PROBLEMS.append(
+                "workflow action pin checker self-test failed for "
+                f"{use!r}: expected_valid={expected_valid}, actual_valid={actual_valid}"
+            )
+
+
+def validate_action_use_parser() -> None:
+    """Prove both block and compact YAML step forms enter the pin validator."""
+
+    pinned = "actions/checkout@" + "d" * 40
+    sample = (
+        f"jobs:\n  block:\n    steps:\n      - name: block\n        uses: {pinned}\n"
+        f"      - uses: {pinned} # compact\n"
+    )
+    parsed = ACTION_USE.findall(sample)
+    if parsed != [pinned, pinned]:
+        PROBLEMS.append(
+            "workflow action uses parser self-test failed: "
+            f"expected two pinned references, parsed={parsed!r}"
+        )
+
+
 def validate_workflow_action_pins(paths: list[Path]) -> None:
     """Require immutable external action identities in every workflow.
 
@@ -129,17 +193,10 @@ def validate_workflow_action_pins(paths: list[Path]) -> None:
     for path in paths:
         content = path.read_text(encoding="utf-8")
         for match in ACTION_USE.finditer(content):
-            action, ref = match.groups()
-            if action.startswith("docker://"):
-                pinned = PINNED_DOCKER_DIGEST.fullmatch(ref) is not None
-                expected = "sha256:<64 lowercase hex>"
-            else:
-                pinned = PINNED_ACTION_REF.fullmatch(ref) is not None
-                expected = "40-character lowercase commit SHA"
-            if not pinned:
+            use = match.group(1)
+            if problem := action_pin_problem(use):
                 PROBLEMS.append(
-                    f"{relative(path)} contains a mutable external action reference "
-                    f"{action}@{ref}; expected {expected}"
+                    f"{relative(path)} contains a mutable action reference: {problem}"
                 )
 
 
@@ -158,6 +215,8 @@ for path in TEMPORARY_EXACT_PATHS:
         PROBLEMS.append(f"temporary patcher remains: {path}")
 
 all_workflows = workflow_paths()
+validate_action_pin_checker()
+validate_action_use_parser()
 validate_workflow_action_pins(all_workflows)
 
 plan = require_file(ACTIVE_PLAN)
