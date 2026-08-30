@@ -20,6 +20,10 @@ AUTHORITATIVE_WORKFLOWS = (
     ".github/workflows/p0-provider-reconciliation-gate.yml",
 )
 RELEASE_WORKFLOW = ".github/workflows/p0-release-candidate-gate.yml"
+WORKFLOW_PATTERNS = (
+    ".github/workflows/*.yml",
+    ".github/workflows/*.yaml",
+)
 TRIGGER_PATH = "docs/release-evidence/p0-candidate-trigger.json"
 ACTIVE_PLAN = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"
 ACTIVE_ADDENDUM = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md"
@@ -62,9 +66,11 @@ TEMPORARY_WORKFLOW_PATTERNS = (
     ".github/workflows/*gap-closure-validate*.yml",
     ".github/workflows/*gap-closure-validate*.yaml",
 )
-UNPINNED_ACTION = re.compile(
-    r"^\s*uses:\s*[^#\s]+@(v\d+|stable|main|master)\s*(?:#.*)?$", re.MULTILINE
+ACTION_USE = re.compile(
+    r"^\s*uses:\s*([^#\s]+)@([^\s#]+)\s*(?:#.*)?$", re.MULTILINE
 )
+PINNED_ACTION_REF = re.compile(r"^[0-9a-f]{40}$")
+PINNED_DOCKER_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 PULL_REQUEST_EVENT = re.compile(r"(?m)^\s{2}pull_request:\s*$")
 MIGRATION_RE = re.compile(r"^(\d{4})_[a-z0-9][a-z0-9._-]*\.sql$")
 
@@ -104,6 +110,39 @@ def git_identity() -> tuple[str | None, str | None]:
     return values[0], values[1]
 
 
+def workflow_paths() -> list[Path]:
+    paths: set[Path] = set()
+    for pattern in WORKFLOW_PATTERNS:
+        paths.update(path for path in ROOT.glob(pattern) if path.is_file())
+    return sorted(paths, key=relative)
+
+
+def validate_workflow_action_pins(paths: list[Path]) -> None:
+    """Require immutable external action identities in every workflow.
+
+    Self-hosted and auxiliary workflows execute with the same repository trust
+    as release workflows. Restricting pin checks to the six candidate gates
+    would leave an avoidable supply-chain bypass through a scheduled or manual
+    helper workflow.
+    """
+
+    for path in paths:
+        content = path.read_text(encoding="utf-8")
+        for match in ACTION_USE.finditer(content):
+            action, ref = match.groups()
+            if action.startswith("docker://"):
+                pinned = PINNED_DOCKER_DIGEST.fullmatch(ref) is not None
+                expected = "sha256:<64 lowercase hex>"
+            else:
+                pinned = PINNED_ACTION_REF.fullmatch(ref) is not None
+                expected = "40-character lowercase commit SHA"
+            if not pinned:
+                PROBLEMS.append(
+                    f"{relative(path)} contains a mutable external action reference "
+                    f"{action}@{ref}; expected {expected}"
+                )
+
+
 for pattern in (
     ".github/workflows/closure-*.yml",
     ".github/workflows/closure-*.yaml",
@@ -117,6 +156,9 @@ for pattern in (
 for path in TEMPORARY_EXACT_PATHS:
     if (ROOT / path).exists():
         PROBLEMS.append(f"temporary patcher remains: {path}")
+
+all_workflows = workflow_paths()
+validate_workflow_action_pins(all_workflows)
 
 plan = require_file(ACTIVE_PLAN)
 for marker in (
@@ -165,10 +207,6 @@ for workflow_path in (*AUTHORITATIVE_WORKFLOWS, RELEASE_WORKFLOW):
     if PULL_REQUEST_EVENT.search(content):
         PROBLEMS.append(
             f"{workflow_path} must not accept pull_request merge trees as release evidence"
-        )
-    for match in UNPINNED_ACTION.finditer(content):
-        PROBLEMS.append(
-            f"{workflow_path} contains an unpinned third-party action: {match.group(0).strip()}"
         )
 
 release_content = require_file(RELEASE_WORKFLOW)
@@ -232,6 +270,7 @@ result = {
     "addendum": Path(ACTIVE_ADDENDUM).name,
     "authoritative_workflows": list(AUTHORITATIVE_WORKFLOWS),
     "release_workflow": RELEASE_WORKFLOW,
+    "workflow_pin_scope": [relative(path) for path in all_workflows],
     "shared_trigger": TRIGGER_PATH,
     "commit_sha": commit_sha,
     "tree_sha": tree_sha,
