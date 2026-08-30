@@ -15,6 +15,7 @@ ACTIVE_PLAN = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"
 ACTIVE_ADDENDUM = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md"
 DOC_CHECKER = "scripts/check-development-docs.py"
 SHARED_TRIGGER = "docs/release-evidence/p0-candidate-trigger.json"
+QUALIFICATION_FREEZE = "docs/release-evidence/.qualification-freeze"
 MIGRATION_HEAD = "0087_add_term_exchange_receipt_event_history.sql"
 AUTHORITATIVE_WORKFLOWS = (
     ".github/workflows/p0-migration-gate.yml",
@@ -136,6 +137,34 @@ def verify_candidate_trigger() -> None:
         PROBLEMS.append("candidate trigger sequence must be a positive integer")
     if trigger.get("production_authorization") != "not_granted":
         PROBLEMS.append("candidate trigger must explicitly deny production authorization")
+
+    freeze_raw = read_text(QUALIFICATION_FREEZE)
+    if not freeze_raw:
+        return
+    freeze: dict[str, str] = {}
+    for line_number, line in enumerate(freeze_raw.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if "=" not in stripped:
+            PROBLEMS.append(f"qualification freeze line {line_number} is not key=value")
+            continue
+        key, value = stripped.split("=", 1)
+        if key in freeze:
+            PROBLEMS.append(f"qualification freeze repeats key: {key}")
+        freeze[key] = value
+    if set(freeze) != {"sequence", "production_authorization"}:
+        PROBLEMS.append(
+            "qualification freeze must contain exactly sequence and production_authorization"
+        )
+    try:
+        freeze_sequence = int(freeze.get("sequence", "0"))
+    except ValueError:
+        freeze_sequence = 0
+    if not isinstance(trigger.get("sequence"), int) or freeze_sequence != trigger.get("sequence"):
+        PROBLEMS.append("qualification freeze sequence must equal candidate trigger sequence")
+    if freeze.get("production_authorization") != "not_granted":
+        PROBLEMS.append("qualification freeze must explicitly deny production authorization")
 
 
 def verify_core() -> None:
@@ -550,7 +579,7 @@ def verify_postgres_argv_contract() -> None:
 
 
 def verify_release_evidence_self_test() -> None:
-    """Run the in-process exact-SHA/rerun binding regression fixture."""
+    """Run the in-process exact-SHA and strict manifest regression fixtures."""
 
     result = subprocess.run(
         [sys.executable, str(ROOT / "scripts/p0-release-evidence-core.py"), "self-test"],
@@ -563,6 +592,19 @@ def verify_release_evidence_self_test() -> None:
     if result.returncode != 0:
         PROBLEMS.append(
             "p0-release-evidence-core self-test failed: " + result.stdout.strip()
+        )
+    strict = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/check-strict-release-evidence-wiring.py")],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    if strict.returncode != 0:
+        PROBLEMS.append(
+            "strict release-evidence wiring self-test failed: "
+            + strict.stdout.strip()
         )
 
 
@@ -606,6 +648,9 @@ def verify_gates_and_plan() -> None:
     require_text(
         "scripts/observe-repository-governance.py",
         "--candidate-branch",
+        "--tree-sha",
+        "candidate_tree_matches_commit",
+        "candidate_branch_commit_sha_final",
         "candidate_branch",
         "candidate_ruleset_count",
         "ruleset_applies_to_branch",
@@ -630,6 +675,11 @@ def verify_gates_and_plan() -> None:
         "docs/schemas/cex-release-baseline-manifest-v1.schema.json",
         "cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*",
         "gh://TrillionniumFoundation/CEX/actions/runs/[1-9][0-9]*/attempts/[1-9][0-9]*",
+    )
+    require_text(
+        QUALIFICATION_FREEZE,
+        "sequence=",
+        "production_authorization=not_granted",
     )
     require_text(
         ".github/workflows/rust-service-gate.yml",
@@ -670,7 +720,11 @@ def verify_gates_and_plan() -> None:
     )
     require_text(
         RELEASE_WORKFLOW,
-        "scripts/p0-release-evidence.py collect",
+        "scripts/p0-release-evidence-strict.py collect",
+        "scripts/p0-release-evidence-strict.py manifest",
+        "scripts/check-release-evidence-contract.py",
+        "Bind exact-tree hosted gate and job evidence",
+        "Hosted evidence: exact branch/SHA/run-attempt, real runner allocation",
         "scripts/check-p0-exact-ledger-soak-postgres.sh",
         "scripts/check-p0-backup-restore-postgres.sh",
         "scripts/check-term-exchange-receipt-partial-upgrade-postgres.sh",
@@ -679,7 +733,9 @@ def verify_gates_and_plan() -> None:
         "scripts/check-repository-integrity.py",
         "scripts/observe-repository-governance.py",
         "--candidate-branch",
+        "--tree-sha",
         "CANDIDATE_BRANCH",
+        "CANDIDATE_TREE",
         "candidate branch/ruleset state",
         '"tree_sha": sys.argv[3]',
         "CANDIDATE_TREE",

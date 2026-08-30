@@ -8,6 +8,7 @@ import fnmatch
 import json
 import os
 import re
+import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -260,6 +261,11 @@ def main() -> int:
     parser.add_argument("--repository", required=True)
     parser.add_argument("--commit-sha", required=True)
     parser.add_argument(
+        "--tree-sha",
+        required=True,
+        help="exact checked-out Git tree SHA to bind to the observation",
+    )
+    parser.add_argument(
         "--candidate-branch",
         "--branch",
         dest="candidate_branch",
@@ -274,8 +280,26 @@ def main() -> int:
         raise SystemExit("GITHUB_TOKEN is required")
     if not GIT_SHA_RE.fullmatch(args.commit_sha):
         raise SystemExit("commit-sha must be a 40-character lowercase Git SHA")
+    if not GIT_SHA_RE.fullmatch(args.tree_sha):
+        raise SystemExit("tree-sha must be a 40-character lowercase Git SHA")
     if not valid_branch(args.candidate_branch):
         raise SystemExit("candidate-branch is not a canonical branch name")
+
+    try:
+        checkout_tree = subprocess.run(
+            ["git", "rev-parse", "HEAD^{tree}"],
+            cwd=Path(__file__).resolve().parents[1],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise SystemExit(f"cannot read checked-out Git tree: {error}") from error
+    if checkout_tree != args.tree_sha:
+        raise SystemExit(
+            "checked-out tree does not match requested tree "
+            f"(checkout={checkout_tree!r}, requested={args.tree_sha!r})"
+        )
 
     base = f"https://api.github.com/repos/{args.repository}"
     repo_status, repo = request_json(base, token)
@@ -297,6 +321,24 @@ def main() -> int:
         raise SystemExit(
             "candidate branch does not point to the requested commit "
             f"(branch={candidate_branch_sha!r}, requested={args.commit_sha!r})"
+        )
+
+    commit_status, commit_payload = request_json(
+        f"{base}/commits/{urllib.parse.quote(args.commit_sha, safe='')}", token
+    )
+    commit_tree = None
+    if isinstance(commit_payload, dict):
+        tree = commit_payload.get("commit")
+        if isinstance(tree, dict):
+            tree_object = tree.get("tree")
+            if isinstance(tree_object, dict):
+                value = tree_object.get("sha")
+                if isinstance(value, str):
+                    commit_tree = value
+    if commit_status != 200 or commit_tree != args.tree_sha:
+        raise SystemExit(
+            "commit tree does not match requested tree "
+            f"(commit={commit_tree!r}, requested={args.tree_sha!r})"
         )
 
     if default_branch_name == args.candidate_branch:
@@ -324,6 +366,19 @@ def main() -> int:
             continue
         ruleset_summaries.append(summarise_ruleset(ruleset, args.candidate_branch))
 
+    # Re-read the branch after all repository/ruleset observations.  A branch
+    # move during this window must not leave a stale governance attestation
+    # claiming that the candidate still points at the requested commit.
+    final_branch_status, final_branch = request_json(
+        f"{base}/branches/{urllib.parse.quote(args.candidate_branch, safe='')}", token
+    )
+    final_branch_sha = branch_commit_sha(final_branch)
+    if final_branch_status != 200 or final_branch_sha != args.commit_sha:
+        raise SystemExit(
+            "candidate branch moved during governance observation "
+            f"(initial={candidate_branch_sha!r}, final={final_branch_sha!r}, requested={args.commit_sha!r})"
+        )
+
     candidate_rulesets = [
         item
         for item in ruleset_summaries
@@ -349,11 +404,15 @@ def main() -> int:
         "ok": True,
         "repository": args.repository,
         "commit_sha": args.commit_sha,
+        "tree_sha": args.tree_sha,
         "observed_at": utc_now(),
         "default_branch": default_branch_name,
         "candidate_branch": args.candidate_branch,
         "candidate_branch_commit_sha": candidate_branch_sha,
         "candidate_commit_matches_branch": candidate_branch_sha == args.commit_sha,
+        "candidate_branch_commit_sha_final": final_branch_sha,
+        "candidate_branch_stable_during_observation": final_branch_sha == args.commit_sha,
+        "candidate_tree_matches_commit": commit_tree == args.tree_sha,
         "default_branch_protected": default_protected,
         "candidate_branch_protected": protected,
         "branch_protection_enabled": bool(

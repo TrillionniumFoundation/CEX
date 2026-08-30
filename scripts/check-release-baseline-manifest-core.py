@@ -20,11 +20,34 @@ ACTIVE_MIGRATION_HEAD = "0087_add_term_exchange_receipt_event_history.sql"
 QUALIFICATION_SCOPE = (
     "repository-exact-money-control-plane-plus-hepta-durability-doc-integrity-full-suite-lint-receipt-recovery-and-trnm-production-config-hardening"
 )
+REQUIRED_ROOT_FIELDS = {
+    "schema",
+    "status",
+    "project_id",
+    "release_id",
+    "generated_at",
+    "qualification_scope",
+    "production_ready",
+    "production_authorization",
+    "source",
+    "dependencies",
+    "database",
+    "build",
+    "evidence",
+    "approvals",
+    "external_gates",
+    "revocation",
+}
 
 
 def reject_unknown(item: dict[str, Any], allowed: set[str], path: str) -> None:
     unknown = sorted(set(item) - allowed)
     require(not unknown, f"{path} contains unknown field(s): {', '.join(unknown)}")
+
+
+def require_fields(item: dict[str, Any], required: set[str], path: str) -> None:
+    missing = sorted(required - set(item))
+    require(not missing, f"{path} is missing required field(s): {', '.join(missing)}")
 
 
 class ValidationError(Exception):
@@ -72,6 +95,8 @@ def validate_artifact(value: Any, path: str, allow_placeholder: bool) -> None:
 
 def validate_manifest(data: Any, allow_template: bool) -> None:
     root = object_at(data, "$" )
+    missing_root = sorted(REQUIRED_ROOT_FIELDS - set(root))
+    require(not missing_root, "$ is missing required field(s): " + ", ".join(missing_root))
     reject_unknown(
         root,
         {
@@ -103,6 +128,7 @@ def validate_manifest(data: Any, allow_template: bool) -> None:
     validate_datetime(root.get("generated_at"), "$.generated_at")
 
     source = object_at(root.get("source"), "$.source")
+    require_fields(source, {"repository", "branch", "commit_sha", "tree_sha"}, "$.source")
     reject_unknown(source, {"repository", "branch", "commit_sha", "tree_sha"}, "$.source")
     require(source.get("repository") == "TrillionniumFoundation/CEX", "$.source.repository is invalid")
     string_at(source.get("branch"), "$.source.branch")
@@ -113,6 +139,7 @@ def validate_manifest(data: Any, allow_template: bool) -> None:
             require(value != ZERO_GIT_SHA, f"$.source.{field} must not be all-zero")
 
     dependencies = object_at(root.get("dependencies"), "$.dependencies")
+    require_fields(dependencies, {"cargo_lock_sha256"}, "$.dependencies")
     reject_unknown(dependencies, {"cargo_lock_sha256"}, "$.dependencies")
     validate_sha256(
         dependencies.get("cargo_lock_sha256"),
@@ -121,6 +148,7 @@ def validate_manifest(data: Any, allow_template: bool) -> None:
     )
 
     database = object_at(root.get("database"), "$.database")
+    require_fields(database, {"migration_head", "migration_sha256", "migration_chain_sha256"}, "$.database")
     reject_unknown(
         database,
         {"migration_head", "migration_sha256", "migration_chain_sha256"},
@@ -141,6 +169,7 @@ def validate_manifest(data: Any, allow_template: bool) -> None:
     )
 
     build = object_at(root.get("build"), "$.build")
+    require_fields(build, {"workflow_run_id", "artifacts", "images", "sbom", "provenance"}, "$.build")
     reject_unknown(
         build,
         {"workflow_run_id", "artifacts", "images", "sbom", "provenance"},
@@ -176,6 +205,7 @@ def validate_manifest(data: Any, allow_template: bool) -> None:
             validate_artifact(value, f"$.build.{field}", allow_template)
 
     external_gates = object_at(root.get("external_gates"), "$.external_gates")
+    require_fields(external_gates, {"status", "items"}, "$.external_gates")
     reject_unknown(external_gates, {"status", "items"}, "$.external_gates")
     require(
         external_gates.get("status") == "independent_approval_required",
@@ -240,6 +270,7 @@ def validate_manifest(data: Any, allow_template: bool) -> None:
         require(any(item.get("decision") == "approve" for item in approvals),
                 "candidate/released manifest requires approval")
 
+    require("revocation" in root, "$.revocation is required")
     revocation = root.get("revocation")
     if status == "revoked":
         revocation = object_at(revocation, "$.revocation")

@@ -19,7 +19,7 @@ env:
   DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/cex_ci
   CEX_P0_EVIDENCE_DIR: run/p0-release-evidence
   # The Rust/Hepta authoritative lane has a 60-minute timeout and may queue
-  # behind hosted capacity.  Keep the aggregate wait longer than that lane so
+  # behind hosted capacity. Keep the aggregate wait longer than that lane so
   # a slow-but-valid exact-SHA run is not rejected merely by the collector.
   CEX_P0_GATE_POLL_ATTEMPTS: '360'
   CEX_P0_GATE_POLL_INTERVAL_SECONDS: '15'
@@ -54,10 +54,6 @@ jobs:
             push|workflow_dispatch) ;;
             *) echo "unsupported evidence event: $GITHUB_EVENT_NAME" >&2; exit 1 ;;
           esac
-          # A tag can point at the same commit as the candidate branch but is
-          # not a branch-tree qualification event.  Refuse it explicitly so a
-          # release tag (or a manually dispatched tag ref) cannot be mistaken
-          # for evidence bound to the review branch.
           if [[ "${GITHUB_REF_TYPE:-}" != "branch" ]]; then
             echo "release evidence requires a branch ref (got ${GITHUB_REF_TYPE:-unset})" >&2
             exit 1
@@ -110,6 +106,7 @@ jobs:
           python3 scripts/check-trnm-settlement-receipt-lookup.py
           python3 scripts/check-trnm-economy-settlement-contract.py
           python3 scripts/test-trnm-economy-settlement-status-negative.py
+          python3 scripts/check-strict-release-evidence-wiring.py
           bash scripts/test-runtime-profile-wiring.sh
 
       - name: Fresh migration and P0 assertions
@@ -213,16 +210,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           CANDIDATE_BRANCH: ${{ steps.source.outputs.branch }}
+          CANDIDATE_TREE: ${{ steps.source.outputs.tree }}
         shell: bash
         run: |
           set -euo pipefail
           python3 scripts/observe-repository-governance.py \
             --repository "$GITHUB_REPOSITORY" \
             --commit-sha "$GITHUB_SHA" \
+            --tree-sha "$CANDIDATE_TREE" \
             --candidate-branch "$CANDIDATE_BRANCH" \
             --output "$CEX_P0_EVIDENCE_DIR/repository-governance.json"
 
-      - name: Bind exact-tree hosted gate evidence
+      - name: Bind exact-tree hosted gate and job evidence
         env:
           GITHUB_TOKEN: ${{ github.token }}
           CANDIDATE_BRANCH: ${{ steps.source.outputs.branch }}
@@ -230,10 +229,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Keep expression values in environment variables and quote every expansion.  Never
-          # splice a branch/ref directly into shell source: Git permits characters such as
-          # apostrophes and dollar signs in refs, and a candidate must not turn evidence binding
-          # into shell evaluation.  The ref-format check also rejects malformed branch names.
           if ! git check-ref-format --branch "$CANDIDATE_BRANCH" >/dev/null; then
             echo "candidate branch is not a valid Git branch ref" >&2
             exit 1
@@ -242,7 +237,7 @@ jobs:
             echo "candidate tree is not a 40-character lowercase SHA-1" >&2
             exit 1
           fi
-          python3 scripts/p0-release-evidence.py collect \
+          python3 scripts/p0-release-evidence-strict.py collect \
             --evidence-dir "$CEX_P0_EVIDENCE_DIR" \
             --context run/p0-release-context.json \
             --repository "$GITHUB_REPOSITORY" \
@@ -271,14 +266,19 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p run/p0-release-manifest
-          python3 scripts/p0-release-evidence.py manifest \
+          python3 scripts/p0-release-evidence-strict.py manifest \
             --context run/p0-release-context.json \
+            --evidence-dir "$CEX_P0_EVIDENCE_DIR" \
             --output run/p0-release-manifest/cex-p0-candidate-manifest.json \
             --release-id "cex-p0-${GITHUB_SHA}" \
             --payload-name "cex-p0-evidence-${GITHUB_SHA}-attempt-${GITHUB_RUN_ATTEMPT}" \
             --payload-digest "$PAYLOAD_DIGEST"
           python3 scripts/check-release-baseline-manifest.py \
             run/p0-release-manifest/cex-p0-candidate-manifest.json
+          python3 scripts/check-release-evidence-contract.py \
+            run/p0-release-manifest/cex-p0-candidate-manifest.json \
+            --context run/p0-release-context.json \
+            --evidence-dir "$CEX_P0_EVIDENCE_DIR"
 
       - name: Upload candidate manifest
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -302,6 +302,7 @@ jobs:
             echo "- Tree: \`$CANDIDATE_TREE\`"
             echo "- Migration head: \`0087_add_term_exchange_receipt_event_history.sql\`"
             echo '- Scope: repository exact-money control plane + TRNM receipt recovery + Hepta PostgreSQL recovery + document integrity'
+            echo '- Hosted evidence: exact branch/SHA/run-attempt, real runner allocation and non-empty successful jobs/steps verified'
             echo '- Development authority: active v12 plan plus implementation addendum, machine-validated'
             echo '- Hepta: strict restart, disjoint claim, wrong-owner rejection and expired-lease recovery qualified'
             echo "- GitHub candidate branch/ruleset state: recorded for \`$CANDIDATE_BRANCH\`; no enforcement is inferred from source code"

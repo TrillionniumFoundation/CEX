@@ -18,6 +18,7 @@ EXPECTED_ADDENDUM = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADD
 EXPECTED_MIGRATION_HEAD = "0087_add_term_exchange_receipt_event_history.sql"
 EXPECTED_REPOSITORY_QUALIFICATION_RESULT = "PENDING_EXACT_SHA_HOSTED_EVIDENCE"
 EXPECTED_REPOSITORY_QUALIFICATION_AUTHORITY = "generated_candidate_manifest_only"
+QUALIFICATION_FREEZE = "docs/release-evidence/.qualification-freeze"
 EXPECTED_REQUIREMENTS = {
     "V12-A",
     "V12-B",
@@ -118,9 +119,12 @@ def validate_authority() -> dict[str, Any]:
         "active_plan",
         "active_addendum",
         "shared_trigger",
+        "qualification_freeze",
         "aggregate_release_workflow",
     ):
         require_path(authority.get(key), f"authority.{key}")
+    if authority.get("qualification_freeze") != QUALIFICATION_FREEZE:
+        PROBLEMS.append("authority qualification_freeze is not the committed v12 freeze path")
 
     workflows = authority.get("authoritative_workflows")
     if not isinstance(workflows, list) or len(workflows) != 5:

@@ -48,8 +48,8 @@ LOCAL_EVIDENCE_URI_PATTERNS = {
     "migration-and-lifecycle-matrix": r"^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/database-lifecycle\.json$",
     "exact-ledger-soak": r"^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/exact-ledger-soak\.json$",
     "backup-restore": r"^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/backup-restore\.json$",
-    "local-evidence-binding": r"^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/local-evidence-binding\.json$",
-    "hosted-gate-execution": r"^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/hosted-gate-execution\.json$",
+    "repository-governance": r"^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/repository-governance\.json$",
+    "hosted-run-execution": r"^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/hosted-run-execution\.json$",
 }
 ACTIVE_STATUSES = ("draft", "candidate")
 EXPECTED_EVIDENCE = (
@@ -64,8 +64,8 @@ EXPECTED_EVIDENCE = (
     "migration-and-lifecycle-matrix",
     "exact-ledger-soak",
     "backup-restore",
-    "local-evidence-binding",
-    "hosted-gate-execution",
+    "repository-governance",
+    "hosted-run-execution",
 )
 EXTERNAL_GATES = (
     "X1: production-like backup and restore rehearsal against representative data volume and the real storage topology",
@@ -77,6 +77,24 @@ EXTERNAL_GATES = (
     "X7: legal, commercial or provider approvals where the production integration requires them",
     "X8: final human go/no-go decision bound to the immutable release candidate",
 )
+REQUIRED_ROOT_FIELDS = {
+    "schema",
+    "status",
+    "project_id",
+    "release_id",
+    "generated_at",
+    "qualification_scope",
+    "production_ready",
+    "production_authorization",
+    "source",
+    "dependencies",
+    "database",
+    "build",
+    "evidence",
+    "approvals",
+    "external_gates",
+    "revocation",
+}
 
 
 def run(command: list[str]) -> subprocess.CompletedProcess[str]:
@@ -122,7 +140,9 @@ def validate_active_head(path: Path) -> list[str]:
             "active v12 manifest status must be draft or candidate; "
             "released/revoked lifecycle states are not implemented"
         )
-    if data.get("revocation") is not None:
+    if "revocation" not in data:
+        problems.append("manifest revocation field is required")
+    elif data.get("revocation") is not None:
         problems.append("active v12 manifest revocation must be null")
     return problems
 
@@ -134,6 +154,21 @@ def nested(value: Any, *keys: str) -> Any:
             return None
         current = current.get(key)
     return current
+
+
+def validate_schema_object(
+    schema: dict[str, Any], path: tuple[str, ...], required: set[str], problems: list[str]
+) -> None:
+    value = nested(schema, *path)
+    label = ".".join(path) or "$"
+    if not isinstance(value, dict):
+        problems.append(f"JSON Schema object is missing: {label}")
+        return
+    if value.get("additionalProperties") is not False:
+        problems.append(f"JSON Schema {label}.additionalProperties must be false")
+    actual = value.get("required")
+    if not isinstance(actual, list) or set(actual) != required or len(actual) != len(required):
+        problems.append(f"JSON Schema {label}.required fields are not exact")
 
 
 def conditional(schema: dict[str, Any], status: str) -> dict[str, Any] | None:
@@ -171,6 +206,19 @@ def validate_schema_contract(path: Path = SCHEMA) -> list[str]:
     schema, problems = read_object(path, "release manifest JSON Schema")
     if schema is None:
         return problems
+
+    validate_schema_object(schema, (), REQUIRED_ROOT_FIELDS, problems)
+    for object_path, required in (
+        (("properties", "source"), {"repository", "branch", "commit_sha", "tree_sha"}),
+        (("properties", "dependencies"), {"cargo_lock_sha256"}),
+        (("properties", "database"), {"migration_head", "migration_sha256", "migration_chain_sha256"}),
+        (("properties", "build"), {"workflow_run_id", "artifacts", "images", "sbom", "provenance"}),
+        (("properties", "external_gates"), {"status", "items"}),
+        (("$defs", "digestedArtifact"), {"name", "uri", "sha256"}),
+        (("$defs", "evidenceItem"), {"name", "status", "uri", "sha256", "waiver"}),
+        (("$defs", "approval"), {"role", "actor", "decision", "decided_at", "scope"}),
+    ):
+        validate_schema_object(schema, object_path, required, problems)
 
     status_values = nested(schema, "properties", "status", "enum")
     if status_values != list(ACTIVE_STATUSES):
@@ -420,6 +468,22 @@ def self_test() -> list[str]:
     ):
         if re.fullmatch(CANONICAL_BRANCH_PATTERN, value) is not None:
             failures.append(f"canonical branch pattern accepted invalid value {value!r}")
+
+    # The schema and both CLI validators must fail closed when a required
+    # lifecycle field is silently removed.  ``dict.get`` would otherwise make
+    # a missing nullable revocation field indistinguishable from an explicit
+    # null.
+    with tempfile.TemporaryDirectory(prefix="cex-required-field-") as directory:
+        path = Path(directory) / "manifest.json"
+        minimal = {
+            "status": "candidate",
+            "database": {"migration_head": ACTIVE_MIGRATION_HEAD},
+            "revocation": None,
+        }
+        minimal.pop("revocation")
+        path.write_text(json.dumps(minimal), encoding="utf-8")
+        if not validate_active_head(path):
+            failures.append("missing revocation field was accepted")
 
     uri_patterns = (
         (

@@ -107,14 +107,14 @@
       "waiver": null
     },
     {
-      "name": "local-evidence-binding",
+      "name": "repository-governance",
       "status": "pending",
       "uri": null,
       "sha256": null,
       "waiver": null
     },
     {
-      "name": "hosted-gate-execution",
+      "name": "hosted-run-execution",
       "status": "pending",
       "uri": null,
       "sha256": null,

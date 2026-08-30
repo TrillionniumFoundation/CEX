@@ -95,6 +95,9 @@ The final candidate sequence is:
 6. report actual branch/ruleset enforcement without inference;
 7. stop at repository qualification unless every external production gate has independent evidence.
 
+The qualification trigger and committed freeze sequence must remain synchronized; a stale or
+missing freeze is a fail-closed repository wiring error, not a reason to infer qualification.
+
 A later commit, including a documentation-only commit, creates a new tree and must be requalified.
 
 ## 4. External production gates remain upstream blockers

@@ -871,6 +871,11 @@ def collect(args: argparse.Namespace) -> int:
         "workflow_run_id": args.run_id,
         "workflow_run_attempt": run_attempt,
         "payload_name": canonical_payload_name(args.sha, run_attempt),
+        # The aggregate upload step supplies the immutable artifact digest
+        # later.  The strict manifest command fills this field before final
+        # context binding; leaving it explicit prevents a missing digest from
+        # being mistaken for an optional value.
+        "payload_digest": None,
         "server_url": args.server_url,
         "generated_at": utc_now(),
         "cargo_lock_sha256": cargo_sha256,

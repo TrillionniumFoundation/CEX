@@ -92,6 +92,9 @@ def main() -> int:
         raise SystemExit("no numbered migrations found for integrity attestation")
     workflow_paths = [ROOT / path for path in authority["authoritative_workflows"]]
     workflow_paths.append(ROOT / authority["aggregate_release_workflow"])
+    freeze_path = authority.get("qualification_freeze")
+    if not isinstance(freeze_path, str) or not (ROOT / freeze_path).is_file():
+        raise SystemExit("development authority qualification freeze is missing")
 
     record = {
         "schema": "cex.repository-integrity.v1",
@@ -117,6 +120,7 @@ def main() -> int:
             "authoritative_workflows": digest_set(workflow_paths),
             "canonical_documents": digest_set(canonical),
             "candidate_trigger": sha256_file(ROOT / authority["shared_trigger"]),
+            "qualification_freeze": sha256_file(ROOT / freeze_path),
             "root_readme_observed_only": (
                 sha256_file(ROOT / "readme.md")
                 if (ROOT / "readme.md").is_file()

@@ -213,9 +213,15 @@ do not replace representative-volume disaster recovery or sustained production q
 
 The static plan defines required evidence but does not embed candidate run IDs. Writing run IDs back
 into this file would create a new commit and invalidate the very exact-SHA evidence being cited.
-Instead, `scripts/p0-release-evidence.py` produces the evidence ledger and candidate manifest inside
-the `p0-release-candidate-gate` run. The manifest must contain the final run IDs, conclusions and
-hashes and must pass `scripts/check-release-baseline-manifest.py` without template mode.
+Instead, `scripts/p0-release-evidence-strict.py` (backed by the immutable
+`scripts/p0-release-evidence-core.py` collector) produces the evidence ledger and candidate manifest
+inside the `p0-release-candidate-gate` run. The manifest must contain the final run IDs, exact
+attempt/job execution attestations, conclusions and hashes and must pass
+`scripts/check-release-baseline-manifest.py` without template mode.
+The strict contract also binds each hosted URI to the collector's final run/context snapshot,
+binds every local evidence digest to the payload index, and re-hashes the payload directory at
+manifest time. A swapped run ID, stale attestation digest, post-upload file mutation, missing
+required field or stale qualification freeze therefore fails closed.
 
 | Evidence | Required state | Binding location |
 |---|---|---|
@@ -248,6 +254,10 @@ Repository-actionable gaps are closed only when all of the following are true on
 9. the generated candidate manifest contains no placeholder and its evidence payload digest,
    SBOM and provenance all validate;
 10. actual branch/ruleset enforcement state is reported without fabrication.
+
+The committed `docs/release-evidence/.qualification-freeze` is checked against the candidate
+trigger sequence and explicit `production_authorization=not_granted`; it is a consistency control,
+not an authorization to deploy.
 
 Even after repository closure, the release remains **not production-ready** until every external
 gate in Section 5 is independently satisfied and the final go/no-go approval is recorded.

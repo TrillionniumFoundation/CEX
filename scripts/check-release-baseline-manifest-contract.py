@@ -31,8 +31,8 @@ BASE_EVIDENCE_ORDER = (
     "backup-restore",
 )
 ATTESTATIONS = {
-    "local-evidence-binding": "local-evidence-binding.json",
-    "hosted-gate-execution": "hosted-gate-execution.json",
+    "repository-governance": "repository-governance.json",
+    "hosted-run-execution": "hosted-run-execution.json",
 }
 EXPECTED_EVIDENCE_ORDER = BASE_EVIDENCE_ORDER + tuple(ATTESTATIONS)
 EXTERNAL_GATES = (

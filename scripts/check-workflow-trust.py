@@ -33,6 +33,12 @@ WRAPPER_MARKERS = {
         "bind-p0-local-evidence.py",
         "check-hosted-gate-execution.py",
     ),
+    "scripts/p0-release-evidence-strict.py": (
+        "p0-release-evidence-core.py",
+        "verify-hosted-run-execution.py",
+        "repository-governance.json",
+        "hosted-run-execution.json",
+    ),
 }
 CORE_PATHS = {
     "scripts/check-p0-release-candidate-hygiene-core.py",
