@@ -19,7 +19,11 @@
         "migrations/0086_add_trnm_native_receipt_evidence.sql",
         "migrations/0087_add_term_exchange_receipt_event_history.sql"
       ],
-      "verification": ["scripts/check-p0-migrations.py", "scripts/check-p0-migrations-postgres.sh"],
+      "verification": [
+        "scripts/check-p0-migrations.py",
+        "scripts/check-p0-migrations-postgres.sh",
+        "scripts/check-term-exchange-receipt-partial-upgrade-postgres.sh"
+      ],
       "gates": [".github/workflows/p0-migration-gate.yml"]
     },
     {

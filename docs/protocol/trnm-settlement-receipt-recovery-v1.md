@@ -38,7 +38,7 @@ CEX computes and stores this hash before applying the economic effect. The hash 
 
 Hash equality is necessary but not sufficient. Lookup also decodes the durable bytes back into `EconomicIntent`, applies `EconomicIntent::validate`, requires the decoded intent ID to equal the requested ID, decodes the receipt as `EconomicReceipt`, applies `EconomicReceipt::validate_for`, and requires both backend identity fields to remain the canonical CEX values (`cex-settlement-backend` and `cex`). This prevents a byte-consistent but semantically malformed intent, mismatched status/progression pair, or cross-backend receipt from becoming recovery authority.
 
-The native writer and migration 0086 fail closed when a compatibility intent carries a missing or negative `amount_credits`: the immutable intent bytes remain unchanged, while receipt evidence records zero. Lookup applies the same `max(0)` evidence rule, so those retained rows remain readable without converting the invalid amount into value authority.
+The native writer and migration 0086 fail closed when a compatibility intent carries a missing, explicit-`null`, or negative `amount_credits`: the immutable intent bytes remain unchanged, while receipt evidence records zero. Lookup applies the same `max(0)` evidence rule, so those retained rows remain readable without converting the invalid amount into value authority. An omitted key is eligible for the legacy evidence fallback only during the 0086 compatibility backfill; an explicit JSON `null` is treated as an invalid present value and can never authorize positive evidence.
 
 ## Success response
 

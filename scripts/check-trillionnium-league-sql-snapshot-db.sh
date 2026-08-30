@@ -3,10 +3,60 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+# Preserve caller-supplied credentials before importing the repository env.  An
+# explicit PGPASSWORD is the conventional override; otherwise a password in
+# DATABASE_URL is authoritative and must not be replaced by a stale `.env`
+# value when the Docker fallback is used.
+SNAPSHOT_CALLER_PGPASSWORD="${PGPASSWORD-}"
+SNAPSHOT_CALLER_PGPASSWORD_SET=0
+if [[ ${PGPASSWORD+x} ]]; then
+  SNAPSHOT_CALLER_PGPASSWORD_SET=1
+fi
+SNAPSHOT_CALLER_CEX_PASSWORD="${CEX_POSTGRES_PASSWORD-}"
+SNAPSHOT_CALLER_CEX_PASSWORD_SET=0
+if [[ ${CEX_POSTGRES_PASSWORD+x} ]]; then
+  SNAPSHOT_CALLER_CEX_PASSWORD_SET=1
+fi
+SNAPSHOT_PSQL_PASSWORD=""
+SNAPSHOT_DOCKER_PASSWORD=""
+# Preserve an explicitly supplied URL while importing the repository's local
+# defaults.  The helper's .env loader otherwise replaces a CI/operator target.
+SNAPSHOT_CALLER_DATABASE_URL="${DATABASE_URL-}"
+SNAPSHOT_CALLER_DATABASE_URL_SET=0
+if [[ ${DATABASE_URL+x} ]]; then
+  SNAPSHOT_CALLER_DATABASE_URL_SET=1
+fi
 # shellcheck source=scripts/_dev-helpers.sh
 source "$SCRIPT_DIR/_dev-helpers.sh"
 
 cex_load_env
+if [[ "$SNAPSHOT_CALLER_DATABASE_URL_SET" == "1" ]]; then
+  export DATABASE_URL="$SNAPSHOT_CALLER_DATABASE_URL"
+fi
+cex_sync_postgres_env_from_database_url "$(cex_effective_database_url)"
+# Keep an explicit caller PGPASSWORD authoritative.  When it was not set and
+# the URI embeds a password, discard any value imported from `.env`; libpq
+# otherwise prefers PGPASSWORD over the URI credential.
+if [[ "$SNAPSHOT_CALLER_PGPASSWORD_SET" == "1" ]]; then
+  export PGPASSWORD="$SNAPSHOT_CALLER_PGPASSWORD"
+elif [[ "$SNAPSHOT_CALLER_CEX_PASSWORD_SET" == "1" \
+        || "${CEX_DATABASE_URL_PASSWORD_PRESENT:-0}" == "1" ]]; then
+  unset PGPASSWORD
+fi
+if [[ "$SNAPSHOT_CALLER_PGPASSWORD_SET" == "1" ]]; then
+  SNAPSHOT_PSQL_PASSWORD="$SNAPSHOT_CALLER_PGPASSWORD"
+  SNAPSHOT_DOCKER_PASSWORD="$SNAPSHOT_CALLER_PGPASSWORD"
+elif [[ "${CEX_DATABASE_URL_PASSWORD_PRESENT:-0}" == "1" ]]; then
+  # Local libpq reads the URI password directly; Docker's socket form needs
+  # the decoded value explicitly.
+  SNAPSHOT_DOCKER_PASSWORD="${CEX_POSTGRES_PASSWORD:-}"
+elif [[ "$SNAPSHOT_CALLER_CEX_PASSWORD_SET" == "1" ]]; then
+  SNAPSHOT_PSQL_PASSWORD="$SNAPSHOT_CALLER_CEX_PASSWORD"
+  SNAPSHOT_DOCKER_PASSWORD="$SNAPSHOT_CALLER_CEX_PASSWORD"
+else
+  SNAPSHOT_PSQL_PASSWORD="${CEX_POSTGRES_PASSWORD:-}"
+  SNAPSHOT_DOCKER_PASSWORD="$SNAPSHOT_PSQL_PASSWORD"
+fi
 
 SNAPSHOT_PATH="${1:-$PROJECT_ROOT/run/linux-runtime/entry-config/league-state-snapshot.sql}"
 if [[ ! -f "$SNAPSHOT_PATH" ]]; then
@@ -15,32 +65,80 @@ if [[ ! -f "$SNAPSHOT_PATH" ]]; then
 fi
 
 TMP_DB="${CEX_SQL_SNAPSHOT_TMP_DB:-cex_snapshot_check_$(date +%s)_$$}"
-if [[ ! "$TMP_DB" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+if [[ ! "$TMP_DB" =~ ^[A-Za-z_][A-Za-z0-9_]*$ || ${#TMP_DB} -gt 63 ]]; then
   echo "unsafe temp database name: $TMP_DB" >&2
   exit 1
 fi
 
 BASE_URL="$(cex_effective_database_url)"
-if [[ "$BASE_URL" != *"127.0.0.1"* && "$BASE_URL" != *"localhost"* && "${CEX_ALLOW_NONLOCAL_SNAPSHOT_DB_CHECK:-0}" != "1" ]]; then
-  if ! cex_can_use_docker_postgres; then
-    echo "refusing non-local DATABASE_URL for snapshot DB check: $BASE_URL" >&2
-    echo "set CEX_ALLOW_NONLOCAL_SNAPSHOT_DB_CHECK=1 only for an isolated disposable database" >&2
-    exit 1
-  fi
+if ! cex_postgres_host_is_local && [[ "${CEX_ALLOW_NONLOCAL_SNAPSHOT_DB_CHECK:-0}" != "1" ]]; then
+  echo "refusing non-local DATABASE_URL for snapshot DB check (credentials redacted)" >&2
+  echo "set CEX_ALLOW_NONLOCAL_SNAPSHOT_DB_CHECK=1 only for an isolated disposable database" >&2
+  exit 1
 fi
+
+docker_psql() {
+  local database="$1"
+  shift
+  local -a args
+  if [[ "${CEX_POSTGRES_HOST:-}" != "127.0.0.1" \
+        && "${CEX_POSTGRES_HOST:-}" != "localhost" \
+        && "${CEX_POSTGRES_HOST:-}" != "::1" ]]; then
+    # Preserve an explicitly selected remote target instead of silently
+    # connecting to the container's local PostgreSQL socket.
+    args=(psql "$(cex_database_url_for_database "$database" "$BASE_URL")" -X -v ON_ERROR_STOP=1)
+  else
+    args=(psql -U "$CEX_POSTGRES_USER" -d "$database" -X -v ON_ERROR_STOP=1)
+  fi
+  if [[ -n "$SNAPSHOT_DOCKER_PASSWORD" \
+        || "${CEX_DATABASE_URL_PASSWORD_PRESENT:-0}" == "1" \
+        || "$SNAPSHOT_CALLER_PGPASSWORD_SET" == "1" \
+        || "$SNAPSHOT_CALLER_CEX_PASSWORD_SET" == "1" ]]; then
+    cex_docker exec -e "PGPASSWORD=$SNAPSHOT_DOCKER_PASSWORD" \
+      "$CEX_POSTGRES_CONTAINER_NAME" "${args[@]}" "$@"
+  else
+    cex_docker exec "$CEX_POSTGRES_CONTAINER_NAME" "${args[@]}" "$@"
+  fi
+}
+
+docker_psql_stdin() {
+  local database="$1"
+  shift
+  local -a args
+  if [[ "${CEX_POSTGRES_HOST:-}" != "127.0.0.1" \
+        && "${CEX_POSTGRES_HOST:-}" != "localhost" \
+        && "${CEX_POSTGRES_HOST:-}" != "::1" ]]; then
+    args=(psql "$(cex_database_url_for_database "$database" "$BASE_URL")" -X -v ON_ERROR_STOP=1)
+  else
+    args=(psql -U "$CEX_POSTGRES_USER" -d "$database" -X -v ON_ERROR_STOP=1)
+  fi
+  if [[ -n "$SNAPSHOT_DOCKER_PASSWORD" \
+        || "${CEX_DATABASE_URL_PASSWORD_PRESENT:-0}" == "1" \
+        || "$SNAPSHOT_CALLER_PGPASSWORD_SET" == "1" \
+        || "$SNAPSHOT_CALLER_CEX_PASSWORD_SET" == "1" ]]; then
+    cex_docker exec -i -e "PGPASSWORD=$SNAPSHOT_DOCKER_PASSWORD" \
+      "$CEX_POSTGRES_CONTAINER_NAME" "${args[@]}" "$@"
+  else
+    cex_docker exec -i "$CEX_POSTGRES_CONTAINER_NAME" "${args[@]}" "$@"
+  fi
+}
 
 cex_wait_postgres 60 1 >/dev/null
 
 run_admin_sql() {
   local sql="$1"
   if cex_has_local_psql; then
-    local admin_url="${BASE_URL%/*}/postgres"
-    PGPASSWORD="$CEX_POSTGRES_PASSWORD" psql "$admin_url" -v ON_ERROR_STOP=1 -c "$sql"
+    local admin_url
+    admin_url="$(cex_database_url_for_database postgres "$BASE_URL")"
+    if [[ -n "$SNAPSHOT_PSQL_PASSWORD" ]]; then
+      PGPASSWORD="$SNAPSHOT_PSQL_PASSWORD" psql "$admin_url" -v ON_ERROR_STOP=1 -c "$sql"
+    else
+      psql "$admin_url" -v ON_ERROR_STOP=1 -c "$sql"
+    fi
     return 0
   fi
   if cex_can_use_docker_postgres; then
-    cex_docker exec "$CEX_POSTGRES_CONTAINER_NAME" \
-      psql -U "$CEX_POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 -c "$sql"
+    docker_psql postgres -c "$sql"
     return 0
   fi
   echo "no usable postgres client found" >&2
@@ -50,13 +148,17 @@ run_admin_sql() {
 run_tmp_file() {
   local file="$1"
   if cex_has_local_psql; then
-    local tmp_url="${BASE_URL%/*}/$TMP_DB"
-    PGPASSWORD="$CEX_POSTGRES_PASSWORD" psql "$tmp_url" -v ON_ERROR_STOP=1 -f "$file"
+    local tmp_url
+    tmp_url="$(cex_database_url_for_database "$TMP_DB" "$BASE_URL")"
+    if [[ -n "$SNAPSHOT_PSQL_PASSWORD" ]]; then
+      PGPASSWORD="$SNAPSHOT_PSQL_PASSWORD" psql "$tmp_url" -v ON_ERROR_STOP=1 -f "$file"
+    else
+      psql "$tmp_url" -v ON_ERROR_STOP=1 -f "$file"
+    fi
     return 0
   fi
   if cex_can_use_docker_postgres; then
-    cex_docker exec -i "$CEX_POSTGRES_CONTAINER_NAME" \
-      psql -U "$CEX_POSTGRES_USER" -d "$TMP_DB" -v ON_ERROR_STOP=1 -f - < "$file"
+    docker_psql_stdin "$TMP_DB" -f - < "$file"
     return 0
   fi
   echo "no usable postgres client found" >&2
@@ -66,13 +168,17 @@ run_tmp_file() {
 run_tmp_sql() {
   local sql="$1"
   if cex_has_local_psql; then
-    local tmp_url="${BASE_URL%/*}/$TMP_DB"
-    PGPASSWORD="$CEX_POSTGRES_PASSWORD" psql "$tmp_url" -v ON_ERROR_STOP=1 -c "$sql"
+    local tmp_url
+    tmp_url="$(cex_database_url_for_database "$TMP_DB" "$BASE_URL")"
+    if [[ -n "$SNAPSHOT_PSQL_PASSWORD" ]]; then
+      PGPASSWORD="$SNAPSHOT_PSQL_PASSWORD" psql "$tmp_url" -v ON_ERROR_STOP=1 -c "$sql"
+    else
+      psql "$tmp_url" -v ON_ERROR_STOP=1 -c "$sql"
+    fi
     return 0
   fi
   if cex_can_use_docker_postgres; then
-    cex_docker exec "$CEX_POSTGRES_CONTAINER_NAME" \
-      psql -U "$CEX_POSTGRES_USER" -d "$TMP_DB" -v ON_ERROR_STOP=1 -c "$sql"
+    docker_psql "$TMP_DB" -c "$sql"
     return 0
   fi
   echo "no usable postgres client found" >&2

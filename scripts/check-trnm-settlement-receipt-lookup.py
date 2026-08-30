@@ -77,6 +77,13 @@ def main() -> int:
     )
     require(
         problems,
+        "left join lateral" in module_sql
+        and "native_event_present" in module_sql
+        and "native_event.present is true" in module_sql,
+        "lookup does not keep the latest native receipt id/json pair from one row",
+    )
+    require(
+        problems,
         "from public.trnm_economic_receipts where intent_id = $1" in module_sql,
         "lookup does not retain the 0027 compatibility receipt fallback",
     )
@@ -121,6 +128,10 @@ def main() -> int:
         (
             "typed_intent_receipt_and_backend_binding_fail_closed",
             "lookup lacks typed intent/receipt/backend corruption coverage",
+        ),
+        (
+            "native_event_pair_never_falls_back_to_legacy_columns",
+            "lookup lacks regression coverage for native row pair integrity",
         ),
     ):
         require(problems, marker in module, message)

@@ -2,9 +2,52 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# Preserve caller-supplied credentials before importing the repository env.  A
+# URI password is authoritative for the selected disposable database unless an
+# explicit PGPASSWORD override was supplied.
+TRNM_CROSS_CALLER_PGPASSWORD="${PGPASSWORD-}"
+TRNM_CROSS_CALLER_PGPASSWORD_SET=0
+if [[ ${PGPASSWORD+x} ]]; then
+  TRNM_CROSS_CALLER_PGPASSWORD_SET=1
+fi
+TRNM_CROSS_CALLER_CEX_PASSWORD="${CEX_POSTGRES_PASSWORD-}"
+TRNM_CROSS_CALLER_CEX_PASSWORD_SET=0
+if [[ ${CEX_POSTGRES_PASSWORD+x} ]]; then
+  TRNM_CROSS_CALLER_CEX_PASSWORD_SET=1
+fi
+# `_dev-helpers.sh` imports all assignments from `.env`, including
+# DATABASE_URL.  Preserve an explicit caller URL so a cross-process evidence
+# run cannot silently inspect the repository's local cex_ai database instead
+# of the disposable database selected by the operator or CI job.
+TRNM_CROSS_PROCESS_CALLER_DATABASE_URL="${DATABASE_URL-}"
+TRNM_CROSS_PROCESS_CALLER_DATABASE_URL_SET=0
+if [[ ${DATABASE_URL+x} ]]; then
+  TRNM_CROSS_PROCESS_CALLER_DATABASE_URL_SET=1
+fi
 # shellcheck source=scripts/_dev-helpers.sh
 source "$SCRIPT_DIR/_dev-helpers.sh"
 cex_load_env
+if [[ "$TRNM_CROSS_PROCESS_CALLER_DATABASE_URL_SET" == "1" ]]; then
+  export DATABASE_URL="$TRNM_CROSS_PROCESS_CALLER_DATABASE_URL"
+fi
+cex_sync_postgres_env_from_database_url "$(cex_effective_database_url)"
+# Preserve caller semantics across the env-file import.  An env-file
+# PGPASSWORD must not shadow an explicit password embedded in DATABASE_URL.
+if [[ "$TRNM_CROSS_CALLER_PGPASSWORD_SET" == "1" ]]; then
+  export PGPASSWORD="$TRNM_CROSS_CALLER_PGPASSWORD"
+elif [[ "$TRNM_CROSS_CALLER_CEX_PASSWORD_SET" == "1" \
+        || "${CEX_DATABASE_URL_PASSWORD_PRESENT:-0}" == "1" ]]; then
+  unset PGPASSWORD
+fi
+if [[ "$TRNM_CROSS_CALLER_PGPASSWORD_SET" == "1" ]]; then
+  export CEX_POSTGRES_PASSWORD="$TRNM_CROSS_CALLER_PGPASSWORD"
+elif [[ "${CEX_DATABASE_URL_PASSWORD_PRESENT:-0}" == "1" ]]; then
+  # cex_sync_postgres_env_from_database_url already installed the decoded URI
+  # password in CEX_POSTGRES_PASSWORD.
+  :
+elif [[ "$TRNM_CROSS_CALLER_CEX_PASSWORD_SET" == "1" ]]; then
+  export CEX_POSTGRES_PASSWORD="$TRNM_CROSS_CALLER_CEX_PASSWORD"
+fi
 
 LEDGER_URL="${LEDGER_BASE_URL:-http://127.0.0.1:7002}"
 CONSUMER_URL="${CONSUMER_ENTRY_BASE_URL:-http://127.0.0.1:8090}"
@@ -15,6 +58,17 @@ WORK_DIR="$(mktemp -d /tmp/cex-trnm-cross-process.XXXXXX)"
 CURRENT_PHASE="bootstrap"
 PLAYER_SESSION=""
 trap 'echo "cross-process E2E failed in phase ${CURRENT_PHASE} at line ${LINENO}" >&2' ERR
+cleanup() {
+  # The work directory contains authenticated response bodies (including
+  # replay receipts and, on some deployments, session-adjacent metadata).  Do
+  # not leave those artifacts behind after either a passing or failing drill.
+  if [[ "${CEX_KEEP_TRNM_CROSS_PROCESS_TMP:-0}" == "1" ]]; then
+    echo "keeping cross-process diagnostics at $WORK_DIR" >&2
+  else
+    rm -rf -- "$WORK_DIR" || true
+  fi
+}
+trap cleanup EXIT
 
 post_ledger() {
   local path="$1"

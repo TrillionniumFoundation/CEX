@@ -151,6 +151,9 @@ def validate_action_pin_checker() -> None:
         ),
         ("docker://ghcr.io/example/image@sha256:" + "c" * 64, True),
         ("actions/checkout@v4", False),
+        ("actions/checkout@latest", False),
+        ("actions/checkout@develop", False),
+        ("actions/checkout@refs/heads/main", False),
         ("owner/repository/.github/workflows/reusable.yml@main", False),
         ("docker://alpine:3.20", False),
         ("docker://ghcr.io/example/image@sha256:abc", False),
@@ -277,6 +280,14 @@ if release_content:
     if "release evidence requires a branch ref" not in release_content:
         PROBLEMS.append(
             f"{RELEASE_WORKFLOW} lacks the explicit branch-ref fail-closed guard"
+        )
+    if "scripts/check-term-exchange-receipt-partial-upgrade-postgres.sh" not in release_content:
+        PROBLEMS.append(
+            f"{RELEASE_WORKFLOW} must execute the term-exchange partial-upgrade regression"
+        )
+    if "term-exchange-receipt-partial-upgrade-regression" not in release_content:
+        PROBLEMS.append(
+            f"{RELEASE_WORKFLOW} lifecycle evidence omits the term-exchange partial-upgrade regression"
         )
 
 numbered: list[tuple[int, str]] = []

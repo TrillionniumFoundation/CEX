@@ -9,7 +9,6 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use term_exchange_protocol::{
     EconomicIntent, EconomicReceipt, SettlementBackendKind, CEX_SETTLEMENT_BACKEND_ID,
-    TERM_EXCHANGE_PROTOCOL_VERSION,
 };
 
 use crate::state::AppState;
@@ -49,6 +48,7 @@ struct ReceiptLookupErrorDetail {
 struct StoredReceiptBinding {
     payload_hash: Option<String>,
     intent_json: Option<Value>,
+    native_event_present: bool,
     receipt_id: Option<String>,
     receipt_json: Option<Value>,
 }
@@ -165,32 +165,48 @@ pub async fn get_trnm_economic_receipt_by_intent(
         return LookupFailure::DatabaseUnavailable.into_response();
     };
 
-    let row = sqlx::query_as::<_, (Option<String>, Option<Value>, Option<String>, Option<Value>)>(
+    let row = sqlx::query_as::<
+        _,
+        (
+            Option<String>,
+            Option<Value>,
+            bool,
+            Option<String>,
+            Option<Value>,
+        ),
+    >(
         "select
              (select payload_hash from public.trnm_economic_intents where intent_id = $1),
              (select intent_json from public.trnm_economic_intents where intent_id = $1),
-             coalesce(
-                 (select e.receipt_id
-                    from public.trnm_economic_receipt_events_v1 e
-                   where e.intent_id = $1
-                   order by e.event_sequence desc, e.event_id desc
-                   limit 1),
-                 (select receipt_id from public.trnm_economic_receipts where intent_id = $1)
-             ),
-             coalesce(
-                 (select e.receipt_json
-                    from public.trnm_economic_receipt_events_v1 e
-                   where e.intent_id = $1
-                   order by e.event_sequence desc, e.event_id desc
-                   limit 1),
-                 (select receipt_json from public.trnm_economic_receipts where intent_id = $1)
-             )",
+             coalesce(native_event.present, false) as native_event_present,
+             case
+                 when native_event.present is true then native_event.receipt_id
+                 else legacy_receipt.receipt_id
+             end as receipt_id,
+             case
+                 when native_event.present is true then native_event.receipt_json
+                 else legacy_receipt.receipt_json
+             end as receipt_json
+          from (select 1) as lookup_anchor
+          left join lateral (
+              select true as present, e.receipt_id, e.receipt_json
+                from public.trnm_economic_receipt_events_v1 e
+               where e.intent_id = $1
+               order by e.event_sequence desc, e.event_id desc
+               limit 1
+          ) as native_event on true
+          left join lateral (
+              select receipt_id, receipt_json
+                from public.trnm_economic_receipts
+               where intent_id = $1
+               limit 1
+          ) as legacy_receipt on native_event.present is not true",
     )
     .bind(&query.intent_id)
     .fetch_one(pool)
     .await;
 
-    let (payload_hash, intent_json, receipt_id, receipt_json) = match row {
+    let (payload_hash, intent_json, native_event_present, receipt_id, receipt_json) = match row {
         Ok(row) => row,
         Err(_) => return LookupFailure::DatabaseUnavailable.into_response(),
     };
@@ -201,6 +217,7 @@ pub async fn get_trnm_economic_receipt_by_intent(
         StoredReceiptBinding {
             payload_hash,
             intent_json,
+            native_event_present,
             receipt_id,
             receipt_json,
         },
@@ -218,16 +235,24 @@ fn resolve_binding(
     let StoredReceiptBinding {
         payload_hash,
         intent_json,
+        native_event_present,
         receipt_id,
         receipt_json,
     } = binding;
 
-    if payload_hash.is_none()
+    if !native_event_present
+        && payload_hash.is_none()
         && intent_json.is_none()
         && receipt_id.is_none()
         && receipt_json.is_none()
     {
         return Err(LookupFailure::NotFound);
+    }
+    // A native event is one immutable row authority.  Never combine a
+    // partially-corrupt native row with a compatibility projection column;
+    // doing so could make an old receipt appear valid under a new event id.
+    if native_event_present && receipt_id.is_none() && receipt_json.is_none() {
+        return Err(LookupFailure::CorruptBinding);
     }
 
     let stored_hash = payload_hash.ok_or(LookupFailure::CorruptBinding)?;
@@ -347,7 +372,7 @@ mod tests {
         http::Request,
     };
     use serde_json::json;
-    use term_exchange_protocol::ReceiptStatus;
+    use term_exchange_protocol::{ReceiptStatus, TERM_EXCHANGE_PROTOCOL_VERSION};
     use tower::ServiceExt;
 
     fn stored_binding_with_amount(
@@ -390,6 +415,7 @@ mod tests {
             StoredReceiptBinding {
                 payload_hash: Some(payload_hash),
                 intent_json: Some(intent_json),
+                native_event_present: false,
                 receipt_id: Some(receipt.receipt_id.clone()),
                 receipt_json: Some(serde_json::to_value(receipt).expect("receipt fixture")),
             },
@@ -434,55 +460,38 @@ mod tests {
     #[test]
     fn negative_legacy_amount_uses_same_fail_closed_evidence_amount_as_writer() {
         let intent_id = "world:negative-legacy-amount";
-        let (payload_hash, binding) = stored_binding_with_amount(
-            intent_id,
-            -25,
-            0,
-            ReceiptStatus::SkippedZeroReward,
-        );
+        let (payload_hash, binding) =
+            stored_binding_with_amount(intent_id, -25, 0, ReceiptStatus::SkippedZeroReward);
         let result = resolve_binding(intent_id, &payload_hash, binding)
             .expect("negative legacy amount evidence must remain readable");
-        assert_eq!(
-            result.receipt.evidence["amount_credits"].as_i64(),
-            Some(0)
-        );
+        assert_eq!(result.receipt.evidence["amount_credits"].as_i64(), Some(0));
     }
 
     #[test]
     fn typed_intent_receipt_and_backend_binding_fail_closed() {
         let (payload_hash, mut progression_mismatch) = stored_binding("progression-mismatch");
-        progression_mismatch
-            .receipt_json
-            .as_mut()
-            .expect("receipt")["progression_class"] = json!("recoverable_hold");
+        progression_mismatch.receipt_json.as_mut().expect("receipt")["progression_class"] =
+            json!("recoverable_hold");
         assert_eq!(
-            resolve_binding(
-                "progression-mismatch",
-                &payload_hash,
-                progression_mismatch
-            )
-            .unwrap_err(),
+            resolve_binding("progression-mismatch", &payload_hash, progression_mismatch)
+                .unwrap_err(),
             LookupFailure::CorruptBinding
         );
 
         let (payload_hash, mut wrong_backend) = stored_binding("wrong-backend");
-        wrong_backend.receipt_json.as_mut().expect("receipt")["backend_id"] =
-            json!("not-cex");
+        wrong_backend.receipt_json.as_mut().expect("receipt")["backend_id"] = json!("not-cex");
         assert_eq!(
             resolve_binding("wrong-backend", &payload_hash, wrong_backend).unwrap_err(),
             LookupFailure::CorruptBinding
         );
 
-        let (mut payload_hash, mut malformed_intent) = stored_binding("malformed-intent");
-        malformed_intent.intent_json.as_mut().expect("intent")["domain"] =
-            json!("not-trnm-game");
-        payload_hash =
+        let (_, mut malformed_intent) = stored_binding("malformed-intent");
+        malformed_intent.intent_json.as_mut().expect("intent")["domain"] = json!("not-trnm-game");
+        let payload_hash =
             sha256_json(malformed_intent.intent_json.as_ref().expect("intent")).expect("hash");
         malformed_intent.payload_hash = Some(payload_hash.clone());
-        malformed_intent
-            .receipt_json
-            .as_mut()
-            .expect("receipt")["evidence"]["payload_hash"] = json!(payload_hash.clone());
+        malformed_intent.receipt_json.as_mut().expect("receipt")["evidence"]["payload_hash"] =
+            json!(payload_hash.clone());
         assert_eq!(
             resolve_binding("malformed-intent", &payload_hash, malformed_intent).unwrap_err(),
             LookupFailure::CorruptBinding
@@ -494,6 +503,7 @@ mod tests {
         let empty = StoredReceiptBinding {
             payload_hash: None,
             intent_json: None,
+            native_event_present: false,
             receipt_id: None,
             receipt_json: None,
         };
@@ -531,6 +541,18 @@ mod tests {
         binding.receipt_json.as_mut().expect("receipt")["intent_id"] = json!("other");
         assert_eq!(
             resolve_binding("wrong-receipt", &payload_hash, binding).unwrap_err(),
+            LookupFailure::CorruptBinding
+        );
+    }
+
+    #[test]
+    fn native_event_pair_never_falls_back_to_legacy_columns() {
+        let (payload_hash, mut binding) = stored_binding("native-pair-corrupt");
+        binding.native_event_present = true;
+        binding.receipt_id = None;
+        binding.receipt_json = None;
+        assert_eq!(
+            resolve_binding("native-pair-corrupt", &payload_hash, binding).unwrap_err(),
             LookupFailure::CorruptBinding
         );
     }

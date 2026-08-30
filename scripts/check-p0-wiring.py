@@ -187,6 +187,15 @@ def verify_core() -> None:
 
 
 def verify_exact_contracts() -> None:
+    require_text(
+        "scripts/_dev-helpers.sh",
+        "cex_sync_postgres_env_from_database_url",
+        "CEX_POSTGRES_PASSWORD",
+        # The helper quotes the assignment so passwords containing shell
+        # metacharacters remain literal.  Keep the contract tied to that
+        # actual invocation rather than a brittle unquoted substring.
+        'PGPASSWORD="$CEX_POSTGRES_PASSWORD"',
+    )
     # The normalized runtime probe must honor an explicitly supplied
     # DATABASE_URL even though it loads the repository's .env for the rest of
     # its local defaults.  Keep this contract visible to the static gate so a
@@ -198,6 +207,51 @@ def verify_exact_contracts() -> None:
         "cex_load_env",
         'if [[ \"$NORMALIZED_RUNTIME_CALLER_DATABASE_URL_SET\" == \"1\" ]]; then',
         'export DATABASE_URL=\"$NORMALIZED_RUNTIME_CALLER_DATABASE_URL\"',
+        "cex_sync_postgres_env_from_database_url",
+        "cex_database_url_for_database",
+    )
+    # The native TRNM evidence scripts also load the repository `.env`, so
+    # their explicit database target must survive that convenience import.
+    # Keep the preservation contract machine-checked alongside the normalized
+    # runtime probe; otherwise a local `.env` can silently redirect a gate.
+    require_text(
+        "scripts/check-trnm-economy-disaster-recovery.sh",
+        "TRNM_DR_CALLER_DATABASE_URL=\"${DATABASE_URL-}\"",
+        "TRNM_DR_CALLER_DATABASE_URL_SET=0",
+        "cex_load_env",
+        'if [[ \"$TRNM_DR_CALLER_DATABASE_URL_SET\" == \"1\" ]]; then',
+        'export DATABASE_URL=\"$TRNM_DR_CALLER_DATABASE_URL\"',
+        "cex_sync_postgres_env_from_database_url",
+    )
+    require_text(
+        "scripts/check-trnm-native-economy-cross-process.sh",
+        "TRNM_CROSS_PROCESS_CALLER_DATABASE_URL=\"${DATABASE_URL-}\"",
+        "TRNM_CROSS_PROCESS_CALLER_DATABASE_URL_SET=0",
+        "cex_load_env",
+        'if [[ \"$TRNM_CROSS_PROCESS_CALLER_DATABASE_URL_SET\" == \"1\" ]]; then',
+        'export DATABASE_URL=\"$TRNM_CROSS_PROCESS_CALLER_DATABASE_URL\"',
+        "cex_sync_postgres_env_from_database_url",
+    )
+    require_text(
+        "scripts/check-trillionnium-league-sql-snapshot-db.sh",
+        "SNAPSHOT_CALLER_DATABASE_URL=\"${DATABASE_URL-}\"",
+        "SNAPSHOT_CALLER_DATABASE_URL_SET=0",
+        'export DATABASE_URL=\"$SNAPSHOT_CALLER_DATABASE_URL\"',
+        "cex_sync_postgres_env_from_database_url",
+        "cex_database_url_for_database",
+    )
+    # The partial-upgrade fixture is also invoked with hosted/CI URLs.  It
+    # must preserve that URL while importing container defaults, retain URI
+    # query options, and honor embedded credentials in the Docker fallback.
+    require_text(
+        "scripts/check-term-exchange-receipt-partial-upgrade-postgres.sh",
+        "RECEIPT_CALLER_DATABASE_URL=\"${DATABASE_URL-}\"",
+        "RECEIPT_CALLER_DATABASE_URL_SET=0",
+        'export DATABASE_URL=\"$RECEIPT_CALLER_DATABASE_URL\"',
+        "RECEIPT_DB_URI_TEMPLATE",
+        "urlunsplit",
+        "RECEIPT_DOCKER_PSQL_PASSWORD",
+        "docker_psql_stdin",
     )
     require_text(
         "crates/shared-types/src/ledger_v2.rs",
@@ -329,6 +383,8 @@ def verify_gates_and_plan() -> None:
         "scripts/p0-release-evidence.py collect",
         "scripts/check-p0-exact-ledger-soak-postgres.sh",
         "scripts/check-p0-backup-restore-postgres.sh",
+        "scripts/check-term-exchange-receipt-partial-upgrade-postgres.sh",
+        "term-exchange-receipt-partial-upgrade-regression",
         "scripts/check-development-docs.py",
         "scripts/check-repository-integrity.py",
         "scripts/check-hepta-postgres-integration.sh --mode recovery-only",

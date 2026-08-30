@@ -156,6 +156,11 @@ jobs:
       - name: TRNM response-loss receipt recovery
         run: bash scripts/check-trnm-settlement-receipt-lookup-http.sh
 
+      - name: Term Exchange receipt partial-upgrade regression
+        run: |
+          bash scripts/check-term-exchange-receipt-partial-upgrade-postgres.sh \
+            | tee "$CEX_P0_EVIDENCE_DIR/term-exchange-receipt-partial-upgrade.log"
+
       - name: Record database lifecycle matrix
         shell: bash
         run: |
@@ -183,6 +188,7 @@ jobs:
                   "provider-unknown-outcome-reconciliation",
                   "hepta-postgres-restart-and-lease-recovery",
                   "trnm-settlement-receipt-response-loss-recovery",
+                  "term-exchange-receipt-partial-upgrade-regression",
               ],
           }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
           PY

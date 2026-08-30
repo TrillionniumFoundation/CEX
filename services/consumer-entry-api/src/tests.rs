@@ -1945,7 +1945,9 @@ fn native_receipt_amount_backfill_prefers_immutable_evidence_over_default_zero()
     assert!(migration.contains("e.amount_credits is distinct from chosen.amount_credits"));
     assert!(migration.contains("if parsed_value < 0 then"));
     assert!(migration.contains("return null;"));
-    assert!(migration.contains("r.receipt_json #>> '{evidence,amount_credits}'"));
+    assert!(migration.contains("r.receipt_json #> '{evidence,amount_credits}'"));
+    assert!(migration.contains("cex_trnm_nonnegative_jsonb_bigint_or_null_v1"));
+    assert!(migration.contains("evidence_amount_present"));
     assert!(migration.contains("as resolved_amount"));
     assert!(migration.contains("normalized_rows.normalized_receipt_json"));
     let backfill_sql = migration

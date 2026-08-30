@@ -2,9 +2,55 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# Preserve caller-supplied credentials before importing the repository env.  A
+# URI password must remain authoritative for Docker socket commands unless the
+# operator explicitly supplied PGPASSWORD.
+TRNM_DR_CALLER_PGPASSWORD="${PGPASSWORD-}"
+TRNM_DR_CALLER_PGPASSWORD_SET=0
+if [[ ${PGPASSWORD+x} ]]; then
+  TRNM_DR_CALLER_PGPASSWORD_SET=1
+fi
+TRNM_DR_CALLER_CEX_PASSWORD="${CEX_POSTGRES_PASSWORD-}"
+TRNM_DR_CALLER_CEX_PASSWORD_SET=0
+if [[ ${CEX_POSTGRES_PASSWORD+x} ]]; then
+  TRNM_DR_CALLER_CEX_PASSWORD_SET=1
+fi
+# Keep an explicit operator/CI database URL authoritative while still loading
+# the repository defaults for tokens and service endpoints.  `_dev-helpers.sh`
+# intentionally imports every assignment from `.env`; without this guard a
+# local `.env` would silently redirect a disposable recovery drill to cex_ai.
+TRNM_DR_CALLER_DATABASE_URL="${DATABASE_URL-}"
+TRNM_DR_CALLER_DATABASE_URL_SET=0
+if [[ ${DATABASE_URL+x} ]]; then
+  TRNM_DR_CALLER_DATABASE_URL_SET=1
+fi
 # shellcheck source=scripts/_dev-helpers.sh
 source "$SCRIPT_DIR/_dev-helpers.sh"
 cex_load_env
+if [[ "$TRNM_DR_CALLER_DATABASE_URL_SET" == "1" ]]; then
+  export DATABASE_URL="$TRNM_DR_CALLER_DATABASE_URL"
+fi
+cex_sync_postgres_env_from_database_url "$(cex_effective_database_url)"
+# `PGPASSWORD` has higher precedence than a URI in libpq.  Do not let an
+# unrelated value loaded from `.env` override the caller-selected URL.
+if [[ "$TRNM_DR_CALLER_PGPASSWORD_SET" == "1" ]]; then
+  export PGPASSWORD="$TRNM_DR_CALLER_PGPASSWORD"
+elif [[ "$TRNM_DR_CALLER_CEX_PASSWORD_SET" == "1" \
+        || "${CEX_DATABASE_URL_PASSWORD_PRESENT:-0}" == "1" ]]; then
+  unset PGPASSWORD
+fi
+if [[ "$TRNM_DR_CALLER_PGPASSWORD_SET" == "1" ]]; then
+  TRNM_DR_DOCKER_PASSWORD="$TRNM_DR_CALLER_PGPASSWORD"
+elif [[ "${CEX_DATABASE_URL_PASSWORD_PRESENT:-0}" == "1" ]]; then
+  TRNM_DR_DOCKER_PASSWORD="${CEX_POSTGRES_PASSWORD:-}"
+elif [[ "$TRNM_DR_CALLER_CEX_PASSWORD_SET" == "1" ]]; then
+  TRNM_DR_DOCKER_PASSWORD="$TRNM_DR_CALLER_CEX_PASSWORD"
+else
+  TRNM_DR_DOCKER_PASSWORD="${CEX_POSTGRES_PASSWORD:-}"
+fi
+# `cex_psql_stdin` is used for the primary-database probes below.  Keep its
+# Docker/local credential view aligned with the same precedence decision.
+export CEX_POSTGRES_PASSWORD="$TRNM_DR_DOCKER_PASSWORD"
 
 ADMIN_TOKEN="${LEDGER_ADMIN_TOKEN:-${IDENTITY_ADMIN_TOKEN:?ledger admin token required}}"
 PRIMARY_URL="${LEDGER_BASE_URL:-http://127.0.0.1:7002}"
@@ -14,22 +60,72 @@ RESTORE_DB="cex_trnm_restore_${RANDOM}_$$"
 WORK_DIR="$(mktemp -d /tmp/cex-trnm-dr.XXXXXX)"
 SECONDARY_PID=""
 CURRENT_PHASE="bootstrap"
+
+# This drill intentionally uses the repository's Docker PostgreSQL instance
+# for both the source and restored databases.  A remote URI cannot be safely
+# represented by the socket-oriented commands below; refusing it prevents a
+# hosted target from being silently replaced by (or mixed with) a local
+# container.  Use a dedicated local disposable instance for this gate.
+if ! cex_postgres_host_is_local; then
+  echo "refusing non-local DATABASE_URL for TRNM economy DR check (Docker-local drill; credentials redacted)" >&2
+  exit 1
+fi
+if ! cex_can_use_docker_postgres; then
+  echo "TRNM economy DR check requires a usable Docker PostgreSQL container" >&2
+  exit 1
+fi
+
+TRNM_DR_DOCKER_PASSWORD_SET=0
+if [[ -n "$TRNM_DR_DOCKER_PASSWORD" \
+      || "$TRNM_DR_CALLER_PGPASSWORD_SET" == "1" \
+      || "$TRNM_DR_CALLER_CEX_PASSWORD_SET" == "1" \
+      || "${CEX_DATABASE_URL_PASSWORD_PRESENT:-0}" == "1" ]]; then
+  TRNM_DR_DOCKER_PASSWORD_SET=1
+fi
+
+trnm_dr_docker_exec() {
+  if [[ "$TRNM_DR_DOCKER_PASSWORD_SET" == "1" ]]; then
+    cex_docker exec -e "PGPASSWORD=$TRNM_DR_DOCKER_PASSWORD" "$@"
+  else
+    cex_docker exec "$@"
+  fi
+}
+
+if [[ ! "$RESTORE_DB" =~ ^[A-Za-z_][A-Za-z0-9_]*$ || ${#RESTORE_DB} -gt 63 ]]; then
+  echo "unsafe TRNM economy DR restore database name: $RESTORE_DB" >&2
+  exit 1
+fi
+
 cleanup() {
-  [[ -z "$SECONDARY_PID" ]] || kill "$SECONDARY_PID" >/dev/null 2>&1 || true
-  cex_docker exec "$CEX_POSTGRES_CONTAINER_NAME" dropdb -U "$CEX_POSTGRES_USER" --if-exists "$RESTORE_DB" >/dev/null 2>&1 || true
-  rm -rf "$WORK_DIR"
+  if [[ -n "$SECONDARY_PID" ]]; then
+    kill "$SECONDARY_PID" >/dev/null 2>&1 || true
+    wait "$SECONDARY_PID" >/dev/null 2>&1 || true
+    SECONDARY_PID=""
+  fi
+  trnm_dr_docker_exec "$CEX_POSTGRES_CONTAINER_NAME" dropdb -U "$CEX_POSTGRES_USER" \
+    --if-exists "$RESTORE_DB" >/dev/null 2>&1 || true
+  rm -rf -- "$WORK_DIR" || true
 }
 trap 'status=$?; if [[ $status -ne 0 ]]; then echo "TRNM economy DR gate failed in phase $CURRENT_PHASE" >&2; fi; cleanup; exit $status' EXIT
 
 CURRENT_PHASE="logical-backup"
-cex_docker exec "$CEX_POSTGRES_CONTAINER_NAME" \
+trnm_dr_docker_exec \
+  "$CEX_POSTGRES_CONTAINER_NAME" \
   pg_dump -U "$CEX_POSTGRES_USER" -d "$CEX_POSTGRES_DB" --format=custom \
     --table=organizations --table=accounts --table=ledger_entries \
     --table='trnm_*' >"$WORK_DIR/cex.dump"
 test -s "$WORK_DIR/cex.dump"
-cex_docker exec "$CEX_POSTGRES_CONTAINER_NAME" createdb -U "$CEX_POSTGRES_USER" "$RESTORE_DB"
-cex_docker exec -i "$CEX_POSTGRES_CONTAINER_NAME" \
-  pg_restore -U "$CEX_POSTGRES_USER" -d "$RESTORE_DB" --no-owner --no-privileges <"$WORK_DIR/cex.dump"
+trnm_dr_docker_exec \
+  "$CEX_POSTGRES_CONTAINER_NAME" createdb -U "$CEX_POSTGRES_USER" "$RESTORE_DB"
+if [[ "$TRNM_DR_DOCKER_PASSWORD_SET" == "1" ]]; then
+  cex_docker exec -i -e "PGPASSWORD=$TRNM_DR_DOCKER_PASSWORD" \
+    "$CEX_POSTGRES_CONTAINER_NAME" \
+    pg_restore -U "$CEX_POSTGRES_USER" -d "$RESTORE_DB" --no-owner --no-privileges <"$WORK_DIR/cex.dump"
+else
+  cex_docker exec -i \
+    "$CEX_POSTGRES_CONTAINER_NAME" \
+    pg_restore -U "$CEX_POSTGRES_USER" -d "$RESTORE_DB" --no-owner --no-privileges <"$WORK_DIR/cex.dump"
+fi
 
 CURRENT_PHASE="restore-parity"
 primary_counts="$(cex_psql_stdin -Atc "select json_build_object(
@@ -39,13 +135,25 @@ primary_counts="$(cex_psql_stdin -Atc "select json_build_object(
   'receipt_event_intents',(select count(distinct intent_id) from trnm_economic_receipt_events_v1),
   'escrows',(select count(*) from trnm_escrow_trades),
   'identities',(select count(*) from trnm_player_identities));")"
-restored_counts="$(cex_docker exec "$CEX_POSTGRES_CONTAINER_NAME" psql -U "$CEX_POSTGRES_USER" -d "$RESTORE_DB" -Atc "select json_build_object(
+if [[ "$TRNM_DR_DOCKER_PASSWORD_SET" == "1" ]]; then
+  restored_counts="$(cex_docker exec -e "PGPASSWORD=$TRNM_DR_DOCKER_PASSWORD" \
+  "$CEX_POSTGRES_CONTAINER_NAME" psql -U "$CEX_POSTGRES_USER" -d "$RESTORE_DB" -Atc "select json_build_object(
   'intents',(select count(*) from trnm_economic_intents),
   'receipts',(select count(*) from trnm_economic_receipts),
   'receipt_events',(select count(*) from trnm_economic_receipt_events_v1),
   'receipt_event_intents',(select count(distinct intent_id) from trnm_economic_receipt_events_v1),
   'escrows',(select count(*) from trnm_escrow_trades),
   'identities',(select count(*) from trnm_player_identities));")"
+else
+  restored_counts="$(cex_docker exec \
+  "$CEX_POSTGRES_CONTAINER_NAME" psql -U "$CEX_POSTGRES_USER" -d "$RESTORE_DB" -Atc "select json_build_object(
+  'intents',(select count(*) from trnm_economic_intents),
+  'receipts',(select count(*) from trnm_economic_receipts),
+  'receipt_events',(select count(*) from trnm_economic_receipt_events_v1),
+  'receipt_event_intents',(select count(distinct intent_id) from trnm_economic_receipt_events_v1),
+  'escrows',(select count(*) from trnm_escrow_trades),
+  'identities',(select count(*) from trnm_player_identities));")"
+fi
 jq -e --argjson restored "$restored_counts" '. == $restored' <<<"$primary_counts" >/dev/null
 
 ledger_binary="$CEX_PROJECT_ROOT/target/release/ledger-service"
