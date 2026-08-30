@@ -13,11 +13,21 @@ import argparse
 import hashlib
 import json
 import os
+import sys
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+from evidence_safe_io import (  # noqa: E402
+    SafeIOError,
+    read_json_nofollow,
+    write_json_nofollow,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 GIT_SHA_RE = __import__("re").compile(r"^[0-9a-f]{40}$")
@@ -402,7 +412,10 @@ def main() -> int:
         raise SystemExit("GITHUB_TOKEN is required")
     context_path = args.context if args.context.is_absolute() else ROOT / args.context
     output_path = args.output if args.output.is_absolute() else ROOT / args.output
-    context = json.loads(context_path.read_text(encoding="utf-8"))
+    try:
+        context = read_json_nofollow(context_path, label="release context")
+    except SafeIOError as error:
+        raise SystemExit(str(error)) from error
     if not isinstance(context, dict):
         raise SystemExit("release context must be an object")
 
@@ -490,8 +503,10 @@ def main() -> int:
         "verified_at": utc_now(),
         "gates": gate_records,
     }
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    try:
+        write_json_nofollow(output_path, result)
+    except SafeIOError as error:
+        raise SystemExit(str(error)) from error
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 

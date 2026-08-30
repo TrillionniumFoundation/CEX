@@ -15,7 +15,11 @@ ACTIVE_PLAN = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"
 ACTIVE_ADDENDUM = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md"
 DOC_CHECKER = "scripts/check-development-docs.py"
 SHARED_TRIGGER = "docs/release-evidence/p0-candidate-trigger.json"
-QUALIFICATION_FREEZE = "docs/release-evidence/.qualification-freeze"
+# Retain the historical symbol for callers of this checker, but the shared
+# trigger is the sole candidate-freeze authority.  A separate side marker can
+# drift without retriggering the exact-tree workflows and is rejected by the
+# candidate-hygiene wrapper.
+QUALIFICATION_FREEZE = SHARED_TRIGGER
 MIGRATION_HEAD = "0087_add_term_exchange_receipt_event_history.sql"
 AUTHORITATIVE_WORKFLOWS = (
     ".github/workflows/p0-migration-gate.yml",
@@ -138,33 +142,11 @@ def verify_candidate_trigger() -> None:
     if trigger.get("production_authorization") != "not_granted":
         PROBLEMS.append("candidate trigger must explicitly deny production authorization")
 
-    freeze_raw = read_text(QUALIFICATION_FREEZE)
-    if not freeze_raw:
-        return
-    freeze: dict[str, str] = {}
-    for line_number, line in enumerate(freeze_raw.splitlines(), start=1):
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if "=" not in stripped:
-            PROBLEMS.append(f"qualification freeze line {line_number} is not key=value")
-            continue
-        key, value = stripped.split("=", 1)
-        if key in freeze:
-            PROBLEMS.append(f"qualification freeze repeats key: {key}")
-        freeze[key] = value
-    if set(freeze) != {"sequence", "production_authorization"}:
-        PROBLEMS.append(
-            "qualification freeze must contain exactly sequence and production_authorization"
-        )
-    try:
-        freeze_sequence = int(freeze.get("sequence", "0"))
-    except ValueError:
-        freeze_sequence = 0
-    if not isinstance(trigger.get("sequence"), int) or freeze_sequence != trigger.get("sequence"):
-        PROBLEMS.append("qualification freeze sequence must equal candidate trigger sequence")
-    if freeze.get("production_authorization") != "not_granted":
-        PROBLEMS.append("qualification freeze must explicitly deny production authorization")
+    # `p0-candidate-trigger.json` is itself the freeze record.  Do not read a
+    # second key=value marker: a duplicated marker creates an avoidable TOCTOU
+    # surface and can claim a different sequence than the workflows observe.
+    if not isinstance(trigger.get("sequence"), int) or trigger["sequence"] < 1:
+        PROBLEMS.append("sole candidate trigger sequence must be positive")
 
 
 def verify_core() -> None:
@@ -317,7 +299,26 @@ def verify_exact_contracts() -> None:
     )
     require_text(
         "scripts/check-p0-backup-restore-postgres.sh",
+        "source \"$SCRIPT_DIR/_dev-helpers.sh\"",
+        "cex_load_env",
+        "cex_sync_postgres_env_from_database_url",
         "cex_database_url_for_database",
+        "BASE_URL_SAFE=",
+        "postgres_client_mode=\"host\"",
+        "cex_can_use_docker_postgres",
+        "cex_postgres_host_is_local",
+        "cex_postgres_docker_socket_is_target",
+        "docker_base_url_safe",
+        "run_psql",
+        "run_pg_dump",
+        "run_pg_restore_list",
+        "run_pg_restore",
+        "run_docker_exec_stdin",
+        "run_docker_exec pg_dump --dbname=\"$docker_url\"",
+        "run_docker_exec_stdin pg_restore --dbname=\"$docker_url\"",
+        "pg_restore --list <\"$dump_file\" >\"$list_file\"",
+        "cex_docker_exec_with_password",
+        "cex_docker_exec_with_password_stdin",
         "run_with_postgres_password",
         "trap cleanup EXIT",
     )
@@ -606,6 +607,23 @@ def verify_release_evidence_self_test() -> None:
             "strict release-evidence wiring self-test failed: "
             + strict.stdout.strip()
         )
+    freshness = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts/verify-hosted-snapshot-freshness.py"),
+            "--self-test",
+        ],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    if freshness.returncode != 0:
+        PROBLEMS.append(
+            "hosted snapshot freshness self-test failed: "
+            + freshness.stdout.strip()
+        )
 
 
 def verify_development_documents() -> None:
@@ -638,6 +656,22 @@ def verify_gates_and_plan() -> None:
         "lacks a valid exact tree_sha",
         "def revalidate_gate_runs(",
         "release-evidence core self-test failed",
+    )
+    require_text(
+        "scripts/p0-release-evidence-strict.py",
+        "frozen_runs_from_attestation",
+        "run_core_collect_frozen(",
+        "immutable core attempted to select hosted runs more than once",
+        "The hosted checker is the sole latest-run selector",
+    )
+    require_text(
+        "scripts/verify-hosted-snapshot-freshness.py",
+        "cex.hosted-gate-selection-binding.v1",
+        "latest_authoritative_run_is_binding",
+        "latest_run_states",
+        "paged_collection",
+        "read_json_nofollow",
+        "read_regular_nofollow",
     )
     for producer in (
         "scripts/check-hepta-postgres-integration.sh",
@@ -677,9 +711,9 @@ def verify_gates_and_plan() -> None:
         "gh://TrillionniumFoundation/CEX/actions/runs/[1-9][0-9]*/attempts/[1-9][0-9]*",
     )
     require_text(
-        QUALIFICATION_FREEZE,
-        "sequence=",
-        "production_authorization=not_granted",
+        SHARED_TRIGGER,
+        '"sequence":',
+        '"production_authorization": "not_granted"',
     )
     require_text(
         ".github/workflows/rust-service-gate.yml",
@@ -744,6 +778,10 @@ def verify_gates_and_plan() -> None:
         "scripts/test-trnm-economy-settlement-status-negative.py",
         "scripts/test-runtime-profile-wiring.sh",
         SHARED_TRIGGER,
+        "Revalidate frozen latest hosted snapshot after exact-job verification",
+        "Revalidate frozen latest hosted snapshot before manifest",
+        "Revalidate frozen latest hosted snapshot after manifest publication",
+        "python3 scripts/verify-hosted-snapshot-freshness.py",
     )
     require_text(
         ACTIVE_PLAN,

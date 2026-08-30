@@ -18,7 +18,11 @@ EXPECTED_ADDENDUM = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADD
 EXPECTED_MIGRATION_HEAD = "0087_add_term_exchange_receipt_event_history.sql"
 EXPECTED_REPOSITORY_QUALIFICATION_RESULT = "PENDING_EXACT_SHA_HOSTED_EVIDENCE"
 EXPECTED_REPOSITORY_QUALIFICATION_AUTHORITY = "generated_candidate_manifest_only"
-QUALIFICATION_FREEZE = "docs/release-evidence/.qualification-freeze"
+SHARED_TRIGGER = "docs/release-evidence/p0-candidate-trigger.json"
+# Keep the historical field name in the authority record for schema
+# compatibility, but bind it to the one shared trigger.  A second freeze
+# marker would be able to drift without retriggering the authoritative gates.
+QUALIFICATION_FREEZE = SHARED_TRIGGER
 EXPECTED_REQUIREMENTS = {
     "V12-A",
     "V12-B",
@@ -124,7 +128,10 @@ def validate_authority() -> dict[str, Any]:
     ):
         require_path(authority.get(key), f"authority.{key}")
     if authority.get("qualification_freeze") != QUALIFICATION_FREEZE:
-        PROBLEMS.append("authority qualification_freeze is not the committed v12 freeze path")
+        PROBLEMS.append(
+            "authority qualification_freeze must point at the shared candidate trigger; "
+            "no secondary freeze marker is authoritative"
+        )
 
     workflows = authority.get("authoritative_workflows")
     if not isinstance(workflows, list) or len(workflows) != 5:

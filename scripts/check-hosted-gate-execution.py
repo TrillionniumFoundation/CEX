@@ -7,12 +7,22 @@ import argparse
 import json
 import os
 import re
+import sys
 import time
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+from evidence_safe_io import (  # noqa: E402
+    SafeIOError,
+    read_json_nofollow,
+    write_json_nofollow,
+)
 
 REQUIRED_GATES: dict[str, dict[str, dict[str, Any]]] = {
     ".github/workflows/p0-migration-gate.yml": {
@@ -503,6 +513,166 @@ def self_test() -> list[str]:
     return failures
 
 
+def build_frozen_attestation(
+    execution_path: Path,
+    context_path: Path,
+    *,
+    repository: str,
+    branch: str,
+    sha: str,
+    tree: str,
+) -> dict[str, Any]:
+    """Build an attestation from the collector's frozen run/job snapshot.
+
+    This is intentionally a separate path from :func:`select_runs`.  The
+    strict wrapper has already selected and revalidated the latest
+    authoritative runs, and ``verify-hosted-run-execution.py`` has queried the
+    exact attempts.  A second latest-run poll here would re-open the race that
+    the strict payload contract is designed to close.
+    """
+
+    try:
+        execution = read_json_nofollow(execution_path, label="frozen hosted execution")
+        context = read_json_nofollow(context_path, label="frozen release context")
+    except SafeIOError as error:
+        raise SystemExit(str(error)) from error
+    if not isinstance(execution, dict) or not isinstance(context, dict):
+        raise SystemExit("frozen hosted execution/context must be JSON objects")
+    if execution.get("schema") != "cex.hosted-run-execution-verification.v1":
+        raise SystemExit("frozen hosted execution has an unexpected schema")
+    if execution.get("status") != "ok" or execution.get("ok") is not True:
+        raise SystemExit("frozen hosted execution is not successful")
+    for field, expected in (
+        ("repository", repository),
+        ("branch", branch),
+        ("commit_sha", sha),
+        ("tree_sha", tree),
+    ):
+        if execution.get(field) != expected:
+            raise SystemExit(f"frozen hosted execution {field} differs from candidate")
+
+    expected_gate_names = {Path(path).stem for path in REQUIRED_GATES}
+    context_gates = context.get("hosted_gates")
+    execution_gates = execution.get("gates")
+    if not isinstance(context_gates, dict) or set(context_gates) != expected_gate_names:
+        raise SystemExit("frozen release context hosted gate set is invalid")
+    if not isinstance(execution_gates, dict) or set(execution_gates) != expected_gate_names:
+        raise SystemExit("frozen hosted execution gate set is invalid")
+
+    summaries: dict[str, Any] = {}
+    for workflow_path, expected_jobs in REQUIRED_GATES.items():
+        gate_name = Path(workflow_path).stem
+        context_gate = context_gates.get(gate_name)
+        execution_gate = execution_gates.get(gate_name)
+        if not isinstance(context_gate, dict) or not isinstance(execution_gate, dict):
+            raise SystemExit(f"frozen hosted gate record is invalid: {gate_name}")
+        if context_gate.get("workflow_path") != workflow_path:
+            raise SystemExit(f"frozen hosted gate {gate_name} workflow path is invalid")
+        if execution_gate.get("workflow_path") != workflow_path:
+            raise SystemExit(
+                f"frozen hosted gate {gate_name} verifier workflow path is invalid"
+            )
+        for field in (
+            "repository",
+            "branch",
+            "head_branch",
+            "head_sha",
+            "event",
+            "run_id",
+            "run_attempt",
+            "created_at",
+            "updated_at",
+        ):
+            if execution_gate.get(field) != context_gate.get(field):
+                raise SystemExit(
+                    f"frozen hosted gate {gate_name} {field} differs from context"
+                )
+        # The core run-list record uses GitHub's run status/conclusion pair
+        # (``completed``/``success``), while the execution verifier's compact
+        # gate record uses ``status: success`` to mean that the exact jobs
+        # passed.  Bind the two representations explicitly instead of
+        # comparing unlike vocabularies.
+        if context_gate.get("status") != "completed" or context_gate.get("conclusion") != "success":
+            raise SystemExit(f"frozen hosted gate {gate_name} is not a completed success")
+        if execution_gate.get("status") != "success":
+            raise SystemExit(f"frozen hosted gate {gate_name} verifier status is invalid")
+        run_id = as_int(context_gate.get("run_id"))
+        run_attempt = as_int(context_gate.get("run_attempt"))
+        if run_id <= 0 or run_attempt <= 0:
+            raise SystemExit(f"frozen hosted gate {gate_name} has an invalid run identity")
+
+        normalized_jobs = execution_gate.get("jobs")
+        if not isinstance(normalized_jobs, list):
+            raise SystemExit(f"frozen hosted gate {gate_name} jobs are invalid")
+        raw_jobs: list[dict[str, Any]] = []
+        for normalized in normalized_jobs:
+            if not isinstance(normalized, dict):
+                raise SystemExit(f"frozen hosted gate {gate_name} contains an invalid job")
+            raw = dict(normalized)
+            # The execution verifier stores a normalized job record.  Restore
+            # the API field aliases expected by validate_job_set, preserving
+            # the exact IDs, labels and step records it already checked.
+            for field, expected in (
+                ("run_id", run_id),
+                ("run_attempt", run_attempt),
+                ("head_sha", sha),
+            ):
+                if field not in normalized or normalized.get(field) != expected:
+                    raise SystemExit(
+                        f"frozen hosted gate {gate_name} job {normalized.get('name')!r} "
+                        f"{field} is not bound to the frozen run"
+                    )
+            if "labels" not in normalized:
+                raise SystemExit(
+                    f"frozen hosted gate {gate_name} job {normalized.get('name')!r} lacks labels"
+                )
+            raw["id"] = normalized.get("job_id")
+            raw["labels"] = normalized.get("labels")
+            raw["run_id"] = normalized.get("run_id")
+            raw["run_attempt"] = normalized.get("run_attempt")
+            raw["head_sha"] = normalized.get("head_sha")
+            raw_jobs.append(raw)
+        problems, job_summaries = validate_job_set(
+            workflow_path,
+            expected_jobs,
+            raw_jobs,
+            sha=sha,
+            run_id=run_id,
+            run_attempt=run_attempt,
+        )
+        if problems:
+            raise SystemExit(
+                "frozen hosted gate execution evidence failed: "
+                + "; ".join(problems)
+            )
+        summaries[workflow_path] = {
+            "run_id": run_id,
+            "run_attempt": run_attempt,
+            "event": context_gate.get("event"),
+            "head_branch": context_gate.get("head_branch"),
+            "head_sha": context_gate.get("head_sha"),
+            "status": context_gate.get("status"),
+            "conclusion": context_gate.get("conclusion"),
+            "created_at": context_gate.get("created_at"),
+            "updated_at": context_gate.get("updated_at"),
+            "selection_policy": "latest_authoritative_run_is_binding",
+            "jobs": job_summaries,
+        }
+
+    return {
+        "schema": "cex.hosted-gate-execution.v1",
+        "status": "ok",
+        "ok": True,
+        "repository": repository,
+        "branch": branch,
+        "commit_sha": sha,
+        "tree_sha": tree,
+        "selection_policy": "latest_authoritative_run_is_binding",
+        "generated_at": utc_now(),
+        "gates": summaries,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repository", required=True)
@@ -510,6 +680,16 @@ def main() -> int:
     parser.add_argument("--sha", required=True)
     parser.add_argument("--tree", required=True)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--context",
+        type=Path,
+        help="frozen release context; required with --execution",
+    )
+    parser.add_argument(
+        "--execution",
+        type=Path,
+        help="verified exact-attempt execution JSON; disables run re-selection",
+    )
     args = parser.parse_args()
 
     failures = self_test()
@@ -519,6 +699,27 @@ def main() -> int:
         raise SystemExit("sha/tree must be 40-character lowercase Git object ids")
     if not args.branch or args.branch.startswith("refs/"):
         raise SystemExit("branch must be a canonical branch name")
+
+    if (args.execution is None) != (args.context is None):
+        raise SystemExit("--context and --execution must be supplied together")
+    if args.execution is not None and args.context is not None:
+        execution_path = args.execution if args.execution.is_absolute() else Path.cwd() / args.execution
+        context_path = args.context if args.context.is_absolute() else Path.cwd() / args.context
+        result = build_frozen_attestation(
+            execution_path,
+            context_path,
+            repository=args.repository,
+            branch=args.branch,
+            sha=args.sha,
+            tree=args.tree,
+        )
+        output = args.output if args.output.is_absolute() else Path.cwd() / args.output
+        try:
+            write_json_nofollow(output, result)
+        except SafeIOError as error:
+            raise SystemExit(str(error)) from error
+        print(output)
+        return 0
 
     attempts = int(os.environ.get("CEX_P0_GATE_POLL_ATTEMPTS", "360"))
     interval = int(os.environ.get("CEX_P0_GATE_POLL_INTERVAL_SECONDS", "15"))
@@ -596,9 +797,11 @@ def main() -> int:
         "generated_at": utc_now(),
         "gates": gate_summaries,
     }
-    output = args.output.resolve()
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output = args.output if args.output.is_absolute() else Path.cwd() / args.output
+    try:
+        write_json_nofollow(output, result)
+    except SafeIOError as error:
+        raise SystemExit(str(error)) from error
     print(output)
     return 0
 

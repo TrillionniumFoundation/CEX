@@ -133,7 +133,12 @@ def action_pin_problem(use: str) -> str | None:
         )
 
     action, separator, ref = use.rpartition("@")
-    if action and separator and PINNED_ACTION_REF.fullmatch(ref):
+    if (
+        action
+        and separator
+        and PINNED_ACTION_REF.fullmatch(ref)
+        and ref != "0" * 40
+    ):
         return None
     return f"{use}; external actions must use a 40-character lowercase commit SHA"
 
@@ -154,6 +159,7 @@ def validate_action_pin_checker() -> None:
         ("actions/checkout@latest", False),
         ("actions/checkout@develop", False),
         ("actions/checkout@refs/heads/main", False),
+        ("actions/checkout@" + "0" * 40, False),
         ("owner/repository/.github/workflows/reusable.yml@main", False),
         ("docker://alpine:3.20", False),
         ("docker://ghcr.io/example/image@sha256:abc", False),

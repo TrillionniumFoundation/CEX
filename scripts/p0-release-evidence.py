@@ -10,8 +10,20 @@ import sys
 from pathlib import Path
 from typing import Any
 
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+from evidence_safe_io import (  # noqa: E402
+    SafeIOError,
+    validate_directory_tree,
+    read_json_nofollow,
+    sha256_file_nofollow,
+    write_json_nofollow,
+)
+
 ROOT = Path(__file__).resolve().parents[1]
 CORE = ROOT / "scripts/p0-release-evidence-core.py"
+VERIFY_EXECUTION = ROOT / "scripts/verify-hosted-run-execution.py"
 LOCAL_BINDER = ROOT / "scripts/bind-p0-local-evidence.py"
 HOSTED_CHECKER = ROOT / "scripts/check-hosted-gate-execution.py"
 MANIFEST_VALIDATOR = ROOT / "scripts/check-release-baseline-manifest.py"
@@ -57,8 +69,8 @@ def run(command: list[str]) -> int:
 
 def read_json(path: Path, label: str) -> dict[str, Any]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+        value = read_json_nofollow(path, label=label)
+    except (SafeIOError, OSError, json.JSONDecodeError) as error:
         raise SystemExit(f"cannot read {label}: {error}") from error
     if not isinstance(value, dict):
         raise SystemExit(f"{label} must be a JSON object")
@@ -66,16 +78,56 @@ def read_json(path: Path, label: str) -> dict[str, Any]:
 
 
 def write_json(path: Path, value: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    try:
+        write_json_nofollow(path, value)
+    except SafeIOError as error:
+        raise SystemExit(str(error)) from error
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return "sha256:" + digest.hexdigest()
+    try:
+        return sha256_file_nofollow(path)
+    except SafeIOError as error:
+        raise SystemExit(str(error)) from error
+
+
+def refresh_payload_index(context_path: Path, evidence_dir: Path) -> None:
+    """Index attestations added after the core's initial payload snapshot.
+
+    The legacy wrapper used to invoke the collector twice, which could select
+    a different hosted rerun on the second pass.  Keep the compatibility entry
+    point single-pass as well: the core selects runs once, the verifier and
+    frozen checker append attestations, and this function only re-hashes the
+    resulting local directory.
+    """
+
+    if evidence_dir.is_symlink() or not evidence_dir.is_dir():
+        raise SystemExit("release evidence directory is not a real directory")
+    try:
+        validate_directory_tree(evidence_dir)
+    except SafeIOError as error:
+        raise SystemExit(str(error)) from error
+    context = read_json(context_path, "release context")
+    files: dict[str, str] = {}
+    for path in sorted(evidence_dir.rglob("*")):
+        if path.is_file() and path.name != "payload-index.json":
+            files[path.relative_to(evidence_dir).as_posix()] = sha256_file(path)
+    payload_index = {
+        "schema": "cex.p0-release-evidence-payload.v1",
+        "repository": context.get("repository"),
+        "branch": context.get("branch"),
+        "commit_sha": context.get("commit_sha"),
+        "tree_sha": context.get("tree_sha"),
+        "workflow_run_id": context.get("workflow_run_id"),
+        "workflow_run_attempt": context.get("workflow_run_attempt"),
+        "payload_name": context.get("payload_name"),
+        "generated_at": context.get("generated_at"),
+        "files": files,
+    }
+    write_json(evidence_dir / "payload-index.json", payload_index)
+    files["payload-index.json"] = sha256_file(evidence_dir / "payload-index.json")
+    context["files"] = files
+    write_json(context_path, context)
 
 
 def require_equal(actual: Any, expected: Any, label: str) -> None:
@@ -176,6 +228,10 @@ def bind_attestations(
         require_equal(files.get(relative), digest, f"release context.files[{relative!r}]")
         attestations[name] = {"path": relative, "sha256": digest}
     context["attestations"] = attestations
+    context["payload_only_attestations"] = {
+        "repository-governance.json": sha256_file(evidence_dir / "repository-governance.json"),
+        "hosted-run-execution.json": sha256_file(evidence_dir / "hosted-run-execution.json"),
+    }
     write_json(context_path, context)
 
 
@@ -245,6 +301,24 @@ def main() -> int:
             "--tree",
             common_values["tree"],
         ]
+    core_result = run([sys.executable, str(CORE), *arguments])
+    if core_result != 0:
+        return core_result
+
+    if command == "collect":
+        assert evidence_dir is not None and context_path is not None
+        execution_path = evidence_dir / "hosted-run-execution.json"
+        verifier = [
+            sys.executable,
+            str(VERIFY_EXECUTION),
+            "--context",
+            str(context_path),
+            "--output",
+            str(execution_path),
+        ]
+        if run(verifier) != 0:
+            return 1
+
         binder = [
             sys.executable,
             str(LOCAL_BINDER),
@@ -265,18 +339,17 @@ def main() -> int:
             sys.executable,
             str(HOSTED_CHECKER),
             *common,
+            "--context",
+            str(context_path),
+            "--execution",
+            str(execution_path),
             "--output",
             str(evidence_dir / ATTESTATION_EVIDENCE["hosted-gate-execution"]),
         ]
         if run(hosted) != 0:
             return 1
 
-    core_result = run([sys.executable, str(CORE), *arguments])
-    if core_result != 0:
-        return core_result
-
-    if command == "collect":
-        assert evidence_dir is not None and context_path is not None
+        refresh_payload_index(context_path, evidence_dir)
         bind_attestations(
             context_path=context_path,
             evidence_dir=evidence_dir,

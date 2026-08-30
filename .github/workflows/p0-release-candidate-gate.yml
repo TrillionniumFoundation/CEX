@@ -63,6 +63,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Resolve immutable source identity
         id: source
@@ -76,9 +77,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$CEX_P0_EVIDENCE_DIR"
           python3 scripts/check-p0-release-candidate-hygiene.py \
-            | tee "$CEX_P0_EVIDENCE_DIR/candidate-hygiene.json"
+            --output "$CEX_P0_EVIDENCE_DIR/candidate-hygiene.json"
 
       - name: Development-document authority and exact-tree integrity
         shell: bash
@@ -107,6 +107,7 @@ jobs:
           python3 scripts/check-trnm-economy-settlement-contract.py
           python3 scripts/test-trnm-economy-settlement-status-negative.py
           python3 scripts/check-strict-release-evidence-wiring.py
+          python3 scripts/test-p0-release-evidence-strict.py
           bash scripts/test-runtime-profile-wiring.sh
 
       - name: Fresh migration and P0 assertions
@@ -151,14 +152,17 @@ jobs:
         run: cargo build --locked -p ledger-service --bin ledger-service
 
       - name: TRNM response-loss receipt recovery
-        run: bash scripts/check-trnm-settlement-receipt-lookup-http.sh
+        env:
+          CEX_P0_EVIDENCE_DIR: run/p0-release-support
+        run: |
+          set -euo pipefail
+          bash scripts/check-trnm-settlement-receipt-lookup-http.sh
 
       - name: Term Exchange receipt partial-upgrade regression
         shell: bash
         run: |
           set -euo pipefail
-          bash scripts/check-term-exchange-receipt-partial-upgrade-postgres.sh \
-            | tee "$CEX_P0_EVIDENCE_DIR/term-exchange-receipt-partial-upgrade.log"
+          bash scripts/check-term-exchange-receipt-partial-upgrade-postgres.sh
 
       - name: Record database lifecycle matrix
         shell: bash
@@ -169,12 +173,13 @@ jobs:
           [[ "$CANDIDATE_TREE" =~ ^[0-9a-f]{40}$ ]]
           [[ "$CANDIDATE_TREE" == "$(git rev-parse 'HEAD^{tree}')" ]]
           python3 - "$CEX_P0_EVIDENCE_DIR/database-lifecycle.json" "$GITHUB_SHA" "$CANDIDATE_TREE" <<'PY'
-          import json
           from datetime import datetime, timezone
           from pathlib import Path
           import sys
+          sys.path.insert(0, str(Path.cwd() / "scripts"))
+          from evidence_safe_io import write_json_nofollow
 
-          Path(sys.argv[1]).write_text(json.dumps({
+          write_json_nofollow(Path(sys.argv[1]), {
               "schema": "cex.p0-database-lifecycle.v1",
               "ok": True,
               "commit_sha": sys.argv[2],
@@ -195,7 +200,7 @@ jobs:
                   "trnm-settlement-receipt-response-loss-recovery",
                   "term-exchange-receipt-partial-upgrade-regression",
               ],
-          }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          })
           PY
 
       - name: Bounded exact Ledger soak
@@ -248,6 +253,24 @@ jobs:
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --server-url "$GITHUB_SERVER_URL"
 
+      - name: Revalidate frozen latest hosted snapshot after exact-job verification
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/verify-hosted-snapshot-freshness.py \
+            --context run/p0-release-context.json
+
+      - name: Freeze immutable evidence payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/p0-release-evidence-strict.py freeze \
+            --context run/p0-release-context.json \
+            --evidence-dir "$CEX_P0_EVIDENCE_DIR" \
+            --payload-lock run/p0-release-payload.lock
+
       - name: Upload immutable evidence payload
         id: payload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -258,6 +281,15 @@ jobs:
           compression-level: 6
           retention-days: 90
 
+      - name: Revalidate frozen latest hosted snapshot before manifest
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/verify-hosted-snapshot-freshness.py \
+            --context run/p0-release-context.json
+
       - name: Generate and validate candidate manifest
         shell: bash
         env:
@@ -265,10 +297,10 @@ jobs:
           PAYLOAD_DIGEST: ${{ steps.payload.outputs.artifact-digest }}
         run: |
           set -euo pipefail
-          mkdir -p run/p0-release-manifest
           python3 scripts/p0-release-evidence-strict.py manifest \
             --context run/p0-release-context.json \
             --evidence-dir "$CEX_P0_EVIDENCE_DIR" \
+            --payload-lock run/p0-release-payload.lock \
             --output run/p0-release-manifest/cex-p0-candidate-manifest.json \
             --release-id "cex-p0-${GITHUB_SHA}" \
             --payload-name "cex-p0-evidence-${GITHUB_SHA}-attempt-${GITHUB_RUN_ATTEMPT}" \
@@ -288,6 +320,15 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 90
+
+      - name: Revalidate frozen latest hosted snapshot after manifest publication
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/verify-hosted-snapshot-freshness.py \
+            --context run/p0-release-context.json
 
       - name: Publish qualification summary
         shell: bash

@@ -43,8 +43,6 @@ if [[ ! -x "$ledger_binary" ]]; then
   echo "ledger binary is missing or not executable: $ledger_binary" >&2
   exit 66
 fi
-mkdir -p "$evidence_dir"
-
 start_ledger() {
   local bind_addr="$1"
   local database_url="$2"
@@ -401,10 +399,13 @@ python3 - \
   "$concurrent_hash" \
   "$started_at_epoch" \
   "$ended_at_epoch" \
-  "${GITHUB_SHA:-unknown}" <<'PY'
+  "${GITHUB_SHA:-unknown}" \
+  "$root" <<'PY'
 import json
 from pathlib import Path
 import sys
+sys.path.insert(0, str(Path(sys.argv[10]) / "scripts"))
+from evidence_safe_io import write_json_nofollow
 
 output = Path(sys.argv[1])
 database = json.loads(sys.argv[2])
@@ -438,7 +439,7 @@ payload = {
     "concurrent_intent_hash": sys.argv[6],
     "database": database,
 }
-output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+write_json_nofollow(output, payload)
 PY
 
 echo "TRNM settlement receipt lookup qualification passed: $evidence_dir/trnm-receipt-lookup.json"

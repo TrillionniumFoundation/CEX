@@ -15,8 +15,15 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/p0-release-candidate-gate.yml"
 STRICT_WRAPPER = ROOT / "scripts/p0-release-evidence-strict.py"
+CANONICAL_GENERATOR = ROOT / "scripts/p0-release-evidence.py"
+LOCAL_BINDER = ROOT / "scripts/bind-p0-local-evidence.py"
+HOSTED_CHECKER = ROOT / "scripts/check-hosted-gate-execution.py"
 EXECUTION_VERIFIER = ROOT / "scripts/verify-hosted-run-execution.py"
+SNAPSHOT_FRESHNESS = ROOT / "scripts/verify-hosted-snapshot-freshness.py"
 CONTRACT = ROOT / "scripts/check-release-evidence-contract.py"
+PRIMARY_CONTRACT = ROOT / "scripts/check-release-baseline-manifest.py"
+TEMPLATE = ROOT / "docs/templates/cex-release-baseline-manifest-v1.json"
+SCHEMA = ROOT / "docs/schemas/cex-release-baseline-manifest-v1.schema.json"
 PROBLEMS: list[str] = []
 
 
@@ -58,6 +65,19 @@ def load_execution_module() -> Any:
     return module
 
 
+def load_strict_module() -> Any:
+    spec = importlib.util.spec_from_file_location(
+        "cex_release_evidence_strict_wrapper",
+        ROOT / "scripts/p0-release-evidence-strict.py",
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load strict evidence wrapper")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def git_value(*args: str) -> str:
     """Read immutable checkout metadata used by the strict contract fixtures."""
 
@@ -89,14 +109,8 @@ def valid_manifest(module: Any) -> dict[str, Any]:
     digest = "sha256:" + "3" * 64
     payload = f"cex-p0-evidence-{sha}-attempt-1"
     local_paths = {
-        "candidate-hygiene": "candidate-hygiene.json",
-        "repository-integrity": "repository-integrity.json",
-        "hepta-postgres-integration": "hepta-postgres-integration.json",
-        "migration-and-lifecycle-matrix": "database-lifecycle.json",
-        "exact-ledger-soak": "exact-ledger-soak.json",
-        "backup-restore": "backup-restore.json",
-        "repository-governance": "repository-governance.json",
-        "hosted-run-execution": "hosted-run-execution.json",
+        **dict(module.LOCAL_EVIDENCE),
+        **dict(module.ATTESTATION_EVIDENCE),
     }
     workflow_run_id = 9001
     evidence = []
@@ -216,6 +230,28 @@ def valid_context(module: Any, manifest: dict[str, Any]) -> dict[str, Any]:
         }
     for relative in module.LOCAL_EVIDENCE.values():
         context["files"][relative] = digest
+    for relative in module.PAYLOAD_ONLY_EVIDENCE.values():
+        context["files"][relative] = digest
+    for relative in module.ATTESTATION_EVIDENCE.values():
+        context["files"][relative] = digest
+    context["payload_only_attestations"] = {
+        relative: digest for relative in module.PAYLOAD_ONLY_EVIDENCE.values()
+    }
+    context["attestations"] = {
+        name: {"path": relative, "sha256": digest}
+        for name, relative in module.ATTESTATION_EVIDENCE.items()
+    }
+    hosted_relative = module.ATTESTATION_EVIDENCE["hosted-gate-execution"]
+    context["hosted_gate_selection"] = {
+        "schema": "cex.hosted-gate-selection-binding.v1",
+        "policy": "latest_authoritative_run_is_binding",
+        "source": hosted_relative,
+        "sha256": context["files"][hosted_relative],
+        "selected_run_ids": {
+            gate_name: context["hosted_gates"][gate_name]["run_id"]
+            for gate_name in module.HOSTED_GATE_NAMES
+        },
+    }
     context["files"]["sbom.spdx.json"] = digest
     context["files"]["provenance.intoto.json"] = digest
     return context
@@ -249,7 +285,7 @@ def local_fixture(name: str, module: Any, source: dict[str, str]) -> dict[str, A
             "migration_head": "0087_add_term_exchange_receipt_event_history.sql",
             "production_authorization": "not_granted",
             "digests": {},
-            "documentation_check": {"ok": True},
+            "documentation_check": {"status": "ok", "ok": True, "problems": []},
         }
     if name == "hepta-postgres-integration":
         return {
@@ -258,7 +294,7 @@ def local_fixture(name: str, module: Any, source: dict[str, str]) -> dict[str, A
             "postgres_required": True,
             "lint_policy": "strict",
             "completed_at": "2026-08-30T00:00:00Z",
-            "checks": ["fixture-check"],
+            "checks": sorted(module.HEPTA_REQUIRED_CHECKS),
         }
     if name == "migration-and-lifecycle-matrix":
         return {
@@ -267,7 +303,7 @@ def local_fixture(name: str, module: Any, source: dict[str, str]) -> dict[str, A
             "commit_sha": source["commit_sha"],
             "tree_sha": source["tree_sha"],
             "completed_at": "2026-08-30T00:00:00Z",
-            "checks": ["term-exchange-receipt-partial-upgrade-regression"],
+            "checks": sorted(module.LIFECYCLE_REQUIRED_CHECKS),
         }
     if name == "exact-ledger-soak":
         return {
@@ -294,7 +330,7 @@ def local_fixture(name: str, module: Any, source: dict[str, str]) -> dict[str, A
             "ok": True,
             "source": restore_state,
             "restored": restore_state,
-            "dump_sha256": "4" * 64,
+            "dump_sha256": "sha256:" + "4" * 64,
             "dump_bytes": 1,
             "archive_items": 1,
             "started_at_epoch": 1,
@@ -334,8 +370,10 @@ def governance_fixture(module: Any, context: dict[str, Any], source: dict[str, A
 
     desired = [
         "fresh-postgres-migrations",
+        "repository-integrity",
         "service-local-gate-linux",
         "service-local-gate-windows",
+        "hepta-postgres-integration",
         "gateway-exact-reserve",
         "execution-settlement",
         "provider-reconciliation",
@@ -550,6 +588,23 @@ def bind_fixture_digest(
         )
         index = module.EXPECTED_EVIDENCE_ORDER.index(evidence_name)
         manifest["evidence"][index]["sha256"] = digest
+    elif relative in module.ATTESTATION_EVIDENCE.values():
+        evidence_name = next(
+            name
+            for name, path_name in module.ATTESTATION_EVIDENCE.items()
+            if path_name == relative
+        )
+        index = module.EXPECTED_EVIDENCE_ORDER.index(evidence_name)
+        manifest["evidence"][index]["sha256"] = digest
+        if isinstance(context.get("attestations"), dict):
+            context["attestations"][evidence_name]["sha256"] = digest
+        if evidence_name == "hosted-gate-execution":
+            selection = context.get("hosted_gate_selection")
+            if isinstance(selection, dict):
+                selection["sha256"] = digest
+    elif relative in module.PAYLOAD_ONLY_EVIDENCE.values():
+        if isinstance(context.get("payload_only_attestations"), dict):
+            context["payload_only_attestations"][relative] = digest
     elif relative in {"sbom.spdx.json", "provenance.intoto.json"}:
         field = "sbom" if relative == "sbom.spdx.json" else "provenance"
         manifest["build"][field]["sha256"] = digest
@@ -573,12 +628,13 @@ def materialize_fixture(
             module, disk_context, gate_name
         )
     for name, relative in module.LOCAL_EVIDENCE.items():
-        if name == "repository-governance":
-            payloads[relative] = governance_fixture(module, disk_context, source)
-        elif name == "hosted-run-execution":
-            payloads[relative] = execution_fixture(module, execution, disk_context, source)
-        else:
-            payloads[relative] = local_fixture(name, module, source)
+        payloads[relative] = local_fixture(name, module, source)
+    payloads[module.PAYLOAD_ONLY_EVIDENCE["repository-governance"]] = governance_fixture(
+        module, disk_context, source
+    )
+    payloads[module.PAYLOAD_ONLY_EVIDENCE["hosted-run-execution"]] = execution_fixture(
+        module, execution, disk_context, source
+    )
     payloads["sbom.spdx.json"] = sbom_fixture(disk_context, source)
     payloads["provenance.intoto.json"] = provenance_fixture(module, disk_context, source)
 
@@ -592,6 +648,94 @@ def materialize_fixture(
             relative,
             module.sha256_file(path),
         )
+
+    # The canonical manifest attestation pair is generated from the two
+    # payload-only observations and the already-bound local/hosted files.
+    binding_records = {
+        name: {
+            "path": relative,
+            "sha256": disk_context["files"][relative],
+            "producer_schema": module.LOCAL_SCHEMAS[name],
+            "producer_commit_sha": source["commit_sha"],
+            "producer_tree_sha": source["tree_sha"],
+            "status": "ok",
+            "ok": True,
+        }
+        for name, relative in module.LOCAL_EVIDENCE.items()
+    }
+    binding_payload = {
+        "schema": "cex.p0-local-evidence-binding.v1",
+        "status": "ok",
+        "ok": True,
+        "repository": source["repository"],
+        "branch": source["branch"],
+        "commit_sha": source["commit_sha"],
+        "tree_sha": source["tree_sha"],
+        "workflow_run_id": disk_context["workflow_run_id"],
+        "workflow_run_attempt": disk_context["workflow_run_attempt"],
+        "generated_at": "2026-08-30T00:00:00Z",
+        "records": binding_records,
+    }
+    binding_relative = module.ATTESTATION_EVIDENCE["local-evidence-binding"]
+    write_json(evidence_root / binding_relative, binding_payload)
+    bind_fixture_digest(
+        module,
+        disk_manifest,
+        disk_context,
+        binding_relative,
+        module.sha256_file(evidence_root / binding_relative),
+    )
+
+    raw_execution = payloads[module.PAYLOAD_ONLY_EVIDENCE["hosted-run-execution"]]
+    hosted_gates: dict[str, Any] = {}
+    for gate_name, workflow_path in module.HOSTED_WORKFLOW_PATHS.items():
+        source_gate = raw_execution["gates"][gate_name]
+        hosted_gates[workflow_path] = {
+            "run_id": source_gate["run_id"],
+            "run_attempt": source_gate["run_attempt"],
+            "event": source_gate["event"],
+            "head_branch": source_gate["head_branch"],
+            "head_sha": source_gate["head_sha"],
+            "status": "completed",
+            "conclusion": "success",
+            "created_at": source_gate["created_at"],
+            "updated_at": source_gate["updated_at"],
+            "jobs": [
+                {
+                    "job_id": job["job_id"],
+                    "name": job["name"],
+                    "runner_id": job["runner_id"],
+                    "runner_name": job["runner_name"],
+                    "runner_labels": job["labels"],
+                    "status": job["status"],
+                    "conclusion": job["conclusion"],
+                    "required_steps": job["required_steps"],
+                    "observed_step_count": len(job["steps"]),
+                }
+                for job in source_gate["jobs"]
+            ],
+        }
+    hosted_binding = {
+        "schema": "cex.hosted-gate-execution.v1",
+        "status": "ok",
+        "ok": True,
+        "repository": source["repository"],
+        "branch": source["branch"],
+        "commit_sha": source["commit_sha"],
+        "tree_sha": source["tree_sha"],
+        "selection_policy": "latest_authoritative_run_is_binding",
+        "generated_at": "2026-08-30T00:00:00Z",
+        "gates": hosted_gates,
+    }
+    hosted_relative = module.ATTESTATION_EVIDENCE["hosted-gate-execution"]
+    write_json(evidence_root / hosted_relative, hosted_binding)
+    bind_fixture_digest(
+        module,
+        disk_manifest,
+        disk_context,
+        hosted_relative,
+        module.sha256_file(evidence_root / hosted_relative),
+    )
 
     # The index intentionally excludes itself, matching the collector's
     # refresh_payload_index implementation.  Its own digest is then indexed.
@@ -657,8 +801,22 @@ def template_contract_self_test() -> None:
 
 def run_contract_self_tests() -> None:
     try:
+        freshness = subprocess.run(
+            [sys.executable, str(SNAPSHOT_FRESHNESS), "--self-test"],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        if freshness.returncode != 0:
+            PROBLEMS.append(
+                "hosted snapshot freshness self-test failed: "
+                + freshness.stdout.strip()
+            )
         module = load_contract_module()
         execution = load_execution_module()
+        strict = load_strict_module()
         execution_failures = execution.self_test()
         if execution_failures:
             PROBLEMS.extend(
@@ -695,7 +853,7 @@ def run_contract_self_tests() -> None:
         missing_job_proof["evidence"] = [
             item
             for item in missing_job_proof["evidence"]
-            if item["name"] != "hosted-run-execution"
+            if item["name"] != "hosted-gate-execution"
         ]
         expect_rejected(module, "missing hosted execution proof", missing_job_proof)
 
@@ -735,9 +893,17 @@ def run_contract_self_tests() -> None:
 
         # Context metadata is deliberately sourced from this checkout.  The
         # fixture must therefore track the real branch/tree, Cargo.lock and
-        # migration-chain digests, as well as the candidate trigger/freeze
-        # policy checked by validate_context_metadata.
+        # migration-chain digests, as well as the sole shared candidate trigger
+        # authority checked by validate_context_metadata.
         context = valid_context(module, base)
+
+        # The on-disk payload and freeze fixtures exercise POSIX descriptor
+        # guarantees (O_NOFOLLOW/O_DIRECTORY).  Strict evidence collection is
+        # intentionally hosted on Linux; Windows still runs all in-memory
+        # contract and schema regressions above, but must not report a product
+        # failure merely because those POSIX primitives do not exist.
+        if not strict.nofollow_supported():
+            return
 
         # Exercise the final on-disk re-hash path with actual JSON payloads,
         # rather than opaque bytes that bypass producer-level validators.
@@ -749,6 +915,31 @@ def run_contract_self_tests() -> None:
             module.validate_manifest(
                 disk_base, context=disk_context, evidence_dir=evidence_root
             )
+
+            extra_path = evidence_root / "unexpected.json"
+            extra_path.write_text("{}\n", encoding="utf-8")
+            expect_context_rejected(
+                module,
+                "non-canonical-payload-path",
+                disk_base,
+                disk_context,
+                evidence_root,
+            )
+            extra_path.unlink()
+
+            secret_path = evidence_root / "candidate-hygiene.json"
+            secret_original_text = secret_path.read_text(encoding="utf-8")
+            secret_payload = json.loads(secret_original_text)
+            secret_payload["token"] = "fixture-secret-that-must-not-ship"
+            write_json(secret_path, secret_payload)
+            expect_context_rejected(
+                module,
+                "secret-like-payload-content",
+                disk_base,
+                disk_context,
+                evidence_root,
+            )
+            secret_path.write_text(secret_original_text, encoding="utf-8")
 
             swapped = copy.deepcopy(disk_base)
             swapped["evidence"][0]["uri"] = (
@@ -829,14 +1020,42 @@ def run_contract_self_tests() -> None:
                 lambda value: value.update(candidate_tree_matches_commit=False),
             )
             forged_file_case(
+                "nonempty-candidate-hygiene-problems",
+                "candidate-hygiene.json",
+                lambda value: value.update(problems=["forged warning"]),
+            )
+            forged_file_case(
+                "failed-documentation-check",
+                "repository-integrity.json",
+                lambda value: value["documentation_check"].update(
+                    status="failed", problems=["forged documentation gap"]
+                ),
+            )
+            forged_file_case(
                 "forged-execution-payload",
                 "hosted-run-execution.json",
                 lambda value: value["gates"][module.HOSTED_GATE_NAMES[0]].update(
                     status="failure"
                 ),
             )
+            forged_file_case(
+                "forged-hosted-gate-attestation",
+                "hosted-gate-execution.json",
+                lambda value: value["gates"][module.HOSTED_WORKFLOW_PATHS[module.HOSTED_GATE_NAMES[0]]]["jobs"][0].update(
+                    conclusion="failure"
+                ),
+            )
+            forged_file_case(
+                "duplicate-hosted-gate-job",
+                "hosted-gate-execution.json",
+                lambda value: value["gates"][module.HOSTED_WORKFLOW_PATHS[module.HOSTED_GATE_NAMES[0]]]["jobs"].append(
+                    copy.deepcopy(value["gates"][module.HOSTED_WORKFLOW_PATHS[module.HOSTED_GATE_NAMES[0]]]["jobs"][0])
+                ),
+            )
 
-            (evidence_root / "sbom.spdx.json").write_bytes(b"mutated")
+            sbom_path = evidence_root / "sbom.spdx.json"
+            sbom_original = sbom_path.read_bytes()
+            sbom_path.write_bytes(b"mutated")
             expect_context_rejected(
                 module,
                 "mutated-payload-file",
@@ -844,6 +1063,37 @@ def run_contract_self_tests() -> None:
                 disk_context,
                 evidence_root,
             )
+            sbom_path.write_bytes(sbom_original)
+
+            # Re-indexing after the core collector has already emitted an
+            # index must replace that stale index rather than treating it as
+            # an unexpected payload file.
+            refresh_context_path = evidence_root.parent / "refresh-context.json"
+            write_json(refresh_context_path, disk_context)
+            strict.refresh_payload_index(evidence_root, refresh_context_path)
+            refreshed_context = json.loads(
+                refresh_context_path.read_text(encoding="utf-8")
+            )
+            if refreshed_context.get("files") != disk_context.get("files"):
+                PROBLEMS.append("refresh_payload_index changed canonical file bindings")
+
+            # Freeze the exact bytes that the workflow uploads and verify the
+            # out-of-band lock at manifest time.  Restore temporary directory
+            # permissions afterwards so TemporaryDirectory cleanup succeeds.
+            context_path = evidence_root.parent / f"{evidence_root.name}-context.json"
+            lock_path = evidence_root.parent / f"{evidence_root.name}-payload.lock"
+            write_json(context_path, disk_context)
+            strict.freeze_payload(evidence_root, context_path, lock_path)
+            strict.validate_payload_lock(evidence_root, disk_context, lock_path)
+            if evidence_root.stat().st_mode & 0o222:
+                PROBLEMS.append("freeze_payload left the evidence root writable")
+            for path in evidence_root.rglob("*"):
+                mode = path.stat().st_mode
+                if path.is_dir():
+                    path.chmod(mode | 0o700)
+                else:
+                    path.chmod(mode | 0o600)
+            evidence_root.chmod(evidence_root.stat().st_mode | 0o700)
     except Exception as error:  # fail closed with a useful diagnostic
         PROBLEMS.append(f"strict evidence contract self-test crashed: {error}")
 
@@ -853,22 +1103,63 @@ def main() -> int:
     require_markers(
         WORKFLOW,
         "scripts/p0-release-evidence-strict.py collect",
+        "scripts/p0-release-evidence-strict.py freeze",
         "scripts/p0-release-evidence-strict.py manifest",
+        "scripts/test-p0-release-evidence-strict.py",
         "scripts/check-release-evidence-contract.py",
         "--evidence-dir",
         "--context run/p0-release-context.json",
+        "--payload-lock run/p0-release-payload.lock",
         "Bind exact-tree hosted gate and job evidence",
         "--tree-sha \"$CANDIDATE_TREE\"",
         "actions: read",
+        "Revalidate frozen latest hosted snapshot after exact-job verification",
+        "Revalidate frozen latest hosted snapshot before manifest",
+        "Revalidate frozen latest hosted snapshot after manifest publication",
+        "python3 scripts/verify-hosted-snapshot-freshness.py",
     )
     require_markers(
         STRICT_WRAPPER,
         "verify-hosted-run-execution.py",
+        "bind-p0-local-evidence.py",
+        "check-hosted-gate-execution.py",
+        "PAYLOAD_ONLY_ATTESTATIONS",
+        "ATTESTATION_EVIDENCE",
+        "CANONICAL_EVIDENCE_ORDER",
         "repository-governance.json",
         "hosted-run-execution.json",
-        "run_core(forwarded)",
+        "run_core_collect_frozen(",
+        "frozen_runs_from_attestation",
+        "immutable core attempted to select hosted runs more than once",
         "repository governance evidence lacks an exact tree",
         "validate_manifest(output_path, context_path, evidence_dir)",
+        "CANONICAL_PAYLOAD_FILES",
+        "strict evidence payload changed after freeze/upload",
+        "payload-only attestations leaked into core manifest evidence",
+        "--execution",
+        "--frozen-hosted-context",
+        "bind_hosted_gate_selection",
+        "hosted_gate_selection",
+        "LATEST_RUN_POLICY",
+    )
+    require_markers(
+        CANONICAL_GENERATOR,
+        '"local-evidence-binding": "local-evidence-binding.json"',
+        '"hosted-gate-execution": "hosted-gate-execution.json"',
+        "augment_manifest",
+    )
+    require_markers(
+        LOCAL_BINDER,
+        "producer_tree = payload.get(\"tree_sha\")",
+        "local-evidence-binding.v1",
+    )
+    require_markers(
+        HOSTED_CHECKER,
+        "latest_authoritative_run_is_binding",
+        "no real runner was allocated",
+        "build_frozen_attestation",
+        "--context and --execution must be supplied together",
+        "disables run re-selection",
     )
     require_markers(
         EXECUTION_VERIFIER,
@@ -882,24 +1173,61 @@ def main() -> int:
         "EXPECTED_JOBS",
     )
     require_markers(
+        SNAPSHOT_FRESHNESS,
+        "cex.hosted-gate-selection-binding.v1",
+        "latest_authoritative_run_is_binding",
+        "latest_run_states",
+        "paged_collection",
+        "newer-success",
+        "newer-rerun-attempt",
+        "read_json_nofollow",
+        "read_regular_nofollow",
+        "workflow_revalidation_count",
+    )
+    require_markers(
         CONTRACT,
         "waivers are forbidden",
         "EXPECTED_EVIDENCE",
         "EXPECTED_EXTERNAL_GATES",
         "repository-qualification-automation",
         "validate_context_binding",
+        "CANONICAL_PAYLOAD_FILES",
+        "reject_secret_like_payload",
         "REQUIRED_ROOT_FIELDS",
+        "FORBIDDEN_SPLIT_BRAIN_EVIDENCE",
+        "local-evidence-binding",
+        "hosted-gate-execution",
+        "repository-governance",
+        "hosted-run-execution",
     )
     require_markers(
-        ROOT / "docs/release-evidence/.qualification-freeze",
-        "sequence=26",
-        "production_authorization=not_granted",
+        PRIMARY_CONTRACT,
+        '"local-evidence-binding"',
+        '"hosted-gate-execution"',
+        "JSON Schema",
+    )
+    require_markers(
+        SCHEMA,
+        '"const": "local-evidence-binding"',
+        '"const": "hosted-gate-execution"',
+        '"minItems": 13',
+        '"maxItems": 13',
+    )
+    require_markers(
+        ROOT / "docs/release-evidence/p0-candidate-trigger.json",
+        '"sequence":',
+        '"production_authorization": "not_granted"',
     )
     run_contract_self_tests()
 
     result = {
-        "schema": "cex.strict-release-evidence-wiring-check.v1",
+        "schema": "cex.strict-release-evidence-wiring-check.v2",
         "status": "failed" if PROBLEMS else "ok",
+        "canonical_evidence_count": 13,
+        "payload_only_attestations": [
+            "repository-governance.json",
+            "hosted-run-execution.json",
+        ],
         "problems": PROBLEMS,
     }
     print(json.dumps(result, indent=2, sort_keys=True))

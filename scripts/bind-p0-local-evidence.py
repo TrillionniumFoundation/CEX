@@ -8,9 +8,20 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+from evidence_safe_io import (  # noqa: E402
+    SafeIOError,
+    read_json_nofollow,
+    sha256_file_nofollow,
+    write_json_nofollow,
+)
 
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 LOCAL_EVIDENCE = {
@@ -24,11 +35,10 @@ LOCAL_EVIDENCE = {
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return "sha256:" + digest.hexdigest()
+    try:
+        return sha256_file_nofollow(path)
+    except SafeIOError as error:
+        raise SystemExit(str(error)) from error
 
 
 def successful(payload: Any) -> bool:
@@ -63,15 +73,13 @@ def main() -> int:
     if type(args.run_attempt) is not int or args.run_attempt < 1:
         raise SystemExit("run-attempt must be a strict positive integer")
 
-    evidence_dir = args.evidence_dir.resolve()
+    evidence_dir = args.evidence_dir if args.evidence_dir.is_absolute() else Path.cwd() / args.evidence_dir
     records: dict[str, Any] = {}
     for name, relative in LOCAL_EVIDENCE.items():
         path = evidence_dir / relative
-        if not path.is_file():
-            raise SystemExit(f"missing local evidence {name}: {path}")
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as error:
+            payload = read_json_nofollow(path, label=f"local evidence {name}")
+        except (SafeIOError, OSError, json.JSONDecodeError) as error:
             raise SystemExit(f"invalid local evidence {name}: {error}") from error
         if not successful(payload):
             raise SystemExit(f"local evidence is not successful: {name}")
@@ -129,8 +137,10 @@ def main() -> int:
     output = args.output or (evidence_dir / "local-evidence-binding.json")
     if not output.is_absolute():
         output = root / output
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    try:
+        write_json_nofollow(output, result)
+    except SafeIOError as error:
+        raise SystemExit(str(error)) from error
     print(output)
     return 0
 

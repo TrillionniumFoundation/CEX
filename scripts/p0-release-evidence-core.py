@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import subprocess
 import time
 import tomllib
@@ -16,6 +17,21 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+# Keep the safety helper importable when this file is loaded through
+# ``importlib`` by the repository self-tests rather than executed directly.
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+from evidence_safe_io import (  # noqa: E402
+    SafeIOError,
+    prepare_collect_targets,
+    read_json_nofollow,
+    read_regular_nofollow,
+    safe_io_self_test,
+    sha256_file_nofollow,
+    write_json_nofollow,
+)
 
 REQUIRED_GATES = {
     "p0-migration-gate": ".github/workflows/p0-migration-gate.yml",
@@ -74,16 +90,17 @@ def sha256_bytes(data: bytes) -> str:
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return "sha256:" + digest.hexdigest()
+    try:
+        return sha256_file_nofollow(path)
+    except SafeIOError as error:
+        raise SystemExit(str(error)) from error
 
 
 def write_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    try:
+        write_json_nofollow(path, value)
+    except SafeIOError as error:
+        raise SystemExit(str(error)) from error
 
 
 def qualification_scope(root: Path) -> str:
@@ -96,8 +113,8 @@ def qualification_scope(root: Path) -> str:
 
     trigger_path = root / TRIGGER_RELATIVE_PATH
     try:
-        trigger = json.loads(trigger_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+        trigger = read_json_nofollow(trigger_path, label="candidate trigger")
+    except SafeIOError as error:
         raise SystemExit(f"cannot read candidate trigger scope: {error}") from error
     scope = trigger.get("qualification_scope") if isinstance(trigger, dict) else None
     if not isinstance(scope, str) or not scope.strip():
@@ -132,7 +149,13 @@ def migration_state(root: Path) -> tuple[Path, str]:
     for _, name, path in numbered:
         digest.update(name.encode("utf-8"))
         digest.update(b"\0")
-        digest.update(path.read_bytes())
+        try:
+            # The migration chain is part of the immutable provenance record;
+            # reject symlinked/replaced files instead of hashing a redirected
+            # target through a path-based read.
+            digest.update(read_regular_nofollow(path))
+        except SafeIOError as error:
+            raise SystemExit(f"cannot read migration {name} safely: {error}") from error
         digest.update(b"\0")
     return numbered[-1][2], "sha256:" + digest.hexdigest()
 
@@ -282,7 +305,8 @@ def collect_gate_runs(
             # failed, cancelled, skipped, or in-progress rerun: doing so would
             # let a candidate silently revert to stale evidence.  This mirrors
             # check-hosted-gate-execution.py, which independently attests the
-            # same latest-run binding before the wrapper invokes this core.
+            # same latest-run binding; the strict wrapper consumes this frozen
+            # context rather than selecting a second run after collection.
             run = max(candidates, key=_run_sort_key)
             status = str(run.get("status") or "unknown").lower()
             conclusion = str(run.get("conclusion") or "unknown").lower()
@@ -486,7 +510,7 @@ def self_test() -> list[str]:
     newer run or a changed detail record fails closed.
     """
 
-    failures: list[str] = []
+    failures: list[str] = list(safe_io_self_test())
     branch = "feature/evidence"
     sha = "a" * 40
     base_runs: list[dict[str, Any]] = []
@@ -613,7 +637,11 @@ def generate_sbom(
     run_id: int,
     run_attempt: int = 1,
 ) -> None:
-    lock = tomllib.loads((root / "Cargo.lock").read_text(encoding="utf-8"))
+    try:
+        cargo_lock_bytes = read_regular_nofollow(root / "Cargo.lock")
+        lock = tomllib.loads(cargo_lock_bytes.decode("utf-8"))
+    except (SafeIOError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        raise SystemExit(f"Cargo.lock is not a safe valid TOML file: {error}") from error
     raw_packages = lock.get("package")
     if not isinstance(raw_packages, list) or not raw_packages:
         raise SystemExit("Cargo.lock contains no packages")
@@ -692,8 +720,11 @@ def local_evidence_is_successful(name: str, payload: Any) -> bool:
 
 def collect(args: argparse.Namespace) -> int:
     root = args.repo_root.resolve()
-    evidence_dir = args.evidence_dir.resolve()
-    context_path = args.context.resolve()
+    # Keep caller paths lexical until the no-follow boundary has checked every
+    # component.  Resolving an attacker-controlled symlink first would erase
+    # the evidence of the substitution and redirect all subsequent writes.
+    evidence_dir = args.evidence_dir if args.evidence_dir.is_absolute() else Path.cwd() / args.evidence_dir
+    context_path = args.context if args.context.is_absolute() else Path.cwd() / args.context
     if not GIT_SHA_RE.fullmatch(args.sha) or not GIT_SHA_RE.fullmatch(args.tree):
         raise SystemExit("sha and tree must be 40 lowercase hex")
     run_attempt = int(getattr(args, "run_attempt", 1))
@@ -709,12 +740,22 @@ def collect(args: argparse.Namespace) -> int:
     if not token:
         raise SystemExit("GITHUB_TOKEN is required to bind hosted gate evidence")
 
-    evidence_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        prepare_collect_targets(
+            evidence_dir,
+            context_path,
+            input_files=tuple(evidence_dir / relative for relative in LOCAL_EVIDENCE.values()),
+            output_files=(context_path,),
+            output_directories=(evidence_dir / "hosted-gates",),
+        )
+    except SafeIOError as error:
+        raise SystemExit(str(error)) from error
     for name, relative in LOCAL_EVIDENCE.items():
         path = evidence_dir / relative
-        if not path.is_file():
-            raise SystemExit(f"missing local evidence {name}: {path}")
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            payload = read_json_nofollow(path, label=f"local evidence {name}")
+        except SafeIOError as error:
+            raise SystemExit(str(error)) from error
         if not local_evidence_is_successful(name, payload):
             raise SystemExit(f"local evidence is not successful: {name}")
         commit_sha = payload.get("commit_sha")
@@ -957,38 +998,48 @@ def validate_hosted_gate_context(context: dict[str, Any]) -> None:
 
 
 def manifest(args: argparse.Namespace) -> int:
-    context = json.loads(args.context.read_text(encoding="utf-8"))
+    try:
+        context = read_json_nofollow(args.context, label="release context")
+    except SafeIOError as error:
+        raise SystemExit(str(error)) from error
     if not isinstance(context, dict):
         raise SystemExit("release context must be an object")
     validate_hosted_gate_context(context)
-    token = os.environ.get("GITHUB_TOKEN", "")
-    if not token:
-        raise SystemExit(
-            "GITHUB_TOKEN is required to revalidate hosted gate evidence before manifest binding"
+    # The strict wrapper freezes and verifies the hosted run/job snapshot
+    # before upload.  In that mode the manifest must consume the immutable
+    # context rather than selecting a second latest run after the artifact
+    # boundary; otherwise a rerun could replace the evidence between collect
+    # and manifest.  The legacy core CLI retains its historical revalidation
+    # behavior unless this explicit flag is supplied.
+    if not getattr(args, "frozen_hosted_context", False):
+        token = os.environ.get("GITHUB_TOKEN", "")
+        if not token:
+            raise SystemExit(
+                "GITHUB_TOKEN is required to revalidate hosted gate evidence before manifest binding"
+            )
+        selected_context: dict[str, dict[str, Any]] = {}
+        for name, record in context["hosted_gates"].items():
+            if not isinstance(record, dict):
+                raise SystemExit(f"release context hosted gate is invalid: {name}")
+            selected_context[name] = {
+                "id": record.get("run_id"),
+                "run_attempt": record.get("run_attempt"),
+                "path": record.get("workflow_path"),
+                "head_sha": record.get("head_sha"),
+                "head_branch": record.get("head_branch"),
+                "event": record.get("event"),
+                "status": record.get("status"),
+                "conclusion": record.get("conclusion"),
+                "created_at": record.get("created_at"),
+                "updated_at": record.get("updated_at"),
+            }
+        revalidate_gate_runs(
+            str(context["repository"]),
+            str(context["commit_sha"]),
+            str(context["branch"]),
+            token,
+            selected_context,
         )
-    selected_context: dict[str, dict[str, Any]] = {}
-    for name, record in context["hosted_gates"].items():
-        if not isinstance(record, dict):
-            raise SystemExit(f"release context hosted gate is invalid: {name}")
-        selected_context[name] = {
-            "id": record.get("run_id"),
-            "run_attempt": record.get("run_attempt"),
-            "path": record.get("workflow_path"),
-            "head_sha": record.get("head_sha"),
-            "head_branch": record.get("head_branch"),
-            "event": record.get("event"),
-            "status": record.get("status"),
-            "conclusion": record.get("conclusion"),
-            "created_at": record.get("created_at"),
-            "updated_at": record.get("updated_at"),
-        }
-    revalidate_gate_runs(
-        str(context["repository"]),
-        str(context["commit_sha"]),
-        str(context["branch"]),
-        token,
-        selected_context,
-    )
     expected_payload_name = context["payload_name"]
     if args.payload_name != expected_payload_name:
         raise SystemExit(
@@ -1121,6 +1172,11 @@ def build_parser() -> argparse.ArgumentParser:
     manifest_parser.add_argument("--release-id", required=True)
     manifest_parser.add_argument("--payload-name", required=True)
     manifest_parser.add_argument("--payload-digest", required=True)
+    manifest_parser.add_argument(
+        "--frozen-hosted-context",
+        action="store_true",
+        help="trust the already verified context snapshot without selecting new runs",
+    )
     manifest_parser.set_defaults(function=manifest)
 
     self_test_parser = subparsers.add_parser(

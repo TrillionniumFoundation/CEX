@@ -50,16 +50,16 @@ else
 fi
 
 if [[ -n "$EVIDENCE" ]]; then
-  mkdir -p "$(dirname "$EVIDENCE")"
   root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
   tree_sha=$(git -C "$root" rev-parse 'HEAD^{tree}')
-  python3 - "$EVIDENCE" "${GITHUB_SHA:-unknown}" "$tree_sha" "$MODE" <<'PY'
-import json
+  python3 - "$EVIDENCE" "${GITHUB_SHA:-unknown}" "$tree_sha" "$MODE" "$root" <<'PY'
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
+sys.path.insert(0, str(Path(sys.argv[5]) / "scripts"))
+from evidence_safe_io import write_json_nofollow
 
-Path(sys.argv[1]).write_text(json.dumps({
+write_json_nofollow(Path(sys.argv[1]), {
     "schema": "cex.hepta-postgres-integration-evidence.v1",
     "status": "ok",
     "ok": True,
@@ -77,6 +77,6 @@ Path(sys.argv[1]).write_text(json.dumps({
         "expired-lease-recovery",
         "readiness-and-metrics",
     ],
-}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+})
 PY
 fi

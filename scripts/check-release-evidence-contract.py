@@ -13,6 +13,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+from evidence_safe_io import (  # noqa: E402
+    SafeIOError,
+    read_json_nofollow,
+    read_regular_nofollow,
+    sha256_file_nofollow,
+)
+
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 BRANCH_RE = re.compile(
@@ -48,8 +58,8 @@ EXPECTED_EVIDENCE_ORDER = (
     "migration-and-lifecycle-matrix",
     "exact-ledger-soak",
     "backup-restore",
-    "repository-governance",
-    "hosted-run-execution",
+    "local-evidence-binding",
+    "hosted-gate-execution",
 )
 EXPECTED_EVIDENCE = set(EXPECTED_EVIDENCE_ORDER)
 HOSTED_EVIDENCE = set(EXPECTED_EVIDENCE_ORDER[:5])
@@ -69,8 +79,60 @@ LOCAL_EVIDENCE = {
     "migration-and-lifecycle-matrix": "database-lifecycle.json",
     "exact-ledger-soak": "exact-ledger-soak.json",
     "backup-restore": "backup-restore.json",
+}
+# These observations are required in the uploaded, exact-tree payload but are
+# deliberately payload-only.  Promoting either one to a manifest record would
+# recreate the historical 15-versus-13 split-brain contract.
+PAYLOAD_ONLY_EVIDENCE = {
     "repository-governance": "repository-governance.json",
     "hosted-run-execution": "hosted-run-execution.json",
+}
+ATTESTATION_EVIDENCE = {
+    "local-evidence-binding": "local-evidence-binding.json",
+    "hosted-gate-execution": "hosted-gate-execution.json",
+}
+FORBIDDEN_SPLIT_BRAIN_EVIDENCE = set(PAYLOAD_ONLY_EVIDENCE)
+# The evidence artifact is intentionally a closed set.  A caller may not add a
+# convenient log, environment dump or alternate JSON file and have it silently
+# become part of the release payload.  Keep this list derived from the manifest
+# vocabulary so the producer and final verifier share one canonical namespace.
+CANONICAL_PAYLOAD_FILES = frozenset(
+    {
+        *(f"hosted-gates/{name}.json" for name in HOSTED_GATE_NAMES),
+        *LOCAL_EVIDENCE.values(),
+        *PAYLOAD_ONLY_EVIDENCE.values(),
+        *ATTESTATION_EVIDENCE.values(),
+        "sbom.spdx.json",
+        "provenance.intoto.json",
+        "payload-index.json",
+    }
+)
+CANONICAL_PAYLOAD_DIRECTORIES = frozenset({"hosted-gates"})
+SECRET_LIKE_PATH_RE = re.compile(
+    r"(?i)(?:^|[/_.-])(?:\.env(?:\.[^/]+)?|secrets?|tokens?|passwords?|"
+    r"credentials?|private[-_.]?keys?|id_rsa|.*\.pem|.*\.key)(?:$|[/_.-])"
+)
+SECRET_LIKE_FIELD_RE = re.compile(
+    r"(?i)^(?:password|passwd|secret|token|access[_-]?token|api[_-]?key|"
+    r"client[_-]?secret|private[_-]?key|credential|credentials|database[_-]?url)$"
+)
+SECRET_VALUE_RE = re.compile(
+    r"(?i)(?:-----BEGIN [^-\r\n]*PRIVATE KEY-----|"
+    r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|"
+    r"AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{20,})\b|"
+    r"\bBearer\s+[A-Za-z0-9._~+/=-]{24,})"
+)
+REDACTED_SECRET_VALUES = {
+    "",
+    "none",
+    "null",
+    "redacted",
+    "masked",
+    "not_granted",
+    "unavailable",
+    "unknown",
+    "fixture",
+    "placeholder",
 }
 REQUIRED_EVIDENCE_FIELDS = {"name", "status", "uri", "sha256", "waiver"}
 EXPECTED_EXTERNAL_GATES = [
@@ -118,12 +180,19 @@ CONTEXT_FIELDS = {
     "migration_chain_sha256",
     "files",
     "hosted_gates",
+    "hosted_gate_selection",
     "qualification_scope",
+    "payload_only_attestations",
+    "attestations",
 }
 HOSTED_GATE_SCHEMA = "cex.hosted-gate-evidence.v1"
 PAYLOAD_INDEX_SCHEMA = "cex.p0-release-evidence-payload.v1"
 GOVERNANCE_SCHEMA = "cex.repository-governance-observation.v1"
 EXECUTION_SCHEMA = "cex.hosted-run-execution-verification.v1"
+LOCAL_BINDING_SCHEMA = "cex.p0-local-evidence-binding.v1"
+HOSTED_GATE_EXECUTION_SCHEMA = "cex.hosted-gate-execution.v1"
+HOSTED_GATE_SELECTION_SCHEMA = "cex.hosted-gate-selection-binding.v1"
+HOSTED_GATE_SELECTION_POLICY = "latest_authoritative_run_is_binding"
 LOCAL_SCHEMAS = {
     "candidate-hygiene": "cex.p0-release-candidate-hygiene.v2",
     "repository-integrity": "cex.repository-integrity.v1",
@@ -132,6 +201,29 @@ LOCAL_SCHEMAS = {
     "exact-ledger-soak": "cex.p0-exact-ledger-soak.v1",
     "backup-restore": "cex.p0-backup-restore.v1",
 }
+EXPECTED_HEPTA_CHECKS = [
+    "exact-lint-ownership",
+    "restart-persistence",
+    "multi-instance-disjoint-outbox-claim",
+    "wrong-owner-ack-rejection",
+    "expired-lease-recovery",
+    "readiness-and-metrics",
+]
+EXPECTED_LIFECYCLE_CHECKS = [
+    "development-document-authority",
+    "repository-integrity",
+    "fresh-migration-and-p0-assertions",
+    "existing-row-audit-baseline",
+    "ledger-operation-identity-and-replay",
+    "invocation-contract-lifecycle",
+    "invocation-terminal-mutual-exclusion",
+    "gateway-exact-reserve-fault-matrix",
+    "execution-settlement-fault-matrix",
+    "provider-unknown-outcome-reconciliation",
+    "hepta-postgres-restart-and-lease-recovery",
+    "trnm-settlement-receipt-response-loss-recovery",
+    "term-exchange-receipt-partial-upgrade-regression",
+]
 LOCAL_REQUIRED_FIELDS = {
     "candidate-hygiene": {"schema", "status", "ok", "problems", "commit_sha", "tree_sha"},
     "repository-integrity": {
@@ -156,6 +248,11 @@ LOCAL_REQUIRED_FIELDS = {
         "restore_database_retained",
     },
 }
+# Producer check lists are part of the v12 evidence meaning, not free-form
+# notes.  Derive the sets from the ordered declarations above so the fixture,
+# producer and contract cannot drift silently when a check is added.
+HEPTA_REQUIRED_CHECKS = frozenset(EXPECTED_HEPTA_CHECKS)
+LIFECYCLE_REQUIRED_CHECKS = frozenset(EXPECTED_LIFECYCLE_CHECKS)
 EXPECTED_RUNNER_LABELS = {
     "ubuntu": "ubuntu-latest",
     "windows": "windows-latest",
@@ -177,21 +274,146 @@ def object_at(value: Any, path: str) -> dict[str, Any]:
 
 
 def reject_unknown(value: dict[str, Any], allowed: set[str], path: str) -> None:
+    require(
+        all(isinstance(key, str) for key in value),
+        f"{path} contains a non-string field name",
+    )
     unknown = sorted(set(value) - allowed)
     require(not unknown, f"{path} contains unknown field(s): {', '.join(unknown)}")
 
 
 def require_fields(value: dict[str, Any], required: set[str], path: str) -> None:
+    require(
+        all(isinstance(key, str) for key in value),
+        f"{path} contains a non-string field name",
+    )
     missing = sorted(required - set(value))
     require(not missing, f"{path} is missing required field(s): {', '.join(missing)}")
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return "sha256:" + digest.hexdigest()
+    try:
+        return sha256_file_nofollow(path)
+    except SafeIOError as error:
+        raise ContractError(str(error)) from error
+
+
+def validate_payload_file_names(files: Any, path: str = "$context.files") -> dict[str, Any]:
+    """Require the exact, relative file vocabulary used by the payload.
+
+    This is deliberately stricter than checking the files needed by the
+    manifest: an extra indexed file would otherwise be an unreviewed channel
+    for logs, credentials or a second attestation.
+    """
+
+    values = object_at(files, path)
+    require(
+        all(isinstance(key, str) for key in values),
+        f"{path} contains a non-string path key",
+    )
+    names = set(values)
+    require(
+        names == set(CANONICAL_PAYLOAD_FILES),
+        f"{path} must contain exactly the canonical payload file set",
+    )
+    for relative in names:
+        require(
+            isinstance(relative, str)
+            and relative in CANONICAL_PAYLOAD_FILES
+            and relative == Path(relative).as_posix()
+            and not Path(relative).is_absolute()
+            and ".." not in Path(relative).parts,
+            f"{path} contains a non-canonical path: {relative!r}",
+        )
+    return values
+
+
+def reject_secret_like_payload(relative: str, raw: bytes, path: str) -> None:
+    """Fail closed on credential-shaped names, values and key material.
+
+    Evidence is public release metadata; it must never become a side channel
+    for a runner environment or provider credential.  The field check permits
+    explicit redaction sentinels (for example ``production_authorization`` is
+    intentionally ``not_granted``) while rejecting populated secret fields.
+    """
+
+    require(
+        not SECRET_LIKE_PATH_RE.search(relative),
+        f"{path} has a secret-like path",
+    )
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ContractError(f"{path} is not UTF-8 evidence") from error
+    require(not SECRET_VALUE_RE.search(text), f"{path} contains secret-like material")
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        # The regular JSON loader emits the more useful syntax error later;
+        # still scan raw bytes above so malformed secret-bearing files fail
+        # closed rather than being reported only as ordinary invalid JSON.
+        return
+
+    def walk(node: Any, location: str) -> None:
+        if isinstance(node, dict):
+            for key, child in node.items():
+                key_text = str(key)
+                if SECRET_LIKE_FIELD_RE.fullmatch(key_text):
+                    if isinstance(child, str):
+                        normalized = child.strip().lower()
+                        require(
+                            normalized in REDACTED_SECRET_VALUES,
+                            f"{location}.{key_text} contains a non-redacted secret-like value",
+                        )
+                    else:
+                        require(
+                            child is None or child is False,
+                            f"{location}.{key_text} contains a non-redacted secret-like value",
+                        )
+                walk(child, f"{location}.{key_text}")
+        elif isinstance(node, list):
+            for index, child in enumerate(node):
+                walk(child, f"{location}[{index}]")
+
+    walk(value, path)
+
+
+def validate_payload_directory(root: Path, files: dict[str, Any]) -> None:
+    """Validate path, symlink, content and exact-set invariants on disk."""
+
+    require(
+        root.is_dir() and not root.is_symlink(),
+        "evidence directory is not a real directory",
+    )
+    root = root.absolute()
+    validate_payload_file_names(files)
+    actual_paths: set[str] = set()
+    for path in root.rglob("*"):
+        relative = path.relative_to(root).as_posix()
+        require(not path.is_symlink(), f"evidence path is a symlink: {relative}")
+        if path.is_dir():
+            require(
+                relative in CANONICAL_PAYLOAD_DIRECTORIES,
+                f"evidence directory contains a non-canonical directory: {relative}",
+            )
+            continue
+        require(path.is_file(), f"evidence path is not a regular file: {relative}")
+        actual_paths.add(relative)
+        require(
+            relative in CANONICAL_PAYLOAD_FILES,
+            f"evidence directory contains a non-canonical file: {relative}",
+        )
+        try:
+            raw = read_regular_nofollow(path)
+        except SafeIOError as error:
+            raise ContractError(
+                f"$evidence.files.{relative} cannot be read safely: {error}"
+            ) from error
+        reject_secret_like_payload(relative, raw, f"$evidence.files.{relative}")
+    require(
+        actual_paths == set(CANONICAL_PAYLOAD_FILES),
+        "evidence directory does not contain exactly the canonical payload files",
+    )
 
 
 def migration_state(root: Path) -> tuple[str, str, str]:
@@ -205,19 +427,30 @@ def migration_state(root: Path) -> tuple[str, str, str]:
     for path in migrations:
         digest.update(path.name.encode("utf-8"))
         digest.update(b"\0")
-        digest.update(path.read_bytes())
+        try:
+            # Migration files are part of the candidate identity.  Read them
+            # through the same no-follow boundary as evidence payloads so a
+            # checked-out symlink (or a replacement during hashing) cannot
+            # redirect the chain digest outside the repository.
+            digest.update(read_regular_nofollow(path))
+        except SafeIOError as error:
+            raise ContractError(f"cannot read migration {path.name} safely: {error}") from error
         digest.update(b"\0")
     head = migrations[-1]
     return head.name, sha256_file(head), "sha256:" + digest.hexdigest()
 
 
 def load_json_file(root: Path, relative: str, path: str) -> dict[str, Any]:
-    target = (root / relative).resolve()
-    require(root.resolve() == target or root.resolve() in target.parents, f"{path} escapes evidence directory")
-    require(target.is_file(), f"{path} is missing")
+    root_absolute = root if root.is_absolute() else Path.cwd() / root
+    relative_path = Path(relative)
+    require(
+        not relative_path.is_absolute() and ".." not in relative_path.parts,
+        f"{path} escapes evidence directory",
+    )
+    target = root_absolute / relative_path
     try:
-        value = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+        value = read_json_nofollow(target, label=path)
+    except (SafeIOError, OSError, json.JSONDecodeError) as error:
         raise ContractError(f"{path} is not valid JSON: {error}") from error
     return object_at(value, path)
 
@@ -287,15 +520,29 @@ def validate_context_metadata(ctx: dict[str, Any], source: dict[str, Any]) -> No
     require(trigger.get("production_authorization") == "not_granted", "$trigger production authorization must remain denied")
     sequence = trigger.get("sequence")
     require(isinstance(sequence, int) and not isinstance(sequence, bool) and sequence > 0, "$trigger.sequence is invalid")
-    freeze_path = root / "docs/release-evidence/.qualification-freeze"
-    require(freeze_path.is_file(), "qualification freeze is missing")
-    freeze_values: dict[str, str] = {}
-    for line in freeze_path.read_text(encoding="utf-8").splitlines():
-        if "=" in line:
-            key, value = line.split("=", 1)
-            freeze_values[key.strip()] = value.strip()
-    require(freeze_values.get("sequence") == str(sequence), "qualification freeze sequence differs from trigger")
-    require(freeze_values.get("production_authorization") == "not_granted", "qualification freeze authorization must remain denied")
+    # The shared candidate trigger is the sole freeze authority.  A secondary
+    # dot-marker can drift without retriggering the exact-tree workflows, so
+    # reject any such marker instead of attempting to reconcile two sources.
+    secondary_markers = []
+    evidence_root = root / "docs/release-evidence"
+    for pattern in ("*qualification*freeze*", ".*qualification*freeze*"):
+        secondary_markers.extend(
+            path for path in evidence_root.glob(pattern)
+            if path.name != "p0-candidate-trigger.json"
+        )
+    require(
+        not secondary_markers,
+        "non-authoritative qualification freeze marker remains: "
+        + ", ".join(sorted(path.name for path in secondary_markers)),
+    )
+    # `trigger` above was loaded from this exact shared path; validating its
+    # sequence and authorization here binds the freeze decision to the same
+    # bytes used by the workflow trigger.
+    require(trigger.get("sequence") == sequence, "candidate trigger sequence is not self-consistent")
+    require(
+        trigger.get("production_authorization") == "not_granted",
+        "candidate trigger authorization must remain denied",
+    )
 
 
 def nonempty_string(value: Any, path: str) -> str:
@@ -323,6 +570,12 @@ def utc_timestamp(value: Any, path: str) -> str:
         f"{path} must be an explicit UTC Z timestamp",
     )
     return raw
+
+
+# Keep the shorter name used by the canonical v12 contract documentation as a
+# compatibility alias; both paths enforce an explicit UTC ``Z`` timestamp.
+def utc_datetime(value: Any, path: str) -> str:
+    return utc_timestamp(value, path)
 
 
 def immutable_uri(value: Any, path: str, *, hosted: bool) -> str:
@@ -392,19 +645,43 @@ def validate_local_payload(
     require(payload.get("commit_sha") == source["commit_sha"], f"{path}.commit_sha differs from manifest")
     require(payload.get("tree_sha") == source["tree_sha"], f"{path}.tree_sha differs from manifest")
     if name in {"candidate-hygiene", "repository-integrity"}:
-        require(isinstance(payload.get("problems"), list) if name == "candidate-hygiene" else True, f"{path}.problems must be an array")
+        if name == "candidate-hygiene":
+            require(isinstance(payload.get("problems"), list), f"{path}.problems must be an array")
+            require(payload["problems"] == [], f"{path}.problems must be empty for a passing candidate")
     if name == "repository-integrity":
         require(payload.get("repository_commit_sha") == source["commit_sha"], f"{path}.repository_commit_sha differs from manifest")
         require(payload.get("repository_tree_sha") == source["tree_sha"], f"{path}.repository_tree_sha differs from manifest")
         require(payload.get("production_authorization") == "not_granted", f"{path}.production_authorization must remain denied")
         require(isinstance(payload.get("digests"), dict), f"{path}.digests must be an object")
-        require(isinstance(payload.get("documentation_check"), dict), f"{path}.documentation_check must be an object")
+        documentation_check = object_at(payload.get("documentation_check"), f"{path}.documentation_check")
+        require(documentation_check.get("status") == "ok", f"{path}.documentation_check.status is not successful")
+        require(documentation_check.get("problems") == [], f"{path}.documentation_check.problems must be empty")
     if name in {"hepta-postgres-integration", "migration-and-lifecycle-matrix"}:
         require(isinstance(payload.get("checks"), list) and payload["checks"], f"{path}.checks must be non-empty")
+        require(
+            all(isinstance(check, str) and check.strip() for check in payload["checks"]),
+            f"{path}.checks must contain only non-empty strings",
+        )
+        require(
+            len(payload["checks"]) == len(set(payload["checks"])),
+            f"{path}.checks must not contain duplicate names",
+        )
+        required_checks = (
+            HEPTA_REQUIRED_CHECKS
+            if name == "hepta-postgres-integration"
+            else LIFECYCLE_REQUIRED_CHECKS
+        )
+        require(
+            required_checks.issubset(set(payload["checks"])),
+            f"{path}.checks omits one or more required v12 lifecycle checks",
+        )
     if name == "hepta-postgres-integration":
         require(payload.get("postgres_required") is True, f"{path}.postgres_required must be true")
     if name == "migration-and-lifecycle-matrix":
-        require(isinstance(payload.get("checks"), list) and "term-exchange-receipt-partial-upgrade-regression" in payload["checks"], f"{path} omits partial-upgrade regression")
+        require(
+            "term-exchange-receipt-partial-upgrade-regression" in payload["checks"],
+            f"{path} omits partial-upgrade regression",
+        )
     if name == "exact-ledger-soak":
         require(positive_int(payload.get("iterations"), f"{path}.iterations") > 0, f"{path}.iterations is invalid")
         for field in (
@@ -420,8 +697,10 @@ def validate_local_payload(
     if name == "backup-restore":
         require(isinstance(payload.get("source"), dict) and isinstance(payload.get("restored"), dict), f"{path}.source/restored must be objects")
         require(payload.get("source") == payload.get("restored"), f"{path} restored state differs from source")
-        dump_sha = payload.get("dump_sha256")
-        require(isinstance(dump_sha, str) and bool(re.fullmatch(r"[0-9a-f]{64}", dump_sha)), f"{path}.dump_sha256 is invalid")
+        # The PostgreSQL drill publishes the same canonical ``sha256:``
+        # representation used by every other evidence digest.  Reject raw or
+        # all-zero values rather than accepting two digest dialects.
+        canonical_sha256(payload.get("dump_sha256"), f"{path}.dump_sha256")
         for field in ("dump_bytes", "archive_items", "started_at_epoch", "ended_at_epoch", "duration_seconds"):
             require(isinstance(payload.get(field), int) and not isinstance(payload.get(field), bool) and payload[field] >= 0, f"{path}.{field} is invalid")
         require(payload["ended_at_epoch"] >= payload["started_at_epoch"] and payload["duration_seconds"] == payload["ended_at_epoch"] - payload["started_at_epoch"], f"{path} duration is inconsistent")
@@ -463,8 +742,10 @@ def validate_governance_payload(
     require(payload.get("candidate_ruleset_count") == len(payload["candidate_rulesets"]), f"{path}.candidate_ruleset_count is inconsistent")
     require(payload.get("candidate_required_status_contexts") == payload.get("actual_required_status_contexts"), f"{path} required-check context aliases differ")
     require(payload.get("desired_required_status_contexts") == [
-        "fresh-postgres-migrations", "service-local-gate-linux", "service-local-gate-windows",
-        "gateway-exact-reserve", "execution-settlement", "provider-reconciliation",
+        "fresh-postgres-migrations", "repository-integrity",
+        "service-local-gate-linux", "service-local-gate-windows",
+        "hepta-postgres-integration", "gateway-exact-reserve",
+        "execution-settlement", "provider-reconciliation",
         "repository-candidate-qualification",
     ], f"{path}.desired_required_status_contexts is not canonical")
     expected_enforced = bool(
@@ -515,20 +796,125 @@ def validate_execution_payload(
         for job in sorted(jobs, key=lambda item: str(item.get("name") if isinstance(item, dict) else "")):
             job_value = object_at(job, f"{path}.gates.{gate_name}.jobs[]")
             job_name = job_value.get("name")
+            require(
+                isinstance(job_name, str) and job_name.strip(),
+                f"{path}.{gate_name} job name is invalid",
+            )
             require(job_name in expected_jobs, f"{path}.{gate_name} contains an unexpected job")
             raw_job = dict(job_value)
             raw_job["id"] = raw_job.get("job_id")
-            verified = verifier.validate_job(
-                gate_name,
-                raw_job,
-                sha=source["commit_sha"],
-                run_id=context_gate["run_id"],
-                run_attempt=context_gate["run_attempt"],
-                expected=expected_jobs[job_name],
-            )
+            try:
+                verified = verifier.validate_job(
+                    gate_name,
+                    raw_job,
+                    sha=source["commit_sha"],
+                    run_id=context_gate["run_id"],
+                    run_attempt=context_gate["run_attempt"],
+                    expected=expected_jobs[job_name],
+                )
+            except (KeyError, TypeError, ValueError) as error:
+                raise ContractError(
+                    f"{path}.{gate_name}/{job_name} has malformed job evidence: {error}"
+                ) from error
             require(verified == job_value, f"{path}.{gate_name}/{job_name} normalized record is inconsistent")
             verified_jobs.append(verified)
         require(gate.get("jobs_sha256") == verifier.canonical_digest(verified_jobs), f"{path}.{gate_name}.jobs_sha256 is invalid")
+
+
+def validate_local_binding_payload(
+    payload: dict[str, Any], ctx: dict[str, Any], source: dict[str, Any]
+) -> None:
+    """Validate the canonical local-evidence binding attestation."""
+
+    path = "$evidence.local-evidence-binding"
+    require(payload.get("schema") == LOCAL_BINDING_SCHEMA, f"{path}.schema is invalid")
+    require(payload.get("status") == "ok" and payload.get("ok") is True, f"{path} is not successful")
+    for field in ("repository", "branch", "commit_sha", "tree_sha"):
+        require(payload.get(field) == source[field], f"{path}.{field} is invalid")
+    for field in ("workflow_run_id", "workflow_run_attempt"):
+        require(payload.get(field) == ctx[field], f"{path}.{field} differs from context")
+    utc_timestamp(payload.get("generated_at"), f"{path}.generated_at")
+    records = object_at(payload.get("records"), f"{path}.records")
+    require(set(records) == set(LOCAL_EVIDENCE), f"{path}.records set is not canonical")
+    files = object_at(ctx.get("files"), "$context.files")
+    for name, relative in LOCAL_EVIDENCE.items():
+        record = object_at(records.get(name), f"{path}.records.{name}")
+        require(record.get("path") == relative, f"{path}.records.{name}.path is invalid")
+        digest = canonical_sha256(record.get("sha256"), f"{path}.records.{name}.sha256")
+        require(files.get(relative) == digest, f"{path}.records.{name} digest differs from context")
+        require(record.get("producer_commit_sha") == source["commit_sha"], f"{path}.records.{name} commit is invalid")
+        require(record.get("producer_tree_sha") == source["tree_sha"], f"{path}.records.{name} tree is invalid")
+
+
+def validate_hosted_gate_execution_payload(
+    payload: dict[str, Any], ctx: dict[str, Any], source: dict[str, Any]
+) -> None:
+    """Validate the canonical hosted-gate job/runner attestation."""
+
+    path = "$evidence.hosted-gate-execution"
+    require(payload.get("schema") == HOSTED_GATE_EXECUTION_SCHEMA, f"{path}.schema is invalid")
+    require(payload.get("status") == "ok" and payload.get("ok") is True, f"{path} is not successful")
+    for field in ("repository", "branch", "commit_sha", "tree_sha"):
+        require(payload.get(field) == source[field], f"{path}.{field} is invalid")
+    require(payload.get("selection_policy") == "latest_authoritative_run_is_binding", f"{path}.selection_policy is invalid")
+    utc_timestamp(payload.get("generated_at"), f"{path}.generated_at")
+    gates = object_at(payload.get("gates"), f"{path}.gates")
+    expected_paths = set(HOSTED_WORKFLOW_PATHS.values())
+    require(set(gates) == expected_paths, f"{path}.gates set is not canonical")
+    context_gates = object_at(ctx.get("hosted_gates"), "$context.hosted_gates")
+    # Import the checker only for its declarative required-job map.  It does
+    # not contact GitHub during validation.
+    checker_path = Path(__file__).resolve().with_name("check-hosted-gate-execution.py")
+    spec = importlib.util.spec_from_file_location("cex_hosted_gate_checker_contract", checker_path)
+    require(spec is not None and spec.loader is not None, f"{path} cannot load hosted gate contract")
+    checker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+    for gate_name, workflow_path in HOSTED_WORKFLOW_PATHS.items():
+        summary = object_at(gates.get(workflow_path), f"{path}.gates.{workflow_path}")
+        context_gate = object_at(context_gates.get(gate_name), f"$context.hosted_gates.{gate_name}")
+        for field in ("run_id", "run_attempt", "event", "head_branch", "head_sha", "status", "conclusion", "created_at", "updated_at"):
+            expected = context_gate.get(field)
+            actual = summary.get(field)
+            require(actual == expected, f"{path}.gates.{workflow_path}.{field} differs from context")
+        require(summary.get("head_branch") == source["branch"], f"{path}.gates.{workflow_path}.branch is invalid")
+        require(summary.get("head_sha") == source["commit_sha"], f"{path}.gates.{workflow_path}.head_sha is invalid")
+        require(summary.get("event") in {"push", "workflow_dispatch"}, f"{path}.gates.{workflow_path}.event is invalid")
+        utc_timestamp(summary.get("created_at"), f"{path}.gates.{workflow_path}.created_at")
+        utc_timestamp(summary.get("updated_at"), f"{path}.gates.{workflow_path}.updated_at")
+        jobs = summary.get("jobs")
+        require(isinstance(jobs, list) and jobs, f"{path}.gates.{workflow_path}.jobs is empty")
+        expected_jobs = checker.REQUIRED_GATES[workflow_path]
+        require(len(jobs) == len(expected_jobs), f"{path}.gates.{workflow_path}.job count is not canonical")
+        job_names: list[str] = []
+        for index, raw_job in enumerate(jobs):
+            job = object_at(raw_job, f"{path}.gates.{workflow_path}.jobs[{index}]")
+            job_name = job.get("name")
+            require(
+                isinstance(job_name, str) and job_name.strip(),
+                f"{path}.gates.{workflow_path}.jobs[{index}].name is invalid",
+            )
+            job_names.append(job_name)
+        require(
+            len(job_names) == len(set(job_names)),
+            f"{path}.gates.{workflow_path}.jobs contain duplicate names",
+        )
+        by_name = dict(zip(job_names, jobs))
+        require(set(by_name) == set(expected_jobs), f"{path}.gates.{workflow_path}.jobs set is not canonical")
+        for job_name, contract in expected_jobs.items():
+            job = object_at(by_name.get(job_name), f"{path}.gates.{workflow_path}.jobs.{job_name}")
+            require(isinstance(job.get("job_id"), int) and job["job_id"] > 0, f"{path}.{job_name}.job_id is invalid")
+            require(isinstance(job.get("runner_id"), int) and job["runner_id"] > 0, f"{path}.{job_name}.runner_id is invalid")
+            require(isinstance(job.get("runner_name"), str) and job["runner_name"].strip(), f"{path}.{job_name}.runner_name is invalid")
+            require(job.get("status") == "completed", f"{path}.{job_name}.status is invalid")
+            require(job.get("conclusion") == "success", f"{path}.{job_name}.conclusion is invalid")
+            runner_labels = job.get("runner_labels")
+            require(isinstance(runner_labels, list), f"{path}.{job_name}.runner_labels is invalid")
+            require(
+                contract.get("runner_label") in runner_labels,
+                f"{path}.{job_name} lacks required runner label {contract.get('runner_label')!r}",
+            )
+            require(job.get("required_steps") == sorted(contract["steps"]), f"{path}.{job_name}.required_steps is invalid")
+            require(isinstance(job.get("observed_step_count"), int) and job["observed_step_count"] >= len(contract["steps"]), f"{path}.{job_name}.observed_step_count is invalid")
 
 
 def validate_context_binding(
@@ -544,8 +930,17 @@ def validate_context_binding(
     """
 
     ctx = object_at(context, "$context")
+    reject_secret_like_payload(
+        "context.json",
+        (json.dumps(ctx, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8"),
+        "$context",
+    )
     source = data["source"]
     validate_context_metadata(ctx, source)
+    # The strict wrapper writes both maps after all producer checks.  They are
+    # part of the v12 context contract, not optional compatibility metadata:
+    # omitting either map would re-open the historical split-brain between
+    # payload-only observations and the canonical manifest attestations.
     require_fields(ctx, CONTEXT_FIELDS, "$context")
     require(ctx["repository"] == source["repository"], "context repository differs from manifest")
     require(ctx["branch"] == source["branch"], "context branch differs from manifest")
@@ -567,9 +962,54 @@ def validate_context_binding(
     )
     require(payload["sha256"] == ctx["payload_digest"], "payload digest differs from context")
 
-    files = object_at(ctx["files"], "$context.files")
+    files = validate_payload_file_names(ctx["files"])
     hosted = object_at(ctx["hosted_gates"], "$context.hosted_gates")
     require(set(hosted) == set(HOSTED_GATE_NAMES), "$context hosted gate set is not canonical")
+    # The hosted checker selection is an immutable binding, not a convenience
+    # summary.  It prevents a later freshness check from silently substituting
+    # another run while retaining the same-looking gate records.
+    selection = object_at(ctx.get("hosted_gate_selection"), "$context.hosted_gate_selection")
+    reject_unknown(
+        selection,
+        {"schema", "policy", "source", "sha256", "selected_run_ids"},
+        "$context.hosted_gate_selection",
+    )
+    require(
+        selection.get("schema") == HOSTED_GATE_SELECTION_SCHEMA,
+        "$context.hosted_gate_selection.schema is invalid",
+    )
+    require(
+        selection.get("policy") == HOSTED_GATE_SELECTION_POLICY,
+        "$context.hosted_gate_selection.policy is invalid",
+    )
+    require(
+        selection.get("source") == ATTESTATION_EVIDENCE["hosted-gate-execution"],
+        "$context.hosted_gate_selection.source is invalid",
+    )
+    selection_digest = canonical_sha256(
+        selection.get("sha256"), "$context.hosted_gate_selection.sha256"
+    )
+    require(
+        selection_digest == files.get(ATTESTATION_EVIDENCE["hosted-gate-execution"]),
+        "$context.hosted_gate_selection digest differs from hosted attestation",
+    )
+    selected_ids = selection.get("selected_run_ids")
+    require(
+        isinstance(selected_ids, dict)
+        and set(selected_ids) == set(HOSTED_GATE_NAMES),
+        "$context.hosted_gate_selection.selected_run_ids set is not canonical",
+    )
+    for gate_name in HOSTED_GATE_NAMES:
+        require(
+            isinstance(selected_ids.get(gate_name), int)
+            and not isinstance(selected_ids.get(gate_name), bool)
+            and selected_ids.get(gate_name) > 0,
+            f"$context.hosted_gate_selection.selected_run_ids.{gate_name} is invalid",
+        )
+        require(
+            selected_ids.get(gate_name) == hosted[gate_name].get("run_id"),
+            f"$context.hosted_gate_selection.selected_run_ids.{gate_name} differs from context",
+        )
     by_name = {item["name"]: item for item in data["evidence"]}
     expected_files: dict[str, str] = {}
     for gate_name in HOSTED_GATE_NAMES:
@@ -600,6 +1040,45 @@ def validate_context_binding(
         require(context_digest == digest, f"evidence {name} digest is not bound to context file {relative}")
         expected_files[relative] = digest
 
+    # Only these two attestation records are promoted into the canonical
+    # thirteen-record manifest.  Governance and exact-run execution remain
+    # payload-only, but must still be present and digest-bound below.
+    attestations = object_at(ctx.get("attestations"), "$context.attestations")
+    require(
+        set(attestations) == set(ATTESTATION_EVIDENCE),
+        "$context.attestations set is not canonical",
+    )
+    for name, relative in ATTESTATION_EVIDENCE.items():
+        item = object_at(by_name.get(name), f"$.evidence[{name}]")
+        digest = canonical_sha256(item["sha256"], f"$.evidence[{name}].sha256")
+        require(
+            files.get(relative) == digest,
+            f"evidence {name} digest is not bound to context file {relative}",
+        )
+        expected_files[relative] = digest
+        attestation = object_at(attestations.get(name), f"$context.attestations.{name}")
+        require(attestation.get("path") == relative, f"$context.attestations.{name}.path is invalid")
+        require(attestation.get("sha256") == digest, f"$context.attestations.{name}.sha256 differs from manifest")
+
+    payload_only = object_at(
+        ctx.get("payload_only_attestations"),
+        "$context.payload_only_attestations",
+    )
+    require(
+        set(payload_only) == set(PAYLOAD_ONLY_EVIDENCE.values()),
+        "$context.payload_only_attestations set is not canonical",
+    )
+    for relative in PAYLOAD_ONLY_EVIDENCE.values():
+        digest = canonical_sha256(
+            payload_only.get(relative),
+            f"$context.payload_only_attestations.{relative}",
+        )
+        require(
+            files.get(relative) == digest,
+            f"payload-only attestation digest is not bound: {relative}",
+        )
+        expected_files[relative] = digest
+
     for field in ("sbom", "provenance"):
         artifact = build[field]
         relative = artifact["name"]
@@ -611,21 +1090,42 @@ def validate_context_binding(
         require(canonical_sha256(files.get(relative), f"$context.files.{relative}") == digest, f"context file digest is invalid: {relative}")
 
     if evidence_dir is not None:
-        root = evidence_dir.resolve()
+        require(
+            not evidence_dir.is_symlink(),
+            "evidence directory must not be a symlink",
+        )
+        root = evidence_dir.absolute()
+        validate_payload_directory(root, files)
         for relative, expected_digest in files.items():
-            require(isinstance(relative, str) and relative and not Path(relative).is_absolute(), f"context file path is not relative: {relative!r}")
             canonical_sha256(expected_digest, f"$context.files.{relative}")
-            path = (root / relative).resolve()
-            require(root == path or root in path.parents, f"context file escapes evidence directory: {relative!r}")
-            require(path.is_file(), f"context file is missing: {relative}")
+            path = root / relative
+            require(path.is_file() and not path.is_symlink(), f"context file is missing: {relative}")
             require(sha256_file(path) == expected_digest, f"context file hash changed: {relative}")
         actual_files = {
             path.relative_to(root).as_posix()
             for path in root.rglob("*")
             if path.is_file()
         }
-        require(actual_files == set(files), "evidence directory files differ from context index")
+        require(actual_files == set(CANONICAL_PAYLOAD_FILES), "evidence directory files differ from canonical payload set")
         payload_index = load_json_file(root, "payload-index.json", "$evidence.payload-index")
+        require_fields(
+            payload_index,
+            {
+                "schema", "repository", "branch", "commit_sha", "tree_sha",
+                "workflow_run_id", "workflow_run_attempt", "payload_name",
+                "generated_at", "files",
+            },
+            "$evidence.payload-index",
+        )
+        reject_unknown(
+            payload_index,
+            {
+                "schema", "repository", "branch", "commit_sha", "tree_sha",
+                "workflow_run_id", "workflow_run_attempt", "payload_name",
+                "generated_at", "files",
+            },
+            "$evidence.payload-index",
+        )
         require(payload_index.get("schema") == PAYLOAD_INDEX_SCHEMA, "$evidence.payload-index.schema is invalid")
         for field in (
             "repository", "branch", "commit_sha", "tree_sha", "workflow_run_id",
@@ -633,6 +1133,14 @@ def validate_context_binding(
         ):
             require(payload_index.get(field) == ctx.get(field), f"$evidence.payload-index.{field} differs from context")
         require(isinstance(payload_index.get("files"), dict), "$evidence.payload-index.files must be an object")
+        require(
+            all(isinstance(key, str) for key in payload_index["files"]),
+            "$evidence.payload-index.files contains a non-string path",
+        )
+        require(
+            set(payload_index["files"]) == set(CANONICAL_PAYLOAD_FILES) - {"payload-index.json"},
+            "$evidence.payload-index.files set is not canonical",
+        )
         require(payload_index["files"] == {key: value for key, value in files.items() if key != "payload-index.json"}, "$evidence.payload-index.files differs from context")
 
         for gate_name in HOSTED_GATE_NAMES:
@@ -640,12 +1148,24 @@ def validate_context_binding(
             validate_hosted_gate_payload(gate_file, gate_name, ctx, source)
         for name, relative in LOCAL_EVIDENCE.items():
             local_file = load_json_file(root, relative, f"$evidence.{name}")
-            if name == "repository-governance":
-                validate_governance_payload(local_file, ctx, source)
-            elif name == "hosted-run-execution":
-                validate_execution_payload(local_file, ctx, source)
-            else:
-                validate_local_payload(name, local_file, source)
+            validate_local_payload(name, local_file, source)
+
+        governance_file = load_json_file(
+            root, PAYLOAD_ONLY_EVIDENCE["repository-governance"], "$evidence.repository-governance"
+        )
+        validate_governance_payload(governance_file, ctx, source)
+        execution_file = load_json_file(
+            root, PAYLOAD_ONLY_EVIDENCE["hosted-run-execution"], "$evidence.hosted-run-execution"
+        )
+        validate_execution_payload(execution_file, ctx, source)
+        binding_file = load_json_file(
+            root, ATTESTATION_EVIDENCE["local-evidence-binding"], "$evidence.local-evidence-binding"
+        )
+        validate_local_binding_payload(binding_file, ctx, source)
+        hosted_execution_file = load_json_file(
+            root, ATTESTATION_EVIDENCE["hosted-gate-execution"], "$evidence.hosted-gate-execution"
+        )
+        validate_hosted_gate_execution_payload(hosted_execution_file, ctx, source)
 
         sbom = load_json_file(root, "sbom.spdx.json", "$evidence.sbom")
         require(sbom.get("spdxVersion") == "SPDX-2.3", "$evidence.sbom.spdxVersion is invalid")
@@ -699,8 +1219,14 @@ def validate_context_binding(
         # Qualification succeeds only when the bytes that were semantically
         # checked are still exactly the bytes indexed by the context.
         for relative, expected_digest in files.items():
-            path = (root / relative).resolve()
-            require(sha256_file(path) == expected_digest, f"context file changed during semantic validation: {relative}")
+            # Keep the path lexical for the final no-follow read.  Resolving
+            # here would follow a symlink introduced between the semantic
+            # parse and this second hash pass, defeating the TOCTOU guard.
+            path = root / relative
+            require(
+                sha256_file(path) == expected_digest,
+                f"context file changed during semantic validation: {relative}",
+            )
 
 
 def validate_manifest(
@@ -818,12 +1344,21 @@ def validate_manifest(
                 uri == f"artifact://{payload_name}/{LOCAL_EVIDENCE[name]}",
                 f"evidence {name} URI is not payload-bound",
             )
+        if name in ATTESTATION_EVIDENCE:
+            require(
+                uri == f"artifact://{payload_name}/{ATTESTATION_EVIDENCE[name]}",
+                f"evidence {name} URI is not payload-bound",
+            )
         uris.append(uri)
         canonical_sha256(item.get("sha256"), f"$.evidence[{index}].sha256")
     require(len(names) == len(set(names)), "evidence names must be unique")
     require(len(uris) == len(set(uris)), "evidence URIs must be unique")
     require(tuple(names) == EXPECTED_EVIDENCE_ORDER, "evidence order is not canonical")
     require(set(names) == EXPECTED_EVIDENCE, "candidate evidence set is incomplete or contains additions")
+    require(
+        not FORBIDDEN_SPLIT_BRAIN_EVIDENCE.intersection(names),
+        "payload-only attestations must not become extra manifest evidence",
+    )
 
     approvals = root.get("approvals")
     require(isinstance(approvals, list) and len(approvals) == 1, "candidate requires exactly one repository automation approval")
@@ -865,15 +1400,26 @@ def main() -> int:
     )
     args = parser.parse_args()
     try:
-        value = json.loads(args.manifest.read_text(encoding="utf-8"))
+        # The manifest and context are untrusted artifact inputs at this
+        # boundary.  Do not follow a caller-supplied symlink while deciding
+        # whether a candidate qualifies.
+        value = read_json_nofollow(args.manifest, label="candidate manifest")
         context = None
         if args.context is not None:
-            context = json.loads(args.context.read_text(encoding="utf-8"))
+            context = read_json_nofollow(args.context, label="release context")
         evidence_dir = args.evidence_dir
         if evidence_dir is not None and not evidence_dir.is_absolute():
             evidence_dir = Path(__file__).resolve().parents[1] / evidence_dir
         validate_manifest(value, context=context, evidence_dir=evidence_dir)
-    except (OSError, json.JSONDecodeError, ContractError) as error:
+    except (
+        OSError,
+        json.JSONDecodeError,
+        SafeIOError,
+        ContractError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ) as error:
         print(f"strict release evidence contract failed: {error}")
         return 1
     print(f"strict release evidence contract passed: {args.manifest}")

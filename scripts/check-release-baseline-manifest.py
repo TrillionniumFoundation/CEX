@@ -48,8 +48,8 @@ LOCAL_EVIDENCE_URI_PATTERNS = {
     "migration-and-lifecycle-matrix": r"^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/database-lifecycle\.json$",
     "exact-ledger-soak": r"^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/exact-ledger-soak\.json$",
     "backup-restore": r"^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/backup-restore\.json$",
-    "repository-governance": r"^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/repository-governance\.json$",
-    "hosted-run-execution": r"^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/hosted-run-execution\.json$",
+    "local-evidence-binding": r"^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/local-evidence-binding\.json$",
+    "hosted-gate-execution": r"^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/hosted-gate-execution\.json$",
 }
 ACTIVE_STATUSES = ("draft", "candidate")
 EXPECTED_EVIDENCE = (
@@ -64,8 +64,8 @@ EXPECTED_EVIDENCE = (
     "migration-and-lifecycle-matrix",
     "exact-ledger-soak",
     "backup-restore",
-    "repository-governance",
-    "hosted-run-execution",
+    "local-evidence-binding",
+    "hosted-gate-execution",
 )
 EXTERNAL_GATES = (
     "X1: production-like backup and restore rehearsal against representative data volume and the real storage topology",

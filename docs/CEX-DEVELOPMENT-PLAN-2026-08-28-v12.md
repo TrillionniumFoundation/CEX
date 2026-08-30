@@ -221,7 +221,27 @@ attempt/job execution attestations, conclusions and hashes and must pass
 The strict contract also binds each hosted URI to the collector's final run/context snapshot,
 binds every local evidence digest to the payload index, and re-hashes the payload directory at
 manifest time. A swapped run ID, stale attestation digest, post-upload file mutation, missing
-required field or stale qualification freeze therefore fails closed.
+required field or stale candidate-trigger freeze therefore fails closed.
+
+Hosted selection is a single bounded collect pass owned by
+`scripts/check-hosted-gate-execution.py`: it performs the run-list/detail/job validation and emits
+the authoritative frozen run/attempt snapshot. The strict collector injects that snapshot into the
+core in-process, so the core cannot perform a second mutable API selection. The exact-attempt
+verifier and hosted-job attestation consume the same frozen IDs, while
+`scripts/verify-hosted-snapshot-freshness.py` revalidates the set after job proof, before manifest
+generation, and after manifest publication; no newer success, failure, cancellation, skip, or
+active rerun can be silently substituted.
+
+The aggregate governance record must contain all nine required contexts, including repository
+integrity and the full Hepta PostgreSQL recovery lane. Exact-state backup/restore uses complete
+host PostgreSQL tooling when available and otherwise a credential-safe Docker client fallback with
+an explicitly proven local port mapping; database URLs are never exposed in process arguments.
+
+The aggregate workflow may also create transient diagnostics under
+`run/p0-release-support` (for example, a TRNM receipt-lookup response). Those files are
+deliberately outside the closed upload namespace and are not qualification evidence. The
+authoritative record for lifecycle checks is `database-lifecycle.json`, together with the
+exact-SHA hosted job/step attestation; a support diagnostic must never be substituted for either.
 
 | Evidence | Required state | Binding location |
 |---|---|---|
@@ -255,9 +275,9 @@ Repository-actionable gaps are closed only when all of the following are true on
    SBOM and provenance all validate;
 10. actual branch/ruleset enforcement state is reported without fabrication.
 
-The committed `docs/release-evidence/.qualification-freeze` is checked against the candidate
-trigger sequence and explicit `production_authorization=not_granted`; it is a consistency control,
-not an authorization to deploy.
+The shared `docs/release-evidence/p0-candidate-trigger.json` is the sole candidate-freeze authority;
+its sequence and explicit `production_authorization=not_granted` are checked as a consistency
+control, not an authorization to deploy. A secondary qualification-freeze marker is forbidden.
 
 Even after repository closure, the release remains **not production-ready** until every external
 gate in Section 5 is independently satisfied and the final go/no-go approval is recorded.

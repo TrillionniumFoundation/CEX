@@ -9,6 +9,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -16,10 +17,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+from evidence_safe_io import SafeIOError, write_json_nofollow  # noqa: E402
+
 DESIRED_CHECKS = [
     "fresh-postgres-migrations",
+    "repository-integrity",
     "service-local-gate-linux",
     "service-local-gate-windows",
+    "hepta-postgres-integration",
     "gateway-exact-reserve",
     "execution-settlement",
     "provider-reconciliation",
@@ -444,8 +452,10 @@ def main() -> int:
             "branch protection or ruleset enforcement."
         ),
     }
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    try:
+        write_json_nofollow(args.output, result)
+    except SafeIOError as error:
+        raise SystemExit(str(error)) from error
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 

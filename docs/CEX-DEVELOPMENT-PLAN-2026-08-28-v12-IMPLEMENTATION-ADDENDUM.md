@@ -95,10 +95,15 @@ The final candidate sequence is:
 6. report actual branch/ruleset enforcement without inference;
 7. stop at repository qualification unless every external production gate has independent evidence.
 
-The qualification trigger and committed freeze sequence must remain synchronized; a stale or
-missing freeze is a fail-closed repository wiring error, not a reason to infer qualification.
+The shared qualification trigger is the sole committed freeze authority; a stale or missing
+trigger, or any secondary freeze marker, is a fail-closed repository wiring error, not a reason
+to infer qualification.
 
 A later commit, including a documentation-only commit, creates a new tree and must be requalified.
+
+Transient files written below `run/p0-release-support` are operator diagnostics only. They are
+outside the canonical payload allow-list; lifecycle qualification is bound to the retained
+`database-lifecycle.json` record and the exact hosted run/job/step attestations.
 
 ## 4. External production gates remain upstream blockers
 

@@ -12,6 +12,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+from evidence_safe_io import (  # noqa: E402
+    SafeIOError,
+    read_json_nofollow,
+    read_regular_nofollow,
+    sha256_file_nofollow,
+    write_json_nofollow,
+)
+
 ROOT = Path(__file__).resolve().parents[1]
 AUTHORITY_PATH = ROOT / "docs/development-doc-authority-v1.json"
 
@@ -26,11 +37,10 @@ def run_git(*arguments: str) -> str:
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return "sha256:" + digest.hexdigest()
+    try:
+        return sha256_file_nofollow(path)
+    except SafeIOError as error:
+        raise SystemExit(str(error)) from error
 
 
 def digest_set(paths: Iterable[Path]) -> str:
@@ -39,7 +49,10 @@ def digest_set(paths: Iterable[Path]) -> str:
         relative = path.relative_to(ROOT).as_posix()
         digest.update(relative.encode("utf-8"))
         digest.update(b"\0")
-        digest.update(path.read_bytes())
+        try:
+            digest.update(read_regular_nofollow(path, maximum=2**63 - 1))
+        except SafeIOError as error:
+            raise SystemExit(str(error)) from error
         digest.update(b"\0")
     return "sha256:" + digest.hexdigest()
 
@@ -75,7 +88,10 @@ def main() -> int:
     if args.expected_tree and args.expected_tree != tree_sha:
         raise SystemExit("checked-out tree does not match expected tree")
 
-    authority = json.loads(AUTHORITY_PATH.read_text(encoding="utf-8"))
+    try:
+        authority = read_json_nofollow(AUTHORITY_PATH, label="development authority")
+    except SafeIOError as error:
+        raise SystemExit(str(error)) from error
     canonical = [ROOT / value for value in authority["canonical_documents"].values()]
     canonical.extend(
         [
@@ -132,8 +148,10 @@ def main() -> int:
     encoded = json.dumps(record, indent=2, sort_keys=True) + "\n"
     if args.output:
         output = args.output if args.output.is_absolute() else ROOT / args.output
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(encoded, encoding="utf-8")
+        try:
+            write_json_nofollow(output, record)
+        except SafeIOError as error:
+            raise SystemExit(str(error)) from error
     print(encoded, end="")
     return 0
 

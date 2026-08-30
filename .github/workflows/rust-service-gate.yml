@@ -26,12 +26,16 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Validate development-document authority
         run: python3 scripts/check-development-docs.py
 
       - name: Strict release evidence wiring
-        run: python3 scripts/check-strict-release-evidence-wiring.py
+        run: |
+          python3 scripts/check-strict-release-evidence-wiring.py
+          python3 scripts/test-p0-release-evidence-strict.py
+          python3 scripts/verify-hosted-snapshot-freshness.py --self-test
 
       - name: Emit exact-tree integrity record
         run: |
@@ -56,6 +60,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Development-document contract
         run: python scripts/check-development-docs.py
@@ -98,6 +104,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Development-document contract
         run: python3 scripts/check-development-docs.py
@@ -151,6 +159,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Development-document contract
         run: python3 scripts/check-development-docs.py

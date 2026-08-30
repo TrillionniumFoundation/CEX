@@ -602,7 +602,7 @@
                   {
                     "properties": {
                       "name": {
-                        "const": "repository-governance"
+                        "const": "local-evidence-binding"
                       },
                       "status": {
                         "const": "pending"
@@ -628,7 +628,7 @@
                   {
                     "properties": {
                       "name": {
-                        "const": "hosted-run-execution"
+                        "const": "hosted-gate-execution"
                       },
                       "status": {
                         "const": "pending"
@@ -1092,7 +1092,7 @@
                   {
                     "properties": {
                       "name": {
-                        "const": "repository-governance"
+                        "const": "local-evidence-binding"
                       },
                       "status": {
                         "const": "pass"
@@ -1100,7 +1100,7 @@
                       "uri": {
                         "type": "string",
                         "minLength": 1,
-                        "pattern": "^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/repository-governance\\.json$"
+                        "pattern": "^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/local-evidence-binding\\.json$"
                       },
                       "sha256": {
                         "$ref": "#/$defs/nonzeroSha256"
@@ -1120,7 +1120,7 @@
                   {
                     "properties": {
                       "name": {
-                        "const": "hosted-run-execution"
+                        "const": "hosted-gate-execution"
                       },
                       "status": {
                         "const": "pass"
@@ -1128,7 +1128,7 @@
                       "uri": {
                         "type": "string",
                         "minLength": 1,
-                        "pattern": "^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/hosted-run-execution\\.json$"
+                        "pattern": "^artifact://cex-p0-evidence-[0-9a-f]{40}-attempt-[1-9][0-9]*/hosted-gate-execution\\.json$"
                       },
                       "sha256": {
                         "$ref": "#/$defs/nonzeroSha256"

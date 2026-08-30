@@ -6,8 +6,10 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Iterable
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_GLOBS = (".github/workflows/*.yml", ".github/workflows/*.yaml")
@@ -62,6 +64,35 @@ FLOW_USES_RE = re.compile(
     r'''[{,]\s*(?:uses|"uses"|'uses')\s*:'''
 )
 ANY_USES_KEY_RE = re.compile(r'''(?:uses|"uses"|'uses')\s*:''')
+DOUBLE_QUOTED_SCALAR_RE = re.compile(r'"(?P<body>(?:\\.|[^"\\])*)"')
+# This checker deliberately has no PyYAML dependency.  Any YAML syntax which
+# can change a mapping key without being represented by the small lexical
+# parser below is therefore rejected.  In particular, quoted keys may carry
+# YAML escapes (``"us\\x65s"``), and tags/anchors/aliases or flow collections
+# can hide an action/event key across physical lines.
+EXPLICIT_KEY_RE = re.compile(r"^\s*(?:-\s*)?\?(?:\s|$)")
+TAG_RE = re.compile(
+    r"(?<![A-Za-z0-9_$])!(?:![A-Za-z0-9_.:/-]+|<[^\n>]+>|[A-Za-z0-9_.:/-]+)?"
+    r"(?=$|[\s,}\]])"
+)
+ANCHOR_ALIAS_RE = re.compile(
+    r"(?<![A-Za-z0-9_$])[&*][A-Za-z0-9_.-]*(?=$|[\s,}\]])"
+)
+FLOW_DELIMITER_RE = re.compile(r"[{}\[\]]")
+BLOCK_SCALAR_RE = re.compile(
+    r":\s*[|>](?:(?:[1-9][+-]?)|(?:[+-][1-9]?))?\s*$"
+)
+# A block scalar used directly as the workflow ``on`` value is equivalent to
+# an event string after YAML folding.  It is outside the small structural
+# parser's trusted subset and can hide a forbidden event across physical
+# lines, so reject the construct rather than trying to infer its folded value.
+ON_BLOCK_SCALAR_RE = re.compile(
+    r"^\s*(?:on|[\"']on[\"'])\s*:\s*[|>]"
+    r"(?:(?:[1-9][+-]?)|(?:[+-][1-9]?))?\s*$"
+)
+ON_QUOTED_VALUE_RE = re.compile(
+    r"^\s*(?:on|[\"']on[\"'])\s*:\s*(?P<quote>[\"'])"
+)
 FORBIDDEN_EVENT_RE = re.compile(
     r"(?<![A-Za-z0-9_])(?:pull_request|pull_request_target)(?![A-Za-z0-9_])"
 )
@@ -109,6 +140,236 @@ def strip_yaml_comment(line: str) -> str:
     return line
 
 
+def unquoted_lines(text: str) -> Iterable[tuple[int, str]]:
+    """Yield YAML lines which are structural rather than block-scalar data.
+
+    Workflow ``run``/``shell`` blocks routinely contain shell, Python, and
+    PowerShell punctuation that looks like YAML flow syntax.  The trust
+    parser must inspect those blocks for neither action nor trigger keys.  A
+    small indentation state machine is sufficient for the block-scalar forms
+    used by GitHub workflows; malformed indentation is left visible and thus
+    fails closed when it resembles ambiguous YAML.
+    """
+
+    scalar_indent: int | None = None
+    for number, physical in enumerate(text.splitlines(), start=1):
+        indentation = len(physical) - len(physical.lstrip(" "))
+        if scalar_indent is not None:
+            if not physical.strip() or indentation > scalar_indent:
+                continue
+            scalar_indent = None
+
+        line = strip_yaml_comment(physical)
+        yield number, line
+        if BLOCK_SCALAR_RE.search(line.rstrip()):
+            scalar_indent = indentation
+
+
+def quoted_mapping_keys(line: str) -> Iterable[tuple[str, str, bool, bool]]:
+    """Return quoted mapping-key tokens found on one structural line.
+
+    The tuple is ``(quote, body, has_backslash, closed)``.  ``closed=False``
+    is retained for a likely multiline key beginning at a mapping boundary;
+    rejecting it prevents a continuation line from bypassing the lexical
+    checks.  This is deliberately broader than YAML's exact grammar and may
+    reject unusual but valid scalar text, which is the safe tradeoff here.
+    """
+
+    text = strip_yaml_comment(line)
+    index = 0
+    while index < len(text):
+        quote = text[index]
+        if quote not in {"'", '"'}:
+            index += 1
+            continue
+
+        start = index
+        index += 1
+        body: list[str] = []
+        has_backslash = False
+        closed = False
+        while index < len(text):
+            char = text[index]
+            if quote == '"':
+                if char == "\\":
+                    has_backslash = True
+                    body.append(char)
+                    index += 1
+                    if index < len(text):
+                        body.append(text[index])
+                        index += 1
+                    continue
+                if char == '"':
+                    index += 1
+                    closed = True
+                    break
+                body.append(char)
+                index += 1
+                continue
+
+            # YAML single-quoted scalars escape a quote by doubling it.
+            if char == "'":
+                if index + 1 < len(text) and text[index + 1] == "'":
+                    body.extend(("'", "'"))
+                    index += 2
+                    continue
+                index += 1
+                closed = True
+                break
+            if char == "\\":
+                has_backslash = True
+            body.append(char)
+            index += 1
+
+        if closed:
+            end = index
+            while end < len(text) and text[end] in " \t":
+                end += 1
+            if end < len(text) and text[end] == ":":
+                yield quote, "".join(body), has_backslash, True
+            # Continue after the token; another quoted key may occur later in
+            # a flow mapping on the same line.
+            index = end
+            continue
+
+        # A quoted key may legally continue on the next physical line.  Only
+        # treat an unterminated token as a key when it starts at a mapping
+        # boundary, avoiding needless rejection of ordinary quoted values.
+        prefix = text[:start].rstrip()
+        if not prefix or prefix.endswith(("-", "?", "{", ",")):
+            yield quote, "".join(body), has_backslash, False
+        break
+
+
+def decode_yaml_double_quoted(body: str) -> str | None:
+    """Decode the YAML escapes needed to identify a forbidden event key."""
+
+    simple = {
+        "0": "\0",
+        "a": "\a",
+        "b": "\b",
+        "t": "\t",
+        "n": "\n",
+        "v": "\v",
+        "f": "\f",
+        "r": "\r",
+        "e": "\x1b",
+        " ": " ",
+        '"': '"',
+        "/": "/",
+        "\\": "\\",
+        "N": "\u0085",
+        "_": "\u00a0",
+        "L": "\u2028",
+        "P": "\u2029",
+    }
+    decoded: list[str] = []
+    index = 0
+    while index < len(body):
+        char = body[index]
+        if char != "\\":
+            decoded.append(char)
+            index += 1
+            continue
+        index += 1
+        if index >= len(body):
+            return None
+        escaped = body[index]
+        if escaped in simple:
+            decoded.append(simple[escaped])
+            index += 1
+            continue
+        width = {"x": 2, "u": 4, "U": 8}.get(escaped)
+        if width is None or index + width >= len(body):
+            return None
+        digits = body[index + 1 : index + 1 + width]
+        if not re.fullmatch(rf"[0-9A-Fa-f]{{{width}}}", digits):
+            return None
+        try:
+            decoded.append(chr(int(digits, 16)))
+        except ValueError:
+            # Invalid Unicode scalar values are still parser-ambiguous; the
+            # caller has already recorded the escaped-key rejection.
+            return None
+        index += width + 1
+    return "".join(decoded)
+
+
+def decode_quoted_key(quote: str, body: str) -> str | None:
+    if quote == '"':
+        return decode_yaml_double_quoted(body)
+    return body.replace("''", "'")
+
+
+def mask_yaml_quoted_and_expressions(line: str) -> str:
+    """Mask quoted scalars and GitHub expressions before syntax checks."""
+
+    text = strip_yaml_comment(line)
+    masked = list(text)
+    index = 0
+    while index < len(text):
+        if text.startswith("${{", index):
+            end = text.find("}}", index + 3)
+            stop = len(text) if end < 0 else end + 2
+            for position in range(index, stop):
+                masked[position] = " "
+            index = stop
+            continue
+        if text[index] not in {"'", '"'}:
+            index += 1
+            continue
+
+        quote = text[index]
+        masked[index] = " "
+        index += 1
+        while index < len(text):
+            char = text[index]
+            masked[index] = " "
+            if quote == '"' and char == "\\":
+                index += 1
+                if index < len(text):
+                    masked[index] = " "
+                    index += 1
+                continue
+            if char == quote:
+                index += 1
+                break
+            if quote == "'" and index + 1 < len(text) and text[index + 1] == "'":
+                masked[index + 1] = " "
+                index += 2
+                continue
+            index += 1
+    return "".join(masked)
+
+
+def parser_ambiguities(line: str) -> list[str]:
+    """Return conservative parser-ambiguity reasons for a YAML line."""
+
+    issues: list[str] = []
+    for quote, body, has_backslash, closed in quoted_mapping_keys(line):
+        if has_backslash:
+            issues.append(
+                "escaped quoted mapping keys are forbidden; use plain YAML keys"
+            )
+            # One issue per line is enough even if a flow map has multiple
+            # escaped keys.
+            break
+        if not closed:
+            issues.append(
+                "multiline quoted mapping keys are parser-ambiguous and forbidden"
+            )
+            break
+
+    masked = mask_yaml_quoted_and_expressions(line)
+    if EXPLICIT_KEY_RE.match(masked):
+        issues.append("explicit YAML mapping keys are parser-ambiguous and forbidden")
+    if TAG_RE.search(masked) or ANCHOR_ALIAS_RE.search(masked):
+        issues.append("YAML tags, anchors, and aliases are parser-ambiguous and forbidden")
+    if FLOW_DELIMITER_RE.search(masked):
+        issues.append("flow-style YAML collections are parser-ambiguous and forbidden")
+    return issues
+
+
 def parse_scalar(raw: str) -> str:
     value = raw.strip()
     if not value:
@@ -148,9 +409,10 @@ def resolve_local_use(use: str, *, require_exists: bool) -> Path | None:
     if not re.fullmatch(r"[A-Za-z0-9._/-]+", relative_raw):
         raise ValueError("local uses path contains unsupported characters")
 
+    repository_root = ROOT.resolve()
     target = (ROOT / relative_raw).resolve()
     try:
-        target.relative_to(ROOT.resolve())
+        target.relative_to(repository_root)
     except ValueError as error:
         raise ValueError("local uses path escapes the repository root") from error
 
@@ -168,16 +430,35 @@ def resolve_local_use(use: str, *, require_exists: bool) -> Path | None:
     if not target.is_dir():
         raise ValueError(f"local uses target does not exist: {relative_raw}")
 
-    descriptors = [
-        candidate
-        for candidate in (target / "action.yml", target / "action.yaml")
-        if candidate.is_file()
-    ]
+    descriptor_candidates = (target / "action.yml", target / "action.yaml")
+    descriptors = [candidate for candidate in descriptor_candidates if candidate.is_file()]
     if len(descriptors) != 1:
         raise ValueError(
             "local action directory must contain exactly one action.yml or action.yaml"
         )
-    return descriptors[0].resolve()
+
+    return validate_local_action_descriptor(descriptors[0], repository_root)
+
+
+def validate_local_action_descriptor(descriptor: Path, repository_root: Path) -> Path:
+    """Validate and resolve a local action descriptor inside the checkout."""
+
+    # A descriptor symlink is not part of the immutable workflow tree.  It can
+    # point outside the checkout (or be swapped after this check), so fail
+    # closed instead of recursively trusting its contents.
+    if descriptor.is_symlink():
+        raise ValueError("local action descriptor must not be a symlink")
+    try:
+        resolved_descriptor = descriptor.resolve()
+    except (OSError, RuntimeError) as error:
+        raise ValueError(f"cannot resolve local action descriptor: {error}") from error
+    try:
+        resolved_descriptor.relative_to(repository_root)
+    except ValueError as error:
+        raise ValueError("local action descriptor escapes the repository root") from error
+    if not resolved_descriptor.is_file():
+        raise ValueError("local action descriptor does not resolve to a regular file")
+    return resolved_descriptor
 
 
 def action_pin_problem(use: str, *, require_local_exists: bool = True) -> tuple[str | None, Path | None]:
@@ -197,7 +478,12 @@ def action_pin_problem(use: str, *, require_local_exists: bool = True) -> tuple[
         )
 
     location, separator, ref = use.rpartition("@")
-    if not location or not separator or not PINNED_SHA_RE.fullmatch(ref):
+    if (
+        not location
+        or not separator
+        or not PINNED_SHA_RE.fullmatch(ref)
+        or ref == "0" * 40
+    ):
         return "external actions must use a 40-character lowercase commit SHA", None
     if not REMOTE_ACTION_RE.fullmatch(location):
         return "external action location has an invalid owner/repository/path shape", None
@@ -208,11 +494,19 @@ def action_pin_problem(use: str, *, require_local_exists: bool = True) -> tuple[
 
 def uses_entries(text: str, label: str) -> list[tuple[int, str]]:
     entries: list[tuple[int, str]] = []
-    for number, physical in enumerate(text.splitlines(), start=1):
-        line = strip_yaml_comment(physical).rstrip()
+    ambiguous = False
+    for number, structural in unquoted_lines(text):
+        line = structural.rstrip()
         if not line.strip():
             continue
+        syntax_issues = parser_ambiguities(line)
+        if syntax_issues:
+            ambiguous = True
+            for issue in syntax_issues:
+                PROBLEMS.append(f"{label}:{number}: {issue}")
+            continue
         if FLOW_USES_RE.search(line):
+            ambiguous = True
             PROBLEMS.append(
                 f"{label}:{number}: flow-style uses mappings are forbidden; use block syntax"
             )
@@ -227,14 +521,29 @@ def uses_entries(text: str, label: str) -> list[tuple[int, str]]:
                 entries.append((number, value))
             continue
         if ANY_USES_KEY_RE.search(line):
+            ambiguous = True
             PROBLEMS.append(
                 f"{label}:{number}: parser-ambiguous uses key is forbidden"
             )
-    return entries
+    # Do not interpret any action reference from a document whose YAML shape
+    # was parser-ambiguous.  The caller still receives all diagnostics above,
+    # while local-action traversal cannot accidentally trust a partial parse.
+    return [] if ambiguous else entries
 
 
 def scan_action_document(path: Path) -> None:
-    path = path.resolve()
+    # Re-check at traversal time as well as during ``resolve_local_use``.  A
+    # local descriptor can be replaced between those calls; following a newly
+    # introduced symlink would make the trust result depend on an untracked
+    # path outside this checkout.
+    if path.is_symlink():
+        PROBLEMS.append(f"{relative(path)}: local action descriptor must not be a symlink")
+        return
+    try:
+        path = validate_local_action_descriptor(path, ROOT.resolve())
+    except ValueError as error:
+        PROBLEMS.append(f"{relative(path)}: {error}")
+        return
     if path in VISITED_ACTIONS:
         return
     VISITED_ACTIONS.add(path)
@@ -255,18 +564,67 @@ def scan_uses(text: str, label: str) -> None:
             scan_action_document(descriptor)
 
 
-def unquoted_lines(text: str) -> Iterable[tuple[int, str]]:
-    for number, physical in enumerate(text.splitlines(), start=1):
-        yield number, strip_yaml_comment(physical)
-
-
 def validate_authoritative_events(path: Path, text: str) -> None:
     label = relative(path)
     for number, line in unquoted_lines(text):
-        if FORBIDDEN_EVENT_RE.search(line):
+        if ON_BLOCK_SCALAR_RE.search(line.rstrip()):
+            PROBLEMS.append(
+                f"{label}:{number}: block-scalar workflow event values are forbidden"
+            )
+        quoted_value = ON_QUOTED_VALUE_RE.match(line)
+        if quoted_value:
+            quote = quoted_value.group("quote")
+            value = line[quoted_value.end() :]
+            # A quote that is continued on the next physical line can decode
+            # to a forbidden event while evading the one-line scalar decoder.
+            # Reject all unterminated ``on`` values; multiline event scalars
+            # are outside the trusted workflow subset anyway.
+            closed = False
+            index = 0
+            while index < len(value):
+                if quote == '"' and value[index] == "\\":
+                    index += 2
+                    continue
+                if value[index] == quote:
+                    if quote == "'" and index + 1 < len(value) and value[index + 1] == "'":
+                        index += 2
+                        continue
+                    closed = True
+                    break
+                index += 1
+            if not closed:
+                PROBLEMS.append(
+                    f"{label}:{number}: multiline quoted workflow event values are forbidden"
+                )
+        for issue in parser_ambiguities(line):
+            PROBLEMS.append(f"{label}:{number}: parser-ambiguous event YAML: {issue}")
+        for quote, body, has_backslash, closed in quoted_mapping_keys(line):
+            if not has_backslash or not closed:
+                continue
+            decoded = decode_quoted_key(quote, body)
+            if decoded in {"pull_request", "pull_request_target"}:
+                PROBLEMS.append(
+                    f"{label}:{number}: escaped forbidden event key {decoded!r} is not allowed"
+                )
+        literal_forbidden = FORBIDDEN_EVENT_RE.search(line)
+        if literal_forbidden:
             PROBLEMS.append(
                 f"{label}:{number}: pull_request/pull_request_target is forbidden for exact-tree evidence"
             )
+        # YAML double-quoted scalars decode hexadecimal/unicode escapes before
+        # GitHub evaluates the ``on`` trigger.  A raw-text search alone would
+        # therefore miss values such as ``"pull_\\x72equest"`` (including a
+        # list-form trigger item).  Decode every complete quoted scalar and
+        # reject an escaped event name when its raw text did not already make
+        # the literal check fail.
+        if not literal_forbidden:
+            for match in DOUBLE_QUOTED_SCALAR_RE.finditer(line):
+                decoded = decode_yaml_double_quoted(match.group("body"))
+                if decoded is not None and FORBIDDEN_EVENT_RE.search(decoded):
+                    PROBLEMS.append(
+                        f"{label}:{number}: escaped forbidden event value is not allowed"
+                    )
+                    break
 
 
 def validate_wrappers(workflow_texts: dict[str, str]) -> None:
@@ -318,7 +676,13 @@ def self_test() -> None:
     invalid_samples = {
         "mutable-tag": "steps:\n  - uses: actions/checkout@v4\n",
         "flow-map": f"steps:\n  - {{ uses: {pinned} }}\n",
+        "flow-map-multiline": f"steps:\n  - {{\n      uses: {pinned}\n    }}\n",
         "dynamic": "steps:\n  - uses: ${{ matrix.action }}\n",
+        "escaped-key": f"steps:\n  - \"us\\x65s\": {pinned}\n",
+        "single-quoted-backslash-key": f"steps:\n  - 'us\\x65s': {pinned}\n",
+        "tagged-key": f"steps:\n  - !!str \"uses\": {pinned}\n",
+        "anchored-mapping": f"steps:\n  - &action\n    uses: {pinned}\n",
+        "multiline-quoted-key": f"steps:\n  - \"us\n    es\": {pinned}\n",
     }
     for name, sample in invalid_samples.items():
         local: list[str] = []
@@ -336,13 +700,64 @@ def self_test() -> None:
     problem, _ = action_pin_problem("./../escape", require_local_exists=False)
     if not problem:
         PROBLEMS.append("workflow trust local path traversal self-test failed")
+    problem, _ = action_pin_problem("actions/checkout@" + "0" * 40, require_local_exists=False)
+    if not problem:
+        PROBLEMS.append("workflow trust all-zero action SHA self-test failed")
+
+    # Exercise both local-descriptor containment guards without depending on
+    # platform-specific permission to create symlinks (the hygiene check also
+    # runs on the hosted Windows lane).  The mocked lstat-style result models
+    # a descriptor candidate that is replaced by a symlink in the checkout.
+    with tempfile.TemporaryDirectory(prefix="cex-workflow-trust-") as directory:
+        test_root = Path(directory) / "repo"
+        action_dir = test_root / "local-action"
+        action_dir.mkdir(parents=True)
+        (action_dir / "action.yml").write_text(
+            "name: self-test\nruns:\n  using: composite\n  steps: []\n",
+            encoding="utf-8",
+        )
+        original_root = ROOT
+        try:
+            globals()["ROOT"] = test_root
+            with mock.patch.object(Path, "is_symlink", return_value=True):
+                symlink_problem, _ = action_pin_problem("./local-action")
+        finally:
+            globals()["ROOT"] = original_root
+        if symlink_problem != "local action descriptor must not be a symlink":
+            PROBLEMS.append(
+                "workflow trust local descriptor symlink self-test failed"
+            )
+
+        outside = Path(directory) / "outside-action.yml"
+        outside.write_text("name: outside\n", encoding="utf-8")
+        try:
+            validate_local_action_descriptor(outside, test_root.resolve())
+        except ValueError as error:
+            containment_problem = str(error)
+        else:
+            containment_problem = ""
+        if "escapes the repository root" not in containment_problem:
+            PROBLEMS.append(
+                "workflow trust local descriptor containment self-test failed"
+            )
 
     for sample in (
         "on:\n  pull_request:\n",
         "on: [push, pull_request]\n",
         "on:\n  \"pull_request_target\": {}\n",
+        "on:\n  \"pull_\\x72equest\": {}\n",
+        "on: \"pull_\\x72equest\"\n",
+        "on:\n  - \"pull_\\x72equest\"\n",
+        "on:\n  !!str \"pull_request\": {}\n",
+        "on:\n  &event pull_request_target: {}\n",
+        "on: |\n  pull_request\n",
+        "on: >-\n  pull_request_target\n",
     ):
-        if not any(FORBIDDEN_EVENT_RE.search(line) for _, line in unquoted_lines(sample)):
+        before = len(PROBLEMS)
+        validate_authoritative_events(ROOT / "<self-test-events>", sample)
+        event_problems = PROBLEMS[before:]
+        del PROBLEMS[before:]
+        if not event_problems:
             PROBLEMS.append("workflow trust forbidden-event self-test failed")
 
 

@@ -14,7 +14,6 @@ if ! [[ "$iterations" =~ ^[1-9][0-9]*$ ]] || (( iterations > 5000 )); then
   exit 64
 fi
 
-mkdir -p "$evidence_dir"
 started_at_epoch=$(date +%s)
 
 cex_psql_stdin -X -v iterations="$iterations" <<'SQL'
@@ -174,10 +173,12 @@ select json_build_object(
   'audit_effect_count',(select count(*) from public.cex_audit_outbox_v1 where source_service='ledger-service' and envelope ->> 'event_type'='ledger.effect.persisted' and envelope #>> '{payload,account_id}'=accounts.account_id::text)
 ) from public.accounts where account_id='90000000-0000-4000-8000-000000000101';")
 
-python3 - "$evidence_dir/exact-ledger-soak.json" "$raw_json" "$started_at_epoch" "$ended_at_epoch" "${GITHUB_SHA:-unknown}" "$tree_sha" <<'PY'
+python3 - "$evidence_dir/exact-ledger-soak.json" "$raw_json" "$started_at_epoch" "$ended_at_epoch" "${GITHUB_SHA:-unknown}" "$tree_sha" "$root" <<'PY'
 import json
 from pathlib import Path
 import sys
+sys.path.insert(0, str(Path(sys.argv[7]) / "scripts"))
+from evidence_safe_io import write_json_nofollow
 
 path = Path(sys.argv[1])
 data = json.loads(sys.argv[2])
@@ -188,7 +189,7 @@ data.update({
     "commit_sha": sys.argv[5],
     "tree_sha": sys.argv[6],
 })
-path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+write_json_nofollow(path, data)
 PY
 
 echo "P0 exact Ledger soak passed: $evidence_dir/exact-ledger-soak.json"

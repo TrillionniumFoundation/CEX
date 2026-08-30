@@ -15,6 +15,10 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE = ROOT / "scripts/check-release-baseline-manifest-contract-core.py"
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+from evidence_safe_io import SafeIOError, read_json_nofollow, write_json_nofollow  # noqa: E402
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 ZERO_SHA256 = "sha256:" + "0" * 64
 BASE_EVIDENCE_ORDER = (
@@ -31,8 +35,8 @@ BASE_EVIDENCE_ORDER = (
     "backup-restore",
 )
 ATTESTATIONS = {
-    "repository-governance": "repository-governance.json",
-    "hosted-run-execution": "hosted-run-execution.json",
+    "local-evidence-binding": "local-evidence-binding.json",
+    "hosted-gate-execution": "hosted-gate-execution.json",
 }
 EXPECTED_EVIDENCE_ORDER = BASE_EVIDENCE_ORDER + tuple(ATTESTATIONS)
 EXTERNAL_GATES = (
@@ -78,7 +82,9 @@ def outer_contract_problems(data: Any) -> list[str]:
                 "manifest evidence order must equal the canonical v12 sequence: "
                 + ", ".join(EXPECTED_EVIDENCE_ORDER)
             )
-        if len(names) != len(set(names)):
+        if any(not isinstance(name, str) or not name for name in names):
+            problems.append("candidate evidence names must be non-empty strings")
+        elif len(names) != len(set(names)):
             problems.append("candidate evidence names must be unique")
 
     external = data.get("external_gates")
@@ -107,7 +113,7 @@ def split_attestations(data: Any) -> tuple[dict[str, Any] | None, list[str]]:
             retained.append(item)
             continue
         name = item.get("name")
-        if name in ATTESTATIONS:
+        if isinstance(name, str) and name in ATTESTATIONS:
             if name in found:
                 problems.append(f"duplicate attestation evidence: {name}")
             else:
@@ -273,8 +279,8 @@ def main() -> int:
 
     problems = [f"checker self-test failed: {item}" for item in self_test()]
     try:
-        data = json.loads(args.manifest.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+        data = read_json_nofollow(args.manifest, label="manifest")
+    except (OSError, SafeIOError, json.JSONDecodeError) as error:
         problems.append(f"cannot read manifest: {error}")
         data = None
 
@@ -294,10 +300,7 @@ def main() -> int:
                     filtered_path = (
                         Path(directory) / "candidate-without-attestations.json"
                     )
-                    filtered_path.write_text(
-                        json.dumps(filtered, indent=2, sort_keys=True) + "\n",
-                        encoding="utf-8",
-                    )
+                    write_json_nofollow(filtered_path, filtered)
                     core_code, core_output = run_core(filtered_path, False)
 
     print_output(core_output)
