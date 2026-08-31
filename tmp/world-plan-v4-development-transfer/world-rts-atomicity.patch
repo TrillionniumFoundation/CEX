@@ -1,0 +1,154 @@
+diff --git a/trillionnium/crates/trnm-rts-sim/src/lib.rs b/trillionnium/crates/trnm-rts-sim/src/lib.rs
+index abd77e8..4f69b19 100644
+--- a/trillionnium/crates/trnm-rts-sim/src/lib.rs
++++ b/trillionnium/crates/trnm-rts-sim/src/lib.rs
+@@ -1822,6 +1822,13 @@ impl MissionSimV1 {
+     }
+ 
+     pub fn issue_order(&mut self, order: RtsFrameOrder) -> Result<(), SimError> {
++        let mut candidate = self.clone();
++        let result = candidate.issue_order_inner(order)?;
++        *self = candidate;
++        Ok(result)
++    }
++
++    fn issue_order_inner(&mut self, order: RtsFrameOrder) -> Result<(), SimError> {
+         self.validate()?;
+         if self.terminal() {
+             return Err(SimError::InvalidState(
+@@ -1981,6 +1988,16 @@ impl MissionSimV1 {
+     pub fn enable_human_enemy_authority(
+         &mut self,
+         enemy_unit_ids: &BTreeSet<String>,
++    ) -> Result<(), SimError> {
++        let mut candidate = self.clone();
++        let result = candidate.enable_human_enemy_authority_inner(enemy_unit_ids)?;
++        *self = candidate;
++        Ok(result)
++    }
++
++    fn enable_human_enemy_authority_inner(
++        &mut self,
++        enemy_unit_ids: &BTreeSet<String>,
+     ) -> Result<(), SimError> {
+         self.validate()?;
+         if enemy_unit_ids.is_empty()
+@@ -2041,6 +2058,13 @@ impl MissionSimV1 {
+     }
+ 
+     pub fn issue_human_enemy_order(&mut self, order: RtsFrameOrder) -> Result<(), SimError> {
++        let mut candidate = self.clone();
++        let result = candidate.issue_human_enemy_order_inner(order)?;
++        *self = candidate;
++        Ok(result)
++    }
++
++    fn issue_human_enemy_order_inner(&mut self, order: RtsFrameOrder) -> Result<(), SimError> {
+         self.validate()?;
+         if !self.human_enemy_authority {
+             return Err(SimError::Order(
+@@ -4073,6 +4097,18 @@ impl MissionSimV1 {
+         source: AuthorityCommandSource,
+         job: SimJob,
+         label: &str,
++    ) -> Result<(), SimError> {
++        let mut candidate = self.clone();
++        let result = candidate.submit_authority_job_inner(source, job, label)?;
++        *self = candidate;
++        Ok(result)
++    }
++
++    fn submit_authority_job_inner(
++        &mut self,
++        source: AuthorityCommandSource,
++        job: SimJob,
++        label: &str,
+     ) -> Result<(), SimError> {
+         let side = job.side;
+         if !matches!(
+@@ -4176,6 +4212,13 @@ impl MissionSimV1 {
+     }
+ 
+     fn resolve_party_ability(&mut self, order: &RtsFrameOrder) -> Result<(), SimError> {
++        let mut candidate = self.clone();
++        let result = candidate.resolve_party_ability_inner(order)?;
++        *self = candidate;
++        Ok(result)
++    }
++
++    fn resolve_party_ability_inner(&mut self, order: &RtsFrameOrder) -> Result<(), SimError> {
+         let selected = order
+             .subject_actor_ids
+             .iter()
+@@ -6229,7 +6272,7 @@ mod tests {
+         map
+     }
+ 
+-    fn seed() -> BattleSeedV1 {
++    pub(super) fn seed() -> BattleSeedV1 {
+         let mut campaign = CampaignSaveV1::default();
+         campaign.move_to(CampaignRoom::MentorHall).unwrap();
+         campaign.talk_to_mentor().unwrap();
+@@ -7678,3 +7721,62 @@ mod tests {
+         assert!(sim.validate().is_ok());
+     }
+ }
++
++#[cfg(test)]
++mod error_state_preservation_regression_tests {
++    use super::*;
++
++    fn bytes(sim: &MissionSimV1) -> Vec<u8> {
++        serde_json::to_vec(sim).expect("simulation serializes")
++    }
++
++    #[test]
++    fn rejected_player_order_preserves_complete_simulation_state() {
++        let mut sim = MissionSimV1::from_seed(crate::tests::seed()).expect("seed is valid");
++        let before = bytes(&sim);
++        let mut order = RtsFrameOrder::new(
++            1,
++            "not-the-player",
++            vec![sim.party[0].unit_id.clone()],
++            RtsOrderKind::Ability,
++            trnm_rts_protocol::RtsOrderSource::LocalInput,
++        );
++        order.target_rule_id = Some("invalid-authority".to_string());
++        assert!(sim.issue_order(order).is_err());
++        assert_eq!(before, bytes(&sim));
++    }
++
++    #[test]
++    fn failed_pvp_partition_preserves_party_and_snapshot_hash() {
++        let mut sim = MissionSimV1::from_seed(crate::tests::seed()).expect("seed is valid");
++        let all_party = sim
++            .party
++            .iter()
++            .map(|unit| unit.unit_id.clone())
++            .collect::<BTreeSet<_>>();
++        let before = bytes(&sim);
++        let before_hash = sim.snapshot_hash().expect("snapshot hashes");
++        assert!(sim.enable_human_enemy_authority(&all_party).is_err());
++        assert_eq!(before, bytes(&sim));
++        assert_eq!(before_hash, sim.snapshot_hash().expect("snapshot still hashes"));
++    }
++
++    #[test]
++    fn failed_construction_preserves_resources_replay_and_random_cursor() {
++        let mut sim = MissionSimV1::from_seed(crate::tests::seed()).expect("seed is valid");
++        sim.resources_available = 0;
++        let before = bytes(&sim);
++        let builder = sim.party[0].unit_id.clone();
++        let mut order = RtsFrameOrder::new(
++            1,
++            "player",
++            vec![builder],
++            RtsOrderKind::Build,
++            trnm_rts_protocol::RtsOrderSource::LocalInput,
++        );
++        order.target_tile = Some(trnm_rts_protocol::RtsTile::new(2, 2));
++        order.target_rule_id = Some("field_barricade".to_string());
++        assert!(sim.issue_order(order).is_err());
++        assert_eq!(before, bytes(&sim));
++    }
++}
