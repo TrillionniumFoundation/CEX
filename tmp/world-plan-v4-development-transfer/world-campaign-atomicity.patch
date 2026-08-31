@@ -1,0 +1,312 @@
+diff --git a/trillionnium/crates/trnm-campaign-core/src/lib.rs b/trillionnium/crates/trnm-campaign-core/src/lib.rs
+index 8af7a96..cb28013 100644
+--- a/trillionnium/crates/trnm-campaign-core/src/lib.rs
++++ b/trillionnium/crates/trnm-campaign-core/src/lib.rs
+@@ -3071,6 +3071,11 @@ impl CampaignSaveV1 {
+                         })
+                     })
+             })
++            || self.wallet_snapshot.available_credits < 0
++            || self.wallet_snapshot.reserved_credits < 0
++            || self.economy_account_binding.as_ref().is_some_and(|binding| {
++                self.wallet_snapshot.account_id != binding.account_id
++            })
+             || self.economy_mode == EconomyMode::CexConnected
+                 && self.economy_account_binding.is_none()
+         {
+@@ -7824,20 +7829,23 @@ impl CampaignSaveV1 {
+                 + i64::from(self.world_clock.minute_of_day) * 60,
+         };
+         intent.validate().map_err(CampaignError::InvalidState)?;
+-        self.economic_idempotency_keys.insert(idempotency_key);
++        // Admission is atomic with publication of the idempotency tombstone.
++        // A full lane must leave the identity retryable after capacity returns.
+         if compensation {
+             if self.pending_economic_compensations.len() >= 64 {
+                 return Err(CampaignError::InvalidState(
+                     "economic compensation lane reached its bounded capacity".to_string(),
+                 ));
+             }
++        } else if self.pending_economic_intents.len() >= 128 {
++            return Err(CampaignError::InvalidState(
++                "economic outbox reached its bounded capacity".to_string(),
++            ));
++        }
++        self.economic_idempotency_keys.insert(idempotency_key);
++        if compensation {
+             self.pending_economic_compensations.push(intent);
+         } else {
+-            if self.pending_economic_intents.len() >= 128 {
+-                return Err(CampaignError::InvalidState(
+-                    "economic outbox reached its bounded capacity".to_string(),
+-                ));
+-            }
+             self.pending_economic_intents.push(intent);
+         }
+         Ok(true)
+@@ -7850,6 +7858,21 @@ impl CampaignSaveV1 {
+         source: ValueEventSource,
+         policy: ValueSettlementPolicy,
+         local_soft_credit_delta: i64,
++    ) -> Result<(), CampaignError> {
++        let mut candidate = self.clone();
++        let result = candidate.record_value_event_inner(event_id, intent_id, source, policy, local_soft_credit_delta)?;
++        candidate.validate()?;
++        *self = candidate;
++        Ok(result)
++    }
++
++    fn record_value_event_inner(
++        &mut self,
++        event_id: String,
++        intent_id: String,
++        source: ValueEventSource,
++        policy: ValueSettlementPolicy,
++        local_soft_credit_delta: i64,
+     ) -> Result<(), CampaignError> {
+         if self
+             .value_events
+@@ -7878,6 +7901,8 @@ impl CampaignSaveV1 {
+                     .min(BATTLE_WALLET_REWARD_DAILY_CAP.saturating_sub(issued))
+             }
+         };
++        // Tentative until the outer command commits the candidate together with
++        // the intent and value-event record.
+         if policy == ValueSettlementPolicy::DualTrack && wallet_credit_delta > 0 {
+             self.wallet_reward_issued_by_day
+                 .entry(self.world_clock.day)
+@@ -7953,6 +7978,17 @@ impl CampaignSaveV1 {
+     pub fn begin_selected_tradeable_purchase_with_seller_account(
+         &mut self,
+         connected_seller_account_id: Option<&str>,
++    ) -> Result<String, CampaignError> {
++        let mut candidate = self.clone();
++        let result = candidate.begin_selected_tradeable_purchase_with_seller_account_inner(connected_seller_account_id)?;
++        candidate.validate()?;
++        *self = candidate;
++        Ok(result)
++    }
++
++    fn begin_selected_tradeable_purchase_with_seller_account_inner(
++        &mut self,
++        connected_seller_account_id: Option<&str>,
+     ) -> Result<String, CampaignError> {
+         let region_id = self.require_regional_market()?;
+         let item = ECONOMY_ITEM_CATALOG
+@@ -8034,6 +8070,14 @@ impl CampaignSaveV1 {
+     }
+ 
+     pub fn cancel_tradeable_purchase(&mut self, purchase_id: &str) -> Result<(), CampaignError> {
++        let mut candidate = self.clone();
++        let result = candidate.cancel_tradeable_purchase_inner(purchase_id)?;
++        candidate.validate()?;
++        *self = candidate;
++        Ok(result)
++    }
++
++    fn cancel_tradeable_purchase_inner(&mut self, purchase_id: &str) -> Result<(), CampaignError> {
+         let index = self
+             .pending_tradeable_purchases
+             .iter()
+@@ -8280,6 +8324,18 @@ impl CampaignSaveV1 {
+         &mut self,
+         backend: &B,
+         max_intents: usize,
++    ) -> Result<EconomyReconciliationReport, CampaignError> {
++        let mut candidate = self.clone();
++        let result = candidate.reconcile_economy_inner(backend, max_intents)?;
++        candidate.validate()?;
++        *self = candidate;
++        Ok(result)
++    }
++
++    fn reconcile_economy_inner<B: EconomyBackend>(
++        &mut self,
++        backend: &B,
++        max_intents: usize,
+     ) -> Result<EconomyReconciliationReport, CampaignError> {
+         let mut report = EconomyReconciliationReport::default();
+         while (report.attempted as usize) < max_intents {
+@@ -10195,3 +10251,182 @@ mod tests {
+         assert_eq!(settings.control_scheme, ControlScheme::Classic);
+     }
+ }
++
++#[cfg(test)]
++mod command_atomicity_regression_tests {
++    use super::*;
++
++    fn bytes(save: &CampaignSaveV1) -> Vec<u8> {
++        serde_json::to_vec(save).expect("campaign state serializes")
++    }
++
++    fn draft(save: &CampaignSaveV1, id: &str, compensation: bool) -> EconomicIntentDraft {
++        EconomicIntentDraft {
++            kind: EconomicIntentKind::CompleteContract,
++            term_id: "atomicity-regression".to_string(),
++            intent_id: id.to_string(),
++            binding: save.effective_economy_binding(),
++            asset_id: "trnm-soft-credit".to_string(),
++            quantity: 1,
++            amount_credits: 0,
++            metadata: json!({"test": "command_atomicity"}),
++            compensation,
++        }
++    }
++
++    fn fill_lane(save: &mut CampaignSaveV1, compensation: bool, capacity: usize) {
++        for index in 0..capacity {
++            let id = format!("fill-{compensation}-{index}");
++            let request = draft(save, &id, compensation);
++            assert!(save
++                .queue_economic_intent(request)
++                .expect("lane fill remains valid"));
++        }
++    }
++
++    fn assert_error_preserves_state<T>(
++        save: &mut CampaignSaveV1,
++        operation: impl FnOnce(&mut CampaignSaveV1) -> Result<T, CampaignError>,
++    ) -> CampaignError {
++        let before = bytes(save);
++        let error = operation(save).expect_err("operation must fail");
++        assert_eq!(before, bytes(save), "Err returned after mutating campaign state");
++        error
++    }
++
++    #[test]
++    fn outbox_full_does_not_publish_idempotency_tombstone() {
++        let mut save = CampaignSaveV1::default();
++        fill_lane(&mut save, false, 128);
++        let id = "retry-after-outbox-capacity";
++        let error = assert_error_preserves_state(&mut save, |candidate| {
++            let request = draft(candidate, id, false);
++            candidate.queue_economic_intent(request)
++        });
++        assert!(error.to_string().contains("economic outbox"));
++
++        save.pending_economic_intents.pop();
++        let request = draft(&save, id, false);
++        assert!(save
++            .queue_economic_intent(request)
++            .expect("the same identity remains retryable after capacity is released"));
++    }
++
++    #[test]
++    fn compensation_full_does_not_publish_idempotency_tombstone() {
++        let mut save = CampaignSaveV1::default();
++        fill_lane(&mut save, true, 64);
++        let id = "retry-after-compensation-capacity";
++        let error = assert_error_preserves_state(&mut save, |candidate| {
++            let request = draft(candidate, id, true);
++            candidate.queue_economic_intent(request)
++        });
++        assert!(error.to_string().contains("compensation lane"));
++
++        save.pending_economic_compensations.pop();
++        let request = draft(&save, id, true);
++        assert!(save
++            .queue_economic_intent(request)
++            .expect("the same compensation identity remains retryable"));
++    }
++
++    #[test]
++    fn value_event_capacity_error_preserves_daily_budget_and_event_log() {
++        let mut save = CampaignSaveV1::default();
++        fill_lane(&mut save, false, 128);
++        let error = assert_error_preserves_state(&mut save, |candidate| {
++            candidate.record_value_event(
++                "capacity-value-event".to_string(),
++                "capacity-value-intent".to_string(),
++                ValueEventSource::Battle,
++                ValueSettlementPolicy::DualTrack,
++                25,
++            )
++        });
++        assert!(error.to_string().contains("economic outbox"));
++    }
++
++    #[test]
++    fn purchase_reserve_capacity_error_leaves_no_orphan_purchase() {
++        let mut save = CampaignSaveV1::default();
++        save.room = CampaignRoom::MarketWindPavilion;
++        save.selected_shop_item_index = ECONOMY_ITEM_CATALOG
++            .iter()
++            .position(|item| item.material)
++            .expect("catalog carries one tradeable material");
++        fill_lane(&mut save, false, 128);
++        let error = assert_error_preserves_state(&mut save, |candidate| {
++            candidate.begin_selected_tradeable_purchase()
++        });
++        assert!(error.to_string().contains("economic outbox"));
++    }
++
++    #[test]
++    fn cancellation_capacity_error_rolls_back_inventory_and_purchase_stage() {
++        let mut save = CampaignSaveV1::default();
++        save.room = CampaignRoom::MarketWindPavilion;
++        save.selected_shop_item_index = ECONOMY_ITEM_CATALOG
++            .iter()
++            .position(|item| item.material)
++            .expect("catalog carries one tradeable material");
++        let purchase_id = save
++            .begin_selected_tradeable_purchase()
++            .expect("offline reserve can be staged");
++        let purchase = save
++            .pending_tradeable_purchases
++            .iter_mut()
++            .find(|purchase| purchase.purchase_id == purchase_id)
++            .expect("purchase exists");
++        purchase.stage = TradeablePurchaseStage::Consumed;
++        let item_id = purchase.item_id.clone();
++        save.progression.inventory.push(LootStack {
++            item_id,
++            quantity: 1,
++        });
++        fill_lane(&mut save, true, 64);
++
++        let error = assert_error_preserves_state(&mut save, |candidate| {
++            candidate.cancel_tradeable_purchase(&purchase_id)
++        });
++        assert!(error.to_string().contains("compensation lane"));
++    }
++
++    struct InvalidSnapshotBackend;
++
++    impl EconomyBackend for InvalidSnapshotBackend {
++        fn backend_id(&self) -> &str {
++            "invalid-snapshot-test"
++        }
++
++        fn execute(&self, intent: &EconomicIntent) -> Result<EconomicReceipt, String> {
++            OfflineLocalEconomyBackend.execute(intent)
++        }
++
++        fn wallet_snapshot(
++            &self,
++            binding: &EconomyAccountBinding,
++            cursor: u64,
++        ) -> Result<Option<WalletSnapshot>, String> {
++            Ok(Some(WalletSnapshot {
++                account_id: binding.account_id.clone(),
++                available_credits: -1,
++                reserved_credits: 0,
++                observed_at_cursor: cursor,
++            }))
++        }
++    }
++
++    #[test]
++    fn reconciliation_validation_error_preserves_queue_receipts_and_cursor() {
++        let mut save = CampaignSaveV1::default();
++        save.bind_cex_economy_account("atomicity-actor", "atomicity-account")
++            .expect("valid binding");
++        let request = draft(&save, "reconcile-invalid-snapshot", false);
++        assert!(save.queue_economic_intent(request).expect("intent queues"));
++
++        let error = assert_error_preserves_state(&mut save, |candidate| {
++            candidate.reconcile_economy(&InvalidSnapshotBackend, 1)
++        });
++        assert!(error.to_string().contains("economy outbox"));
++    }
++}
