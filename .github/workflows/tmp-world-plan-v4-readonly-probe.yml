@@ -1,0 +1,25 @@
+name: tmp-world-plan-v4-readonly-probe
+
+on:
+  push:
+    branches:
+      - tmp/world-plan-v4-development-transfer-20260831
+    paths:
+      - .github/workflows/tmp-world-plan-v4-readonly-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Prove runner startup
+        shell: bash
+        run: |
+          set -euo pipefail
+          uname -a
+          git --version
+          python3 --version
