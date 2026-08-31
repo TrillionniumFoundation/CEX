@@ -16,6 +16,7 @@ on:
       - 'Cargo.lock'
       - 'crates/**'
       - 'services/execution-service/**'
+      - 'scripts/check-provider-success-evidence.py'
       - 'scripts/check-provider-reconciliation-postgres.sh'
       - 'scripts/_dev-helpers.sh'
       - 'docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md'
@@ -60,6 +61,9 @@ jobs:
 
       - name: Candidate tree hygiene
         run: python3 scripts/check-p0-release-candidate-hygiene.py
+
+      - name: Provider terminal-success evidence contract
+        run: python3 scripts/check-provider-success-evidence.py
 
       - name: Migration and release-manifest governance
         run: |

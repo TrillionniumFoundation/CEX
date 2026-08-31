@@ -17,6 +17,7 @@ use crate::{
     api::{self, ProcessExecutionRequest, StartExecutionRequest},
     providers::{
         dispatch_via_provider, parse_provider_target, OpenClawCliEnvScope, ProviderDispatchInput,
+        ProviderDispatchOutput,
     },
     state::AppState,
 };
@@ -317,6 +318,23 @@ async fn process_command(
 
     match dispatch {
         Ok(output) => {
+            if let Err(error) =
+                validate_provider_success_evidence(&command.provider_target, &output)
+            {
+                finish_command(
+                    pool,
+                    command.command_id,
+                    worker_id,
+                    "reconcile_required",
+                    None,
+                    Some(200),
+                    Some(error.code),
+                    Some(error.message),
+                    None,
+                )
+                .await?;
+                return Ok(());
+            }
             finish_command(
                 pool,
                 command.command_id,
@@ -347,6 +365,100 @@ async fn process_command(
             .await?;
         }
     }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProviderSuccessEvidenceError {
+    code: &'static str,
+    message: &'static str,
+}
+
+fn validate_provider_success_evidence(
+    expected_provider_target: &str,
+    output: &ProviderDispatchOutput,
+) -> Result<(), ProviderSuccessEvidenceError> {
+    let Some((expected_provider, expected_provider_ref)) =
+        parse_provider_target(expected_provider_target)
+    else {
+        return Err(ProviderSuccessEvidenceError {
+            code: "provider_success_target_invalid",
+            message: "provider success cannot be bound to a non-canonical target",
+        });
+    };
+
+    if output.provider != expected_provider
+        || output.provider_ref != expected_provider_ref
+        || output.provider_target != expected_provider_target
+    {
+        return Err(ProviderSuccessEvidenceError {
+            code: "provider_success_target_mismatch",
+            message: "provider success identity does not match the immutable dispatch command",
+        });
+    }
+
+    let Some(payload) = output.result_payload.as_object() else {
+        return Err(ProviderSuccessEvidenceError {
+            code: "provider_success_payload_invalid",
+            message: "provider success payload must be a JSON object",
+        });
+    };
+
+    if payload.get("provider").and_then(Value::as_str) != Some(expected_provider)
+        || payload.get("provider_ref").and_then(Value::as_str) != Some(expected_provider_ref)
+    {
+        return Err(ProviderSuccessEvidenceError {
+            code: "provider_success_payload_identity_mismatch",
+            message: "provider success payload identity does not match the immutable dispatch command",
+        });
+    }
+
+    match payload.get("done") {
+        Some(Value::Bool(true)) => {}
+        Some(Value::Bool(false)) => {
+            return Err(ProviderSuccessEvidenceError {
+                code: "provider_success_not_terminal",
+                message: "provider returned a non-terminal success envelope",
+            })
+        }
+        Some(_) => {
+            return Err(ProviderSuccessEvidenceError {
+                code: "provider_success_done_invalid",
+                message: "provider success field 'done' must be a JSON boolean",
+            })
+        }
+        None => {
+            return Err(ProviderSuccessEvidenceError {
+                code: "provider_success_done_missing",
+                message: "provider success is missing required terminal field 'done'",
+            })
+        }
+    }
+
+    let model_is_present = payload
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+    if !model_is_present {
+        return Err(ProviderSuccessEvidenceError {
+            code: "provider_success_model_missing",
+            message: "provider success is missing a non-empty model identity",
+        });
+    }
+
+    let output_is_present = payload
+        .get("output_text")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+    if !output_is_present {
+        return Err(ProviderSuccessEvidenceError {
+            code: "provider_success_output_missing",
+            message: "provider success is missing non-empty output evidence",
+        });
+    }
+
     Ok(())
 }
 
@@ -632,6 +744,21 @@ fn bounded_u64_env(name: &str, default: u64, min: u64, max: u64) -> Result<u64, 
 mod tests {
     use super::*;
 
+    fn valid_provider_output() -> ProviderDispatchOutput {
+        ProviderDispatchOutput {
+            provider: "ollama".to_string(),
+            provider_ref: "model-v1".to_string(),
+            provider_target: "ollama://model-v1".to_string(),
+            result_payload: json!({
+                "provider": "ollama",
+                "provider_ref": "model-v1",
+                "model": "model-v1",
+                "output_text": "result",
+                "done": true
+            }),
+        }
+    }
+
     #[test]
     fn provider_error_classification_is_fail_closed() {
         assert_eq!(
@@ -650,5 +777,57 @@ mod tests {
             classify_provider_error("provider upstream returned status 503: unavailable");
         assert_eq!(unavailable.outcome, "reconcile_required");
         assert_eq!(unavailable.code, "provider_unknown_remote_outcome");
+    }
+
+    #[test]
+    fn provider_success_requires_explicit_terminal_done_true() {
+        let mut output = valid_provider_output();
+        output.result_payload["done"] = json!(false);
+        let incomplete =
+            validate_provider_success_evidence("ollama://model-v1", &output).unwrap_err();
+        assert_eq!(incomplete.code, "provider_success_not_terminal");
+
+        output.result_payload.as_object_mut().unwrap().remove("done");
+        let missing =
+            validate_provider_success_evidence("ollama://model-v1", &output).unwrap_err();
+        assert_eq!(missing.code, "provider_success_done_missing");
+
+        output.result_payload["done"] = json!("true");
+        let invalid =
+            validate_provider_success_evidence("ollama://model-v1", &output).unwrap_err();
+        assert_eq!(invalid.code, "provider_success_done_invalid");
+    }
+
+    #[test]
+    fn provider_success_binds_identity_model_and_output() {
+        let output = valid_provider_output();
+        assert!(validate_provider_success_evidence("ollama://model-v1", &output).is_ok());
+
+        let mut mismatched = output.clone();
+        mismatched.provider_target = "ollama://other".to_string();
+        assert_eq!(
+            validate_provider_success_evidence("ollama://model-v1", &mismatched)
+                .unwrap_err()
+                .code,
+            "provider_success_target_mismatch"
+        );
+
+        let mut missing_model = output.clone();
+        missing_model.result_payload["model"] = Value::Null;
+        assert_eq!(
+            validate_provider_success_evidence("ollama://model-v1", &missing_model)
+                .unwrap_err()
+                .code,
+            "provider_success_model_missing"
+        );
+
+        let mut missing_output = output;
+        missing_output.result_payload["output_text"] = json!("");
+        assert_eq!(
+            validate_provider_success_evidence("ollama://model-v1", &missing_output)
+                .unwrap_err()
+                .code,
+            "provider_success_output_missing"
+        );
     }
 }
