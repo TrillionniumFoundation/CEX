@@ -1,6 +1,8 @@
 use reqwest::{header::RETRY_AFTER, redirect::Policy, Client, StatusCode};
 use serde_json::Value;
-use shared_config::{load_ledger_scoped_admin_tokens, select_ledger_manage_token};
+use shared_config::{
+    load_ledger_scoped_admin_tokens, runtime_guard, select_ledger_manage_token,
+};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use std::{env, error::Error, fmt, time::Duration};
 use tokio::time::{sleep, timeout};
@@ -588,65 +590,12 @@ fn validate_worker_id(worker_id: &str) -> Result<(), WorkerError> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuntimeProfile {
-    Test,
-    Local,
-    Dev,
-    Beta,
-    Staging,
-    Production,
-}
-
-impl RuntimeProfile {
-    fn parse(raw: &str) -> Result<Self, WorkerError> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "test" => Ok(Self::Test),
-            "local" => Ok(Self::Local),
-            "dev" | "development" => Ok(Self::Dev),
-            "beta" => Ok(Self::Beta),
-            "staging" | "stage" => Ok(Self::Staging),
-            "production" | "prod" => Ok(Self::Production),
-            other => Err(WorkerError::Config(format!(
-                "unsupported runtime profile '{other}'"
-            ))),
-        }
-    }
-
-    fn is_production_like(self) -> bool {
-        matches!(self, Self::Beta | Self::Staging | Self::Production)
-    }
-}
-
-fn resolve_profile() -> Result<RuntimeProfile, WorkerError> {
-    let primary = env::var("CEX_RUNTIME_PROFILE")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .map(|value| RuntimeProfile::parse(&value))
-        .transpose()?;
-    let compatibility = env::var("APP_ENV")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .map(|value| RuntimeProfile::parse(&value))
-        .transpose()?;
-    match (primary, compatibility) {
-        (Some(left), Some(right)) if left != right => Err(WorkerError::Config(
-            "CEX_RUNTIME_PROFILE and APP_ENV resolve to different profiles".to_string(),
-        )),
-        (Some(profile), _) | (_, Some(profile)) => Ok(profile),
-        (None, None) => Err(WorkerError::Config(
-            "CEX_RUNTIME_PROFILE or APP_ENV must be set explicitly".to_string(),
-        )),
-    }
-}
-
 fn validate_runtime_posture(
     ledger_manage_token: &str,
     mode: GatewayLedgerMode,
 ) -> Result<(), WorkerError> {
-    let profile = resolve_profile()?;
+    let profile = runtime_guard::resolve_runtime_profile()
+        .map_err(|error| WorkerError::Config(error.to_string()))?;
     if profile.is_production_like() {
         if !matches!(mode, GatewayLedgerMode::Dual | GatewayLedgerMode::RequireV2) {
             return Err(WorkerError::Config(

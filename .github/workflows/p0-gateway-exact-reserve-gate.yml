@@ -12,6 +12,7 @@ on:
       - 'services/gateway-service/**'
       - 'crates/shared-config/src/runtime_guard.rs'
       - 'scripts/check-gateway-exact-reserve.py'
+      - 'scripts/check-gateway-runtime-authority.py'
       - 'scripts/check-ledger-caller-cutover.py'
       - 'scripts/check-gateway-exact-reserve-postgres.sh'
       - 'scripts/_dev-helpers.sh'
@@ -77,6 +78,9 @@ jobs:
 
       - name: Static P0-N6 architecture gate
         run: python3 scripts/check-gateway-exact-reserve.py
+
+      - name: Gateway runtime profile and principal authority
+        run: python3 scripts/check-gateway-runtime-authority.py
 
       - name: Canonical Invocation caller cutover guard
         run: python3 scripts/check-ledger-caller-cutover.py

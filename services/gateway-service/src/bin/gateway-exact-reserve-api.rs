@@ -7,6 +7,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+use shared_config::runtime_guard;
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::net::TcpListener;
@@ -17,6 +18,7 @@ const DEFAULT_DATABASE_MAX_CONNECTIONS: u32 = 8;
 const MAX_DATABASE_CONNECTIONS: u32 = 32;
 const MAX_REQUEST_BYTES: usize = 16 * 1024;
 const MIN_PRODUCTION_TOKEN_BYTES: usize = 32;
+const EXACT_INGRESS_PRINCIPAL: &str = "gateway-exact-ingress";
 const WEAK_TOKEN_MARKERS: &[&str] = &[
     "local-dev",
     "change-me",
@@ -52,6 +54,7 @@ struct ExactReserveRequest {
 enum AuthenticationError {
     Unauthorized,
     InvalidServiceId,
+    ServiceIdMismatch,
 }
 
 impl AuthenticationError {
@@ -66,6 +69,11 @@ impl AuthenticationError {
                 StatusCode::BAD_REQUEST,
                 "invalid_service_id",
                 "x-cex-service-id must use 1..128 characters from [A-Za-z0-9._:-]",
+            ),
+            Self::ServiceIdMismatch => error_response(
+                StatusCode::UNAUTHORIZED,
+                "service_identity_mismatch",
+                "x-cex-service-id must match the principal bound to the exact-ingress credential",
             ),
         }
     }
@@ -88,7 +96,7 @@ async fn main() {
 }
 
 async fn run() -> Result<(), String> {
-    let profile = resolve_profile()?;
+    let profile = runtime_guard::resolve_runtime_profile().map_err(|error| error.to_string())?;
     let database_url = required_env("DATABASE_URL")?;
     let ingress_token = required_env("CEX_GATEWAY_EXACT_INGRESS_TOKEN")?;
     validate_ingress_token(&ingress_token, profile.is_production_like())?;
@@ -244,21 +252,25 @@ fn authenticate(headers: &HeaderMap, expected_token: &str) -> Result<String, Aut
         return Err(AuthenticationError::Unauthorized);
     }
 
-    let principal = headers
-        .get("x-cex-service-id")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("gateway-exact-ingress")
-        .to_string();
-    if principal.len() > 128
+    let principal = match headers.get("x-cex-service-id") {
+        None => EXACT_INGRESS_PRINCIPAL,
+        Some(value) => value
+            .to_str()
+            .map(str::trim)
+            .map_err(|_| AuthenticationError::InvalidServiceId)?,
+    };
+    if principal.is_empty()
+        || principal.len() > 128
         || !principal.chars().all(|character| {
             character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-' | ':')
         })
     {
         return Err(AuthenticationError::InvalidServiceId);
     }
-    Ok(principal)
+    if !constant_time_eq(principal.as_bytes(), EXACT_INGRESS_PRINCIPAL.as_bytes()) {
+        return Err(AuthenticationError::ServiceIdMismatch);
+    }
+    Ok(EXACT_INGRESS_PRINCIPAL.to_string())
 }
 
 fn map_database_error(error: sqlx::Error) -> axum::response::Response {
@@ -341,56 +353,6 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
         difference |= usize::from(left_byte ^ right_byte);
     }
     difference == 0
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuntimeProfile {
-    Test,
-    Local,
-    Dev,
-    Beta,
-    Staging,
-    Production,
-}
-
-impl RuntimeProfile {
-    fn parse(raw: &str) -> Result<Self, String> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "test" => Ok(Self::Test),
-            "local" => Ok(Self::Local),
-            "dev" | "development" => Ok(Self::Dev),
-            "beta" => Ok(Self::Beta),
-            "staging" | "stage" => Ok(Self::Staging),
-            "production" | "prod" => Ok(Self::Production),
-            other => Err(format!("unsupported runtime profile '{other}'")),
-        }
-    }
-
-    fn is_production_like(self) -> bool {
-        matches!(self, Self::Beta | Self::Staging | Self::Production)
-    }
-}
-
-fn resolve_profile() -> Result<RuntimeProfile, String> {
-    let primary = env::var("CEX_RUNTIME_PROFILE")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .map(|value| RuntimeProfile::parse(&value))
-        .transpose()?;
-    let compatibility = env::var("APP_ENV")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .map(|value| RuntimeProfile::parse(&value))
-        .transpose()?;
-    match (primary, compatibility) {
-        (Some(left), Some(right)) if left != right => {
-            Err("CEX_RUNTIME_PROFILE and APP_ENV resolve to different profiles".to_string())
-        }
-        (Some(profile), _) | (_, Some(profile)) => Ok(profile),
-        (None, None) => Err("CEX_RUNTIME_PROFILE or APP_ENV must be set explicitly".to_string()),
-    }
 }
 
 fn validate_ingress_token(token: &str, production_like: bool) -> Result<(), String> {
@@ -485,5 +447,37 @@ mod tests {
         assert!(constant_time_eq(b"same", b"same"));
         assert!(!constant_time_eq(b"same", b"same-longer"));
         assert!(!constant_time_eq(b"same", b"diff"));
+    }
+
+    #[test]
+    fn exact_ingress_principal_cannot_be_relabelled_by_a_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            axum::http::HeaderValue::from_static("Bearer test-ingress-token"),
+        );
+
+        assert_eq!(
+            authenticate(&headers, "test-ingress-token").unwrap(),
+            EXACT_INGRESS_PRINCIPAL
+        );
+
+        headers.insert(
+            "x-cex-service-id",
+            axum::http::HeaderValue::from_static("execution-service"),
+        );
+        assert_eq!(
+            authenticate(&headers, "test-ingress-token"),
+            Err(AuthenticationError::ServiceIdMismatch)
+        );
+
+        headers.insert(
+            "x-cex-service-id",
+            axum::http::HeaderValue::from_static(EXACT_INGRESS_PRINCIPAL),
+        );
+        assert_eq!(
+            authenticate(&headers, "test-ingress-token").unwrap(),
+            EXACT_INGRESS_PRINCIPAL
+        );
     }
 }

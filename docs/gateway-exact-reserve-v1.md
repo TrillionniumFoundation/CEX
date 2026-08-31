@@ -72,10 +72,18 @@ decimals, whitespace and noncanonical leading zeros are rejected before database
 `amount_minor` is a positive string that must fit signed 64-bit storage. Currency unit must already
 be lowercase and match `^[a-z][a-z0-9._-]{0,31}$`; scale is 0–6.
 
-The route is an internal expand-phase API. It requires a bearer token and records
-`x-cex-service-id` as the source principal. Production-like startup rejects short credentials and
-known development placeholders. Request bodies are bounded. Active command creation requires the
-explicit `CEX_GATEWAY_EXACT_RESERVE_ALLOW_ACTIVE=true` rollout switch.
+The route is an internal expand-phase API. It requires a bearer token whose authenticated source is
+bound to the fixed `gateway-exact-ingress` principal. An omitted `x-cex-service-id` header resolves
+to that principal; a supplied header must match it exactly or authentication fails. A caller that
+possesses the ingress token therefore cannot relabel the immutable contract or Audit actor as
+another service. Production-like startup rejects short credentials and known development
+placeholders. Request bodies are bounded. Active command creation requires the explicit
+`CEX_GATEWAY_EXACT_RESERVE_ALLOW_ACTIVE=true` rollout switch.
+
+The API and worker resolve `CEX_RUNTIME_PROFILE`/`APP_ENV` through the shared runtime-profile
+authority. They therefore accept the same canonical aliases, including the production-like
+`trnm-economy` lane, reject conflicting sources, and honor the same explicit implicit-development
+escape hatch. Private profile enums in either money binary are forbidden.
 
 ## 3. Atomic source transaction
 
