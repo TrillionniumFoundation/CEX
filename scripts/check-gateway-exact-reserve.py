@@ -82,6 +82,11 @@ worker = require(
     "claim is intentionally left for lease recovery",
     "CEX_GATEWAY_LEDGER_MODE=dual or require_v2",
     "validate_serial_lease_budget",
+    "ledger_success_receipt_replayed_missing",
+    "ledger_success_receipt_replayed_invalid",
+    "ledger_success_missing_replayed_requires_reconciliation",
+    "ledger_success_non_boolean_replayed_requires_reconciliation",
+    "ledger_success_boolean_replayed_is_preserved_exactly",
 )
 canonical_entry = require(
     "services/gateway-service/src/application/invocation_service_entry.rs",
@@ -135,6 +140,15 @@ for relative, content in (
             PROBLEMS.append(
                 f"{relative} contains forbidden legacy-money/long-transaction marker: {pattern}"
             )
+
+unsafe_replayed_inference = re.compile(
+    r'\.get\("replayed"\)\s*\.and_then\(Value::as_bool\)\s*\.unwrap_or\(false\)',
+    re.MULTILINE,
+)
+if unsafe_replayed_inference.search(worker):
+    PROBLEMS.append(
+        "Gateway exact worker must not infer missing or malformed replay evidence as false"
+    )
 
 entry_guard_offset = canonical_entry.find("if req.has_legacy_reserve()")
 entry_legacy_call_offset = canonical_entry.find("legacy::create_invocation")

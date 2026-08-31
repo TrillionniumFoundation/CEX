@@ -421,10 +421,10 @@ async fn classify_response(response: reqwest::Response) -> PersistedOutcome {
     };
 
     if status.is_success() {
-        let replayed = body
-            .get("replayed")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
+        let replayed = match parse_success_replayed(&body, status) {
+            Ok(replayed) => replayed,
+            Err(outcome) => return outcome,
+        };
         return PersistedOutcome::succeeded(body, replayed, status.as_u16());
     }
 
@@ -449,6 +449,25 @@ async fn classify_response(response: reqwest::Response) -> PersistedOutcome {
         )
     } else {
         PersistedOutcome::rejected(code, message, Some(status.as_u16()))
+    }
+}
+
+fn parse_success_replayed(
+    body: &Value,
+    status: StatusCode,
+) -> Result<bool, PersistedOutcome> {
+    match body.get("replayed") {
+        Some(Value::Bool(replayed)) => Ok(*replayed),
+        Some(_) => Err(PersistedOutcome::reconcile(
+            "ledger_success_receipt_replayed_invalid",
+            "Ledger success receipt field 'replayed' must be a JSON boolean",
+            Some(status.as_u16()),
+        )),
+        None => Err(PersistedOutcome::reconcile(
+            "ledger_success_receipt_replayed_missing",
+            "Ledger success receipt is missing required field 'replayed'",
+            Some(status.as_u16()),
+        )),
     }
 }
 
@@ -749,5 +768,51 @@ mod tests {
         let invalid = reqwest::header::HeaderValue::from_static("99999");
         assert_eq!(parse_retry_after(Some(&valid)), Some(30));
         assert_eq!(parse_retry_after(Some(&invalid)), None);
+    }
+
+    #[test]
+    fn ledger_success_missing_replayed_requires_reconciliation() {
+        let outcome = parse_success_replayed(
+            &serde_json::json!({"effect": {"entry_id": Uuid::nil()}}),
+            StatusCode::OK,
+        )
+        .expect_err("missing replay evidence must not be inferred as false");
+        assert_eq!(outcome.outcome, "reconcile_required");
+        assert_eq!(
+            outcome.error_code.as_deref(),
+            Some("ledger_success_receipt_replayed_missing")
+        );
+        assert!(outcome.receipt.is_none());
+        assert!(outcome.replayed.is_none());
+    }
+
+    #[test]
+    fn ledger_success_non_boolean_replayed_requires_reconciliation() {
+        let outcome = parse_success_replayed(
+            &serde_json::json!({"replayed": "false"}),
+            StatusCode::OK,
+        )
+        .expect_err("non-boolean replay evidence must not be coerced");
+        assert_eq!(outcome.outcome, "reconcile_required");
+        assert_eq!(
+            outcome.error_code.as_deref(),
+            Some("ledger_success_receipt_replayed_invalid")
+        );
+        assert!(outcome.receipt.is_none());
+        assert!(outcome.replayed.is_none());
+    }
+
+    #[test]
+    fn ledger_success_boolean_replayed_is_preserved_exactly() {
+        assert!(parse_success_replayed(
+            &serde_json::json!({"replayed": true}),
+            StatusCode::OK
+        )
+        .expect("boolean replay evidence must be accepted"));
+        assert!(!parse_success_replayed(
+            &serde_json::json!({"replayed": false}),
+            StatusCode::OK
+        )
+        .expect("boolean replay evidence must be accepted"));
     }
 }
