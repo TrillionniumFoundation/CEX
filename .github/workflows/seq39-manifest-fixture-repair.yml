@@ -51,7 +51,7 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Repair manifest fixture after the pinned transform and execute validation
+      - name: Repair stale migration-head fixtures after the pinned transform
         shell: bash
         run: |
           set -euo pipefail
@@ -69,7 +69,6 @@ jobs:
 
           python3 - <<'PYWRAP'
           from pathlib import Path
-          import base64
 
           workflow = Path('.github/workflows/seq39-exact-apply.yml').read_text(
               encoding='utf-8'
@@ -92,8 +91,7 @@ jobs:
           if extracted.count(observed_line) != 1:
               raise SystemExit('sequence 39 post-transform digest anchor drifted')
 
-          repair_b64 = 'cGhhc2UgInJlcGFpciBzZXF1ZW5jZSAzOSBtYW5pZmVzdCBzZWxmLXRlc3QgZml4dHVyZSIKcHl0aG9uMyA8PCdQWU1BTklGRVNUJwpmcm9tIHBhdGhsaWIgaW1wb3J0IFBhdGgKCnBhdGggPSBQYXRoKCdzY3JpcHRzL2NoZWNrLXJlbGVhc2UtYmFzZWxpbmUtbWFuaWZlc3QtY29udHJhY3QtY29yZS5weScpCnRleHQgPSBwYXRoLnJlYWRfdGV4dChlbmNvZGluZz0ndXRmLTgnKQpvbGQgPSAoCiAgICAnICAgICAgICAiZGF0YWJhc2UiOiB7XG4nCiAgICAnICAgICAgICAgICAgIm1pZ3JhdGlvbl9oZWFkIjogJwogICAgJyIwMDg3X2FkZF90ZXJtX2V4Y2hhbmdlX3JlY2VpcHRfZXZlbnRfaGlzdG9yeS5zcWwiLFxuJwogICAgJyAgICAgICAgICAgICJtaWdyYXRpb25fc2hhMjU2IjogZGlnZXN0LFxuJwogICAgJyAgICAgICAgICAgICJtaWdyYXRpb25fY2hhaW5fc2hhMjU2IjogZGlnZXN0LFxuJwogICAgJyAgICAgICAgfSwnCikKbmV3ID0gKAogICAgJyAgICAgICAgImRhdGFiYXNlIjoge1xuJwogICAgJyAgICAgICAgICAgICJtaWdyYXRpb25faGVhZCI6ICcKICAgICciMDA4OF9lbmZvcmNlX3Byb3ZpZGVyX3Rlcm1pbmFsX2V2aWRlbmNlX2JpbmRpbmcuc3FsIixcbicKICAgICcgICAgICAgICAgICAibWlncmF0aW9uX3NoYTI1NiI6IGRpZ2VzdCxc bicKICAgICcgICAgICAgICAgICAibWlncmF0aW9uX2NoYWluX3NoYTI1NiI6IGRpZ2VzdCxc bicKICAgICcgICAgICAgIH0sJwopCmNvdW50ID0gdGV4dC5jb3VudChvbGQpCmlmIGNvdW50ICE9IDE6CiAgICByYWlzZSBTeXN0ZW1FeGl0KAogICAgICAgIGYnbWFuaWZlc3QgdmFsaWQtY2FuZGlkYXRlIGZpeHR1cmUgYW5jaG9yIGRyaWZ0ZWQ6IGV4cGVjdGVkIDEsIGdvdCB7Y291bnR9JwogICAgKQpwYXRoLndyaXRlX3RleHQodGV4dC5yZXBsYWNlKG9sZCwgbmV3LCAxKSwgZW5jb2Rpbmc9J3V0Zi04JykKUFlNQU5JRkVTVApnaXQgYWRkIC0tIHNjcmlwdHMvY2hlY2stcmVsZWFzZS1iYXNlbGluZS1tYW5pZmVzdC1jb250cmFjdC1jb3JlLnB5Cgo='
-          repair_b64 = repair_b64.replace(' ', '')
+          repair_b64 = 'cGhhc2UgInJlcGFpciBzZXF1ZW5jZSAzOSBzdGFsZSBtaWdyYXRpb24taGVhZCBmaXh0dXJlcyIKcHl0aG9uMyA8PCdQWVJFUEFJUicKZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCgpyZXBsYWNlbWVudHMgPSBbCiAgICAoCiAgICAgICAgUGF0aCgnc2NyaXB0cy9jaGVjay1yZWxlYXNlLWJhc2VsaW5lLW1hbmlmZXN0LWNvbnRyYWN0LWNvcmUucHknKSwKICAgICAgICAoCiAgICAgICAgICAgICcgICAgICAgICJkYXRhYmFzZSI6IHtcbicKICAgICAgICAgICAgJyAgICAgICAgICAgICJtaWdyYXRpb25faGVhZCI6ICcKICAgICAgICAgICAgJyIwMDg3X2FkZF90ZXJtX2V4Y2hhbmdlX3JlY2VpcHRfZXZlbnRfaGlzdG9yeS5zcWwiLFxuJwogICAgICAgICAgICAnICAgICAgICAgICAgIm1pZ3JhdGlvbl9zaGEyNTYiOiBkaWdlc3QsXG4nCiAgICAgICAgICAgICcgICAgICAgICAgICAibWlncmF0aW9uX2NoYWluX3NoYTI1NiI6IGRpZ2VzdCxcbicKICAgICAgICAgICAgJyAgICAgICAgfSwnCiAgICAgICAgKSwKICAgICAgICAoCiAgICAgICAgICAgICcgICAgICAgICJkYXRhYmFzZSI6IHtcbicKICAgICAgICAgICAgJyAgICAgICAgICAgICJtaWdyYXRpb25faGVhZCI6ICcKICAgICAgICAgICAgJyIwMDg4X2VuZm9yY2VfcHJvdmlkZXJfdGVybWluYWxfZXZpZGVuY2VfYmluZGluZy5zcWwiLFxuJwogICAgICAgICAgICAnICAgICAgICAgICAgIm1pZ3JhdGlvbl9zaGEyNTYiOiBkaWdlc3QsXG4nCiAgICAgICAgICAgICcgICAgICAgICAgICAibWlncmF0aW9uX2NoYWluX3NoYTI1NiI6IGRpZ2VzdCxcbicKICAgICAgICAgICAgJyAgICAgICAgfSwnCiAgICAgICAgKSwKICAgICAgICAnbWFuaWZlc3QgdmFsaWQtY2FuZGlkYXRlIGZpeHR1cmUnLAogICAgKSwKICAgICgKICAgICAgICBQYXRoKCdzY3JpcHRzL2NoZWNrLWludm9jYXRpb24tbGVkZ2VyLWNvbnRyYWN0LXN0YXRpYy5weScpLAogICAgICAgICciMDA4N19hZGRfdGVybV9leGNoYW5nZV9yZWNlaXB0X2V2ZW50X2hpc3Rvcnkuc3FsIicsCiAgICAgICAgJyIwMDg4X2VuZm9yY2VfcHJvdmlkZXJfdGVybWluYWxfZXZpZGVuY2VfYmluZGluZy5zcWwiJywKICAgICAgICAnaW52b2NhdGlvbi1sZWRnZXIgYWN0aXZlIG1pZ3JhdGlvbiBtYXJrZXInLAogICAgKSwKXQpmb3IgcGF0aCwgb2xkLCBuZXcsIGxhYmVsIGluIHJlcGxhY2VtZW50czoKICAgIHRleHQgPSBwYXRoLnJlYWRfdGV4dChlbmNvZGluZz0ndXRmLTgnKQogICAgY291bnQgPSB0ZXh0LmNvdW50KG9sZCkKICAgIGlmIGNvdW50ICE9IDE6CiAgICAgICAgcmFpc2UgU3lzdGVtRXhpdChmJ3tsYWJlbH0gYW5jaG9yIGRyaWZ0ZWQ6IGV4cGVjdGVkIDEsIGdvdCB7Y291bnR9JykKICAgIHBhdGgud3JpdGVfdGV4dCh0ZXh0LnJlcGxhY2Uob2xkLCBuZXcsIDEpLCBlbmNvZGluZz0ndXRmLTgnKQpQWVJFUEFJUgpnaXQgYWRkIC0tICAgc2NyaXB0cy9jaGVjay1yZWxlYXNlLWJhc2VsaW5lLW1hbmlmZXN0LWNvbnRyYWN0LWNvcmUucHkgICBzY3JpcHRzL2NoZWNrLWludm9jYXRpb24tbGVkZ2VyLWNvbnRyYWN0LXN0YXRpYy5weQoK'
           pyfix = f'''python3 - "$RUNNER_TEMP/seq39-exact-apply.sh" <<'PYFIXSCRIPT'
           from pathlib import Path
           import base64
@@ -101,11 +99,20 @@ jobs:
 
           path = Path(sys.argv[1])
           source = path.read_text(encoding='utf-8')
-          anchor = 'phase "bind clean-checkout discovery into active authority"\\n'
+          path_anchor = 'patch_paths = {{\\n'
+          path_entry = "    'scripts/check-invocation-ledger-contract-static.py',\\n"
+          if source.count(path_anchor) != 1:
+              raise SystemExit('transformed sequence 39 patch_paths anchor drifted')
+          if path_entry in source:
+              raise SystemExit('invocation-ledger checker is already in candidate path set')
+          source = source.replace(path_anchor, path_anchor + path_entry, 1)
+
+          bind_anchor = 'phase "bind clean-checkout discovery into active authority"\\n'
           repair = base64.b64decode({repair_b64!r}).decode('utf-8')
-          if source.count(anchor) != 1:
+          if source.count(bind_anchor) != 1:
               raise SystemExit('transformed sequence 39 bind phase anchor drifted')
-          path.write_text(source.replace(anchor, repair + anchor, 1), encoding='utf-8')
+          source = source.replace(bind_anchor, repair + bind_anchor, 1)
+          path.write_text(source, encoding='utf-8')
           PYFIXSCRIPT
           '''
           extracted = extracted.replace(
