@@ -19,6 +19,8 @@ env:
   DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/cex_ci
   CARGO_TERM_COLOR: never
   CARGO_INCREMENTAL: '0'
+  PYTHONDONTWRITEBYTECODE: '1'
+  PYTHONPYCACHEPREFIX: /tmp/cex-seq39-python-cache
 
 jobs:
   repair-and-validate:
@@ -51,7 +53,7 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Repair stale migration-head fixtures after the pinned transform
+      - name: Repair and validate the exact sequence 39 candidate
         shell: bash
         run: |
           set -euo pipefail
@@ -91,7 +93,7 @@ jobs:
           if extracted.count(observed_line) != 1:
               raise SystemExit('sequence 39 post-transform digest anchor drifted')
 
-          repair_b64 = 'cGhhc2UgInJlcGFpciBzZXF1ZW5jZSAzOSBzdGFsZSBtaWdyYXRpb24taGVhZCBmaXh0dXJlcyIKcHl0aG9uMyA8PCdQWVJFUEFJUicKZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCgpyZXBsYWNlbWVudHMgPSBbCiAgICAoCiAgICAgICAgUGF0aCgnc2NyaXB0cy9jaGVjay1yZWxlYXNlLWJhc2VsaW5lLW1hbmlmZXN0LWNvbnRyYWN0LWNvcmUucHknKSwKICAgICAgICAoCiAgICAgICAgICAgICcgICAgICAgICJkYXRhYmFzZSI6IHtcbicKICAgICAgICAgICAgJyAgICAgICAgICAgICJtaWdyYXRpb25faGVhZCI6ICcKICAgICAgICAgICAgJyIwMDg3X2FkZF90ZXJtX2V4Y2hhbmdlX3JlY2VpcHRfZXZlbnRfaGlzdG9yeS5zcWwiLFxuJwogICAgICAgICAgICAnICAgICAgICAgICAgIm1pZ3JhdGlvbl9zaGEyNTYiOiBkaWdlc3QsXG4nCiAgICAgICAgICAgICcgICAgICAgICAgICAibWlncmF0aW9uX2NoYWluX3NoYTI1NiI6IGRpZ2VzdCxcbicKICAgICAgICAgICAgJyAgICAgICAgfSwnCiAgICAgICAgKSwKICAgICAgICAoCiAgICAgICAgICAgICcgICAgICAgICJkYXRhYmFzZSI6IHtcbicKICAgICAgICAgICAgJyAgICAgICAgICAgICJtaWdyYXRpb25faGVhZCI6ICcKICAgICAgICAgICAgJyIwMDg4X2VuZm9yY2VfcHJvdmlkZXJfdGVybWluYWxfZXZpZGVuY2VfYmluZGluZy5zcWwiLFxuJwogICAgICAgICAgICAnICAgICAgICAgICAgIm1pZ3JhdGlvbl9zaGEyNTYiOiBkaWdlc3QsXG4nCiAgICAgICAgICAgICcgICAgICAgICAgICAibWlncmF0aW9uX2NoYWluX3NoYTI1NiI6IGRpZ2VzdCxcbicKICAgICAgICAgICAgJyAgICAgICAgfSwnCiAgICAgICAgKSwKICAgICAgICAnbWFuaWZlc3QgdmFsaWQtY2FuZGlkYXRlIGZpeHR1cmUnLAogICAgKSwKICAgICgKICAgICAgICBQYXRoKCdzY3JpcHRzL2NoZWNrLWludm9jYXRpb24tbGVkZ2VyLWNvbnRyYWN0LXN0YXRpYy5weScpLAogICAgICAgICciMDA4N19hZGRfdGVybV9leGNoYW5nZV9yZWNlaXB0X2V2ZW50X2hpc3Rvcnkuc3FsIicsCiAgICAgICAgJyIwMDg4X2VuZm9yY2VfcHJvdmlkZXJfdGVybWluYWxfZXZpZGVuY2VfYmluZGluZy5zcWwiJywKICAgICAgICAnaW52b2NhdGlvbi1sZWRnZXIgYWN0aXZlIG1pZ3JhdGlvbiBtYXJrZXInLAogICAgKSwKXQpmb3IgcGF0aCwgb2xkLCBuZXcsIGxhYmVsIGluIHJlcGxhY2VtZW50czoKICAgIHRleHQgPSBwYXRoLnJlYWRfdGV4dChlbmNvZGluZz0ndXRmLTgnKQogICAgY291bnQgPSB0ZXh0LmNvdW50KG9sZCkKICAgIGlmIGNvdW50ICE9IDE6CiAgICAgICAgcmFpc2UgU3lzdGVtRXhpdChmJ3tsYWJlbH0gYW5jaG9yIGRyaWZ0ZWQ6IGV4cGVjdGVkIDEsIGdvdCB7Y291bnR9JykKICAgIHBhdGgud3JpdGVfdGV4dCh0ZXh0LnJlcGxhY2Uob2xkLCBuZXcsIDEpLCBlbmNvZGluZz0ndXRmLTgnKQpQWVJFUEFJUgpnaXQgYWRkIC0tICAgc2NyaXB0cy9jaGVjay1yZWxlYXNlLWJhc2VsaW5lLW1hbmlmZXN0LWNvbnRyYWN0LWNvcmUucHkgICBzY3JpcHRzL2NoZWNrLWludm9jYXRpb24tbGVkZ2VyLWNvbnRyYWN0LXN0YXRpYy5weQoK'
+          repair_b64 = 'cGhhc2UgInJlcGFpciBzZXF1ZW5jZSAzOSBzdGFsZSBtaWdyYXRpb24taGVhZCBmaXh0dXJlcyIKcHl0aG9uMyA8PCdQWVJFUEFJUicKZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCgpyZXBsYWNlbWVudHMgPSBbCiAgICAoCiAgICAgICAgUGF0aCgnc2NyaXB0cy9jaGVjay1yZWxlYXNlLWJhc2VsaW5lLW1hbmlmZXN0LWNvbnRyYWN0LWNvcmUucHknKSwKICAgICAgICAoCiAgICAgICAgICAgICcgICAgICAgICJkYXRhYmFzZSI6IHtcbicKICAgICAgICAgICAgJyAgICAgICAgICAgICJtaWdyYXRpb25faGVhZCI6ICcKICAgICAgICAgICAgJyIwMDg3X2FkZF90ZXJtX2V4Y2hhbmdlX3JlY2VpcHRfZXZlbnRfaGlzdG9yeS5zcWwiLFxuJwogICAgICAgICAgICAnICAgICAgICAgICAgIm1pZ3JhdGlvbl9zaGEyNTYiOiBkaWdlc3QsXG4nCiAgICAgICAgICAgICcgICAgICAgICAgICAibWlncmF0aW9uX2NoYWluX3NoYTI1NiI6IGRpZ2VzdCxcbicKICAgICAgICAgICAgJyAgICAgICAgfSwnCiAgICAgICAgKSwKICAgICAgICAoCiAgICAgICAgICAgICcgICAgICAgICJkYXRhYmFzZSI6IHtcbicKICAgICAgICAgICAgJyAgICAgICAgICAgICJtaWdyYXRpb25faGVhZCI6ICcKICAgICAgICAgICAgJyIwMDg4X2VuZm9yY2VfcHJvdmlkZXJfdGVybWluYWxfZXZpZGVuY2VfYmluZGluZy5zcWwiLFxuJwogICAgICAgICAgICAnICAgICAgICAgICAgIm1pZ3JhdGlvbl9zaGEyNTYiOiBkaWdlc3QsXG4nCiAgICAgICAgICAgICcgICAgICAgICAgICAibWlncmF0aW9uX2NoYWluX3NoYTI1NiI6IGRpZ2VzdCxcbicKICAgICAgICAgICAgJyAgICAgICAgfSwnCiAgICAgICAgKSwKICAgICAgICAnbWFuaWZlc3QgdmFsaWQtY2FuZGlkYXRlIGZpeHR1cmUnLAogICAgKSwKICAgICgKICAgICAgICBQYXRoKCdzY3JpcHRzL2NoZWNrLWludm9jYXRpb24tbGVkZ2VyLWNvbnRyYWN0LXN0YXRpYy5weScpLAogICAgICAgICciMDA4N19hZGRfdGVybV9leGNoYW5nZV9yZWNlaXB0X2V2ZW50X2hpc3Rvcnkuc3FsIicsCiAgICAgICAgJyIwMDg4X2VuZm9yY2VfcHJvdmlkZXJfdGVybWluYWxfZXZpZGVuY2VfYmluZGluZy5zcWwiJywKICAgICAgICAnaW52b2NhdGlvbi1sZWRnZXIgYWN0aXZlIG1pZ3JhdGlvbiBtYXJrZXInLAogICAgKSwKXQpmb3IgcGF0aCwgb2xkLCBuZXcsIGxhYmVsIGluIHJlcGxhY2VtZW50czoKICAgIHRleHQgPSBwYXRoLnJlYWRfdGV4dChlbmNvZGluZz0ndXRmLTgnKQogICAgY291bnQgPSB0ZXh0LmNvdW50KG9sZCkKICAgIGlmIGNvdW50ICE9IDE6CiAgICAgICAgcmFpc2UgU3lzdGVtRXhpdChmJ3tsYWJlbH0gYW5jaG9yIGRyaWZ0ZWQ6IGV4cGVjdGVkIDEsIGdvdCB7Y291bnR9JykKICAgIHBhdGgud3JpdGVfdGV4dCh0ZXh0LnJlcGxhY2Uob2xkLCBuZXcsIDEpLCBlbmNvZGluZz0ndXRmLTgnKQpQWVJFUEFJUgpnaXQgYWRkIC0tICAgc2NyaXB0cy9jaGVjay1yZWxlYXNlLWJhc2VsaW5lLW1hbmlmZXN0LWNvbnRyYWN0LWNvcmUucHkgICBzY3JpcHRzL2NoZWNrLWludm9jYXRpb24tbGVkZ2VyLWNvbnRyYWN0LXN0YXRpYy5weQoKcGhhc2UgImZvcm1hdCBzZXF1ZW5jZSAzOSBSdXN0IGNhbmRpZGF0ZSIKY2FyZ28gZm10IC0tYWxsCmdpdCBhZGQgLS0gXAogIGNyYXRlcy9zaGFyZWQtY29uZmlnL3NyYy9ydW50aW1lX2d1YXJkLnJzIFwKICBzZXJ2aWNlcy9leGVjdXRpb24tc2VydmljZS9zcmMvcHJvdmlkZXJfZGlzcGF0Y2gucnMgXAogIHNlcnZpY2VzL2dhdGV3YXktc2VydmljZS9zcmMvYmluL2dhdGV3YXktZXhhY3QtcmVzZXJ2ZS13b3JrZXIucnMgXAogIHNlcnZpY2VzL2lkZW50aXR5LXNlcnZpY2Uvc3JjL21haW4ucnMgXAogIHNlcnZpY2VzL2xlZGdlci1zZXJ2aWNlL3NyYy9tYWluLnJzCgo='
           pyfix = f'''python3 - "$RUNNER_TEMP/seq39-exact-apply.sh" <<'PYFIXSCRIPT'
           from pathlib import Path
           import base64
@@ -101,7 +103,7 @@ jobs:
           source = path.read_text(encoding='utf-8')
 
           normalization_anchor = 'raw_status = subprocess.check_output(\\n'
-          normalization_seed = base64.b64decode('Zm9yIHJlbGF0aXZlIGluIHNvcnRlZChleHBlY3RlZCk6CiAgICBibG9iID0gc3VicHJvY2Vzcy5jaGVja19vdXRwdXQoWydnaXQnLCAnc2hvdycsIGYne2Jhc2V9OntyZWxhdGl2ZX0nXSkKICAgIG5vcm1hbGl6ZWQgPSBibG9iLnJlcGxhY2UoYidcclxuJywgYidcbicpCiAgICBpZiBibG9iID09IG5vcm1hbGl6ZWQ6CiAgICAgICAgcmFpc2UgU3lzdGVtRXhpdChmJ2V4cGVjdGVkIENSTEYtYmVhcmluZyBibG9iIGlzIGFscmVhZHkgbm9ybWFsaXplZDoge3JlbGF0aXZlfScpCiAgICBpZiBiJ1xyJyBpbiBub3JtYWxpemVkOgogICAgICAgIHJhaXNlIFN5c3RlbUV4aXQoZid1bnN1cHBvcnRlZCBsb25lIENSIHJlbWFpbnMgYWZ0ZXIgbm9ybWFsaXphdGlvbjoge3JlbGF0aXZlfScpCiAgICBQYXRoKHJlbGF0aXZlKS53cml0ZV9ieXRlcyhub3JtYWxpemVkKQoK').decode('utf-8')
+          normalization_seed = base64.b64decode('Zm9yIHJlbGF0aXZlIGluIHNvcnRlZChleHBlY3RlZCk6CiAgICBibG9iID0gc3VicHJvY2Vzcy5jaGVja19vdXRwdXQoWydnaXQnLCAnc2hvdycsIGYne2Jhc2V9OntyZWxhdGl2ZX0nXSkKICAgIG5vcm1hbGl6ZWQgPSBibG9iLnJlcGxhY2UoYidcclxuJywgYidcbicpCiAgICBpZiBibG9iID09IG5vcm1hbGl6ZWQ6CiAgICAgICAgcmFpc2UgU3lzdGVtRXhpdChmJ2V4cGVjdGVkIENSTEYtYmVhcmluZyBibG9iIGlzIGFscmVhZHkgbm9ybWFsaXplZDoge3JlbGF0aXZlfScpCiAgICBQYXRoKHJlbGF0aXZlKS53cml0ZV9ieXRlcyhub3JtYWxpemVkKQoK').decode('utf-8')
           if source.count(normalization_anchor) != 1:
               raise SystemExit('transformed normalization status anchor drifted')
           source = source.replace(
@@ -111,12 +113,19 @@ jobs:
           )
 
           path_anchor = 'patch_paths = {{\\n'
-          path_entry = "    'scripts/check-invocation-ledger-contract-static.py',\\n"
+          path_entries = (
+              "    'crates/shared-config/src/runtime_guard.rs',\\n"
+              "    'scripts/check-invocation-ledger-contract-static.py',\\n"
+              "    'services/gateway-service/src/bin/gateway-exact-reserve-worker.rs',\\n"
+              "    'services/identity-service/src/main.rs',\\n"
+              "    'services/ledger-service/src/main.rs',\\n"
+          )
           if source.count(path_anchor) != 1:
               raise SystemExit('transformed sequence 39 patch_paths anchor drifted')
-          if path_entry in source:
-              raise SystemExit('invocation-ledger checker is already in candidate path set')
-          source = source.replace(path_anchor, path_anchor + path_entry, 1)
+          for entry in path_entries:
+              if entry in source:
+                  raise SystemExit(f'candidate path is already present: {entry.strip()}')
+          source = source.replace(path_anchor, path_anchor + ''.join(path_entries), 1)
 
           bind_anchor = 'phase "bind clean-checkout discovery into active authority"\\n'
           repair = base64.b64decode({repair_b64!r}).decode('utf-8')
