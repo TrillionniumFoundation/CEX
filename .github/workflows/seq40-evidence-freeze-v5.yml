@@ -1,0 +1,307 @@
+name: seq40-evidence-freeze-v5
+
+on:
+  push:
+    branches:
+      - automation/seq40-workflow-trust-windows
+    paths:
+      - '.github/workflows/seq40-evidence-freeze-v5.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+  pull-requests: read
+
+concurrency:
+  group: seq40-evidence-freeze-v5
+  cancel-in-progress: false
+
+jobs:
+  freeze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout automation control branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Resolve exact hosted-gates-passed candidate
+        id: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=false
+          for _ in $(seq 1 720); do
+            if git ls-remote --exit-code origin \
+              refs/heads/automation/seq40-hosted-gates-passed >/tmp/seq40-hosted.ref 2>/dev/null; then
+              found=true
+              break
+            fi
+            sleep 10
+          done
+          if [[ "$found" != true ]]; then
+            echo '::error::sequence 40 hosted-gates-passed ref was not published'
+            exit 1
+          fi
+          sha=$(awk '{print $1}' /tmp/seq40-hosted.ref)
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "sequence40_candidate_sha=$sha"
+
+      - name: Checkout exact candidate without automation harness
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.candidate.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Collect canonical hosted and governance evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          owner, repo = repository.split('/', 1)
+          token = os.environ['GH_TOKEN']
+          candidate = os.environ['CANDIDATE_SHA']
+          required = (
+              '.github/workflows/p0-provider-reconciliation-gate.yml',
+              '.github/workflows/p0-migration-gate.yml',
+              '.github/workflows/p0-gateway-exact-reserve-gate.yml',
+              '.github/workflows/p0-execution-settlement-gate.yml',
+              '.github/workflows/rust-service-gate.yml',
+              '.github/workflows/p0-release-candidate-gate.yml',
+          )
+          headers = {
+              'Accept': 'application/vnd.github+json',
+              'Authorization': f'Bearer {token}',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'cex-sequence-40-evidence-freeze',
+          }
+
+          def api(path: str):
+              request = urllib.request.Request(
+                  f'https://api.github.com/repos/{repository}{path}',
+                  headers=headers,
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=60) as response:
+                      raw = response.read()
+                      return response.status, json.loads(raw) if raw else None
+              except urllib.error.HTTPError as exc:
+                  raw = exc.read().decode('utf-8', errors='replace')
+                  try:
+                      payload = json.loads(raw)
+                  except json.JSONDecodeError:
+                      payload = {'message': raw}
+                  return exc.code, payload
+
+          query = urllib.parse.urlencode({'head_sha': candidate, 'per_page': '100'})
+          status, payload = api(f'/actions/runs?{query}')
+          if status != 200:
+              raise SystemExit(f'cannot list exact runs: HTTP {status}: {payload!r}')
+          grouped = {path: [] for path in required}
+          for run in payload.get('workflow_runs', []):
+              path = run.get('path')
+              if path in grouped:
+                  grouped[path].append(run)
+
+          frozen_runs = []
+          for path in required:
+              runs = sorted(
+                  grouped[path],
+                  key=lambda run: (
+                      run.get('created_at') or '',
+                      int(run.get('run_attempt') or 0),
+                      int(run.get('id') or 0),
+                  ),
+                  reverse=True,
+              )
+              if not runs:
+                  raise SystemExit(f'missing exact-head run for {path}')
+              run = runs[0]
+              if run.get('status') != 'completed' or run.get('conclusion') != 'success':
+                  raise SystemExit(
+                      f'latest exact-head run is not successful for {path}: '
+                      f"{run.get('status')}/{run.get('conclusion')}"
+                  )
+              run_id = int(run['id'])
+              jobs_status, jobs_payload = api(
+                  f'/actions/runs/{run_id}/jobs?filter=latest&per_page=100'
+              )
+              if jobs_status != 200:
+                  raise SystemExit(
+                      f'cannot freeze jobs for {path}: HTTP {jobs_status}: {jobs_payload!r}'
+                  )
+              artifacts_status, artifacts_payload = api(
+                  f'/actions/runs/{run_id}/artifacts?per_page=100'
+              )
+              if artifacts_status != 200:
+                  raise SystemExit(
+                      f'cannot freeze artifacts for {path}: '
+                      f'HTTP {artifacts_status}: {artifacts_payload!r}'
+                  )
+              jobs = []
+              for job in jobs_payload.get('jobs', []):
+                  jobs.append(
+                      {
+                          'id': job.get('id'),
+                          'name': job.get('name'),
+                          'status': job.get('status'),
+                          'conclusion': job.get('conclusion'),
+                          'runner_group_name': job.get('runner_group_name'),
+                          'runner_name': job.get('runner_name'),
+                          'started_at': job.get('started_at'),
+                          'completed_at': job.get('completed_at'),
+                          'steps': [
+                              {
+                                  'number': step.get('number'),
+                                  'name': step.get('name'),
+                                  'status': step.get('status'),
+                                  'conclusion': step.get('conclusion'),
+                              }
+                              for step in job.get('steps', [])
+                          ],
+                      }
+                  )
+              artifacts = []
+              for artifact in artifacts_payload.get('artifacts', []):
+                  artifacts.append(
+                      {
+                          'id': artifact.get('id'),
+                          'name': artifact.get('name'),
+                          'size_in_bytes': artifact.get('size_in_bytes'),
+                          'expired': artifact.get('expired'),
+                          'created_at': artifact.get('created_at'),
+                          'expires_at': artifact.get('expires_at'),
+                          'digest': artifact.get('digest'),
+                      }
+                  )
+              frozen_runs.append(
+                  {
+                      'workflow_path': path,
+                      'run': {
+                          'id': run_id,
+                          'run_number': run.get('run_number'),
+                          'run_attempt': run.get('run_attempt'),
+                          'event': run.get('event'),
+                          'head_sha': run.get('head_sha'),
+                          'status': run.get('status'),
+                          'conclusion': run.get('conclusion'),
+                          'created_at': run.get('created_at'),
+                          'updated_at': run.get('updated_at'),
+                          'html_url': run.get('html_url'),
+                      },
+                      'jobs': sorted(jobs, key=lambda item: (str(item['name']), int(item['id']))),
+                      'artifacts': sorted(
+                          artifacts,
+                          key=lambda item: (str(item['name']), int(item['id'])),
+                      ),
+                  }
+              )
+
+          repo_status, repo_payload = api('')
+          if repo_status != 200:
+              raise SystemExit(f'cannot read repository metadata: {repo_status}')
+          default_branch = repo_payload.get('default_branch')
+          protection_status, protection_payload = api(
+              f'/branches/{urllib.parse.quote(str(default_branch), safe="")}/protection'
+          )
+          pulls_query = urllib.parse.urlencode(
+              {
+                  'state': 'all',
+                  'head': f'{owner}:automation/seq40-validated',
+                  'per_page': '20',
+              }
+          )
+          pulls_status, pulls_payload = api(f'/pulls?{pulls_query}')
+          if pulls_status != 200:
+              raise SystemExit(f'cannot read sequence 40 PRs: HTTP {pulls_status}')
+          pull_records = []
+          for pull in pulls_payload:
+              pull_records.append(
+                  {
+                      'number': pull.get('number'),
+                      'state': pull.get('state'),
+                      'draft': pull.get('draft'),
+                      'merged_at': pull.get('merged_at'),
+                      'base_ref': (pull.get('base') or {}).get('ref'),
+                      'base_sha': (pull.get('base') or {}).get('sha'),
+                      'head_ref': (pull.get('head') or {}).get('ref'),
+                      'head_sha': (pull.get('head') or {}).get('sha'),
+                      'html_url': pull.get('html_url'),
+                  }
+              )
+
+          hosted = {
+              'schema_version': 'cex.sequence40.hosted-evidence.v1',
+              'candidate_sha': candidate,
+              'production_authorization': 'not_granted',
+              'required_workflows': list(required),
+              'latest_exact_head_runs': sorted(
+                  frozen_runs,
+                  key=lambda item: item['workflow_path'],
+              ),
+          }
+          governance = {
+              'schema_version': 'cex.sequence40.governance-readback.v1',
+              'candidate_sha': candidate,
+              'production_authorization': 'not_granted',
+              'repository': repository,
+              'default_branch': default_branch,
+              'default_branch_protection_http_status': protection_status,
+              'default_branch_protection': protection_payload,
+              'sequence40_pull_requests': sorted(
+                  pull_records,
+                  key=lambda item: int(item['number']),
+              ),
+              'validated_ref': 'refs/heads/automation/seq40-validated',
+              'hosted_pass_ref': 'refs/heads/automation/seq40-hosted-gates-passed',
+          }
+
+          out = Path('docs/release-evidence/sequence40')
+          out.mkdir(parents=True, exist_ok=True)
+          for name, document in (
+              ('hosted-gates-v1.json', hosted),
+              ('governance-readback-v1.json', governance),
+          ):
+              encoded = (
+                  json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False)
+                  + '\n'
+              ).encode('utf-8')
+              (out / name).write_bytes(encoded)
+              (out / f'{name}.sha256').write_text(
+                  hashlib.sha256(encoded).hexdigest() + f'  {name}\n',
+                  encoding='utf-8',
+              )
+          PY
+
+          git diff --check
+
+      - name: Commit immutable evidence to a separate branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'cex-sequence-40-evidence'
+          git config user.email 'cex-sequence-40-evidence@users.noreply.github.com'
+          git add -- docs/release-evidence/sequence40
+          git commit -m 'docs(evidence): freeze sequence 40 hosted and governance readback'
+          git push --force origin HEAD:automation/seq40-evidence-freeze
+          echo "sequence40_evidence_commit=$(git rev-parse HEAD)"
+          echo "sequence40_evidence_tree=$(git rev-parse HEAD^{tree})"
