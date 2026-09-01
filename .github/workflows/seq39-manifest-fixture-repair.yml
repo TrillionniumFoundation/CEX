@@ -51,7 +51,7 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Repair manifest fixture and execute pinned sequence 39 validator
+      - name: Repair manifest fixture after the pinned transform and execute validation
         shell: bash
         run: |
           set -euo pipefail
@@ -69,41 +69,7 @@ jobs:
 
           python3 - <<'PYWRAP'
           from pathlib import Path
-          import textwrap
-
-          script_path = Path('.automation/seq39-exact-apply.sh')
-          source = script_path.read_text(encoding='utf-8')
-          anchor = 'phase "bind clean-checkout discovery into active authority"\n'
-          repair = r'''phase "repair sequence 39 manifest self-test fixture"
-          python3 <<'PYMANIFEST'
-          from pathlib import Path
-
-          path = Path('scripts/check-release-baseline-manifest-contract-core.py')
-          text = path.read_text(encoding='utf-8')
-          old = ''' + repr('''        "database": {
-                      "migration_head": "0087_add_term_exchange_receipt_event_history.sql",
-                      "migration_sha256": digest,
-                      "migration_chain_sha256": digest,
-                  },''') + r'''
-          new = ''' + repr('''        "database": {
-                      "migration_head": "0088_enforce_provider_terminal_evidence_binding.sql",
-                      "migration_sha256": digest,
-                      "migration_chain_sha256": digest,
-                  },''') + r'''
-          count = text.count(old)
-          if count != 1:
-              raise SystemExit(
-                  f'manifest valid-candidate fixture anchor drifted: expected 1, got {count}'
-              )
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
-          PYMANIFEST
-          git add -- scripts/check-release-baseline-manifest-contract-core.py
-
-          '''
-          if source.count(anchor) != 1:
-              raise SystemExit('sequence 39 bind phase anchor drifted')
-          source = source.replace(anchor, repair + anchor, 1)
-          script_path.write_text(source, encoding='utf-8')
+          import base64
 
           workflow = Path('.github/workflows/seq39-exact-apply.yml').read_text(
               encoding='utf-8'
@@ -118,6 +84,36 @@ jobs:
           extracted = '\n'.join(
               line[10:] if line.startswith('          ') else '' for line in block
           ) + '\n'
+
+          observed_line = (
+              'observed=$(sha256sum "$RUNNER_TEMP/seq39-exact-apply.sh" '
+              "| awk '{print $1}')\n"
+          )
+          if extracted.count(observed_line) != 1:
+              raise SystemExit('sequence 39 post-transform digest anchor drifted')
+
+          repair_b64 = 'cGhhc2UgInJlcGFpciBzZXF1ZW5jZSAzOSBtYW5pZmVzdCBzZWxmLXRlc3QgZml4dHVyZSIKcHl0aG9uMyA8PCdQWU1BTklGRVNUJwpmcm9tIHBhdGhsaWIgaW1wb3J0IFBhdGgKCnBhdGggPSBQYXRoKCdzY3JpcHRzL2NoZWNrLXJlbGVhc2UtYmFzZWxpbmUtbWFuaWZlc3QtY29udHJhY3QtY29yZS5weScpCnRleHQgPSBwYXRoLnJlYWRfdGV4dChlbmNvZGluZz0ndXRmLTgnKQpvbGQgPSAoCiAgICAnICAgICAgICAiZGF0YWJhc2UiOiB7XG4nCiAgICAnICAgICAgICAgICAgIm1pZ3JhdGlvbl9oZWFkIjogJwogICAgJyIwMDg3X2FkZF90ZXJtX2V4Y2hhbmdlX3JlY2VpcHRfZXZlbnRfaGlzdG9yeS5zcWwiLFxuJwogICAgJyAgICAgICAgICAgICJtaWdyYXRpb25fc2hhMjU2IjogZGlnZXN0LFxuJwogICAgJyAgICAgICAgICAgICJtaWdyYXRpb25fY2hhaW5fc2hhMjU2IjogZGlnZXN0LFxuJwogICAgJyAgICAgICAgfSwnCikKbmV3ID0gKAogICAgJyAgICAgICAgImRhdGFiYXNlIjoge1xuJwogICAgJyAgICAgICAgICAgICJtaWdyYXRpb25faGVhZCI6ICcKICAgICciMDA4OF9lbmZvcmNlX3Byb3ZpZGVyX3Rlcm1pbmFsX2V2aWRlbmNlX2JpbmRpbmcuc3FsIixcbicKICAgICcgICAgICAgICAgICAibWlncmF0aW9uX3NoYTI1NiI6IGRpZ2VzdCxc bicKICAgICcgICAgICAgICAgICAibWlncmF0aW9uX2NoYWluX3NoYTI1NiI6IGRpZ2VzdCxc bicKICAgICcgICAgICAgIH0sJwopCmNvdW50ID0gdGV4dC5jb3VudChvbGQpCmlmIGNvdW50ICE9IDE6CiAgICByYWlzZSBTeXN0ZW1FeGl0KAogICAgICAgIGYnbWFuaWZlc3QgdmFsaWQtY2FuZGlkYXRlIGZpeHR1cmUgYW5jaG9yIGRyaWZ0ZWQ6IGV4cGVjdGVkIDEsIGdvdCB7Y291bnR9JwogICAgKQpwYXRoLndyaXRlX3RleHQodGV4dC5yZXBsYWNlKG9sZCwgbmV3LCAxKSwgZW5jb2Rpbmc9J3V0Zi04JykKUFlNQU5JRkVTVApnaXQgYWRkIC0tIHNjcmlwdHMvY2hlY2stcmVsZWFzZS1iYXNlbGluZS1tYW5pZmVzdC1jb250cmFjdC1jb3JlLnB5Cgo='
+          repair_b64 = repair_b64.replace(' ', '')
+          pyfix = f'''python3 - "$RUNNER_TEMP/seq39-exact-apply.sh" <<'PYFIXSCRIPT'
+          from pathlib import Path
+          import base64
+          import sys
+
+          path = Path(sys.argv[1])
+          source = path.read_text(encoding='utf-8')
+          anchor = 'phase "bind clean-checkout discovery into active authority"\\n'
+          repair = base64.b64decode({repair_b64!r}).decode('utf-8')
+          if source.count(anchor) != 1:
+              raise SystemExit('transformed sequence 39 bind phase anchor drifted')
+          path.write_text(source.replace(anchor, repair + anchor, 1), encoding='utf-8')
+          PYFIXSCRIPT
+          '''
+          extracted = extracted.replace(
+              observed_line,
+              pyfix + observed_line,
+              1,
+          )
+
           digest_line = (
               'expected=0fef8fbcabfc3956a816f6d92a4111201036e27f4c2b7cf8f7d507281ad10756'
           )
