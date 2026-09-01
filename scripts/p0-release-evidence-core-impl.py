@@ -1053,7 +1053,8 @@ def manifest(args: argparse.Namespace) -> int:
     )
     files = context["files"]
     evidence: list[dict[str, Any]] = []
-    for name, gate in context["hosted_gates"].items():
+    for name in REQUIRED_GATES:
+        gate = context["hosted_gates"][name]
         evidence.append(
             {
                 "name": f"hosted:{name}",
