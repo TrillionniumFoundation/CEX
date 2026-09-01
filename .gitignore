@@ -23,3 +23,7 @@ TOOLS.md
 USER.md
 MEMORY.md
 DREAMS.md
+# Python interpreter/build artifacts
+__pycache__/
+*.py[cod]
+*$py.class

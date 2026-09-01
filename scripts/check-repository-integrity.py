@@ -76,6 +76,21 @@ def main() -> int:
         print(docs_check.stdout, end="")
         raise SystemExit("development document contract failed")
 
+    tracked_python_artifacts = sorted(
+        path
+        for path in run_git("ls-files", "-z").split("\0")
+        if path
+        and (
+            path.endswith((".pyc", ".pyo"))
+            or "/__pycache__/" in f"/{path}/"
+        )
+    )
+    if tracked_python_artifacts:
+        raise SystemExit(
+            "tracked Python interpreter artifacts are forbidden during integrity "
+            f"attestation: {', '.join(tracked_python_artifacts)}"
+        )
+
     if subprocess.run(["git", "-C", str(ROOT), "diff", "--quiet"]).returncode != 0:
         raise SystemExit("tracked worktree changes exist during integrity attestation")
     if subprocess.run(["git", "-C", str(ROOT), "diff", "--cached", "--quiet"]).returncode != 0:
