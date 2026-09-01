@@ -1,0 +1,206 @@
+name: seq40-hosted-gates-monitor-v4
+
+on:
+  push:
+    branches:
+      - automation/seq40-workflow-trust-windows
+    paths:
+      - '.github/workflows/seq40-hosted-gates-monitor-v4.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: seq40-hosted-gates-monitor-v4
+  cancel-in-progress: false
+
+jobs:
+  exact-head-hosted-closure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout automation control branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Wait for canonical sequence 40 validated ref
+        id: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=false
+          for _ in $(seq 1 120); do
+            if git ls-remote --exit-code origin \
+              refs/heads/automation/seq40-validated >/tmp/seq40-ref.txt 2>/dev/null; then
+              found=true
+              break
+            fi
+            sleep 10
+          done
+          if [[ "$found" != true ]]; then
+            echo '::error::automation/seq40-validated was not published within 20 minutes'
+            exit 1
+          fi
+          sha=$(awk '{print $1}' /tmp/seq40-ref.txt)
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::invalid sequence 40 SHA: $sha"
+            exit 1
+          }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "sequence40_validated_sha=$sha"
+
+      - name: Dispatch missing exact-head hosted workflows and require latest success
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+          candidate = os.environ['CANDIDATE_SHA']
+          branch = 'automation/seq40-validated'
+          required = (
+              '.github/workflows/p0-provider-reconciliation-gate.yml',
+              '.github/workflows/p0-migration-gate.yml',
+              '.github/workflows/p0-gateway-exact-reserve-gate.yml',
+              '.github/workflows/p0-execution-settlement-gate.yml',
+              '.github/workflows/rust-service-gate.yml',
+              '.github/workflows/p0-release-candidate-gate.yml',
+          )
+          headers = {
+              'Accept': 'application/vnd.github+json',
+              'Authorization': f'Bearer {token}',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'cex-sequence-40-hosted-gate-monitor',
+          }
+
+          def request(method: str, path: str, payload=None):
+              body = None
+              if payload is not None:
+                  body = json.dumps(payload, separators=(',', ':')).encode('utf-8')
+              req = urllib.request.Request(
+                  f'https://api.github.com/repos/{repository}{path}',
+                  data=body,
+                  headers=headers,
+                  method=method,
+              )
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  raw = response.read()
+                  return response.status, json.loads(raw) if raw else None
+
+          def exact_runs():
+              query = urllib.parse.urlencode(
+                  {'head_sha': candidate, 'per_page': '100'}
+              )
+              _, payload = request('GET', f'/actions/runs?{query}')
+              return payload.get('workflow_runs', [])
+
+          initial = exact_runs()
+          by_path = {}
+          for run in initial:
+              by_path.setdefault(run.get('path'), []).append(run)
+
+          for path in required:
+              if by_path.get(path):
+                  continue
+              workflow = path.rsplit('/', 1)[-1]
+              try:
+                  status, _ = request(
+                      'POST',
+                      f'/actions/workflows/{workflow}/dispatches',
+                      {'ref': branch},
+                  )
+                  print(f'dispatched {path}: HTTP {status}', flush=True)
+              except urllib.error.HTTPError as exc:
+                  detail = exc.read().decode('utf-8', errors='replace')
+                  raise SystemExit(
+                      f'failed to dispatch {path}: HTTP {exc.code}: {detail}'
+                  ) from exc
+
+          deadline = time.monotonic() + 110 * 60
+          last_summary = None
+          while time.monotonic() < deadline:
+              runs = exact_runs()
+              grouped = {path: [] for path in required}
+              for run in runs:
+                  path = run.get('path')
+                  if path in grouped:
+                      grouped[path].append(run)
+
+              summary = {}
+              complete = True
+              failed = []
+              for path in required:
+                  candidates = sorted(
+                      grouped[path],
+                      key=lambda run: (
+                          run.get('created_at') or '',
+                          int(run.get('run_attempt') or 0),
+                          int(run.get('id') or 0),
+                      ),
+                      reverse=True,
+                  )
+                  if not candidates:
+                      summary[path] = 'missing'
+                      complete = False
+                      continue
+                  latest = candidates[0]
+                  state = latest.get('status')
+                  conclusion = latest.get('conclusion')
+                  summary[path] = {
+                      'id': latest.get('id'),
+                      'attempt': latest.get('run_attempt'),
+                      'status': state,
+                      'conclusion': conclusion,
+                      'event': latest.get('event'),
+                  }
+                  if state != 'completed':
+                      complete = False
+                  elif conclusion != 'success':
+                      failed.append((path, latest))
+
+              encoded = json.dumps(summary, sort_keys=True, separators=(',', ':'))
+              if encoded != last_summary:
+                  print(encoded, flush=True)
+                  last_summary = encoded
+
+              if complete:
+                  if failed:
+                      lines = [
+                          f"{path}: id={run.get('id')} conclusion={run.get('conclusion')}"
+                          for path, run in failed
+                      ]
+                      raise SystemExit(
+                          'latest exact-head hosted workflows are not all successful:\n'
+                          + '\n'.join(lines)
+                      )
+                  print('all required exact-head hosted workflows passed', flush=True)
+                  break
+              time.sleep(20)
+          else:
+              raise SystemExit('timed out waiting for exact-head hosted workflows')
+          PY
+
+      - name: Publish exact hosted-gates-passed ref
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$CANDIDATE_SHA"
+          git push --force origin \
+            "$CANDIDATE_SHA":refs/heads/automation/seq40-hosted-gates-passed
+          echo "sequence40_hosted_gates_passed_sha=$CANDIDATE_SHA"
