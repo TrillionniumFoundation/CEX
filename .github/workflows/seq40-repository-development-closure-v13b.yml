@@ -1,0 +1,144 @@
+name: seq40-repository-development-closure-v13b
+
+on:
+  push:
+    branches:
+      - automation/seq40-workflow-trust-windows
+    paths:
+      - '.github/workflows/seq40-repository-development-closure-v13b.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seq40-repository-development-closure-v13b
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+  PYTHONPYCACHEPREFIX: /tmp/cex-seq40-python-cache
+
+jobs:
+  close:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout automation control branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Wait for exact hosted pass and frozen evidence
+        id: refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate=''
+          evidence=''
+          for _ in $(seq 1 720); do
+            candidate=''
+            evidence=''
+            if git ls-remote --exit-code origin \
+              refs/heads/automation/seq40-hosted-gates-passed >/tmp/seq40-hosted.ref 2>/dev/null; then
+              candidate=$(awk '{print $1}' /tmp/seq40-hosted.ref)
+            fi
+            if git ls-remote --exit-code origin \
+              refs/heads/automation/seq40-evidence-freeze >/tmp/seq40-evidence.ref 2>/dev/null; then
+              evidence=$(awk '{print $1}' /tmp/seq40-evidence.ref)
+            fi
+            if [[ "$candidate" =~ ^[0-9a-f]{40}$ \
+                  && "$evidence" =~ ^[0-9a-f]{40}$ ]]; then
+              break
+            fi
+            sleep 10
+          done
+          [[ "$candidate" =~ ^[0-9a-f]{40}$ \
+             && "$evidence" =~ ^[0-9a-f]{40}$ ]] || {
+            echo '::error::hosted pass and evidence refs were not both available'
+            exit 1
+          }
+          echo "candidate=$candidate" >> "$GITHUB_OUTPUT"
+          echo "evidence=$evidence" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact canonical candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.refs.outputs.candidate }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Fetch evidence object and prove one-file ancestry
+        shell: bash
+        env:
+          EVIDENCE_SHA: ${{ steps.refs.outputs.evidence }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$EVIDENCE_SHA"
+          git fetch --no-tags origin automation/seq39-validated
+          git merge-base --is-ancestor origin/automation/seq39-validated HEAD
+          changed=$(git diff --name-only origin/automation/seq39-validated..HEAD)
+          [[ "$changed" == 'scripts/check-workflow-trust.py' ]] || {
+            echo '::error::sequence 40 candidate is not the one-file descendant'
+            printf '%s\n' "$changed"
+            exit 1
+          }
+
+      - name: Re-run local authority gates on the exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check-workflow-trust.py
+          python3 scripts/check-repository-integrity.py
+          python3 scripts/check-p0-release-candidate-hygiene.py
+          python3 scripts/check-development-docs.py
+          git diff --check
+          test -z "$(git status --porcelain)"
+
+      - name: Verify the six-workflow evidence binds the same SHA
+        shell: bash
+        env:
+          EVIDENCE_SHA: ${{ steps.refs.outputs.evidence }}
+          CANDIDATE_SHA: ${{ steps.refs.outputs.candidate }}
+        run: |
+          set -euo pipefail
+          git show "$EVIDENCE_SHA":docs/release-evidence/sequence40/hosted-gates-v1.json \
+            > /tmp/seq40-hosted-evidence.json
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          document = json.loads(
+              Path('/tmp/seq40-hosted-evidence.json').read_text(encoding='utf-8')
+          )
+          candidate = os.environ['CANDIDATE_SHA']
+          required = set(document.get('required_workflows') or [])
+          runs = document.get('latest_exact_head_runs') or []
+          paths = {item.get('workflow_path') for item in runs}
+          if document.get('candidate_sha') != candidate:
+              raise SystemExit('frozen evidence candidate SHA mismatch')
+          if len(required) != 6 or paths != required:
+              raise SystemExit(
+                  f'frozen evidence workflow set mismatch: required={required}, paths={paths}'
+              )
+          for item in runs:
+              run = item.get('run') or {}
+              path = item.get('workflow_path')
+              if run.get('head_sha') != candidate:
+                  raise SystemExit(f'{path} is not bound to the exact candidate SHA')
+              if run.get('status') != 'completed' or run.get('conclusion') != 'success':
+                  raise SystemExit(f'{path} is not a completed success')
+          PY
+
+      - name: Publish clean repository-development closure marker
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ steps.refs.outputs.candidate }}
+        run: |
+          set -euo pipefail
+          git push --force origin \
+            "$CANDIDATE_SHA":refs/heads/automation/seq40-repository-development-closed
+          echo "sequence40_repository_development_closed_sha=$CANDIDATE_SHA"
+          echo 'production_authorization=not_granted'
