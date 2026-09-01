@@ -1,0 +1,178 @@
+name: seq40-workflow-trust-windows-v2
+
+on:
+  push:
+    branches:
+      - automation/seq40-workflow-trust-windows
+    paths:
+      - '.github/workflows/seq40-workflow-trust-windows-v2.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seq40-workflow-trust-windows
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  linux-validation:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      PYTHONPYCACHEPREFIX: /tmp/cex-seq40-python-cache
+    steps:
+      - name: Checkout latest sequence 40 candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: automation/seq40-workflow-trust-windows
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Assert concrete-path fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('scripts/check-workflow-trust.py').read_text(encoding='utf-8')
+          required = (
+              'type(descriptor_path)',
+              'candidate == descriptor_path',
+              'type(action_dir)',
+              'candidate == action_dir',
+          )
+          missing = [marker for marker in required if marker not in text]
+          if missing:
+              raise SystemExit(f'sequence 40 fix missing markers: {missing!r}')
+          if 'mock.patch.object(Path, "is_symlink", return_value=True)' in text:
+              raise SystemExit('obsolete abstract Path symlink mock remains')
+          PY
+
+      - name: Construct workflow-free exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'cex-sequence-40-validator'
+          git config user.email 'cex-sequence-40-validator@users.noreply.github.com'
+          git rm -- \
+            .github/workflows/seq40-workflow-trust-windows.yml \
+            .github/workflows/seq40-workflow-trust-windows-v2.yml
+          git commit -m 'test(seq40): strip automation harnesses'
+          echo "sequence40_linux_tree=$(git rev-parse HEAD^{tree})"
+
+      - name: Run Linux trust and hygiene gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/check-workflow-trust.py scripts/check-workflow-trust-impl.py
+          python3 scripts/check-workflow-trust.py
+          python3 scripts/check-repository-integrity.py
+          python3 scripts/check-p0-release-candidate-hygiene.py
+          git diff --check
+          test -z "$(git status --porcelain)"
+
+  windows-validation:
+    runs-on: windows-2025
+    permissions:
+      contents: read
+    env:
+      PYTHONPYCACHEPREFIX: D:\a\_temp\cex-seq40-python-cache
+    steps:
+      - name: Checkout latest sequence 40 candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: automation/seq40-workflow-trust-windows
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Assert concrete-path fix
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $text = Get-Content scripts/check-workflow-trust.py -Raw
+          $required = @(
+            'type(descriptor_path)',
+            'candidate == descriptor_path',
+            'type(action_dir)',
+            'candidate == action_dir'
+          )
+          foreach ($marker in $required) {
+            if (-not $text.Contains($marker)) {
+              throw "sequence 40 fix missing marker: $marker"
+            }
+          }
+          if ($text.Contains('mock.patch.object(Path, "is_symlink", return_value=True)')) {
+            throw 'obsolete abstract Path symlink mock remains'
+          }
+
+      - name: Construct workflow-free exact candidate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'cex-sequence-40-validator'
+          git config user.email 'cex-sequence-40-validator@users.noreply.github.com'
+          git rm -- .github/workflows/seq40-workflow-trust-windows.yml .github/workflows/seq40-workflow-trust-windows-v2.yml
+          git commit -m 'test(seq40): strip automation harnesses'
+          $tree = git rev-parse 'HEAD^{tree}'
+          Write-Host "sequence40_windows_tree=$tree"
+
+      - name: Run Windows trust and hygiene gates
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m py_compile scripts/check-workflow-trust.py scripts/check-workflow-trust-impl.py
+          python scripts/check-workflow-trust.py
+          python scripts/check-repository-integrity.py
+          python scripts/check-p0-release-candidate-hygiene.py
+          git diff --check
+          $status = git status --porcelain
+          if ($status) {
+            throw "candidate worktree is dirty:`n$status"
+          }
+
+  closure:
+    needs:
+      - linux-validation
+      - windows-validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout sequence 40 branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: automation/seq40-workflow-trust-windows
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Persist deterministic dual-platform marker
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .automation
+          cat > .automation/seq40-linux-windows-passed.json <<'JSON'
+          {
+            "schema_version": "cex.sequence40.validation.v1",
+            "status": "passed",
+            "validated_surfaces": [
+              "ubuntu-latest",
+              "windows-2025"
+            ],
+            "workflow_trust_semantics": "concrete-path-class-targeted-symlink-mock",
+            "production_authorization": "not_granted"
+          }
+          JSON
+          git config user.name 'cex-sequence-40'
+          git config user.email 'cex-sequence-40@users.noreply.github.com'
+          git add -- .automation/seq40-linux-windows-passed.json
+          if git diff --cached --quiet; then
+            echo 'sequence 40 validation marker already present'
+            exit 0
+          fi
+          git commit -m 'test(ci): record sequence 40 Linux and Windows validation'
+          git push origin HEAD:automation/seq40-workflow-trust-windows
