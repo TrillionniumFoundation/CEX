@@ -1,0 +1,259 @@
+name: seq40-hosted-gates-retry-v4c
+
+on:
+  push:
+    branches:
+      - automation/seq40-workflow-trust-windows
+    paths:
+      - '.github/workflows/seq40-hosted-gates-retry-v4c.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: seq40-hosted-gates-retry-v4c
+  cancel-in-progress: false
+
+jobs:
+  retry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout automation control branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Wait for hosted success or first diagnostic
+        id: state
+        shell: bash
+        run: |
+          set -euo pipefail
+          state=''
+          sha=''
+          for _ in $(seq 1 720); do
+            if git ls-remote --exit-code origin \
+              refs/heads/automation/seq40-hosted-gates-passed >/tmp/seq40-pass.ref 2>/dev/null; then
+              state=success
+              sha=$(awk '{print $1}' /tmp/seq40-pass.ref)
+              break
+            fi
+            if git ls-remote --exit-code origin \
+              refs/heads/automation/seq40-hosted-gates-diagnostic >/tmp/seq40-diagnostic.ref 2>/dev/null; then
+              state=diagnostic
+              sha=$(awk '{print $1}' /tmp/seq40-diagnostic.ref)
+              break
+            fi
+            sleep 10
+          done
+          [[ -n "$state" && "$sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo '::error::neither hosted success nor diagnostic appeared'
+            exit 1
+          }
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Stop when exact hosted gates already passed
+        if: steps.state.outputs.state == 'success'
+        shell: bash
+        run: echo 'sequence 40 exact hosted gates already passed; retry not required'
+
+      - name: Checkout first diagnostic
+        if: steps.state.outputs.state == 'diagnostic'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.state.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Re-run failed exact-head jobs once
+        if: steps.state.outputs.state == 'diagnostic'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          from pathlib import Path
+          import urllib.error
+          import urllib.request
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+          diagnostic = json.loads(
+              Path(
+                  'docs/release-evidence/sequence40/hosted-gate-diagnostic-v1.json'
+              ).read_text(encoding='utf-8')
+          )
+          headers = {
+              'Accept': 'application/vnd.github+json',
+              'Authorization': f'Bearer {token}',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'cex-sequence-40-hosted-retry-v4c',
+          }
+          run_ids = sorted(
+              {
+                  int(diagnostic['latest_exact_head_runs'][path]['id'])
+                  for path in diagnostic['failed_workflow_paths']
+              }
+          )
+          if not run_ids:
+              raise SystemExit('diagnostic contains no failed run ids')
+          for run_id in run_ids:
+              request = urllib.request.Request(
+                  f'https://api.github.com/repos/{repository}/actions/runs/'
+                  f'{run_id}/rerun-failed-jobs',
+                  data=b'',
+                  headers=headers,
+                  method='POST',
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=60) as response:
+                      print(f'rerun run_id={run_id}: HTTP {response.status}', flush=True)
+              except urllib.error.HTTPError as exc:
+                  detail = exc.read().decode('utf-8', errors='replace')
+                  raise SystemExit(
+                      f'cannot rerun failed jobs for {run_id}: HTTP {exc.code}: {detail}'
+                  ) from exc
+          Path('/tmp/seq40-candidate-sha').write_text(
+              diagnostic['candidate_sha'] + '\n', encoding='utf-8'
+          )
+          PY
+
+      - name: Wait for retried latest attempts and publish result
+        if: steps.state.outputs.state == 'diagnostic'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          from pathlib import Path
+          import time
+          import urllib.parse
+          import urllib.request
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+          candidate = Path('/tmp/seq40-candidate-sha').read_text(
+              encoding='utf-8'
+          ).strip()
+          required = (
+              '.github/workflows/p0-provider-reconciliation-gate.yml',
+              '.github/workflows/p0-migration-gate.yml',
+              '.github/workflows/p0-gateway-exact-reserve-gate.yml',
+              '.github/workflows/p0-execution-settlement-gate.yml',
+              '.github/workflows/rust-service-gate.yml',
+              '.github/workflows/p0-release-candidate-gate.yml',
+          )
+          headers = {
+              'Accept': 'application/vnd.github+json',
+              'Authorization': f'Bearer {token}',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'cex-sequence-40-hosted-retry-v4c',
+          }
+
+          def get(path: str):
+              request = urllib.request.Request(
+                  f'https://api.github.com/repos/{repository}{path}',
+                  headers=headers,
+              )
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  return json.loads(response.read())
+
+          deadline = time.monotonic() + 105 * 60
+          final = None
+          while time.monotonic() < deadline:
+              query = urllib.parse.urlencode(
+                  {'head_sha': candidate, 'per_page': '100'}
+              )
+              payload = get(f'/actions/runs?{query}')
+              grouped = {path: [] for path in required}
+              for run in payload.get('workflow_runs', []):
+                  if run.get('path') in grouped:
+                      grouped[run['path']].append(run)
+              summary = {}
+              complete = True
+              for path in required:
+                  runs = sorted(
+                      grouped[path],
+                      key=lambda run: (
+                          run.get('created_at') or '',
+                          int(run.get('run_attempt') or 0),
+                          int(run.get('id') or 0),
+                      ),
+                      reverse=True,
+                  )
+                  if not runs:
+                      complete = False
+                      continue
+                  run = runs[0]
+                  summary[path] = {
+                      'id': int(run['id']),
+                      'run_attempt': run.get('run_attempt'),
+                      'status': run.get('status'),
+                      'conclusion': run.get('conclusion'),
+                      'html_url': run.get('html_url'),
+                  }
+                  if run.get('status') != 'completed':
+                      complete = False
+              if complete:
+                  final = summary
+                  break
+              time.sleep(20)
+          if final is None:
+              raise SystemExit('timed out waiting for retried hosted attempts')
+          failed = [
+              path for path, run in final.items()
+              if run.get('conclusion') != 'success'
+          ]
+          result = {
+              'schema_version': 'cex.sequence40.hosted-gate-retry.v1',
+              'candidate_sha': candidate,
+              'production_authorization': 'not_granted',
+              'latest_exact_head_runs_after_retry': final,
+              'all_required_runs_successful': not failed,
+              'failed_workflow_paths': failed,
+          }
+          Path('/tmp/seq40-hosted-retry.json').write_text(
+              json.dumps(result, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          Path('/tmp/seq40-retry-result').write_text(
+              ('success' if not failed else 'failure') + '\n',
+              encoding='utf-8',
+          )
+          PY
+
+          result=$(tr -d '\n' </tmp/seq40-retry-result)
+          candidate=$(tr -d '\n' </tmp/seq40-candidate-sha)
+          if [[ "$result" == success ]]; then
+            git fetch origin "$candidate"
+            git push --force origin \
+              "$candidate":refs/heads/automation/seq40-hosted-gates-passed
+            echo "sequence40_hosted_retry_passed_sha=$candidate"
+            exit 0
+          fi
+
+          git checkout --detach "$candidate"
+          mkdir -p docs/release-evidence/sequence40
+          cp /tmp/seq40-hosted-retry.json \
+            docs/release-evidence/sequence40/hosted-gate-retry-v1.json
+          git config user.name 'cex-sequence-40-diagnostic'
+          git config user.email 'cex-sequence-40-diagnostic@users.noreply.github.com'
+          git add -- docs/release-evidence/sequence40/hosted-gate-retry-v1.json
+          git commit -m 'docs(evidence): freeze sequence 40 hosted retry failure'
+          git push --force origin HEAD:automation/seq40-hosted-gates-retry-diagnostic
+          echo '::error::exact-head hosted gates still fail after one controlled retry'
+          exit 1
