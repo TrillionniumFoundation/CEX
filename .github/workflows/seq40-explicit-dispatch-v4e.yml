@@ -1,0 +1,90 @@
+name: seq40-explicit-dispatch-v4e
+
+on:
+  push:
+    branches:
+      - automation/seq40-workflow-trust-windows
+    paths:
+      - '.github/workflows/seq40-explicit-dispatch-v4e.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: seq40-explicit-dispatch-v4e
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact sequence 40 candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: automation/seq40-validated
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require dispatch surfaces and trigger exact-head runs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+          workflows = (
+              'p0-provider-reconciliation-gate.yml',
+              'p0-migration-gate.yml',
+              'p0-gateway-exact-reserve-gate.yml',
+              'p0-execution-settlement-gate.yml',
+              'rust-service-gate.yml',
+              'p0-release-candidate-gate.yml',
+          )
+          headers = {
+              'Accept': 'application/vnd.github+json',
+              'Authorization': f'Bearer {token}',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'cex-sequence-40-explicit-dispatch-v4e',
+          }
+          for workflow in workflows:
+              path = Path('.github/workflows') / workflow
+              text = path.read_text(encoding='utf-8')
+              if 'workflow_dispatch' not in text:
+                  raise SystemExit(
+                      f'exact-head workflow does not declare workflow_dispatch: {workflow}'
+                  )
+              payload = json.dumps(
+                  {'ref': 'automation/seq40-validated'},
+                  separators=(',', ':'),
+              ).encode('utf-8')
+              request = urllib.request.Request(
+                  f'https://api.github.com/repos/{repository}/actions/workflows/'
+                  f'{workflow}/dispatches',
+                  data=payload,
+                  headers=headers,
+                  method='POST',
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=60) as response:
+                      if response.status != 204:
+                          raise SystemExit(
+                              f'unexpected dispatch status for {workflow}: {response.status}'
+                          )
+                      print(f'dispatched {workflow}', flush=True)
+              except urllib.error.HTTPError as exc:
+                  detail = exc.read().decode('utf-8', errors='replace')
+                  raise SystemExit(
+                      f'dispatch failed for {workflow}: HTTP {exc.code}: {detail}'
+                  ) from exc
+          PY
