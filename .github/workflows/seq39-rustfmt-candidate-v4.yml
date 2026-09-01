@@ -65,6 +65,7 @@ jobs:
 
           python3 - <<'PYWRAP'
           from pathlib import Path
+          import base64
 
           workflow = Path('.github/workflows/seq39-manifest-fixture-repair.yml').read_text(
               encoding='utf-8'
@@ -92,14 +93,9 @@ jobs:
               raise SystemExit('candidate path block boundary drifted')
           start = extracted.index(start_marker)
           end = extracted.index(end_marker, start)
-          path_block = '''path_entries = (
-              "    'crates/shared-config/src/runtime_guard.rs',\\n",
-              "    'scripts/check-invocation-ledger-contract-static.py',\\n",
-              "    'services/gateway-service/src/bin/gateway-exact-reserve-worker.rs',\\n",
-              "    'services/identity-service/src/main.rs',\\n",
-              "    'services/ledger-service/src/main.rs',\\n",
-          )
-          '''
+          path_block = base64.b64decode(
+              'cGF0aF9lbnRyaWVzID0gKAogICAgIiAgICAnY3JhdGVzL3NoYXJlZC1jb25maWcvc3JjL3J1bnRpbWVfZ3VhcmQucnMnLFxcbiIsCiAgICAiICAgICdzY3JpcHRzL2NoZWNrLWludm9jYXRpb24tbGVkZ2VyLWNvbnRyYWN0LXN0YXRpYy5weScsXFxuIiwKICAgICIgICAgJ3NlcnZpY2VzL2dhdGV3YXktc2VydmljZS9zcmMvYmluL2dhdGV3YXktZXhhY3QtcmVzZXJ2ZS13b3JrZXIucnMnLFxcbiIsCiAgICAiICAgICdzZXJ2aWNlcy9pZGVudGl0eS1zZXJ2aWNlL3NyYy9tYWluLnJzJyxcXG4iLAogICAgIiAgICAnc2VydmljZXMvbGVkZ2VyLXNlcnZpY2Uvc3JjL21haW4ucnMnLFxcbiIsCikK'
+          ).decode('utf-8')
           extracted = extracted[:start] + path_block + extracted[end:]
 
           Path('/tmp/seq39-rustfmt-candidate-v4.sh').write_text(
