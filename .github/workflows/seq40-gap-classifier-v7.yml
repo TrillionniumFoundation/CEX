@@ -1,0 +1,154 @@
+name: seq40-gap-classifier-v7
+
+on:
+  push:
+    branches:
+      - automation/seq40-workflow-trust-windows
+    paths:
+      - '.github/workflows/seq40-gap-classifier-v7.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seq40-gap-classifier-v7
+  cancel-in-progress: false
+
+jobs:
+  classify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout automation control branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Wait for authoritative sequence 40 gap audit
+        id: audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=false
+          for _ in $(seq 1 720); do
+            if git ls-remote --exit-code origin \
+              refs/heads/automation/seq40-gap-audit >/tmp/seq40-gap-audit.ref 2>/dev/null; then
+              found=true
+              break
+            fi
+            sleep 10
+          done
+          if [[ "$found" != true ]]; then
+            echo '::error::sequence 40 gap-audit branch was not published'
+            exit 1
+          fi
+          sha=$(awk '{print $1}' /tmp/seq40-gap-audit.ref)
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact gap-audit commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.audit.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Conservatively classify residual blockers
+        id: classification
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import re
+
+          audit = json.loads(
+              Path(
+                  'docs/release-evidence/sequence40/remaining-gap-audit-v1.json'
+              ).read_text(encoding='utf-8')
+          )
+          candidate = audit['candidate_sha']
+          Path('/tmp/seq40-candidate-sha').write_text(candidate + '\n', encoding='utf-8')
+
+          if audit.get('all_authoritative_checks_passed') is True:
+              Path('/tmp/seq40-classification').write_text(
+                  'authoritative_checks_passed\n', encoding='utf-8'
+              )
+              raise SystemExit(0)
+
+          external = re.compile(
+              r'(independent|reviewer|review approval|approval required|'
+              r'branch protection|branch governance|governance readback|'
+              r'immutable hosted evidence|evidence freeze|external evidence|'
+              r'production authorization|not_granted|not granted|do not merge|'
+              r'\bx[1-8]\b|real[- ]environment|external owner|credential|'
+              r'operator sign[- ]off|canary|rollback drill|launch drill|beta cohort)',
+              flags=re.IGNORECASE,
+          )
+          internal = re.compile(
+              r'(workflow trust|repository integrity|migration failed|schema failed|'
+              r'compile failed|clippy failed|rustfmt failed|cargo fmt failed|'
+              r'unit test failed|integration test failed|postgres(?:ql)? failed|'
+              r'provider reconciliation failed|gateway exact|execution settlement failed|'
+              r'deterministic validation failed|code blocker|implementation gap)',
+              flags=re.IGNORECASE,
+          )
+
+          lines = []
+          for check in audit.get('checks', []):
+              if int(check.get('exit_code', 1)) == 0:
+                  continue
+              selected = check.get('selected_blocker_lines') or []
+              if not selected:
+                  raise SystemExit(
+                      f"nonzero {check.get('name')} has no classifiable blocker lines"
+                  )
+              lines.extend(str(line) for line in selected)
+
+          if not lines:
+              raise SystemExit('non-passing audit has no blocker lines')
+          unclassified = []
+          for line in lines:
+              if internal.search(line):
+                  raise SystemExit(f'internal blocker remains: {line}')
+              if not external.search(line):
+                  unclassified.append(line)
+          if unclassified:
+              raise SystemExit(
+                  'unclassified nonzero authoritative blocker lines remain:\n'
+                  + '\n'.join(unclassified[:40])
+              )
+          Path('/tmp/seq40-classification').write_text(
+              'external_gaps_only\n', encoding='utf-8'
+          )
+          PY
+          echo "classification=$(tr -d '\n' </tmp/seq40-classification)" >> "$GITHUB_OUTPUT"
+          echo "candidate_sha=$(tr -d '\n' </tmp/seq40-candidate-sha)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish conservative classification ref
+        shell: bash
+        env:
+          CLASSIFICATION: ${{ steps.classification.outputs.classification }}
+          CANDIDATE_SHA: ${{ steps.classification.outputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          case "$CLASSIFICATION" in
+            authoritative_checks_passed)
+              target=automation/seq40-authoritative-checks-passed
+              ;;
+            external_gaps_only)
+              target=automation/seq40-external-gaps-only
+              ;;
+            *)
+              echo "::error::unsupported classification: $CLASSIFICATION"
+              exit 1
+              ;;
+          esac
+          git fetch origin "$CANDIDATE_SHA"
+          git push --force origin "$CANDIDATE_SHA":refs/heads/"$target"
+          echo "sequence40_classification=$CLASSIFICATION"
+          echo "sequence40_classification_ref=$target"
