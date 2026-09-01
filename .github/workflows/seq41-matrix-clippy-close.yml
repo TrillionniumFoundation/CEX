@@ -77,19 +77,14 @@ jobs:
                   raise SystemExit(f'Clippy response-boundary fix already present for {name}')
               source = source.replace(anchor, replacement, 1)
 
-          needless_borrows = source.count('&format!(')
-          if needless_borrows != 23:
-              raise SystemExit(
-                  'needless format-borrow anchor drifted: '
-                  f'expected 23, got {needless_borrows}'
-              )
-          source = source.replace('&format!(', 'format!(')
-          if '&format!(' in source:
-              raise SystemExit('needless format borrows remain after replacement')
-
           path.write_text(source, encoding='utf-8')
           PY
 
+          # Let the exact Rust 1.98 Clippy implementation apply only its
+          # machine-applicable borrow suggestions, rather than approximating
+          # multiline macro syntax with a textual global replacement.
+          cargo clippy --fix --allow-dirty --allow-staged --locked \
+            -p matrix-entry-adapter --all-targets -- -D warnings
           cargo fmt --all
 
           mapfile -t changed < <(git diff --name-only)
@@ -99,13 +94,14 @@ jobs:
             exit 1
           }
           git diff --check
+          git diff --stat
 
           cargo clippy --locked -p matrix-entry-adapter --all-targets -- -D warnings
           cargo clippy --locked -p trnm-economy-service --all-targets -- -D warnings
           cargo test --locked -p matrix-entry-adapter
 
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+github-actions[bot]]@users.noreply.github.com"
           git add -- "$target"
           git commit -m "fix(clippy): close matrix response and format regressions"
           git push origin HEAD:automation/seq41-matrix-clippy-close
