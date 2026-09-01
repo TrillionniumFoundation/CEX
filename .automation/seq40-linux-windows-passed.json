@@ -1,0 +1,10 @@
+{
+  "schema_version": "cex.sequence40.validation.v1",
+  "status": "passed",
+  "validated_surfaces": [
+    "ubuntu-latest",
+    "windows-2025"
+  ],
+  "workflow_trust_semantics": "concrete-path-class-targeted-symlink-mock",
+  "production_authorization": "not_granted"
+}
