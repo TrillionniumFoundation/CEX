@@ -58,7 +58,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$(git hash-object .github/workflows/seq39-manifest-fixture-repair.yml)" == \
-             "bf9767e41b0db566e6f9e57c5553d3ab382741d3" ]] || {
+             "17546edf6aa6c859e0dbef9955aa1c187e5c2ed4" ]] || {
             echo "::error::sequence 39 manifest/rustfmt workflow blob drifted"
             exit 1
           }
