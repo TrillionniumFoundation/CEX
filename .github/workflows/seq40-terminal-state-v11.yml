@@ -1,0 +1,180 @@
+name: seq40-terminal-state-v11
+
+on:
+  push:
+    branches:
+      - automation/seq40-workflow-trust-windows
+    paths:
+      - '.github/workflows/seq40-terminal-state-v11.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seq40-terminal-state-v11
+  cancel-in-progress: false
+
+jobs:
+  consolidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout automation control branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Wait for a terminal sequence 40 classification
+        id: terminal
+        shell: bash
+        run: |
+          set -euo pipefail
+          state=''
+          source_ref=''
+          source_sha=''
+          for _ in $(seq 1 720); do
+            for entry in \
+              'authoritative_checks_passed refs/heads/automation/seq40-authoritative-checks-passed' \
+              'external_gaps_only refs/heads/automation/seq40-external-gaps-only' \
+              'hosted_gate_failure refs/heads/automation/seq40-hosted-gates-retry-diagnostic'; do
+              candidate_state=${entry%% *}
+              candidate_ref=${entry#* }
+              if git ls-remote --exit-code origin "$candidate_ref" >/tmp/seq40-terminal.ref 2>/dev/null; then
+                state=$candidate_state
+                source_ref=$candidate_ref
+                source_sha=$(awk '{print $1}' /tmp/seq40-terminal.ref)
+                break 2
+              fi
+            done
+            sleep 10
+          done
+          [[ -n "$state" && "$source_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo '::error::sequence 40 did not reach a terminal state'
+            exit 1
+          }
+          git ls-remote --exit-code origin \
+            refs/heads/automation/seq40-validated >/tmp/seq40-candidate.ref
+          candidate_sha=$(awk '{print $1}' /tmp/seq40-candidate.ref)
+          [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          echo "source_ref=$source_ref" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "candidate_sha=$candidate_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve best evidence base
+        id: base
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ steps.terminal.outputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          base_sha=''
+          for ref in \
+            refs/heads/automation/seq40-gap-audit \
+            refs/heads/automation/seq40-evidence-freeze; do
+            if git ls-remote --exit-code origin "$ref" >/tmp/seq40-base.ref 2>/dev/null; then
+              base_sha=$(awk '{print $1}' /tmp/seq40-base.ref)
+              break
+            fi
+          done
+          if [[ -z "$base_sha" ]]; then
+            base_sha=$CANDIDATE_SHA
+          fi
+          [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          echo "sha=$base_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout evidence base
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.base.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Write immutable terminal state
+        shell: bash
+        env:
+          TERMINAL_STATE: ${{ steps.terminal.outputs.state }}
+          SOURCE_REF: ${{ steps.terminal.outputs.source_ref }}
+          SOURCE_SHA: ${{ steps.terminal.outputs.source_sha }}
+          CANDIDATE_SHA: ${{ steps.terminal.outputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p docs/release-evidence/sequence40
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import json
+          import os
+
+          state = os.environ['TERMINAL_STATE']
+          descriptions = {
+              'authoritative_checks_passed': (
+                  'Repository authoritative readiness/signoff checks passed. '
+                  'Production authorization is still not inferred by this automation record.'
+              ),
+              'external_gaps_only': (
+                  'All classifiable repository-internal development blockers are closed; '
+                  'only independent/external/authorization evidence gaps remain.'
+              ),
+              'hosted_gate_failure': (
+                  'At least one exact-head hosted gate remains failed after one controlled retry; '
+                  'a subsequent development sequence is required.'
+              ),
+          }
+          if state not in descriptions:
+              raise SystemExit(f'unsupported terminal state: {state}')
+          document = {
+              'schema_version': 'cex.sequence40.terminal-state.v1',
+              'state': state,
+              'description': descriptions[state],
+              'candidate_sha': os.environ['CANDIDATE_SHA'],
+              'terminal_source_ref': os.environ['SOURCE_REF'],
+              'terminal_source_sha': os.environ['SOURCE_SHA'],
+              'production_authorization': 'not_granted',
+              'merge_authorization': 'not_granted',
+              'independent_review_required': True,
+              'automation_may_not_self_approve': True,
+          }
+          path = Path('docs/release-evidence/sequence40/closure-status-v1.json')
+          encoded = (
+              json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False) + '\n'
+          ).encode('utf-8')
+          path.write_bytes(encoded)
+          path.with_suffix(path.suffix + '.sha256').write_text(
+              hashlib.sha256(encoded).hexdigest() + f'  {path.name}\n',
+              encoding='utf-8',
+          )
+          PY
+          git diff --check
+
+      - name: Publish terminal evidence and clean-state marker
+        shell: bash
+        env:
+          TERMINAL_STATE: ${{ steps.terminal.outputs.state }}
+          CANDIDATE_SHA: ${{ steps.terminal.outputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          git config user.name 'cex-sequence-40-terminal'
+          git config user.email 'cex-sequence-40-terminal@users.noreply.github.com'
+          git add -- docs/release-evidence/sequence40/closure-status-v1.json \
+            docs/release-evidence/sequence40/closure-status-v1.json.sha256
+          git commit -m "docs(evidence): record sequence 40 terminal state ${TERMINAL_STATE}"
+          git push --force origin HEAD:automation/seq40-terminal-state
+
+          case "$TERMINAL_STATE" in
+            authoritative_checks_passed)
+              marker=automation/seq40-all-authoritative-checks-passed
+              ;;
+            external_gaps_only)
+              marker=automation/seq40-repository-development-closed
+              ;;
+            hosted_gate_failure)
+              echo 'hosted failure state recorded; no closed marker is published'
+              exit 0
+              ;;
+          esac
+          git push --force origin \
+            "$CANDIDATE_SHA":refs/heads/"$marker"
+          echo "sequence40_clean_marker=$marker"
