@@ -52,7 +52,7 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Build validate and stage exact sequence 39
+      - name: Diagnose exact sequence 39 normalization boundary
         shell: bash
         run: |
           set -euo pipefail
@@ -89,8 +89,6 @@ jobs:
           """,
                   r"""git add --renormalize -- "${NORMALIZED_PATHS[@]}"
           git diff --quiet || fail "unstaged changes remain after CRLF normalization"
-          git diff --cached --quiet --ignore-cr-at-eol "$BASE_SHA" -- "${NORMALIZED_PATHS[@]}" \
-            || fail "checkout normalization changed content beyond CR-at-EOL"
           python3 - "${NORMALIZED_PATHS[@]}" <<'PY'
           import subprocess
           import sys
@@ -102,6 +100,49 @@ jobs:
           PY
           """,
               ),
+              (
+                  r"""git diff --cached --quiet --ignore-cr-at-eol "$BASE_SHA" -- "${NORMALIZED_PATHS[@]}" \
+            || fail "checkout normalization changed content beyond CR-at-EOL"
+          """,
+                  r"""python3 - "$BASE_SHA" "${NORMALIZED_PATHS[@]}" <<'PYDIAG'
+          import hashlib
+          import subprocess
+          import sys
+
+          base = sys.argv[1]
+          paths = sys.argv[2:]
+          all_equal = True
+          for relative in paths:
+              base_blob = subprocess.check_output(['git', 'show', f'{base}:{relative}'])
+              staged = subprocess.check_output(['git', 'show', f':{relative}'])
+              def stats(data: bytes) -> str:
+                  return (
+                      f'bytes={len(data)} sha256={hashlib.sha256(data).hexdigest()} '
+                      f'crlf={data.count(bytes([13,10]))} cr={data.count(bytes([13]))} '
+                      f'lf={data.count(bytes([10]))} bom={data.startswith(bytes([239,187,191]))}'
+                  )
+              canonical_base = base_blob.replace(bytes([13,10]), bytes([10])).replace(bytes([13]), bytes([10]))
+              canonical_staged = staged.replace(bytes([13,10]), bytes([10])).replace(bytes([13]), bytes([10]))
+              equal = canonical_base == canonical_staged
+              print(f'NORMALIZATION_DIAG path={relative} canonical_equal={equal}')
+              print(f'  base   {stats(base_blob)}')
+              print(f'  staged {stats(staged)}')
+              if not equal:
+                  all_equal = False
+                  limit = min(len(canonical_base), len(canonical_staged))
+                  offset = next((i for i in range(limit) if canonical_base[i] != canonical_staged[i]), limit)
+                  line = canonical_base[:offset].count(bytes([10])) + 1
+                  start = max(0, offset - 80)
+                  end_base = min(len(canonical_base), offset + 160)
+                  end_staged = min(len(canonical_staged), offset + 160)
+                  print(f'  first_diff_offset={offset} canonical_base_line={line}')
+                  print(f'  base_context={canonical_base[start:end_base]!r}')
+                  print(f'  staged_context={canonical_staged[start:end_staged]!r}')
+          if not all_equal:
+              raise SystemExit('checkout normalization contains non-newline byte differences')
+          PYDIAG
+          """,
+              ),
           ]
           for old, new in replacements:
               if source.count(old) != 1:
@@ -110,9 +151,9 @@ jobs:
           Path(sys.argv[1]).write_text(source, encoding='utf-8')
           PYTRANSFORM
           observed=$(sha256sum "$RUNNER_TEMP/seq39-exact-apply.sh" | awk '{print $1}')
-          expected=ca24305df7a779f479507460b4c8dc0bd171f34dd7d12c220c49d215a9caa0cb
+          expected=43f7dacb93f5bebc1c780b92fe5471b12d8c6262a3fb0bcdc68d025b967aee63
           [[ "$observed" == "$expected" ]] || {
-            echo "::error::transformed script digest mismatch: expected=$expected observed=$observed"
+            echo "::error::diagnostic script digest mismatch: expected=$expected observed=$observed"
             exit 1
           }
           chmod 700 "$RUNNER_TEMP/seq39-exact-apply.sh"
