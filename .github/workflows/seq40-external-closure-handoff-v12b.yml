@@ -1,0 +1,346 @@
+name: seq40-external-closure-handoff-v12b
+
+on:
+  push:
+    branches:
+      - automation/seq40-workflow-trust-windows
+    paths:
+      - '.github/workflows/seq40-external-closure-handoff-v12b.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+  issues: write
+
+concurrency:
+  group: seq40-external-closure-handoff-v12b
+  cancel-in-progress: false
+
+jobs:
+  handoff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout automation control branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Wait for internal closure and authoritative gap audit together
+        id: refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          state=''
+          candidate=''
+          audit=''
+          for _ in $(seq 1 720); do
+            state=''
+            candidate=''
+            audit=''
+            if git ls-remote --exit-code origin \
+              refs/heads/automation/seq40-all-authoritative-checks-passed >/tmp/seq40-full.ref 2>/dev/null; then
+              state=authoritative_checks_passed
+              candidate=$(awk '{print $1}' /tmp/seq40-full.ref)
+            elif git ls-remote --exit-code origin \
+              refs/heads/automation/seq40-repository-development-closed >/tmp/seq40-dev.ref 2>/dev/null; then
+              state=external_gaps_only
+              candidate=$(awk '{print $1}' /tmp/seq40-dev.ref)
+            fi
+            if git ls-remote --exit-code origin \
+              refs/heads/automation/seq40-gap-audit >/tmp/seq40-gap.ref 2>/dev/null; then
+              audit=$(awk '{print $1}' /tmp/seq40-gap.ref)
+            fi
+            if [[ "$state" == authoritative_checks_passed && "$candidate" =~ ^[0-9a-f]{40}$ ]]; then
+              break
+            fi
+            if [[ "$state" == external_gaps_only \
+                  && "$candidate" =~ ^[0-9a-f]{40}$ \
+                  && "$audit" =~ ^[0-9a-f]{40}$ ]]; then
+              break
+            fi
+            sleep 10
+          done
+          [[ -n "$state" && "$candidate" =~ ^[0-9a-f]{40}$ ]] || {
+            echo '::error::sequence 40 internal closure did not appear'
+            exit 1
+          }
+          if [[ "$state" == external_gaps_only && ! "$audit" =~ ^[0-9a-f]{40}$ ]]; then
+            echo '::error::sequence 40 gap audit did not appear with internal closure'
+            exit 1
+          fi
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          echo "candidate=$candidate" >> "$GITHUB_OUTPUT"
+          echo "audit=$audit" >> "$GITHUB_OUTPUT"
+
+      - name: Stop when authoritative checks already pass
+        if: steps.refs.outputs.state == 'authoritative_checks_passed'
+        shell: bash
+        run: echo 'authoritative readiness/signoff checks already pass; no external handoff is required'
+
+      - name: Checkout exact gap-audit evidence
+        if: steps.refs.outputs.state == 'external_gaps_only'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.refs.outputs.audit }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Parse X1-X8 and dispatch only authoritative-plan external workflows
+        if: steps.refs.outputs.state == 'external_gaps_only'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ steps.refs.outputs.candidate }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import urllib.error
+          import urllib.request
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+          candidate = os.environ['CANDIDATE_SHA']
+          plan_paths = (
+              Path('docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md'),
+              Path('docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md'),
+          )
+          missing_plan_files = [str(path) for path in plan_paths if not path.is_file()]
+          if missing_plan_files:
+              raise SystemExit(f'authoritative plan files missing: {missing_plan_files!r}')
+          plan_parts = [path.read_text(encoding='utf-8') for path in plan_paths]
+          plan = '\n\n'.join(plan_parts)
+
+          heading_pattern = re.compile(
+              r'(?m)^(#{1,6})\s*(X[1-8])(?:\s*[-:：.]\s*|\s+)(.+?)\s*$'
+          )
+          headings = list(heading_pattern.finditer(plan))
+          gates = []
+          for index, match in enumerate(headings):
+              start = match.start()
+              end = headings[index + 1].start() if index + 1 < len(headings) else len(plan)
+              section = plan[start:end].strip()
+              gates.append(
+                  {
+                      'gate': match.group(2),
+                      'title': match.group(3).strip(),
+                      'section_sha256': hashlib.sha256(section.encode('utf-8')).hexdigest(),
+                      'section_excerpt': section[:6000],
+                  }
+              )
+          present = {item['gate'] for item in gates}
+          missing = [f'X{number}' for number in range(1, 9) if f'X{number}' not in present]
+
+          headers = {
+              'Accept': 'application/vnd.github+json',
+              'Authorization': f'Bearer {token}',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'cex-sequence-40-external-handoff-v12b',
+          }
+          dispatches = []
+          for workflow in sorted(Path('.github/workflows').glob('*external-evidence*.yml')):
+              text = workflow.read_text(encoding='utf-8')
+              referenced = workflow.name in plan or str(workflow) in plan
+              dispatchable = 'workflow_dispatch' in text
+              record = {
+                  'workflow_path': str(workflow),
+                  'referenced_by_authoritative_plan': referenced,
+                  'declares_workflow_dispatch': dispatchable,
+                  'dispatch_http_status': None,
+                  'dispatch_detail': None,
+              }
+              if referenced:
+                  if not dispatchable:
+                      raise SystemExit(
+                          f'plan-referenced external workflow is not dispatchable: {workflow}'
+                      )
+                  payload = json.dumps(
+                      {'ref': 'automation/seq40-validated'},
+                      separators=(',', ':'),
+                  ).encode('utf-8')
+                  request = urllib.request.Request(
+                      f'https://api.github.com/repos/{repository}/actions/workflows/'
+                      f'{workflow.name}/dispatches',
+                      data=payload,
+                      headers=headers,
+                      method='POST',
+                  )
+                  try:
+                      with urllib.request.urlopen(request, timeout=60) as response:
+                          record['dispatch_http_status'] = response.status
+                  except urllib.error.HTTPError as exc:
+                      record['dispatch_http_status'] = exc.code
+                      record['dispatch_detail'] = exc.read().decode(
+                          'utf-8', errors='replace'
+                      )[:4000]
+                  if record['dispatch_http_status'] != 204:
+                      raise SystemExit(
+                          f'plan-referenced external workflow dispatch failed: {record!r}'
+                      )
+              dispatches.append(record)
+
+          gap_audit_path = Path(
+              'docs/release-evidence/sequence40/remaining-gap-audit-v1.json'
+          )
+          gap_audit = json.loads(gap_audit_path.read_text(encoding='utf-8'))
+          document = {
+              'schema_version': 'cex.sequence40.external-closure-handoff.v2',
+              'candidate_sha': candidate,
+              'gap_audit_commit': os.environ.get('GITHUB_SHA'),
+              'production_authorization': 'not_granted',
+              'merge_authorization': 'not_granted',
+              'independent_review_required': True,
+              'external_owner_execution_required': True,
+              'x1_x8_sections': sorted(gates, key=lambda item: item['gate']),
+              'missing_x1_x8_headings': missing,
+              'plan_referenced_external_workflow_dispatches': dispatches,
+              'authoritative_gap_checks': gap_audit.get('checks', []),
+          }
+          out = Path(
+              'docs/release-evidence/sequence40/external-closure-handoff-v2.json'
+          )
+          encoded = (
+              json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False) + '\n'
+          ).encode('utf-8')
+          out.write_bytes(encoded)
+          out.with_suffix(out.suffix + '.sha256').write_text(
+              hashlib.sha256(encoded).hexdigest() + f'  {out.name}\n',
+              encoding='utf-8',
+          )
+          PY
+          git diff --check
+
+      - name: Publish race-free external handoff evidence
+        if: steps.refs.outputs.state == 'external_gaps_only'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'cex-sequence-40-external-handoff'
+          git config user.email 'cex-sequence-40-external-handoff@users.noreply.github.com'
+          git add -- \
+            docs/release-evidence/sequence40/external-closure-handoff-v2.json \
+            docs/release-evidence/sequence40/external-closure-handoff-v2.json.sha256
+          git commit -m 'docs(evidence): freeze race-free sequence 40 external handoff'
+          git push --force origin HEAD:automation/seq40-external-closure-handoff-v2
+
+      - name: Create or update the X1-X8 closure issue
+        if: steps.refs.outputs.state == 'external_gaps_only'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ steps.refs.outputs.candidate }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          from pathlib import Path
+          import urllib.parse
+          import urllib.request
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+          candidate = os.environ['CANDIDATE_SHA']
+          document = json.loads(
+              Path(
+                  'docs/release-evidence/sequence40/external-closure-handoff-v2.json'
+              ).read_text(encoding='utf-8')
+          )
+          headers = {
+              'Accept': 'application/vnd.github+json',
+              'Authorization': f'Bearer {token}',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'cex-sequence-40-external-handoff-v12b',
+          }
+
+          def api(method: str, path: str, payload=None):
+              body = None
+              if payload is not None:
+                  body = json.dumps(payload, separators=(',', ':')).encode('utf-8')
+              request = urllib.request.Request(
+                  f'https://api.github.com/repos/{repository}{path}',
+                  data=body,
+                  headers=headers,
+                  method=method,
+              )
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  raw = response.read()
+                  return response.status, json.loads(raw) if raw else None
+
+          label = 'production-not-authorized'
+          status, _ = api('GET', f'/labels/{urllib.parse.quote(label, safe="")}')
+          if status == 404:
+              api(
+                  'POST',
+                  '/labels',
+                  {
+                      'name': label,
+                      'description': 'Production authorization is explicitly not granted.',
+                      'color': '5319E7',
+                  },
+              )
+          title = 'Sequence 40 external evidence closure: X1-X8 and independent approval'
+          query = urllib.parse.urlencode({'state': 'open', 'per_page': '100'})
+          _, issues = api('GET', f'/issues?{query}')
+          issue = next(
+              (
+                  item
+                  for item in issues
+                  if item.get('title') == title and 'pull_request' not in item
+              ),
+              None,
+          )
+          checklist = [
+              f"- [ ] {item['gate']} — {item['title']}"
+              for item in document['x1_x8_sections']
+          ]
+          checklist.extend(
+              f'- [ ] {gate} — authoritative heading was not parsed; owner resolution required'
+              for gate in document['missing_x1_x8_headings']
+          )
+          body = '\n'.join(
+              [
+                  '## External closure boundary',
+                  '',
+                  f'- canonical code candidate: `{candidate}`',
+                  '- repository-internal development closure: machine-verified separately',
+                  '- independent approval: required and not self-issued',
+                  '- production authorization: **not_granted**',
+                  '- merge authorization: **not_granted**',
+                  '',
+                  '## X1–X8 checklist',
+                  '',
+                  *(checklist or ['- [ ] No X1–X8 headings parsed; owner resolution required']),
+                  '',
+                  'Keep this issue open until real external evidence and an authorized independent decision are attached.',
+              ]
+          )
+          if issue is None:
+              status, issue = api(
+                  'POST',
+                  '/issues',
+                  {'title': title, 'body': body, 'labels': [label]},
+              )
+              if status != 201:
+                  raise SystemExit(f'cannot create external issue: HTTP {status}')
+          else:
+              status, _ = api(
+                  'PATCH',
+                  f"/issues/{issue['number']}",
+                  {'body': body},
+              )
+              if status != 200:
+                  raise SystemExit(f'cannot update external issue: HTTP {status}')
+          print(f"sequence40_external_issue={issue['number']}")
+          PY
