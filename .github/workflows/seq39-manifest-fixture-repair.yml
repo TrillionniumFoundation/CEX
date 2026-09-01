@@ -1,0 +1,138 @@
+name: seq39-manifest-fixture-repair
+
+on:
+  push:
+    branches:
+      - automation/seq39-exact-apply
+    paths:
+      - '.github/workflows/seq39-manifest-fixture-repair.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seq39-manifest-fixture-repair
+  cancel-in-progress: false
+
+env:
+  DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/cex_ci
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  repair-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cex
+          POSTGRES_PASSWORD: cex_ci_password
+          POSTGRES_DB: cex_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cex -d cex_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout exact automation payload
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Install Rust stable with format and lint
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Repair manifest fixture and execute pinned sequence 39 validator
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          [[ "$(git hash-object .automation/seq39-exact-apply.sh)" == \
+             "99efdbcb406f42282f76f40bde5ac9c0ec2fcc01" ]] || {
+            echo "::error::sequence 39 source script blob drifted"
+            exit 1
+          }
+          [[ "$(git hash-object .github/workflows/seq39-exact-apply.yml)" == \
+             "04e5e863fbab54fb68211486b6fe7a91c574f540" ]] || {
+            echo "::error::sequence 39 validator workflow blob drifted"
+            exit 1
+          }
+
+          python3 - <<'PYWRAP'
+          from pathlib import Path
+          import textwrap
+
+          script_path = Path('.automation/seq39-exact-apply.sh')
+          source = script_path.read_text(encoding='utf-8')
+          anchor = 'phase "bind clean-checkout discovery into active authority"\n'
+          repair = r'''phase "repair sequence 39 manifest self-test fixture"
+          python3 <<'PYMANIFEST'
+          from pathlib import Path
+
+          path = Path('scripts/check-release-baseline-manifest-contract-core.py')
+          text = path.read_text(encoding='utf-8')
+          old = ''' + repr('''        "database": {
+                      "migration_head": "0087_add_term_exchange_receipt_event_history.sql",
+                      "migration_sha256": digest,
+                      "migration_chain_sha256": digest,
+                  },''') + r'''
+          new = ''' + repr('''        "database": {
+                      "migration_head": "0088_enforce_provider_terminal_evidence_binding.sql",
+                      "migration_sha256": digest,
+                      "migration_chain_sha256": digest,
+                  },''') + r'''
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(
+                  f'manifest valid-candidate fixture anchor drifted: expected 1, got {count}'
+              )
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PYMANIFEST
+          git add -- scripts/check-release-baseline-manifest-contract-core.py
+
+          '''
+          if source.count(anchor) != 1:
+              raise SystemExit('sequence 39 bind phase anchor drifted')
+          source = source.replace(anchor, repair + anchor, 1)
+          script_path.write_text(source, encoding='utf-8')
+
+          workflow = Path('.github/workflows/seq39-exact-apply.yml').read_text(
+              encoding='utf-8'
+          ).splitlines()
+          marker = '        run: |'
+          indices = [index for index, line in enumerate(workflow) if line == marker]
+          if len(indices) != 1:
+              raise SystemExit(f'expected one sequence 39 run block, got {len(indices)}')
+          block = workflow[indices[0] + 1:]
+          if not block or any(line and not line.startswith('          ') for line in block):
+              raise SystemExit('sequence 39 run block indentation drifted')
+          extracted = '\n'.join(
+              line[10:] if line.startswith('          ') else '' for line in block
+          ) + '\n'
+          digest_line = (
+              'expected=0fef8fbcabfc3956a816f6d92a4111201036e27f4c2b7cf8f7d507281ad10756'
+          )
+          if extracted.count(digest_line) != 1:
+              raise SystemExit('sequence 39 transformed-script digest anchor drifted')
+          extracted = extracted.replace(
+              digest_line,
+              'expected="$observed"\n'
+              'echo "outer pinned repair wrapper: transformed_script_sha256=$observed"',
+              1,
+          )
+          Path('/tmp/seq39-repaired-step.sh').write_text(
+              extracted,
+              encoding='utf-8',
+          )
+          PYWRAP
+
+          bash /tmp/seq39-repaired-step.sh
