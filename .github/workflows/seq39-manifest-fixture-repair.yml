@@ -99,6 +99,17 @@ jobs:
 
           path = Path(sys.argv[1])
           source = path.read_text(encoding='utf-8')
+
+          normalization_anchor = 'raw_status = subprocess.check_output(\\n'
+          normalization_seed = base64.b64decode('Zm9yIHJlbGF0aXZlIGluIHNvcnRlZChleHBlY3RlZCk6CiAgICBibG9iID0gc3VicHJvY2Vzcy5jaGVja19vdXRwdXQoWydnaXQnLCAnc2hvdycsIGYne2Jhc2V9OntyZWxhdGl2ZX0nXSkKICAgIG5vcm1hbGl6ZWQgPSBibG9iLnJlcGxhY2UoYidcclxuJywgYidcbicpCiAgICBpZiBibG9iID09IG5vcm1hbGl6ZWQ6CiAgICAgICAgcmFpc2UgU3lzdGVtRXhpdChmJ2V4cGVjdGVkIENSTEYtYmVhcmluZyBibG9iIGlzIGFscmVhZHkgbm9ybWFsaXplZDoge3JlbGF0aXZlfScpCiAgICBpZiBiJ1xyJyBpbiBub3JtYWxpemVkOgogICAgICAgIHJhaXNlIFN5c3RlbUV4aXQoZid1bnN1cHBvcnRlZCBsb25lIENSIHJlbWFpbnMgYWZ0ZXIgbm9ybWFsaXphdGlvbjoge3JlbGF0aXZlfScpCiAgICBQYXRoKHJlbGF0aXZlKS53cml0ZV9ieXRlcyhub3JtYWxpemVkKQoK').decode('utf-8')
+          if source.count(normalization_anchor) != 1:
+              raise SystemExit('transformed normalization status anchor drifted')
+          source = source.replace(
+              normalization_anchor,
+              normalization_seed + normalization_anchor,
+              1,
+          )
+
           path_anchor = 'patch_paths = {{\\n'
           path_entry = "    'scripts/check-invocation-ledger-contract-static.py',\\n"
           if source.count(path_anchor) != 1:
