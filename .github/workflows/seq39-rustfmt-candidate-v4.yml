@@ -79,11 +79,27 @@ jobs:
           extracted = '\n'.join(
               line[10:] if line.startswith('          ') else '' for line in block
           ) + '\n'
+
           old = "f'candidate path is already present: {entry.strip()}'"
           new = "f'candidate path is already present: {{entry.strip()}}'"
           if extracted.count(old) != 1:
               raise SystemExit('nested candidate-path assertion anchor drifted')
           extracted = extracted.replace(old, new, 1)
+
+          tuple_paths = (
+              'crates/shared-config/src/runtime_guard.rs',
+              'scripts/check-invocation-ledger-contract-static.py',
+              'services/gateway-service/src/bin/gateway-exact-reserve-worker.rs',
+              'services/identity-service/src/main.rs',
+              'services/ledger-service/src/main.rs',
+          )
+          for path in tuple_paths:
+              old_line = f'              "    \'{path}\',\\\\n"\n'
+              new_line = f'              "    \'{path}\',\\\\n",\n'
+              if extracted.count(old_line) != 1:
+                  raise SystemExit(f'candidate tuple line anchor drifted: {path}')
+              extracted = extracted.replace(old_line, new_line, 1)
+
           Path('/tmp/seq39-rustfmt-candidate-v4.sh').write_text(
               extracted,
               encoding='utf-8',
