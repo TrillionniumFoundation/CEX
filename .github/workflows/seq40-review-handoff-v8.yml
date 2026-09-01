@@ -1,0 +1,195 @@
+name: seq40-review-handoff-v8
+
+on:
+  push:
+    branches:
+      - automation/seq40-workflow-trust-windows
+    paths:
+      - '.github/workflows/seq40-review-handoff-v8.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: seq40-review-handoff-v8
+  cancel-in-progress: false
+
+jobs:
+  handoff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout automation control branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Wait for sequence 40 evidence freeze
+        id: refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 720); do
+            if git ls-remote --exit-code origin \
+              refs/heads/automation/seq40-evidence-freeze >/tmp/seq40-evidence.ref 2>/dev/null; then
+              break
+            fi
+            sleep 10
+          done
+          test -s /tmp/seq40-evidence.ref
+          git ls-remote --exit-code origin \
+            refs/heads/automation/seq40-validated >/tmp/seq40-candidate.ref
+          candidate=$(awk '{print $1}' /tmp/seq40-candidate.ref)
+          evidence=$(awk '{print $1}' /tmp/seq40-evidence.ref)
+          [[ "$candidate" =~ ^[0-9a-f]{40}$ && "$evidence" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          echo "candidate=$candidate" >> "$GITHUB_OUTPUT"
+          echo "evidence=$evidence" >> "$GITHUB_OUTPUT"
+
+      - name: Create or normalize independent-review PR handoff
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ steps.refs.outputs.candidate }}
+          EVIDENCE_SHA: ${{ steps.refs.outputs.evidence }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          owner, _ = repository.split('/', 1)
+          token = os.environ['GH_TOKEN']
+          candidate = os.environ['CANDIDATE_SHA']
+          evidence = os.environ['EVIDENCE_SHA']
+          headers = {
+              'Accept': 'application/vnd.github+json',
+              'Authorization': f'Bearer {token}',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'cex-sequence-40-review-handoff',
+          }
+
+          def api(method: str, path: str, payload=None):
+              body = None
+              if payload is not None:
+                  body = json.dumps(payload, separators=(',', ':')).encode('utf-8')
+              request = urllib.request.Request(
+                  f'https://api.github.com/repos/{repository}{path}',
+                  data=body,
+                  headers=headers,
+                  method=method,
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=60) as response:
+                      raw = response.read()
+                      return response.status, json.loads(raw) if raw else None
+              except urllib.error.HTTPError as exc:
+                  raw = exc.read().decode('utf-8', errors='replace')
+                  try:
+                      detail = json.loads(raw)
+                  except json.JSONDecodeError:
+                      detail = {'message': raw}
+                  return exc.code, detail
+
+          query = urllib.parse.urlencode(
+              {
+                  'state': 'open',
+                  'head': f'{owner}:automation/seq40-validated',
+                  'base': 'automation/seq39-validated',
+                  'per_page': '20',
+              }
+          )
+          status, pulls = api('GET', f'/pulls?{query}')
+          if status != 200:
+              raise SystemExit(f'cannot list sequence 40 PR: HTTP {status}: {pulls!r}')
+          if len(pulls) > 1:
+              raise SystemExit(f'multiple open sequence 40 PRs exist: {len(pulls)}')
+          if not pulls:
+              status, pull = api(
+                  'POST',
+                  '/pulls',
+                  {
+                      'title': (
+                          'Sequence 40: make workflow-trust symlink self-tests cross-platform'
+                      ),
+                      'head': 'automation/seq40-validated',
+                      'base': 'automation/seq39-validated',
+                      'body': (
+                          'Single-file cross-platform self-test repair. '
+                          'Requires independent review. Production authorization remains not_granted.'
+                      ),
+                      'draft': False,
+                  },
+              )
+              if status != 201:
+                  raise SystemExit(f'cannot create sequence 40 PR: HTTP {status}: {pull!r}')
+          else:
+              pull = pulls[0]
+          number = int(pull['number'])
+
+          labels = (
+              ('needs-independent-review', 'Independent reviewer approval is required.', 'B60205'),
+              ('do-not-merge', 'Merge is blocked until all declared gates close.', 'D93F0B'),
+              ('production-not-authorized', 'Production authorization is explicitly not granted.', '5319E7'),
+          )
+          for name, description, color in labels:
+              label_status, _ = api('GET', f'/labels/{urllib.parse.quote(name, safe="")}')
+              if label_status == 404:
+                  create_status, detail = api(
+                      'POST',
+                      '/labels',
+                      {'name': name, 'description': description, 'color': color},
+                  )
+                  if create_status not in (201, 422):
+                      raise SystemExit(
+                          f'cannot create label {name}: HTTP {create_status}: {detail!r}'
+                      )
+              elif label_status != 200:
+                  raise SystemExit(f'cannot read label {name}: HTTP {label_status}')
+          label_status, detail = api(
+              'POST',
+              f'/issues/{number}/labels',
+              {'labels': [name for name, _, _ in labels]},
+          )
+          if label_status != 200:
+              raise SystemExit(f'cannot label sequence 40 PR: {label_status}: {detail!r}')
+
+          marker = '<!-- cex-sequence40-review-handoff-v1 -->'
+          comments_status, comments = api(
+              'GET', f'/issues/{number}/comments?per_page=100'
+          )
+          if comments_status != 200:
+              raise SystemExit(f'cannot read PR comments: HTTP {comments_status}')
+          if not any(marker in str(comment.get('body') or '') for comment in comments):
+              body = '\n'.join(
+                  (
+                      marker,
+                      '## Sequence 40 independent-review handoff',
+                      '',
+                      f'- canonical candidate: `{candidate}`',
+                      f'- immutable evidence commit: `{evidence}`',
+                      '- code delta: `scripts/check-workflow-trust.py` only',
+                      '- required review focus: concrete runtime `Path` class mocking must preserve fail-closed descriptor/action-directory symlink rejection',
+                      '- production authorization: **not_granted**',
+                      '- this comment and all automation results are not an approval and do not authorize merge or deployment',
+                  )
+              )
+              comment_status, detail = api(
+                  'POST', f'/issues/{number}/comments', {'body': body}
+              )
+              if comment_status != 201:
+                  raise SystemExit(
+                      f'cannot add sequence 40 handoff comment: '
+                      f'HTTP {comment_status}: {detail!r}'
+                  )
+          print(f'sequence40_review_pr={number}', flush=True)
+          PY
