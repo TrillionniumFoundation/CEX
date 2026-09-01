@@ -19,6 +19,7 @@ env:
   DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/cex_ci
   CARGO_TERM_COLOR: never
   CARGO_INCREMENTAL: '0'
+  PYTHONDONTWRITEBYTECODE: '1'
 
 jobs:
   repair-and-validate:
