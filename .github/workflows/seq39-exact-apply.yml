@@ -58,6 +58,8 @@ jobs:
           set -euo pipefail
           python3 - "$RUNNER_TEMP/seq39-exact-apply.sh" <<'PYTRANSFORM'
           from pathlib import Path
+          import base64
+          import hashlib
           import sys
 
           source = Path('.automation/seq39-exact-apply.sh').read_text(encoding='utf-8')
@@ -83,71 +85,25 @@ jobs:
                   raise SystemExit(f'expected CRLF-bearing blob is already normalized: {relative}')
           """,
               ),
-              (
-                  r"""git add --renormalize -- "${NORMALIZED_PATHS[@]}"
-          git diff --quiet || fail "unstaged changes remain after CRLF normalization"
-          """,
-                  r"""git add --renormalize -- "${NORMALIZED_PATHS[@]}"
-          git diff --quiet || fail "unstaged changes remain after CRLF normalization"
-          python3 - "${NORMALIZED_PATHS[@]}" <<'PY'
-          import subprocess
-          import sys
-
-          for relative in sys.argv[1:]:
-              staged = subprocess.check_output(['git', 'show', f':{relative}'])
-              if b'\r' in staged:
-                  raise SystemExit(f'normalized staged blob still contains CR: {relative}')
-          PY
-          """,
-              ),
-              (
-                  r"""git diff --cached --quiet --ignore-cr-at-eol "$BASE_SHA" -- "${NORMALIZED_PATHS[@]}" \
-            || fail "checkout normalization changed content beyond CR-at-EOL"
-          """,
-                  r"""python3 - "$BASE_SHA" "${NORMALIZED_PATHS[@]}" <<'PYDIAG'
-          import hashlib
-          import subprocess
-          import sys
-
-          base = sys.argv[1]
-          paths = sys.argv[2:]
-          all_equal = True
-          for relative in paths:
-              base_blob = subprocess.check_output(['git', 'show', f'{base}:{relative}'])
-              staged = subprocess.check_output(['git', 'show', f':{relative}'])
-              def stats(data: bytes) -> str:
-                  return (
-                      f'bytes={len(data)} sha256={hashlib.sha256(data).hexdigest()} '
-                      f'crlf={data.count(bytes([13,10]))} cr={data.count(bytes([13]))} '
-                      f'lf={data.count(bytes([10]))} bom={data.startswith(bytes([239,187,191]))}'
-                  )
-              canonical_base = base_blob.replace(bytes([13,10]), bytes([10])).replace(bytes([13]), bytes([10]))
-              canonical_staged = staged.replace(bytes([13,10]), bytes([10])).replace(bytes([13]), bytes([10]))
-              equal = canonical_base == canonical_staged
-              print(f'NORMALIZATION_DIAG path={relative} canonical_equal={equal}')
-              print(f'  base   {stats(base_blob)}')
-              print(f'  staged {stats(staged)}')
-              if not equal:
-                  all_equal = False
-                  limit = min(len(canonical_base), len(canonical_staged))
-                  offset = next((i for i in range(limit) if canonical_base[i] != canonical_staged[i]), limit)
-                  line = canonical_base[:offset].count(bytes([10])) + 1
-                  start = max(0, offset - 80)
-                  end_base = min(len(canonical_base), offset + 160)
-                  end_staged = min(len(canonical_staged), offset + 160)
-                  print(f'  first_diff_offset={offset} canonical_base_line={line}')
-                  print(f'  base_context={canonical_base[start:end_base]!r}')
-                  print(f'  staged_context={canonical_staged[start:end_staged]!r}')
-          if not all_equal:
-              raise SystemExit('checkout normalization contains non-newline byte differences')
-          PYDIAG
-          """,
-              ),
           ]
           for old, new in replacements:
               if source.count(old) != 1:
                   raise SystemExit(f'automation transformation boundary drifted: {old[:80]!r}')
               source = source.replace(old, new)
+
+          block_b64 = (
+              'Z2l0IGFkZCAtLXJlbm9ybWFsaXplIC0tICIke05PUk1BTElaRURfUEFUSFNbQF19IgpnaXQgZGlmZiAtLXF1aWV0IHx8IGZhaWwgInVuc3RhZ2VkIGNoYW5nZXMgcmVtYWluIGFmdGVyIENSTEYgbm9ybWFsaXphdGlvbiIKcHl0aG9uMyAtICIkQkFTRV9TSEEiICIke05PUk1BTElaRURfUEFUSFNbQF19IiA8PCdQWURJQUcnCmltcG9ydCBoYXNobGliCmltcG9ydCBzdWJwcm9jZXNzCmltcG9ydCBzeXMKCmJhc2UgPSBzeXMuYXJndlsxXQpwYXRocyA9IHN5cy5hcmd2WzI6XQphbGxfZXF1YWwgPSBUcnVlCmZvciByZWxhdGl2ZSBpbiBwYXRoczoKICAgIGJhc2VfYmxvYiA9IHN1YnByb2Nlc3MuY2hlY2tfb3V0cHV0KFsnZ2l0JywgJ3Nob3cnLCBmJ3tiYXNlfTp7cmVsYXRpdmV9J10pCiAgICBzdGFnZWQgPSBzdWJwcm9jZXNzLmNoZWNrX291dHB1dChbJ2dpdCcsICdzaG93JywgZic6e3JlbGF0aXZlfSddKQogICAgZGVmIHN0YXRzKGRhdGE6IGJ5dGVzKSAtPiBzdHI6CiAgICAgICAgcmV0dXJuICgKICAgICAgICAgICAgZidieXRlcz17bGVuKGRhdGEpfSBzaGEyNTY9e2hhc2hsaWIuc2hhMjU2KGRhdGEpLmhleGRpZ2VzdCgpfSAnCiAgICAgICAgICAgIGYnY3JsZj17ZGF0YS5jb3VudChieXRlcyhbMTMsMTBdKSl9IGNyPXtkYXRhLmNvdW50KGJ5dGVzKFsxM10pKX0gJwogICAgICAgICAgICBmJ2xmPXtkYXRhLmNvdW50KGJ5dGVzKFsxMF0pKX0gYm9tPXtkYXRhLnN0YXJ0c3dpdGgoYnl0ZXMoWzIzOSwxODcsMTkxXSkpfScKICAgICAgICApCiAgICBjYW5vbmljYWxfYmFzZSA9IGJhc2VfYmxvYi5yZXBsYWNlKGJ5dGVzKFsxMywxMF0pLCBieXRlcyhbMTBdKSkucmVwbGFjZShieXRlcyhbMTNdKSwgYnl0ZXMoWzEwXSkpCiAgICBjYW5vbmljYWxfc3RhZ2VkID0gc3RhZ2VkLnJlcGxhY2UoYnl0ZXMoWzEzLDEwXSksIGJ5dGVzKFsxMF0pKS5yZXBsYWNlKGJ5dGVzKFsxM10pLCBieXRlcyhbMTBdKSkKICAgIGVxdWFsID0gY2Fub25pY2FsX2Jhc2UgPT0gY2Fub25pY2FsX3N0YWdlZAogICAgcHJpbnQoZidOT1JNQUxJWkFUSU9OX0RJQUcgcGF0aD17cmVsYXRpdmV9IGNhbm9uaWNhbF9lcXVhbD17ZXF1YWx9JykKICAgIHByaW50KGYnICBiYXNlICAge3N0YXRzKGJhc2VfYmxvYil9JykKICAgIHByaW50KGYnICBzdGFnZWQge3N0YXRzKHN0YWdlZCl9JykKICAgIGlmIG5vdCBlcXVhbDoKICAgICAgICBhbGxfZXF1YWwgPSBGYWxzZQogICAgICAgIGxpbWl0ID0gbWluKGxlbihjYW5vbmljYWxfYmFzZSksIGxlbihjYW5vbmljYWxfc3RhZ2VkKSkKICAgICAgICBvZmZzZXQgPSBuZXh0KChpIGZvciBpIGluIHJhbmdlKGxpbWl0KSBpZiBjYW5vbmljYWxfYmFzZVtpXSAhPSBjYW5vbmljYWxfc3RhZ2VkW2ldKSwgbGltaXQpCiAgICAgICAgbGluZSA9IGNhbm9uaWNhbF9iYXNlWzpvZmZzZXRdLmNvdW50KGJ5dGVzKFsxMF0pKSArIDEKICAgICAgICBzdGFydCA9IG1heCgwLCBvZmZzZXQgLSA4MCkKICAgICAgICBlbmRfYmFzZSA9IG1pbihsZW4oY2Fub25pY2FsX2Jhc2UpLCBvZmZzZXQgKyAxNjApCiAgICAgICAgZW5kX3N0YWdlZCA9IG1pbihsZW4oY2Fub25pY2FsX3N0YWdlZCksIG9mZnNldCArIDE2MCkKICAgICAgICBwcmludChmJyAgZmlyc3RfZGlmZl9vZmZzZXQ9e29mZnNldH0gY2Fub25pY2FsX2Jhc2VfbGluZT17bGluZX0nKQogICAgICAgIHByaW50KGYnICBiYXNlX2NvbnRleHQ9e2Nhbm9uaWNhbF9iYXNlW3N0YXJ0OmVuZF9iYXNlXSFyfScpCiAgICAgICAgcHJpbnQoZicgIHN0YWdlZF9jb250ZXh0PXtjYW5vbmljYWxfc3RhZ2VkW3N0YXJ0OmVuZF9zdGFnZWRdIXJ9JykKaWYgbm90IGFsbF9lcXVhbDoKICAgIHJhaXNlIFN5c3RlbUV4aXQoJ2NoZWNrb3V0IG5vcm1hbGl6YXRpb24gY29udGFpbnMgbm9uLW5ld2xpbmUgYnl0ZSBkaWZmZXJlbmNlcycpClBZRElBRwpweXRob24zIC0gIiR7Tk9STUFMSVpFRF9QQVRIU1tAXX0iIDw8J1BZJwppbXBvcnQgc3VicHJvY2VzcwppbXBvcnQgc3lzCgpmb3IgcmVsYXRpdmUgaW4gc3lzLmFyZ3ZbMTpdOgogICAgc3RhZ2VkID0gc3VicHJvY2Vzcy5jaGVja19vdXRwdXQoWydnaXQnLCAnc2hvdycsIGYnOntyZWxhdGl2ZX0nXSkKICAgIGlmIGInXHInIGluIHN0YWdlZDoKICAgICAgICByYWlzZSBTeXN0ZW1FeGl0KGYnbm9ybWFsaXplZCBzdGFnZWQgYmxvYiBzdGlsbCBjb250YWlucyBDUjoge3JlbGF0aXZlfScpClBZCg=='
+          )
+          block = base64.b64decode(block_b64).decode('utf-8')
+          if hashlib.sha256(block.encode('utf-8')).hexdigest() != 'e19d1bfde913c4b3a91516060f244cc3ebbd88c9ed66edf76a1c10418643dcdc':
+              raise SystemExit('diagnostic block digest mismatch')
+          start_marker = 'git add --renormalize -- "${NORMALIZED_PATHS[@]}"\n'
+          end_marker = '\nphase "apply hash-bound sequence 39 patch"'
+          start = source.find(start_marker)
+          end = source.find(end_marker, start)
+          if start < 0 or end < 0 or source.find(start_marker, start + 1) >= 0:
+              raise SystemExit('normalization splice boundary drifted')
+          source = source[:start] + block + source[end:]
           Path(sys.argv[1]).write_text(source, encoding='utf-8')
           PYTRANSFORM
           observed=$(sha256sum "$RUNNER_TEMP/seq39-exact-apply.sh" | awk '{print $1}')
