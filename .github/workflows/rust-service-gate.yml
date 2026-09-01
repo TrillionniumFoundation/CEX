@@ -71,7 +71,7 @@ jobs:
 
       - name: Verify P0 static wiring
         run: |
-          python scripts/check-p0-wiring.py
+          python scripts/check-p0-wiring-windows.py --implementation scripts/check-p0-wiring.py
           bash scripts/test-runtime-profile-wiring.sh
 
       - name: Install Rust stable
