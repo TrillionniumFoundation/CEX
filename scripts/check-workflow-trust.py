@@ -2,10 +2,11 @@
 """Byte-bound cross-platform adapter for the workflow trust implementation.
 
 The reviewed implementation is retained verbatim in
-``check-workflow-trust-impl.py``. This adapter applies three exact source
+``check-workflow-trust-impl.py``. This adapter applies four exact source
 corrections before execution so the no-symlink self-tests preserve identical
 fail-closed semantics on POSIX and Windows:
 
+* the descriptor sentinel uses the same canonical action target as production;
 * local descriptor and path-component mocks patch the concrete ``Path`` type;
 * the immutable-script fallback mock patches the concrete type; and
 * that fallback installs a real method via ``new=`` instead of an unbound
@@ -28,6 +29,11 @@ _IMPL_PATH = _SCRIPT_DIR / "check-workflow-trust-impl.py"
 _EXPECTED_IMPL_GIT_BLOB = "a159b71f42083365b4c9c7d41966745d406c54fc"
 _EXPECTED_IMPL_SIZE = 40825
 _SOURCE_REWRITES: tuple[tuple[bytes, bytes, str], ...] = (
+    (
+        b'            descriptor_path = action_dir / "action.yml"\n',
+        b'            descriptor_path = action_dir.resolve() / "action.yml"\n',
+        "canonical local descriptor sentinel",
+    ),
     (
         (
             b"            with mock.patch.object(\n"
