@@ -52,7 +52,7 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Diagnose exact sequence 39 normalization boundary
+      - name: Build validate and stage exact sequence 39
         shell: bash
         run: |
           set -euo pipefail
@@ -92,11 +92,11 @@ jobs:
               source = source.replace(old, new)
 
           block_b64 = (
-              'Z2l0IGFkZCAtLXJlbm9ybWFsaXplIC0tICIke05PUk1BTElaRURfUEFUSFNbQF19IgpnaXQgZGlmZiAtLXF1aWV0IHx8IGZhaWwgInVuc3RhZ2VkIGNoYW5nZXMgcmVtYWluIGFmdGVyIENSTEYgbm9ybWFsaXphdGlvbiIKcHl0aG9uMyAtICIkQkFTRV9TSEEiICIke05PUk1BTElaRURfUEFUSFNbQF19IiA8PCdQWURJQUcnCmltcG9ydCBoYXNobGliCmltcG9ydCBzdWJwcm9jZXNzCmltcG9ydCBzeXMKCmJhc2UgPSBzeXMuYXJndlsxXQpwYXRocyA9IHN5cy5hcmd2WzI6XQphbGxfZXF1YWwgPSBUcnVlCmZvciByZWxhdGl2ZSBpbiBwYXRoczoKICAgIGJhc2VfYmxvYiA9IHN1YnByb2Nlc3MuY2hlY2tfb3V0cHV0KFsnZ2l0JywgJ3Nob3cnLCBmJ3tiYXNlfTp7cmVsYXRpdmV9J10pCiAgICBzdGFnZWQgPSBzdWJwcm9jZXNzLmNoZWNrX291dHB1dChbJ2dpdCcsICdzaG93JywgZic6e3JlbGF0aXZlfSddKQogICAgZGVmIHN0YXRzKGRhdGE6IGJ5dGVzKSAtPiBzdHI6CiAgICAgICAgcmV0dXJuICgKICAgICAgICAgICAgZidieXRlcz17bGVuKGRhdGEpfSBzaGEyNTY9e2hhc2hsaWIuc2hhMjU2KGRhdGEpLmhleGRpZ2VzdCgpfSAnCiAgICAgICAgICAgIGYnY3JsZj17ZGF0YS5jb3VudChieXRlcyhbMTMsMTBdKSl9IGNyPXtkYXRhLmNvdW50KGJ5dGVzKFsxM10pKX0gJwogICAgICAgICAgICBmJ2xmPXtkYXRhLmNvdW50KGJ5dGVzKFsxMF0pKX0gYm9tPXtkYXRhLnN0YXJ0c3dpdGgoYnl0ZXMoWzIzOSwxODcsMTkxXSkpfScKICAgICAgICApCiAgICBjYW5vbmljYWxfYmFzZSA9IGJhc2VfYmxvYi5yZXBsYWNlKGJ5dGVzKFsxMywxMF0pLCBieXRlcyhbMTBdKSkucmVwbGFjZShieXRlcyhbMTNdKSwgYnl0ZXMoWzEwXSkpCiAgICBjYW5vbmljYWxfc3RhZ2VkID0gc3RhZ2VkLnJlcGxhY2UoYnl0ZXMoWzEzLDEwXSksIGJ5dGVzKFsxMF0pKS5yZXBsYWNlKGJ5dGVzKFsxM10pLCBieXRlcyhbMTBdKSkKICAgIGVxdWFsID0gY2Fub25pY2FsX2Jhc2UgPT0gY2Fub25pY2FsX3N0YWdlZAogICAgcHJpbnQoZidOT1JNQUxJWkFUSU9OX0RJQUcgcGF0aD17cmVsYXRpdmV9IGNhbm9uaWNhbF9lcXVhbD17ZXF1YWx9JykKICAgIHByaW50KGYnICBiYXNlICAge3N0YXRzKGJhc2VfYmxvYil9JykKICAgIHByaW50KGYnICBzdGFnZWQge3N0YXRzKHN0YWdlZCl9JykKICAgIGlmIG5vdCBlcXVhbDoKICAgICAgICBhbGxfZXF1YWwgPSBGYWxzZQogICAgICAgIGxpbWl0ID0gbWluKGxlbihjYW5vbmljYWxfYmFzZSksIGxlbihjYW5vbmljYWxfc3RhZ2VkKSkKICAgICAgICBvZmZzZXQgPSBuZXh0KChpIGZvciBpIGluIHJhbmdlKGxpbWl0KSBpZiBjYW5vbmljYWxfYmFzZVtpXSAhPSBjYW5vbmljYWxfc3RhZ2VkW2ldKSwgbGltaXQpCiAgICAgICAgbGluZSA9IGNhbm9uaWNhbF9iYXNlWzpvZmZzZXRdLmNvdW50KGJ5dGVzKFsxMF0pKSArIDEKICAgICAgICBzdGFydCA9IG1heCgwLCBvZmZzZXQgLSA4MCkKICAgICAgICBlbmRfYmFzZSA9IG1pbihsZW4oY2Fub25pY2FsX2Jhc2UpLCBvZmZzZXQgKyAxNjApCiAgICAgICAgZW5kX3N0YWdlZCA9IG1pbihsZW4oY2Fub25pY2FsX3N0YWdlZCksIG9mZnNldCArIDE2MCkKICAgICAgICBwcmludChmJyAgZmlyc3RfZGlmZl9vZmZzZXQ9e29mZnNldH0gY2Fub25pY2FsX2Jhc2VfbGluZT17bGluZX0nKQogICAgICAgIHByaW50KGYnICBiYXNlX2NvbnRleHQ9e2Nhbm9uaWNhbF9iYXNlW3N0YXJ0OmVuZF9iYXNlXSFyfScpCiAgICAgICAgcHJpbnQoZicgIHN0YWdlZF9jb250ZXh0PXtjYW5vbmljYWxfc3RhZ2VkW3N0YXJ0OmVuZF9zdGFnZWRdIXJ9JykKaWYgbm90IGFsbF9lcXVhbDoKICAgIHJhaXNlIFN5c3RlbUV4aXQoJ2NoZWNrb3V0IG5vcm1hbGl6YXRpb24gY29udGFpbnMgbm9uLW5ld2xpbmUgYnl0ZSBkaWZmZXJlbmNlcycpClBZRElBRwpweXRob24zIC0gIiR7Tk9STUFMSVpFRF9QQVRIU1tAXX0iIDw8J1BZJwppbXBvcnQgc3VicHJvY2VzcwppbXBvcnQgc3lzCgpmb3IgcmVsYXRpdmUgaW4gc3lzLmFyZ3ZbMTpdOgogICAgc3RhZ2VkID0gc3VicHJvY2Vzcy5jaGVja19vdXRwdXQoWydnaXQnLCAnc2hvdycsIGYnOntyZWxhdGl2ZX0nXSkKICAgIGlmIGInXHInIGluIHN0YWdlZDoKICAgICAgICByYWlzZSBTeXN0ZW1FeGl0KGYnbm9ybWFsaXplZCBzdGFnZWQgYmxvYiBzdGlsbCBjb250YWlucyBDUjoge3JlbGF0aXZlfScpClBZCg=='
+              'Z2l0IGFkZCAtLXJlbm9ybWFsaXplIC0tICIke05PUk1BTElaRURfUEFUSFNbQF19IgpnaXQgZGlmZiAtLXF1aWV0IHx8IGZhaWwgInVuc3RhZ2VkIGNoYW5nZXMgcmVtYWluIGFmdGVyIENSTEYgbm9ybWFsaXphdGlvbiIKcHl0aG9uMyAtICIkQkFTRV9TSEEiICIke05PUk1BTElaRURfUEFUSFNbQF19IiA8PCdQWU5PUk0nCmltcG9ydCBzdWJwcm9jZXNzCmltcG9ydCBzeXMKCmJhc2UgPSBzeXMuYXJndlsxXQpmb3IgcmVsYXRpdmUgaW4gc3lzLmFyZ3ZbMjpdOgogICAgYmFzZV9ibG9iID0gc3VicHJvY2Vzcy5jaGVja19vdXRwdXQoWydnaXQnLCAnc2hvdycsIGYne2Jhc2V9OntyZWxhdGl2ZX0nXSkKICAgIHN0YWdlZCA9IHN1YnByb2Nlc3MuY2hlY2tfb3V0cHV0KFsnZ2l0JywgJ3Nob3cnLCBmJzp7cmVsYXRpdmV9J10pCiAgICBleHBlY3RlZCA9IGJhc2VfYmxvYi5yZXBsYWNlKGInXHJcbicsIGInXG4nKQogICAgaWYgc3RhZ2VkICE9IGV4cGVjdGVkOgogICAgICAgIHJhaXNlIFN5c3RlbUV4aXQoCiAgICAgICAgICAgIGYnY2hlY2tvdXQgbm9ybWFsaXphdGlvbiBjaGFuZ2VkIGJ5dGVzIGJleW9uZCBDUkxGLXRvLUxGOiB7cmVsYXRpdmV9JwogICAgICAgICkKICAgIGlmIGInXHJcbicgaW4gc3RhZ2VkOgogICAgICAgIHJhaXNlIFN5c3RlbUV4aXQoZidub3JtYWxpemVkIHN0YWdlZCBibG9iIHN0aWxsIGNvbnRhaW5zIENSTEY6IHtyZWxhdGl2ZX0nKQpQWU5PUk0K'
           )
           block = base64.b64decode(block_b64).decode('utf-8')
-          if hashlib.sha256(block.encode('utf-8')).hexdigest() != 'e19d1bfde913c4b3a91516060f244cc3ebbd88c9ed66edf76a1c10418643dcdc':
-              raise SystemExit('diagnostic block digest mismatch')
+          if hashlib.sha256(block.encode('utf-8')).hexdigest() != '4f9ebf713d2f5181c67fe2cca567330eac31410064597e07153c3e6a9d0a03cf':
+              raise SystemExit('normalization proof block digest mismatch')
           start_marker = 'git add --renormalize -- "${NORMALIZED_PATHS[@]}"\n'
           end_marker = '\nphase "apply hash-bound sequence 39 patch"'
           start = source.find(start_marker)
@@ -107,9 +107,9 @@ jobs:
           Path(sys.argv[1]).write_text(source, encoding='utf-8')
           PYTRANSFORM
           observed=$(sha256sum "$RUNNER_TEMP/seq39-exact-apply.sh" | awk '{print $1}')
-          expected=43f7dacb93f5bebc1c780b92fe5471b12d8c6262a3fb0bcdc68d025b967aee63
+          expected=80329e0bd33f71df520e76b976639f97c5ba07aca12463f46bfafabaf5c7e1d0
           [[ "$observed" == "$expected" ]] || {
-            echo "::error::diagnostic script digest mismatch: expected=$expected observed=$observed"
+            echo "::error::runtime script digest mismatch: expected=$expected observed=$observed"
             exit 1
           }
           chmod 700 "$RUNNER_TEMP/seq39-exact-apply.sh"
