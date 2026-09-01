@@ -1,0 +1,217 @@
+name: seq40-workflow-trust-windows
+
+on:
+  push:
+    branches:
+      - automation/seq40-workflow-trust-windows
+    paths:
+      - '.github/workflows/seq40-workflow-trust-windows.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seq40-workflow-trust-windows
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+  PYTHONPYCACHEPREFIX: /tmp/cex-seq40-python-cache
+
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      candidate_sha: ${{ steps.candidate.outputs.sha }}
+    steps:
+      - name: Checkout sequence 40 branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Patch concrete Path classes without weakening fail-closed behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('scripts/check-workflow-trust.py')
+          text = path.read_text(encoding='utf-8')
+          old_pattern = re.compile(
+              r"mock\.patch\.object\(\s*Path\s*,\s*(['\"])is_symlink\1\s*,"
+              r"\s*return_value\s*=\s*True\s*\)",
+              flags=re.MULTILINE,
+          )
+          matches = list(old_pattern.finditer(text))
+          already_fixed = (
+              'type(descriptor_path)' in text
+              and 'candidate == descriptor_path' in text
+              and 'type(action_dir)' in text
+              and 'candidate == action_dir' in text
+          )
+          if not matches:
+              if not already_fixed:
+                  raise SystemExit(
+                      'workflow-trust symlink mock anchors drifted and no fixed form exists'
+                  )
+              print('sequence 40 concrete-path fix already present')
+              raise SystemExit(0)
+
+          replacements: list[tuple[int, int, str]] = []
+          seen: list[str] = []
+          for match in matches:
+              context = text[max(0, match.start() - 1800):match.start()]
+              ranked = sorted(
+                  ((context.rfind(name), name) for name in ('descriptor_path', 'action_dir')),
+                  reverse=True,
+              )
+              position, variable = ranked[0]
+              if position < 0:
+                  raise SystemExit(
+                      f'cannot bind concrete Path variable near byte {match.start()}'
+                  )
+              replacement = (
+                  'mock.patch.object(\n'
+                  f'            type({variable}),\n'
+                  '            "is_symlink",\n'
+                  f'            new=lambda candidate: candidate == {variable},\n'
+                  '        )'
+              )
+              replacements.append((match.start(), match.end(), replacement))
+              seen.append(variable)
+
+          if sorted(seen) != ['action_dir', 'descriptor_path']:
+              raise SystemExit(
+                  f'expected descriptor_path and action_dir symlink mocks, got {seen!r}'
+              )
+          for start, end, replacement in reversed(replacements):
+              text = text[:start] + replacement + text[end:]
+          path.write_text(text, encoding='utf-8')
+          PY
+
+          python3 -m py_compile \
+            scripts/check-workflow-trust.py \
+            scripts/check-workflow-trust-impl.py
+          git diff --check
+
+      - name: Commit script-only fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- scripts/check-workflow-trust.py; then
+            echo 'sequence 40 fix already committed'
+            exit 0
+          fi
+          git config user.name 'cex-sequence-40'
+          git config user.email 'cex-sequence-40@users.noreply.github.com'
+          git add -- scripts/check-workflow-trust.py
+          git commit -m 'fix(ci): use concrete Path classes in symlink self-tests'
+          git push origin HEAD:automation/seq40-workflow-trust-windows
+
+      - name: Resolve candidate commit
+        id: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin automation/seq40-workflow-trust-windows
+          sha=$(git rev-parse origin/automation/seq40-workflow-trust-windows)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "sequence40_candidate_sha=$sha"
+
+  linux-validation:
+    needs: apply-fix
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact patched commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.apply-fix.outputs.candidate_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Construct workflow-free candidate tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'cex-sequence-40-validator'
+          git config user.email 'cex-sequence-40-validator@users.noreply.github.com'
+          git rm -- .github/workflows/seq40-workflow-trust-windows.yml
+          git commit -m 'test(seq40): remove automation harness from candidate tree'
+          echo "sequence40_candidate_tree=$(git rev-parse HEAD^{tree})"
+
+      - name: Validate workflow trust and repository hygiene on Linux
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            scripts/check-workflow-trust.py \
+            scripts/check-workflow-trust-impl.py
+          python3 scripts/check-workflow-trust.py
+          python3 scripts/check-repository-integrity.py
+          python3 scripts/check-p0-release-candidate-hygiene.py
+          git diff --check
+          test -z "$(git status --porcelain)"
+
+  windows-validation:
+    needs: apply-fix
+    runs-on: windows-2025
+    permissions:
+      contents: read
+    env:
+      PYTHONPYCACHEPREFIX: D:\a\_temp\cex-seq40-python-cache
+    steps:
+      - name: Checkout exact patched commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.apply-fix.outputs.candidate_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Construct workflow-free candidate tree
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'cex-sequence-40-validator'
+          git config user.email 'cex-sequence-40-validator@users.noreply.github.com'
+          git rm -- .github/workflows/seq40-workflow-trust-windows.yml
+          git commit -m 'test(seq40): remove automation harness from candidate tree'
+          $tree = git rev-parse 'HEAD^{tree}'
+          Write-Host "sequence40_candidate_tree=$tree"
+
+      - name: Validate workflow trust and repository hygiene on Windows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m py_compile scripts/check-workflow-trust.py scripts/check-workflow-trust-impl.py
+          python scripts/check-workflow-trust.py
+          python scripts/check-repository-integrity.py
+          python scripts/check-p0-release-candidate-hygiene.py
+          git diff --check
+          $status = git status --porcelain
+          if ($status) {
+            Write-Error "candidate worktree is dirty:`n$status"
+          }
+
+  closure:
+    needs:
+      - apply-fix
+      - linux-validation
+      - windows-validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Record exact validated script commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "sequence40_validated_sha=${{ needs.apply-fix.outputs.candidate_sha }}"
+          echo 'sequence 40 Linux and Windows workflow-trust validation passed'
