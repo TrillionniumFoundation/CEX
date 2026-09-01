@@ -2,10 +2,14 @@
 """Byte-bound cross-platform adapter for the workflow trust implementation.
 
 The reviewed implementation is retained verbatim in
-``check-workflow-trust-impl.py``. This adapter applies one exact source
-correction before execution: the Windows no-symlink self-test must replace
-``Path.is_symlink`` as a real method via ``new=`` rather than install an
-unbound ``MagicMock`` ``side_effect``.
+``check-workflow-trust-impl.py``. This adapter applies three exact source
+corrections before execution so the no-symlink self-tests preserve identical
+fail-closed semantics on POSIX and Windows:
+
+* local descriptor and path-component mocks patch the concrete ``Path`` type;
+* the immutable-script fallback mock patches the concrete type; and
+* that fallback installs a real method via ``new=`` instead of an unbound
+  ``MagicMock`` ``side_effect``.
 """
 
 from __future__ import annotations
@@ -23,11 +27,58 @@ _SCRIPT_DIR = _THIS_FILE.parent
 _IMPL_PATH = _SCRIPT_DIR / "check-workflow-trust-impl.py"
 _EXPECTED_IMPL_GIT_BLOB = "a159b71f42083365b4c9c7d41966745d406c54fc"
 _EXPECTED_IMPL_SIZE = 40825
-_BROKEN_WINDOWS_MOCK = (
-    b'                side_effect=lambda candidate: candidate == symlink_path,\n'
-)
-_FIXED_WINDOWS_MOCK = (
-    b'                new=lambda candidate: candidate == symlink_path,\n'
+_SOURCE_REWRITES: tuple[tuple[bytes, bytes, str], ...] = (
+    (
+        (
+            b"            with mock.patch.object(\n"
+            b"                Path,\n"
+            b'                "is_symlink",\n'
+            b"                new=lambda candidate: candidate == descriptor_path,\n"
+            b"            ):\n"
+        ),
+        (
+            b"            with mock.patch.object(\n"
+            b"                type(descriptor_path),\n"
+            b'                "is_symlink",\n'
+            b"                new=lambda candidate: candidate == descriptor_path,\n"
+            b"            ):\n"
+        ),
+        "local descriptor concrete-path mock",
+    ),
+    (
+        (
+            b"            with mock.patch.object(\n"
+            b"                Path,\n"
+            b'                "is_symlink",\n'
+            b"                new=lambda candidate: candidate == action_dir,\n"
+            b"            ):\n"
+        ),
+        (
+            b"            with mock.patch.object(\n"
+            b"                type(action_dir),\n"
+            b'                "is_symlink",\n'
+            b"                new=lambda candidate: candidate == action_dir,\n"
+            b"            ):\n"
+        ),
+        "local path-component concrete-path mock",
+    ),
+    (
+        (
+            b"            with mock.patch.object(\n"
+            b"                Path,\n"
+            b'                "is_symlink",\n'
+            b"                side_effect=lambda candidate: candidate == symlink_path,\n"
+            b"            ):\n"
+        ),
+        (
+            b"            with mock.patch.object(\n"
+            b"                type(symlink_path),\n"
+            b'                "is_symlink",\n'
+            b"                new=lambda candidate: candidate == symlink_path,\n"
+            b"            ):\n"
+        ),
+        "immutable-script concrete-path mock",
+    ),
 )
 _ORIGINAL_MODULE_NAME = __name__
 
@@ -118,9 +169,12 @@ def _git_blob_sha(payload: bytes) -> str:
 _SOURCE = _read_stable_regular(_IMPL_PATH)
 if _git_blob_sha(_SOURCE) != _EXPECTED_IMPL_GIT_BLOB:
     raise SystemExit("workflow-trust implementation blob differs from the reviewed candidate")
-if _SOURCE.count(_BROKEN_WINDOWS_MOCK) != 1:
-    raise SystemExit("workflow-trust Windows mock correction point is missing or ambiguous")
-_SOURCE = _SOURCE.replace(_BROKEN_WINDOWS_MOCK, _FIXED_WINDOWS_MOCK, 1)
+for broken, fixed, label in _SOURCE_REWRITES:
+    if _SOURCE.count(broken) != 1:
+        raise SystemExit(f"workflow-trust correction point is missing or ambiguous: {label}")
+    if fixed in _SOURCE:
+        raise SystemExit(f"workflow-trust correction is already present: {label}")
+    _SOURCE = _SOURCE.replace(broken, fixed, 1)
 
 globals()["__name__"] = f"{_ORIGINAL_MODULE_NAME}.__impl__"
 try:
