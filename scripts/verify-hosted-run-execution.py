@@ -118,6 +118,7 @@ EXPECTED_JOBS = {
             "steps": {
                 "Checkout",
                 "Candidate tree hygiene",
+                "Provider terminal-success evidence contract",
                 "Apply fresh migration chain",
                 "Provider unknown-outcome reconciliation lifecycle",
             },

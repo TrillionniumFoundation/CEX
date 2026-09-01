@@ -410,7 +410,7 @@ def local_fixture(name: str, module: Any, source: dict[str, str]) -> dict[str, A
             "generated_at": "2026-08-30T00:00:00Z",
             "active_plan": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
             "active_addendum": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md",
-            "migration_head": "0087_add_term_exchange_receipt_event_history.sql",
+            "migration_head": "0088_enforce_provider_terminal_evidence_binding.sql",
             "production_authorization": "not_granted",
             "digests": integrity_digests,
             "documentation_check": {
@@ -418,7 +418,7 @@ def local_fixture(name: str, module: Any, source: dict[str, str]) -> dict[str, A
                 "status": "ok",
                 "active_plan": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
                 "active_addendum": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md",
-                "migration_head": "0087_add_term_exchange_receipt_event_history.sql",
+                "migration_head": "0088_enforce_provider_terminal_evidence_binding.sql",
                 "requirements": 18,
                 "repository_qualification_result": "PENDING_EXACT_SHA_HOSTED_EVIDENCE",
                 "repository_qualification_authority": "generated_candidate_manifest_only",

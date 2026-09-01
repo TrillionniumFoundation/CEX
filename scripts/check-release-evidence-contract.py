@@ -2743,7 +2743,7 @@ def validate_manifest(
         {"migration_head", "migration_sha256", "migration_chain_sha256"},
         "$.database",
     )
-    require(database.get("migration_head") == "0087_add_term_exchange_receipt_event_history.sql", "migration head is stale")
+    require(database.get("migration_head") == "0088_enforce_provider_terminal_evidence_binding.sql", "migration head is stale")
     canonical_sha256(database.get("migration_sha256"), "$.database.migration_sha256")
     canonical_sha256(database.get("migration_chain_sha256"), "$.database.migration_chain_sha256")
 

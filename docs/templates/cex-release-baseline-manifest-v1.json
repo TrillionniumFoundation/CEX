@@ -17,7 +17,7 @@
     "cargo_lock_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   },
   "database": {
-    "migration_head": "0087_add_term_exchange_receipt_event_history.sql",
+    "migration_head": "0088_enforce_provider_terminal_evidence_binding.sql",
     "migration_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "migration_chain_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   },

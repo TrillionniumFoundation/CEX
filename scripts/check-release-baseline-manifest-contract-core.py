@@ -17,7 +17,7 @@ QUALIFICATION_SCOPE = (
 )
 REPOSITORY = "TrillionniumFoundation/CEX"
 PROJECT_ID = "hepta-control-plane"
-ACTIVE_MIGRATION_HEAD = "0087_add_term_exchange_receipt_event_history.sql"
+ACTIVE_MIGRATION_HEAD = "0088_enforce_provider_terminal_evidence_binding.sql"
 ZERO_GIT_SHA = "0" * 40
 ZERO_SHA256 = "sha256:" + "0" * 64
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -428,7 +428,7 @@ def valid_candidate_fixture() -> dict[str, Any]:
         },
         "dependencies": {"cargo_lock_sha256": digest},
         "database": {
-            "migration_head": "0087_add_term_exchange_receipt_event_history.sql",
+            "migration_head": "0088_enforce_provider_terminal_evidence_binding.sql",
             "migration_sha256": digest,
             "migration_chain_sha256": digest,
         },

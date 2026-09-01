@@ -4,7 +4,7 @@
 
 - Status: active all-blocker closure candidate; **not production-ready**.
 - Supersedes: `CEX-DEVELOPMENT-PLAN-2026-08-28-v11.md` for the exact-money, durable-settlement, provider-dispatch and release-evidence workstream.
-- Candidate migration head: `0087_add_term_exchange_receipt_event_history.sql`.
+- Candidate migration head: `0088_enforce_provider_terminal_evidence_binding.sql`.
 - Default rollout posture: shadow or fail-closed; no production cutover is authorized by this document.
 - Acceptance rule: source presence, a static marker, a template manifest or an unexecuted script is not evidence. A gap closes only when the exact commit/tree has the required hosted execution evidence and the evidence is bound to the release candidate.
 
@@ -59,11 +59,17 @@ evidence and append-only controls. HTTP regression coverage uses `/v2/accounts` 
 
 ### Provider-dispatch authority and unknown outcomes
 
-Migrations `0078`, `0081`, `0082` and `0084` separate provider dispatch from Execution state
+Migrations `0078`, `0081`, `0082`, `0084` and `0088` separate provider dispatch from Execution state
 mutation, require exact authority, classify lease expiry after dispatch as an unknown outcome,
 require immutable reconciliation artifacts and permit requeue only after fresh
 confirmed-not-executed evidence plus acknowledgement. Migration `0084` keeps exact evidence replay
-side-effect-free after confirmed execution has already made the command terminal.
+side-effect-free after confirmed execution has already made the command terminal. Migration `0088`
+makes provider-command identity and terminal authority database invariants while preserving two
+non-interchangeable evidence paths: a live `claimed -> succeeded` transition must bind the upstream
+Ollama model, explicit `done=true`, non-empty output and canonical payload hash to the immutable
+target; a `reconcile_required/dead_letter -> succeeded` transition must bind the exact result and
+hash to the same-attempt append-only `confirmed_executed` artifact. Neither path may impersonate
+the other.
 
 ### Audit and release evidence
 
@@ -153,7 +159,15 @@ Required evidence:
 - confirmed execution closes the command exactly once and exact replay remains terminal-safe;
 - confirmed-not-executed evidence is required before requeue;
 - indeterminate evidence cannot authorize retry;
-- transition and reconciliation evidence are append-only.
+- transition and reconciliation evidence are append-only;
+- live provider-reported model identity equals the immutable provider reference;
+- live success requires explicit terminal/output/hash evidence from a claimed command;
+- reconciled success requires a same-attempt append-only `confirmed_executed` artifact whose
+  exact result payload and hash become the terminal command evidence;
+- a live envelope cannot authorize reconciliation and operator evidence cannot replace live
+  provider identity on the automatic worker path;
+- immutable provider-command fields and terminal evidence cannot be rewritten;
+- exact hosted job evidence proves the terminal-success static contract step executed.
 
 Closure gate: `.github/workflows/p0-provider-reconciliation-gate.yml` must execute the hosted
 PostgreSQL lifecycle on the exact candidate commit. Static SQL markers alone are not sufficient.
@@ -174,6 +188,7 @@ Required evidence:
 
 Before repository qualification:
 
+- a clean checkout is byte-clean under `.gitattributes`; LF-governed tracked blobs are normalized so checkout clean filters do not mutate candidate bytes;
 - temporary self-patch workflows, patch scripts and CI trigger files are absent;
 - the five authoritative workflows listen to `docs/release-evidence/p0-candidate-trigger.json`;
 - third-party Actions in those workflows and the candidate workflow are commit-pinned;

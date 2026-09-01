@@ -409,7 +409,8 @@ fn validate_provider_success_evidence(
     {
         return Err(ProviderSuccessEvidenceError {
             code: "provider_success_payload_identity_mismatch",
-            message: "provider success payload identity does not match the immutable dispatch command",
+            message:
+                "provider success payload identity does not match the immutable dispatch command",
         });
     }
 
@@ -435,15 +436,22 @@ fn validate_provider_success_evidence(
         }
     }
 
-    let model_is_present = payload
-        .get("model")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty());
-    if !model_is_present {
+    let Some(reported_model) = payload.get("model").and_then(Value::as_str) else {
         return Err(ProviderSuccessEvidenceError {
             code: "provider_success_model_missing",
             message: "provider success is missing a non-empty model identity",
+        });
+    };
+    if reported_model.trim().is_empty() {
+        return Err(ProviderSuccessEvidenceError {
+            code: "provider_success_model_missing",
+            message: "provider success is missing a non-empty model identity",
+        });
+    }
+    if reported_model != expected_provider_ref {
+        return Err(ProviderSuccessEvidenceError {
+            code: "provider_success_model_mismatch",
+            message: "provider-reported model does not match the immutable provider reference",
         });
     }
 
@@ -787,14 +795,16 @@ mod tests {
             validate_provider_success_evidence("ollama://model-v1", &output).unwrap_err();
         assert_eq!(incomplete.code, "provider_success_not_terminal");
 
-        output.result_payload.as_object_mut().unwrap().remove("done");
-        let missing =
-            validate_provider_success_evidence("ollama://model-v1", &output).unwrap_err();
+        output
+            .result_payload
+            .as_object_mut()
+            .unwrap()
+            .remove("done");
+        let missing = validate_provider_success_evidence("ollama://model-v1", &output).unwrap_err();
         assert_eq!(missing.code, "provider_success_done_missing");
 
         output.result_payload["done"] = json!("true");
-        let invalid =
-            validate_provider_success_evidence("ollama://model-v1", &output).unwrap_err();
+        let invalid = validate_provider_success_evidence("ollama://model-v1", &output).unwrap_err();
         assert_eq!(invalid.code, "provider_success_done_invalid");
     }
 
@@ -819,6 +829,15 @@ mod tests {
                 .unwrap_err()
                 .code,
             "provider_success_model_missing"
+        );
+
+        let mut mismatched_model = output.clone();
+        mismatched_model.result_payload["model"] = json!("other-model");
+        assert_eq!(
+            validate_provider_success_evidence("ollama://model-v1", &mismatched_model)
+                .unwrap_err()
+                .code,
+            "provider_success_model_mismatch"
         );
 
         let mut missing_output = output;

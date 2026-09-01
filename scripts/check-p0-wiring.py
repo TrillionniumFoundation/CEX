@@ -20,7 +20,7 @@ SHARED_TRIGGER = "docs/release-evidence/p0-candidate-trigger.json"
 # drift without retriggering the exact-tree workflows and is rejected by the
 # candidate-hygiene wrapper.
 QUALIFICATION_FREEZE = SHARED_TRIGGER
-MIGRATION_HEAD = "0087_add_term_exchange_receipt_event_history.sql"
+MIGRATION_HEAD = "0088_enforce_provider_terminal_evidence_binding.sql"
 AUTHORITATIVE_WORKFLOWS = (
     ".github/workflows/p0-migration-gate.yml",
     ".github/workflows/rust-service-gate.yml",
@@ -351,6 +351,23 @@ def verify_core() -> None:
         "cex_invocation_ledger_effect_request_v1",
         "cex_bind_invocation_ledger_effect_v1",
         "missing_effect_evidence",
+    )
+
+    require_text(
+        "migrations/0088_enforce_provider_terminal_evidence_binding.sql",
+        "cex_provider_target_ref_v1",
+        "cex_provider_result_sha256_v1",
+        "cex_validate_provider_live_terminal_result_v1",
+        "cex_validate_provider_reconciled_terminal_result_v1",
+        "cex_validate_provider_dispatch_binding_v1",
+        "cex_guard_provider_dispatch_command_contract_v2",
+        "cex_guard_provider_terminal_evidence_v1",
+    )
+    require_text(
+        "scripts/check-provider-success-evidence.py",
+        "provider_success_model_mismatch",
+        "remote model == immutable provider_ref",
+        "Provider terminal-success evidence contract",
     )
 
     require_text(

@@ -2,9 +2,7 @@
 mod service_client;
 
 use axum::middleware;
-use identity_service::{
-    build_router, harden_runtime_state, validate_runtime_backend, AppState,
-};
+use identity_service::{build_router, harden_runtime_state, validate_runtime_backend, AppState};
 use shared_config::{
     runtime_guard::{self, ServiceKind},
     service_auth::{self, ServiceAuthConfig},

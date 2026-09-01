@@ -341,7 +341,7 @@ jobs:
             echo
             echo "- Commit: \`$GITHUB_SHA\`"
             echo "- Tree: \`$CANDIDATE_TREE\`"
-            echo "- Migration head: \`0087_add_term_exchange_receipt_event_history.sql\`"
+            echo "- Migration head: \`0088_enforce_provider_terminal_evidence_binding.sql\`"
             echo '- Scope: repository exact-money control plane + TRNM receipt recovery + Hepta PostgreSQL recovery + document integrity'
             echo '- Hosted evidence: exact branch/SHA/run-attempt, real runner allocation and non-empty successful jobs/steps verified'
             echo '- Development authority: active v12 plan plus implementation addendum, machine-validated'

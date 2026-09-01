@@ -37,7 +37,7 @@ Failure is terminal for that candidate; no later successful test may override it
 
 Against fresh PostgreSQL 16:
 
-1. apply the complete numbered migration chain through `0087_add_term_exchange_receipt_event_history.sql`;
+1. apply the complete numbered migration chain through `0088_enforce_provider_terminal_evidence_binding.sql`;
 2. when the TRNM economy settlement lane is in scope, apply the service-owned bootstrap at `services/trnm-economy-service/migrations/settlement_v1.sql`; this migration is intentionally outside the numbered chain;
 3. execute representative existing-row upgrade paths;
 4. verify exact account opening, append-only effects, replay/collision and insufficient-funds recovery;

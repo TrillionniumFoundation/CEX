@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CORE = ROOT / "scripts/check-release-baseline-manifest-core.py"
 STRICT = ROOT / "scripts/check-release-baseline-manifest-contract.py"
 SCHEMA = ROOT / "docs/schemas/cex-release-baseline-manifest-v1.schema.json"
-ACTIVE_MIGRATION_HEAD = "0087_add_term_exchange_receipt_event_history.sql"
+ACTIVE_MIGRATION_HEAD = "0088_enforce_provider_terminal_evidence_binding.sql"
 CANONICAL_BRANCH_PATTERN = (
     r"^(?!/)(?!.*//)(?!.*\.\.)(?!.*(?:^|/)\.(?:/|$))"
     r"(?!.*(?:^|/)\.\.(?:/|$))(?!.*@\{)(?!refs/)(?!HEAD$)(?!.*/$)"

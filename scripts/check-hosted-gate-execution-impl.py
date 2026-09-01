@@ -111,6 +111,7 @@ REQUIRED_GATES: dict[str, dict[str, dict[str, Any]]] = {
             "steps": {
                 "Checkout",
                 "Candidate tree hygiene",
+                "Provider terminal-success evidence contract",
                 "Apply fresh migration chain",
                 "Provider unknown-outcome reconciliation lifecycle",
             },

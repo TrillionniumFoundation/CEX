@@ -28,7 +28,7 @@ TRIGGER_PATH = "docs/release-evidence/p0-candidate-trigger.json"
 ACTIVE_PLAN = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"
 ACTIVE_ADDENDUM = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md"
 DOC_CHECKER = "scripts/check-development-docs.py"
-EXPECTED_MIGRATION_HEAD = "0087_add_term_exchange_receipt_event_history.sql"
+EXPECTED_MIGRATION_HEAD = "0088_enforce_provider_terminal_evidence_binding.sql"
 TEMPORARY_EXACT_PATHS = (
     "scripts/apply-closure-fixes.py",
     "scripts/patch-0082-provider-view.py",
@@ -238,6 +238,7 @@ for marker in (
     "Definition of repository closure",
     "External gates that repository edits cannot self-certify",
     "not production-ready",
+    "clean checkout is byte-clean under `.gitattributes`",
     f"Candidate migration head: `{EXPECTED_MIGRATION_HEAD}`.",
 ):
     if marker not in plan:

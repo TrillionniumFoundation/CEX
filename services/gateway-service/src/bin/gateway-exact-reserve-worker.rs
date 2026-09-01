@@ -1,8 +1,6 @@
 use reqwest::{header::RETRY_AFTER, redirect::Policy, Client, StatusCode};
 use serde_json::Value;
-use shared_config::{
-    load_ledger_scoped_admin_tokens, runtime_guard, select_ledger_manage_token,
-};
+use shared_config::{load_ledger_scoped_admin_tokens, runtime_guard, select_ledger_manage_token};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use std::{env, error::Error, fmt, time::Duration};
 use tokio::time::{sleep, timeout};
@@ -452,10 +450,7 @@ async fn classify_response(response: reqwest::Response) -> PersistedOutcome {
     }
 }
 
-fn parse_success_replayed(
-    body: &Value,
-    status: StatusCode,
-) -> Result<bool, PersistedOutcome> {
+fn parse_success_replayed(body: &Value, status: StatusCode) -> Result<bool, PersistedOutcome> {
     match body.get("replayed") {
         Some(Value::Bool(replayed)) => Ok(*replayed),
         Some(_) => Err(PersistedOutcome::reconcile(
@@ -788,11 +783,9 @@ mod tests {
 
     #[test]
     fn ledger_success_non_boolean_replayed_requires_reconciliation() {
-        let outcome = parse_success_replayed(
-            &serde_json::json!({"replayed": "false"}),
-            StatusCode::OK,
-        )
-        .expect_err("non-boolean replay evidence must not be coerced");
+        let outcome =
+            parse_success_replayed(&serde_json::json!({"replayed": "false"}), StatusCode::OK)
+                .expect_err("non-boolean replay evidence must not be coerced");
         assert_eq!(outcome.outcome, "reconcile_required");
         assert_eq!(
             outcome.error_code.as_deref(),
@@ -804,15 +797,13 @@ mod tests {
 
     #[test]
     fn ledger_success_boolean_replayed_is_preserved_exactly() {
-        assert!(parse_success_replayed(
-            &serde_json::json!({"replayed": true}),
-            StatusCode::OK
-        )
-        .expect("boolean replay evidence must be accepted"));
-        assert!(!parse_success_replayed(
-            &serde_json::json!({"replayed": false}),
-            StatusCode::OK
-        )
-        .expect("boolean replay evidence must be accepted"));
+        assert!(
+            parse_success_replayed(&serde_json::json!({"replayed": true}), StatusCode::OK)
+                .expect("boolean replay evidence must be accepted")
+        );
+        assert!(
+            !parse_success_replayed(&serde_json::json!({"replayed": false}), StatusCode::OK)
+                .expect("boolean replay evidence must be accepted")
+        );
     }
 }

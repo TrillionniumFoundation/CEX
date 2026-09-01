@@ -12,6 +12,7 @@ on:
       - 'migrations/0085_harden_term_exchange_receipt_projections.sql'
       - 'migrations/0086_add_trnm_native_receipt_evidence.sql'
       - 'migrations/0087_add_term_exchange_receipt_event_history.sql'
+      - 'migrations/0088_enforce_provider_terminal_evidence_binding.sql'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'crates/**'

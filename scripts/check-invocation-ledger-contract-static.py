@@ -64,7 +64,7 @@ require(
     # record and active head instead of requiring a stale filename literal in
     # the JSON envelope.
     "migration-and-lifecycle-matrix",
-    "0087_add_term_exchange_receipt_event_history.sql",
+    "0088_enforce_provider_terminal_evidence_binding.sql",
 )
 
 print(json.dumps({

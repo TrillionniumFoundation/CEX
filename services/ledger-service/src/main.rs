@@ -20,7 +20,8 @@ fn main() {
 
     // SAFETY: this is the first startup action, before tracing, Tokio, or any
     // application worker thread is initialized.
-    let prepared = match unsafe { runtime_guard::prepare_process_environment(ServiceKind::Ledger) } {
+    let prepared = match unsafe { runtime_guard::prepare_process_environment(ServiceKind::Ledger) }
+    {
         Ok(prepared) => prepared,
         Err(error) => {
             eprintln!("ledger-service startup rejected: {error}");

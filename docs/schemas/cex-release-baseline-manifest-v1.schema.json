@@ -101,7 +101,7 @@
       ],
       "properties": {
         "migration_head": {
-          "const": "0087_add_term_exchange_receipt_event_history.sql"
+          "const": "0088_enforce_provider_terminal_evidence_binding.sql"
         },
         "migration_sha256": {
           "$ref": "#/$defs/sha256"

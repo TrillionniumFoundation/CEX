@@ -128,16 +128,13 @@ pub unsafe fn prepare_process_environment(
 ///
 /// The same pre-runtime, single-threaded contract as
 /// `prepare_process_environment` applies.
-pub unsafe fn canonicalize_runtime_profile_environment(
-) -> Result<RuntimeProfile, StartupError> {
+pub unsafe fn canonicalize_runtime_profile_environment() -> Result<RuntimeProfile, StartupError> {
     // SAFETY: the caller accepts and must uphold the pre-runtime contract above.
     unsafe { implementation::canonicalize_runtime_profile_environment() }
 }
 
 /// Complete the database readiness proof without mutating process environment.
-pub async fn enforce_prepared(
-    prepared: PreparedStartup,
-) -> Result<StartupReport, StartupError> {
+pub async fn enforce_prepared(prepared: PreparedStartup) -> Result<StartupReport, StartupError> {
     implementation::enforce_prepared(prepared.0).await
 }
 

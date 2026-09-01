@@ -58,8 +58,15 @@ begin
             '84000000-0000-4000-8000-000000000001',
             '84000000-0000-4000-8000-000000000701',
             'ollama://authority-probe',
-            'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-            'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            'sha256:' || encode(digest('authority probe', 'sha256'), 'hex'),
+            public.cex_provider_dispatch_fingerprint_v1(
+                '84000000-0000-4000-8000-000000000901',
+                '84000000-0000-4000-8000-000000000801',
+                '84000000-0000-4000-8000-000000000001',
+                '84000000-0000-4000-8000-000000000701',
+                'ollama://authority-probe',
+                'sha256:' || encode(digest('authority probe', 'sha256'), 'hex')
+            ),
             2
         );
     exception
@@ -314,16 +321,130 @@ declare
     first_result jsonb;
     replay_result jsonb;
     reconciliation_audit_count bigint;
+    worker_mismatch_rejected boolean := false;
+    live_hash_mismatch_rejected boolean := false;
+    reconciliation_authority_rejected boolean := false;
+    terminal_mutation_rejected boolean := false;
+    valid_live_result_payload jsonb := '{
+        "provider":"ollama",
+        "provider_ref":"confirmed-executed",
+        "model":"confirmed-executed",
+        "output_text":"confirmed-live-result",
+        "done":true
+    }'::jsonb;
+    valid_live_result_sha256 text;
 begin
+    valid_live_result_sha256 := public.cex_provider_result_sha256_v1(
+        valid_live_result_payload
+    );
     select * into command_row
       from public.cex_claim_provider_dispatch_v1('provider-worker-b',1,10);
     if command_row.command_id is distinct from '84000000-0000-4000-8000-000000000011' then
         raise exception 'confirmed-executed provider command claim failed';
     end if;
+
+    -- Bypassing Rust and invoking the worker database function directly must
+    -- not admit a model identity different from the immutable provider target.
+    begin
+        perform public.cex_finish_provider_dispatch_v1(
+            command_row.command_id,
+            'provider-worker-b',
+            'succeeded',
+            '{
+                "provider":"ollama",
+                "provider_ref":"confirmed-executed",
+                "model":"wrong-model",
+                "output_text":"wrong-model-result",
+                "done":true
+            }'::jsonb,
+            200,
+            null,
+            null,
+            null
+        );
+    exception when others then
+        if position(
+            'live provider result model does not match immutable target'
+            in sqlerrm
+        ) = 0 then
+            raise;
+        end if;
+        worker_mismatch_rejected := true;
+    end;
+    if not worker_mismatch_rejected then
+        raise exception 'worker success model mismatch bypass was not rejected';
+    end if;
+
+    -- Even a correctly bound live envelope cannot carry an unrelated result
+    -- hash through a direct table write.
+    begin
+        update public.cex_provider_dispatch_commands_v1
+           set status='succeeded',
+               claimed_by=null,
+               lease_expires_at=null,
+               result_payload=valid_live_result_payload,
+               result_sha256='sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+               completed_at=now(),
+               updated_at=now()
+         where command_id=command_row.command_id;
+    exception when others then
+        if position(
+            'provider terminal result hash does not match canonical JSONB payload'
+            in sqlerrm
+        ) = 0 then
+            raise;
+        end if;
+        live_hash_mismatch_rejected := true;
+    end;
+    if not live_hash_mismatch_rejected then
+        raise exception 'direct live success hash mismatch bypass was not rejected';
+    end if;
+
+    select * into command_row
+      from public.cex_provider_dispatch_commands_v1
+     where command_id=command_row.command_id;
+    if command_row.status <> 'claimed'
+       or command_row.result_payload is not null
+       or command_row.result_sha256 is not null then
+        raise exception 'rejected live success mutated provider command state';
+    end if;
+
     update public.cex_provider_dispatch_commands_v1
        set lease_expires_at=now()-interval '1 second'
      where command_id=command_row.command_id;
     perform public.cex_reconcile_expired_provider_claims_v1();
+
+    -- A live-looking envelope cannot authorize a reconciliation transition.
+    -- reconcile_required/dead_letter success needs a same-attempt immutable
+    -- confirmed-executed evidence row; the two authority models cannot
+    -- substitute for each other.
+    begin
+        update public.cex_provider_dispatch_commands_v1
+           set status='succeeded',
+               result_payload=valid_live_result_payload,
+               result_sha256=valid_live_result_sha256,
+               completed_at=now(),
+               updated_at=now()
+         where command_id=command_row.command_id;
+    exception when others then
+        if position(
+            'reconciled provider success requires same-attempt confirmed-executed evidence'
+            in sqlerrm
+        ) = 0 then
+            raise;
+        end if;
+        reconciliation_authority_rejected := true;
+    end;
+    if not reconciliation_authority_rejected then
+        raise exception 'reconciliation success without same-attempt evidence was not rejected';
+    end if;
+    if exists (
+        select 1
+          from public.cex_provider_reconciliation_evidence_v1
+         where command_id=command_row.command_id
+    ) then
+        raise exception 'rejected direct reconciliation success fabricated evidence';
+    end if;
 
     first_result := public.cex_record_provider_reconciliation_v1(
         command_row.command_id,
@@ -363,6 +484,27 @@ begin
            and execution_id='84000000-0000-4000-8000-000000000911'
     ) then
         raise exception 'confirmed provider execution did not close Execution/Invocation';
+    end if;
+
+    begin
+        update public.cex_provider_dispatch_commands_v1
+           set result_payload=jsonb_set(
+                   result_payload,
+                   '{answer}',
+                   '"tampered"'::jsonb
+               ),
+               result_sha256='sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+               updated_at=now()
+         where command_id=command_row.command_id;
+    exception when others then
+        if position('terminal provider dispatch command is immutable' in sqlerrm) = 0
+           and position('terminal provider command evidence is immutable' in sqlerrm) = 0 then
+            raise;
+        end if;
+        terminal_mutation_rejected := true;
+    end;
+    if not terminal_mutation_rejected then
+        raise exception 'terminal provider result mutation was not rejected';
     end if;
 
     select count(*)::bigint into reconciliation_audit_count

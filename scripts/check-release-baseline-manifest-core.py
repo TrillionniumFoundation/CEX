@@ -16,7 +16,7 @@ RELEASE_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 MIGRATION_RE = re.compile(r"^[0-9]{4}_[a-z0-9][a-z0-9._-]*\.sql$")
 ZERO_GIT_SHA = "0" * 40
 ZERO_SHA256 = "sha256:" + "0" * 64
-ACTIVE_MIGRATION_HEAD = "0087_add_term_exchange_receipt_event_history.sql"
+ACTIVE_MIGRATION_HEAD = "0088_enforce_provider_terminal_evidence_binding.sql"
 QUALIFICATION_SCOPE = (
     "repository-exact-money-control-plane-plus-hepta-durability-doc-integrity-full-suite-lint-receipt-recovery-and-trnm-production-config-hardening"
 )
