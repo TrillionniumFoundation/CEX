@@ -1,0 +1,172 @@
+name: seq40-failure-log-freeze-v4f
+
+on:
+  push:
+    branches:
+      - automation/seq40-workflow-trust-windows
+    paths:
+      - '.github/workflows/seq40-failure-log-freeze-v4f.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: seq40-failure-log-freeze-v4f
+  cancel-in-progress: false
+
+jobs:
+  freeze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout automation control branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Wait for persistent hosted retry diagnostic
+        id: diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=false
+          for _ in $(seq 1 720); do
+            if git ls-remote --exit-code origin \
+              refs/heads/automation/seq40-hosted-gates-retry-diagnostic >/tmp/seq40-retry.ref 2>/dev/null; then
+              found=true
+              break
+            fi
+            if git ls-remote --exit-code origin \
+              refs/heads/automation/seq40-hosted-gates-passed >/dev/null 2>&1; then
+              echo 'hosted gates passed; failure-log freeze is not required'
+              exit 0
+            fi
+            sleep 10
+          done
+          if [[ "$found" != true ]]; then
+            echo 'no persistent retry diagnostic appeared'
+            exit 0
+          fi
+          sha=$(awk '{print $1}' /tmp/seq40-retry.ref)
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout retry diagnostic
+        if: steps.diagnostic.outputs.sha != ''
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.diagnostic.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Download and redact persistent failure logs
+        if: steps.diagnostic.outputs.sha != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import io
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import urllib.request
+          import zipfile
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+          result = json.loads(
+              Path(
+                  'docs/release-evidence/sequence40/hosted-gate-retry-v1.json'
+              ).read_text(encoding='utf-8')
+          )
+          headers = {
+              'Accept': 'application/vnd.github+json',
+              'Authorization': f'Bearer {token}',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'cex-sequence-40-failure-log-freeze',
+          }
+          secret = re.compile(
+              r'(?i)(token|secret|password|authorization|database_url)'
+              r'(\s*[:=]\s*)(\S+)'
+          )
+          interesting = re.compile(
+              r'(?i)(error|failed|failure|panic|exception|traceback|not found|'
+              r'mismatch|drift|dirty|symlink|windows|powershell|rustc|clippy|cargo)'
+          )
+          records = []
+          run_ids = sorted(
+              {
+                  int(run['id'])
+                  for path, run in result[
+                      'latest_exact_head_runs_after_retry'
+                  ].items()
+                  if run.get('conclusion') != 'success'
+              }
+          )
+          for run_id in run_ids:
+              request = urllib.request.Request(
+                  f'https://api.github.com/repos/{repository}/actions/runs/{run_id}/logs',
+                  headers=headers,
+              )
+              with urllib.request.urlopen(request, timeout=120) as response:
+                  archive = response.read()
+              with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
+                  for member in sorted(zipped.namelist()):
+                      if member.endswith('/'):
+                          continue
+                      text = zipped.read(member).decode('utf-8', errors='replace')
+                      lines = text.splitlines()
+                      selected = []
+                      for index, line in enumerate(lines):
+                          if not interesting.search(line):
+                              continue
+                          start = max(0, index - 3)
+                          end = min(len(lines), index + 5)
+                          for context_line in lines[start:end]:
+                              redacted = secret.sub(r'\1\2<redacted>', context_line)
+                              if redacted not in selected:
+                                  selected.append(redacted[:4000])
+                          if len(selected) >= 500:
+                              break
+                      if selected:
+                          records.append(
+                              {
+                                  'run_id': run_id,
+                                  'log_member': member,
+                                  'selected_redacted_lines': selected,
+                              }
+                          )
+          document = {
+              'schema_version': 'cex.sequence40.hosted-failure-log-freeze.v1',
+              'candidate_sha': result['candidate_sha'],
+              'production_authorization': 'not_granted',
+              'persistent_failed_workflow_paths': result['failed_workflow_paths'],
+              'redacted_log_records': records,
+          }
+          out = Path(
+              'docs/release-evidence/sequence40/hosted-failure-logs-v1.json'
+          )
+          out.write_text(
+              json.dumps(document, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          PY
+
+      - name: Publish persistent failure log evidence
+        if: steps.diagnostic.outputs.sha != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'cex-sequence-40-diagnostic'
+          git config user.email 'cex-sequence-40-diagnostic@users.noreply.github.com'
+          git add -- docs/release-evidence/sequence40/hosted-failure-logs-v1.json
+          git commit -m 'docs(evidence): freeze sequence 40 persistent hosted failure logs'
+          git push --force origin HEAD:automation/seq40-hosted-failure-logs
