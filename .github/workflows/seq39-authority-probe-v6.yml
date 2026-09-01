@@ -1,0 +1,105 @@
+name: seq39-authority-probe-v6
+
+on:
+  push:
+    branches:
+      - automation/seq39-exact-apply
+    paths:
+      - '.github/workflows/seq39-authority-probe-v6.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seq39-authority-probe-v6
+  cancel-in-progress: false
+
+env:
+  DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/cex_ci
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: '0'
+  PYTHONDONTWRITEBYTECODE: '1'
+  PYTHONPYCACHEPREFIX: /tmp/cex-seq39-python-cache
+
+jobs:
+  construct-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cex
+          POSTGRES_PASSWORD: cex_ci_password
+          POSTGRES_DB: cex_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cex -d cex_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout exact automation payload
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Install Rust stable with format and lint
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Execute deduplicated authority-fixture validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow=.github/workflows/seq39-authority-probe-v5.yml
+          [[ "$(git hash-object "$workflow")" == \
+             "bf020ae4d1be742c487c2bafcdddefbadeb7f71f" ]] || {
+            echo "::error::sequence 39 v5 workflow blob drifted"
+            exit 1
+          }
+
+          python3 - <<'PYWRAP'
+          from pathlib import Path
+
+          lines = Path(
+              '.github/workflows/seq39-authority-probe-v5.yml'
+          ).read_text(encoding='utf-8').splitlines()
+          marker = '        run: |'
+          indices = [index for index, line in enumerate(lines) if line == marker]
+          if len(indices) != 1:
+              raise SystemExit(f'expected one v5 run block, got {len(indices)}')
+          block = lines[indices[0] + 1:]
+          if not block or any(
+              line and not line.startswith('          ') for line in block
+          ):
+              raise SystemExit('v5 run block indentation drifted')
+          extracted = '\n'.join(
+              line[10:] if line.startswith('          ') else '' for line in block
+          ) + '\n'
+
+          old_path_block = (
+              'cGF0aF9lbnRyaWVzID0gKAogICAgIiAgICAnY3JhdGVzL3NoYXJlZC1jb25maWcvc3JjL3J1bnRpbWVfZ3VhcmQucnMnLFxcbiIsCiAgICAiICAgICdzY3JpcHRzL2NoZWNrLWludm9jYXRpb24tbGVkZ2VyLWNvbnRyYWN0LXN0YXRpYy5weScsXFxuIiwKICAgICIgICAgJ3NlcnZpY2VzL2dhdGV3YXktc2VydmljZS9zcmMvYmluL2dhdGV3YXktZXhhY3QtcmVzZXJ2ZS13b3JrZXIucnMnLFxcbiIsCiAgICAiICAgICdzZXJ2aWNlcy9pZGVudGl0eS1zZXJ2aWNlL3NyYy9tYWluLnJzJyxcXG4iLAogICAgIiAgICAnc2VydmljZXMvbGVkZ2VyLXNlcnZpY2Uvc3JjL21haW4ucnMnLFxcbiIsCikK'
+          )
+          duplicate_path_block = (
+              'cGF0aF9lbnRyaWVzID0gKAogICAgIiAgICAnY3JhdGVzL3NoYXJlZC1jb25maWcvc3JjL3J1bnRpbWVfZ3VhcmQucnMnLFxcbiIsCiAgICAiICAgICdzY3JpcHRzL2NoZWNrLWludm9jYXRpb24tbGVkZ2VyLWNvbnRyYWN0LXN0YXRpYy5weScsXFxuIiwKICAgICIgICAgJ3NjcmlwdHMvY2hlY2stcHJvdmlkZXItcmVjb25jaWxpYXRpb24tcG9zdGdyZXMuc2gnLFxcbiIsCiAgICAiICAgICdzZXJ2aWNlcy9nYXRld2F5LXNlcnZpY2Uvc3JjL2Jpbi9nYXRld2F5LWV4YWN0LXJlc2VydmUtd29ya2VyLnJzJyxcXG4iLAogICAgIiAgICAnc2VydmljZXMvaWRlbnRpdHktc2VydmljZS9zcmMvbWFpbi5ycycsXFxuIiwKICAgICIgICAgJ3NlcnZpY2VzL2xlZGdlci1zZXJ2aWNlL3NyYy9tYWluLnJzJyxcXG4iLAopCg=='
+          )
+          if extracted.count(duplicate_path_block) != 1:
+              raise SystemExit('v5 duplicate path-block anchor drifted')
+          extracted = extracted.replace(
+              duplicate_path_block,
+              old_path_block,
+              1,
+          )
+          Path('/tmp/seq39-authority-probe-v6.sh').write_text(
+              extracted,
+              encoding='utf-8',
+          )
+          PYWRAP
+
+          bash /tmp/seq39-authority-probe-v6.sh
