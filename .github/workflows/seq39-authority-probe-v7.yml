@@ -1,0 +1,132 @@
+name: seq39-authority-probe-v7
+
+on:
+  push:
+    branches:
+      - automation/seq39-exact-apply
+    paths:
+      - '.github/workflows/seq39-authority-probe-v7.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seq39-authority-probe-v7
+  cancel-in-progress: false
+
+env:
+  DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/cex_ci
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: '0'
+  PYTHONDONTWRITEBYTECODE: '1'
+  PYTHONPYCACHEPREFIX: /tmp/cex-seq39-python-cache
+
+jobs:
+  construct-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cex
+          POSTGRES_PASSWORD: cex_ci_password
+          POSTGRES_DB: cex_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cex -d cex_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout exact automation payload
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Install Rust stable with format and lint
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Execute fixed authority-fixture candidate validation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          manifest=.github/workflows/seq39-manifest-fixture-repair.yml
+          validator=.github/workflows/seq39-rustfmt-candidate-v4.yml
+          [[ "$(git hash-object "$manifest")" == \
+             "17546edf6aa6c859e0dbef9955aa1c187e5c2ed4" ]] || {
+            echo "::error::sequence 39 manifest repair blob drifted"
+            exit 1
+          }
+          [[ "$(git hash-object "$validator")" == \
+             "b1830ae0fed8a20e97e130d739a6b3ed20896998" ]] || {
+            echo "::error::sequence 39 v4 validator blob drifted"
+            exit 1
+          }
+
+          python3 - <<'PYWRAP'
+          from pathlib import Path
+          import re
+          import subprocess
+
+          manifest_path = Path('.github/workflows/seq39-manifest-fixture-repair.yml')
+          manifest_text = manifest_path.read_text(encoding='utf-8')
+          match = re.search(
+              r"^          repair_b64 = '([A-Za-z0-9+/=]+)'$",
+              manifest_text,
+              flags=re.MULTILINE,
+          )
+          if match is None:
+              raise SystemExit('sequence 39 repair payload marker drifted')
+          known_good = 'cGhhc2UgInJlcGFpciBzZXF1ZW5jZSAzOSBzdGFsZSBtaWdyYXRpb24taGVhZCBhbmQgUG9zdGdyZVNRTCBmaXh0dXJlcyIKcHl0aG9uMyA8PCdQWVJFUEFJUicKZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCgpyZXBsYWNlbWVudHMgPSBbCiAgICAoCiAgICAgICAgUGF0aCgnc2NyaXB0cy9jaGVjay1yZWxlYXNlLWJhc2VsaW5lLW1hbmlmZXN0LWNvbnRyYWN0LWNvcmUucHknKSwKICAgICAgICAoCiAgICAgICAgICAgICcgICAgICAgICJkYXRhYmFzZSI6IHtcbicKICAgICAgICAgICAgJyAgICAgICAgICAgICJtaWdyYXRpb25faGVhZCI6ICcKICAgICAgICAgICAgJyIwMDg3X2FkZF90ZXJtX2V4Y2hhbmdlX3JlY2VpcHRfZXZlbnRfaGlzdG9yeS5zcWwiLFxuJwogICAgICAgICAgICAnICAgICAgICAgICAgIm1pZ3JhdGlvbl9zaGEyNTYiOiBkaWdlc3QsXG4nCiAgICAgICAgICAgICcgICAgICAgICAgICAibWlncmF0aW9uX2NoYWluX3NoYTI1NiI6IGRpZ2VzdCxcbicKICAgICAgICAgICAgJyAgICAgICAgfSwnCiAgICAgICAgKSwKICAgICAgICAoCiAgICAgICAgICAgICcgICAgICAgICJkYXRhYmFzZSI6IHtcbicKICAgICAgICAgICAgJyAgICAgICAgICAgICJtaWdyYXRpb25faGVhZCI6ICcKICAgICAgICAgICAgJyIwMDg4X2VuZm9yY2VfcHJvdmlkZXJfdGVybWluYWxfZXZpZGVuY2VfYmluZGluZy5zcWwiLFxuJwogICAgICAgICAgICAnICAgICAgICAgICAgIm1pZ3JhdGlvbl9zaGEyNTYiOiBkaWdlc3QsXG4nCiAgICAgICAgICAgICcgICAgICAgICAgICAibWlncmF0aW9uX2NoYWluX3NoYTI1NiI6IGRpZ2VzdCxcbicKICAgICAgICAgICAgJyAgICAgICAgfSwnCiAgICAgICAgKSwKICAgICAgICAnbWFuaWZlc3QgdmFsaWQtY2FuZGlkYXRlIGZpeHR1cmUnLAogICAgKSwKICAgICgKICAgICAgICBQYXRoKCdzY3JpcHRzL2NoZWNrLWludm9jYXRpb24tbGVkZ2VyLWNvbnRyYWN0LXN0YXRpYy5weScpLAogICAgICAgICciMDA4N19hZGRfdGVybV9leGNoYW5nZV9yZWNlaXB0X2V2ZW50X2hpc3Rvcnkuc3FsIicsCiAgICAgICAgJyIwMDg4X2VuZm9yY2VfcHJvdmlkZXJfdGVybWluYWxfZXZpZGVuY2VfYmluZGluZy5zcWwiJywKICAgICAgICAnaW52b2NhdGlvbi1sZWRnZXIgYWN0aXZlIG1pZ3JhdGlvbiBtYXJrZXInLAogICAgKSwKICAgICgKICAgICAgICBQYXRoKCdtaWdyYXRpb25zLzAwODhfZW5mb3JjZV9wcm92aWRlcl90ZXJtaW5hbF9ldmlkZW5jZV9iaW5kaW5nLnNxbCcpLAogICAgICAgICgKICAgICAgICAgICAgIiAgICAgICBvciBwX3Byb3ZpZGVyX3RhcmdldCAhfiAiCiAgICAgICAgICAgICInXm9sbGFtYTovL1teWzpzcGFjZTpdWzpjbnRybDpdXXsxLDUwM30kJyB0aGVuIgogICAgICAgICksCiAgICAgICAgKAogICAgICAgICAgICAiICAgICAgIG9yIGxlbmd0aChwX3Byb3ZpZGVyX3RhcmdldCkgbm90IGJldHdlZW4gIgogICAgICAgICAgICAibGVuZ3RoKCdvbGxhbWE6Ly8nKSArIDFcbiIKICAgICAgICAgICAgIiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIGFuZCAiCiAgICAgICAgICAgICJsZW5ndGgoJ29sbGFtYTovLycpICsgNTAzXG4iCiAgICAgICAgICAgICIgICAgICAgb3IgcF9wcm92aWRlcl90YXJnZXQgIX4gIgogICAgICAgICAgICAiJ15vbGxhbWE6Ly9bXls6c3BhY2U6XVs6Y250cmw6XV0rJCcgdGhlbiIKICAgICAgICApLAogICAgICAgICdwcm92aWRlciB0YXJnZXQgUG9zdGdyZVNRTCByZWdleCBib3VuZCcsCiAgICApLAogICAgKAogICAgICAgIFBhdGgoJ3NjcmlwdHMvY2hlY2stcHJvdmlkZXItcmVjb25jaWxpYXRpb24tcG9zdGdyZXMuc2gnKSwKICAgICAgICAoCiAgICAgICAgICAgICIgICAgICAgICAgICAnc2hhMjU2OmFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEnLFxuIgogICAgICAgICAgICAiICAgICAgICAgICAgJ3NoYTI1NjpiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiJyxcbiIKICAgICAgICAgICAgIiAgICAgICAgICAgIDIiCiAgICAgICAgKSwKICAgICAgICAoCiAgICAgICAgICAgICIgICAgICAgICAgICAnc2hhMjU2OicgfHwgZW5jb2RlKGRpZ2VzdCgnYXV0aG9yaXR5IHByb2JlJywgJ3NoYTI1NicpLCAnaGV4JyksXG4iCiAgICAgICAgICAgICIgICAgICAgICAgICBwdWJsaWMuY2V4X3Byb3ZpZGVyX2Rpc3BhdGNoX2ZpbmdlcnByaW50X3YxKFxuIgogICAgICAgICAgICAiICAgICAgICAgICAgICAgICc4NDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDA5MDEnLFxuIgogICAgICAgICAgICAiICAgICAgICAgICAgICAgICc4NDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDA4MDEnLFxuIgogICAgICAgICAgICAiICAgICAgICAgICAgICAgICc4NDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEnLFxuIgogICAgICAgICAgICAiICAgICAgICAgICAgICAgICc4NDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDA3MDEnLFxuIgogICAgICAgICAgICAiICAgICAgICAgICAgICAgICdvbGxhbWE6Ly9hdXRob3JpdHktcHJvYmUnLFxuIgogICAgICAgICAgICAiICAgICAgICAgICAgICAgICdzaGEyNTY6JyB8fCBlbmNvZGUoZGlnZXN0KCdhdXRob3JpdHkgcHJvYmUnLCAnc2hhMjU2JyksICdoZXgnKVxuIgogICAgICAgICAgICAiICAgICAgICAgICAgKSxcbiIKICAgICAgICAgICAgIiAgICAgICAgICAgIDIiCiAgICAgICAgKSwKICAgICAgICAncHJvdmlkZXIgYXV0aG9yaXR5IHByb2JlIGNhbm9uaWNhbCBkaXNwYXRjaCBiaW5kaW5nJywKICAgICksCl0KZm9yIHBhdGgsIG9sZCwgbmV3LCBsYWJlbCBpbiByZXBsYWNlbWVudHM6CiAgICB0ZXh0ID0gcGF0aC5yZWFkX3RleHQoZW5jb2Rpbmc9J3V0Zi04JykKICAgIGNvdW50ID0gdGV4dC5jb3VudChvbGQpCiAgICBpZiBjb3VudCAhPSAxOgogICAgICAgIHJhaXNlIFN5c3RlbUV4aXQoZid7bGFiZWx9IGFuY2hvciBkcmlmdGVkOiBleHBlY3RlZCAxLCBnb3Qge2NvdW50fScpCiAgICBwYXRoLndyaXRlX3RleHQodGV4dC5yZXBsYWNlKG9sZCwgbmV3LCAxKSwgZW5jb2Rpbmc9J3V0Zi04JykKUFlSRVBBSVIKZ2l0IGFkZCAtLSBcCiAgbWlncmF0aW9ucy8wMDg4X2VuZm9yY2VfcHJvdmlkZXJfdGVybWluYWxfZXZpZGVuY2VfYmluZGluZy5zcWwgXAogIHNjcmlwdHMvY2hlY2stcmVsZWFzZS1iYXNlbGluZS1tYW5pZmVzdC1jb250cmFjdC1jb3JlLnB5IFwKICBzY3JpcHRzL2NoZWNrLWludm9jYXRpb24tbGVkZ2VyLWNvbnRyYWN0LXN0YXRpYy5weSBcCiAgc2NyaXB0cy9jaGVjay1wcm92aWRlci1yZWNvbmNpbGlhdGlvbi1wb3N0Z3Jlcy5zaAoKcGhhc2UgImZvcm1hdCBzZXF1ZW5jZSAzOSBSdXN0IGNhbmRpZGF0ZSIKY2FyZ28gZm10IC0tYWxsCmdpdCBhZGQgLS0gXAogIGNyYXRlcy9zaGFyZWQtY29uZmlnL3NyYy9ydW50aW1lX2d1YXJkLnJzIFwKICBzZXJ2aWNlcy9leGVjdXRpb24tc2VydmljZS9zcmMvcHJvdmlkZXJfZGlzcGF0Y2gucnMgXAogIHNlcnZpY2VzL2dhdGV3YXktc2VydmljZS9zcmMvYmluL2dhdGV3YXktZXhhY3QtcmVzZXJ2ZS13b3JrZXIucnMgXAogIHNlcnZpY2VzL2lkZW50aXR5LXNlcnZpY2Uvc3JjL21haW4ucnMgXAogIHNlcnZpY2VzL2xlZGdlci1zZXJ2aWNlL3NyYy9tYWluLnJzCgo='
+          manifest_text = (
+              manifest_text[:match.start(1)]
+              + known_good
+              + manifest_text[match.end(1):]
+          )
+          manifest_path.write_text(manifest_text, encoding='utf-8')
+          repaired_manifest_blob = subprocess.check_output(
+              ['git', 'hash-object', str(manifest_path)],
+              text=True,
+          ).strip()
+
+          validator_lines = Path(
+              '.github/workflows/seq39-rustfmt-candidate-v4.yml'
+          ).read_text(encoding='utf-8').splitlines()
+          marker = '        run: |'
+          indices = [
+              index for index, line in enumerate(validator_lines) if line == marker
+          ]
+          if len(indices) != 1:
+              raise SystemExit(f'expected one v4 run block, got {len(indices)}')
+          block = validator_lines[indices[0] + 1:]
+          if not block or any(
+              line and not line.startswith('          ') for line in block
+          ):
+              raise SystemExit('v4 run block indentation drifted')
+          extracted = '\n'.join(
+              line[10:] if line.startswith('          ') else '' for line in block
+          ) + '\n'
+
+          old_manifest_blob = '17546edf6aa6c859e0dbef9955aa1c187e5c2ed4'
+          if extracted.count(old_manifest_blob) != 1:
+              raise SystemExit('v4 manifest blob pin drifted')
+          extracted = extracted.replace(
+              old_manifest_blob,
+              repaired_manifest_blob,
+              1,
+          )
+          Path('/tmp/seq39-authority-probe-v7.sh').write_text(
+              extracted,
+              encoding='utf-8',
+          )
+          PYWRAP
+
+          bash /tmp/seq39-authority-probe-v7.sh
