@@ -1,0 +1,195 @@
+name: seq39-authority-probe-v5
+
+on:
+  push:
+    branches:
+      - automation/seq39-exact-apply
+    paths:
+      - '.github/workflows/seq39-authority-probe-v5.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seq39-authority-probe-v5
+  cancel-in-progress: false
+
+env:
+  DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/cex_ci
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: '0'
+  PYTHONDONTWRITEBYTECODE: '1'
+  PYTHONPYCACHEPREFIX: /tmp/cex-seq39-python-cache
+
+jobs:
+  construct-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cex
+          POSTGRES_PASSWORD: cex_ci_password
+          POSTGRES_DB: cex_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cex -d cex_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout exact automation payload
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Install Rust stable with format and lint
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Repair authority fixture and execute exact candidate validation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          manifest=.github/workflows/seq39-manifest-fixture-repair.yml
+          validator=.github/workflows/seq39-rustfmt-candidate-v4.yml
+          [[ "$(git hash-object "$manifest")" == \
+             "17546edf6aa6c859e0dbef9955aa1c187e5c2ed4" ]] || {
+            echo "::error::sequence 39 manifest repair blob drifted"
+            exit 1
+          }
+          [[ "$(git hash-object "$validator")" == \
+             "b1830ae0fed8a20e97e130d739a6b3ed20896998" ]] || {
+            echo "::error::sequence 39 v4 validator blob drifted"
+            exit 1
+          }
+
+          python3 - <<'PYWRAP'
+          from pathlib import Path
+          import base64
+          import re
+          import subprocess
+
+          manifest_path = Path('.github/workflows/seq39-manifest-fixture-repair.yml')
+          manifest_text = manifest_path.read_text(encoding='utf-8')
+          match = re.search(
+              r"^          repair_b64 = '([A-Za-z0-9+/=]+)'$",
+              manifest_text,
+              flags=re.MULTILINE,
+          )
+          if match is None:
+              raise SystemExit('sequence 39 repair payload marker drifted')
+          payload = base64.b64decode(match.group(1)).decode('utf-8')
+
+          bad_label = "        'provider dispatch hash prefix contract',\n    ),\n"
+          if payload.count(bad_label) != 1:
+              raise SystemExit('obsolete hash-validator repair label drifted')
+          label_at = payload.index(bad_label)
+          tuple_at = payload.rfind('    (\n', 0, label_at)
+          if tuple_at < 0:
+              raise SystemExit('obsolete hash-validator repair tuple boundary missing')
+          payload = payload[:tuple_at] + payload[label_at + len(bad_label):]
+
+          authority_tuple = '''    (
+              Path('scripts/check-provider-reconciliation-postgres.sh'),
+              (
+                  "            'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',\\n"
+                  "            'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',\\n"
+                  "            2"
+              ),
+              (
+                  "            'sha256:' || encode(digest('authority probe', 'sha256'), 'hex'),\\n"
+                  "            public.cex_provider_dispatch_fingerprint_v1(\\n"
+                  "                '84000000-0000-4000-8000-000000000901',\\n"
+                  "                '84000000-0000-4000-8000-000000000801',\\n"
+                  "                '84000000-0000-4000-8000-000000000001',\\n"
+                  "                '84000000-0000-4000-8000-000000000701',\\n"
+                  "                'ollama://authority-probe',\\n"
+                  "                'sha256:' || encode(digest('authority probe', 'sha256'), 'hex')\\n"
+                  "            ),\\n"
+                  "            2"
+              ),
+              'provider authority probe canonical dispatch binding',
+          ),
+          '''
+          list_end = ']\nfor path, old, new, label in replacements:'
+          if payload.count(list_end) != 1:
+              raise SystemExit('sequence 39 repair list boundary drifted')
+          payload = payload.replace(list_end, authority_tuple + list_end, 1)
+
+          old_add = (
+              '  scripts/check-invocation-ledger-contract-static.py\n'
+              '\nphase "format sequence 39 Rust candidate"\n'
+          )
+          new_add = (
+              '  scripts/check-invocation-ledger-contract-static.py \\\n'
+              '  scripts/check-provider-reconciliation-postgres.sh\n'
+              '\nphase "format sequence 39 Rust candidate"\n'
+          )
+          if payload.count(old_add) != 1:
+              raise SystemExit('provider reconciliation git-add anchor drifted')
+          payload = payload.replace(old_add, new_add, 1)
+
+          repaired_b64 = base64.b64encode(payload.encode('utf-8')).decode('ascii')
+          manifest_text = (
+              manifest_text[:match.start(1)]
+              + repaired_b64
+              + manifest_text[match.end(1):]
+          )
+          manifest_path.write_text(manifest_text, encoding='utf-8')
+          repaired_manifest_blob = subprocess.check_output(
+              ['git', 'hash-object', str(manifest_path)],
+              text=True,
+          ).strip()
+
+          validator_lines = Path(
+              '.github/workflows/seq39-rustfmt-candidate-v4.yml'
+          ).read_text(encoding='utf-8').splitlines()
+          marker = '        run: |'
+          indices = [
+              index for index, line in enumerate(validator_lines) if line == marker
+          ]
+          if len(indices) != 1:
+              raise SystemExit(f'expected one v4 run block, got {len(indices)}')
+          block = validator_lines[indices[0] + 1:]
+          if not block or any(
+              line and not line.startswith('          ') for line in block
+          ):
+              raise SystemExit('v4 run block indentation drifted')
+          extracted = '\n'.join(
+              line[10:] if line.startswith('          ') else '' for line in block
+          ) + '\n'
+
+          old_manifest_blob = '17546edf6aa6c859e0dbef9955aa1c187e5c2ed4'
+          if extracted.count(old_manifest_blob) != 1:
+              raise SystemExit('v4 manifest blob pin drifted')
+          extracted = extracted.replace(
+              old_manifest_blob,
+              repaired_manifest_blob,
+              1,
+          )
+
+          old_path_block = (
+              'cGF0aF9lbnRyaWVzID0gKAogICAgIiAgICAnY3JhdGVzL3NoYXJlZC1jb25maWcvc3JjL3J1bnRpbWVfZ3VhcmQucnMnLFxcbiIsCiAgICAiICAgICdzY3JpcHRzL2NoZWNrLWludm9jYXRpb24tbGVkZ2VyLWNvbnRyYWN0LXN0YXRpYy5weScsXFxuIiwKICAgICIgICAgJ3NlcnZpY2VzL2dhdGV3YXktc2VydmljZS9zcmMvYmluL2dhdGV3YXktZXhhY3QtcmVzZXJ2ZS13b3JrZXIucnMnLFxcbiIsCiAgICAiICAgICdzZXJ2aWNlcy9pZGVudGl0eS1zZXJ2aWNlL3NyYy9tYWluLnJzJyxcXG4iLAogICAgIiAgICAnc2VydmljZXMvbGVkZ2VyLXNlcnZpY2Uvc3JjL21haW4ucnMnLFxcbiIsCikK'
+          )
+          new_path_block = (
+              'cGF0aF9lbnRyaWVzID0gKAogICAgIiAgICAnY3JhdGVzL3NoYXJlZC1jb25maWcvc3JjL3J1bnRpbWVfZ3VhcmQucnMnLFxcbiIsCiAgICAiICAgICdzY3JpcHRzL2NoZWNrLWludm9jYXRpb24tbGVkZ2VyLWNvbnRyYWN0LXN0YXRpYy5weScsXFxuIiwKICAgICIgICAgJ3NjcmlwdHMvY2hlY2stcHJvdmlkZXItcmVjb25jaWxpYXRpb24tcG9zdGdyZXMuc2gnLFxcbiIsCiAgICAiICAgICdzZXJ2aWNlcy9nYXRld2F5LXNlcnZpY2Uvc3JjL2Jpbi9nYXRld2F5LWV4YWN0LXJlc2VydmUtd29ya2VyLnJzJyxcXG4iLAogICAgIiAgICAnc2VydmljZXMvaWRlbnRpdHktc2VydmljZS9zcmMvbWFpbi5ycycsXFxuIiwKICAgICIgICAgJ3NlcnZpY2VzL2xlZGdlci1zZXJ2aWNlL3NyYy9tYWluLnJzJyxcXG4iLAopCg=='
+          )
+          if extracted.count(old_path_block) != 1:
+              raise SystemExit('v4 candidate path block drifted')
+          extracted = extracted.replace(old_path_block, new_path_block, 1)
+
+          Path('/tmp/seq39-authority-probe-v5.sh').write_text(
+              extracted,
+              encoding='utf-8',
+          )
+          PYWRAP
+
+          bash /tmp/seq39-authority-probe-v5.sh
