@@ -1,0 +1,227 @@
+name: seq40-hosted-gates-monitor-v4b
+
+on:
+  push:
+    branches:
+      - automation/seq40-workflow-trust-windows
+    paths:
+      - '.github/workflows/seq40-hosted-gates-monitor-v4b.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: seq40-hosted-gates-monitor-v4b
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 130
+    steps:
+      - name: Checkout automation control branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Resolve sequence 40 candidate
+        id: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-remote --exit-code origin \
+            refs/heads/automation/seq40-validated > /tmp/seq40.ref
+          sha=$(awk '{print $1}' /tmp/seq40.ref)
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "sequence40_candidate_sha=$sha"
+
+      - name: Wait for connector-triggered exact-head workflows
+        id: runs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          from pathlib import Path
+          import time
+          import urllib.parse
+          import urllib.request
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+          candidate = os.environ['CANDIDATE_SHA']
+          required = (
+              '.github/workflows/p0-provider-reconciliation-gate.yml',
+              '.github/workflows/p0-migration-gate.yml',
+              '.github/workflows/p0-gateway-exact-reserve-gate.yml',
+              '.github/workflows/p0-execution-settlement-gate.yml',
+              '.github/workflows/rust-service-gate.yml',
+              '.github/workflows/p0-release-candidate-gate.yml',
+          )
+          headers = {
+              'Accept': 'application/vnd.github+json',
+              'Authorization': f'Bearer {token}',
+              'X-GitHub-Api-Version': '2022-11-28',
+              'User-Agent': 'cex-sequence-40-hosted-monitor-v4b',
+          }
+
+          def get(path: str):
+              request = urllib.request.Request(
+                  f'https://api.github.com/repos/{repository}{path}',
+                  headers=headers,
+              )
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  raw = response.read()
+                  return json.loads(raw) if raw else None
+
+          deadline = time.monotonic() + 115 * 60
+          last = None
+          final = None
+          while time.monotonic() < deadline:
+              query = urllib.parse.urlencode(
+                  {'head_sha': candidate, 'per_page': '100'}
+              )
+              payload = get(f'/actions/runs?{query}')
+              grouped = {path: [] for path in required}
+              for run in payload.get('workflow_runs', []):
+                  path = run.get('path')
+                  if path in grouped:
+                      grouped[path].append(run)
+              summary = {}
+              ready = True
+              for path in required:
+                  runs = sorted(
+                      grouped[path],
+                      key=lambda run: (
+                          run.get('created_at') or '',
+                          int(run.get('run_attempt') or 0),
+                          int(run.get('id') or 0),
+                      ),
+                      reverse=True,
+                  )
+                  if not runs:
+                      summary[path] = {'status': 'missing'}
+                      ready = False
+                      continue
+                  run = runs[0]
+                  summary[path] = {
+                      'id': int(run['id']),
+                      'run_number': run.get('run_number'),
+                      'run_attempt': run.get('run_attempt'),
+                      'event': run.get('event'),
+                      'head_branch': run.get('head_branch'),
+                      'head_sha': run.get('head_sha'),
+                      'status': run.get('status'),
+                      'conclusion': run.get('conclusion'),
+                      'created_at': run.get('created_at'),
+                      'updated_at': run.get('updated_at'),
+                      'html_url': run.get('html_url'),
+                  }
+                  if run.get('status') != 'completed':
+                      ready = False
+              encoded = json.dumps(summary, sort_keys=True, separators=(',', ':'))
+              if encoded != last:
+                  print(encoded, flush=True)
+                  last = encoded
+              if ready:
+                  final = summary
+                  break
+              time.sleep(20)
+          if final is None:
+              raise SystemExit('timed out waiting for all exact-head workflows')
+
+          failed = [
+              path for path, run in final.items()
+              if run.get('conclusion') != 'success'
+          ]
+          diagnostics = {
+              'schema_version': 'cex.sequence40.hosted-gate-diagnostic.v1',
+              'candidate_sha': candidate,
+              'production_authorization': 'not_granted',
+              'latest_exact_head_runs': final,
+              'all_required_runs_successful': not failed,
+              'failed_workflow_paths': failed,
+          }
+          if failed:
+              jobs = {}
+              for path in failed:
+                  run_id = final[path]['id']
+                  payload = get(
+                      f'/actions/runs/{run_id}/jobs?filter=latest&per_page=100'
+                  )
+                  jobs[path] = [
+                      {
+                          'id': job.get('id'),
+                          'name': job.get('name'),
+                          'status': job.get('status'),
+                          'conclusion': job.get('conclusion'),
+                          'failed_steps': [
+                              {
+                                  'number': step.get('number'),
+                                  'name': step.get('name'),
+                                  'status': step.get('status'),
+                                  'conclusion': step.get('conclusion'),
+                              }
+                              for step in job.get('steps', [])
+                              if step.get('conclusion') == 'failure'
+                          ],
+                      }
+                      for job in payload.get('jobs', [])
+                      if job.get('conclusion') != 'success'
+                  ]
+              diagnostics['failed_jobs'] = jobs
+          Path('/tmp/seq40-hosted-diagnostic.json').write_text(
+              json.dumps(diagnostics, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
+          )
+          Path('/tmp/seq40-hosted-result').write_text(
+              ('success' if not failed else 'failure') + '\n',
+              encoding='utf-8',
+          )
+          PY
+          echo "result=$(tr -d '\n' </tmp/seq40-hosted-result)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact candidate for publication
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ steps.candidate.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Publish success ref or immutable failure diagnostic
+        shell: bash
+        env:
+          RESULT: ${{ steps.runs.outputs.result }}
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$RESULT" == success ]]; then
+            git push --force origin \
+              "$CANDIDATE_SHA":refs/heads/automation/seq40-hosted-gates-passed
+            echo "sequence40_hosted_gates_passed_sha=$CANDIDATE_SHA"
+            exit 0
+          fi
+          if [[ "$RESULT" != failure ]]; then
+            echo "::error::unknown hosted result: $RESULT"
+            exit 1
+          fi
+          mkdir -p docs/release-evidence/sequence40
+          cp /tmp/seq40-hosted-diagnostic.json \
+            docs/release-evidence/sequence40/hosted-gate-diagnostic-v1.json
+          git config user.name 'cex-sequence-40-diagnostic'
+          git config user.email 'cex-sequence-40-diagnostic@users.noreply.github.com'
+          git add -- docs/release-evidence/sequence40/hosted-gate-diagnostic-v1.json
+          git commit -m 'docs(evidence): freeze sequence 40 hosted gate failure diagnostic'
+          git push --force origin HEAD:automation/seq40-hosted-gates-diagnostic
+          echo '::error::one or more exact-head hosted gates failed; diagnostic branch published'
+          exit 1
