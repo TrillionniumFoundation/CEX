@@ -56,19 +56,61 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 - "$RUNNER_TEMP/seq39-exact-apply.sh" <<'PY'
+          python3 - "$RUNNER_TEMP/seq39-exact-apply.sh" <<'PYTRANSFORM'
           from pathlib import Path
           import sys
 
           source = Path('.automation/seq39-exact-apply.sh').read_text(encoding='utf-8')
-          old = 'git read-tree --reset -u "$BASE_SHA"'
-          new = 'git reset --hard "$BASE_SHA"'
-          if source.count(old) != 1:
-              raise SystemExit('automation reset boundary drifted')
-          Path(sys.argv[1]).write_text(source.replace(old, new), encoding='utf-8')
+          replacements = [
+              (
+                  'git read-tree --reset -u "$BASE_SHA"',
+                  'git reset --hard "$BASE_SHA"',
+              ),
+              (
+                  r"""for relative in sorted(expected):
+              blob = subprocess.check_output(['git', 'show', f'{base}:{relative}'])
+              normalized = blob.replace(b'\r\n', b'\n')
+              if blob == normalized:
+                  raise SystemExit(f'expected CRLF-bearing blob is already normalized: {relative}')
+              if b'\r' in normalized:
+                  raise SystemExit(f'unsupported lone CR remains after normalization: {relative}')
+              if Path(relative).read_bytes() != normalized:
+                  raise SystemExit(f'checkout changed more than CRLF line endings: {relative}')
+          """,
+                  r"""for relative in sorted(expected):
+              blob = subprocess.check_output(['git', 'show', f'{base}:{relative}'])
+              if b'\r\n' not in blob:
+                  raise SystemExit(f'expected CRLF-bearing blob is already normalized: {relative}')
+          """,
+              ),
+              (
+                  r"""git add --renormalize -- "${NORMALIZED_PATHS[@]}"
+          git diff --quiet || fail "unstaged changes remain after CRLF normalization"
+          """,
+                  r"""git add --renormalize -- "${NORMALIZED_PATHS[@]}"
+          git diff --quiet || fail "unstaged changes remain after CRLF normalization"
+          git diff --cached --quiet --ignore-cr-at-eol "$BASE_SHA" -- "${NORMALIZED_PATHS[@]}" \
+            || fail "checkout normalization changed content beyond CR-at-EOL"
+          python3 - "${NORMALIZED_PATHS[@]}" <<'PY'
+          import subprocess
+          import sys
+
+          for relative in sys.argv[1:]:
+              staged = subprocess.check_output(['git', 'show', f':{relative}'])
+              if b'\r' in staged:
+                  raise SystemExit(f'normalized staged blob still contains CR: {relative}')
           PY
+          """,
+              ),
+          ]
+          for old, new in replacements:
+              if source.count(old) != 1:
+                  raise SystemExit(f'automation transformation boundary drifted: {old[:80]!r}')
+              source = source.replace(old, new)
+          Path(sys.argv[1]).write_text(source, encoding='utf-8')
+          PYTRANSFORM
           observed=$(sha256sum "$RUNNER_TEMP/seq39-exact-apply.sh" | awk '{print $1}')
-          expected=3f1059c3d872421f20307a53e9f3ceb04b005ffc9e5682dfa48fe90375b11e3b
+          expected=ca24305df7a779f479507460b4c8dc0bd171f34dd7d12c220c49d215a9caa0cb
           [[ "$observed" == "$expected" ]] || {
             echo "::error::transformed script digest mismatch: expected=$expected observed=$observed"
             exit 1
