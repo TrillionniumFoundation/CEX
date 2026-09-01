@@ -56,6 +56,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cp .automation/seq39-exact-apply.sh "$RUNNER_TEMP/seq39-exact-apply.sh"
+          python3 - "$RUNNER_TEMP/seq39-exact-apply.sh" <<'PY'
+          from pathlib import Path
+          import sys
+
+          source = Path('.automation/seq39-exact-apply.sh').read_text(encoding='utf-8')
+          old = 'git read-tree --reset -u "$BASE_SHA"'
+          new = 'git reset --hard "$BASE_SHA"'
+          if source.count(old) != 1:
+              raise SystemExit('automation reset boundary drifted')
+          Path(sys.argv[1]).write_text(source.replace(old, new), encoding='utf-8')
+          PY
+          observed=$(sha256sum "$RUNNER_TEMP/seq39-exact-apply.sh" | awk '{print $1}')
+          expected=3f1059c3d872421f20307a53e9f3ceb04b005ffc9e5682dfa48fe90375b11e3b
+          [[ "$observed" == "$expected" ]] || {
+            echo "::error::transformed script digest mismatch: expected=$expected observed=$observed"
+            exit 1
+          }
           chmod 700 "$RUNNER_TEMP/seq39-exact-apply.sh"
           bash "$RUNNER_TEMP/seq39-exact-apply.sh"
