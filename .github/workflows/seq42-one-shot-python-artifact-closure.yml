@@ -1,0 +1,135 @@
+name: seq42-one-shot-python-artifact-closure
+
+on:
+  push:
+    branches:
+      - automation/seq42-final-gap-closure
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seq42-one-shot-python-artifact-closure
+  cancel-in-progress: false
+
+jobs:
+  patch-verify-and-self-delete:
+    if: >-
+      github.repository == 'TrillionniumFoundation/CEX' &&
+      github.ref == 'refs/heads/automation/seq42-final-gap-closure' &&
+      github.event.head_commit.message == 'chore: bootstrap seq42 Python artifact closure'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact closure branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: automation/seq42-final-gap-closure
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Remove generated artifacts and harden integrity policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          root = Path.cwd()
+          tracked = subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0")
+          generated = []
+          for raw in tracked:
+              if not raw:
+                  continue
+              path = raw.decode("utf-8", "surrogateescape")
+              if (
+                  path.endswith((".pyc", ".pyo"))
+                  or "/__pycache__/" in f"/{path}/"
+              ):
+                  generated.append(path)
+
+          expected = {
+              "scripts/__pycache__/evidence_safe_io.cpython-312.pyc",
+              "scripts/__pycache__/p0-release-evidence-core-impl.cpython-312.pyc",
+              "scripts/__pycache__/p0_authoritative_runs.cpython-312.pyc",
+          }
+          missing = sorted(expected.difference(generated))
+          if missing:
+              raise SystemExit(f"expected tracked Python artifacts are missing: {missing}")
+          if not generated:
+              raise SystemExit("no tracked Python artifacts found to remove")
+          for relative in generated:
+              path = root / relative
+              if path.exists() or path.is_symlink():
+                  path.unlink()
+          print({"removed_tracked_python_artifacts": sorted(generated)})
+
+          ignore_path = root / ".gitignore"
+          ignore_text = ignore_path.read_text(encoding="utf-8")
+          block = (
+              "\n# Python interpreter/build artifacts\n"
+              "__pycache__/\n"
+              "*.py[cod]\n"
+              "*$py.class\n"
+          )
+          if "# Python interpreter/build artifacts" in ignore_text:
+              raise SystemExit("Python artifact ignore block already exists unexpectedly")
+          ignore_path.write_text(ignore_text.rstrip() + block, encoding="utf-8")
+
+          integrity_path = root / "scripts/check-repository-integrity.py"
+          integrity_text = integrity_path.read_text(encoding="utf-8")
+          needle = '''    if docs_check.returncode != 0:\n        print(docs_check.stdout, end="")\n        raise SystemExit("development document contract failed")\n\n    if subprocess.run(["git", "-C", str(ROOT), "diff", "--quiet"]).returncode != 0:\n'''
+          replacement = '''    if docs_check.returncode != 0:\n        print(docs_check.stdout, end="")\n        raise SystemExit("development document contract failed")\n\n    tracked_python_artifacts = sorted(\n        path\n        for path in run_git("ls-files", "-z").split("\\0")\n        if path\n        and (\n            path.endswith((".pyc", ".pyo"))\n            or "/__pycache__/" in f"/{path}/"\n        )\n    )\n    if tracked_python_artifacts:\n        raise SystemExit(\n            "tracked Python interpreter artifacts are forbidden during integrity "\n            f"attestation: {', '.join(tracked_python_artifacts)}"\n        )\n\n    if subprocess.run(["git", "-C", str(ROOT), "diff", "--quiet"]).returncode != 0:\n'''
+          if integrity_text.count(needle) != 1:
+              raise SystemExit(
+                  "repository-integrity insertion point did not match exactly once"
+              )
+          integrity_path.write_text(
+              integrity_text.replace(needle, replacement, 1), encoding="utf-8"
+          )
+
+          workflow = root / ".github/workflows/seq42-one-shot-python-artifact-closure.yml"
+          if not workflow.is_file():
+              raise SystemExit("one-shot workflow is missing before self-deletion")
+          workflow.unlink()
+          PY
+
+          git diff --check
+          git status --short
+
+      - name: Commit locally before clean-tree verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: remove tracked Python bytecode from integrity boundary"
+          test -z "$(git status --porcelain=v1)"
+
+      - name: Verify clean-tree integrity and bytecode regression guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git ls-files | grep -E '(^|/)__pycache__/|\.py[co]$' || true)"
+          git check-ignore -q scripts/__pycache__/probe.cpython-312.pyc
+          python3 -m py_compile scripts/check-repository-integrity.py
+          python3 scripts/p0-release-evidence-core.py self-test
+          python3 scripts/check-development-docs.py
+          candidate_sha="$(git rev-parse HEAD)"
+          candidate_tree="$(git rev-parse 'HEAD^{tree}')"
+          python3 scripts/check-repository-integrity.py \
+            --expected-sha "$candidate_sha" \
+            --expected-tree "$candidate_tree" \
+            --output /tmp/repository-integrity.json
+          python3 scripts/check-p0-release-candidate-hygiene.py \
+            --output /tmp/candidate-hygiene.json
+          test -z "$(git status --porcelain=v1)"
+
+      - name: Push verified closure commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin HEAD:automation/seq42-final-gap-closure
