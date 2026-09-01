@@ -86,19 +86,21 @@ jobs:
               raise SystemExit('nested candidate-path assertion anchor drifted')
           extracted = extracted.replace(old, new, 1)
 
-          tuple_paths = (
-              'crates/shared-config/src/runtime_guard.rs',
-              'scripts/check-invocation-ledger-contract-static.py',
-              'services/gateway-service/src/bin/gateway-exact-reserve-worker.rs',
-              'services/identity-service/src/main.rs',
-              'services/ledger-service/src/main.rs',
+          start_marker = 'path_entries = (\n'
+          end_marker = 'if source.count(path_anchor) != 1:\n'
+          if extracted.count(start_marker) != 1 or extracted.count(end_marker) != 1:
+              raise SystemExit('candidate path block boundary drifted')
+          start = extracted.index(start_marker)
+          end = extracted.index(end_marker, start)
+          path_block = '''path_entries = (
+              "    'crates/shared-config/src/runtime_guard.rs',\\n",
+              "    'scripts/check-invocation-ledger-contract-static.py',\\n",
+              "    'services/gateway-service/src/bin/gateway-exact-reserve-worker.rs',\\n",
+              "    'services/identity-service/src/main.rs',\\n",
+              "    'services/ledger-service/src/main.rs',\\n",
           )
-          for path in tuple_paths:
-              old_line = f'              "    \'{path}\',\\\\n"\n'
-              new_line = f'              "    \'{path}\',\\\\n",\n'
-              if extracted.count(old_line) != 1:
-                  raise SystemExit(f'candidate tuple line anchor drifted: {path}')
-              extracted = extracted.replace(old_line, new_line, 1)
+          '''
+          extracted = extracted[:start] + path_block + extracted[end:]
 
           Path('/tmp/seq39-rustfmt-candidate-v4.sh').write_text(
               extracted,
