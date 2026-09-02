@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the active documentation core plus external-evidence intake contract."""
+"""Run the active documentation core plus external-evidence intake checks."""
 
 from __future__ import annotations
 
@@ -14,7 +14,9 @@ CORE = ROOT / "scripts/check-development-docs-core.py"
 EXTERNAL = ROOT / "scripts/check-external-production-evidence-contract.py"
 
 
-def run_json(arguments: list[str], label: str) -> tuple[int, dict[str, Any] | None, str]:
+def run_json(
+    arguments: list[str], label: str
+) -> tuple[int, dict[str, Any] | None, str]:
     completed = subprocess.run(
         arguments,
         cwd=ROOT,
@@ -33,24 +35,60 @@ def run_json(arguments: list[str], label: str) -> tuple[int, dict[str, Any] | No
     return completed.returncode, value, raw or f"<{label} emitted no output>"
 
 
+def fallback_result(problem_text: str) -> dict[str, Any]:
+    return {
+        "schema": "cex.development-doc-check.v1",
+        "status": "failed",
+        "active_plan": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
+        "active_addendum": (
+            "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-"
+            "IMPLEMENTATION-ADDENDUM.md"
+        ),
+        "migration_head": "0088_enforce_provider_terminal_evidence_binding.sql",
+        "requirements": 18,
+        "repository_qualification_result": "PENDING_EXACT_SHA_HOSTED_EVIDENCE",
+        "repository_qualification_authority": "generated_candidate_manifest_only",
+        "production_authorization": "not_granted",
+        "problems": [problem_text],
+    }
+
+
+def append_check(
+    problems: list[object],
+    *,
+    arguments: list[str],
+    label: str,
+    expected_schema: str,
+) -> int:
+    code, result, raw = run_json(arguments, label)
+    if result is None:
+        problems.append(f"{label} did not emit one JSON object: {raw}")
+        return code
+    child_problems = result.get("problems")
+    if isinstance(child_problems, list):
+        problems.extend(f"{label}: {item}" for item in child_problems)
+    elif result.get("status") != "ok":
+        problems.append(f"{label} failed without diagnostics")
+    if result.get("schema") != expected_schema:
+        problems.append(f"{label} emitted an unexpected schema")
+    if result.get("production_authorization") != "not_granted":
+        problems.append(f"{label} changed production authorization")
+    if result.get("checker_may_grant_production_authorization") is not False:
+        problems.append(f"{label} may not grant production authorization")
+    if code != 0 and not child_problems:
+        problems.append(f"{label} exited nonzero without diagnostics")
+    return code
+
+
 def main() -> int:
     core_code, core, core_raw = run_json(
         [sys.executable, str(CORE)],
         "documentation core",
     )
     if core is None:
-        result = {
-            "schema": "cex.development-doc-check.v1",
-            "status": "failed",
-            "active_plan": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
-            "active_addendum": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md",
-            "migration_head": "0088_enforce_provider_terminal_evidence_binding.sql",
-            "requirements": 18,
-            "repository_qualification_result": "PENDING_EXACT_SHA_HOSTED_EVIDENCE",
-            "repository_qualification_authority": "generated_candidate_manifest_only",
-            "production_authorization": "not_granted",
-            "problems": ["documentation core did not emit one JSON object: " + core_raw],
-        }
+        result = fallback_result(
+            "documentation core did not emit one JSON object: " + core_raw
+        )
         print(json.dumps(result, indent=2, ensure_ascii=False, sort_keys=True))
         return 1
 
@@ -59,32 +97,27 @@ def main() -> int:
         problems = ["documentation core problems field is invalid"]
         core["problems"] = problems
 
-    external_code, external, external_raw = run_json(
-        [sys.executable, str(EXTERNAL), "--contract-only"],
-        "external evidence contract",
+    contract_code = append_check(
+        problems,
+        arguments=[sys.executable, str(EXTERNAL), "--contract-only"],
+        label="external evidence contract",
+        expected_schema="cex.external-production-evidence-contract-check.v1",
     )
-    if external is None:
-        problems.append(
-            "external evidence contract did not emit one JSON object: " + external_raw
-        )
-    else:
-        external_problems = external.get("problems")
-        if isinstance(external_problems, list):
-            problems.extend(
-                "external evidence contract: " + str(item)
-                for item in external_problems
-            )
-        elif external.get("status") != "ok":
-            problems.append("external evidence contract failed without diagnostics")
-        if external.get("production_authorization") != "not_granted":
-            problems.append("external evidence checker changed production authorization")
-        if external.get("checker_may_grant_production_authorization") is not False:
-            problems.append("external evidence checker may not grant production authorization")
+    self_test_code = append_check(
+        problems,
+        arguments=[sys.executable, str(EXTERNAL), "--self-test"],
+        label="external evidence binding self-test",
+        expected_schema="cex.external-production-evidence-binding-self-test.v1",
+    )
 
     if core_code != 0 and not problems:
         problems.append("documentation core failed without diagnostics")
-    if external_code != 0 and not problems:
+    if contract_code != 0 and not problems:
         problems.append("external evidence contract failed without diagnostics")
+    if self_test_code != 0 and not problems:
+        problems.append(
+            "external evidence binding self-test failed without diagnostics"
+        )
 
     core["status"] = "failed" if problems else "ok"
     core["production_authorization"] = "not_granted"

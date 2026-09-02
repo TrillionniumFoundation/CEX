@@ -6,8 +6,8 @@ Production authorization: `not_granted`
 This contract defines how independently issued evidence for V12-X1 through
 V12-X8 is identified, transported, validated, retained, and bound to one exact
 CEX candidate. It does **not** allow repository source, local tests, GitHub
-Actions, a repository administrator, or this checker to self-certify an
-external gate.
+Actions, a repository administrator, or the structural checker to self-certify
+an external gate.
 
 ## 1. Hard boundary
 
@@ -23,10 +23,10 @@ The following are never external-gate evidence:
 - source code, Markdown, a template, fixture, mock provider, or synthetic log;
 - an empty, skipped, queued, zero-step, or pre-runner workflow record;
 - an administrator assertion, waiver, repository-owner signature, or self-review;
-- a mutable branch URL, latest artifact alias, local path, or evidence without a
+- a mutable branch URL, latest-artifact alias, local path, or evidence without a
   verified SHA-256 digest;
-- evidence issued for another commit, tree, artifact set, topology, provider,
-  jurisdiction, or approval scope.
+- evidence issued for another commit, tree, migration head, artifact set,
+  topology, provider, jurisdiction, or approval scope.
 
 ## 2. Machine-readable bundle
 
@@ -37,25 +37,56 @@ and binds all records to:
 
 - repository `TrillionniumFoundation/CEX`;
 - exact 40-character commit and tree SHA;
-- exact migration head;
+- active migration head
+  `0088_enforce_provider_terminal_evidence_binding.sql`;
 - immutable generated repository-candidate manifest URI and SHA-256;
 - exact artifact/deployment scope;
 - UTC generation time and approved retention-policy identity.
 
-The schema is closed: unknown root, candidate, manifest, gate, evidence,
-issuer, or final-decision fields fail validation rather than becoming an
-unreviewed extension channel.
+The schema is closed: unknown root, candidate, manifest, gate, evidence, issuer,
+or final-decision fields fail validation rather than becoming an unreviewed
+extension channel.
 
-Real evidence bundles are retained in the approved external custody system.
-They are not committed into the source tree. The repository may retain only the
-shape-only template and this contract.
+Real evidence bundles and downloaded candidate manifests are retained in the
+approved external custody system. They are not committed into the source tree.
+The repository may retain only the shape-only template, checker, and this
+contract.
 
-## 3. Evidence envelope
+## 3. Candidate-manifest binding
+
+Bundle validation requires both inputs:
+
+```text
+python3 scripts/check-external-production-evidence-contract.py \
+  --bundle /secure/intake/cex-external-production-evidence.json \
+  --candidate-manifest /secure/intake/cex-candidate-manifest.json
+```
+
+The checker reads the supplied manifest as immutable bytes, computes its
+SHA-256, and requires equality with
+`repository_candidate_manifest.sha256`. It then runs
+`scripts/check-release-baseline-manifest.py` against that exact file.
+
+The validated manifest must declare:
+
+- schema `cex.release-baseline-manifest.v1`;
+- status `candidate`;
+- the same repository, commit SHA, tree SHA, migration head, and qualification
+  scope as the external bundle;
+- `production_ready=false`;
+- `production_authorization=not_granted`.
+
+The manifest must exist before any accepted external evidence, and both manifest
+and evidence must predate or equal `bundle.generated_at`. A URI and digest alone
+are insufficient when the supplied bytes do not validate or do not describe the
+same candidate.
+
+## 4. Evidence envelope
 
 Every pass or fail record contains:
 
-- immutable URI with no embedded credentials and a `sha256:<64 lowercase hex>`
-  content digest;
+- immutable URI with no embedded credentials and a
+  `sha256:<64 lowercase hex>` content digest;
 - issuing actor, organization, role, and an explicit statement that the issuer
   is independent of repository automation for the asserted domain;
 - an issuer role that exactly matches the gate's machine-declared
@@ -67,12 +98,12 @@ Every pass or fail record contains:
 - explicit `pass` or `fail` decision;
 - no waiver or inferred approval.
 
-Structural validation does not prove that the issuer identity, signature,
-organization, independence statement, or underlying activity is genuine. The
-responsible human control owner must verify those facts before accepting the
-evidence.
+One immutable evidence object cannot be reused across two gates. Structural
+validation does not prove that the issuer identity, signature, organization,
+independence statement, or underlying activity is genuine. The responsible
+human control owner must verify those facts before accepting the evidence.
 
-## 4. Gate-specific acceptance
+## 5. Gate-specific acceptance
 
 ### V12-X1 — representative-volume disaster recovery
 
@@ -116,57 +147,66 @@ value conservation, reconciliation, segregation of duties, and exceptions.
 ### V12-X7 — legal, commercial, and provider approvals
 
 Responsible authorities identify the applicable jurisdiction, contract,
-provider and production scope, then issue explicit approvals or denials bound to
-the exact candidate and deployment scope. Repository actors may not infer that
-approval is unnecessary.
+provider, and production scope, then issue explicit approvals or denials bound
+to the exact candidate and deployment scope. Repository actors may not infer
+that approval is unnecessary.
 
 ### V12-X8 — final human go/no-go
 
+V12-X8 `pass` requires exactly one evidence record. The
+`final_human_decision` object must be the same immutable record as that V12-X8
+evidence: URI, digest, actor, organization, role, scope, candidate commit/tree,
+and timestamp must all agree. The record uses the exact
+`final_human_release_authority` role.
+
 The final release authority verifies repository qualification and accepted
 X1-X7 evidence on the same immutable candidate/artifact set, then records `go`
-or `no-go`, identity, organization, the exact
-`final_human_release_authority` role, UTC time, scope, and evidence digest.
-Automation may validate structure but may not emit, infer, or impersonate this
-decision.
+or `no-go`. X8 and the final decision must occur after every accepted X1-X7
+record. Automation may validate structure but may not emit, infer, or impersonate
+this decision.
 
-## 5. Validation modes
+## 6. Validation modes
 
-Run the repository contract check with:
+Run the repository source-contract check with:
 
 ```text
 python3 scripts/check-external-production-evidence-contract.py --contract-only
+python3 scripts/check-external-production-evidence-contract.py --self-test
 ```
 
-This validates only the source-tree template, active traceability and navigation
-wiring, anti-self-certification policy, and closed schema. It deliberately
-reports production authorization as `not_granted`.
-
-A responsible evidence custodian may structurally inspect an externally stored
-bundle with:
+This validates only the source-tree template, active traceability/navigation
+wiring, anti-self-certification policy, closed schema, manifest-binding logic,
+temporal ordering, duplicate rejection, and the X8 same-record rule. It
+deliberately reports:
 
 ```text
-python3 scripts/check-external-production-evidence-contract.py \
-  --bundle /secure/intake/cex-external-production-evidence.json
+production_authorization=not_granted
+checker_may_grant_production_authorization=false
 ```
 
-A successful bundle check means only that the supplied JSON satisfies this
-shape and cross-gate consistency contract. It is not a cryptographic signature
-verification, reviewer independence determination, legal conclusion, financial
-approval, or production authorization.
+A successful real-bundle check means only that the supplied JSON and candidate
+manifest satisfy this structural and cross-gate consistency contract. It is not
+cryptographic signature verification, reviewer-independence determination,
+legal conclusion, financial approval, or production authorization.
 
-## 6. Ordering and revocation
+## 7. Ordering and revocation
 
-X8 cannot be `go` unless X1-X7 are structurally present as `pass` for the same
-candidate. Any candidate, artifact, topology, provider, jurisdiction, control,
+X8 cannot be `pass` unless X1-X7 are structurally present as `pass` for the same
+candidate. The manifest must precede every accepted evidence record, the final
+decision must not predate any accepted X1-X7 record, and bundle generation must
+not predate any included evidence or decision.
+
+Any candidate, migration, artifact, topology, provider, jurisdiction, control,
 or approval-scope change requires re-evaluation by every affected issuer.
 Revocation, expiry, supersession, or a later failing result blocks authorization
 and must be retained rather than deleted.
 
-## 7. Change protocol
+## 8. Change protocol
 
 Changing this schema, accepted URI policy, gate IDs, evidence envelope,
-independence rule, issuer-role binding, closed field sets, traceability wiring,
-or X8 ordering requires an updated template when its shape changes, checker,
-implementation addendum, active documentation index, traceability, tests, and a
-new shared candidate trigger. No change may weaken `self_certifiable=false` or
-turn structural validation into automatic production authorization.
+manifest binding, temporal ordering, independence rule, issuer-role binding,
+closed field sets, traceability wiring, or X8 ordering requires an updated
+template when its shape changes, checker, embedded regression self-tests,
+implementation addendum, active documentation index, traceability, and a new
+shared candidate trigger. No change may weaken `self_certifiable=false` or turn
+structural validation into automatic production authorization.
