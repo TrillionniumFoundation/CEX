@@ -8,27 +8,32 @@ This file is the canonical entry point for development, qualification, and opera
 
 When two sources appear to disagree, use the following precedence:
 
-1. immutable exact-commit release evidence and the generated candidate manifest;
-2. `CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md` together with its active implementation addendum;
-3. accepted ADRs and versioned protocol specifications;
+1. immutable exact-commit release evidence and the generated candidate manifest within the scope they actually prove;
+2. accepted ADRs and versioned protocol specifications, including ADR-004's external-Agent-only product boundary;
+3. `CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md`, its active implementation addendum, and the Sequence-51 architecture closure contract, which may implement but may not silently supersede an accepted ADR;
 4. component status, state-machine, threat-model, acceptance, SLO, compatibility, module-contract, evidence-intake, and runbook documents;
 5. historical plans, archived evidence, research notes, and examples.
 
-Source presence, prose, a template, or a green run on another SHA never overrides exact-tree evidence.
+Source presence, prose, a template, a local command result, or a green run on another SHA never overrides exact-tree evidence. An implementation plan cannot reintroduce a capability explicitly rejected by an accepted ADR without a new accepted superseding decision.
 
 ## Active authority set
 
+- Architecture decision: `../decisions/adr-004-three-module-external-agent-battle-platform.md`
+- Sequence-51 architecture closure: `architecture/external-agent-runtime-boundary-sequence-51.md`
 - Plan: `CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md`
 - Implementation addendum: `CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md`
 - Machine-readable authority: `development-doc-authority-v1.json`
 - Machine-readable requirement traceability: `traceability/v12-requirements-v1.json`
 - Component status: `status/component-status-v1.md`
+- Hepta external Agent protocol: `hepta-agent-protocol-v1.md`
 - Hepta state machines: `hepta-paper-raid-state-machines-v1.md`
 - Security threat model: `security-threat-model-v1.md`
 - Clean-deployment acceptance: `clean-deployment-acceptance-v1.md`
 - SLO and recovery contract: `slo-recovery-contract-v1.md`
 - Protocol compatibility matrix: `protocol/version-compatibility-matrix-v1.md`
 - TRNM production credential contract: `trnm-production-credential-contract-v1.md`
+
+The executable architecture boundary is `scripts/check-external-agent-runtime-boundary.py`. It is called by `scripts/check-development-docs.py` and rejects default/local inference execution, local model discovery, production activation of the legacy compatibility feature, or documentation that transfers external Agent authority into CEX.
 
 ## Workspace module contracts
 
@@ -37,7 +42,7 @@ The Cargo workspace is documented through two active supporting contracts:
 - Machine-readable module catalog: `docs/module-catalog-v1.json`
 - Human module index: `docs/modules/index.md`
 
-Every Cargo member must appear exactly once in the catalog and have one dedicated document under `docs/modules/`. Nakama, Trillionnium Chain, Matrix homeserver, content-addressed object storage, external providers, and external Agents remain external authorities and must not be invented as local Cargo members.
+Every Cargo member must appear exactly once in the catalog and have one dedicated document under `docs/modules/`. Nakama, Trillionnium Chain, Matrix homeserver, content-addressed object storage, external providers/Agents, Trillionnium World fixtures and the Trillionnium Game runtime remain external authorities or integrations and must not be invented as local Cargo members.
 
 The module catalog is verified by `scripts/check-module-documentation.py`; that checker is executed by `scripts/check-development-docs.py`. The exact repository identity and successful documentation result are recorded by `scripts/check-repository-integrity.py`.
 
@@ -60,10 +65,11 @@ The source tree may validate only the contract and empty template. Real evidence
 - `template`: shape-only input; never release evidence.
 - `module contract`: the technical boundary for one Cargo member; not release evidence by itself.
 - `external evidence contract`: structural intake policy; never proof that the external activity or approval occurred.
+- `legacy compatibility`: retained source/data needed for upgrade or audit, excluded from default production authority.
 
 ## Production authorization boundary
 
-Repository qualification may establish that source, migrations, tests, workflows, documentation, and generated evidence are internally consistent on one commit/tree. It cannot authorize production. Representative-volume disaster recovery, real deployment and rollback, provider evidence, secret custody, sustained soak, independent reviews, legal/commercial approvals, and final human go/no-go remain externally evidenced gates. The production-authorization value remains `not_granted` until those independent records and the final human decision exist.
+Repository qualification may establish that source, migrations, tests, workflows, documentation, architecture boundaries and generated evidence are internally consistent on one commit/tree. It cannot authorize production. Representative-volume disaster recovery, real deployment and rollback, real external Agent/provider evidence, secret custody, sustained soak, independent reviews, legal/commercial approvals, protected-branch administration and final human go/no-go remain externally evidenced gates. The production-authorization value remains `not_granted` until those independent records and the final human decision exist.
 
 ## Change protocol
 
@@ -71,8 +77,9 @@ A change to any active authority or workspace member must:
 
 1. preserve the explicit `not_granted` production-authorization posture;
 2. update the machine-readable authority or traceability document when normative scope changes;
-3. update the affected module-catalog entry and dedicated module contract when membership, ownership, interfaces, persistence, configuration, verification, or deployment changes;
-4. update the external evidence contract, template, and checker together when evidence shape or gate ordering changes;
-5. pass `scripts/check-module-documentation.py`, `scripts/check-external-production-evidence-contract.py --contract-only`, and `scripts/check-development-docs.py`;
-6. pass repository-integrity attestation on the exact tree;
-7. trigger all authoritative v12 hosted gates through the shared candidate trigger before repository qualification.
+3. update the affected module-catalog entry and dedicated module contract when membership, ownership, interfaces, persistence, configuration, verification or deployment changes;
+4. preserve ADR-004 unless a new accepted ADR explicitly supersedes it;
+5. update the external evidence contract, template and checker together when evidence shape or gate ordering changes;
+6. pass `scripts/check-external-agent-runtime-boundary.py`, `scripts/check-module-documentation.py`, `scripts/check-external-production-evidence-contract.py --contract-only`, and `scripts/check-development-docs.py`;
+7. pass repository-integrity attestation on the exact tree;
+8. update the sole shared candidate trigger and rerun all authoritative v12 hosted gates before repository qualification.
