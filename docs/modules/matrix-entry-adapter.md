@@ -13,53 +13,53 @@ This contract is indexed by `docs/module-catalog-v1.json`. It defines the module
 
 ## Purpose and non-goals
 
-**Purpose.** Adapts Matrix-shaped ingress and callbacks to the bounded consumer-entry contract while preserving stable event identity and transport replay semantics.
+**Purpose.** Adapts authenticated Matrix-shaped ingress and callbacks to the bounded consumer-entry contract while preserving stable event identity, redaction semantics and transport replay behavior.
 
-**Non-goals.** It does not make authorization, entitlement, billing, research, provider, or finality decisions and must not become a second user/account authority.
+**Non-goals.** It does not make authorization, entitlement, billing, research, provider, World/Game or finality decisions and must not become a second user/account authority, Matrix homeserver or durable CEX domain store.
 
 ## Authority and owned state
 
-Matrix transport validation, event normalization, cursor/idempotency handling, and forwarding to the product entry boundary; it owns no CEX domain truth.
+The adapter is authoritative only for Matrix transport validation, event normalization, adapter-local cursor/deduplication identity and delivery observations explicitly implemented by this package. Matrix and downstream CEX services retain their own truth.
 
-Owned state: Only adapter-local cursor, deduplication, replay, and delivery observations explicitly implemented by this package. Matrix and CEX services retain their own authoritative state.
+Owned state, when durability is enabled, is limited to opaque Matrix cursor positions, source event IDs, normalized request fingerprints, claim/fencing metadata, delivery acknowledgements and dead-letter evidence. Caller-supplied Matrix user/room fields never grant CEX authority.
 
 A projection, cache, compatibility row, HTTP success, or transport acknowledgement never transfers authority from its owning component.
 
 ## Source layout and entry points
 
-- `lib.rs`: adapter state, routes, Matrix parsing, delivery, and tests.
-- `main.rs`: startup and listener.
+- `lib.rs`: adapter state, routes, Matrix parsing, cursor/deduplication, downstream delivery and tests.
+- `main.rs`: startup, configuration validation and listener boundary.
 
 Catalog-bound entry points:
 
 - `services/matrix-entry-adapter/src/main.rs`
 - `services/matrix-entry-adapter/src/lib.rs`
 
-Any new binary, public source boundary, migration owner, or removed path must update the catalog and this document in the same commit.
+Any new binary, public source boundary, migration owner, or removed path must update the catalog and this document in the same commit. The large `lib.rs` remains a refactor target: parsing, cursor store, delivery client, auth and metrics should move behind internal modules without changing authority.
 
 ## Interfaces and contracts
 
-Axum routes and Matrix/downstream HTTP clients in `lib.rs`, with the process boundary in `main.rs`. Every forwarded request must carry stable event/idempotency identity.
+Axum routes and Matrix/downstream HTTP clients reside in `lib.rs`, with the process boundary in `main.rs`. Every forwarded request carries stable source event identity, normalized payload fingerprint and scoped idempotency identity.
 
-Requests and events must define authentication, tenant/subject binding, size bounds, immutable identity, idempotency scope, version negotiation, error semantics, and retirement conditions. Authoritative transitions require complete contract/receipt validation, not transport success alone.
+Requests define inbound authentication/signature policy, Matrix homeserver identity, tenant/subject mapping, event/body/media limits, supported event versions, edit/redaction behavior, downstream timeout, retry classification and retirement conditions. Unsupported or ambiguous events fail closed rather than becoming privileged actions.
 
 ## Persistence, concurrency, and recovery
 
-If cursor/dedup state is not durable, the service remains supporting Alpha and must rely on downstream idempotency. A production promotion requires explicit durable cursor/replay storage and recovery tests.
+A non-durable cursor/deduplication implementation is supporting Alpha only and relies on downstream idempotency. Production promotion requires an explicit durable cursor/replay repository, transactional delivery intent, expiring claims, fencing tokens, poison-event isolation and restart/multi-instance tests.
 
-Remote effects, where present, must occur after durable intent or claim commit and before a separate outcome transaction. Possible-side-effect timeouts enter pending or reconciliation state; they never authorize blind retry or a second operation identity.
+Cursor advancement occurs only after durable downstream acceptance. A timeout after possible downstream acceptance enters unknown/reconciliation state; it never advances the cursor blindly, invents success or creates a second operation identity. Multiple replicas may share a cursor partition only with lease ownership and stale-writer fencing.
 
 ## Configuration and secrets
 
-Matrix homeserver/ingress settings, downstream consumer-entry URL, shared secrets/tokens, timeout/body limits, and runtime profile.
+Configuration includes Matrix homeserver and ingress identities, inbound verification material, downstream consumer-entry URL/principal, cursor partition, storage mode, worker identity, body/media bounds, batch/lease/poll/timeout limits and runtime profile.
 
-Production-like startup must fail before listening or working when required durable storage, credentials, trust anchors, or explicit modes are absent. Example values are not activation evidence.
+Production-like startup fails before listening when authentication, durable cursor storage, required schema, downstream trust, explicit modes or non-placeholder credentials are absent. Access tokens, sync tokens and signing material come from approved secret custody and never from committed examples.
 
 ## Security and trust boundaries
 
-Verify transport authentication/signatures where available, bound bodies, reject untrusted claimed user/room authority, disable redirect surprises, and avoid logging event bodies or access tokens.
+Verify inbound transport identity and signatures where supported; bind claimed sender/room/device fields to the verified source; bound decompressed bodies/media; reject unsafe redirects and cross-tenant mappings; redact access/sync tokens and message bodies from logs.
 
-Inputs must be bounded and validated before authority changes. Logs, metrics, traces, and errors exclude sensitive material, unrestricted payloads, and high-cardinality identity fields unless a reviewed contract explicitly permits them.
+Edits and redactions preserve the original source event relationship and cannot silently create a new privileged action. Metrics use bounded route/outcome labels, not raw event, room, sender or tenant identifiers. Downstream responses are untrusted until the owning contract and receipt validate.
 
 ## Verification
 
@@ -72,21 +72,21 @@ cargo clippy -p matrix-entry-adapter --all-targets -- -D warnings
 
 Required behavioral focus:
 
-- Authentication, body bounds, event normalization, duplicate event replay, cursor restart, downstream timeout, and no invented success.
-- Refactor pressure: the large `lib.rs` should be split without changing the public contract; new domains require separate modules and ownership.
+- Authentication, body bounds, event normalization, duplicate replay and cursor restart.
+- Downstream timeout/response loss, poison-event dead letter, redaction/edit handling and no invented success.
+- Multiple-instance claim/fencing behavior when durable cursor mode is introduced.
+- Boundary tests proving Matrix transport fields cannot grant identity, research, value, World/Game or finality authority.
 
 The exact candidate SHA must also pass the authoritative hosted workflow and appear in the generated immutable candidate manifest.
 
 ## Deployment and operations
 
-Run as a separate adapter with least-privilege Matrix and downstream credentials. Monitor cursor lag, duplicate hits, delivery failures, and authentication rejects.
+Run as a separate least-privilege adapter. Readiness must be false unless configuration is valid, the cursor store is in the declared mode and required downstream trust is available; liveness reports only process health. Monitor cursor lag, oldest unacknowledged event, duplicate hits, claim expiry, dead-letter age, delivery failures and authentication rejects.
 
-Operators record artifact identity, runtime profile, dependency identities, readiness, rollback boundary, retained evidence, alerts, and owner escalation. Repository CI does not replace representative-volume recovery, sustained load, credential custody, or independent approval.
+Rollback stops claims before switching binaries, preserves cursor/deduplication/dead-letter evidence and restarts only with a schema/protocol-compatible revision. Operators record artifact identity, runtime profile, Matrix and downstream identities, readiness dimensions, rollback boundary and owner escalation. Repository CI does not replace real homeserver, recovery, load or credential-custody evidence.
 
 ## Compatibility and change protocol
 
-Matrix event shape is translated into a versioned internal request. Unsupported event versions or ambiguous edits/redactions fail closed rather than creating a new domain action.
+Matrix event shape is translated into a versioned internal request. Command-filter, edit/redaction, identity mapping or cursor changes require compatibility fixtures and exact replay tests. A durable-store introduction uses expand/backfill/verify/cutover/contract steps without converting process-local observations into historical authority.
 
-Changes to authority, public types/routes, persistence, configuration, migrations, retry semantics, or topology require this contract, the module catalog, relevant ADR/protocol/traceability, executable tests, hosted gate wiring, and a new shared candidate trigger.
-
-No module document may declare repository closure or production authorization.
+Changes to authority, public routes/types, persistence, configuration, retry semantics or topology require this contract, the module catalog, Matrix architecture/threat model, executable tests, hosted gate wiring and a new shared candidate trigger. No module document may declare repository closure or production authorization.
