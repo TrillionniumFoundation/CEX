@@ -97,19 +97,33 @@ Required behavior:
 - real external evidence and the downloaded candidate manifest remain outside
   the source tree under approved external custody;
 - bundle validation requires both `--bundle` and `--candidate-manifest`;
-- the candidate-manifest bytes must match the declared SHA-256, pass
+- each supplied file is acquired once through a bounded, no-final-symlink,
+  regular-file read and copied to a private single-read immutable snapshot;
+  every parser and child validator consumes those snapshots, and the snapshots
+  are rechecked after validation;
+- the candidate-manifest snapshot must match the declared SHA-256, pass
   `scripts/check-release-baseline-manifest.py`, and match repository,
   commit/tree, migration
   `0088_enforce_provider_terminal_evidence_binding.sql`, and artifact scope;
+- because the authoritative manifest validator emits diagnostics before its
+  result, the intake checker accepts only its final complete trailing JSON object
+  together with a zero exit code, canonical schema, `status=ok`, and the exact
+  snapshot path;
 - accepted evidence cannot predate the generated candidate manifest or postdate
   bundle generation;
 - one immutable evidence object cannot be reused across gates;
+- no external gate record may reuse a candidate-manifest or repository evidence
+  URI or SHA-256, including candidate payload, hosted evidence, SBOM,
+  provenance, Cargo-lock, or migration evidence;
+- a repository-owned evidence identity, including CEX Actions and
+  `artifact://cex-p0-evidence-*`, cannot prove an external production gate;
 - V12-X8 `pass` requires exactly one record, and
   `final_human_decision` must be the same immutable record as V12-X8, including
   URI, digest, issuer, role, scope, candidate identity, and timestamp;
 - X8 cannot precede any accepted X1-X7 evidence;
 - `scripts/check-external-production-evidence-contract.py --self-test` exercises
-  eleven positive and negative binding cases;
+  the inherited eleven binding cases plus Sequence-50 mixed-output,
+  exact-snapshot, candidate-artifact-isolation, and repository-ownership cases;
 - structural validation always reports
   `checker_may_grant_production_authorization=false` and
   `production_authorization=not_granted`.
@@ -138,15 +152,15 @@ The active documentation set defines:
 8. protocol compatibility, migration, and retirement;
 9. requirement-to-code-to-test-to-gate traceability;
 10. complete-suite lint ownership;
-11. external-evidence intake with manifest, time, issuer, and X8 same-record
-    binding.
+11. external-evidence intake with exact snapshot, manifest, time, issuer,
+    candidate-artifact isolation, and X8 same-record binding.
 
 Documentation is complete only when the executable checker validates the
 authority set, workspace/catalog bijection, dedicated module contracts,
-external-evidence source contract, embedded regression self-tests, and referenced paths, and
-the exact-tree integrity record binds that success to the candidate. Word
-count, file presence, a README, template, or central plan alone is not
-completion.
+external-evidence source contract, embedded regression self-tests, and
+referenced paths, and the exact-tree integrity record binds that success to the
+candidate. Word count, file presence, a README, template, or central plan alone
+is not completion.
 
 ## 3. Candidate sequencing
 

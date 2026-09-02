@@ -1,48 +1,154 @@
 #!/usr/bin/env python3
-"""Add fail-closed candidate-manifest and temporal binding to external evidence."""
+"""Fail-closed external-evidence intake over one immutable candidate snapshot."""
 
 from __future__ import annotations
 
 import argparse
-import copy
 import hashlib
+import importlib.util
 import json
+import os
 import re
+import stat
 import subprocess
 import sys
-from datetime import datetime, timezone
+import tempfile
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE = ROOT / "scripts/check-external-production-evidence-contract-core.py"
+BINDING = ROOT / "scripts/check-external-production-evidence-binding-core.py"
 MANIFEST_CHECKER = ROOT / "scripts/check-release-baseline-manifest.py"
-EXPECTED_REPOSITORY = "TrillionniumFoundation/CEX"
-EXPECTED_MIGRATION_HEAD = "0088_enforce_provider_terminal_evidence_binding.sql"
-EXPECTED_SCOPE = (
-    "repository-exact-money-control-plane-plus-hepta-durability-doc-integrity-"
-    "full-suite-lint-receipt-recovery-and-trnm-production-config-hardening"
-)
-GATES = tuple(f"V12-X{index}" for index in range(1, 9))
-ROLES = {
-    "V12-X1": "independent_operations_recovery_owner",
-    "V12-X2": "independent_deployment_operations_owner",
-    "V12-X3": "real_provider_reconciliation_owner",
-    "V12-X4": "independent_security_custody_owner",
-    "V12-X5": "independent_sre_capacity_owner",
-    "V12-X6": "independent_security_operations_financial_reviewers",
-    "V12-X7": "responsible_legal_commercial_provider_authority",
-    "V12-X8": "final_human_release_authority",
-}
-SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+CONTRACT = ROOT / "docs/external-production-evidence-contract-v1.md"
+ADDENDUM = ROOT / "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md"
+TRACEABILITY = ROOT / "docs/traceability/v12-requirements-v1.json"
+TRIGGER = ROOT / "docs/release-evidence/p0-candidate-trigger.json"
+GATES = tuple(f"V12-X{i}" for i in range(1, 9))
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-FINAL_FIELDS = {
-    "decision", "uri", "sha256", "decided_at", "actor_id", "organization",
-    "role", "scope", "candidate_commit_sha", "candidate_tree_sha",
-}
+URI_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
+MAX_BYTES = 64 * 1024 * 1024
+MANIFEST_RESULT_SCHEMA = "cex.active-v12-manifest-guard.v1"
+MIGRATION_HEAD = "0088_enforce_provider_terminal_evidence_binding.sql"
+SEQUENCE = 50
 
 
-def run_json(arguments: list[str]) -> tuple[int, dict[str, Any] | None, str]:
+class IntakeError(Exception):
+    pass
+
+
+def load_binding() -> Any:
+    spec = importlib.util.spec_from_file_location("cex_binding_core", BINDING)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load external evidence binding core")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def state(value: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        int(value.st_dev),
+        int(value.st_ino),
+        int(value.st_size),
+        int(value.st_mtime_ns),
+        int(value.st_ctime_ns),
+    )
+
+
+def exact_read(path: Path, label: str) -> bytes:
+    try:
+        if path.is_symlink():
+            raise IntakeError(f"{label} path may not be a symlink")
+        resolved = path.resolve(strict=True)
+    except OSError as error:
+        raise IntakeError(f"cannot resolve {label}: {error}") from error
+    if within(resolved, ROOT):
+        raise IntakeError(f"{label} must remain outside the source tree")
+
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(resolved, flags)
+    except OSError as error:
+        raise IntakeError(f"cannot open {label} without following links: {error}") from error
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise IntakeError(f"{label} must be a regular file")
+        if before.st_size > MAX_BYTES:
+            raise IntakeError(f"{label} exceeds the {MAX_BYTES}-byte intake limit")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(descriptor, min(1024 * 1024, MAX_BYTES + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > MAX_BYTES:
+                raise IntakeError(f"{label} exceeds the {MAX_BYTES}-byte intake limit")
+        after = os.fstat(descriptor)
+        raw = b"".join(chunks)
+        if state(before) != state(after) or len(raw) != after.st_size:
+            raise IntakeError(f"{label} changed while its immutable bytes were read")
+        return raw
+    finally:
+        os.close(descriptor)
+
+
+def snapshot(directory: Path, name: str, raw: bytes) -> Path:
+    path = directory / name
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_BINARY", 0) | getattr(os, "O_CLOEXEC", 0)
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        view = memoryview(raw)
+        offset = 0
+        while offset < len(view):
+            count = os.write(descriptor, view[offset:])
+            if count <= 0:
+                raise IntakeError(f"cannot complete immutable snapshot write: {name}")
+            offset += count
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    os.chmod(path, 0o400)
+    return path
+
+
+def verify_snapshot(path: Path, raw: bytes, label: str) -> None:
+    try:
+        if path.read_bytes() != raw:
+            raise IntakeError(f"{label} snapshot changed during validation")
+    except OSError as error:
+        raise IntakeError(f"cannot verify {label} snapshot: {error}") from error
+
+
+def trailing_object(raw: str) -> dict[str, Any] | None:
+    decoder = json.JSONDecoder()
+    for index in range(len(raw) - 1, -1, -1):
+        if raw[index] != "{":
+            continue
+        try:
+            value, used = decoder.raw_decode(raw[index:])
+        except json.JSONDecodeError:
+            continue
+        if not raw[index + used :].strip() and isinstance(value, dict):
+            return value
+    return None
+
+
+def run(arguments: list[str]) -> tuple[int, dict[str, Any] | None, str]:
     completed = subprocess.run(
         arguments,
         cwd=ROOT,
@@ -51,460 +157,270 @@ def run_json(arguments: list[str]) -> tuple[int, dict[str, Any] | None, str]:
         stderr=subprocess.STDOUT,
         check=False,
     )
-    raw = completed.stdout.strip()
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError:
-        value = None
-    return completed.returncode, value if isinstance(value, dict) else None, raw or "<no output>"
+    output = completed.stdout.strip()
+    return completed.returncode, trailing_object(output), output or "<no output>"
 
 
-def parse_utc(value: object, label: str, problems: list[str]) -> datetime | None:
-    if not isinstance(value, str) or not value.endswith("Z"):
-        problems.append(f"{label} must be a UTC RFC3339 timestamp ending in Z")
-        return None
+def object_bytes(raw: bytes, label: str, problems: list[str]) -> dict[str, Any]:
     try:
-        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
-    except ValueError:
-        problems.append(f"{label} is not a valid RFC3339 timestamp")
-        return None
-    if parsed.tzinfo is None or parsed.utcoffset() != timezone.utc.utcoffset(parsed):
-        problems.append(f"{label} must resolve to UTC")
-        return None
-    return parsed
-
-
-def is_within(path: Path, root: Path) -> bool:
-    try:
-        path.resolve().relative_to(root.resolve())
-        return True
-    except (OSError, ValueError):
-        return False
-
-
-def validate_manifest_file(
-    path: Path, expected_digest: object, problems: list[str]
-) -> tuple[bytes, dict[str, Any], bool]:
-    if not isinstance(expected_digest, str) or not DIGEST_RE.fullmatch(expected_digest):
-        problems.append("repository_candidate_manifest.sha256 must be sha256:<64 lowercase hex>")
-    try:
-        if path.is_symlink():
-            problems.append("candidate manifest path may not be a symlink")
-            return b"", {}, False
-        resolved = path.resolve(strict=True)
-    except OSError as error:
-        problems.append(f"cannot resolve candidate manifest: {error}")
-        return b"", {}, False
-    if not resolved.is_file():
-        problems.append("candidate manifest path must reference a regular file")
-        return b"", {}, False
-    if is_within(resolved, ROOT):
-        problems.append("candidate manifest supplied for external intake must be outside the source tree")
-    try:
-        raw = resolved.read_bytes()
-    except OSError as error:
-        problems.append(f"cannot read candidate manifest bytes: {error}")
-        return b"", {}, False
-    if "sha256:" + hashlib.sha256(raw).hexdigest() != expected_digest:
-        problems.append(
-            "candidate manifest byte digest does not match "
-            "repository_candidate_manifest.sha256"
-        )
-    try:
-        parsed = json.loads(raw.decode("utf-8"))
+        value = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        problems.append(f"candidate manifest is not valid UTF-8 JSON: {error}")
-        return raw, {}, False
-    if not isinstance(parsed, dict):
-        problems.append("candidate manifest root must be an object")
-        return raw, {}, False
-    code, result, output = run_json(
-        [sys.executable, str(MANIFEST_CHECKER), str(resolved)]
-    )
-    validator_ok = (
-        code == 0
-        and isinstance(result, dict)
-        and result.get("status") == "ok"
-        and result.get("production_authorization") == "not_granted"
-    )
-    if not validator_ok:
-        problems.append("candidate manifest failed the authoritative validator: " + output)
-    return raw, parsed, validator_ok
+        problems.append(f"{label} is not valid UTF-8 JSON: {error}")
+        return {}
+    if not isinstance(value, dict):
+        problems.append(f"{label} root must be an object")
+        return {}
+    return value
 
 
-def validate_binding(
-    bundle: dict[str, Any],
-    manifest_raw: bytes,
-    manifest: dict[str, Any],
-    *,
-    validator_ok: bool,
-    bundle_path: Path | None = None,
+def child_result(
+    code: int,
+    result: dict[str, Any] | None,
+    output: str,
+    label: str,
 ) -> tuple[list[str], bool]:
+    if result is None:
+        return [f"{label} did not emit a trailing JSON object: {output}"], False
     problems: list[str] = []
-    if bundle_path is not None:
-        try:
-            if bundle_path.is_symlink():
-                problems.append("external evidence bundle path may not be a symlink")
-            resolved = bundle_path.resolve(strict=True)
-            if not resolved.is_file():
-                problems.append("external evidence bundle path must reference a regular file")
-            if is_within(resolved, ROOT):
-                problems.append("live external evidence bundle must remain outside the source tree")
-        except OSError as error:
-            problems.append(f"cannot resolve external evidence bundle: {error}")
-    if not validator_ok:
-        problems.append("candidate manifest validator result is not an authoritative pass")
+    values = result.get("problems")
+    if isinstance(values, list):
+        problems.extend(f"{label}: {item}" for item in values)
+    elif result.get("status") != "ok":
+        problems.append(f"{label} failed without structured diagnostics")
+    if result.get("schema") != "cex.external-production-evidence-contract-check.v1":
+        problems.append(f"{label} emitted an unexpected schema")
+    if result.get("production_authorization") != "not_granted":
+        problems.append(f"{label} changed production authorization")
+    if result.get("checker_may_grant_production_authorization") is not False:
+        problems.append(f"{label} may not grant production authorization")
+    if code != 0 and not values:
+        problems.append(f"{label} exited nonzero without diagnostics")
+    return problems, code == 0 and result.get("status") == "ok" and not problems
 
-    candidate = bundle.get("candidate")
-    if not isinstance(candidate, dict):
-        return problems + ["candidate must be an object"], False
-    commit = candidate.get("commit_sha")
-    tree = candidate.get("tree_sha")
-    scope = candidate.get("artifact_scope")
-    if candidate.get("repository") != EXPECTED_REPOSITORY:
-        problems.append("bundle candidate repository is invalid")
-    if not isinstance(commit, str) or not SHA_RE.fullmatch(commit):
-        problems.append("bundle candidate commit SHA is invalid")
-        commit = ""
-    if not isinstance(tree, str) or not SHA_RE.fullmatch(tree):
-        problems.append("bundle candidate tree SHA is invalid")
-        tree = ""
-    if candidate.get("migration_head") != EXPECTED_MIGRATION_HEAD:
-        problems.append("bundle candidate migration head must equal " + EXPECTED_MIGRATION_HEAD)
-    if scope != EXPECTED_SCOPE:
-        problems.append("bundle candidate artifact_scope is not the active scope")
 
-    reference = bundle.get("repository_candidate_manifest")
-    expected_digest = reference.get("sha256") if isinstance(reference, dict) else None
-    if not isinstance(reference, dict):
-        problems.append("repository_candidate_manifest must be an object")
-    if not isinstance(expected_digest, str) or not DIGEST_RE.fullmatch(expected_digest):
-        problems.append("repository_candidate_manifest.sha256 must be sha256:<64 lowercase hex>")
-    elif "sha256:" + hashlib.sha256(manifest_raw).hexdigest() != expected_digest:
-        problems.append(
-            "candidate manifest byte digest does not match "
-            "repository_candidate_manifest.sha256"
-        )
+def collect(value: object, uris: set[str], digests: set[str]) -> None:
+    if isinstance(value, dict):
+        for child in value.values():
+            collect(child, uris, digests)
+    elif isinstance(value, list):
+        for child in value:
+            collect(child, uris, digests)
+    elif isinstance(value, str):
+        if DIGEST_RE.fullmatch(value):
+            digests.add(value)
+        if URI_RE.match(value):
+            uris.add(value)
 
-    if manifest.get("schema") != "cex.release-baseline-manifest.v1":
-        problems.append("candidate manifest schema is invalid")
-    if manifest.get("status") != "candidate":
-        problems.append("candidate manifest must have status=candidate")
-    if manifest.get("production_ready") is not False:
-        problems.append("candidate manifest must keep production_ready=false")
-    if manifest.get("production_authorization") != "not_granted":
-        problems.append("candidate manifest must keep production_authorization=not_granted")
-    if manifest.get("qualification_scope") != scope:
-        problems.append("candidate manifest qualification_scope does not match artifact_scope")
-    source = manifest.get("source")
-    if not isinstance(source, dict):
-        problems.append("candidate manifest source must be an object")
-    else:
-        for field, expected in (
-            ("repository", EXPECTED_REPOSITORY),
-            ("commit_sha", commit),
-            ("tree_sha", tree),
-        ):
-            if source.get(field) != expected:
-                problems.append(f"candidate manifest {field} does not match the bundle")
-    database = manifest.get("database")
-    if not isinstance(database, dict):
-        problems.append("candidate manifest database must be an object")
-    elif database.get("migration_head") != EXPECTED_MIGRATION_HEAD:
-        problems.append("candidate manifest migration head does not match active authority")
 
-    manifest_time = parse_utc(
-        manifest.get("generated_at"), "candidate_manifest.generated_at", problems
+def repository_uri(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    lowered = value.lower()
+    if lowered.startswith("gh://trillionniumfoundation/cex/"):
+        return True
+    if lowered.startswith("artifact://cex-p0-evidence-"):
+        return True
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return False
+    return (
+        parsed.netloc.lower()
+        in {"github.com", "api.github.com", "raw.githubusercontent.com"}
+        and "/trillionniumfoundation/cex/" in parsed.path.lower() + "/"
     )
-    bundle_time = parse_utc(bundle.get("generated_at"), "generated_at", problems)
-    if manifest_time is not None and bundle_time is not None and manifest_time > bundle_time:
-        problems.append("external evidence bundle predates its candidate manifest")
 
+
+def identity_isolation(bundle: dict[str, Any], manifest: dict[str, Any]) -> list[str]:
+    reserved_uris: set[str] = set()
+    reserved_digests: set[str] = set()
+    collect(manifest, reserved_uris, reserved_digests)
+    reference = bundle.get("repository_candidate_manifest")
+    if isinstance(reference, dict):
+        if isinstance(reference.get("uri"), str):
+            reserved_uris.add(reference["uri"])
+        if isinstance(reference.get("sha256"), str):
+            reserved_digests.add(reference["sha256"])
+
+    problems: list[str] = []
     gates = bundle.get("gates")
-    if not isinstance(gates, list) or len(gates) != 8:
-        return problems + [
-            "external evidence bundle must contain exactly V12-X1 through V12-X8"
-        ], False
-    statuses: dict[str, str] = {}
-    records: dict[str, list[dict[str, Any]]] = {}
-    observed: list[str] = []
-    seen_uris: set[str] = set()
-    seen_digests: set[str] = set()
+    if not isinstance(gates, list):
+        return problems
     for gate_index, gate in enumerate(gates):
-        label = f"gates[{gate_index}]"
-        if not isinstance(gate, dict):
-            problems.append(f"{label} must be an object")
-            continue
-        gate_id = str(gate.get("id"))
-        observed.append(gate_id)
-        status = str(gate.get("status"))
-        statuses[gate_id] = status
-        evidence = gate.get("evidence")
+        evidence = gate.get("evidence") if isinstance(gate, dict) else None
         if not isinstance(evidence, list):
-            problems.append(f"{label}.evidence must be an array")
-            evidence = []
-        gate_records: list[dict[str, Any]] = []
+            continue
         for record_index, record in enumerate(evidence):
-            record_label = f"{label}.evidence[{record_index}]"
             if not isinstance(record, dict):
-                problems.append(f"{record_label} must be an object")
                 continue
+            label = f"gates[{gate_index}].evidence[{record_index}]"
             uri = record.get("uri")
             digest = record.get("sha256")
-            if isinstance(uri, str):
-                if uri in seen_uris:
-                    problems.append(f"{record_label}.uri reuses another gate's evidence object")
-                seen_uris.add(uri)
-            if isinstance(digest, str):
-                if digest in seen_digests:
-                    problems.append(f"{record_label}.sha256 reuses another gate's evidence object")
-                seen_digests.add(digest)
-            executed = parse_utc(
-                record.get("executed_at"), f"{record_label}.executed_at", problems
-            )
-            if executed is not None and manifest_time is not None and executed < manifest_time:
-                problems.append(f"{record_label} predates the candidate manifest")
-            if executed is not None and bundle_time is not None and executed > bundle_time:
-                problems.append(f"{record_label} is later than bundle.generated_at")
-            issuer = record.get("issuer")
-            gate_records.append(
-                {
-                    "uri": uri,
-                    "sha256": digest,
-                    "actor_id": issuer.get("actor_id") if isinstance(issuer, dict) else None,
-                    "organization": issuer.get("organization") if isinstance(issuer, dict) else None,
-                    "role": issuer.get("role") if isinstance(issuer, dict) else None,
-                    "executed_at": executed,
-                    "scope": record.get("scope"),
-                    "candidate_commit_sha": record.get("candidate_commit_sha"),
-                    "candidate_tree_sha": record.get("candidate_tree_sha"),
-                }
-            )
-        records[gate_id] = gate_records
-    if tuple(observed) != GATES:
-        problems.append("external evidence bundle gate order/identity is invalid")
-
-    final = bundle.get("final_human_decision")
-    final_time: datetime | None = None
-    if statuses.get("V12-X8") == "pass":
-        if not all(statuses.get(gate_id) == "pass" for gate_id in GATES[:-1]):
-            problems.append("V12-X8 cannot pass before V12-X1 through V12-X7 pass")
-        x8_records = records.get("V12-X8", [])
-        if len(x8_records) != 1:
-            problems.append("V12-X8 pass requires exactly one canonical evidence record")
-            x8 = None
-        else:
-            x8 = x8_records[0]
-        if not isinstance(final, dict) or set(final) != FINAL_FIELDS:
-            problems.append("final_human_decision field set is not canonical")
-        else:
-            final_time = parse_utc(
-                final.get("decided_at"), "final_human_decision.decided_at", problems
-            )
-            if final.get("role") != ROLES["V12-X8"]:
-                problems.append(
-                    "final_human_decision.role is not the final human release authority"
-                )
-            if x8 is not None:
-                for field in (
-                    "uri", "sha256", "actor_id", "organization", "role", "scope",
-                    "candidate_commit_sha", "candidate_tree_sha",
-                ):
-                    if final.get(field) != x8.get(field):
-                        problems.append(
-                            "final human decision must be the same immutable record "
-                            f"as V12-X8: mismatch at {field}"
-                        )
-                if final_time != x8.get("executed_at"):
-                    problems.append(
-                        "final human decision must be the same immutable record "
-                        "as V12-X8: decided_at must equal executed_at"
-                    )
-            if final_time is not None:
-                for gate_id in GATES[:-1]:
-                    for record in records.get(gate_id, []):
-                        executed = record.get("executed_at")
-                        if isinstance(executed, datetime) and executed > final_time:
-                            problems.append(
-                                "final human decision predates accepted evidence for " + gate_id
-                            )
-                if bundle_time is not None and final_time > bundle_time:
-                    problems.append("final human decision is later than bundle.generated_at")
-    elif final is not None:
-        problems.append("final_human_decision must be null unless V12-X8 is pass")
-
-    final_go = isinstance(final, dict) and final.get("decision") == "go"
-    eligible = (
-        not problems
-        and all(statuses.get(gate_id) == "pass" for gate_id in GATES)
-        and final_go
-    )
-    return problems, eligible
+            if isinstance(uri, str) and uri in reserved_uris:
+                problems.append(f"{label}.uri reuses candidate-manifest or repository evidence")
+            if isinstance(digest, str) and digest in reserved_digests:
+                problems.append(f"{label}.sha256 reuses candidate-manifest or repository evidence")
+            if repository_uri(uri):
+                problems.append(f"{label}.uri is repository-owned and cannot prove an external gate")
+    return problems
 
 
-def base_manifest() -> dict[str, Any]:
-    return {
-        "schema": "cex.release-baseline-manifest.v1",
-        "status": "candidate",
-        "qualification_scope": EXPECTED_SCOPE,
-        "source": {
-            "repository": EXPECTED_REPOSITORY,
-            "commit_sha": "1" * 40,
-            "tree_sha": "2" * 40,
-        },
-        "database": {"migration_head": EXPECTED_MIGRATION_HEAD},
-        "generated_at": "2026-09-02T00:00:00Z",
-        "production_ready": False,
-        "production_authorization": "not_granted",
-    }
+def wiring() -> list[str]:
+    problems: list[str] = []
+    for path in (CORE, BINDING, MANIFEST_CHECKER, CONTRACT, ADDENDUM, TRACEABILITY, TRIGGER):
+        if not path.is_file():
+            problems.append(f"missing required Sequence-50 path: {path.relative_to(ROOT)}")
 
+    def text(path: Path, label: str) -> str:
+        try:
+            return path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            problems.append(f"cannot read {label}: {error}")
+            return ""
 
-def base_bundle(manifest_raw: bytes) -> dict[str, Any]:
-    gates: list[dict[str, Any]] = []
-    for index, gate_id in enumerate(GATES, start=1):
-        evidence = {
-            "uri": f"artifact://external/{gate_id.lower()}-immutable",
-            "sha256": f"sha256:{index:064x}",
-            "issuer": {
-                "actor_id": f"actor-{index}",
-                "organization": f"organization-{index}",
-                "role": ROLES[gate_id],
-                "independent_of_repository_automation": True,
-            },
-            "executed_at": f"2026-09-02T00:{index:02d}:00Z",
-            "decision": "pass",
-            "scope": f"independently retained production evidence scope for {gate_id}",
-            "candidate_commit_sha": "1" * 40,
-            "candidate_tree_sha": "2" * 40,
-            "waiver": None,
+    contract = text(CONTRACT, "external evidence contract")
+    for marker in (
+        "single-read immutable snapshot",
+        "candidate-manifest or repository evidence",
+        "trailing JSON object",
+        "repository-owned",
+    ):
+        if marker not in contract:
+            problems.append(f"external evidence contract lacks Sequence-50 marker: {marker}")
+
+    addendum = text(ADDENDUM, "implementation addendum")
+    for marker in (
+        "single-read immutable snapshot",
+        "repository-owned evidence identity",
+        "trailing JSON object",
+    ):
+        if marker not in addendum:
+            problems.append(f"implementation addendum lacks Sequence-50 marker: {marker}")
+
+    try:
+        trace = json.loads(TRACEABILITY.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        trace = {}
+        problems.append(f"cannot read v12 traceability: {error}")
+    requirements = trace.get("requirements") if isinstance(trace, dict) else None
+    v12_h = next(
+        (item for item in requirements if isinstance(item, dict) and item.get("id") == "V12-H"),
+        None,
+    ) if isinstance(requirements, list) else None
+    if not isinstance(v12_h, dict):
+        problems.append("V12-H traceability entry is missing")
+    else:
+        observed = {str(item) for item in v12_h.get("implementation", [])}
+        required = {
+            "scripts/check-external-production-evidence-contract-core.py",
+            "scripts/check-external-production-evidence-binding-core.py",
+            "scripts/check-external-production-evidence-contract.py",
         }
-        gates.append(
-            {
-                "id": gate_id,
-                "classification": "external",
-                "self_certifiable": False,
-                "status": "pass",
-                "required_issuer_role": ROLES[gate_id],
-                "evidence": [evidence],
-            }
-        )
-    x8 = gates[-1]["evidence"][0]
-    issuer = x8["issuer"]
-    return {
-        "schema": "cex.external-production-evidence-bundle.v1",
-        "status": "evidence_bundle",
-        "template": False,
-        "candidate": {
-            "repository": EXPECTED_REPOSITORY,
-            "commit_sha": "1" * 40,
-            "tree_sha": "2" * 40,
-            "migration_head": EXPECTED_MIGRATION_HEAD,
-            "artifact_scope": EXPECTED_SCOPE,
-        },
-        "repository_candidate_manifest": {
-            "uri": "artifact://candidate/exact-manifest",
-            "sha256": "sha256:" + hashlib.sha256(manifest_raw).hexdigest(),
-        },
-        "generated_at": "2026-09-02T00:20:00Z",
-        "retention_policy_id": "external-custody-v1",
-        "production_authorization": "not_granted",
-        "gates": gates,
-        "final_human_decision": {
-            "decision": "go",
-            "uri": x8["uri"],
-            "sha256": x8["sha256"],
-            "decided_at": x8["executed_at"],
-            "actor_id": issuer["actor_id"],
-            "organization": issuer["organization"],
-            "role": issuer["role"],
-            "scope": x8["scope"],
-            "candidate_commit_sha": "1" * 40,
-            "candidate_tree_sha": "2" * 40,
-        },
-        "revocations": [],
-    }
-
-
-def run_self_tests() -> tuple[list[str], int]:
-    manifest = base_manifest()
-    raw = (json.dumps(manifest, sort_keys=True) + "\n").encode()
-    original = base_bundle(raw)
-    cases: list[tuple[str, dict[str, Any], dict[str, Any], bytes, str | None]] = []
-
-    cases.append(("valid", copy.deepcopy(original), copy.deepcopy(manifest), raw, None))
-
-    value = copy.deepcopy(original)
-    value["candidate"]["migration_head"] = "0087_old.sql"
-    cases.append(("migration", value, copy.deepcopy(manifest), raw, "migration head"))
-
-    value = copy.deepcopy(original)
-    value["repository_candidate_manifest"]["sha256"] = "sha256:" + "0" * 64
-    cases.append(("digest", value, copy.deepcopy(manifest), raw, "byte digest"))
-
-    changed_manifest = copy.deepcopy(manifest)
-    changed_manifest["source"]["commit_sha"] = "3" * 40
-    changed_raw = (json.dumps(changed_manifest, sort_keys=True) + "\n").encode()
-    value = copy.deepcopy(original)
-    value["repository_candidate_manifest"]["sha256"] = (
-        "sha256:" + hashlib.sha256(changed_raw).hexdigest()
-    )
-    cases.append(("manifest identity", value, changed_manifest, changed_raw, "commit_sha"))
-
-    late_manifest = copy.deepcopy(manifest)
-    late_manifest["generated_at"] = "2026-09-02T00:10:00Z"
-    late_raw = (json.dumps(late_manifest, sort_keys=True) + "\n").encode()
-    value = copy.deepcopy(original)
-    value["repository_candidate_manifest"]["sha256"] = (
-        "sha256:" + hashlib.sha256(late_raw).hexdigest()
-    )
-    cases.append(
-        ("manifest chronology", value, late_manifest, late_raw, "predates the candidate manifest")
-    )
-
-    value = copy.deepcopy(original)
-    value["final_human_decision"]["uri"] = "artifact://external/different-final"
-    cases.append(("final split", value, copy.deepcopy(manifest), raw, "same immutable"))
-
-    value = copy.deepcopy(original)
-    x8 = value["gates"][-1]["evidence"][0]
-    x8["executed_at"] = "2026-09-02T00:03:00Z"
-    value["final_human_decision"]["decided_at"] = x8["executed_at"]
-    cases.append(("time order", value, copy.deepcopy(manifest), raw, "predates"))
-
-    value = copy.deepcopy(original)
-    value["generated_at"] = "2026-09-02T00:04:00Z"
-    cases.append(("bundle time", value, copy.deepcopy(manifest), raw, "generated_at"))
-
-    value = copy.deepcopy(original)
-    first = value["gates"][0]["evidence"][0]
-    second = value["gates"][1]["evidence"][0]
-    second["uri"], second["sha256"] = first["uri"], first["sha256"]
-    cases.append(("reuse", value, copy.deepcopy(manifest), raw, "reuses"))
-
-    value = copy.deepcopy(original)
-    extra = copy.deepcopy(value["gates"][-1]["evidence"][0])
-    extra["uri"] = "artifact://external/v12-x8-second"
-    extra["sha256"] = "sha256:" + "f" * 64
-    value["gates"][-1]["evidence"].append(extra)
-    cases.append(("multiple x8", value, copy.deepcopy(manifest), raw, "exactly one"))
-
-    value = copy.deepcopy(original)
-    cases.append(("validator failure", value, copy.deepcopy(manifest), raw, "validator result"))
-
-    failures: list[str] = []
-    for name, bundle, candidate_manifest, candidate_raw, expected in cases:
-        validator_ok = name != "validator failure"
-        problems, eligible = validate_binding(
-            bundle, candidate_raw, candidate_manifest, validator_ok=validator_ok
-        )
-        if expected is None:
-            if problems or not eligible:
-                failures.append(f"{name}: expected success, got {problems!r}")
-        elif eligible or not any(expected in item for item in problems):
-            failures.append(
-                f"{name}: expected rejection containing {expected!r}, got {problems!r}"
+        if required - observed:
+            problems.append(
+                "V12-H implementation omits Sequence-50 evidence paths: "
+                + ",".join(sorted(required - observed))
             )
-    return failures, len(cases)
+
+    try:
+        trigger = json.loads(TRIGGER.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        trigger = {}
+        problems.append(f"cannot read shared candidate trigger: {error}")
+    if not isinstance(trigger, dict) or trigger.get("sequence") != SEQUENCE:
+        problems.append(f"shared candidate trigger must be sequence {SEQUENCE}")
+    if isinstance(trigger, dict) and trigger.get("production_authorization") != "not_granted":
+        problems.append("shared candidate trigger changed production authorization")
+    return problems
+
+
+def self_tests(binding: Any) -> tuple[list[str], int]:
+    failures, count = binding.run_self_tests()
+    mixed = "diagnostic\n" + json.dumps(
+        {"schema": MANIFEST_RESULT_SCHEMA, "status": "ok"}, indent=2
+    )
+    count += 1
+    if (trailing_object(mixed) or {}).get("status") != "ok":
+        failures.append("trailing JSON parser rejected authoritative mixed stdout")
+    count += 1
+    if trailing_object(mixed + "\ntrailing garbage") is not None:
+        failures.append("trailing JSON parser accepted trailing data")
+
+    manifest = binding.base_manifest()
+    raw = (json.dumps(manifest, sort_keys=True) + "\n").encode()
+    original = binding.base_bundle(raw)
+
+    value = json.loads(json.dumps(original))
+    value["gates"][0]["evidence"][0]["uri"] = value["repository_candidate_manifest"]["uri"]
+    count += 1
+    if not any("candidate-manifest" in item for item in identity_isolation(value, manifest)):
+        failures.append("candidate-manifest URI alias was accepted")
+
+    value = json.loads(json.dumps(original))
+    value["gates"][0]["evidence"][0]["sha256"] = value["repository_candidate_manifest"]["sha256"]
+    count += 1
+    if not any("candidate-manifest" in item for item in identity_isolation(value, manifest)):
+        failures.append("candidate-manifest digest alias was accepted")
+
+    nested = json.loads(json.dumps(manifest))
+    nested["build"] = {"artifacts": [{
+        "uri": "artifact://cex-p0-evidence-internal/candidate.json",
+        "sha256": "sha256:" + "e" * 64,
+    }]}
+    value = json.loads(json.dumps(original))
+    value["gates"][0]["evidence"][0].update(nested["build"]["artifacts"][0])
+    count += 1
+    if len(identity_isolation(value, nested)) < 2:
+        failures.append("nested candidate artifact identity was accepted")
+
+    value = json.loads(json.dumps(original))
+    value["gates"][0]["evidence"][0]["uri"] = (
+        "gh://TrillionniumFoundation/CEX/actions/runs/1/attempts/1"
+    )
+    count += 1
+    if not any("repository-owned" in item for item in identity_isolation(value, manifest)):
+        failures.append("repository-owned Actions URI was accepted")
+
+    count += 1
+    try:
+        with tempfile.TemporaryDirectory(prefix="cex-external-single-read-") as directory:
+            source = Path(directory) / "source.json"
+            source.write_bytes(b'{"schema":"test"}\n')
+            value = exact_read(source, "self-test input")
+            target = Path(directory) / "snapshots"
+            target.mkdir(mode=0o700)
+            copied = snapshot(target, "input.json", value)
+            verify_snapshot(copied, value, "self-test")
+    except (OSError, IntakeError) as error:
+        failures.append(f"single-read snapshot self-test failed: {error}")
+    return failures, count
+
+
+def emit(
+    mode: str,
+    problems: list[str],
+    eligible: bool = False,
+    cases: int | None = None,
+) -> int:
+    result: dict[str, Any] = {
+        "schema": (
+            "cex.external-production-evidence-binding-self-test.v1"
+            if mode == "self_test"
+            else "cex.external-production-evidence-contract-check.v1"
+        ),
+        "status": "failed" if problems else "ok",
+        "gate_ids": list(GATES),
+        "production_authorization": "not_granted",
+        "checker_may_grant_production_authorization": False,
+        "problems": problems,
+    }
+    if mode == "self_test":
+        result["cases"] = cases
+    else:
+        result["mode"] = mode
+        result["structurally_eligible_for_human_decision"] = eligible
+    print(json.dumps(result, indent=2, ensure_ascii=False, sort_keys=True))
+    return 1 if problems else 0
 
 
 def main() -> int:
@@ -515,89 +431,96 @@ def main() -> int:
     modes.add_argument("--self-test", action="store_true")
     parser.add_argument("--candidate-manifest", type=Path)
     args = parser.parse_args()
-
     if args.bundle is not None and args.candidate_manifest is None:
         parser.error("--candidate-manifest is required with --bundle")
     if args.bundle is None and args.candidate_manifest is not None:
         parser.error("--candidate-manifest is only valid with --bundle")
 
+    try:
+        binding = load_binding()
+    except Exception as error:
+        return emit(
+            "self_test" if args.self_test else "contract_only",
+            [f"cannot load external evidence binding core: {error}"],
+            cases=0 if args.self_test else None,
+        )
+
     if args.self_test:
-        failures, count = run_self_tests()
-        result = {
-            "schema": "cex.external-production-evidence-binding-self-test.v1",
-            "status": "failed" if failures else "ok",
-            "cases": count,
-            "production_authorization": "not_granted",
-            "checker_may_grant_production_authorization": False,
-            "problems": failures,
-        }
-        print(json.dumps(result, indent=2, sort_keys=True))
-        return 1 if failures else 0
+        failures, count = self_tests(binding)
+        return emit("self_test", failures, cases=count)
 
-    core_args = [sys.executable, str(CORE)]
     if args.contract_only:
-        core_args.append("--contract-only")
-    else:
-        core_args.extend(["--bundle", str(args.bundle)])
-    core_code, core, core_raw = run_json(core_args)
+        code, result, output = run([sys.executable, str(CORE), "--contract-only"])
+        problems, _ = child_result(code, result, output, "external evidence core")
+        problems.extend(wiring())
+        return emit("contract_only", problems)
+
+    try:
+        bundle_raw = exact_read(args.bundle, "external evidence bundle")
+        manifest_raw = exact_read(args.candidate_manifest, "candidate manifest")
+    except IntakeError as error:
+        return emit("bundle", [str(error)])
+
     problems: list[str] = []
-    if core is None:
-        problems.append("external evidence core did not emit JSON: " + core_raw)
-        core_eligible = False
-    else:
-        core_problems = core.get("problems")
-        if isinstance(core_problems, list):
-            problems.extend("core: " + str(item) for item in core_problems)
-        if core_code != 0 and not core_problems:
-            problems.append("external evidence core failed without diagnostics")
-        core_eligible = core.get("structurally_eligible_for_human_decision") is True
+    bundle = object_bytes(bundle_raw, "external evidence bundle", problems)
+    manifest = object_bytes(manifest_raw, "candidate manifest", problems)
+    core_eligible = False
+    binding_eligible = False
 
-    hardening_eligible = False
-    mode = "contract_only"
-    if args.bundle is not None and args.candidate_manifest is not None:
-        mode = "bundle"
-        bundle_path = args.bundle
-        try:
-            bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-            problems.append(f"cannot read external evidence bundle: {error}")
-            bundle = {}
-        if not isinstance(bundle, dict):
-            problems.append("external evidence bundle root must be an object")
-            bundle = {}
-        reference = bundle.get("repository_candidate_manifest")
-        expected_digest = reference.get("sha256") if isinstance(reference, dict) else None
-        manifest_raw, manifest, validator_ok = validate_manifest_file(
-            args.candidate_manifest, expected_digest, problems
-        )
-        binding_problems, hardening_eligible = validate_binding(
-            bundle,
-            manifest_raw,
-            manifest,
-            validator_ok=validator_ok,
-            bundle_path=bundle_path,
-        )
-        problems.extend(binding_problems)
+    try:
+        with tempfile.TemporaryDirectory(prefix="cex-external-snapshot-") as directory:
+            root = Path(directory)
+            bundle_path = snapshot(root, "bundle.json", bundle_raw)
+            manifest_path = snapshot(root, "candidate-manifest.json", manifest_raw)
 
-    structurally_eligible = (
-        mode == "bundle"
-        and not problems
-        and core_eligible
-        and hardening_eligible
+            code, result, output = run(
+                [sys.executable, str(MANIFEST_CHECKER), str(manifest_path)]
+            )
+            manifest_ok = (
+                code == 0
+                and isinstance(result, dict)
+                and result.get("schema") == MANIFEST_RESULT_SCHEMA
+                and result.get("status") == "ok"
+                and result.get("expected_migration_head") == MIGRATION_HEAD
+                and result.get("manifest") == str(manifest_path)
+            )
+            if not manifest_ok:
+                problems.append(
+                    "candidate manifest failed the authoritative trailing-JSON "
+                    "validator contract: " + output
+                )
+
+            code, result, output = run(
+                [sys.executable, str(CORE), "--bundle", str(bundle_path)]
+            )
+            child, core_ok = child_result(code, result, output, "external evidence core")
+            problems.extend(child)
+            core_eligible = (
+                core_ok
+                and isinstance(result, dict)
+                and result.get("structurally_eligible_for_human_decision") is True
+            )
+
+            child, binding_eligible = binding.validate_binding(
+                bundle,
+                manifest_raw,
+                manifest,
+                validator_ok=manifest_ok,
+                bundle_path=bundle_path,
+            )
+            problems.extend(child)
+            problems.extend(identity_isolation(bundle, manifest))
+            verify_snapshot(bundle_path, bundle_raw, "external evidence bundle")
+            verify_snapshot(manifest_path, manifest_raw, "candidate manifest")
+    except (OSError, IntakeError) as error:
+        problems.append(str(error))
+
+    return emit(
+        "bundle",
+        problems,
+        not problems and core_eligible and binding_eligible,
     )
-    result = {
-        "schema": "cex.external-production-evidence-contract-check.v1",
-        "status": "failed" if problems else "ok",
-        "mode": mode,
-        "gate_ids": list(GATES),
-        "structurally_eligible_for_human_decision": structurally_eligible,
-        "production_authorization": "not_granted",
-        "checker_may_grant_production_authorization": False,
-        "problems": problems,
-    }
-    print(json.dumps(result, indent=2, ensure_ascii=False, sort_keys=True))
-    return 1 if problems else 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())
