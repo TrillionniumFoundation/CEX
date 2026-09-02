@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Validate complete, one-to-one technical documentation for the Cargo workspace."""
+"""Validate one-to-one technical documentation for the Cargo workspace.
+
+The checker validates structure and source facts rather than accepting file
+presence or word count alone. It is a repository-candidate rejection gate and
+cannot grant production authorization.
+"""
 
 from __future__ import annotations
 
@@ -50,8 +55,14 @@ EXPECTED_EXTERNAL_COMPONENTS = {
     "matrix-homeserver",
     "content-addressed-object-store",
     "external-providers-and-agents",
+    "trillionnium-world-fixture",
+    "trillionnium-game-runtime",
 }
 MACHINE_PATH = re.compile(r"(?:^|[\s`])/(?:home|data|Users)/|\b[A-Za-z]:\\")
+PLACEHOLDER = re.compile(
+    r"\b(?:TODO|TBD|FIXME|lorem ipsum|coming soon|placeholder text)\b",
+    re.IGNORECASE,
+)
 PROBLEMS: list[str] = []
 
 
@@ -59,7 +70,9 @@ def problem(message: str) -> None:
     PROBLEMS.append(message)
 
 
-def repository_path(value: object, label: str, *, require_file: bool = True) -> Path | None:
+def repository_path(
+    value: object, label: str, *, require_file: bool = True
+) -> Path | None:
     if not isinstance(value, str) or not value:
         problem(f"{label} must be a non-empty repository path")
         return None
@@ -160,12 +173,44 @@ def index_link_for_document(document: str) -> str | None:
     return f"]({relative.as_posix()})"
 
 
+def explicit_manifest_targets(member: str, manifest: dict[str, Any]) -> set[str]:
+    result: set[str] = set()
+    member_path = ROOT / member
+    for conventional in ("src/lib.rs", "src/main.rs"):
+        if (member_path / conventional).is_file():
+            result.add(f"{member}/{conventional}")
+
+    for key in ("bin", "test", "example", "bench"):
+        entries = manifest.get(key)
+        if entries is None:
+            continue
+        if not isinstance(entries, list):
+            problem(f"{member}/Cargo.toml [[{key}]] entries must be an array")
+            continue
+        for index, entry in enumerate(entries):
+            if not isinstance(entry, dict):
+                problem(f"{member}/Cargo.toml [[{key}]][{index}] must be a table")
+                continue
+            path = entry.get("path")
+            if isinstance(path, str) and path:
+                result.add(f"{member}/{path}")
+    package = manifest.get("package")
+    build_path = package.get("build") if isinstance(package, dict) else None
+    if isinstance(build_path, str) and build_path:
+        result.add(f"{member}/{build_path}")
+    return result
+
+
 def validate_document(
     *,
     member: str,
     package: str,
+    kind: str,
+    deployable: bool,
     document: str,
     owner: str,
+    entrypoints: list[str],
+    commands: list[str],
     index_text: str,
 ) -> None:
     path = repository_path(document, f"{member}.documentation")
@@ -182,15 +227,41 @@ def validate_document(
     for marker in required_markers:
         if marker not in text:
             problem(f"{document} lacks required marker: {marker}")
+
     for marker in REQUIRED_SECTIONS:
         body = section_body(text, marker)
-        if body and len(body) < 80:
+        if not body:
+            continue
+        if len(body) < 80:
             problem(f"{document} section is too shallow: {marker}")
+        if PLACEHOLDER.search(body):
+            problem(f"{document} section contains placeholder language: {marker}")
+
     if MACHINE_PATH.search(text):
         problem(f"{document} contains a machine-specific absolute path")
     lowered = text.lower()
     if "production authorization: `granted`" in lowered or "production-ready: true" in lowered:
         problem(f"{document} improperly claims production authorization")
+    if "repository closed" in lowered and "not" not in lowered:
+        problem(f"{document} may not self-declare repository closure")
+
+    for entrypoint in entrypoints:
+        if f"`{entrypoint}`" not in text:
+            problem(f"{document} does not document catalog source entry point: {entrypoint}")
+    for command in commands:
+        if command not in text:
+            problem(f"{document} does not document verification command: {command}")
+
+    if deployable:
+        deployment = section_body(text, "## Deployment and operations").lower()
+        if "rollback" not in deployment:
+            problem(f"{document} deployable module lacks rollback behavior")
+        if "readiness" not in text.lower():
+            problem(f"{document} deployable module lacks readiness semantics")
+    elif kind in {"library", "contract-library"}:
+        deployment = section_body(text, "## Deployment and operations").lower()
+        if "not independently deployable" not in deployment and "not independently" not in deployment:
+            problem(f"{document} non-deployable module does not state deployment non-applicability")
 
     expected_link = index_link_for_document(document)
     if (
@@ -230,6 +301,8 @@ def validate_catalog() -> tuple[int, int]:
     seen_members: set[str] = set()
     seen_packages: set[str] = set()
     seen_documents: set[str] = set()
+    authorities: dict[str, str] = {}
+
     for index, item in enumerate(entries):
         label = f"modules[{index}]"
         if not isinstance(item, dict):
@@ -239,6 +312,9 @@ def validate_catalog() -> tuple[int, int]:
         package = item.get("package")
         owner = item.get("owner")
         document = item.get("documentation")
+        kind = item.get("kind")
+        deployable = item.get("deployable")
+
         if not isinstance(member, str) or not member:
             problem(f"{label}.workspace_member is invalid")
             continue
@@ -250,46 +326,53 @@ def validate_catalog() -> tuple[int, int]:
 
         manifest = load_toml(ROOT / member / "Cargo.toml", f"{member}/Cargo.toml")
         manifest_package = manifest.get("package")
-        manifest_name = manifest_package.get("name") if isinstance(manifest_package, dict) else None
+        manifest_name = (
+            manifest_package.get("name") if isinstance(manifest_package, dict) else None
+        )
         if not isinstance(package, str) or not package or package != manifest_name:
             problem(
                 f"{member} package mismatch: catalog={package!r}, manifest={manifest_name!r}"
             )
+            package = str(package)
         elif package in seen_packages:
             problem(f"duplicate catalog package name: {package}")
         else:
             seen_packages.add(package)
 
-        if item.get("kind") not in MODULE_KINDS:
+        if kind not in MODULE_KINDS:
             problem(f"{member} has an invalid module kind")
         if item.get("logical_module") not in LOGICAL_MODULES:
             problem(f"{member} has an invalid logical_module")
-        if not isinstance(item.get("deployable"), bool):
+        if not isinstance(deployable, bool):
             problem(f"{member} deployable must be boolean")
+            deployable = False
         if item.get("status") not in MODULE_STATUSES:
             problem(f"{member} has an invalid maturity status")
         if not isinstance(owner, str) or not owner.strip():
             problem(f"{member} owner is missing")
             owner = "<missing>"
+
         authority = item.get("authority")
-        if not isinstance(authority, str) or len(authority.strip()) < 40:
+        if not isinstance(authority, str) or len(authority.strip()) < 60:
             problem(f"{member} authority boundary is incomplete")
+            authority = ""
+        if authority in authorities:
+            problem(
+                f"{member} reuses the authority statement of {authorities[authority]}"
+            )
+        elif authority:
+            authorities[authority] = member
 
         if not isinstance(document, str) or not document:
             problem(f"{member} documentation path is missing")
+            document = ""
+        elif document in seen_documents:
+            problem(f"module document is reused: {document}")
         else:
-            if document in seen_documents:
-                problem(f"module document is reused: {document}")
             seen_documents.add(document)
-            validate_document(
-                member=member,
-                package=str(package),
-                document=document,
-                owner=owner,
-                index_text=index_text,
-            )
 
         entrypoints = item.get("source_entrypoints")
+        valid_entrypoints: list[str] = []
         if not isinstance(entrypoints, list) or not entrypoints:
             problem(f"{member} source_entrypoints must be a non-empty array")
         else:
@@ -302,17 +385,41 @@ def validate_catalog() -> tuple[int, int]:
                 if entry in local_seen:
                     problem(f"{member} repeats source entry point: {entry}")
                 local_seen.add(entry)
+                valid_entrypoints.append(entry)
                 if not entry.startswith(member + "/"):
                     problem(f"{entry_label} escapes the workspace member: {entry}")
                 repository_path(entry, entry_label)
 
+        explicit_targets = explicit_manifest_targets(member, manifest)
+        missing_targets = explicit_targets - set(valid_entrypoints)
+        if missing_targets:
+            problem(
+                f"{member} catalog omits explicit/conventional Cargo targets: {sorted(missing_targets)}"
+            )
+
         commands = item.get("verification")
+        valid_commands: list[str] = []
         if (
             not isinstance(commands, list)
             or not commands
             or any(not isinstance(command, str) or not command.strip() for command in commands)
         ):
             problem(f"{member} verification commands are incomplete")
+        else:
+            valid_commands = [str(command) for command in commands]
+
+        if document:
+            validate_document(
+                member=member,
+                package=str(package),
+                kind=str(kind),
+                deployable=bool(deployable),
+                document=document,
+                owner=owner,
+                entrypoints=valid_entrypoints,
+                commands=valid_commands,
+                index_text=index_text,
+            )
 
     missing = member_set - seen_members
     extra = seen_members - member_set
@@ -345,13 +452,33 @@ def validate_catalog() -> tuple[int, int]:
             problem(
                 f"external component must explicitly set workspace_member=false: {component_id}"
             )
-        kind = item.get("kind")
-        if not isinstance(kind, str) or not kind.startswith("external_"):
+        external_kind = item.get("kind")
+        if not isinstance(external_kind, str) or not external_kind.startswith("external_"):
             problem(f"external component kind is invalid: {component_id}")
-        authority = item.get("authority")
-        if not isinstance(authority, str) or len(authority.strip()) < 40:
+        external_authority = item.get("authority")
+        if not isinstance(external_authority, str) or len(external_authority.strip()) < 60:
             problem(f"external component authority is incomplete: {component_id}")
-        repository_path(item.get("documentation"), f"{component_id}.documentation")
+        doc_path = repository_path(
+            item.get("documentation"), f"{component_id}.documentation"
+        )
+        if doc_path is not None and doc_path.is_file():
+            doc_text = read_text(doc_path, f"{component_id}.documentation")
+            if MACHINE_PATH.search(doc_text):
+                problem(
+                    f"external component document contains a machine-specific path: {component_id}"
+                )
+            if doc_path.name in {
+                "trillionnium-world-fixture.md",
+                "trillionnium-game-runtime.md",
+            }:
+                for marker in (
+                    f"Catalog ID: `{component_id}`",
+                    "Production authorization: `not_granted`",
+                ):
+                    if marker not in doc_text:
+                        problem(
+                            f"external component document lacks required marker for {component_id}: {marker}"
+                        )
         if item.get("production_evidence") != "external":
             problem(f"external component production_evidence is invalid: {component_id}")
         if f"`{component_id}`" not in index_text:
@@ -364,10 +491,48 @@ def validate_catalog() -> tuple[int, int]:
             f"extra={sorted(external_ids - EXPECTED_EXTERNAL_COMPONENTS)}"
         )
 
+    execution = next(
+        (
+            item
+            for item in entries
+            if isinstance(item, dict)
+            and item.get("workspace_member") == "services/execution-service"
+        ),
+        None,
+    )
+    capability = next(
+        (
+            item
+            for item in entries
+            if isinstance(item, dict)
+            and item.get("workspace_member") == "services/capability-service"
+        ),
+        None,
+    )
+    if not isinstance(execution, dict) or "external-Agent" not in str(
+        execution.get("authority")
+    ):
+        problem("execution-service catalog authority is not external-Agent aligned")
+    if not isinstance(capability, dict) or "external-Agent" not in str(
+        capability.get("authority")
+    ):
+        problem("capability-service catalog authority is not external-Agent aligned")
+
     return len(members), len(external_ids)
 
 
 def validate_navigation_and_ownership() -> None:
+    index = read_text(INDEX_PATH, "module index")
+    for marker in (
+        "scripts/check-external-agent-runtime-boundary.py",
+        "`trillionnium-world-fixture`",
+        "`trillionnium-game-runtime`",
+        "`external-providers-and-agents`",
+        "Production authorization: `not_granted`",
+    ):
+        if marker not in index:
+            problem(f"module index lacks required semantic marker: {marker}")
+
     readme = read_text(README_PATH, "root readme")
     for marker in (
         "navigation only",
@@ -408,6 +573,9 @@ def main() -> int:
         "status": "failed" if PROBLEMS else "ok",
         "workspace_member_count": workspace_count,
         "external_component_count": external_count,
+        "source_fact_validation": True,
+        "semantic_validation": True,
+        "checker_may_grant_production_authorization": False,
         "production_authorization": "not_granted",
         "problems": PROBLEMS,
     }
