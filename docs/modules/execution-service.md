@@ -31,7 +31,9 @@ A projection, cache, compatibility row, HTTP success, or transport acknowledgeme
 - `dispatch_policy.rs`: bounded dispatch-state policy; it grants no Agent runtime authority.
 - `ledger_settlement.rs` and `settlement_worker_*`: durable consume/refund command handling.
 - `state.rs`: durable/in-memory state boundary.
-- `provider_dispatch.rs`, `providers.rs`, and `bin/execution-provider-dispatch-worker.rs`: retained legacy local-provider compatibility source, excluded from the default build behind `legacy-local-provider-dispatch` and forbidden in production-like profiles.
+- `providers.rs`: pure provider identity/input/output types plus the default fail-closed external-Agent-required boundary; it contains no local inference implementation.
+- `provider_dispatch.rs` and `bin/execution-provider-dispatch-worker.rs`: retained historical command/reconciliation compatibility source, excluded from the default build behind `legacy-local-provider-dispatch` and forbidden in production-like profiles.
+- `tests/external_agent_boundary.rs`: default integration regression proving no network inference or prompt echo.
 
 Catalog-bound entry points:
 
@@ -45,7 +47,7 @@ Catalog-bound entry points:
 - `services/execution-service/src/state.rs`
 - `services/execution-service/src/bin/execution-provider-dispatch-worker.rs`
 - `services/execution-service/src/bin/execution-settlement-worker.rs`
-- `services/execution-service/tests/http_flow.rs`
+- `services/execution-service/tests/external_agent_boundary.rs`
 
 Any new binary, public source boundary, migration owner, or removed path must update the catalog and this document in the same commit.
 
@@ -65,7 +67,7 @@ Historical provider command/evidence tables remain append-only and covered by Po
 
 The default service uses database, runtime profile, internal service authentication, exact Ledger authority, worker identity, lease/retry limits and downstream protocol trust anchors. It requires no model-provider inference credential and does not read local model catalogs.
 
-The compatibility binary exists only when Cargo feature `legacy-local-provider-dispatch` is selected. It additionally requires `CEX_ENABLE_LEGACY_LOCAL_PROVIDER_DISPATCH=true`, accepts only isolated test/local/dev profiles, and rejects beta, staging and production before dispatch. No authoritative workflow or deployment configuration may activate it.
+The compatibility binary exists only when Cargo feature `legacy-local-provider-dispatch` is selected. It additionally requires `CEX_ENABLE_LEGACY_LOCAL_PROVIDER_DISPATCH=true`, accepts only isolated test/local/dev profiles, and rejects beta, staging and production before dispatch. Its provider boundary still fails closed and performs no model call. No authoritative workflow or deployment configuration may activate it.
 
 Production-like startup fails before listening or working when durable storage, credentials, trust anchors or explicit modes are missing. Example values are not activation evidence.
 
@@ -73,7 +75,7 @@ Production-like startup fails before listening or working when durable storage, 
 
 Agent private keys and model-provider inference keys stay outside CEX. Inputs, result references and receipts are bounded and validated before state changes; unrestricted prompts, outputs, credentials and response bodies must not enter logs, metrics, ordinary Audit payloads or database error text.
 
-Legacy local-provider source is not a supported production trust boundary. Re-enabling it requires an ADR that supersedes ADR-004, bounded transport, a privacy/cost/threat model, dedicated tests and independent review. Operator reconciliation evidence must bind immutable URI/digest, exact attempt and outcome without inventing success.
+Legacy command/reconciliation source is not a supported production trust boundary. Re-enabling local inference requires an ADR that supersedes ADR-004, bounded transport, a privacy/cost/threat model, dedicated tests and independent review. Operator reconciliation evidence must bind immutable URI/digest, exact attempt and outcome without inventing success.
 
 ## Verification
 
@@ -92,6 +94,7 @@ bash scripts/check-provider-reconciliation-postgres.sh
 Required behavioral focus:
 
 - The default build excludes local provider adapters and the default router does not call them.
+- The compatibility provider function always returns `external_agent_runtime_required`, performs no network/process execution and never echoes prompt/target details.
 - Execution state transitions, claim ownership, terminal mutual exclusion and settlement recovery remain deterministic.
 - Historical provider evidence still rejects malformed/mismatched/nonterminal success, unsafe lease replay and evidence collisions.
 - External Agent capability/work/result identity remains protocol-bound and does not become platform inference authority.
