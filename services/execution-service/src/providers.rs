@@ -1,33 +1,19 @@
-use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use std::process::Stdio;
-use std::time::Duration;
-use tokio::io::AsyncReadExt;
-use tokio::process::{Child, Command};
-use tokio::sync::oneshot;
-use tokio::time::timeout;
+use serde_json::Value;
 
+pub const RUNTIME_POLICY: &str = "external_only";
+pub const LEGACY_LOCAL_DISPATCH_STATUS: &str = "legacy_local_provider_dispatch_disabled";
+const EXTERNAL_AGENT_REQUIRED: &str = "external_agent_runtime_required: CEX does not execute participating Agents; submit signed hepta_agent_protocol_v1 evidence through the external Agent boundary";
+
+/// Retained only so historical provider-dispatch rows and the explicitly
+/// feature-gated compatibility worker keep one stable source contract. The
+/// fields are never interpreted by the default runtime.
 #[derive(Debug, Clone, Default)]
 pub struct OpenClawCliEnvScope {
     pub config_path: Option<String>,
     pub state_dir: Option<String>,
     pub agent_dir: Option<String>,
-}
-
-impl OpenClawCliEnvScope {
-    fn apply_to_command(&self, command: &mut Command) {
-        if let Some(config_path) = self.config_path.as_deref() {
-            command.env("OPENCLAW_CONFIG_PATH", config_path);
-        }
-        if let Some(state_dir) = self.state_dir.as_deref() {
-            command.env("OPENCLAW_STATE_DIR", state_dir);
-        }
-        if let Some(agent_dir) = self.agent_dir.as_deref() {
-            command.env("OPENCLAW_AGENT_DIR", agent_dir);
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,617 +35,39 @@ pub struct ProviderDispatchError {
 }
 
 impl ProviderDispatchError {
-    fn transport(message: impl Into<String>) -> Self {
+    fn external_agent_required() -> Self {
         Self {
-            message: message.into(),
+            message: EXTERNAL_AGENT_REQUIRED.to_string(),
         }
     }
 
-    fn upstream(status: u16, body: impl Into<String>) -> Self {
+    fn invalid_target() -> Self {
         Self {
-            message: format!(
-                "provider upstream returned status {status}: {}",
-                body.into()
-            ),
-        }
-    }
-
-    fn decode(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
+            message: "invalid_provider_target: provider target must use a non-empty provider://reference identity"
+                .to_string(),
         }
     }
 }
 
-#[async_trait]
-pub trait ProviderAdapter: Send + Sync {
-    fn provider(&self) -> &'static str;
-
-    async fn execute(
-        &self,
-        http: &Client,
-        provider_ref: &str,
-        input: &ProviderDispatchInput,
-    ) -> Result<ProviderDispatchOutput, ProviderDispatchError>;
-}
-
-pub struct OllamaProviderAdapter {
-    pub base_url: String,
-    pub timeout_seconds: u64,
-}
-
-pub struct OpenClawCliProviderAdapter {
-    pub cli_bin: String,
-    pub source_provider: String,
-    pub env_scope: OpenClawCliEnvScope,
-    pub timeout_seconds: u64,
-}
-
-#[derive(Debug, Deserialize)]
-struct OllamaGenerateResponse {
-    model: Option<String>,
-    response: Option<String>,
-    done: Option<bool>,
-    total_duration: Option<u64>,
-    eval_count: Option<u64>,
-    prompt_eval_count: Option<u64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenClawModelRunResponse {
-    ok: Option<bool>,
-    capability: Option<String>,
-    transport: Option<String>,
-    provider: Option<String>,
-    model: Option<String>,
-    #[serde(default)]
-    attempts: Vec<Value>,
-    #[serde(default)]
-    outputs: Vec<OpenClawModelRunOutput>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct OpenClawModelRunOutput {
-    text: Option<String>,
-    #[serde(rename = "mediaUrl")]
-    media_url: Option<String>,
-}
-
-enum OpenClawStdoutResult {
-    Parsed(OpenClawModelRunResponse),
-    Finished(Vec<u8>),
-    ReadError(String),
-}
-
-enum OpenClawWaitOutcome {
-    Parsed(OpenClawModelRunResponse),
-    Finished(Vec<u8>),
-    ReadError(String),
-    ChannelClosed,
-    Timeout,
-}
-
-#[async_trait]
-impl ProviderAdapter for OllamaProviderAdapter {
-    fn provider(&self) -> &'static str {
-        "ollama"
-    }
-
-    async fn execute(
-        &self,
-        http: &Client,
-        provider_ref: &str,
-        input: &ProviderDispatchInput,
-    ) -> Result<ProviderDispatchOutput, ProviderDispatchError> {
-        timeout(Duration::from_secs(self.timeout_seconds), async {
-            let url = format!("{}/api/generate", self.base_url.trim_end_matches('/'));
-            let response = http
-                .post(url)
-                .json(&json!({
-                    "model": provider_ref,
-                    "prompt": input.prompt,
-                    "stream": false,
-                }))
-                .send()
-                .await
-                .map_err(|err| {
-                    ProviderDispatchError::transport(format!("request failed: {err}"))
-                })?;
-
-            let status = response.status();
-            let body = response.text().await.map_err(|err| {
-                ProviderDispatchError::transport(format!("read body failed: {err}"))
-            })?;
-
-            if !status.is_success() {
-                return Err(ProviderDispatchError::upstream(status.as_u16(), body));
-            }
-
-            let parsed: OllamaGenerateResponse = serde_json::from_str(&body).map_err(|err| {
-                ProviderDispatchError::decode(format!("decode response failed: {err}; body={body}"))
-            })?;
-
-            Ok(ProviderDispatchOutput {
-                provider: self.provider().to_string(),
-                provider_ref: provider_ref.to_string(),
-                provider_target: build_provider_target(self.provider(), provider_ref),
-                result_payload: json!({
-                    "provider": self.provider(),
-                    "provider_ref": provider_ref,
-                    "model": parsed.model,
-                    "output_text": parsed.response,
-                    "done": parsed.done,
-                    "total_duration": parsed.total_duration,
-                    "eval_count": parsed.eval_count,
-                    "prompt_eval_count": parsed.prompt_eval_count,
-                }),
-            })
-        })
-        .await
-        .map_err(|_| {
-            ProviderDispatchError::transport(format!(
-                "provider dispatch timed out after {}s: {}",
-                self.timeout_seconds,
-                build_provider_target(self.provider(), provider_ref)
-            ))
-        })?
-    }
-}
-
-#[async_trait]
-impl ProviderAdapter for OpenClawCliProviderAdapter {
-    fn provider(&self) -> &'static str {
-        "openclaw-cli"
-    }
-
-    async fn execute(
-        &self,
-        _http: &Client,
-        provider_ref: &str,
-        input: &ProviderDispatchInput,
-    ) -> Result<ProviderDispatchOutput, ProviderDispatchError> {
-        let canonical_provider = canonical_openclaw_provider(&self.source_provider);
-        let model_key = format!("{canonical_provider}/{provider_ref}");
-        let (mut command, wait_timeout_seconds) = self.build_command(&model_key, &input.prompt);
-
-        let mut child = command.spawn().map_err(|err| {
-            ProviderDispatchError::transport(format!(
-                "spawn openclaw model bridge failed for {model_key}: {err}"
-            ))
-        })?;
-
-        let mut stdout = child.stdout.take().ok_or_else(|| {
-            ProviderDispatchError::transport(format!(
-                "openclaw model bridge missing stdout pipe for {model_key}"
-            ))
-        })?;
-        let mut stderr = child.stderr.take().ok_or_else(|| {
-            ProviderDispatchError::transport(format!(
-                "openclaw model bridge missing stderr pipe for {model_key}"
-            ))
-        })?;
-
-        let (stdout_tx, stdout_rx) = oneshot::channel();
-        tokio::spawn(async move {
-            let mut buf = Vec::new();
-            let mut chunk = [0_u8; 4096];
-            loop {
-                match stdout.read(&mut chunk).await {
-                    Ok(0) => {
-                        let _ = stdout_tx.send(OpenClawStdoutResult::Finished(buf));
-                        break;
-                    }
-                    Ok(n) => {
-                        buf.extend_from_slice(&chunk[..n]);
-                        if let Ok(parsed) = serde_json::from_slice::<OpenClawModelRunResponse>(&buf)
-                        {
-                            let _ = stdout_tx.send(OpenClawStdoutResult::Parsed(parsed));
-                            break;
-                        }
-                    }
-                    Err(err) => {
-                        let _ = stdout_tx.send(OpenClawStdoutResult::ReadError(err.to_string()));
-                        break;
-                    }
-                }
-            }
-        });
-
-        let stderr_task = tokio::spawn(async move {
-            let mut buf = Vec::new();
-            let _ = stderr.read_to_end(&mut buf).await;
-            buf
-        });
-
-        let mut stdout_rx = stdout_rx;
-        let wait_outcome = tokio::select! {
-            stdout_result = &mut stdout_rx => {
-                match stdout_result {
-                    Ok(OpenClawStdoutResult::Parsed(parsed)) => OpenClawWaitOutcome::Parsed(parsed),
-                    Ok(OpenClawStdoutResult::Finished(stdout_buf)) => OpenClawWaitOutcome::Finished(stdout_buf),
-                    Ok(OpenClawStdoutResult::ReadError(err)) => OpenClawWaitOutcome::ReadError(err),
-                    Err(_) => OpenClawWaitOutcome::ChannelClosed,
-                }
-            }
-            _ = tokio::time::sleep(Duration::from_secs(wait_timeout_seconds)) => OpenClawWaitOutcome::Timeout,
-        };
-
-        let parsed = match wait_outcome {
-            OpenClawWaitOutcome::Parsed(parsed) => {
-                if openclaw_outputs_look_like_error(&parsed) {
-                    terminate_child(&mut child).await;
-                    let stderr_buf = stderr_task.await.unwrap_or_default();
-                    return Err(build_openclaw_cli_error(
-                        &model_key,
-                        &parsed,
-                        &stderr_buf,
-                        None,
-                    ));
-                }
-                terminate_child(&mut child).await;
-                let _ = stderr_task.await;
-                parsed
-            }
-            OpenClawWaitOutcome::Finished(stdout_buf) => {
-                if let Ok(parsed) = serde_json::from_slice::<OpenClawModelRunResponse>(&stdout_buf)
-                {
-                    let status = child.wait().await.map_err(|err| {
-                        ProviderDispatchError::transport(format!(
-                            "wait openclaw model bridge failed for {model_key}: {err}"
-                        ))
-                    })?;
-                    let stderr_buf = stderr_task.await.unwrap_or_default();
-                    if status.success() {
-                        parsed
-                    } else {
-                        return Err(build_openclaw_cli_error(
-                            &model_key,
-                            &parsed,
-                            &stderr_buf,
-                            if status.code() == Some(124) {
-                                Some(self.timeout_seconds)
-                            } else {
-                                None
-                            },
-                        ));
-                    }
-                } else {
-                    let status = child.wait().await.map_err(|err| {
-                        ProviderDispatchError::transport(format!(
-                            "wait openclaw model bridge failed for {model_key}: {err}"
-                        ))
-                    })?;
-                    let stderr_buf = stderr_task.await.unwrap_or_default();
-                    if status.code() == Some(124) {
-                        let stderr = String::from_utf8_lossy(&stderr_buf).trim().to_string();
-                        let stderr_surface =
-                            extract_openclaw_stderr_surface_error(&stderr).unwrap_or(stderr);
-                        let stdout = String::from_utf8_lossy(&stdout_buf).trim().to_string();
-                        let detail = if !stderr_surface.is_empty() {
-                            stderr_surface
-                        } else if !stdout.is_empty() {
-                            stdout
-                        } else {
-                            format!(
-                                "provider dispatch timed out after {}s",
-                                self.timeout_seconds
-                            )
-                        };
-                        return Err(ProviderDispatchError::transport(format!(
-                            "provider dispatch timed out after {}s: {model_key}; detail={detail}",
-                            self.timeout_seconds
-                        )));
-                    }
-                    if !status.success() {
-                        let stderr = String::from_utf8_lossy(&stderr_buf).trim().to_string();
-                        let stderr_surface =
-                            extract_openclaw_stderr_surface_error(&stderr).unwrap_or(stderr);
-                        let stdout = String::from_utf8_lossy(&stdout_buf).trim().to_string();
-                        let detail = if !stderr_surface.is_empty() {
-                            stderr_surface
-                        } else {
-                            stdout
-                        };
-                        return Err(ProviderDispatchError::transport(format!(
-                            "openclaw model bridge failed for {model_key}: {detail}"
-                        )));
-                    }
-                    serde_json::from_slice(&stdout_buf).map_err(|err| {
-                        ProviderDispatchError::decode(format!(
-                            "decode openclaw model bridge response failed: {err}; stdout={}",
-                            String::from_utf8_lossy(&stdout_buf)
-                        ))
-                    })?
-                }
-            }
-            OpenClawWaitOutcome::ReadError(err) => {
-                terminate_child(&mut child).await;
-                let _ = stderr_task.await;
-                return Err(ProviderDispatchError::transport(format!(
-                    "read openclaw model bridge stdout failed for {model_key}: {err}"
-                )));
-            }
-            OpenClawWaitOutcome::ChannelClosed => {
-                terminate_child(&mut child).await;
-                let _ = stderr_task.await;
-                return Err(ProviderDispatchError::transport(format!(
-                    "openclaw model bridge stdout channel closed for {model_key}"
-                )));
-            }
-            OpenClawWaitOutcome::Timeout => {
-                terminate_child_gracefully(&mut child).await;
-                let stdout_after_term = timeout(Duration::from_secs(5), &mut stdout_rx).await;
-                let stderr_buf = timeout(Duration::from_secs(5), stderr_task)
-                    .await
-                    .ok()
-                    .and_then(|res| res.ok())
-                    .unwrap_or_default();
-                terminate_child(&mut child).await;
-
-                match stdout_after_term {
-                    Ok(Ok(OpenClawStdoutResult::Parsed(parsed))) => parsed,
-                    Ok(Ok(OpenClawStdoutResult::Finished(stdout_buf))) => {
-                        if let Ok(parsed) =
-                            serde_json::from_slice::<OpenClawModelRunResponse>(&stdout_buf)
-                        {
-                            parsed
-                        } else {
-                            let stderr = String::from_utf8_lossy(&stderr_buf).trim().to_string();
-                            let stdout = String::from_utf8_lossy(&stdout_buf).trim().to_string();
-                            let detail = if !stderr.is_empty() { stderr } else { stdout };
-                            return Err(ProviderDispatchError::transport(format!(
-                                "provider dispatch timed out after {}s: {model_key}; detail={detail}",
-                                self.timeout_seconds
-                            )));
-                        }
-                    }
-                    Ok(Ok(OpenClawStdoutResult::ReadError(err))) => {
-                        return Err(ProviderDispatchError::transport(format!(
-                            "provider dispatch timed out after {}s: {model_key}; stdout read error: {err}",
-                            self.timeout_seconds
-                        )));
-                    }
-                    Ok(Err(_)) | Err(_) => {
-                        let stderr = String::from_utf8_lossy(&stderr_buf).trim().to_string();
-                        let detail = if stderr.is_empty() {
-                            format!(
-                                "provider dispatch timed out after {}s",
-                                self.timeout_seconds
-                            )
-                        } else {
-                            stderr
-                        };
-                        return Err(ProviderDispatchError::transport(format!(
-                            "provider dispatch timed out after {}s: {model_key}; detail={detail}",
-                            self.timeout_seconds
-                        )));
-                    }
-                }
-            }
-        };
-
-        let output_text = parsed
-            .outputs
-            .iter()
-            .find_map(|entry| entry.text.clone())
-            .or_else(|| {
-                parsed
-                    .outputs
-                    .first()
-                    .and_then(|entry| entry.media_url.clone())
-            });
-
-        Ok(ProviderDispatchOutput {
-            provider: canonical_provider.to_string(),
-            provider_ref: provider_ref.to_string(),
-            provider_target: build_provider_target(canonical_provider, provider_ref),
-            result_payload: json!({
-                "provider": parsed.provider.unwrap_or_else(|| canonical_provider.to_string()),
-                "provider_ref": provider_ref,
-                "model": parsed.model.unwrap_or_else(|| provider_ref.to_string()),
-                "capability": parsed.capability,
-                "transport": parsed.transport,
-                "ok": parsed.ok,
-                "output_text": output_text,
-                "outputs": parsed.outputs,
-                "attempts": parsed.attempts,
-                "bridge": "openclaw-cli"
-            }),
-        })
-    }
-}
-
-impl OpenClawCliProviderAdapter {
-    fn build_command(&self, model_key: &str, prompt: &str) -> (Command, u64) {
-        #[cfg(unix)]
-        {
-            let mut command = Command::new("timeout");
-            self.env_scope.apply_to_command(&mut command);
-            command
-                .arg("--signal=TERM")
-                .arg("--kill-after=5s")
-                .arg(format!("{}s", self.timeout_seconds))
-                .arg(&self.cli_bin)
-                .args(["infer", "model", "run", "--local", "--json", "--model"])
-                .arg(model_key)
-                .args(["--prompt"])
-                .arg(prompt)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
-            (command, self.timeout_seconds.saturating_add(10))
-        }
-
-        #[cfg(not(unix))]
-        {
-            let mut command = Command::new(&self.cli_bin);
-            self.env_scope.apply_to_command(&mut command);
-            command
-                .args(["infer", "model", "run", "--local", "--json", "--model"])
-                .arg(model_key)
-                .args(["--prompt"])
-                .arg(prompt)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
-            (command, self.timeout_seconds)
-        }
-    }
-}
-
-async fn terminate_child(child: &mut Child) {
-    if matches!(child.try_wait(), Ok(Some(_))) {
-        return;
-    }
-    let _ = child.kill().await;
-    let _ = child.wait().await;
-}
-
-async fn terminate_child_gracefully(child: &mut Child) {
-    if matches!(child.try_wait(), Ok(Some(_))) {
-        return;
-    }
-
-    #[cfg(unix)]
-    if let Some(pid) = child.id() {
-        let _ = Command::new("kill")
-            .arg("-TERM")
-            .arg(pid.to_string())
-            .status()
-            .await;
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = child.kill().await;
-    }
-}
-
-fn build_openclaw_cli_error(
-    model_key: &str,
-    parsed: &OpenClawModelRunResponse,
-    stderr_buf: &[u8],
-    timeout_seconds: Option<u64>,
-) -> ProviderDispatchError {
-    let surfaced_text = openclaw_surface_text(parsed).unwrap_or_default();
-    let stderr = String::from_utf8_lossy(stderr_buf).trim().to_string();
-    let stderr_surface =
-        extract_openclaw_stderr_surface_error(&stderr).unwrap_or_else(|| stderr.clone());
-
-    if !surfaced_text.is_empty() {
-        if let Some(timeout_seconds) = timeout_seconds {
-            ProviderDispatchError::transport(format!(
-                "provider dispatch timed out after {}s: {}; surfaced_error={}",
-                timeout_seconds, model_key, surfaced_text
-            ))
-        } else {
-            ProviderDispatchError::transport(format!(
-                "openclaw model bridge surfaced provider error for {}: {}",
-                model_key, surfaced_text
-            ))
-        }
-    } else if let Some(timeout_seconds) = timeout_seconds {
-        let detail = if stderr_surface.is_empty() {
-            format!("provider dispatch timed out after {}s", timeout_seconds)
-        } else {
-            stderr_surface
-        };
-        ProviderDispatchError::transport(format!(
-            "provider dispatch timed out after {}s: {}; detail={detail}",
-            timeout_seconds, model_key
-        ))
-    } else {
-        let detail = if stderr_surface.is_empty() {
-            "unknown openclaw bridge failure".to_string()
-        } else {
-            stderr_surface
-        };
-        ProviderDispatchError::transport(format!(
-            "openclaw model bridge failed for {}: {}",
-            model_key, detail
-        ))
-    }
-}
-
-fn openclaw_surface_text(parsed: &OpenClawModelRunResponse) -> Option<String> {
-    parsed
-        .outputs
-        .iter()
-        .find_map(|entry| entry.text.as_deref())
-        .or_else(|| {
-            parsed
-                .outputs
-                .first()
-                .and_then(|entry| entry.media_url.as_deref())
-        })
-        .map(|text| text.trim().to_string())
-        .filter(|text| !text.is_empty())
-}
-
-fn openclaw_outputs_look_like_error(parsed: &OpenClawModelRunResponse) -> bool {
-    let Some(text) = openclaw_surface_text(parsed) else {
-        return false;
-    };
-    let lowered = text.to_ascii_lowercase();
-    text.starts_with('⚠')
-        || lowered.contains("returned a billing error")
-        || lowered.contains("insufficient balance")
-        || lowered.contains("run out of credits")
-        || lowered.contains("returned an auth error")
-        || lowered.contains("returned a rate limit error")
-        || lowered.contains("returned an api error")
-}
-
-fn extract_openclaw_stderr_surface_error(stderr: &str) -> Option<String> {
-    for line in stderr.lines() {
-        if let Some(idx) = line.find("error=") {
-            let rest = &line[idx + "error=".len()..];
-            let cleaned = rest.split(" rawError=").next().unwrap_or(rest).trim();
-            if !cleaned.is_empty() {
-                return Some(cleaned.to_string());
-            }
-        }
-    }
-
-    if stderr.contains("insufficient balance") {
-        return Some("insufficient balance (1008)".to_string());
-    }
-
-    None
-}
-
+/// Fail-closed compatibility surface.
+///
+/// Sequence 51 removes all local Ollama/OpenClaw execution code from CEX. This
+/// function deliberately preserves the old call signature so historical
+/// lifecycle and reconciliation code can compile while every attempted local
+/// dispatch produces a stable, non-sensitive error. It never reads the prompt,
+/// starts a child process, performs an inference HTTP request, or copies a
+/// provider body into logs/database error text.
 pub async fn dispatch_via_provider(
-    http: &Client,
-    ollama_base_url: &str,
-    openclaw_cli_bin: &str,
-    openclaw_env_scope: &OpenClawCliEnvScope,
-    provider_timeout_seconds: u64,
+    _http: &Client,
+    _ollama_base_url: &str,
+    _openclaw_cli_bin: &str,
+    _openclaw_env_scope: &OpenClawCliEnvScope,
+    _provider_timeout_seconds: u64,
     provider_target: &str,
-    input: &ProviderDispatchInput,
+    _input: &ProviderDispatchInput,
 ) -> Result<ProviderDispatchOutput, ProviderDispatchError> {
-    let (provider, provider_ref) = parse_provider_target(provider_target).ok_or_else(|| {
-        ProviderDispatchError::decode(format!("invalid provider target: {provider_target}"))
-    })?;
-
-    match provider {
-        "ollama" => {
-            let adapter = OllamaProviderAdapter {
-                base_url: ollama_base_url.to_string(),
-                timeout_seconds: provider_timeout_seconds,
-            };
-            adapter.execute(http, provider_ref, input).await
-        }
-        other if !openclaw_cli_bin.trim().is_empty() => {
-            let adapter = OpenClawCliProviderAdapter {
-                cli_bin: openclaw_cli_bin.to_string(),
-                source_provider: other.to_string(),
-                env_scope: openclaw_env_scope.clone(),
-                timeout_seconds: provider_timeout_seconds,
-            };
-            adapter.execute(http, provider_ref, input).await
-        }
-        other => Err(ProviderDispatchError::decode(format!(
-            "unsupported provider adapter: {other}"
-        ))),
-    }
+    parse_provider_target(provider_target).ok_or_else(ProviderDispatchError::invalid_target)?;
+    Err(ProviderDispatchError::external_agent_required())
 }
 
 pub fn build_provider_target(provider: &str, provider_ref: &str) -> String {
@@ -667,26 +75,71 @@ pub fn build_provider_target(provider: &str, provider_ref: &str) -> String {
 }
 
 pub fn parse_provider_target(provider_target: &str) -> Option<(&str, &str)> {
-    provider_target.split_once("://")
-}
-
-fn canonical_openclaw_provider(provider: &str) -> &str {
-    match provider {
-        "codex" => "openai-codex",
-        "minimax-cn" => "minimax",
-        other => other,
+    let (provider, provider_ref) = provider_target.split_once("://")?;
+    if provider.is_empty()
+        || provider_ref.is_empty()
+        || provider.trim() != provider
+        || provider_ref.trim() != provider_ref
+        || provider.chars().any(char::is_control)
+        || provider_ref.chars().any(char::is_control)
+    {
+        return None;
     }
+    Some((provider, provider_ref))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::extract_openclaw_stderr_surface_error;
+    use super::{
+        build_provider_target, dispatch_via_provider, parse_provider_target,
+        OpenClawCliEnvScope, ProviderDispatchInput, LEGACY_LOCAL_DISPATCH_STATUS, RUNTIME_POLICY,
+    };
+    use reqwest::Client;
 
     #[test]
-    fn extract_openclaw_stderr_surface_error_prefers_embedded_error_field() {
-        let stderr = r#"[agent/embedded] embedded run agent end: runId=abc isError=true model=MiniMax-M2.5 provider=minimax error=⚠️ minimax (MiniMax-M2.5) returned a billing error — your API key has run out of credits or has an insufficient balance. Check your minimax billing dashboard and top up or switch to a different API key. rawError=500 {"type":"error","error":{"type":"api_error","message":"insufficient balance (1008)"}}"#;
-        let extracted = extract_openclaw_stderr_surface_error(stderr).expect("surface error");
-        assert!(extracted.contains("returned a billing error"));
-        assert!(!extracted.contains("rawError="));
+    fn provider_target_round_trip_preserves_identity() {
+        let target = build_provider_target("external-agent", "did:trnm:agent-alpha");
+        assert_eq!(
+            parse_provider_target(&target),
+            Some(("external-agent", "did:trnm:agent-alpha"))
+        );
+        assert_eq!(RUNTIME_POLICY, "external_only");
+        assert_eq!(
+            LEGACY_LOCAL_DISPATCH_STATUS,
+            "legacy_local_provider_dispatch_disabled"
+        );
+    }
+
+    #[test]
+    fn malformed_provider_targets_fail_closed() {
+        assert_eq!(parse_provider_target("ollama"), None);
+        assert_eq!(parse_provider_target("://model"), None);
+        assert_eq!(parse_provider_target("ollama://"), None);
+        assert_eq!(parse_provider_target(" ollama://model"), None);
+        assert_eq!(parse_provider_target("ollama://model\nsecret"), None);
+    }
+
+    #[tokio::test]
+    async fn dispatch_never_executes_a_local_provider_or_echoes_prompt() {
+        let secret_prompt = "PRIVATE-PROMPT-MUST-NOT-APPEAR";
+        let error = dispatch_via_provider(
+            &Client::new(),
+            "http://127.0.0.1:11434",
+            "openclaw",
+            &OpenClawCliEnvScope::default(),
+            1,
+            "ollama://demo",
+            &ProviderDispatchInput {
+                prompt: secret_prompt.to_string(),
+            },
+        )
+        .await
+        .expect_err("local provider execution must be disabled");
+
+        assert!(error.message.contains("external_agent_runtime_required"));
+        assert!(error.message.contains("hepta_agent_protocol_v1"));
+        assert!(!error.message.contains(secret_prompt));
+        assert!(!error.message.contains("127.0.0.1"));
+        assert!(!error.message.contains("demo"));
     }
 }
