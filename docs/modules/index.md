@@ -13,8 +13,8 @@ stated source and ownership boundary.
 A repository candidate fails the development-document gate when any Cargo
 workspace member is absent from the catalog, a documented source entry point is
 missing, a module document lacks a required section, or the catalog and
-`Cargo.toml` disagree. The exact-tree integrity record hashes the catalog and
-all module documents.
+`Cargo.toml` disagree. The exact-tree integrity record binds the successful
+module-documentation result to the candidate commit/tree.
 
 ## Logical architecture
 
@@ -53,25 +53,27 @@ own no durable business state.
 | `apps/matrix-bot-relay` | `matrix-bot-relay` | application | hepta | yes | `matrix-integration` | [matrix-bot-relay.md](matrix-bot-relay.md) |
 | `apps/matrix-bot-poller` | `matrix-bot-poller` | application | hepta | yes | `matrix-integration` | [matrix-bot-poller.md](matrix-bot-poller.md) |
 
+All links in this table are relative to `docs/modules/`; the machine catalog
+retains the full repository path for each document.
+
 ## External authoritative components
 
-The catalog also records external components so a missing workspace crate is
-not mistaken for a missing authority:
+External authorities have stable catalog IDs so automated checks do not depend
+on capitalization or display wording. None is a Cargo workspace member.
 
-- **Nakama** — authoritative ordered realtime session events, roster epochs,
-  checkpoints, and completion receipts.
-- **Trillionnium Chain** — consensus/finality, challenge/resolution, and
-  immutable Chain receipts.
-- **Matrix homeserver** — Matrix account, room, sync-token, and event transport
-  authority.
-- **Content-addressed object store** — immutable research/provider artifact
-  bytes under verified digests.
-- **External providers and Agents** — independently operated execution
-  endpoints and signing keys; CEX stores only bounded contracts/evidence.
+| Catalog ID | Human authority | Owned boundary | Supporting contract |
+|---|---|---|---|
+| `nakama` | Nakama | ordered realtime session events, roster epochs, checkpoints, and signed completion receipts | `docs/hepta-paper-raid-state-machines-v1.md` |
+| `trillionnium-chain` | Trillionnium Chain | consensus/finality, challenges, resolutions, and immutable Chain receipts | `docs/protocol/version-compatibility-matrix-v1.md` |
+| `matrix-homeserver` | Matrix homeserver | Matrix accounts, rooms, opaque sync tokens, and source event transport | `docs/consumer-entry-matrix-architecture-v1.md` |
+| `content-addressed-object-store` | Content-addressed object store | immutable research/provider artifact bytes addressed by verified digests | `docs/security-threat-model-v1.md` |
+| `external-providers-and-agents` | External providers and Agents | independently operated execution endpoints and signing keys; CEX retains only bounded contracts and evidence | `docs/security-threat-model-v1.md` |
 
 ## Change protocol
 
 New workspace members require a catalog entry and module document in the same
 commit. Removing or renaming a member requires an explicit compatibility and
-data-retirement decision. A documentation-only change still creates a new
-candidate tree and must be requalified.
+data-retirement decision. External authority IDs are stable protocol names;
+renaming one requires a catalog, index, threat-model/compatibility, checker, and
+consumer migration in the same candidate. A documentation-only change still
+creates a new candidate tree and must be requalified.

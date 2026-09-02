@@ -16,6 +16,7 @@ INDEX_PATH = ROOT / "docs/modules/index.md"
 README_PATH = ROOT / "readme.md"
 CODEOWNERS_PATH = ROOT / ".github/CODEOWNERS"
 ADDENDUM = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md"
+MODULE_INDEX_ROOT = Path("docs/modules")
 REQUIRED_SECTIONS = (
     "## Purpose and non-goals",
     "## Authority and owned state",
@@ -144,6 +145,21 @@ def section_body(text: str, marker: str) -> str:
     return text[body_start : next_heading if next_heading >= 0 else len(text)].strip()
 
 
+def index_link_for_document(document: str) -> str | None:
+    path = Path(document)
+    try:
+        relative = path.relative_to(MODULE_INDEX_ROOT)
+    except ValueError:
+        problem(
+            f"module documentation must live below {MODULE_INDEX_ROOT.as_posix()}: {document}"
+        )
+        return None
+    if not relative.parts or relative.suffix.lower() != ".md":
+        problem(f"module documentation must be a Markdown file: {document}")
+        return None
+    return f"]({relative.as_posix()})"
+
+
 def validate_document(
     *,
     member: str,
@@ -175,8 +191,17 @@ def validate_document(
     lowered = text.lower()
     if "production authorization: `granted`" in lowered or "production-ready: true" in lowered:
         problem(f"{document} improperly claims production authorization")
-    if member not in index_text or package not in index_text or document not in index_text:
-        problem(f"module index does not bind {member}, {package}, and {document}")
+
+    expected_link = index_link_for_document(document)
+    if (
+        member not in index_text
+        or package not in index_text
+        or expected_link is None
+        or expected_link not in index_text
+    ):
+        problem(
+            f"module index does not bind {member}, {package}, and the relative link for {document}"
+        )
 
 
 def validate_catalog() -> tuple[int, int]:
@@ -315,13 +340,23 @@ def validate_catalog() -> tuple[int, int]:
         if component_id in external_ids:
             problem(f"duplicate external component: {component_id}")
         external_ids.add(component_id)
-        if item.get("workspace_member") is not None:
-            problem(f"external component must not claim a Cargo workspace member: {component_id}")
+
+        if item.get("workspace_member") is not False:
+            problem(
+                f"external component must explicitly set workspace_member=false: {component_id}"
+            )
+        kind = item.get("kind")
+        if not isinstance(kind, str) or not kind.startswith("external_"):
+            problem(f"external component kind is invalid: {component_id}")
         authority = item.get("authority")
         if not isinstance(authority, str) or len(authority.strip()) < 40:
             problem(f"external component authority is incomplete: {component_id}")
-        if component_id not in index_text:
-            problem(f"module index lacks external component: {component_id}")
+        repository_path(item.get("documentation"), f"{component_id}.documentation")
+        if item.get("production_evidence") != "external":
+            problem(f"external component production_evidence is invalid: {component_id}")
+        if f"`{component_id}`" not in index_text:
+            problem(f"module index lacks external component ID: {component_id}")
+
     if external_ids != EXPECTED_EXTERNAL_COMPONENTS:
         problem(
             "external component set mismatch: "
