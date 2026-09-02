@@ -1,0 +1,12 @@
+[
+  {
+    "capability_id": "cap.external-agent.paper-analysis.v1",
+    "kind": "external_agent_capability",
+    "provider": "external-agent",
+    "provider_ref": "did:trnm:agent-example#paper-analysis-v1",
+    "display_name": "External paper analysis Agent",
+    "version": "hepta_agent_protocol_v1",
+    "description": "Public capability declaration only. Agent execution, signing keys, model/provider credentials and scientific authority remain external.",
+    "enabled": true
+  }
+]
