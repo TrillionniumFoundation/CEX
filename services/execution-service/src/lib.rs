@@ -1,7 +1,9 @@
 pub mod api;
 pub mod dispatch_policy;
 pub mod ledger_settlement;
+#[cfg(feature = "legacy-local-provider-dispatch")]
 pub mod provider_dispatch;
+#[cfg(feature = "legacy-local-provider-dispatch")]
 pub mod providers;
 pub mod settlement_worker;
 pub mod state;
@@ -75,14 +77,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/executions/:id/approve", post(api::approve_execution))
         .route("/v1/executions/:id/reject", post(api::reject_execution))
         .route("/v1/executions/:id/dispatch", post(api::dispatch_execution))
-        .route(
-            "/v1/executions/:id/start",
-            post(provider_dispatch::start_execution),
-        )
-        .route(
-            "/v1/executions/:id/process",
-            post(provider_dispatch::process_execution),
-        )
+        .route("/v1/executions/:id/start", post(api::start_execution))
+        .route("/v1/executions/:id/process", post(api::process_execution))
         .route(
             "/v1/executions/:id/renew-lease",
             post(api::renew_execution_lease),
