@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Fail-closed static gate for durable provider terminal-success evidence."""
+"""Fail-closed static gate for provider evidence and external-only execution.
+
+Migration 0088 and its reconciliation tests remain authoritative for historical
+provider-command evidence. Sequence 51 additionally requires that the runtime
+cannot create new local Ollama/OpenClaw effects: the provider compatibility
+surface must return one stable external-Agent-required error without reading or
+copying prompt/provider response bytes.
+"""
 
 from __future__ import annotations
 
@@ -60,9 +67,26 @@ terminal_migration = require(
 )
 providers = require(
     "services/execution-service/src/providers.rs",
-    "struct OllamaGenerateResponse",
-    "done: Option<bool>",
-    '"done": parsed.done',
+    'pub const RUNTIME_POLICY: &str = "external_only";',
+    'pub const LEGACY_LOCAL_DISPATCH_STATUS: &str = "legacy_local_provider_dispatch_disabled";',
+    "external_agent_runtime_required",
+    "pub async fn dispatch_via_provider",
+    "Err(ProviderDispatchError::external_agent_required())",
+    "hepta_agent_protocol_v1",
+)
+execution_manifest = require(
+    "services/execution-service/Cargo.toml",
+    "default = []",
+    "legacy-local-provider-dispatch = []",
+    'required-features = ["legacy-local-provider-dispatch"]',
+    'name = "external_agent_boundary"',
+)
+external_boundary_test = require(
+    "services/execution-service/tests/external_agent_boundary.rs",
+    "provider_compatibility_surface_fails_closed_without_network_or_prompt_echo",
+    "external_agent_runtime_required",
+    "TOP-SECRET-RESEARCH-PROMPT",
+    "assert!(!error.message.contains(prompt))",
 )
 postgres_test = require(
     "scripts/check-provider-reconciliation-postgres.sh",
@@ -85,6 +109,11 @@ workflow = require(
     "python3 scripts/check-provider-success-evidence.py",
     "bash scripts/check-provider-reconciliation-postgres.sh",
 )
+architecture_checker = require(
+    "scripts/check-external-agent-runtime-boundary.py",
+    "services/execution-service/src/providers.rs runtime implementation",
+    "external_agent_runtime_required",
+)
 
 if provider_dispatch:
     validate_call = provider_dispatch.find(
@@ -95,7 +124,7 @@ if provider_dispatch:
     )
     if min(validate_call, success_persist) < 0 or validate_call >= success_persist:
         PROBLEMS.append(
-            "durable provider success must be validated before the succeeded outcome is persisted"
+            "historical provider success must be validated before a succeeded outcome is persisted"
         )
 
     if re.search(
@@ -104,7 +133,7 @@ if provider_dispatch:
         re.DOTALL,
     ):
         PROBLEMS.append(
-            "provider dispatch contains an unvalidated direct success-persistence branch"
+            "provider reconciliation code contains an unvalidated direct success-persistence branch"
         )
 
     required_terminal_shape = (
@@ -114,7 +143,7 @@ if provider_dispatch:
     )
     if not required_terminal_shape:
         PROBLEMS.append(
-            "provider success evidence must require an explicit terminal JSON boolean and reconcile otherwise"
+            "historical provider evidence must require an explicit terminal JSON boolean and reconcile otherwise"
         )
 
     required_model_binding = (
@@ -124,26 +153,51 @@ if provider_dispatch:
     )
     if not required_model_binding:
         PROBLEMS.append(
-            "remote provider model identity must equal the immutable provider reference"
+            "historical remote provider model identity must equal the immutable provider reference"
         )
 
-if providers and "done: Option<bool>" not in providers:
-    PROBLEMS.append("Ollama adapter response shape drifted; update the terminal-evidence contract")
+provider_runtime = providers.split("#[cfg(test)]", 1)[0]
+for forbidden in (
+    "OllamaProviderAdapter",
+    "OpenClawCliProviderAdapter",
+    "/api/generate",
+    "Command::new",
+    "response.text()",
+    'args(["infer", "model", "run"',
+):
+    if forbidden in provider_runtime:
+        PROBLEMS.append(
+            f"external-only provider boundary retains executable local inference marker: {forbidden}"
+        )
+if "_input: &ProviderDispatchInput" not in provider_runtime:
+    PROBLEMS.append("provider boundary must make prompt non-consumption explicit")
+if "Err(ProviderDispatchError::external_agent_required())" not in provider_runtime:
+    PROBLEMS.append("provider boundary must fail closed to the external Agent protocol")
+if "--features legacy-local-provider-dispatch" in workflow or "--all-features" in workflow:
+    PROBLEMS.append("authoritative provider workflow activates retired local provider execution")
 
 result = {
     "schema": "cex.provider-success-evidence-static.v1",
     "status": "failed" if PROBLEMS else "ok",
+    "runtime_policy": "external_only",
+    "automatic_local_provider_dispatch_allowed": False,
+    "historical_terminal_success_inference_allowed": False,
     "terminal_success_inference_allowed": False,
-    "required_terminal_field": "done=true",
-    "required_model_binding": "remote model == immutable provider_ref",
+    "required_terminal_field": "done=true for retained historical live evidence",
+    "required_model_binding": "historical remote model == immutable provider_ref",
     "database_guard_bound": (
         "cex_validate_provider_live_terminal_result_v1" in terminal_migration
         and "cex_validate_provider_reconciled_terminal_result_v1" in terminal_migration
     ),
     "invalid_success_outcome": "reconcile_required",
+    "default_external_agent_test_bound": bool(external_boundary_test),
+    "legacy_worker_feature_isolated": bool(execution_manifest),
     "workflow_bound": "scripts/check-provider-success-evidence.py" in workflow,
     "postgres_negative_paths_bound": bool(postgres_test),
+    "architecture_checker_bound": bool(architecture_checker),
     "hosted_step_attested": bool(hosted_checker) and bool(exact_attempt_verifier),
+    "checker_may_grant_production_authorization": False,
+    "production_authorization": "not_granted",
     "problems": PROBLEMS,
 }
 print(json.dumps(result, ensure_ascii=False, indent=2))
