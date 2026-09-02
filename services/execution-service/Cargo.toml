@@ -37,11 +37,3 @@ required-features = ["legacy-local-provider-dispatch"]
 [[test]]
 name = "external_agent_boundary"
 path = "tests/external_agent_boundary.rs"
-
-# This large fixture suite documents the retired in-process Ollama/OpenClaw
-# behavior. It is excluded from authoritative/default qualification so legacy
-# expectations cannot reintroduce platform-owned Agent execution.
-[[test]]
-name = "legacy_local_provider_http_flow"
-path = "tests/http_flow.rs"
-required-features = ["legacy-local-provider-dispatch"]
