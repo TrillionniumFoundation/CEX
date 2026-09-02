@@ -18,7 +18,7 @@ Required behavior:
 - templates, status prose, and branch-local runs cannot be presented as release evidence;
 - every branch push must execute the authoritative Rust gate without path-filter gaps;
 - the exact commit, tree, Cargo lock, migration chain, workflow set, and canonical document set must be hashed into a machine-readable integrity record;
-- root `readme.md` is outside this authority chain and is not required for closure;
+- root `readme.md` is non-normative navigation and cannot establish current status or release evidence;
 - production authorization remains explicitly `not_granted`.
 
 Closure evidence:
@@ -67,43 +67,65 @@ Closure evidence:
 - `scripts/check-hepta-postgres-integration.sh --mode full` succeeds;
 - the exact-SHA Hepta job reports every test successful and Clippy clean under warnings denied.
 
+### Block K — complete workspace module documentation and ownership
+
+The documentation authority must cover the actual Cargo workspace rather than only central P0 workstreams. `Cargo.toml` is the source of truth for membership. Every workspace member must have one machine-readable catalog entry and one dedicated technical contract.
+
+Required behavior:
+
+- `docs/module-catalog-v1.json` contains exactly the Cargo workspace members, with no missing, duplicate, stale, or invented member;
+- each catalog package name matches the member's `[package].name`;
+- every catalog entry identifies kind, logical module, deployability, maturity, owner role, authority boundary, documentation path, source entry points, and executable verification commands;
+- every dedicated document defines purpose and non-goals, authority and owned state, source layout, interfaces, persistence/concurrency/recovery, configuration/secrets, security/trust, verification, deployment/operations, and compatibility/change protocol;
+- `docs/modules/index.md` maps all workspace members and the external Nakama, Chain, Matrix, object-store, provider, and external-Agent authorities;
+- `scripts/check-module-documentation.py` verifies workspace/catalog equality, package identity, source-path existence, document depth, ownership, navigation, and external-component boundaries;
+- `scripts/check-development-docs.py` executes that module checker as part of Block H evidence;
+- root `readme.md` provides non-normative discovery only;
+- one-time convergence, self-patch, force-update, or candidate-construction scripts are absent from the frozen tree;
+- module-document validation is bound to the exact commit/tree through the repository-integrity record and generated candidate manifest;
+- production authorization remains `not_granted`.
+
+Closure evidence:
+
+- `scripts/check-module-documentation.py` succeeds and reports the complete workspace;
+- `scripts/check-development-docs.py` succeeds with the module contract enabled;
+- `scripts/check-repository-integrity.py` records the exact candidate commit/tree and successful documentation check;
+- the `repository-integrity` job and aggregate candidate workflow succeed on that same SHA.
+
 ## 2. Documentation completion contract
 
 The active documentation set must define all of the following:
 
 1. authority and precedence;
 2. component maturity and evidence posture;
-3. Research, Nakama, and Settlement state machines and their cross-product invariants;
-4. trust boundaries, threats, controls, residual risks, and independent-review boundaries;
-5. clean-deployment acceptance from an empty database through exact-tree evidence generation;
-6. SLI/SLO targets, recovery semantics, and the distinction between CI regression evidence and production qualification;
-7. protocol read/write authority, compatibility, migration, and retirement conditions;
-8. machine-readable requirement-to-code-to-test-to-gate traceability;
-9. complete-suite lint ownership without broad warning suppression.
+3. complete workspace module documentation, ownership, authority boundaries, source entry points, verification, deployment and change protocol;
+4. Research, Nakama, and Settlement state machines and their cross-product invariants;
+5. trust boundaries, threats, controls, residual risks, and independent-review boundaries;
+6. clean-deployment acceptance from an empty database through exact-tree evidence generation;
+7. SLI/SLO targets, recovery semantics, and the distinction between CI regression evidence and production qualification;
+8. protocol read/write authority, compatibility, migration, and retirement conditions;
+9. machine-readable requirement-to-code-to-test-to-gate traceability;
+10. complete-suite lint ownership without broad warning suppression.
 
-Documentation is complete only when the checker validates the files and the exact-tree integrity record binds their digests. Word count or file presence alone is not completion.
+Documentation is complete only when the checker validates the authority set, the Cargo workspace/catalog bijection, every dedicated module contract and every referenced source path, and the exact-tree integrity record binds the successful result to the candidate tree. Word count, file presence, a root README, or a central plan alone is not completion.
 
 ## 3. Candidate sequencing
 
 The final candidate sequence is:
 
 1. freeze one candidate commit/tree;
-2. run documentation, hygiene, static wiring, lint-ownership, and repository-integrity checks;
-3. run the five authoritative v12 workflows, with `rust-service-gate` containing Blocks H, I, and J;
+2. run module documentation, authority, hygiene, static wiring, lint-ownership, and repository-integrity checks;
+3. run the five authoritative v12 workflows, with `rust-service-gate` containing Blocks H, I, J, and K;
 4. run the aggregate candidate workflow on the same SHA;
 5. generate and validate the immutable evidence payload and candidate manifest;
 6. report actual branch/ruleset enforcement without inference;
 7. stop at repository qualification unless every external production gate has independent evidence.
 
-The shared qualification trigger is the sole committed freeze authority; a stale or missing
-trigger, or any secondary freeze marker, is a fail-closed repository wiring error, not a reason
-to infer qualification.
+The shared qualification trigger is the sole committed freeze authority; a stale or missing trigger, or any secondary freeze marker, is a fail-closed repository wiring error, not a reason to infer qualification.
 
 A later commit, including a documentation-only commit, creates a new tree and must be requalified.
 
-Transient files written below `run/p0-release-support` are operator diagnostics only. They are
-outside the canonical payload allow-list; lifecycle qualification is bound to the retained
-`database-lifecycle.json` record and the exact hosted run/job/step attestations.
+Transient files written below `run/p0-release-support` are operator diagnostics only. They are outside the canonical payload allow-list; lifecycle qualification is bound to the retained `database-lifecycle.json` record and the exact hosted run/job/step attestations.
 
 ## 4. External production gates remain upstream blockers
 
@@ -116,10 +138,11 @@ Repository closure therefore yields `REPOSITORY_CLOSED_CANDIDATE`, never product
 This addendum is closed on one exact commit only when:
 
 - all active documents and machine-readable ledgers validate;
+- the Cargo workspace, module catalog, module index, and all dedicated module contracts validate;
 - all repository-actionable traceability entries resolve to existing files and executable gates;
 - strict Hepta PostgreSQL recovery cannot skip;
 - the exact Hepta lint ownership contract validates and the complete package suite passes;
 - the exact-tree integrity record is generated and included in release evidence;
 - the five authoritative workflows and aggregate candidate workflow succeed on that SHA;
-- no placeholder, temporary remediation workflow, broad warning allowance, or fabricated external approval is used;
+- no placeholder, temporary remediation/convergence workflow, broad warning allowance, or fabricated external approval is used;
 - the generated candidate manifest continues to deny production authorization.

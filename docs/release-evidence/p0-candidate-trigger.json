@@ -1,8 +1,8 @@
 {
   "schema": "cex.p0-candidate-trigger.v1",
   "plan": "CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
-  "sequence": 44,
-  "purpose": "Qualify one exact v12 sequence-44 tree after closing every repository-internal failure observed on sequence 43. The hosted-gate context producer and strict manifest validator share one semantic closed field contract; SQLx is PostgreSQL-only while explicitly retaining the required macros, migration, and JSON surfaces; unused RSA and Paste dependency paths are removed; the remaining Gumdrop warning is confined to the Tendermint finality-verifier dev-only fixture generator with an owner, machine-checked path, runtime prohibition, and fail-closed expiry; every explicitly declared Cargo workspace member has a dedicated machine-enforced technical development contract; and the root developer entry point plus external-evidence closure runbook are complete. All migration-0088, exact-money, terminal-evidence, recovery, soak, backup, governance-observation, immutable-evidence, and X1-X8 independent-approval separation controls remain unchanged.",
+  "sequence": 45,
+  "purpose": "Qualify one exact v12 tree after converging the sequence-44 runtime, migration-0088, provider-evidence, workflow-trust, Windows, clean-checkout and safe-I/O fixes with the complete Cargo-workspace documentation contract: all 18 members are catalogued, each has a dedicated technical module document, source/owner/verification boundaries are executable, root navigation is non-normative, and one-time sequence-44 candidate-construction/convergence artifacts are absent. Repository qualification still requires real non-empty exact-SHA hosted execution and a generated candidate manifest; production authorization remains denied and V12-X1-X8 remain independent external gates.",
   "qualification_scope": "repository-exact-money-control-plane-plus-hepta-durability-doc-integrity-full-suite-lint-receipt-recovery-and-trnm-production-config-hardening",
   "production_authorization": "not_granted"
 }

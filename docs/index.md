@@ -2,7 +2,7 @@
 
 Status: active
 
-This file is the canonical entry point for development, qualification, and operator documentation. The repository root `readme.md` is deliberately not part of the normative development-document chain.
+This file is the canonical entry point for development, qualification, and operator documentation. The repository root `readme.md` is a non-normative navigation page and cannot establish current status, qualification, or production authorization.
 
 ## Authority order
 
@@ -11,7 +11,7 @@ When two sources appear to disagree, use the following precedence:
 1. immutable exact-commit release evidence and the generated candidate manifest;
 2. `CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md` together with its active implementation addendum;
 3. accepted ADRs and versioned protocol specifications;
-4. component status, state-machine, threat-model, acceptance, SLO, compatibility, and runbook documents;
+4. component status, state-machine, threat-model, acceptance, SLO, compatibility, module-contract, and runbook documents;
 5. historical plans, archived evidence, research notes, and examples.
 
 Source presence, prose, a template, or a green run on another SHA never overrides exact-tree evidence.
@@ -30,7 +30,16 @@ Source presence, prose, a template, or a green run on another SHA never override
 - Protocol compatibility matrix: `protocol/version-compatibility-matrix-v1.md`
 - TRNM production credential contract: `trnm-production-credential-contract-v1.md`
 
-The active set is validated by `scripts/check-development-docs.py`. The exact repository identity and authority-set digests are emitted by `scripts/check-repository-integrity.py`.
+## Workspace module contracts
+
+The Cargo workspace is documented through two active supporting contracts:
+
+- Machine-readable module catalog: `docs/module-catalog-v1.json`
+- Human module index: `docs/modules/index.md`
+
+Every Cargo member must appear exactly once in the catalog and have one dedicated document under `docs/modules/`. Nakama, Trillionnium Chain, Matrix homeserver, content-addressed object storage, external providers, and external Agents remain external authorities and must not be invented as local Cargo members.
+
+The module catalog is verified by `scripts/check-module-documentation.py`; that checker is executed by `scripts/check-development-docs.py`. The exact repository identity and successful documentation result are recorded by `scripts/check-repository-integrity.py`.
 
 ## Lifecycle labels
 
@@ -39,17 +48,19 @@ The active set is validated by `scripts/check-development-docs.py`. The exact re
 - `operational`: executable runbook or acceptance procedure.
 - `historical`: retained for audit only; not a source of current status.
 - `template`: shape-only input; never release evidence.
+- `module contract`: the technical boundary for one Cargo member; not release evidence by itself.
 
 ## Production authorization boundary
 
-Repository qualification may establish that source, migrations, tests, workflows, and generated evidence are internally consistent on one commit/tree. It cannot authorize production. Representative-volume disaster recovery, real deployment and rollback, provider evidence, secret custody, sustained soak, independent reviews, legal/commercial approvals, and final human go/no-go remain externally evidenced gates. The production-authorization value remains `not_granted` until those independent records and the final human decision exist.
+Repository qualification may establish that source, migrations, tests, workflows, documentation, and generated evidence are internally consistent on one commit/tree. It cannot authorize production. Representative-volume disaster recovery, real deployment and rollback, provider evidence, secret custody, sustained soak, independent reviews, legal/commercial approvals, and final human go/no-go remain externally evidenced gates. The production-authorization value remains `not_granted` until those independent records and the final human decision exist.
 
 ## Change protocol
 
-A change to any active authority document must:
+A change to any active authority or workspace member must:
 
 1. preserve the explicit `not_granted` production-authorization posture;
-2. update the machine-readable authority or traceability document when scope changes;
-3. pass the documentation contract checker;
-4. pass repository-integrity attestation on the exact tree;
-5. trigger all authoritative v12 hosted gates through the shared candidate trigger before repository qualification.
+2. update the machine-readable authority or traceability document when normative scope changes;
+3. update the affected module-catalog entry and dedicated module contract when membership, ownership, interfaces, persistence, configuration, verification, or deployment changes;
+4. pass `scripts/check-module-documentation.py` and `scripts/check-development-docs.py`;
+5. pass repository-integrity attestation on the exact tree;
+6. trigger all authoritative v12 hosted gates through the shared candidate trigger before repository qualification.

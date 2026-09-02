@@ -13,6 +13,7 @@ Record before execution:
 - `Cargo.lock` digest;
 - numbered migration head and full numbered migration-chain digest;
 - workflow and canonical-document digests;
+- module catalog and complete workspace-member count;
 - container image or runner identity;
 - PostgreSQL major version.
 
@@ -23,6 +24,7 @@ Any source change creates a new candidate and invalidates prior exact-tree quali
 Run, in order:
 
 ```bash
+python3 scripts/check-module-documentation.py
 python3 scripts/check-development-docs.py
 python3 scripts/check-hepta-lint-ownership.py
 python3 scripts/check-p0-release-candidate-hygiene.py
@@ -30,6 +32,8 @@ python3 scripts/check-p0-wiring.py
 python3 scripts/check-repository-integrity.py --output run/repository-integrity.json
 cargo fmt --all --check
 ```
+
+The module check must prove an exact bijection between `Cargo.toml` workspace members and `docs/module-catalog-v1.json`, a dedicated technical contract for every member, existing catalog-bound source entry points, complete ownership and external-authority boundaries, and a non-normative root navigation page.
 
 Failure is terminal for that candidate; no later successful test may override it.
 
@@ -84,7 +88,7 @@ A production-like product rehearsal must eventually demonstrate three humans and
 The aggregate gate must:
 
 - check exact branch-tree event identity;
-- rerun repository integrity and strict Hepta recovery;
+- rerun module documentation, repository integrity, and strict Hepta recovery;
 - wait for all five authoritative exact-SHA gates;
 - upload the evidence payload;
 - generate a non-template candidate manifest with real run IDs and artifact digests;
@@ -94,7 +98,7 @@ The aggregate gate must:
 
 ## 7. Fail-closed conditions
 
-Reject the candidate on any placeholder hash/run ID, missing gate, different head SHA, migration-head mismatch, skipped strict database test, incomplete Hepta package lane, unguarded lint suppression, unpinned third-party Action, temporary remediation workflow, legacy monetary write, ambiguous provider retry, mutable evidence, or inferred external approval.
+Reject the candidate on any placeholder hash/run ID, missing gate, different head SHA, migration-head mismatch, skipped strict database test, incomplete workspace-module contract, incomplete Hepta package lane, unguarded lint suppression, unpinned third-party Action, temporary remediation/convergence workflow, legacy monetary write, ambiguous provider retry, mutable evidence, or inferred external approval.
 
 ## 8. External deployment acceptance
 

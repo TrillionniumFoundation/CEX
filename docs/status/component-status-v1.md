@@ -15,6 +15,7 @@ This document describes maturity and required evidence. It is not release eviden
 | Hepta Research League | functional Alpha / repository-candidate slice | durable research facts, signed control, PostgreSQL outbox/inbox, finality projection | strict Hepta PostgreSQL job inside Rust gate plus aggregate recovery rerun | no production activation |
 | Nakama integration | contract-qualified boundary | authoritative ordered session events and signed receipts | contract/golden tests and Hepta recovery | live topology rehearsal external |
 | Consumer entry and BFF | supporting Alpha | identity mapping/read models only; not scientific fact authority | Rust workspace tests | user-journey and operational qualification pending |
+| Workspace module documentation | repository-candidate contract | Cargo workspace membership, owner and authority mapping, dedicated technical documents | module checker, documentation checker, repository-integrity job | not release evidence by itself |
 | Release evidence | repository-candidate | generated immutable evidence payload and candidate manifest | all five exact-SHA gates plus aggregate gate | explicitly not production authorization |
 
 ## Status vocabulary
@@ -22,12 +23,18 @@ This document describes maturity and required evidence. It is not release eviden
 - `repository-candidate`: implementation and repository-hosted evidence can qualify one exact tree.
 - `functional Alpha`: the vertical slice is executable but has not completed every external production gate.
 - `supporting Alpha`: usable supporting surface whose end-to-end production qualification remains incomplete.
+- `contract-qualified boundary`: protocol and repository checks exist, while live topology evidence remains external.
 - `blocked_upstream`: no repository edit can supply the required independent evidence.
+
+## Module documentation posture
+
+`Cargo.toml` is the workspace-membership source. `docs/module-catalog-v1.json` must contain exactly the same members, and every member must have one dedicated technical contract indexed by `docs/modules/index.md`. `scripts/check-module-documentation.py` verifies the bijection, package names, owners, source entry points, required sections, and external-authority boundaries. The result is still only repository evidence after it executes on the exact candidate tree and is retained by the aggregate gate.
 
 ## Non-equivalences
 
 - A completed Nakama session is not a completed paper.
 - A completed paper is not economic finality.
+- Complete module documentation is not executable qualification.
 - Repository qualification is not deployment approval.
 - A template manifest is not a candidate manifest.
 - A run on a parent, branch tip, merge tree, or later commit is not evidence for another tree.
