@@ -11,7 +11,7 @@ When two sources appear to disagree, use the following precedence:
 1. immutable exact-commit release evidence and the generated candidate manifest;
 2. `CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md` together with its active implementation addendum;
 3. accepted ADRs and versioned protocol specifications;
-4. component status, state-machine, threat-model, acceptance, SLO, compatibility, module-contract, and runbook documents;
+4. component status, state-machine, threat-model, acceptance, SLO, compatibility, module-contract, evidence-intake, and runbook documents;
 5. historical plans, archived evidence, research notes, and examples.
 
 Source presence, prose, a template, or a green run on another SHA never overrides exact-tree evidence.
@@ -41,6 +41,16 @@ Every Cargo member must appear exactly once in the catalog and have one dedicate
 
 The module catalog is verified by `scripts/check-module-documentation.py`; that checker is executed by `scripts/check-development-docs.py`. The exact repository identity and successful documentation result are recorded by `scripts/check-repository-integrity.py`.
 
+## External production evidence intake
+
+The repository defines a shape and anti-self-certification boundary for the eight external production gates:
+
+- Contract: `docs/external-production-evidence-contract-v1.md`
+- Shape-only template: `docs/templates/cex-external-production-evidence-bundle-v1.json`
+- Structural checker: `scripts/check-external-production-evidence-contract.py`
+
+The source tree may validate only the contract and empty template. Real evidence remains in approved external custody. Structural bundle validation cannot verify that an issuer is genuinely independent and cannot grant production authorization. V12-X1 through V12-X8 remain `blocked_upstream` until the responsible external actors issue and accept immutable evidence for one exact qualified candidate.
+
 ## Lifecycle labels
 
 - `active`: normative for current repository work.
@@ -49,6 +59,7 @@ The module catalog is verified by `scripts/check-module-documentation.py`; that 
 - `historical`: retained for audit only; not a source of current status.
 - `template`: shape-only input; never release evidence.
 - `module contract`: the technical boundary for one Cargo member; not release evidence by itself.
+- `external evidence contract`: structural intake policy; never proof that the external activity or approval occurred.
 
 ## Production authorization boundary
 
@@ -61,6 +72,7 @@ A change to any active authority or workspace member must:
 1. preserve the explicit `not_granted` production-authorization posture;
 2. update the machine-readable authority or traceability document when normative scope changes;
 3. update the affected module-catalog entry and dedicated module contract when membership, ownership, interfaces, persistence, configuration, verification, or deployment changes;
-4. pass `scripts/check-module-documentation.py` and `scripts/check-development-docs.py`;
-5. pass repository-integrity attestation on the exact tree;
-6. trigger all authoritative v12 hosted gates through the shared candidate trigger before repository qualification.
+4. update the external evidence contract, template, and checker together when evidence shape or gate ordering changes;
+5. pass `scripts/check-module-documentation.py`, `scripts/check-external-production-evidence-contract.py --contract-only`, and `scripts/check-development-docs.py`;
+6. pass repository-integrity attestation on the exact tree;
+7. trigger all authoritative v12 hosted gates through the shared candidate trigger before repository qualification.

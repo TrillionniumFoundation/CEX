@@ -92,6 +92,28 @@ Closure evidence:
 - `scripts/check-repository-integrity.py` records the exact candidate commit/tree and successful documentation check;
 - the `repository-integrity` job and aggregate candidate workflow succeed on that same SHA.
 
+### Block L — external production evidence intake and anti-self-certification
+
+The repository must define one machine-checkable shape for V12-X1 through V12-X8 while preserving their external, non-self-certifiable status. Structural validation may reject malformed or cross-candidate evidence; it may never create, infer, waive, or approve the underlying real-world facts.
+
+Required behavior:
+
+- `docs/external-production-evidence-contract-v1.md` defines candidate binding, issuer identity, immutable URI/digest, UTC time, scope, gate ordering, revocation, retention, and final-human-decision requirements;
+- `docs/templates/cex-external-production-evidence-bundle-v1.json` is shape-only, contains exactly V12-X1 through V12-X8, carries no evidence, and explicitly denies production authorization;
+- real external evidence is stored under approved external custody and is not committed into the source tree;
+- every evidence record binds the exact candidate commit/tree and repository-candidate manifest, identifies its issuer/organization/role, and explicitly states independence from repository automation;
+- `scripts/check-external-production-evidence-contract.py --contract-only` validates the source contract and anti-self-certification boundary;
+- optional bundle validation checks structure and cross-gate consistency but still reports `production_authorization=not_granted` and `checker_may_grant_production_authorization=false`;
+- V12-X8 cannot structurally pass before V12-X1 through V12-X7 pass on the same candidate, and only a real final human `go` decision can grant authorization outside repository automation;
+- a waiver, source-tree evidence file, mutable URI, credential-bearing URI, cross-candidate record, revocation, or inferred approval fails closed.
+
+Closure evidence:
+
+- the contract-only checker succeeds on the exact tree;
+- `scripts/check-development-docs.py` executes the contract-only checker without changing the established candidate-manifest schema;
+- the exact-tree repository-integrity job retains the successful documentation result;
+- real X1-X8 closure remains external and cannot be claimed by this block.
+
 ## 2. Documentation completion contract
 
 The active documentation set must define all of the following:
@@ -105,17 +127,18 @@ The active documentation set must define all of the following:
 7. SLI/SLO targets, recovery semantics, and the distinction between CI regression evidence and production qualification;
 8. protocol read/write authority, compatibility, migration, and retirement conditions;
 9. machine-readable requirement-to-code-to-test-to-gate traceability;
-10. complete-suite lint ownership without broad warning suppression.
+10. complete-suite lint ownership without broad warning suppression;
+11. an executable external-evidence intake shape that cannot self-certify production gates.
 
-Documentation is complete only when the checker validates the authority set, the Cargo workspace/catalog bijection, every dedicated module contract and every referenced source path, and the exact-tree integrity record binds the successful result to the candidate tree. Word count, file presence, a root README, or a central plan alone is not completion.
+Documentation is complete only when the checker validates the authority set, the Cargo workspace/catalog bijection, every dedicated module contract, the external-evidence source contract, and every referenced source path, and the exact-tree integrity record binds the successful result to the candidate tree. Word count, file presence, a root README, a template, or a central plan alone is not completion.
 
 ## 3. Candidate sequencing
 
 The final candidate sequence is:
 
 1. freeze one candidate commit/tree;
-2. run module documentation, authority, hygiene, static wiring, lint-ownership, and repository-integrity checks;
-3. run the five authoritative v12 workflows, with `rust-service-gate` containing Blocks H, I, J, and K;
+2. run module documentation, external-evidence contract, authority, hygiene, static wiring, lint-ownership, and repository-integrity checks;
+3. run the five authoritative v12 workflows, with `rust-service-gate` containing Blocks H, I, J, K, and L;
 4. run the aggregate candidate workflow on the same SHA;
 5. generate and validate the immutable evidence payload and candidate manifest;
 6. report actual branch/ruleset enforcement without inference;
@@ -139,10 +162,11 @@ This addendum is closed on one exact commit only when:
 
 - all active documents and machine-readable ledgers validate;
 - the Cargo workspace, module catalog, module index, and all dedicated module contracts validate;
+- the external-evidence template and anti-self-certification checker validate without claiming real X1-X8 closure;
 - all repository-actionable traceability entries resolve to existing files and executable gates;
 - strict Hepta PostgreSQL recovery cannot skip;
 - the exact Hepta lint ownership contract validates and the complete package suite passes;
 - the exact-tree integrity record is generated and included in release evidence;
 - the five authoritative workflows and aggregate candidate workflow succeed on that SHA;
-- no placeholder, temporary remediation/convergence workflow, broad warning allowance, or fabricated external approval is used;
+- no placeholder, temporary remediation/convergence workflow, broad warning allowance, fabricated external evidence, or fabricated approval is used;
 - the generated candidate manifest continues to deny production authorization.

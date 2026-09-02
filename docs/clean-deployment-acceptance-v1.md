@@ -14,6 +14,7 @@ Record before execution:
 - numbered migration head and full numbered migration-chain digest;
 - workflow and canonical-document digests;
 - module catalog and complete workspace-member count;
+- external-production evidence contract/template digests;
 - container image or runner identity;
 - PostgreSQL major version.
 
@@ -25,6 +26,7 @@ Run, in order:
 
 ```bash
 python3 scripts/check-module-documentation.py
+python3 scripts/check-external-production-evidence-contract.py --contract-only
 python3 scripts/check-development-docs.py
 python3 scripts/check-hepta-lint-ownership.py
 python3 scripts/check-p0-release-candidate-hygiene.py
@@ -34,6 +36,8 @@ cargo fmt --all --check
 ```
 
 The module check must prove an exact bijection between `Cargo.toml` workspace members and `docs/module-catalog-v1.json`, a dedicated technical contract for every member, existing catalog-bound source entry points, complete ownership and external-authority boundaries, and a non-normative root navigation page.
+
+The external-evidence contract check validates only the source-tree shape, empty template, gate ordering, and anti-self-certification boundary. It cannot prove or close V12-X1 through V12-X8 and must continue to report `production_authorization=not_granted`.
 
 Failure is terminal for that candidate; no later successful test may override it.
 
@@ -88,7 +92,7 @@ A production-like product rehearsal must eventually demonstrate three humans and
 The aggregate gate must:
 
 - check exact branch-tree event identity;
-- rerun module documentation, repository integrity, and strict Hepta recovery;
+- rerun module documentation, external-evidence contract, repository integrity, and strict Hepta recovery;
 - wait for all five authoritative exact-SHA gates;
 - upload the evidence payload;
 - generate a non-template candidate manifest with real run IDs and artifact digests;
@@ -98,8 +102,8 @@ The aggregate gate must:
 
 ## 7. Fail-closed conditions
 
-Reject the candidate on any placeholder hash/run ID, missing gate, different head SHA, migration-head mismatch, skipped strict database test, incomplete workspace-module contract, incomplete Hepta package lane, unguarded lint suppression, unpinned third-party Action, temporary remediation/convergence workflow, legacy monetary write, ambiguous provider retry, mutable evidence, or inferred external approval.
+Reject the candidate on any placeholder hash/run ID, missing gate, different head SHA, migration-head mismatch, skipped strict database test, incomplete workspace-module contract, malformed external-evidence contract, source-committed live external evidence, incomplete Hepta package lane, unguarded lint suppression, unpinned third-party Action, temporary remediation/convergence workflow, legacy monetary write, ambiguous provider retry, mutable evidence, waiver, or inferred external approval.
 
 ## 8. External deployment acceptance
 
-Real service identities, network policy, secret custody, representative data volume, object storage, provider endpoints, rollback, sustained load and human approvals are outside repository self-certification. Their absence yields `BLOCKED_UPSTREAM`, not an invented pass.
+Real service identities, network policy, secret custody, representative data volume, object storage, provider endpoints, rollback, sustained load and human approvals are outside repository self-certification. Their absence yields `BLOCKED_UPSTREAM`, not an invented pass. A structurally valid external bundle is accepted only after its responsible human control owners independently verify issuer identity, signatures, scope, underlying activity, retention, and revocation state.

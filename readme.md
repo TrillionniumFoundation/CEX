@@ -13,10 +13,14 @@ CEX is the Rust workspace containing exact Ledger, invocation/execution, Audit, 
 - Active implementation addendum: [`docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md`](docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md)
 - Component maturity: [`docs/status/component-status-v1.md`](docs/status/component-status-v1.md)
 - Clean deployment acceptance: [`docs/clean-deployment-acceptance-v1.md`](docs/clean-deployment-acceptance-v1.md)
+- External production evidence intake contract: [`docs/external-production-evidence-contract-v1.md`](docs/external-production-evidence-contract-v1.md)
+- Shape-only external evidence template: [`docs/templates/cex-external-production-evidence-bundle-v1.json`](docs/templates/cex-external-production-evidence-bundle-v1.json)
 
 ## Development entry points
 
 ```bash
+python3 scripts/check-module-documentation.py
+python3 scripts/check-external-production-evidence-contract.py --contract-only
 python3 scripts/check-development-docs.py
 python3 scripts/check-repository-integrity.py
 cargo fmt --all --check
@@ -24,6 +28,8 @@ cargo test --workspace --all-targets
 ```
 
 Every Cargo workspace member must have exactly one entry in the module catalog and one dedicated technical contract. Adding, removing, or renaming a member without updating both is a failing documentation gate.
+
+The external evidence template is deliberately empty. Real V12-X1 through V12-X8 evidence must remain in approved external custody and bind one exact repository-qualified candidate. Structural validation cannot establish issuer independence or grant authorization.
 
 ## Authority boundary
 
