@@ -2,10 +2,10 @@
 """Validate the accepted external-Agent-only runtime boundary.
 
 This check is intentionally source based. It prevents an implementation plan,
-workspace change, workflow, or deployment manifest from silently reintroducing
-platform-owned model routing, prompt hosting, or inference execution contrary
-to ADR-004. It can reject a repository candidate; it cannot grant production
-authorization.
+workspace change, workflow, deployment manifest, or runner probe from silently
+reintroducing platform-owned model routing, prompt hosting, inference execution,
+or synthetic qualification evidence contrary to ADR-004. It can reject a
+repository candidate; it cannot grant production authorization.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-TRACEABILITY_PATH = "docs/traceability/sequence-51-architecture-v1.json"
+TRACEABILITY_PATH = "docs/traceability/sequence-52-architecture-v1.json"
 PROBLEMS: list[str] = []
 
 
@@ -75,12 +75,12 @@ def forbid(relative: str, text: str, *markers: str) -> None:
 def validate_traceability() -> int:
     trace = load_json(TRACEABILITY_PATH)
     expected = {
-        "schema": "cex.sequence-51-architecture-traceability.v1",
+        "schema": "cex.sequence-52-architecture-traceability.v1",
         "status": "active",
-        "candidate_sequence": 51,
+        "candidate_sequence": 52,
         "runtime_policy": "external_only",
         "architecture_decision": "decisions/adr-004-three-module-external-agent-battle-platform.md",
-        "closure_contract": "docs/architecture/external-agent-runtime-boundary-sequence-51.md",
+        "closure_contract": "docs/architecture/external-agent-runtime-boundary-sequence-52.md",
         "checker": "scripts/check-external-agent-runtime-boundary.py",
         "shared_trigger": "docs/release-evidence/p0-candidate-trigger.json",
         "production_authorization": "not_granted",
@@ -102,7 +102,7 @@ def validate_traceability() -> int:
     if not isinstance(controls, list):
         PROBLEMS.append(f"{TRACEABILITY_PATH} controls must be an array")
         controls = []
-    expected_ids = {f"M{index}" for index in range(1, 9)}
+    expected_ids = {f"M{index}" for index in range(1, 11)}
     seen: set[str] = set()
     for index, control in enumerate(controls):
         label = f"architecture controls[{index}]"
@@ -183,6 +183,29 @@ def scan_activation_surfaces() -> None:
                 )
 
 
+def validate_runner_probe(relative: str, expected_runner_marker: str) -> None:
+    text = require(
+        relative,
+        "workflow_dispatch:",
+        "permissions: {}",
+        'test "$GITHUB_EVENT_NAME" = workflow_dispatch',
+        'test "$GITHUB_REF" = refs/heads/main',
+        expected_runner_marker,
+    )
+    for forbidden in (
+        "pull_request:",
+        "push:",
+        "actions/checkout@",
+        "contents: write",
+        "pull-requests: write",
+        "id-token: write",
+    ):
+        if forbidden in text:
+            PROBLEMS.append(
+                f"{relative} is not a bounded no-checkout manual runner probe: {forbidden}"
+            )
+
+
 decision = require(
     "decisions/adr-004-three-module-external-agent-battle-platform.md",
     "状态：Accepted",
@@ -197,19 +220,36 @@ protocol = require(
     "Capabilities are declarations used for discovery and eligibility. They do not authorize Hepta to execute the Agent.",
 )
 closure = require(
-    "docs/architecture/external-agent-runtime-boundary-sequence-51.md",
+    "docs/architecture/external-agent-runtime-boundary-sequence-52.md",
     "Status: active architecture closure contract",
+    "Candidate sequence: `52`",
     "Block M",
     "default workspace build",
     "CAPABILITY_EXTERNAL_AGENT_REGISTRY_JSON",
-    "production_authorization: `not_granted`",
+    "retired `/process` route",
+    "runner probes remain `workflow_dispatch`-only",
+    "Production authorization: `not_granted`",
 )
 authority = require(
     "docs/development-doc-authority-v1.json",
+    '"candidate_sequence": 52',
     '"architecture_decision": "decisions/adr-004-three-module-external-agent-battle-platform.md"',
-    '"architecture_closure": "docs/architecture/external-agent-runtime-boundary-sequence-51.md"',
-    '"architecture_traceability": "docs/traceability/sequence-51-architecture-v1.json"',
+    '"architecture_closure": "docs/architecture/external-agent-runtime-boundary-sequence-52.md"',
+    '"architecture_traceability": "docs/traceability/sequence-52-architecture-v1.json"',
     '"architecture_boundary_checker": "scripts/check-external-agent-runtime-boundary.py"',
+)
+require(
+    "docs/index.md",
+    "Sequence 52",
+    "provider-specific Ollama/OpenClaw wording",
+    "runner probe definition is not execution evidence",
+)
+require(
+    "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md",
+    "Sequence-52 correction",
+    "external-agent-runtime-boundary-sequence-52.md",
+    "sequence-52-architecture-v1.json",
+    "retired `/process` route is absent",
 )
 manifest = require(
     "services/execution-service/Cargo.toml",
@@ -225,11 +265,13 @@ execution_lib = require(
     '#[cfg(feature = "legacy-local-provider-dispatch")]\npub mod provider_dispatch;',
     "pub mod providers;",
     'post(api::start_execution)',
-    'post(api::process_execution)',
+    'post(api::succeed_execution)',
 )
 forbid(
     "services/execution-service/src/lib.rs",
     execution_lib,
+    '"/v1/executions/:id/process"',
+    "post(api::process_execution)",
     "post(provider_dispatch::start_execution)",
     "post(provider_dispatch::process_execution)",
 )
@@ -300,6 +342,9 @@ require(
 )
 require(
     "services/execution-service/tests/external_agent_boundary.rs",
+    "default_execution_router_does_not_expose_retired_process_endpoint",
+    "StatusCode::NOT_FOUND",
+    "default_router_source_cannot_regain_the_retired_process_route_silently",
     "provider_compatibility_surface_fails_closed_without_network_or_prompt_echo",
     "assert!(!error.message.contains(prompt))",
 )
@@ -308,6 +353,7 @@ require(
     "default workspace build does not compile or route to local provider adapters",
     "legacy-local-provider-dispatch",
     "external Agent",
+    "retired `/process` route",
 )
 require(
     "docs/modules/capability-service.md",
@@ -317,14 +363,23 @@ require(
 )
 trigger = require(
     "docs/release-evidence/p0-candidate-trigger.json",
-    '"sequence": 51',
+    '"sequence": 52',
     "external-Agent-only runtime boundary",
+    "retired process route",
     '"production_authorization": "not_granted"',
 )
-wrapper = require(
+require(
     "scripts/check-development-docs.py",
     "check-external-agent-runtime-boundary.py",
     "cex.external-agent-runtime-boundary-check.v1",
+)
+validate_runner_probe(
+    ".github/workflows/self-hosted-desktop-availability.yml",
+    'test "$RUNNER_NAME" = desktop',
+)
+validate_runner_probe(
+    ".github/workflows/self-hosted-fleet-availability.yml",
+    'test "$RUNNER_NAME" = rog',
 )
 traceability_controls = validate_traceability()
 
@@ -332,14 +387,14 @@ if decision and "平台不拥有、托管、调度或执行参赛 Agent" not in 
     PROBLEMS.append("ADR-004 no longer denies platform-owned Agent execution")
 if protocol and "Agent private keys never enter Hepta, Nakama, or TRNM" not in protocol:
     PROBLEMS.append("external Agent protocol lost its private-key custody boundary")
-if authority and closure and "external-agent-runtime-boundary-sequence-51.md" not in authority:
+if authority and closure and "external-agent-runtime-boundary-sequence-52.md" not in authority:
     PROBLEMS.append("machine-readable authority does not bind the architecture closure contract")
 if manifest.count("legacy-local-provider-dispatch") < 2:
     PROBLEMS.append("legacy provider feature is not both declared and bound to the worker target")
 if worker and "is_production_like" not in worker:
     PROBLEMS.append("legacy provider worker lacks an explicit production-like rejection")
-if trigger and closure and "sequence-51" not in closure.lower():
-    PROBLEMS.append("candidate trigger and architecture closure do not share sequence-51 identity")
+if trigger and closure and "sequence 52" not in closure.lower():
+    PROBLEMS.append("candidate trigger and architecture closure do not share sequence-52 identity")
 if provider_runtime:
     dispatch_start = provider_runtime.find("pub async fn dispatch_via_provider")
     dispatch_body = provider_runtime[dispatch_start:] if dispatch_start >= 0 else ""
@@ -353,12 +408,15 @@ scan_activation_surfaces()
 result = {
     "schema": "cex.external-agent-runtime-boundary-check.v1",
     "status": "failed" if PROBLEMS else "ok",
+    "candidate_sequence": 52,
     "runtime_policy": "external_only",
     "top_level_domains": ["hepta", "nakama", "trnm"],
     "architecture_traceability_controls": traceability_controls,
     "default_build_compiles_local_inference": False,
+    "default_router_exposes_local_process_route": False,
     "legacy_local_dispatch_production_allowed": False,
     "capability_registry_authority": "external_agent_declarations_only",
+    "runner_probe_definition_is_execution_evidence": False,
     "checker_may_grant_production_authorization": False,
     "production_authorization": "not_granted",
     "problems": PROBLEMS,
