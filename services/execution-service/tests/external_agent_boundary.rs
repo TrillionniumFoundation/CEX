@@ -46,6 +46,30 @@ async fn default_execution_router_remains_live_without_local_provider_runtime() 
 }
 
 #[tokio::test]
+async fn default_execution_router_does_not_expose_retired_process_endpoint() {
+    let response = build_router(test_state())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/executions/00000000-0000-0000-0000-000000000000/process")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .expect("build retired process request"),
+        )
+        .await
+        .expect("retired process response");
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[test]
+fn default_router_source_cannot_regain_the_retired_process_route_silently() {
+    let source = include_str!("../src/lib.rs");
+    assert!(!source.contains("/v1/executions/:id/process"));
+    assert!(!source.contains("post(api::process_execution)"));
+}
+
+#[tokio::test]
 async fn provider_compatibility_surface_fails_closed_without_network_or_prompt_echo() {
     let prompt = "TOP-SECRET-RESEARCH-PROMPT";
     let error = dispatch_via_provider(
