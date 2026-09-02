@@ -56,7 +56,8 @@ impl ProviderDispatchError {
 /// lifecycle and reconciliation code can compile while every attempted local
 /// dispatch produces a stable, non-sensitive error. It never reads the prompt,
 /// starts a child process, performs an inference HTTP request, or copies a
-/// provider body into logs/database error text.
+/// provider body into logs/database error text. Any secret prompt must not appear
+/// in the returned error.
 pub async fn dispatch_via_provider(
     _http: &Client,
     _ollama_base_url: &str,
