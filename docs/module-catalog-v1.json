@@ -228,7 +228,7 @@
       "deployable": true,
       "status": "repository_candidate",
       "owner": "execution-runtime",
-      "authority": "Execution lifecycle, durable provider-dispatch commands, terminal Ledger settlement commands, and operator recovery evidence.",
+      "authority": "Durable execution-request lifecycle, external-Agent work and evidence correlation, exact terminal Ledger settlement commands, historical provider reconciliation records, and operator recovery evidence.",
       "documentation": "docs/modules/execution-service.md",
       "source_entrypoints": [
         "services/execution-service/src/main.rs",
@@ -241,11 +241,12 @@
         "services/execution-service/src/state.rs",
         "services/execution-service/src/bin/execution-provider-dispatch-worker.rs",
         "services/execution-service/src/bin/execution-settlement-worker.rs",
-        "services/execution-service/tests/http_flow.rs"
+        "services/execution-service/tests/external_agent_boundary.rs"
       ],
       "verification": [
-        "cargo test -p execution-service",
+        "cargo test -p execution-service --all-targets",
         "cargo clippy -p execution-service --all-targets -- -D warnings",
+        "python3 scripts/check-external-agent-runtime-boundary.py",
         "python3 scripts/check-execution-settlement-commands.py",
         "bash scripts/check-execution-settlement-commands-postgres.sh",
         "python3 scripts/check-provider-success-evidence.py",
@@ -286,7 +287,7 @@
       "deployable": true,
       "status": "supporting_alpha",
       "owner": "capability-registry",
-      "authority": "Capability metadata and version registry for supported control-plane flows; it grants no execution, Agent, financial, or finality authority by itself.",
+      "authority": "Validated read-only external-Agent capability declarations and registry snapshot serialization; it grants no Agent execution, ownership, entitlement, financial, scientific, or finality authority.",
       "documentation": "docs/modules/capability-service.md",
       "source_entrypoints": [
         "services/capability-service/src/main.rs",
@@ -294,8 +295,9 @@
         "services/capability-service/tests/http_flow.rs"
       ],
       "verification": [
-        "cargo test -p capability-service",
-        "cargo clippy -p capability-service --all-targets -- -D warnings"
+        "cargo test -p capability-service --all-targets",
+        "cargo clippy -p capability-service --all-targets -- -D warnings",
+        "python3 scripts/check-external-agent-runtime-boundary.py"
       ]
     },
     {
@@ -306,7 +308,7 @@
       "deployable": true,
       "status": "supporting_alpha",
       "owner": "consumer-edge",
-      "authority": "Consumer session/identity mapping, bounded task and product projections, and edge-local governance; it is not scientific, Ledger, provider, or finality authority.",
+      "authority": "Consumer session/identity mapping, bounded task and product projections, and edge-local governance; it is not scientific, Ledger, provider, World/Game, or finality authority.",
       "documentation": "docs/modules/consumer-entry-api.md",
       "source_entrypoints": [
         "services/consumer-entry-api/src/main.rs",
@@ -460,7 +462,7 @@
       "id": "matrix-homeserver",
       "kind": "external_message_transport",
       "workspace_member": false,
-      "authority": "Matrix identities, rooms, sync tokens, and source events.",
+      "authority": "Matrix identities, rooms, sync tokens, redaction semantics, and source event transport.",
       "documentation": "docs/consumer-entry-matrix-architecture-v1.md",
       "production_evidence": "external"
     },
@@ -468,7 +470,7 @@
       "id": "content-addressed-object-store",
       "kind": "external_immutable_byte_store",
       "workspace_member": false,
-      "authority": "Artifact bytes addressed by verified SHA-256 digests.",
+      "authority": "Immutable research and provider artifact bytes addressed by verified SHA-256 digests.",
       "documentation": "docs/security-threat-model-v1.md",
       "production_evidence": "external"
     },
@@ -476,8 +478,24 @@
       "id": "external-providers-and-agents",
       "kind": "external_execution",
       "workspace_member": false,
-      "authority": "Provider/Agent-owned execution and signing keys; repository stores only bounded contracts and evidence.",
-      "documentation": "docs/security-threat-model-v1.md",
+      "authority": "Independently operated Agent execution endpoints, model/provider credentials and signing keys; CEX retains only bounded declarations, commands, receipts, content commitments and reconciliation evidence.",
+      "documentation": "docs/hepta-agent-protocol-v1.md",
+      "production_evidence": "external"
+    },
+    {
+      "id": "trillionnium-world-fixture",
+      "kind": "external_deterministic_fixture",
+      "workspace_member": false,
+      "authority": "Pinned Trillionnium-World repository revision used only as a deterministic transition and compatibility fixture; it is not CEX, Game, Nakama, Ledger, or Chain authority.",
+      "documentation": "docs/external-components/trillionnium-world-fixture.md",
+      "production_evidence": "external"
+    },
+    {
+      "id": "trillionnium-game-runtime",
+      "kind": "external_authority_candidate",
+      "workspace_member": false,
+      "authority": "Pinned TrillionniumGame/Nakama runtime candidate for authoritative game commands, storage and World-transition integration outside the CEX Cargo workspace.",
+      "documentation": "docs/external-components/trillionnium-game-runtime.md",
       "production_evidence": "external"
     }
   ]
