@@ -13,51 +13,49 @@ This contract is indexed by `docs/module-catalog-v1.json`. It defines the module
 
 ## Purpose and non-goals
 
-**Purpose.** Polls Matrix events, preserves event identity, and forwards supported messages through the adapter/consumer-entry path.
+**Purpose.** Polls an authenticated Matrix `/sync` stream, preserves opaque cursor/event identity and forwards only supported messages through the Matrix adapter/consumer-entry boundary.
 
-**Non-goals.** It is not an event store, user authority, scheduler for CEX jobs, or substitute for Matrix sync semantics.
+**Non-goals.** It is not an event store, Matrix identity authority, scheduler for CEX jobs, user/room governance service or substitute for homeserver ordering, edit and redaction semantics.
 
 ## Authority and owned state
 
-Polling/cursor transport only; it owns no consumer, research, financial, or finality state.
+The poller owns only transport-local cursor and delivery observations when they are explicitly persisted. It owns no consumer, research, Agent, financial, World/Game or finality state. Matrix remains authoritative for source events and sync tokens; downstream services remain authoritative for accepted actions.
 
-Owned state: Only the polling cursor and delivery observations if explicitly persisted. Without durable cursor storage it remains supporting Alpha and relies on downstream idempotency.
-
-A projection, cache, compatibility row, HTTP success, or transport acknowledgement never transfers authority from its owning component.
+Without durable cursor state, the process is supporting Alpha and downstream idempotency is the final duplicate barrier. A process-local cache, successful HTTP response or advanced in-memory token cannot become durable acceptance evidence.
 
 ## Source layout and entry points
 
-- `src/main.rs`: polling loop, Matrix/downstream clients, and current test surface.
+- `src/main.rs`: polling loop, configuration, Matrix client, event filtering, downstream client and current test surface.
 
 Catalog-bound entry points:
 
 - `apps/matrix-bot-poller/src/main.rs`
 
-Any new binary, public source boundary, migration owner, or removed path must update the catalog and this document in the same commit.
+Any new worker, partitioning strategy, storage owner or public command grammar must update the module catalog and this contract. The single-file executable should be split into configuration, Matrix client, cursor repository, delivery worker and telemetry modules before production promotion.
 
 ## Interfaces and contracts
 
-The executable in `src/main.rs` uses Matrix and downstream HTTP APIs. It must preserve the opaque Matrix sync token and event IDs.
+The executable consumes Matrix sync responses and invokes the versioned downstream adapter/consumer-entry HTTP contract. It preserves the opaque `next_batch` token, source event ID, room/sender relationship, edit/redaction linkage and scoped idempotency identity.
 
-Requests and events must define authentication, tenant/subject binding, size bounds, immutable identity, idempotency scope, version negotiation, error semantics, and retirement conditions. Authoritative transitions require complete contract/receipt validation, not transport success alone.
+Only an explicit command allowlist is forwarded. Unknown event versions, malformed content, ambiguous edits/redactions or unsupported media fail closed or enter bounded dead-letter handling; they never map to a privileged default action.
 
 ## Persistence, concurrency, and recovery
 
-Cursor advancement must occur only after durable downstream acceptance. On restart, replay is safe through stable event/idempotency identity; skipped ranges are forbidden.
+Cursor advancement occurs only after durable downstream acceptance of every event covered by the prior cursor. On timeout or response loss after possible acceptance, the event is retried with the same identity and the cursor remains fenced until exact replay or reconciliation resolves the outcome.
 
-Remote effects, where present, must occur after durable intent or claim commit and before a separate outcome transaction. Possible-side-effect timeouts enter pending or reconciliation state; they never authorize blind retry or a second operation identity.
+Production promotion requires durable cursor/deduplication storage with singleton lease or partition fencing, compare-and-set cursor advancement, poison-event isolation, restart recovery and retained transition evidence. Multiple instances cannot advance one cursor concurrently without a monotonically fenced lease.
 
 ## Configuration and secrets
 
-Matrix homeserver/base URL, access token, user/device or room scope, poll interval/timeout, downstream URL/token, body limits, and runtime profile.
+Configuration includes Matrix homeserver/base URL, access token, user/device/room scope, poll interval and long-poll timeout, downstream URL/principal, body/media limits, cursor partition/store, worker identity, lease/retry/dead-letter limits and runtime profile.
 
-Production-like startup must fail before listening or working when required durable storage, credentials, trust anchors, or explicit modes are absent. Example values are not activation evidence.
+Production-like startup must fail before polling when required durable storage, credentials, explicit partition ownership, trusted endpoints or bounded limits are absent. Matrix access/sync tokens and downstream credentials must come from approved custody and never be logged or embedded in committed examples.
 
 ## Security and trust boundaries
 
-Scope the Matrix token, protect sync tokens, reject untrusted event authority, bound event/media bodies, and redact tokens/message content from logs.
+Scope the Matrix token to the minimum account/device/rooms; reject redirects and untrusted homeserver identity; bound decompressed event/media sizes; validate event type and sender/room linkage; redact message bodies, access tokens, sync tokens and personal identifiers from telemetry.
 
-Inputs must be bounded and validated before authority changes. Logs, metrics, traces, and errors exclude sensitive material, unrestricted payloads, and high-cardinality identity fields unless a reviewed contract explicitly permits them.
+A Matrix sender or room field is untrusted until verified by the homeserver contract and mapped by the downstream identity authority. Metrics use aggregate partition/outcome labels rather than raw event, room, sender or tenant identifiers.
 
 ## Verification
 
@@ -70,21 +68,21 @@ cargo clippy -p matrix-bot-poller --all-targets -- -D warnings
 
 Required behavioral focus:
 
-- Cursor persistence/advance ordering, duplicate replay, restart, Matrix rate limit, downstream timeout, and poison-event handling.
-- Multiple instances must not advance one cursor concurrently without lease/fencing evidence.
+- Cursor persistence and advancement ordering, exact duplicate replay and restart.
+- Matrix rate limits, server errors, response loss, downstream timeout and poison-event isolation.
+- Edit/redaction handling and command allowlist fail-closed behavior.
+- Singleton lease or multi-instance fencing before any horizontally scaled deployment.
 
 The exact candidate SHA must also pass the authoritative hosted workflow and appear in the generated immutable candidate manifest.
 
 ## Deployment and operations
 
-Run as a singleton per cursor partition unless the cursor store supports fencing. Monitor lag, repeated event failures, rate-limit responses, and downstream availability.
+Run as a singleton per cursor partition until a durable fenced cursor repository is qualified. Readiness must be false unless Matrix authentication, cursor ownership/store and downstream trust are valid; liveness reports only process health. Monitor sync lag, oldest unresolved event, repeated failure count, rate-limit duration, cursor lease expiry and dead-letter age.
 
-Operators record artifact identity, runtime profile, dependency identities, readiness, rollback boundary, retained evidence, alerts, and owner escalation. Repository CI does not replace representative-volume recovery, sustained load, credential custody, or independent approval.
+Rollback stops polling and releases/fences cursor ownership before switching binaries. Preserve the exact last committed cursor, unresolved-event identity and delivery evidence; never advance or reset a cursor to make a deployment appear healthy. Operators record artifact/config identities, readiness dimensions, rollback boundary and escalation owner.
 
 ## Compatibility and change protocol
 
-Changes to command filtering or event translation require explicit versioning and replay tests; redactions/edits must not silently create new privileged actions.
+Changes to command filtering, event translation, edit/redaction handling, cursor representation or partition strategy require an explicit protocol version, replay fixtures and migration/rollback evidence. A new Matrix API version must run dual-read/shadow comparison before cutover.
 
-Changes to authority, public types/routes, persistence, configuration, migrations, retry semantics, or topology require this contract, the module catalog, relevant ADR/protocol/traceability, executable tests, hosted gate wiring, and a new shared candidate trigger.
-
-No module document may declare repository closure or production authorization.
+Changes to authority, interfaces, persistence, configuration, retry semantics or deployment topology require this contract, the module catalog, Matrix architecture/threat model, executable tests, hosted gate wiring and a new shared candidate trigger. No module document may declare repository closure or production authorization.
