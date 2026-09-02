@@ -111,7 +111,7 @@ manifest = require(
 execution_lib = require(
     "services/execution-service/src/lib.rs",
     '#[cfg(feature = "legacy-local-provider-dispatch")]\npub mod provider_dispatch;',
-    '#[cfg(feature = "legacy-local-provider-dispatch")]\npub mod providers;',
+    "pub mod providers;",
     'post(api::start_execution)',
     'post(api::process_execution)',
 )
@@ -120,6 +120,30 @@ forbid(
     execution_lib,
     "post(provider_dispatch::start_execution)",
     "post(provider_dispatch::process_execution)",
+)
+provider_boundary = require(
+    "services/execution-service/src/providers.rs",
+    'pub const RUNTIME_POLICY: &str = "external_only";',
+    'pub const LEGACY_LOCAL_DISPATCH_STATUS: &str = "legacy_local_provider_dispatch_disabled";',
+    "external_agent_runtime_required",
+    "pub async fn dispatch_via_provider",
+    "Err(ProviderDispatchError::external_agent_required())",
+    "hepta_agent_protocol_v1",
+    "must not appear",
+)
+provider_runtime = provider_boundary.split("#[cfg(test)]", 1)[0]
+forbid(
+    "services/execution-service/src/providers.rs runtime implementation",
+    provider_runtime,
+    "OllamaProviderAdapter",
+    "OpenClawCliProviderAdapter",
+    "std::process::Command",
+    "tokio::process",
+    "/api/generate",
+    'args(["infer", "model", "run"',
+    ".response.text()",
+    "response.text()",
+    "Command::new",
 )
 worker = require(
     "services/execution-service/src/bin/execution-provider-dispatch-worker.rs",
@@ -197,6 +221,13 @@ if worker and "is_production_like" not in worker:
     PROBLEMS.append("legacy provider worker lacks an explicit production-like rejection")
 if trigger and closure and "sequence-51" not in closure.lower():
     PROBLEMS.append("candidate trigger and architecture closure do not share sequence-51 identity")
+if provider_runtime:
+    dispatch_start = provider_runtime.find("pub async fn dispatch_via_provider")
+    dispatch_body = provider_runtime[dispatch_start:] if dispatch_start >= 0 else ""
+    if "Err(ProviderDispatchError::external_agent_required())" not in dispatch_body:
+        PROBLEMS.append("provider boundary does not fail closed to the external Agent protocol")
+    if "PRIVATE-PROMPT" in provider_runtime:
+        PROBLEMS.append("test-only prompt marker leaked into provider runtime implementation")
 
 scan_activation_surfaces()
 
