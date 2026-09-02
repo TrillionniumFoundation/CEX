@@ -1,0 +1,29 @@
+# Source ownership routing only. This file is not branch-protection,
+# independent-approval, financial, operational, or production evidence.
+* @Tomasrgbsf @ProfHepta
+
+# Normative plans, release evidence, CI trust, migrations, and security controls
+/docs/CEX-DEVELOPMENT-PLAN-* @ProfHepta @Franksudoman
+/docs/development-doc-authority-v1.json @ProfHepta @Franksudoman
+/docs/traceability/ @ProfHepta @Franksudoman
+/docs/module-catalog-v1.json @ProfHepta @Franksudoman
+/docs/security-threat-model-v1.md @ProfHepta @Franksudoman
+/docs/slo-recovery-contract-v1.md @ProfHepta @Franksudoman
+/docs/release-evidence/ @ProfHepta @Franksudoman
+/.github/workflows/ @ProfHepta @Franksudoman
+/scripts/check-* @ProfHepta @Franksudoman
+/scripts/*release* @ProfHepta @Franksudoman
+/migrations/ @ProfHepta @Franksudoman
+
+# Exact value, settlement, provider, Audit, and TRNM boundaries
+/crates/shared-types/ @ProfHepta @Franksudoman
+/services/ledger-service/ @ProfHepta @Franksudoman
+/services/gateway-service/ @ProfHepta @Franksudoman
+/services/execution-service/ @ProfHepta @Franksudoman
+/services/audit-service/ @ProfHepta @Franksudoman
+/services/trnm-economy-service/ @ProfHepta @Franksudoman
+
+# Hepta/Paper Raid contracts and runtime
+/crates/hepta-paper-raid-contracts/ @ProfHepta
+/services/hepta-research-league/ @ProfHepta
+/services/paper-raid-bff/ @ProfHepta

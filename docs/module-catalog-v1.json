@@ -1,0 +1,484 @@
+{
+  "schema": "cex.module-catalog.v1",
+  "status": "active",
+  "workspace_source": "Cargo.toml",
+  "module_index": "docs/modules/index.md",
+  "documentation_contract": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md",
+  "production_authorization": "not_granted",
+  "required_document_sections": [
+    "## Purpose and non-goals",
+    "## Authority and owned state",
+    "## Source layout and entry points",
+    "## Interfaces and contracts",
+    "## Persistence, concurrency, and recovery",
+    "## Configuration and secrets",
+    "## Security and trust boundaries",
+    "## Verification",
+    "## Deployment and operations",
+    "## Compatibility and change protocol"
+  ],
+  "modules": [
+    {
+      "workspace_member": "crates/shared-types",
+      "package": "shared-types",
+      "kind": "library",
+      "logical_module": "shared",
+      "deployable": false,
+      "status": "active",
+      "owner": "platform-foundations",
+      "authority": "Versioned serializable types and validation helpers shared across CEX services; it owns no durable business state.",
+      "documentation": "docs/modules/shared-types.md",
+      "source_entrypoints": [
+        "crates/shared-types/src/lib.rs",
+        "crates/shared-types/src/money.rs",
+        "crates/shared-types/src/ledger_v2.rs",
+        "crates/shared-types/src/audit_v2.rs",
+        "crates/shared-types/src/saga.rs"
+      ],
+      "verification": [
+        "cargo test -p shared-types",
+        "cargo clippy -p shared-types --all-targets -- -D warnings"
+      ]
+    },
+    {
+      "workspace_member": "crates/shared-errors",
+      "package": "shared-errors",
+      "kind": "library",
+      "logical_module": "shared",
+      "deployable": false,
+      "status": "active",
+      "owner": "platform-foundations",
+      "authority": "Shared typed error vocabulary only; each service remains authoritative for HTTP mapping and retry policy.",
+      "documentation": "docs/modules/shared-errors.md",
+      "source_entrypoints": [
+        "crates/shared-errors/src/lib.rs"
+      ],
+      "verification": [
+        "cargo test -p shared-errors",
+        "cargo clippy -p shared-errors --all-targets -- -D warnings"
+      ]
+    },
+    {
+      "workspace_member": "crates/shared-tracing",
+      "package": "shared-tracing",
+      "kind": "library",
+      "logical_module": "shared",
+      "deployable": false,
+      "status": "active",
+      "owner": "platform-foundations",
+      "authority": "Workspace tracing initialization and common field conventions; it owns no trace persistence.",
+      "documentation": "docs/modules/shared-tracing.md",
+      "source_entrypoints": [
+        "crates/shared-tracing/src/lib.rs"
+      ],
+      "verification": [
+        "cargo test -p shared-tracing",
+        "cargo clippy -p shared-tracing --all-targets -- -D warnings"
+      ]
+    },
+    {
+      "workspace_member": "crates/shared-config",
+      "package": "shared-config",
+      "kind": "library",
+      "logical_module": "shared",
+      "deployable": false,
+      "status": "active",
+      "owner": "platform-foundations",
+      "authority": "Canonical runtime-profile normalization, service-auth parsing, guarded database mode selection, and shared client configuration.",
+      "documentation": "docs/modules/shared-config.md",
+      "source_entrypoints": [
+        "crates/shared-config/src/lib.rs",
+        "crates/shared-config/src/runtime_guard.rs",
+        "crates/shared-config/src/service_auth.rs",
+        "crates/shared-config/src/service_client.rs"
+      ],
+      "verification": [
+        "cargo test -p shared-config",
+        "cargo clippy -p shared-config --all-targets -- -D warnings"
+      ]
+    },
+    {
+      "workspace_member": "crates/hepta-paper-raid-contracts",
+      "package": "hepta-paper-raid-contracts",
+      "kind": "contract-library",
+      "logical_module": "hepta",
+      "deployable": false,
+      "status": "contract_qualified",
+      "owner": "hepta-contracts",
+      "authority": "Canonical Paper Raid signed-byte frames, identifiers, cryptographic validation, and cross-service contract types.",
+      "documentation": "docs/modules/hepta-paper-raid-contracts.md",
+      "source_entrypoints": [
+        "crates/hepta-paper-raid-contracts/src/lib.rs",
+        "crates/hepta-paper-raid-contracts/assets/legacy-golden-qualification-brief.md"
+      ],
+      "verification": [
+        "cargo test -p hepta-paper-raid-contracts",
+        "cargo clippy -p hepta-paper-raid-contracts --all-targets -- -D warnings"
+      ]
+    },
+    {
+      "workspace_member": "services/identity-service",
+      "package": "identity-service",
+      "kind": "service",
+      "logical_module": "hepta",
+      "deployable": true,
+      "status": "repository_candidate",
+      "owner": "identity-control-plane",
+      "authority": "Organization/tenant identity, API-key lifecycle, authenticated actor resolution, and durable identity governance within the CEX control plane.",
+      "documentation": "docs/modules/identity-service.md",
+      "source_entrypoints": [
+        "services/identity-service/src/main.rs",
+        "services/identity-service/src/lib_entry.rs",
+        "services/identity-service/src/lib.rs",
+        "services/identity-service/tests/http_flow.rs",
+        "services/identity-service/tests/runtime_blackbox.rs"
+      ],
+      "verification": [
+        "cargo test -p identity-service",
+        "cargo clippy -p identity-service --all-targets -- -D warnings"
+      ]
+    },
+    {
+      "workspace_member": "services/ledger-service",
+      "package": "ledger-service",
+      "kind": "service",
+      "logical_module": "trnm",
+      "deployable": true,
+      "status": "repository_candidate",
+      "owner": "ledger-authority",
+      "authority": "Exact minor-unit account/effect authority, immutable operation identity, reserve/consume/refund receipts, and intent-hash-bound receipt recovery.",
+      "documentation": "docs/modules/ledger-service.md",
+      "source_entrypoints": [
+        "services/ledger-service/src/main.rs",
+        "services/ledger-service/src/api.rs",
+        "services/ledger-service/src/account_control.rs",
+        "services/ledger-service/src/ledger_effects.rs",
+        "services/ledger-service/src/receipt_lookup.rs",
+        "services/ledger-service/src/repository/mod.rs",
+        "services/ledger-service/src/repository/postgres.rs",
+        "services/ledger-service/src/repository/native_economy.rs",
+        "services/ledger-service/tests/http_flow.rs"
+      ],
+      "verification": [
+        "cargo test -p ledger-service",
+        "cargo clippy -p ledger-service --all-targets -- -D warnings",
+        "bash scripts/check-p0-migrations-postgres.sh"
+      ]
+    },
+    {
+      "workspace_member": "services/trnm-economy-service",
+      "package": "trnm-economy-service",
+      "kind": "service",
+      "logical_module": "trnm",
+      "deployable": true,
+      "status": "repository_candidate",
+      "owner": "trnm-economy",
+      "authority": "Authenticated TRNM economic-intent admission, canonical contract validation, durable settlement request state, and receipt projection at the Chain adapter boundary.",
+      "documentation": "docs/modules/trnm-economy-service.md",
+      "source_entrypoints": [
+        "services/trnm-economy-service/src/main.rs",
+        "services/trnm-economy-service/src/api.rs",
+        "services/trnm-economy-service/src/config.rs",
+        "services/trnm-economy-service/src/contract.rs",
+        "services/trnm-economy-service/src/repository.rs",
+        "services/trnm-economy-service/migrations/settlement_v1.sql",
+        "services/trnm-economy-service/tests/settlement_contract.rs",
+        "services/trnm-economy-service/tests/durable_bytes_immutability.rs"
+      ],
+      "verification": [
+        "cargo test -p trnm-economy-service",
+        "cargo clippy -p trnm-economy-service --all-targets -- -D warnings"
+      ]
+    },
+    {
+      "workspace_member": "services/gateway-service",
+      "package": "gateway-service",
+      "kind": "service",
+      "logical_module": "hepta",
+      "deployable": true,
+      "status": "repository_candidate",
+      "owner": "gateway-runtime",
+      "authority": "Invocation ingress normalization and durable exact-reserve command preparation; it does not own final Ledger outcomes.",
+      "documentation": "docs/modules/gateway-service.md",
+      "source_entrypoints": [
+        "services/gateway-service/src/main.rs",
+        "services/gateway-service/src/application/invocation_service.rs",
+        "services/gateway-service/src/domain/invocation.rs",
+        "services/gateway-service/src/interfaces/http.rs",
+        "services/gateway-service/src/interfaces/saga.rs",
+        "services/gateway-service/src/infrastructure/clients.rs",
+        "services/gateway-service/src/infrastructure/ledger_v2_client.rs",
+        "services/gateway-service/src/bin/gateway-exact-reserve-api.rs",
+        "services/gateway-service/src/bin/gateway-exact-reserve-worker.rs",
+        "services/gateway-service/tests/http_flow.rs",
+        "services/gateway-service/tests/runtime_blackbox.rs"
+      ],
+      "verification": [
+        "cargo test -p gateway-service",
+        "cargo clippy -p gateway-service --all-targets -- -D warnings",
+        "python3 scripts/check-gateway-exact-reserve.py",
+        "bash scripts/check-gateway-exact-reserve-postgres.sh"
+      ]
+    },
+    {
+      "workspace_member": "services/execution-service",
+      "package": "execution-service",
+      "kind": "service",
+      "logical_module": "hepta",
+      "deployable": true,
+      "status": "repository_candidate",
+      "owner": "execution-runtime",
+      "authority": "Execution lifecycle, durable provider-dispatch commands, terminal Ledger settlement commands, and operator recovery evidence.",
+      "documentation": "docs/modules/execution-service.md",
+      "source_entrypoints": [
+        "services/execution-service/src/main.rs",
+        "services/execution-service/src/api.rs",
+        "services/execution-service/src/provider_dispatch.rs",
+        "services/execution-service/src/providers.rs",
+        "services/execution-service/src/dispatch_policy.rs",
+        "services/execution-service/src/ledger_settlement.rs",
+        "services/execution-service/src/settlement_worker_runtime.rs",
+        "services/execution-service/src/state.rs",
+        "services/execution-service/src/bin/execution-provider-dispatch-worker.rs",
+        "services/execution-service/src/bin/execution-settlement-worker.rs",
+        "services/execution-service/tests/http_flow.rs"
+      ],
+      "verification": [
+        "cargo test -p execution-service",
+        "cargo clippy -p execution-service --all-targets -- -D warnings",
+        "python3 scripts/check-execution-settlement-commands.py",
+        "bash scripts/check-execution-settlement-commands-postgres.sh",
+        "python3 scripts/check-provider-success-evidence.py",
+        "bash scripts/check-provider-reconciliation-postgres.sh"
+      ]
+    },
+    {
+      "workspace_member": "services/audit-service",
+      "package": "audit-service",
+      "kind": "service",
+      "logical_module": "hepta",
+      "deployable": true,
+      "status": "repository_candidate",
+      "owner": "audit-integrity",
+      "authority": "Authenticated Audit v2 append, per-scope hash chains, source baseline, durable outbox delivery, and immutable acknowledgement evidence.",
+      "documentation": "docs/modules/audit-service.md",
+      "source_entrypoints": [
+        "services/audit-service/src/main.rs",
+        "services/audit-service/src/api.rs",
+        "services/audit-service/src/v2.rs",
+        "services/audit-service/src/state.rs",
+        "services/audit-service/src/outbox_dispatcher.rs",
+        "services/audit-service/src/bin/audit-outbox-dispatcher.rs",
+        "services/audit-service/tests/http_flow.rs",
+        "services/audit-service/tests/runtime_blackbox.rs"
+      ],
+      "verification": [
+        "cargo test -p audit-service",
+        "cargo clippy -p audit-service --all-targets -- -D warnings",
+        "bash scripts/check-audit-source-baseline-postgres.sh"
+      ]
+    },
+    {
+      "workspace_member": "services/capability-service",
+      "package": "capability-service",
+      "kind": "service",
+      "logical_module": "hepta",
+      "deployable": true,
+      "status": "supporting_alpha",
+      "owner": "capability-registry",
+      "authority": "Capability metadata and version registry for supported control-plane flows; it grants no execution, Agent, financial, or finality authority by itself.",
+      "documentation": "docs/modules/capability-service.md",
+      "source_entrypoints": [
+        "services/capability-service/src/main.rs",
+        "services/capability-service/src/lib.rs",
+        "services/capability-service/tests/http_flow.rs"
+      ],
+      "verification": [
+        "cargo test -p capability-service",
+        "cargo clippy -p capability-service --all-targets -- -D warnings"
+      ]
+    },
+    {
+      "workspace_member": "services/consumer-entry-api",
+      "package": "consumer-entry-api",
+      "kind": "service",
+      "logical_module": "hepta",
+      "deployable": true,
+      "status": "supporting_alpha",
+      "owner": "consumer-edge",
+      "authority": "Consumer session/identity mapping, bounded task and product projections, and edge-local governance; it is not scientific, Ledger, provider, or finality authority.",
+      "documentation": "docs/modules/consumer-entry-api.md",
+      "source_entrypoints": [
+        "services/consumer-entry-api/src/main.rs",
+        "services/consumer-entry-api/src/lib.rs",
+        "services/consumer-entry-api/src/consumer_ingress.rs",
+        "services/consumer-entry-api/src/identity_admin_routes.rs",
+        "services/consumer-entry-api/src/task_routes.rs",
+        "services/consumer-entry-api/src/term_exchange_backend.rs",
+        "services/consumer-entry-api/src/world_routes.rs",
+        "services/consumer-entry-api/src/health_metrics.rs",
+        "services/consumer-entry-api/src/tests.rs"
+      ],
+      "verification": [
+        "cargo test -p consumer-entry-api",
+        "cargo clippy -p consumer-entry-api --all-targets -- -D warnings"
+      ]
+    },
+    {
+      "workspace_member": "services/hepta-research-league",
+      "package": "hepta-research-league",
+      "kind": "service",
+      "logical_module": "hepta",
+      "deployable": true,
+      "status": "functional_alpha",
+      "owner": "hepta-research",
+      "authority": "Durable Paper Raid research facts, teams, Agent bindings, consent, evidence lineage, review workflows, Nakama authorization consumption, and finality projection.",
+      "documentation": "docs/modules/hepta-research-league.md",
+      "source_entrypoints": [
+        "services/hepta-research-league/src/main.rs",
+        "services/hepta-research-league/src/lib.rs",
+        "services/hepta-research-league/src/workflows.rs",
+        "services/hepta-research-league/src/paper_raid_v2.rs",
+        "services/hepta-research-league/src/paper_collaboration_v3_body.rs",
+        "services/hepta-research-league/src/paper_review_v4_body.rs",
+        "services/hepta-research-league/src/paper_chain_finality_v2.rs",
+        "services/hepta-research-league/tests/http_flow.rs",
+        "services/hepta-research-league/tests/postgres_recovery.rs",
+        "services/hepta-research-league/README.md"
+      ],
+      "verification": [
+        "cargo test -p hepta-research-league --all-targets",
+        "cargo clippy -p hepta-research-league --all-targets -- -D warnings",
+        "python3 scripts/check-hepta-lint-ownership.py",
+        "bash scripts/check-hepta-postgres-integration.sh --mode full"
+      ]
+    },
+    {
+      "workspace_member": "services/paper-raid-bff",
+      "package": "paper-raid-bff",
+      "kind": "service",
+      "logical_module": "hepta",
+      "deployable": true,
+      "status": "supporting_alpha",
+      "owner": "paper-raid-edge",
+      "authority": "Browser sessions, CSRF/revocation, bounded invite-alpha access directory, edge-local replay bytes, and Consumer Edge assertion signing only.",
+      "documentation": "docs/modules/paper-raid-bff.md",
+      "source_entrypoints": [
+        "services/paper-raid-bff/src/main.rs",
+        "services/paper-raid-bff/src/app.rs",
+        "services/paper-raid-bff/src/auth.rs",
+        "services/paper-raid-bff/src/oidc.rs",
+        "services/paper-raid-bff/src/access.rs",
+        "services/paper-raid-bff/src/agent_bridge.rs",
+        "services/paper-raid-bff/src/db.rs",
+        "services/paper-raid-bff/src/hepta.rs",
+        "services/paper-raid-bff/src/review_receipts.rs",
+        "services/paper-raid-bff/src/bin/paper-raid-accessctl.rs",
+        "services/paper-raid-bff/README.md"
+      ],
+      "verification": [
+        "cargo test -p paper-raid-bff --all-targets",
+        "cargo clippy -p paper-raid-bff --all-targets -- -D warnings",
+        "bash services/paper-raid-bff/scripts/check-boundaries.sh",
+        "bash services/paper-raid-bff/scripts/check-browser-e2e.sh"
+      ]
+    },
+    {
+      "workspace_member": "services/matrix-entry-adapter",
+      "package": "matrix-entry-adapter",
+      "kind": "adapter-service",
+      "logical_module": "hepta",
+      "deployable": true,
+      "status": "supporting_alpha",
+      "owner": "matrix-integration",
+      "authority": "Matrix transport validation, event normalization, cursor/idempotency handling, and forwarding to the product entry boundary; it owns no CEX domain truth.",
+      "documentation": "docs/modules/matrix-entry-adapter.md",
+      "source_entrypoints": [
+        "services/matrix-entry-adapter/src/main.rs",
+        "services/matrix-entry-adapter/src/lib.rs"
+      ],
+      "verification": [
+        "cargo test -p matrix-entry-adapter",
+        "cargo clippy -p matrix-entry-adapter --all-targets -- -D warnings"
+      ]
+    },
+    {
+      "workspace_member": "apps/matrix-bot-relay",
+      "package": "matrix-bot-relay",
+      "kind": "application",
+      "logical_module": "hepta",
+      "deployable": true,
+      "status": "supporting_alpha",
+      "owner": "matrix-integration",
+      "authority": "Webhook/relay transport only; downstream services decide identity, task, research, value, and finality authority.",
+      "documentation": "docs/modules/matrix-bot-relay.md",
+      "source_entrypoints": [
+        "apps/matrix-bot-relay/src/main.rs"
+      ],
+      "verification": [
+        "cargo test -p matrix-bot-relay",
+        "cargo clippy -p matrix-bot-relay --all-targets -- -D warnings"
+      ]
+    },
+    {
+      "workspace_member": "apps/matrix-bot-poller",
+      "package": "matrix-bot-poller",
+      "kind": "application",
+      "logical_module": "hepta",
+      "deployable": true,
+      "status": "supporting_alpha",
+      "owner": "matrix-integration",
+      "authority": "Polling/cursor transport only; it owns no consumer, research, financial, or finality state.",
+      "documentation": "docs/modules/matrix-bot-poller.md",
+      "source_entrypoints": [
+        "apps/matrix-bot-poller/src/main.rs"
+      ],
+      "verification": [
+        "cargo test -p matrix-bot-poller",
+        "cargo clippy -p matrix-bot-poller --all-targets -- -D warnings"
+      ]
+    }
+  ],
+  "external_components": [
+    {
+      "id": "nakama",
+      "kind": "external_authoritative_runtime",
+      "workspace_member": false,
+      "authority": "Ordered realtime session events, roster epochs, checkpoints, and signed completion receipts.",
+      "documentation": "docs/hepta-paper-raid-state-machines-v1.md",
+      "production_evidence": "external"
+    },
+    {
+      "id": "trillionnium-chain",
+      "kind": "external_consensus_and_finality",
+      "workspace_member": false,
+      "authority": "Consensus, independently verified finality, challenges, resolutions, and Chain receipts.",
+      "documentation": "docs/protocol/version-compatibility-matrix-v1.md",
+      "production_evidence": "external"
+    },
+    {
+      "id": "matrix-homeserver",
+      "kind": "external_message_transport",
+      "workspace_member": false,
+      "authority": "Matrix identities, rooms, sync tokens, and source events.",
+      "documentation": "docs/consumer-entry-matrix-architecture-v1.md",
+      "production_evidence": "external"
+    },
+    {
+      "id": "content-addressed-object-store",
+      "kind": "external_immutable_byte_store",
+      "workspace_member": false,
+      "authority": "Artifact bytes addressed by verified SHA-256 digests.",
+      "documentation": "docs/security-threat-model-v1.md",
+      "production_evidence": "external"
+    },
+    {
+      "id": "external-providers-and-agents",
+      "kind": "external_execution",
+      "workspace_member": false,
+      "authority": "Provider/Agent-owned execution and signing keys; repository stores only bounded contracts and evidence.",
+      "documentation": "docs/security-threat-model-v1.md",
+      "production_evidence": "external"
+    }
+  ]
+}

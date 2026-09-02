@@ -4,13 +4,20 @@ Status: active normative addendum
 
 Parent plan: `CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md`
 
-This addendum deepens the parent plan without changing its exact-money invariants, migration head, rollout posture, or external approval boundary. If this addendum conflicts with the parent plan, the parent plan controls. The two documents form the active repository implementation plan.
+This addendum deepens the parent plan without changing its exact-money
+invariants, migration head, rollout posture, or external approval boundary. If
+this addendum conflicts with the parent plan, the parent plan controls. The two
+documents form the active repository implementation plan.
 
 ## 1. Additional repository-actionable closure blocks
 
 ### Block H — development-document authority and exact-tree integrity
 
-The repository must provide one canonical documentation entry point, a machine-readable authority declaration, and a requirement traceability ledger. Every repository-actionable requirement must identify its normative source, implementation locations, executable verification, hosted gate, and evidence posture.
+The repository must provide one canonical documentation entry point, a
+machine-readable authority declaration, and a requirement traceability ledger.
+Every repository-actionable requirement must identify its normative source,
+implementation locations, executable verification, hosted gate, and evidence
+posture.
 
 Required behavior:
 
@@ -18,7 +25,7 @@ Required behavior:
 - templates, status prose, and branch-local runs cannot be presented as release evidence;
 - every branch push must execute the authoritative Rust gate without path-filter gaps;
 - the exact commit, tree, Cargo lock, migration chain, workflow set, and canonical document set must be hashed into a machine-readable integrity record;
-- root `readme.md` is outside this authority chain and is not required for closure;
+- root `readme.md` is non-normative navigation and may not establish readiness;
 - production authorization remains explicitly `not_granted`.
 
 Closure evidence:
@@ -30,7 +37,10 @@ Closure evidence:
 
 ### Block I — Hepta durable PostgreSQL recovery
 
-A hosted gate must prove that Hepta's PostgreSQL-backed state is not silently skipped and that restart, concurrent outbox claiming, wrong-owner acknowledgement rejection, expired-lease recovery, readiness, and operator metrics execute against PostgreSQL 16.
+A hosted gate must prove that Hepta's PostgreSQL-backed state is not silently
+skipped and that restart, concurrent outbox claiming, wrong-owner
+acknowledgement rejection, expired-lease recovery, readiness, and operator
+metrics execute against PostgreSQL 16.
 
 Required behavior:
 
@@ -49,7 +59,14 @@ Closure evidence:
 
 ### Block J — complete-suite lint ownership and fail-closed source identity
 
-The complete Hepta package suite is authoritative. A recovery-only test cannot substitute for package tests plus all-target Clippy. The Paper Raid child modules inherit the Base64 engine trait from `paper_raid_v2`; their extracted bodies must therefore remove redundant local `Engine as _` imports and their wrappers must remain thin, attribute-free `include!` modules. Each cleaned body is bound to an immutable source-body Git blob. A crate-wide warning allowance, `-A warnings`, module-level lint suppression, or unguarded source split is forbidden.
+The complete Hepta package suite is authoritative. A recovery-only test cannot
+substitute for package tests plus all-target Clippy. The Paper Raid child
+modules inherit the Base64 engine trait from `paper_raid_v2`; their extracted
+bodies must therefore remove redundant local `Engine as _` imports and their
+wrappers must remain thin, attribute-free `include!` modules. Each cleaned body
+is bound to an immutable source-body Git blob. A crate-wide warning allowance,
+`-A warnings`, module-level lint suppression, or unguarded source split is
+forbidden.
 
 Required behavior:
 
@@ -67,59 +84,120 @@ Closure evidence:
 - `scripts/check-hepta-postgres-integration.sh --mode full` succeeds;
 - the exact-SHA Hepta job reports every test successful and Clippy clean under warnings denied.
 
+### Block K — complete workspace module documentation and ownership
+
+The documentation authority must cover the actual Cargo workspace, not only
+the central P0 workstreams. `Cargo.toml` is the source of truth for repository
+module membership. Every workspace member must have one machine-readable
+catalog entry and one dedicated module contract.
+
+Required behavior:
+
+- `docs/module-catalog-v1.json` contains exactly the Cargo workspace members,
+  with no missing, duplicate, stale, or invented member;
+- the catalog package name matches each member's `[package].name`;
+- every entry identifies kind, logical module, deployability, maturity, owner
+  role, authority boundary, documentation path, source entry points, and
+  executable verification commands;
+- every source entry point exists inside its workspace member;
+- every module contract defines purpose/non-goals, authority/owned state,
+  source layout, interfaces, persistence/concurrency/recovery,
+  configuration/secrets, security/trust, verification,
+  deployment/operations, and compatibility/change protocol;
+- the human module index records the mapping from the three logical product
+  domains to the 18 Rust workspace members and external authorities;
+- Nakama, Trillionnium Chain, Matrix, object storage, external providers, and
+  external Agents are recorded as external components rather than invented
+  workspace packages;
+- root `readme.md` provides non-normative discovery and links to the canonical
+  documentation entry point;
+- the exact-tree integrity record hashes the module catalog and every module
+  contract;
+- temporary exact-SHA convergence/force-update workflows are rejected and may
+  not become a second qualification authority;
+- production authorization remains `not_granted`.
+
+Closure evidence:
+
+- `scripts/check-development-docs.py` reports exact workspace/catalog equality
+  and all module contracts valid;
+- `scripts/check-repository-integrity.py` records the complete
+  module-documentation digest and module count;
+- the `repository-integrity` job inside `rust-service-gate` succeeds on the
+  exact candidate SHA;
+- the aggregate candidate manifest includes the resulting integrity record.
+
 ## 2. Documentation completion contract
 
 The active documentation set must define all of the following:
 
 1. authority and precedence;
 2. component maturity and evidence posture;
-3. Research, Nakama, and Settlement state machines and their cross-product invariants;
-4. trust boundaries, threats, controls, residual risks, and independent-review boundaries;
-5. clean-deployment acceptance from an empty database through exact-tree evidence generation;
-6. SLI/SLO targets, recovery semantics, and the distinction between CI regression evidence and production qualification;
-7. protocol read/write authority, compatibility, migration, and retirement conditions;
-8. machine-readable requirement-to-code-to-test-to-gate traceability;
-9. complete-suite lint ownership without broad warning suppression.
+3. complete workspace membership, owner roles, source entry points, and one
+   dedicated technical contract for every Rust module;
+4. Research, Nakama, and Settlement state machines and their cross-product invariants;
+5. trust boundaries, threats, controls, residual risks, and independent-review boundaries;
+6. clean-deployment acceptance from an empty database through exact-tree evidence generation;
+7. SLI/SLO targets, recovery semantics, and the distinction between CI regression evidence and production qualification;
+8. protocol read/write authority, compatibility, migration, and retirement conditions;
+9. machine-readable requirement-to-code-to-test-to-gate traceability;
+10. complete-suite lint ownership without broad warning suppression.
 
-Documentation is complete only when the checker validates the files and the exact-tree integrity record binds their digests. Word count or file presence alone is not completion.
+Documentation is complete only when the checker validates the authority set,
+the Cargo workspace/catalog bijection, every module contract, and all referenced
+source paths, and the exact-tree integrity record binds their digests. Word
+count, file presence, a root README, or a central plan alone is not completion.
 
 ## 3. Candidate sequencing
 
 The final candidate sequence is:
 
 1. freeze one candidate commit/tree;
-2. run documentation, hygiene, static wiring, lint-ownership, and repository-integrity checks;
-3. run the five authoritative v12 workflows, with `rust-service-gate` containing Blocks H, I, and J;
+2. run documentation, workspace-module, hygiene, static wiring,
+   lint-ownership, and repository-integrity checks;
+3. run the five authoritative v12 workflows, with `rust-service-gate`
+   containing Blocks H, I, J, and K;
 4. run the aggregate candidate workflow on the same SHA;
 5. generate and validate the immutable evidence payload and candidate manifest;
 6. report actual branch/ruleset enforcement without inference;
 7. stop at repository qualification unless every external production gate has independent evidence.
 
-The shared qualification trigger is the sole committed freeze authority; a stale or missing
-trigger, or any secondary freeze marker, is a fail-closed repository wiring error, not a reason
-to infer qualification.
+The shared qualification trigger is the sole committed freeze authority; a
+stale or missing trigger, or any secondary freeze marker, is a fail-closed
+repository wiring error, not a reason to infer qualification.
 
-A later commit, including a documentation-only commit, creates a new tree and must be requalified.
+A later commit, including a documentation-only commit, creates a new tree and
+must be requalified.
 
-Transient files written below `run/p0-release-support` are operator diagnostics only. They are
-outside the canonical payload allow-list; lifecycle qualification is bound to the retained
-`database-lifecycle.json` record and the exact hosted run/job/step attestations.
+Transient files written below `run/p0-release-support` are operator diagnostics
+only. They are outside the canonical payload allow-list; lifecycle
+qualification is bound to the retained `database-lifecycle.json` record and the
+exact hosted run/job/step attestations.
 
 ## 4. External production gates remain upstream blockers
 
-The following cannot be closed by this addendum or by repository automation: representative-volume recovery on real topology; real deployment/cutover/rollback; real provider outcome artifacts; credential custody review; sustained production-like soak and SLO qualification; independent security, operations, and financial-control review; legal/commercial/provider approvals; and final human go/no-go.
+The following cannot be closed by this addendum or by repository automation:
+representative-volume recovery on real topology; real
+deployment/cutover/rollback; real provider outcome artifacts; credential
+custody review; sustained production-like soak and SLO qualification;
+independent security, operations, and financial-control review;
+legal/commercial/provider approvals; and final human go/no-go.
 
-Repository closure therefore yields `REPOSITORY_CLOSED_CANDIDATE`, never production activation.
+Repository closure therefore yields `REPOSITORY_CLOSED_CANDIDATE`, never
+production activation.
 
 ## 5. Definition of addendum closure
 
 This addendum is closed on one exact commit only when:
 
 - all active documents and machine-readable ledgers validate;
+- the Cargo workspace, module catalog, module index, and all dedicated module
+  contracts are complete and exact-tree bound;
 - all repository-actionable traceability entries resolve to existing files and executable gates;
 - strict Hepta PostgreSQL recovery cannot skip;
 - the exact Hepta lint ownership contract validates and the complete package suite passes;
 - the exact-tree integrity record is generated and included in release evidence;
 - the five authoritative workflows and aggregate candidate workflow succeed on that SHA;
-- no placeholder, temporary remediation workflow, broad warning allowance, or fabricated external approval is used;
+- no placeholder, temporary remediation/convergence workflow, broad warning
+  allowance, or fabricated external approval is used;
 - the generated candidate manifest continues to deny production authorization.
