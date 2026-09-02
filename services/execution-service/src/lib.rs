@@ -3,7 +3,9 @@ pub mod dispatch_policy;
 pub mod ledger_settlement;
 #[cfg(feature = "legacy-local-provider-dispatch")]
 pub mod provider_dispatch;
-#[cfg(feature = "legacy-local-provider-dispatch")]
+// Shared provider identity/input/output types and the fail-closed external-only
+// dispatch boundary remain in the default build. The module contains no local
+// inference implementation.
 pub mod providers;
 pub mod settlement_worker;
 pub mod state;
