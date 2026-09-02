@@ -42,6 +42,10 @@ and binds all records to:
 - exact artifact/deployment scope;
 - UTC generation time and approved retention-policy identity.
 
+The schema is closed: unknown root, candidate, manifest, gate, evidence,
+issuer, or final-decision fields fail validation rather than becoming an
+unreviewed extension channel.
+
 Real evidence bundles are retained in the approved external custody system.
 They are not committed into the source tree. The repository may retain only the
 shape-only template and this contract.
@@ -54,6 +58,8 @@ Every pass or fail record contains:
   content digest;
 - issuing actor, organization, role, and an explicit statement that the issuer
   is independent of repository automation for the asserted domain;
+- an issuer role that exactly matches the gate's machine-declared
+  `required_issuer_role`;
 - UTC execution/decision timestamp;
 - exact candidate commit/tree repeated inside the record;
 - bounded scope describing environment, provider, topology, jurisdiction, or
@@ -62,8 +68,9 @@ Every pass or fail record contains:
 - no waiver or inferred approval.
 
 Structural validation does not prove that the issuer identity, signature,
-organization, or underlying activity is genuine. The responsible human control
-owner must verify those facts before accepting the evidence.
+organization, independence statement, or underlying activity is genuine. The
+responsible human control owner must verify those facts before accepting the
+evidence.
 
 ## 4. Gate-specific acceptance
 
@@ -117,7 +124,8 @@ approval is unnecessary.
 
 The final release authority verifies repository qualification and accepted
 X1-X7 evidence on the same immutable candidate/artifact set, then records `go`
-or `no-go`, identity, organization, role, UTC time, scope, and evidence digest.
+or `no-go`, identity, organization, the exact
+`final_human_release_authority` role, UTC time, scope, and evidence digest.
 Automation may validate structure but may not emit, infer, or impersonate this
 decision.
 
@@ -129,9 +137,9 @@ Run the repository contract check with:
 python3 scripts/check-external-production-evidence-contract.py --contract-only
 ```
 
-This validates only the source-tree template, anti-self-certification policy,
-and contract wiring. It deliberately reports production authorization as
-`not_granted`.
+This validates only the source-tree template, active traceability and navigation
+wiring, anti-self-certification policy, and closed schema. It deliberately
+reports production authorization as `not_granted`.
 
 A responsible evidence custodian may structurally inspect an externally stored
 bundle with:
@@ -157,7 +165,8 @@ and must be retained rather than deleted.
 ## 7. Change protocol
 
 Changing this schema, accepted URI policy, gate IDs, evidence envelope,
-independence rule, or X8 ordering requires an updated template, checker,
+independence rule, issuer-role binding, closed field sets, traceability wiring,
+or X8 ordering requires an updated template when its shape changes, checker,
 implementation addendum, active documentation index, traceability, tests, and a
 new shared candidate trigger. No change may weaken `self_certifiable=false` or
 turn structural validation into automatic production authorization.

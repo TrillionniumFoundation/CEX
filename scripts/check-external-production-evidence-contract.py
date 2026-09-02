@@ -15,6 +15,10 @@ from urllib.parse import urlsplit
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = ROOT / "docs/external-production-evidence-contract-v1.md"
 TEMPLATE = ROOT / "docs/templates/cex-external-production-evidence-bundle-v1.json"
+TRACEABILITY = ROOT / "docs/traceability/v12-requirements-v1.json"
+ADDENDUM = ROOT / "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md"
+INDEX = ROOT / "docs/index.md"
+README = ROOT / "readme.md"
 LIVE_SOURCE_ROOT = ROOT / "docs/external-production-evidence"
 GATES = tuple(f"V12-X{index}" for index in range(1, 9))
 REQUIRED_ROLES = {
@@ -31,6 +35,64 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 MIGRATION_RE = re.compile(r"^[0-9]{4}_[a-z0-9][a-z0-9._-]*\.sql$")
 ALLOWED_URI_SCHEMES = {"https", "s3", "gs", "artifact", "gh", "ipfs"}
+ROOT_FIELDS = {
+    "schema",
+    "status",
+    "template",
+    "candidate",
+    "repository_candidate_manifest",
+    "generated_at",
+    "retention_policy_id",
+    "production_authorization",
+    "gates",
+    "final_human_decision",
+    "revocations",
+}
+CANDIDATE_FIELDS = {
+    "repository",
+    "commit_sha",
+    "tree_sha",
+    "migration_head",
+    "artifact_scope",
+}
+MANIFEST_FIELDS = {"uri", "sha256"}
+GATE_FIELDS = {
+    "id",
+    "classification",
+    "self_certifiable",
+    "status",
+    "required_issuer_role",
+    "evidence",
+}
+EVIDENCE_FIELDS = {
+    "uri",
+    "sha256",
+    "issuer",
+    "executed_at",
+    "decision",
+    "scope",
+    "candidate_commit_sha",
+    "candidate_tree_sha",
+    "waiver",
+}
+ISSUER_FIELDS = {
+    "actor_id",
+    "organization",
+    "role",
+    "independent_of_repository_automation",
+}
+FINAL_FIELDS = {
+    "decision",
+    "uri",
+    "sha256",
+    "decided_at",
+    "actor_id",
+    "organization",
+    "role",
+    "scope",
+    "candidate_commit_sha",
+    "candidate_tree_sha",
+}
 PROBLEMS: list[str] = []
 
 
@@ -58,6 +120,18 @@ def load_json(path: Path, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         problem(f"{label} root must be an object")
         return {}
+    return value
+
+
+def exact_fields(value: object, expected: set[str], label: str) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        problem(f"{label} must be an object")
+        return None
+    if set(value) != expected:
+        problem(
+            f"{label} field set is not canonical: "
+            f"missing={sorted(expected - set(value))}, extra={sorted(set(value) - expected)}"
+        )
     return value
 
 
@@ -100,6 +174,42 @@ def nonempty(value: object, label: str, minimum: int = 1) -> None:
         problem(f"{label} must be a non-empty string")
 
 
+def validate_traceability_wiring() -> None:
+    trace = load_json(TRACEABILITY, "v12 traceability")
+    requirements = trace.get("requirements")
+    if not isinstance(requirements, list):
+        problem("v12 traceability requirements must be an array")
+        return
+    v12_h = next(
+        (
+            item
+            for item in requirements
+            if isinstance(item, dict) and item.get("id") == "V12-H"
+        ),
+        None,
+    )
+    if not isinstance(v12_h, dict):
+        problem("V12-H traceability entry is missing")
+        return
+    expected_paths = {
+        "docs/external-production-evidence-contract-v1.md",
+        "docs/templates/cex-external-production-evidence-bundle-v1.json",
+        "scripts/check-external-production-evidence-contract.py",
+        "scripts/check-development-docs.py",
+    }
+    observed = {
+        str(path)
+        for field in ("source", "implementation", "verification")
+        for path in (v12_h.get(field) if isinstance(v12_h.get(field), list) else [])
+    }
+    missing = expected_paths - observed
+    if missing:
+        problem(
+            "V12-H traceability does not bind the external evidence intake contract: "
+            + ",".join(sorted(missing))
+        )
+
+
 def validate_contract_source() -> None:
     text = read_text(CONTRACT, "external evidence contract")
     for marker in (
@@ -116,6 +226,36 @@ def validate_contract_source() -> None:
         if marker not in text:
             problem(f"external evidence contract lacks required marker: {marker}")
 
+    addendum = read_text(ADDENDUM, "active implementation addendum")
+    for marker in (
+        "Block L",
+        "external production evidence intake",
+        "checker_may_grant_production_authorization=false",
+    ):
+        if marker not in addendum:
+            problem(f"active implementation addendum lacks Block L marker: {marker}")
+
+    index = read_text(INDEX, "documentation index")
+    for marker in (
+        "External production evidence intake",
+        "docs/external-production-evidence-contract-v1.md",
+        "docs/templates/cex-external-production-evidence-bundle-v1.json",
+        "scripts/check-external-production-evidence-contract.py",
+    ):
+        if marker not in index:
+            problem(f"documentation index lacks external evidence marker: {marker}")
+
+    readme = read_text(README, "root readme")
+    for marker in (
+        "docs/external-production-evidence-contract-v1.md",
+        "docs/templates/cex-external-production-evidence-bundle-v1.json",
+        "check-external-production-evidence-contract.py --contract-only",
+    ):
+        if marker not in readme:
+            problem(f"root readme lacks external evidence navigation marker: {marker}")
+
+    validate_traceability_wiring()
+
     if LIVE_SOURCE_ROOT.exists():
         for path in sorted(LIVE_SOURCE_ROOT.rglob("*")):
             if path.is_file():
@@ -127,20 +267,7 @@ def validate_contract_source() -> None:
 
 def validate_template() -> None:
     template = load_json(TEMPLATE, "external evidence template")
-    expected_keys = {
-        "schema",
-        "status",
-        "template",
-        "candidate",
-        "repository_candidate_manifest",
-        "generated_at",
-        "retention_policy_id",
-        "production_authorization",
-        "gates",
-        "final_human_decision",
-        "revocations",
-    }
-    if set(template) != expected_keys:
+    if set(template) != ROOT_FIELDS:
         problem("external evidence template root field set is not canonical")
     if template.get("schema") != "cex.external-production-evidence-bundle.v1":
         problem("external evidence template schema is invalid")
@@ -148,20 +275,23 @@ def validate_template() -> None:
         problem("external evidence template must remain a shape-only template")
     if template.get("production_authorization") != "not_granted":
         problem("external evidence template must deny production authorization")
-    candidate = template.get("candidate")
-    if not isinstance(candidate, dict) or set(candidate) != {
-        "repository", "commit_sha", "tree_sha", "migration_head", "artifact_scope"
-    }:
-        problem("external evidence template candidate object is invalid")
-    else:
+
+    candidate = exact_fields(template.get("candidate"), CANDIDATE_FIELDS, "template.candidate")
+    if candidate is not None:
         if candidate.get("repository") != "TrillionniumFoundation/CEX":
             problem("external evidence template repository is invalid")
         for field in ("commit_sha", "tree_sha", "migration_head", "artifact_scope"):
             if candidate.get(field) is not None:
                 problem(f"external evidence template candidate.{field} must be null")
-    manifest = template.get("repository_candidate_manifest")
-    if not isinstance(manifest, dict) or manifest != {"uri": None, "sha256": None}:
+
+    manifest = exact_fields(
+        template.get("repository_candidate_manifest"),
+        MANIFEST_FIELDS,
+        "template.repository_candidate_manifest",
+    )
+    if manifest is not None and manifest != {"uri": None, "sha256": None}:
         problem("external evidence template manifest reference must remain empty")
+
     for field in ("generated_at", "retention_policy_id", "final_human_decision"):
         if template.get(field) is not None:
             problem(f"external evidence template {field} must be null")
@@ -173,18 +303,13 @@ def validate_template() -> None:
         problem("external evidence template must contain exactly V12-X1 through V12-X8")
         return
     observed: list[str] = []
-    for index, gate in enumerate(gates):
+    for index, gate_value in enumerate(gates):
         label = f"template.gates[{index}]"
-        if not isinstance(gate, dict):
-            problem(f"{label} must be an object")
+        gate = exact_fields(gate_value, GATE_FIELDS, label)
+        if gate is None:
             continue
         gate_id = gate.get("id")
         observed.append(str(gate_id))
-        if set(gate) != {
-            "id", "classification", "self_certifiable", "status",
-            "required_issuer_role", "evidence"
-        }:
-            problem(f"{label} field set is not canonical")
         if gate.get("classification") != "external" or gate.get("self_certifiable") is not False:
             problem(f"{label} must remain external and non-self-certifiable")
         if gate.get("status") != "missing" or gate.get("evidence") != []:
@@ -196,21 +321,16 @@ def validate_template() -> None:
 
 
 def validate_evidence_record(
-    record: object,
+    record_value: object,
     *,
     label: str,
     commit_sha: str,
     tree_sha: str,
+    required_role: str,
 ) -> str | None:
-    if not isinstance(record, dict):
-        problem(f"{label} must be an object")
+    record = exact_fields(record_value, EVIDENCE_FIELDS, label)
+    if record is None:
         return None
-    expected = {
-        "uri", "sha256", "issuer", "executed_at", "decision", "scope",
-        "candidate_commit_sha", "candidate_tree_sha", "waiver"
-    }
-    if set(record) != expected:
-        problem(f"{label} field set is not canonical")
     immutable_uri(record.get("uri"), f"{label}.uri")
     sha256(record.get("sha256"), f"{label}.sha256")
     utc_timestamp(record.get("executed_at"), f"{label}.executed_at")
@@ -224,22 +344,30 @@ def validate_evidence_record(
         problem(f"{label} is bound to another candidate tree")
     if record.get("waiver") is not None:
         problem(f"{label} may not contain a waiver")
-    issuer = record.get("issuer")
-    if not isinstance(issuer, dict) or set(issuer) != {
-        "actor_id", "organization", "role", "independent_of_repository_automation"
-    }:
-        problem(f"{label}.issuer field set is invalid")
-    else:
+
+    issuer = exact_fields(record.get("issuer"), ISSUER_FIELDS, f"{label}.issuer")
+    if issuer is not None:
         nonempty(issuer.get("actor_id"), f"{label}.issuer.actor_id")
         nonempty(issuer.get("organization"), f"{label}.issuer.organization")
-        nonempty(issuer.get("role"), f"{label}.issuer.role")
+        if issuer.get("role") != required_role:
+            problem(
+                f"{label}.issuer.role must equal the gate's required role {required_role!r}"
+            )
         if issuer.get("independent_of_repository_automation") is not True:
-            problem(f"{label}.issuer must explicitly be independent of repository automation")
+            problem(
+                f"{label}.issuer must explicitly be independent of repository automation"
+            )
     return decision if isinstance(decision, str) else None
 
 
 def validate_bundle(path: Path) -> bool:
     bundle = load_json(path, "external evidence bundle")
+    if set(bundle) != ROOT_FIELDS:
+        problem(
+            "external evidence bundle root field set is not canonical: "
+            f"missing={sorted(ROOT_FIELDS - set(bundle))}, "
+            f"extra={sorted(set(bundle) - ROOT_FIELDS)}"
+        )
     if bundle.get("schema") != "cex.external-production-evidence-bundle.v1":
         problem("external evidence bundle schema is invalid")
     if bundle.get("status") != "evidence_bundle" or bundle.get("template") is not False:
@@ -247,9 +375,8 @@ def validate_bundle(path: Path) -> bool:
     if bundle.get("production_authorization") != "not_granted":
         problem("structural evidence intake may not itself grant production authorization")
 
-    candidate = bundle.get("candidate")
-    if not isinstance(candidate, dict):
-        problem("external evidence bundle candidate must be an object")
+    candidate = exact_fields(bundle.get("candidate"), CANDIDATE_FIELDS, "candidate")
+    if candidate is None:
         return False
     if candidate.get("repository") != "TrillionniumFoundation/CEX":
         problem("external evidence bundle repository is invalid")
@@ -266,10 +393,12 @@ def validate_bundle(path: Path) -> bool:
         problem("external evidence bundle migration head is invalid")
     nonempty(candidate.get("artifact_scope"), "candidate.artifact_scope", 20)
 
-    manifest = bundle.get("repository_candidate_manifest")
-    if not isinstance(manifest, dict):
-        problem("repository candidate manifest reference must be an object")
-    else:
+    manifest = exact_fields(
+        bundle.get("repository_candidate_manifest"),
+        MANIFEST_FIELDS,
+        "repository_candidate_manifest",
+    )
+    if manifest is not None:
         immutable_uri(manifest.get("uri"), "repository_candidate_manifest.uri")
         sha256(manifest.get("sha256"), "repository_candidate_manifest.sha256")
     utc_timestamp(bundle.get("generated_at"), "generated_at")
@@ -281,22 +410,27 @@ def validate_bundle(path: Path) -> bool:
         return False
     statuses: dict[str, str] = {}
     observed: list[str] = []
-    for index, gate in enumerate(gates):
+    for index, gate_value in enumerate(gates):
         label = f"gates[{index}]"
-        if not isinstance(gate, dict):
-            problem(f"{label} must be an object")
+        gate = exact_fields(gate_value, GATE_FIELDS, label)
+        if gate is None:
             continue
         gate_id = gate.get("id")
-        observed.append(str(gate_id))
+        gate_id_text = str(gate_id)
+        observed.append(gate_id_text)
         if gate.get("classification") != "external" or gate.get("self_certifiable") is not False:
             problem(f"{label} must remain external and non-self-certifiable")
-        if gate.get("required_issuer_role") != REQUIRED_ROLES.get(str(gate_id)):
+        required_role = REQUIRED_ROLES.get(gate_id_text)
+        if gate.get("required_issuer_role") != required_role:
             problem(f"{label} required issuer role is invalid")
+            required_role = str(gate.get("required_issuer_role") or "")
+
         status = gate.get("status")
         if status not in {"missing", "pass", "fail"}:
             problem(f"{label}.status is invalid")
             status = "missing"
-        statuses[str(gate_id)] = str(status)
+        statuses[gate_id_text] = str(status)
+
         evidence = gate.get("evidence")
         if not isinstance(evidence, list):
             problem(f"{label}.evidence must be an array")
@@ -307,6 +441,7 @@ def validate_bundle(path: Path) -> bool:
                 label=f"{label}.evidence[{record_index}]",
                 commit_sha=commit_sha,
                 tree_sha=tree_sha,
+                required_role=required_role,
             )
             for record_index, item in enumerate(evidence)
         ]
@@ -325,19 +460,22 @@ def validate_bundle(path: Path) -> bool:
     if statuses.get("V12-X8") == "pass":
         if not all(statuses.get(f"V12-X{index}") == "pass" for index in range(1, 8)):
             problem("V12-X8 cannot pass before V12-X1 through V12-X7 pass")
-        if not isinstance(final, dict):
-            problem("V12-X8 pass requires a final human decision")
-        else:
-            if final.get("decision") not in {"go", "no-go"}:
+        final_object = exact_fields(final, FINAL_FIELDS, "final_human_decision")
+        if final_object is not None:
+            if final_object.get("decision") not in {"go", "no-go"}:
                 problem("final_human_decision.decision must be go or no-go")
-            immutable_uri(final.get("uri"), "final_human_decision.uri")
-            sha256(final.get("sha256"), "final_human_decision.sha256")
-            utc_timestamp(final.get("decided_at"), "final_human_decision.decided_at")
-            nonempty(final.get("actor_id"), "final_human_decision.actor_id")
-            nonempty(final.get("organization"), "final_human_decision.organization")
-            nonempty(final.get("role"), "final_human_decision.role")
-            nonempty(final.get("scope"), "final_human_decision.scope", 20)
-            if final.get("candidate_commit_sha") != commit_sha or final.get("candidate_tree_sha") != tree_sha:
+            immutable_uri(final_object.get("uri"), "final_human_decision.uri")
+            sha256(final_object.get("sha256"), "final_human_decision.sha256")
+            utc_timestamp(final_object.get("decided_at"), "final_human_decision.decided_at")
+            nonempty(final_object.get("actor_id"), "final_human_decision.actor_id")
+            nonempty(final_object.get("organization"), "final_human_decision.organization")
+            if final_object.get("role") != REQUIRED_ROLES["V12-X8"]:
+                problem("final_human_decision.role is not the final human release authority")
+            nonempty(final_object.get("scope"), "final_human_decision.scope", 20)
+            if (
+                final_object.get("candidate_commit_sha") != commit_sha
+                or final_object.get("candidate_tree_sha") != tree_sha
+            ):
                 problem("final human decision is bound to another candidate")
     elif final is not None:
         problem("final_human_decision must be null unless V12-X8 is pass")
@@ -349,11 +487,15 @@ def validate_bundle(path: Path) -> bool:
     if revocations:
         problem("an external evidence bundle with a revocation cannot be structurally eligible")
 
+    final_is_go = (
+        isinstance(final, dict)
+        and set(final) == FINAL_FIELDS
+        and final.get("decision") == "go"
+    )
     return (
         not PROBLEMS
         and all(statuses.get(gate_id) == "pass" for gate_id in GATES)
-        and isinstance(final, dict)
-        and final.get("decision") == "go"
+        and final_is_go
     )
 
 
