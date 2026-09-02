@@ -4,6 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+# Historical local-provider compatibility only. This feature is deliberately
+# absent from every authoritative build/deployment path and the worker rejects
+# beta, staging, and production profiles at startup.
+legacy-local-provider-dispatch = []
+
 [dependencies]
 axum.workspace = true
 tokio.workspace = true
@@ -13,10 +20,15 @@ uuid.workspace = true
 chrono.workspace = true
 reqwest.workspace = true
 sqlx.workspace = true
-async-trait = "0.1"
+async-trait.workspace = true
 shared-tracing = { path = "../../crates/shared-tracing" }
 shared-types = { path = "../../crates/shared-types" }
 shared-config = { path = "../../crates/shared-config" }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+
+[[bin]]
+name = "execution-provider-dispatch-worker"
+path = "src/bin/execution-provider-dispatch-worker.rs"
+required-features = ["legacy-local-provider-dispatch"]
