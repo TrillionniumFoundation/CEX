@@ -2,11 +2,15 @@
 # independent-approval, financial, operational, or production evidence.
 * @Tomasrgbsf @ProfHepta
 
-# Normative plans, release evidence, CI trust, migrations, and security controls
+# Normative architecture, plans, release evidence, CI trust, migrations and security controls
+/decisions/adr-004-three-module-external-agent-battle-platform.md @ProfHepta @Franksudoman
+/docs/architecture/ @ProfHepta @Franksudoman
 /docs/CEX-DEVELOPMENT-PLAN-* @ProfHepta @Franksudoman
 /docs/development-doc-authority-v1.json @ProfHepta @Franksudoman
 /docs/traceability/ @ProfHepta @Franksudoman
 /docs/module-catalog-v1.json @ProfHepta @Franksudoman
+/docs/modules/ @ProfHepta @Franksudoman
+/docs/external-components/ @ProfHepta @Franksudoman
 /docs/security-threat-model-v1.md @ProfHepta @Franksudoman
 /docs/slo-recovery-contract-v1.md @ProfHepta @Franksudoman
 /docs/release-evidence/ @ProfHepta @Franksudoman
@@ -15,15 +19,23 @@
 /scripts/*release* @ProfHepta @Franksudoman
 /migrations/ @ProfHepta @Franksudoman
 
-# Exact value, settlement, provider, Audit, and TRNM boundaries
+# Exact value, settlement, external-Agent execution evidence, Audit and TRNM boundaries
 /crates/shared-types/ @ProfHepta @Franksudoman
+/services/identity-service/ @ProfHepta @Franksudoman
 /services/ledger-service/ @ProfHepta @Franksudoman
 /services/gateway-service/ @ProfHepta @Franksudoman
 /services/execution-service/ @ProfHepta @Franksudoman
 /services/audit-service/ @ProfHepta @Franksudoman
 /services/trnm-economy-service/ @ProfHepta @Franksudoman
+/services/capability-service/ @ProfHepta @Franksudoman
 
 # Hepta/Paper Raid contracts and runtime
 /crates/hepta-paper-raid-contracts/ @ProfHepta
 /services/hepta-research-league/ @ProfHepta
 /services/paper-raid-bff/ @ProfHepta
+
+# Consumer and Matrix edge/integration surfaces
+/services/consumer-entry-api/ @Tomasrgbsf @ProfHepta
+/services/matrix-entry-adapter/ @Tomasrgbsf @ProfHepta
+/apps/matrix-bot-relay/ @Tomasrgbsf @ProfHepta
+/apps/matrix-bot-poller/ @Tomasrgbsf @ProfHepta
