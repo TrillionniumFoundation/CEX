@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+TRACEABILITY_PATH = "docs/traceability/sequence-51-architecture-v1.json"
 PROBLEMS: list[str] = []
 
 
@@ -29,6 +31,21 @@ def read(relative: str) -> str:
         return ""
 
 
+def load_json(relative: str) -> dict[str, Any]:
+    raw = read(relative)
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as error:
+        PROBLEMS.append(f"invalid JSON in {relative}: {error}")
+        return {}
+    if not isinstance(value, dict):
+        PROBLEMS.append(f"{relative} root must be a JSON object")
+        return {}
+    return value
+
+
 def require(relative: str, *markers: str) -> str:
     text = read(relative)
     for marker in markers:
@@ -37,10 +54,103 @@ def require(relative: str, *markers: str) -> str:
     return text
 
 
+def require_path(value: object, label: str) -> None:
+    if not isinstance(value, str) or not value:
+        PROBLEMS.append(f"{label} must be a non-empty repository path")
+        return
+    path = Path(value)
+    if path.is_absolute() or ".." in path.parts or "\\" in value:
+        PROBLEMS.append(f"{label} is not a canonical repository path: {value}")
+        return
+    if not (ROOT / path).is_file():
+        PROBLEMS.append(f"{label} references missing file: {value}")
+
+
 def forbid(relative: str, text: str, *markers: str) -> None:
     for marker in markers:
         if marker in text:
             PROBLEMS.append(f"{relative} contains forbidden runtime marker: {marker}")
+
+
+def validate_traceability() -> int:
+    trace = load_json(TRACEABILITY_PATH)
+    expected = {
+        "schema": "cex.sequence-51-architecture-traceability.v1",
+        "status": "active",
+        "candidate_sequence": 51,
+        "runtime_policy": "external_only",
+        "architecture_decision": "decisions/adr-004-three-module-external-agent-battle-platform.md",
+        "closure_contract": "docs/architecture/external-agent-runtime-boundary-sequence-51.md",
+        "checker": "scripts/check-external-agent-runtime-boundary.py",
+        "shared_trigger": "docs/release-evidence/p0-candidate-trigger.json",
+        "production_authorization": "not_granted",
+    }
+    for field, expected_value in expected.items():
+        if trace.get(field) != expected_value:
+            PROBLEMS.append(
+                f"{TRACEABILITY_PATH} {field} must equal {expected_value!r}"
+            )
+    for field in (
+        "architecture_decision",
+        "closure_contract",
+        "checker",
+        "shared_trigger",
+    ):
+        require_path(trace.get(field), f"architecture traceability.{field}")
+
+    controls = trace.get("controls")
+    if not isinstance(controls, list):
+        PROBLEMS.append(f"{TRACEABILITY_PATH} controls must be an array")
+        controls = []
+    expected_ids = {f"M{index}" for index in range(1, 9)}
+    seen: set[str] = set()
+    for index, control in enumerate(controls):
+        label = f"architecture controls[{index}]"
+        if not isinstance(control, dict):
+            PROBLEMS.append(f"{label} must be an object")
+            continue
+        control_id = control.get("id")
+        if not isinstance(control_id, str) or not control_id:
+            PROBLEMS.append(f"{label}.id is invalid")
+            continue
+        if control_id in seen:
+            PROBLEMS.append(f"duplicate architecture control: {control_id}")
+        seen.add(control_id)
+        requirement = control.get("requirement")
+        if not isinstance(requirement, str) or len(requirement.strip()) < 60:
+            PROBLEMS.append(f"{control_id} requirement is incomplete")
+        for field in ("source", "implementation", "verification"):
+            paths = control.get(field)
+            if not isinstance(paths, list) or not paths:
+                PROBLEMS.append(f"{control_id}.{field} must be a non-empty array")
+                continue
+            for path_index, path in enumerate(paths):
+                require_path(path, f"{control_id}.{field}[{path_index}]")
+        require_path(control.get("hosted_gate"), f"{control_id}.hosted_gate")
+    if seen != expected_ids:
+        PROBLEMS.append(
+            "architecture control set mismatch: missing="
+            + ",".join(sorted(expected_ids - seen))
+            + " extra="
+            + ",".join(sorted(seen - expected_ids))
+        )
+
+    blockers = trace.get("external_blockers")
+    required_blockers = {
+        "runner_allocation_and_non_empty_exact_sha_execution",
+        "protected_main_ruleset_governance",
+        "independent_non_pusher_review",
+        "downstream_world_game_immutable_revision_binding",
+        "real_external_agent_provider_reconciliation",
+        "final_human_go_no_go",
+    }
+    if not isinstance(blockers, list) or not required_blockers.issubset(
+        {str(item) for item in blockers}
+    ):
+        PROBLEMS.append(
+            f"{TRACEABILITY_PATH} does not preserve all independent external blockers"
+        )
+    return len(controls)
 
 
 def scan_activation_surfaces() -> None:
@@ -98,6 +208,7 @@ authority = require(
     "docs/development-doc-authority-v1.json",
     '"architecture_decision": "decisions/adr-004-three-module-external-agent-battle-platform.md"',
     '"architecture_closure": "docs/architecture/external-agent-runtime-boundary-sequence-51.md"',
+    '"architecture_traceability": "docs/traceability/sequence-51-architecture-v1.json"',
     '"architecture_boundary_checker": "scripts/check-external-agent-runtime-boundary.py"',
 )
 manifest = require(
@@ -107,6 +218,7 @@ manifest = require(
     "legacy-local-provider-dispatch = []",
     'name = "execution-provider-dispatch-worker"',
     'required-features = ["legacy-local-provider-dispatch"]',
+    'name = "external_agent_boundary"',
 )
 execution_lib = require(
     "services/execution-service/src/lib.rs",
@@ -161,7 +273,8 @@ capability = require(
     "MAX_REGISTRY_BYTES",
     "MAX_REGISTRY_RECORDS",
     "unsupported field",
-    "production-like profiles",
+    "is_production_like",
+    "implicit dev is disabled",
 )
 capability_runtime = capability.split("#[cfg(test)]", 1)[0]
 forbid(
@@ -186,6 +299,11 @@ require(
     "CAPABILITY_BIND_ADDR",
 )
 require(
+    "services/execution-service/tests/external_agent_boundary.rs",
+    "provider_compatibility_surface_fails_closed_without_network_or_prompt_echo",
+    "assert!(!error.message.contains(prompt))",
+)
+require(
     "docs/modules/execution-service.md",
     "default workspace build does not compile or route to local provider adapters",
     "legacy-local-provider-dispatch",
@@ -208,6 +326,7 @@ wrapper = require(
     "check-external-agent-runtime-boundary.py",
     "cex.external-agent-runtime-boundary-check.v1",
 )
+traceability_controls = validate_traceability()
 
 if decision and "平台不拥有、托管、调度或执行参赛 Agent" not in decision:
     PROBLEMS.append("ADR-004 no longer denies platform-owned Agent execution")
@@ -236,6 +355,7 @@ result = {
     "status": "failed" if PROBLEMS else "ok",
     "runtime_policy": "external_only",
     "top_level_domains": ["hepta", "nakama", "trnm"],
+    "architecture_traceability_controls": traceability_controls,
     "default_build_compiles_local_inference": False,
     "legacy_local_dispatch_production_allowed": False,
     "capability_registry_authority": "external_agent_declarations_only",
