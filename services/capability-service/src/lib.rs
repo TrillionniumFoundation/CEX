@@ -6,7 +6,6 @@ use axum::{
     Json, Router,
 };
 use serde_json::{json, Value};
-use shared_config::runtime_guard;
 use shared_types::CapabilityRecord;
 use std::{collections::HashMap, env, sync::Arc};
 
@@ -38,6 +37,49 @@ const ALLOWED_KEYS: &[&str] = &[
     "enabled",
 ];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeProfile {
+    Test,
+    Local,
+    Dev,
+    Beta,
+    Staging,
+    Production,
+}
+
+impl RuntimeProfile {
+    fn parse(raw: &str) -> Result<Self, String> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "test" => Ok(Self::Test),
+            "local" => Ok(Self::Local),
+            "dev" | "development" => Ok(Self::Dev),
+            "beta" => Ok(Self::Beta),
+            "staging" | "stage" => Ok(Self::Staging),
+            "production" | "prod" | "trnm-economy" | "trnm_economy" => {
+                Ok(Self::Production)
+            }
+            other => Err(format!(
+                "unsupported runtime profile '{other}'; expected test, local, dev, beta, staging, production, or trnm-economy"
+            )),
+        }
+    }
+
+    fn is_production_like(self) -> bool {
+        matches!(self, Self::Beta | Self::Staging | Self::Production)
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Test => "test",
+            Self::Local => "local",
+            Self::Dev => "dev",
+            Self::Beta => "beta",
+            Self::Staging => "staging",
+            Self::Production => "production",
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     capabilities: Arc<HashMap<String, CapabilityRecord>>,
@@ -47,12 +89,8 @@ pub struct AppState {
 
 impl AppState {
     pub async fn from_env() -> Result<Self, String> {
-        let profile = runtime_guard::resolve_runtime_profile()
-            .map_err(|error| format!("capability-service runtime profile rejected: {error}"))?;
-        let registry = env::var(REGISTRY_ENV)
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
+        let profile = resolve_runtime_profile()?;
+        let registry = trimmed_env(REGISTRY_ENV);
 
         match registry {
             Some(raw) => Self::from_registry_json(&raw, "environment"),
@@ -143,7 +181,7 @@ impl AppState {
         Ok(Self {
             capabilities: Arc::new(map),
             ready,
-            source: Arc::from(source.to_string()),
+            source: Arc::from(source),
         })
     }
 }
@@ -219,10 +257,7 @@ async fn list_capabilities(State(state): State<AppState>) -> Json<Vec<Capability
     Json(records)
 }
 
-async fn get_capability(
-    Path(id): Path<String>,
-    State(state): State<AppState>,
-) -> Response {
+async fn get_capability(Path(id): Path<String>, State(state): State<AppState>) -> Response {
     match state.capabilities.get(&id) {
         Some(record) => (StatusCode::OK, Json(record.clone())).into_response(),
         None => (
@@ -231,6 +266,58 @@ async fn get_capability(
         )
             .into_response(),
     }
+}
+
+fn resolve_runtime_profile() -> Result<RuntimeProfile, String> {
+    let cex_profile = trimmed_env("CEX_RUNTIME_PROFILE");
+    let app_env = trimmed_env("APP_ENV");
+    let allow_implicit_dev = match trimmed_env("CEX_ALLOW_IMPLICIT_DEV_PROFILE") {
+        Some(raw) => parse_bool("CEX_ALLOW_IMPLICIT_DEV_PROFILE", &raw)?,
+        None => false,
+    };
+    resolve_profile_values(
+        cex_profile.as_deref(),
+        app_env.as_deref(),
+        allow_implicit_dev,
+    )
+}
+
+fn resolve_profile_values(
+    cex_profile: Option<&str>,
+    app_env: Option<&str>,
+    allow_implicit_dev: bool,
+) -> Result<RuntimeProfile, String> {
+    let primary = cex_profile.map(RuntimeProfile::parse).transpose()?;
+    let compatibility = app_env.map(RuntimeProfile::parse).transpose()?;
+    match (primary, compatibility) {
+        (Some(left), Some(right)) if left != right => Err(format!(
+            "CEX_RUNTIME_PROFILE resolves to {}, but APP_ENV resolves to {}",
+            left.name(),
+            right.name()
+        )),
+        (Some(profile), _) | (_, Some(profile)) => Ok(profile),
+        (None, None) if allow_implicit_dev => Ok(RuntimeProfile::Dev),
+        (None, None) => Err(
+            "set CEX_RUNTIME_PROFILE or APP_ENV explicitly; implicit dev is disabled".to_string(),
+        ),
+    }
+}
+
+fn parse_bool(name: &str, raw: &str) -> Result<bool, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" => Ok(false),
+        _ => Err(format!(
+            "{name} must be one of true/false, 1/0, yes/no, or on/off"
+        )),
+    }
+}
+
+fn trimmed_env(name: &str) -> Option<String> {
+    env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn validate_entry_shape(index: usize, entry: &Value) -> Result<(), String> {
@@ -262,6 +349,8 @@ fn validate_record(index: usize, record: &CapabilityRecord) -> Result<(), String
         &record.capability_id,
         MAX_ID_BYTES,
     )?;
+    validate_text(index, "kind", &record.kind, MAX_ID_BYTES)?;
+    validate_text(index, "provider", &record.provider, MAX_ID_BYTES)?;
     validate_text(index, "provider_ref", &record.provider_ref, MAX_REFERENCE_BYTES)?;
     validate_text(index, "display_name", &record.display_name, MAX_DISPLAY_BYTES)?;
     validate_text(index, "version", &record.version, MAX_VERSION_BYTES)?;
@@ -314,7 +403,7 @@ fn validate_text(index: usize, field: &str, value: &str, max_bytes: usize) -> Re
 
 #[cfg(test)]
 mod tests {
-    use super::AppState;
+    use super::{resolve_profile_values, AppState, RuntimeProfile};
 
     #[test]
     fn strict_registry_rejects_local_model_authority() {
@@ -334,5 +423,24 @@ mod tests {
         .err()
         .expect("unknown fields must fail closed");
         assert!(error.contains("unsupported field 'secret'"));
+    }
+
+    #[test]
+    fn production_aliases_are_production_like() {
+        for raw in ["beta", "stage", "staging", "prod", "production", "trnm-economy"] {
+            let profile = resolve_profile_values(Some(raw), None, false)
+                .expect("production-like profile must parse");
+            assert!(profile.is_production_like());
+        }
+    }
+
+    #[test]
+    fn explicit_profile_conflicts_and_missing_profile_fail_closed() {
+        assert!(resolve_profile_values(Some("dev"), Some("production"), false).is_err());
+        assert!(resolve_profile_values(None, None, false).is_err());
+        assert_eq!(
+            resolve_profile_values(None, None, true).expect("explicit implicit-dev opt-in"),
+            RuntimeProfile::Dev
+        );
     }
 }
