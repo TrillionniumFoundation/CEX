@@ -80,7 +80,6 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/executions/:id/reject", post(api::reject_execution))
         .route("/v1/executions/:id/dispatch", post(api::dispatch_execution))
         .route("/v1/executions/:id/start", post(api::start_execution))
-        .route("/v1/executions/:id/process", post(api::process_execution))
         .route(
             "/v1/executions/:id/renew-lease",
             post(api::renew_execution_lease),
