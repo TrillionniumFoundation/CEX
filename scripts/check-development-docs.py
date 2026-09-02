@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the active documentation core plus external-evidence intake checks."""
+"""Run the active documentation core plus architecture and evidence checks."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE = ROOT / "scripts/check-development-docs-core.py"
+AGENT_BOUNDARY = ROOT / "scripts/check-external-agent-runtime-boundary.py"
 EXTERNAL = ROOT / "scripts/check-external-production-evidence-contract.py"
 
 
@@ -97,6 +98,12 @@ def main() -> int:
         problems = ["documentation core problems field is invalid"]
         core["problems"] = problems
 
+    boundary_code = append_check(
+        problems,
+        arguments=[sys.executable, str(AGENT_BOUNDARY)],
+        label="external Agent runtime boundary",
+        expected_schema="cex.external-agent-runtime-boundary-check.v1",
+    )
     contract_code = append_check(
         problems,
         arguments=[sys.executable, str(EXTERNAL), "--contract-only"],
@@ -112,6 +119,8 @@ def main() -> int:
 
     if core_code != 0 and not problems:
         problems.append("documentation core failed without diagnostics")
+    if boundary_code != 0 and not problems:
+        problems.append("external Agent runtime boundary failed without diagnostics")
     if contract_code != 0 and not problems:
         problems.append("external evidence contract failed without diagnostics")
     if self_test_code != 0 and not problems:
