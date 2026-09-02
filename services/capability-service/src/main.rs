@@ -1,7 +1,8 @@
 use capability_service::{build_router, AppState};
-use shared_config::runtime_guard::CONFIG_ERROR_EXIT_CODE;
 use shared_tracing::init_tracing;
 use std::env;
+
+const CONFIG_ERROR_EXIT_CODE: i32 = 78;
 
 #[tokio::main]
 async fn main() {
