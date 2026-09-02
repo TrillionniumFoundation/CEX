@@ -1,0 +1,159 @@
+{
+  "schema": "cex.sequence-51-architecture-traceability.v1",
+  "status": "active",
+  "candidate_sequence": 51,
+  "runtime_policy": "external_only",
+  "architecture_decision": "decisions/adr-004-three-module-external-agent-battle-platform.md",
+  "closure_contract": "docs/architecture/external-agent-runtime-boundary-sequence-51.md",
+  "checker": "scripts/check-external-agent-runtime-boundary.py",
+  "shared_trigger": "docs/release-evidence/p0-candidate-trigger.json",
+  "production_authorization": "not_granted",
+  "controls": [
+    {
+      "id": "M1",
+      "requirement": "The default Execution build and HTTP router cannot execute local Ollama/OpenClaw inference.",
+      "source": [
+        "decisions/adr-004-three-module-external-agent-battle-platform.md",
+        "docs/architecture/external-agent-runtime-boundary-sequence-51.md"
+      ],
+      "implementation": [
+        "services/execution-service/Cargo.toml",
+        "services/execution-service/src/lib.rs",
+        "services/execution-service/src/providers.rs"
+      ],
+      "verification": [
+        "services/execution-service/tests/external_agent_boundary.rs",
+        "scripts/check-external-agent-runtime-boundary.py"
+      ],
+      "hosted_gate": ".github/workflows/rust-service-gate.yml"
+    },
+    {
+      "id": "M2",
+      "requirement": "Historical provider commands and migration-0088 terminal evidence remain auditable without granting Agent execution authority.",
+      "source": [
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
+        "docs/modules/execution-service.md"
+      ],
+      "implementation": [
+        "migrations/0088_enforce_provider_terminal_evidence_binding.sql",
+        "services/execution-service/src/provider_dispatch.rs"
+      ],
+      "verification": [
+        "scripts/check-provider-success-evidence.py",
+        "scripts/check-provider-reconciliation-postgres.sh"
+      ],
+      "hosted_gate": ".github/workflows/p0-provider-reconciliation-gate.yml"
+    },
+    {
+      "id": "M3",
+      "requirement": "The legacy provider worker is an explicit non-default feature and rejects every production-like profile.",
+      "source": [
+        "decisions/adr-004-three-module-external-agent-battle-platform.md",
+        "docs/modules/execution-service.md"
+      ],
+      "implementation": [
+        "services/execution-service/Cargo.toml",
+        "services/execution-service/src/bin/execution-provider-dispatch-worker.rs"
+      ],
+      "verification": [
+        "scripts/check-external-agent-runtime-boundary.py"
+      ],
+      "hosted_gate": ".github/workflows/rust-service-gate.yml"
+    },
+    {
+      "id": "M4",
+      "requirement": "Capability Service accepts bounded external-Agent declarations only and performs no local model discovery or CLI execution.",
+      "source": [
+        "docs/hepta-agent-protocol-v1.md",
+        "docs/modules/capability-service.md"
+      ],
+      "implementation": [
+        "services/capability-service/src/lib.rs",
+        "services/capability-service/src/main.rs"
+      ],
+      "verification": [
+        "services/capability-service/tests/http_flow.rs",
+        "scripts/check-external-agent-runtime-boundary.py"
+      ],
+      "hosted_gate": ".github/workflows/rust-service-gate.yml"
+    },
+    {
+      "id": "M5",
+      "requirement": "Capability readiness distinguishes validated registry authority from process liveness and fails closed in production-like profiles.",
+      "source": [
+        "docs/modules/capability-service.md",
+        "docs/architecture/external-agent-runtime-boundary-sequence-51.md"
+      ],
+      "implementation": [
+        "services/capability-service/src/lib.rs",
+        "services/capability-service/src/main.rs"
+      ],
+      "verification": [
+        "services/capability-service/tests/http_flow.rs"
+      ],
+      "hosted_gate": ".github/workflows/rust-service-gate.yml"
+    },
+    {
+      "id": "M6",
+      "requirement": "Authoritative workflows and deployment/configuration surfaces cannot activate the legacy local-provider feature or opt-in.",
+      "source": [
+        "docs/architecture/external-agent-runtime-boundary-sequence-51.md"
+      ],
+      "implementation": [
+        ".github/workflows/rust-service-gate.yml",
+        ".github/workflows/p0-provider-reconciliation-gate.yml"
+      ],
+      "verification": [
+        "scripts/check-external-agent-runtime-boundary.py"
+      ],
+      "hosted_gate": ".github/workflows/p0-release-candidate-gate.yml"
+    },
+    {
+      "id": "M7",
+      "requirement": "World, Game/Nakama and external providers/Agents remain explicit external components rather than implicit CEX workspace authorities.",
+      "source": [
+        "docs/modules/index.md",
+        "docs/external-components/trillionnium-world-fixture.md",
+        "docs/external-components/trillionnium-game-runtime.md"
+      ],
+      "implementation": [
+        "docs/module-catalog-v1.json"
+      ],
+      "verification": [
+        "scripts/check-module-documentation.py",
+        "scripts/check-development-docs.py"
+      ],
+      "hosted_gate": ".github/workflows/rust-service-gate.yml"
+    },
+    {
+      "id": "M8",
+      "requirement": "Architecture closure is bound to the single sequence-51 trigger and can reject a candidate but cannot grant production authorization.",
+      "source": [
+        "docs/index.md",
+        "docs/development-doc-authority-v1.json"
+      ],
+      "implementation": [
+        "docs/release-evidence/p0-candidate-trigger.json",
+        "scripts/check-development-docs.py"
+      ],
+      "verification": [
+        "scripts/check-external-agent-runtime-boundary.py",
+        "scripts/check-repository-integrity.py"
+      ],
+      "hosted_gate": ".github/workflows/p0-release-candidate-gate.yml"
+    }
+  ],
+  "external_blockers": [
+    "runner_allocation_and_non_empty_exact_sha_execution",
+    "protected_main_ruleset_governance",
+    "independent_non_pusher_review",
+    "downstream_world_game_immutable_revision_binding",
+    "representative_volume_disaster_recovery",
+    "real_external_agent_provider_reconciliation",
+    "credential_custody_and_rotation",
+    "sustained_production_like_soak",
+    "independent_security_operations_financial_review",
+    "legal_commercial_provider_approval",
+    "final_human_go_no_go"
+  ]
+}
