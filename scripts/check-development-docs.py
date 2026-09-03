@@ -12,6 +12,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 CORE = ROOT / "scripts/check-development-docs-core.py"
 AGENT_BOUNDARY = ROOT / "scripts/check-external-agent-runtime-boundary.py"
+EXECUTION_STATE_BOUNDARY = ROOT / "scripts/check-execution-default-state-boundary.py"
 EXTERNAL = ROOT / "scripts/check-external-production-evidence-contract.py"
 
 
@@ -104,6 +105,12 @@ def main() -> int:
         label="external Agent runtime boundary",
         expected_schema="cex.external-agent-runtime-boundary-check.v1",
     )
+    state_boundary_code = append_check(
+        problems,
+        arguments=[sys.executable, str(EXECUTION_STATE_BOUNDARY)],
+        label="Execution default-state privacy boundary",
+        expected_schema="cex.execution-default-state-boundary-check.v1",
+    )
     contract_code = append_check(
         problems,
         arguments=[sys.executable, str(EXTERNAL), "--contract-only"],
@@ -121,6 +128,8 @@ def main() -> int:
         problems.append("documentation core failed without diagnostics")
     if boundary_code != 0 and not problems:
         problems.append("external Agent runtime boundary failed without diagnostics")
+    if state_boundary_code != 0 and not problems:
+        problems.append("Execution default-state privacy boundary failed without diagnostics")
     if contract_code != 0 and not problems:
         problems.append("external evidence contract failed without diagnostics")
     if self_test_code != 0 and not problems:
