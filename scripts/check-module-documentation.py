@@ -149,13 +149,47 @@ def cargo_members() -> list[str]:
     return members
 
 
+def document_sections(text: str) -> dict[str, list[str]]:
+    """Read actual level-two headings, not examples or hidden HTML comments.
+
+    Section bodies retain fenced examples, but those examples cannot create
+    required headings. Duplicate headings stay separate and are rejected.
+    """
+    text = re.sub(r"<!--.*?(?:-->|\Z)", "", text, flags=re.DOTALL)
+    sections: dict[str, list[str]] = {}
+    marker: str | None = None
+    body: list[str] = []
+    fence_char = ""
+    fence_size = 0
+
+    def finish() -> None:
+        if marker is not None:
+            sections.setdefault(marker, []).append("\n".join(body).strip())
+
+    for line in text.splitlines():
+        fence = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if fence:
+            run, tail = fence.groups()
+            if not fence_char:
+                fence_char, fence_size = run[0], len(run)
+            elif run[0] == fence_char and len(run) >= fence_size and not tail.strip():
+                fence_char, fence_size = "", 0
+            if marker is not None:
+                body.append(line)
+            continue
+        heading = re.fullmatch(r" {0,3}(## [^\r\n]+?)\s*", line) if not fence_char else None
+        if heading:
+            finish()
+            marker, body = heading.group(1), []
+        elif marker is not None:
+            body.append(line)
+    finish()
+    return sections
+
+
 def section_body(text: str, marker: str) -> str:
-    start = text.find(marker)
-    if start < 0:
-        return ""
-    body_start = start + len(marker)
-    next_heading = text.find("\n## ", body_start)
-    return text[body_start : next_heading if next_heading >= 0 else len(text)].strip()
+    sections = document_sections(text).get(marker, [])
+    return sections[0] if len(sections) == 1 else ""
 
 
 def index_link_for_document(document: str) -> str | None:
@@ -228,9 +262,15 @@ def validate_document(
         if marker not in text:
             problem(f"{document} lacks required marker: {marker}")
 
+    sections = document_sections(text)
     for marker in REQUIRED_SECTIONS:
-        body = section_body(text, marker)
+        bodies = sections.get(marker, [])
+        if len(bodies) != 1:
+            problem(f"{document} requires exactly one real heading: {marker}")
+            continue
+        body = bodies[0]
         if not body:
+            problem(f"{document} section is empty: {marker}")
             continue
         if len(body) < 80:
             problem(f"{document} section is too shallow: {marker}")
@@ -566,6 +606,7 @@ def validate_navigation_and_ownership() -> None:
 
 
 def main() -> int:
+    PROBLEMS.clear()
     workspace_count, external_count = validate_catalog()
     validate_navigation_and_ownership()
     result = {

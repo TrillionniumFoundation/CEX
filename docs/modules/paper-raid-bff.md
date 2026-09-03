@@ -34,9 +34,12 @@ A projection, cache, compatibility row, HTTP success, or transport acknowledgeme
 - `db.rs`: edge persistence and schema checks.
 - `hepta.rs`/`nakama.rs`/`cas.rs`: downstream adapters.
 
+- `lib.rs`: library entry point and public module exports.
+
 Catalog-bound entry points:
 
 - `services/paper-raid-bff/src/main.rs`
+- `services/paper-raid-bff/src/lib.rs`
 - `services/paper-raid-bff/src/app.rs`
 - `services/paper-raid-bff/src/auth.rs`
 - `services/paper-raid-bff/src/oidc.rs`

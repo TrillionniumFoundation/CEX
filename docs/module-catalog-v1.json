@@ -150,6 +150,7 @@
       "documentation": "docs/modules/ledger-service.md",
       "source_entrypoints": [
         "services/ledger-service/src/main.rs",
+        "services/ledger-service/src/lib.rs",
         "services/ledger-service/src/api.rs",
         "services/ledger-service/src/account_control.rs",
         "services/ledger-service/src/ledger_effects.rs",
@@ -177,6 +178,7 @@
       "documentation": "docs/modules/trnm-economy-service.md",
       "source_entrypoints": [
         "services/trnm-economy-service/src/main.rs",
+        "services/trnm-economy-service/src/lib.rs",
         "services/trnm-economy-service/src/api.rs",
         "services/trnm-economy-service/src/config.rs",
         "services/trnm-economy-service/src/contract.rs",
@@ -202,6 +204,7 @@
       "documentation": "docs/modules/gateway-service.md",
       "source_entrypoints": [
         "services/gateway-service/src/main.rs",
+        "services/gateway-service/src/lib.rs",
         "services/gateway-service/src/application/invocation_service.rs",
         "services/gateway-service/src/domain/invocation.rs",
         "services/gateway-service/src/interfaces/http.rs",
@@ -232,6 +235,7 @@
       "documentation": "docs/modules/execution-service.md",
       "source_entrypoints": [
         "services/execution-service/src/main.rs",
+        "services/execution-service/src/lib.rs",
         "services/execution-service/src/api.rs",
         "services/execution-service/src/provider_dispatch.rs",
         "services/execution-service/src/providers.rs",
@@ -265,6 +269,7 @@
       "documentation": "docs/modules/audit-service.md",
       "source_entrypoints": [
         "services/audit-service/src/main.rs",
+        "services/audit-service/src/lib.rs",
         "services/audit-service/src/api.rs",
         "services/audit-service/src/v2.rs",
         "services/audit-service/src/state.rs",
@@ -367,6 +372,7 @@
       "documentation": "docs/modules/paper-raid-bff.md",
       "source_entrypoints": [
         "services/paper-raid-bff/src/main.rs",
+        "services/paper-raid-bff/src/lib.rs",
         "services/paper-raid-bff/src/app.rs",
         "services/paper-raid-bff/src/auth.rs",
         "services/paper-raid-bff/src/oidc.rs",

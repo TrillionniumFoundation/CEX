@@ -32,9 +32,12 @@ A projection, cache, compatibility row, HTTP success, or transport acknowledgeme
 - `outbox_dispatcher.rs`: claim/deliver/ack lifecycle.
 - `bin/audit-outbox-dispatcher.rs`: dedicated worker process.
 
+- `lib.rs`: library entry point and public module exports.
+
 Catalog-bound entry points:
 
 - `services/audit-service/src/main.rs`
+- `services/audit-service/src/lib.rs`
 - `services/audit-service/src/api.rs`
 - `services/audit-service/src/v2.rs`
 - `services/audit-service/src/state.rs`

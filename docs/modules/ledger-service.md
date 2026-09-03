@@ -35,9 +35,12 @@ A projection, cache, compatibility row, HTTP success, or transport acknowledgeme
 - `repository/native_economy.rs`: TRNM native economy adapter.
 - `exact_memory.rs`: bounded development/test implementation, never production authority.
 
+- `lib.rs`: library entry point and public module exports.
+
 Catalog-bound entry points:
 
 - `services/ledger-service/src/main.rs`
+- `services/ledger-service/src/lib.rs`
 - `services/ledger-service/src/api.rs`
 - `services/ledger-service/src/account_control.rs`
 - `services/ledger-service/src/ledger_effects.rs`

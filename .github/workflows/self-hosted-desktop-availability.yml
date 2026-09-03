@@ -9,17 +9,17 @@ on:
         default: operator-check
         type: string
 
-# This probe intentionally does not check out repository code. It only proves
-# that the selected, trusted main/manual lane can acquire the desktop runner.
+# Connectivity only: manual trusted-main invocation, no checkout or token rights.
 permissions: {}
+
+env:
+  PROBE_REASON: ${{ inputs.reason }}
 
 jobs:
   runner-probe:
     name: Desktop runner probe
-    runs-on:
-      - self-hosted
-      - linux
-      - x64
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 10
     steps:
       - name: Verify trusted manual main invocation
@@ -29,9 +29,9 @@ jobs:
           test "$GITHUB_EVENT_NAME" = workflow_dispatch
           test "$GITHUB_REF" = refs/heads/main
           test "$RUNNER_NAME" = desktop
-          printf 'runner=%s\nos=%s\narch=%s\nref=%s\nreason=%s\n' \
-            "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH" "$GITHUB_REF" \
-            '${{ inputs.reason }}'
+          printf 'runner=%s\nos=%s\narch=%s\nref=%s\n' \
+            "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH" "$GITHUB_REF"
+          printf 'reason=%q\n' "${PROBE_REASON:0:256}"
       - name: Read-only capability snapshot
         shell: bash
         run: |

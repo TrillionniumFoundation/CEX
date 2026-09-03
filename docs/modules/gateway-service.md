@@ -33,9 +33,12 @@ A projection, cache, compatibility row, HTTP success, or transport acknowledgeme
 - `infrastructure/`: downstream clients and persistent state.
 - `bin/gateway-exact-reserve-*`: durable reserve admission and worker.
 
+- `lib.rs`: library entry point and public module exports.
+
 Catalog-bound entry points:
 
 - `services/gateway-service/src/main.rs`
+- `services/gateway-service/src/lib.rs`
 - `services/gateway-service/src/application/invocation_service.rs`
 - `services/gateway-service/src/domain/invocation.rs`
 - `services/gateway-service/src/interfaces/http.rs`

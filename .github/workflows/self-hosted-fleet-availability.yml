@@ -9,13 +9,16 @@ on:
         default: operator-check
         type: string
 
-# Connectivity probe only. No checkout, no repository token permissions, and
-# no automatic push/pull-request trigger.
+# Connectivity only: manual trusted-main invocation, no checkout or token rights.
 permissions: {}
+
+env:
+  PROBE_REASON: ${{ inputs.reason }}
 
 jobs:
   rog:
     name: ROG runner probe
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, linux, x64, rog]
     timeout-minutes: 10
     steps:
@@ -26,9 +29,9 @@ jobs:
           test "$GITHUB_EVENT_NAME" = workflow_dispatch
           test "$GITHUB_REF" = refs/heads/main
           test "$RUNNER_NAME" = rog
-          printf 'runner=%s\nos=%s\narch=%s\nref=%s\nreason=%s\n' \
-            "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH" "$GITHUB_REF" \
-            '${{ inputs.reason }}'
+          printf 'runner=%s\nos=%s\narch=%s\nref=%s\n' \
+            "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH" "$GITHUB_REF"
+          printf 'reason=%q\n' "${PROBE_REASON:0:256}"
       - name: Read-only browser snapshot
         shell: bash
         run: |
@@ -40,6 +43,7 @@ jobs:
 
   pocket4:
     name: Pocket4 runner probe
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, linux, x64, pocket4]
     timeout-minutes: 10
     steps:
@@ -50,9 +54,9 @@ jobs:
           test "$GITHUB_EVENT_NAME" = workflow_dispatch
           test "$GITHUB_REF" = refs/heads/main
           test "$RUNNER_NAME" = pocket4
-          printf 'runner=%s\nos=%s\narch=%s\nref=%s\nreason=%s\n' \
-            "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH" "$GITHUB_REF" \
-            '${{ inputs.reason }}'
+          printf 'runner=%s\nos=%s\narch=%s\nref=%s\n' \
+            "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH" "$GITHUB_REF"
+          printf 'reason=%q\n' "${PROBE_REASON:0:256}"
       - name: Read-only capability snapshot
         shell: bash
         run: |
@@ -61,6 +65,7 @@ jobs:
 
   macbook:
     name: MacBook Pro runner probe
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, macOS, ARM64, macbook]
     timeout-minutes: 10
     steps:
@@ -71,9 +76,9 @@ jobs:
           test "$GITHUB_EVENT_NAME" = workflow_dispatch
           test "$GITHUB_REF" = refs/heads/main
           test "$RUNNER_NAME" = macbook-pro
-          printf 'runner=%s\nos=%s\narch=%s\nref=%s\nreason=%s\n' \
-            "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH" "$GITHUB_REF" \
-            '${{ inputs.reason }}'
+          printf 'runner=%s\nos=%s\narch=%s\nref=%s\n' \
+            "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH" "$GITHUB_REF"
+          printf 'reason=%q\n' "${PROBE_REASON:0:256}"
       - name: Read-only platform snapshot
         shell: bash
         run: |

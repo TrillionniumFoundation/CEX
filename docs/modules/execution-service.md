@@ -35,9 +35,12 @@ A projection, cache, compatibility row, HTTP success, or transport acknowledgeme
 - `provider_dispatch.rs` and `bin/execution-provider-dispatch-worker.rs`: retained historical command/reconciliation compatibility source, excluded from the default build behind `legacy-local-provider-dispatch` and forbidden in production-like profiles.
 - `tests/external_agent_boundary.rs`: default integration regression proving no process route, provider Prompt retention, local-provider configuration, network inference, subprocess execution, or prompt echo.
 
+- `lib.rs`: library entry point and default router assembly; the retired process route remains absent.
+
 Catalog-bound entry points:
 
 - `services/execution-service/src/main.rs`
+- `services/execution-service/src/lib.rs`
 - `services/execution-service/src/api.rs`
 - `services/execution-service/src/provider_dispatch.rs`
 - `services/execution-service/src/providers.rs`

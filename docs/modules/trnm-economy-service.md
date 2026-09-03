@@ -33,9 +33,12 @@ A projection, cache, compatibility row, HTTP success, or transport acknowledgeme
 - `repository.rs`: durable intent and receipt state.
 - `migrations/settlement_v1.sql`: adapter-owned schema.
 
+- `lib.rs`: library entry point and public module exports.
+
 Catalog-bound entry points:
 
 - `services/trnm-economy-service/src/main.rs`
+- `services/trnm-economy-service/src/lib.rs`
 - `services/trnm-economy-service/src/api.rs`
 - `services/trnm-economy-service/src/config.rs`
 - `services/trnm-economy-service/src/contract.rs`

@@ -28,6 +28,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Development gate negative regression tests
+        run: python3 scripts/test-development-gates.py
+
       - name: Validate development-document authority
         run: python3 scripts/check-development-docs.py
 
