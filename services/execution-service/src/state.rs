@@ -57,6 +57,108 @@ struct LoadedExecutionPolicyBundle {
     bundle: ExecutionPolicyBundle,
 }
 
+/// Compatibility storage for the retired in-process provider route.
+///
+/// The default external-Agent-only build deliberately discards every value so
+/// normal execution admission cannot retain raw Prompt material for an
+/// unreachable local-provider path. Historical local compatibility builds may
+/// opt into storage through the explicitly non-default feature.
+#[derive(Clone, Default)]
+pub struct ProviderInputStore {
+    #[cfg(feature = "legacy-local-provider-dispatch")]
+    inner: Arc<RwLock<HashMap<Uuid, ProviderDispatchInput>>>,
+}
+
+impl ProviderInputStore {
+    pub async fn read(&self) -> ProviderInputReadGuard<'_> {
+        #[cfg(feature = "legacy-local-provider-dispatch")]
+        {
+            ProviderInputReadGuard {
+                inner: self.inner.read().await,
+            }
+        }
+        #[cfg(not(feature = "legacy-local-provider-dispatch"))]
+        {
+            ProviderInputReadGuard {
+                _marker: std::marker::PhantomData,
+            }
+        }
+    }
+
+    pub async fn write(&self) -> ProviderInputWriteGuard<'_> {
+        #[cfg(feature = "legacy-local-provider-dispatch")]
+        {
+            ProviderInputWriteGuard {
+                inner: self.inner.write().await,
+            }
+        }
+        #[cfg(not(feature = "legacy-local-provider-dispatch"))]
+        {
+            ProviderInputWriteGuard {
+                _marker: std::marker::PhantomData,
+            }
+        }
+    }
+}
+
+pub struct ProviderInputReadGuard<'a> {
+    #[cfg(feature = "legacy-local-provider-dispatch")]
+    inner: tokio::sync::RwLockReadGuard<'a, HashMap<Uuid, ProviderDispatchInput>>,
+    #[cfg(not(feature = "legacy-local-provider-dispatch"))]
+    _marker: std::marker::PhantomData<&'a ()>,
+}
+
+impl<'a> ProviderInputReadGuard<'a> {
+    pub fn get(&self, execution_id: &Uuid) -> Option<&ProviderDispatchInput> {
+        #[cfg(feature = "legacy-local-provider-dispatch")]
+        {
+            self.inner.get(execution_id)
+        }
+        #[cfg(not(feature = "legacy-local-provider-dispatch"))]
+        {
+            let _ = execution_id;
+            None
+        }
+    }
+}
+
+pub struct ProviderInputWriteGuard<'a> {
+    #[cfg(feature = "legacy-local-provider-dispatch")]
+    inner: tokio::sync::RwLockWriteGuard<'a, HashMap<Uuid, ProviderDispatchInput>>,
+    #[cfg(not(feature = "legacy-local-provider-dispatch"))]
+    _marker: std::marker::PhantomData<&'a ()>,
+}
+
+impl<'a> ProviderInputWriteGuard<'a> {
+    pub fn insert(
+        &mut self,
+        execution_id: Uuid,
+        input: ProviderDispatchInput,
+    ) -> Option<ProviderDispatchInput> {
+        #[cfg(feature = "legacy-local-provider-dispatch")]
+        {
+            self.inner.insert(execution_id, input)
+        }
+        #[cfg(not(feature = "legacy-local-provider-dispatch"))]
+        {
+            let _ = (execution_id, input);
+            None
+        }
+    }
+
+    pub fn remove(&mut self, execution_id: &Uuid) -> Option<ProviderDispatchInput> {
+        #[cfg(feature = "legacy-local-provider-dispatch")]
+        {
+            self.inner.remove(execution_id)
+        }
+        #[cfg(not(feature = "legacy-local-provider-dispatch"))]
+        {
+            let _ = execution_id;
+            None
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionRecord {
     pub execution_id: Uuid,
@@ -140,10 +242,12 @@ impl ExecutionRuntimeMetrics {
 #[derive(Clone)]
 pub struct AppState {
     pub executions: Arc<RwLock<HashMap<Uuid, ExecutionRecord>>>,
-    pub provider_inputs: Arc<RwLock<HashMap<Uuid, ProviderDispatchInput>>>,
+    pub provider_inputs: ProviderInputStore,
     pub audit_base_url: String,
     pub ledger_base_url: String,
     pub ledger_manage_token: String,
+    // These fields remain solely so feature-gated historical source compiles.
+    // Default builds assign inert values and never read local-provider env vars.
     pub ollama_base_url: String,
     pub openclaw_cli_bin: String,
     pub openclaw_config_path: Option<String>,
@@ -239,13 +343,32 @@ impl AppState {
             .and_then(|v| v.parse::<i64>().ok())
             .filter(|v| *v > 0)
             .unwrap_or(300);
-        let ollama_base_url =
-            env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
+
+        // Legacy local-provider configuration is compiled into meaningful
+        // values only when the explicit compatibility feature is selected.
+        #[cfg(feature = "legacy-local-provider-dispatch")]
+        let ollama_base_url = env::var("OLLAMA_BASE_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
+        #[cfg(not(feature = "legacy-local-provider-dispatch"))]
+        let ollama_base_url = String::new();
+        #[cfg(feature = "legacy-local-provider-dispatch")]
         let openclaw_cli_bin =
             env::var("OPENCLAW_CLI_BIN").unwrap_or_else(|_| "openclaw".to_string());
+        #[cfg(not(feature = "legacy-local-provider-dispatch"))]
+        let openclaw_cli_bin = String::new();
+        #[cfg(feature = "legacy-local-provider-dispatch")]
         let openclaw_config_path = optional_non_empty_env("OPENCLAW_CONFIG_PATH");
+        #[cfg(not(feature = "legacy-local-provider-dispatch"))]
+        let openclaw_config_path: Option<String> = None;
+        #[cfg(feature = "legacy-local-provider-dispatch")]
         let openclaw_state_dir = optional_non_empty_env("OPENCLAW_STATE_DIR");
+        #[cfg(not(feature = "legacy-local-provider-dispatch"))]
+        let openclaw_state_dir: Option<String> = None;
+        #[cfg(feature = "legacy-local-provider-dispatch")]
         let openclaw_agent_dir = optional_non_empty_env("OPENCLAW_AGENT_DIR");
+        #[cfg(not(feature = "legacy-local-provider-dispatch"))]
+        let openclaw_agent_dir: Option<String> = None;
+
         let execution_default_max_attempts = positive_i32_env(
             "EXECUTION_DEFAULT_MAX_ATTEMPTS",
             DEFAULT_EXECUTION_DEFAULT_MAX_ATTEMPTS,
@@ -254,10 +377,14 @@ impl AppState {
             "EXECUTION_QUEUED_WORKER_MAX_ATTEMPTS",
             DEFAULT_EXECUTION_QUEUED_WORKER_MAX_ATTEMPTS,
         );
+        #[cfg(feature = "legacy-local-provider-dispatch")]
         let execution_provider_dispatch_timeout_seconds = positive_u64_env(
             "EXECUTION_PROVIDER_DISPATCH_TIMEOUT_SECONDS",
             DEFAULT_EXECUTION_PROVIDER_DISPATCH_TIMEOUT_SECONDS,
         );
+        #[cfg(not(feature = "legacy-local-provider-dispatch"))]
+        let execution_provider_dispatch_timeout_seconds =
+            DEFAULT_EXECUTION_PROVIDER_DISPATCH_TIMEOUT_SECONDS;
         let execution_retry_backoff_seconds = positive_i64_env(
             "EXECUTION_RETRY_BACKOFF_SECONDS",
             DEFAULT_EXECUTION_RETRY_BACKOFF_SECONDS,
@@ -337,7 +464,7 @@ impl AppState {
 
         Self {
             executions: Arc::new(RwLock::new(HashMap::new())),
-            provider_inputs: Arc::new(RwLock::new(HashMap::new())),
+            provider_inputs: ProviderInputStore::default(),
             audit_base_url,
             ledger_base_url,
             ledger_manage_token,
@@ -420,11 +547,11 @@ impl AppState {
 
         Self {
             executions: Arc::new(RwLock::new(HashMap::new())),
-            provider_inputs: Arc::new(RwLock::new(HashMap::new())),
+            provider_inputs: ProviderInputStore::default(),
             audit_base_url: "http://127.0.0.1:9".to_string(),
             ledger_base_url: "http://127.0.0.1:9".to_string(),
             ledger_manage_token: "local-dev-admin-token".to_string(),
-            ollama_base_url: "http://127.0.0.1:11434".to_string(),
+            ollama_base_url: String::new(),
             openclaw_cli_bin: String::new(),
             openclaw_config_path: None,
             openclaw_state_dir: None,
@@ -510,6 +637,7 @@ fn positive_i64_env(name: &str, default_value: i64) -> i64 {
         .unwrap_or(default_value)
 }
 
+#[cfg(feature = "legacy-local-provider-dispatch")]
 fn positive_u64_env(name: &str, default_value: u64) -> u64 {
     env::var(name)
         .ok()
