@@ -32,12 +32,18 @@ def require(text: str, relative: str, *markers: str) -> None:
             PROBLEMS.append(f"{relative} lacks required marker: {marker}")
 
 
-def previous_nonempty(lines: list[str], index: int) -> str:
+def is_feature_guarded(lines: list[str], index: int) -> bool:
+    checked = 0
     for cursor in range(index - 1, -1, -1):
         value = lines[cursor].strip()
-        if value:
-            return value
-    return ""
+        if not value:
+            continue
+        checked += 1
+        if value == FEATURE:
+            return True
+        if value.startswith("#[cfg(") or checked >= 4:
+            return False
+    return False
 
 
 def require_feature_guarded_call(lines: list[str], marker: str) -> None:
@@ -46,7 +52,7 @@ def require_feature_guarded_call(lines: list[str], marker: str) -> None:
         PROBLEMS.append(f"{STATE_PATH} lacks historical compatibility read: {marker}")
         return
     for index in matches:
-        if previous_nonempty(lines, index) != FEATURE:
+        if not is_feature_guarded(lines, index):
             PROBLEMS.append(
                 f"{STATE_PATH} local-provider read is not feature-gated: {marker}"
             )
@@ -90,7 +96,7 @@ for marker in (
     'optional_non_empty_env("OPENCLAW_CONFIG_PATH")',
     'optional_non_empty_env("OPENCLAW_STATE_DIR")',
     'optional_non_empty_env("OPENCLAW_AGENT_DIR")',
-    'positive_u64_env(\n            "EXECUTION_PROVIDER_DISPATCH_TIMEOUT_SECONDS"',
+    '"EXECUTION_PROVIDER_DISPATCH_TIMEOUT_SECONDS"',
 ):
     require_feature_guarded_call(lines, marker)
 
