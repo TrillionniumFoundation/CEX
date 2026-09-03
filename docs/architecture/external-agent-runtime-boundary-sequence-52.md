@@ -8,7 +8,7 @@ Production authorization: `not_granted`
 
 ## Authority and scope
 
-This contract closes the repository-actionable architecture gaps under accepted ADR-004. It governs the default CEX workspace build, its HTTP routing surface, Capability registry semantics, compatibility-only provider code, CI activation surfaces, and machine-readable traceability. The accepted decision remains that Hepta, Nakama, and TRNM are the three top-level domains and that participating Agent runtimes, model selection, provider credentials, prompts, and inference execution remain external.
+This contract closes the repository-actionable architecture gaps under accepted ADR-004. It governs the default CEX workspace build, HTTP routing and state surfaces, Capability registry semantics, compatibility-only provider code, CI activation surfaces, and machine-readable traceability. The accepted decision remains that Hepta, Nakama, and TRNM are the three top-level domains and that participating Agent runtimes, model selection, provider credentials, prompts, and inference execution remain external.
 
 The parent v12 plan remains authoritative for exact Ledger, Gateway, Execution lifecycle, Audit, migration, recovery, and evidence controls. Any provider-specific Ollama/OpenClaw execution wording retained in that historical plan is superseded within the ADR-004 scope by this contract and the active implementation addendum. It may describe historical migration-0088 rows and negative compatibility verification only; it cannot authorize a current runtime path.
 
@@ -19,19 +19,22 @@ Block M is complete only when every condition below is true on one unchanged rep
 1. The default `execution-service` build does not compile a local provider worker target.
 2. The default Execution router does not expose `/v1/executions/:id/process` or any equivalent in-process model/provider execution endpoint.
 3. `services/execution-service/src/providers.rs` contains identity helpers and a fail-closed compatibility function only. It performs no HTTP inference call, subprocess execution, filesystem model discovery, or prompt/body logging.
-4. The compatibility worker is available only behind the non-default `legacy-local-provider-dispatch` feature and rejects every production-like profile before work begins.
-5. Capability Service consumes bounded external Agent capability declarations from `CAPABILITY_EXTERNAL_AGENT_REGISTRY_JSON`; local model discovery, executable paths, commands, secrets, provider credentials, and implicit production defaults are forbidden.
-6. Authoritative workflows, deployment manifests, configuration files, and example environments do not activate the legacy feature or its opt-in flag.
-7. World, Game/Nakama, Chain, Matrix, content-addressed storage, and external providers/Agents remain explicit external authorities rather than implicit Cargo workspace members.
-8. The architecture decision, closure contract, traceability file, module contracts, shared candidate trigger, and checker all bind candidate sequence 52.
-9. The bounded self-hosted runner probes remain `workflow_dispatch`-only, have no repository-token permissions, perform no checkout, and require `refs/heads/main`. Their presence is not runner-execution evidence.
-10. Every checker and document continues to emit or state `production_authorization: not_granted`; repository validation cannot issue the final human go/no-go.
+4. Default `AppState` does not read Ollama/OpenClaw environment variables and does not retain Prompt material for the retired provider path. Local-provider configuration and retaining Prompt storage become meaningful only under the explicit non-default compatibility feature.
+5. The compatibility worker is available only behind the non-default `legacy-local-provider-dispatch` feature and rejects every production-like profile before work begins.
+6. Capability Service consumes bounded external Agent capability declarations from `CAPABILITY_EXTERNAL_AGENT_REGISTRY_JSON`; local model discovery, executable paths, commands, secrets, provider credentials, and implicit production defaults are forbidden.
+7. Authoritative workflows, deployment manifests, configuration files, and example environments do not activate the legacy feature or its opt-in flag.
+8. World, Game/Nakama, Chain, Matrix, content-addressed storage, and external providers/Agents remain explicit external authorities rather than implicit Cargo workspace members.
+9. The architecture decision, closure contract, traceability file, module contracts, shared candidate trigger, and checkers all bind candidate sequence 52.
+10. The bounded self-hosted runner probes remain `workflow_dispatch`-only, have no repository-token permissions, perform no checkout, and require `refs/heads/main`. Their presence is not runner-execution evidence.
+11. Every checker and document continues to emit or state `production_authorization: not_granted`; repository validation cannot issue the final human go/no-go.
 
 ## Execution boundary
 
 The normal Execution API owns durable lifecycle state, claims, lease renewal, reconciliation, dead-letter acknowledgement, and signed external evidence ingestion. It does not own an Agent runtime. The retired `/process` route is absent from the default router, so a request to that path returns `404 Not Found` rather than attempting local execution or manufacturing an external-Agent result.
 
 `dispatch_via_provider` is retained solely as a bounded fail-closed compatibility symbol for historical code and negative tests. For every syntactically valid provider target it returns `external_agent_runtime_required` without reading the prompt, connecting to a provider, spawning a child process, or echoing target/prompt material. Historical provider-command tables and migration-0088 terminal-evidence constraints remain auditable and may be reconciled, but they confer no runtime authority.
+
+Default Execution admission no longer creates a retaining in-memory Prompt map for the retired provider path. `ProviderInputStore` is a zero-retention compatibility facade in default builds: inserts are discarded and reads return no value. The Ollama/OpenClaw fields retained for source compatibility receive inert empty values and their environment variables are not read. Only a build that explicitly enables `legacy-local-provider-dispatch` may construct retaining storage or load those compatibility variables.
 
 The feature-gated `execution-provider-dispatch-worker` is not a supported production runtime. It exists only so old rows and rollback evidence remain inspectable. Production-like startup rejection is mandatory and no workflow or deployment surface may enable the feature.
 
@@ -49,6 +52,7 @@ Within ADR-004 scope, the following parent-plan concepts are historical compatib
 - OpenClaw CLI model invocation from CEX;
 - a provider/model terminal envelope generated by a CEX-hosted inference adapter;
 - filesystem-discovered model catalogs;
+- default-state retention of local-provider Prompts or configuration;
 - provider credentials or Agent private keys entering CEX.
 
 The active replacement is signed, versioned external-Agent assignment and evidence exchange under `docs/hepta-agent-protocol-v1.md`. Migration-0088 provider terminal-evidence checks remain regression requirements for already persisted historical records and for rejecting fabricated or mismatched evidence.
@@ -65,6 +69,7 @@ Repository checks:
 
 ```text
 python3 scripts/check-external-agent-runtime-boundary.py
+python3 scripts/check-execution-default-state-boundary.py
 python3 scripts/check-development-docs.py
 python3 scripts/check-module-documentation.py
 cargo test -p execution-service --test external_agent_boundary
@@ -73,7 +78,7 @@ cargo check -p execution-service --all-targets --no-default-features
 cargo clippy -p execution-service --all-targets --no-default-features -- -D warnings
 ```
 
-Required negative cases include the retired `/process` route returning 404, attempted Ollama/OpenClaw dispatch returning a stable external-Agent-required error without prompt echo, malformed capability declarations failing closed, and activation scans rejecting any workflow/deploy/config enablement of the legacy feature.
+Required negative cases include the retired `/process` route returning 404; default Prompt inserts being discarded; default state exposing inert local-provider compatibility values without reading the corresponding environment; attempted Ollama/OpenClaw dispatch returning a stable external-Agent-required error without prompt echo; malformed capability declarations failing closed; and activation scans rejecting any workflow/deploy/config enablement of the legacy feature.
 
 ## Independent blockers preserved
 
@@ -92,4 +97,4 @@ Sequence 52 does not self-certify or close:
 
 ## Change protocol
 
-Any reintroduction of a process route, local inference client, executable provider adapter, local model discovery, implicit capability default, legacy feature activation, new external authority, or changed Agent protocol requires a new accepted or superseding ADR, updated module/catalog/protocol documentation, executable negative tests, machine traceability, hosted gate wiring, and a new shared candidate sequence. No such change may inherit qualification evidence from sequence 52.
+Any reintroduction of a process route, default Prompt retention, default local-provider environment read, local inference client, executable provider adapter, local model discovery, implicit capability default, legacy feature activation, new external authority, or changed Agent protocol requires a new accepted or superseding ADR, updated module/catalog/protocol documentation, executable negative tests, machine traceability, hosted gate wiring, and a new shared candidate identity. No such change may inherit qualification evidence from sequence 52.
