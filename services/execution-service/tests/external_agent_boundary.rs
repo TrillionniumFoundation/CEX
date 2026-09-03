@@ -12,6 +12,7 @@ use execution_service::{
 };
 use reqwest::Client;
 use tower::util::ServiceExt;
+use uuid::Uuid;
 
 fn test_state() -> AppState {
     AppState::new_for_tests(
@@ -67,6 +68,44 @@ fn default_router_source_cannot_regain_the_retired_process_route_silently() {
     let source = include_str!("../src/lib.rs");
     assert!(!source.contains("/v1/executions/:id/process"));
     assert!(!source.contains("post(api::process_execution)"));
+}
+
+#[cfg(not(feature = "legacy-local-provider-dispatch"))]
+#[tokio::test]
+async fn default_state_discards_retired_provider_prompt_material() {
+    let state = test_state();
+    let execution_id = Uuid::new_v4();
+    let prompt = "TOP-SECRET-RETIRED-PROVIDER-PROMPT";
+
+    state.provider_inputs.write().await.insert(
+        execution_id,
+        ProviderDispatchInput {
+            prompt: prompt.to_string(),
+        },
+    );
+
+    assert!(state
+        .provider_inputs
+        .read()
+        .await
+        .get(&execution_id)
+        .is_none());
+    assert!(state.ollama_base_url.is_empty());
+    assert!(state.openclaw_cli_bin.is_empty());
+    assert!(state.openclaw_config_path.is_none());
+    assert!(state.openclaw_state_dir.is_none());
+    assert!(state.openclaw_agent_dir.is_none());
+}
+
+#[test]
+fn default_state_source_feature_gates_local_provider_environment_reads() {
+    let source = include_str!("../src/state.rs");
+    assert!(source.contains("Default builds assign inert values and never read local-provider env vars"));
+    assert!(source.contains("Legacy local-provider configuration is compiled into meaningful"));
+    assert!(source.contains("ProviderInputStore"));
+    assert!(!source.contains(
+        "pub provider_inputs: Arc<RwLock<HashMap<Uuid, ProviderDispatchInput>>>"
+    ));
 }
 
 #[tokio::test]
