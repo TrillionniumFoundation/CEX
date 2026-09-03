@@ -9,6 +9,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 STATE_PATH = "services/execution-service/src/state.rs"
 TEST_PATH = "services/execution-service/tests/external_agent_boundary.rs"
+WRAPPER_PATH = "scripts/check-development-docs.py"
+TRACEABILITY_PATH = "docs/traceability/sequence-52-architecture-v1.json"
+CLOSURE_PATH = "docs/architecture/external-agent-runtime-boundary-sequence-52.md"
 FEATURE = '#[cfg(feature = "legacy-local-provider-dispatch")]'
 NO_FEATURE = '#[cfg(not(feature = "legacy-local-provider-dispatch"))]'
 PROBLEMS: list[str] = []
@@ -60,6 +63,9 @@ def require_feature_guarded_call(lines: list[str], marker: str) -> None:
 
 state = read(STATE_PATH)
 tests = read(TEST_PATH)
+wrapper = read(WRAPPER_PATH)
+traceability = read(TRACEABILITY_PATH)
+closure = read(CLOSURE_PATH)
 lines = state.splitlines()
 
 require(
@@ -121,6 +127,27 @@ require(
     "assert!(state.openclaw_cli_bin.is_empty())",
     "default_state_source_feature_gates_local_provider_environment_reads",
 )
+require(
+    wrapper,
+    WRAPPER_PATH,
+    "check-execution-default-state-boundary.py",
+    "cex.execution-default-state-boundary-check.v1",
+    "Execution default-state privacy boundary",
+)
+require(
+    traceability,
+    TRACEABILITY_PATH,
+    '"services/execution-service/src/state.rs"',
+    '"scripts/check-execution-default-state-boundary.py"',
+    "retain retired-route Prompt material",
+)
+require(
+    closure,
+    CLOSURE_PATH,
+    "Default `AppState` does not read Ollama/OpenClaw environment variables",
+    "`ProviderInputStore` is a zero-retention compatibility facade",
+    "python3 scripts/check-execution-default-state-boundary.py",
+)
 
 result = {
     "schema": "cex.execution-default-state-boundary-check.v1",
@@ -130,6 +157,7 @@ result = {
     "default_retains_provider_prompt": False,
     "default_reads_local_provider_environment": False,
     "legacy_configuration_requires_non_default_feature": True,
+    "wired_into_development_document_gate": True,
     "checker_may_grant_production_authorization": False,
     "production_authorization": "not_granted",
     "problems": PROBLEMS,
