@@ -11,7 +11,7 @@
   "controls": [
     {
       "id": "M1",
-      "requirement": "The default Execution build and HTTP router cannot execute local Ollama/OpenClaw inference or expose the retired process endpoint.",
+      "requirement": "The default Execution build, state and HTTP router cannot execute local Ollama/OpenClaw inference, retain retired-route Prompt material, read local-provider configuration, or expose the retired process endpoint.",
       "source": [
         "decisions/adr-004-three-module-external-agent-battle-platform.md",
         "docs/architecture/external-agent-runtime-boundary-sequence-52.md"
@@ -19,11 +19,13 @@
       "implementation": [
         "services/execution-service/Cargo.toml",
         "services/execution-service/src/lib.rs",
-        "services/execution-service/src/providers.rs"
+        "services/execution-service/src/providers.rs",
+        "services/execution-service/src/state.rs"
       ],
       "verification": [
         "services/execution-service/tests/external_agent_boundary.rs",
-        "scripts/check-external-agent-runtime-boundary.py"
+        "scripts/check-external-agent-runtime-boundary.py",
+        "scripts/check-execution-default-state-boundary.py"
       ],
       "hosted_gate": ".github/workflows/rust-service-gate.yml"
     },
@@ -47,17 +49,19 @@
     },
     {
       "id": "M3",
-      "requirement": "The legacy provider worker is a non-default compatibility feature and rejects every production-like profile before processing work.",
+      "requirement": "The legacy provider worker and its local-provider environment are non-default compatibility surfaces and reject every production-like profile before processing work.",
       "source": [
         "decisions/adr-004-three-module-external-agent-battle-platform.md",
         "docs/modules/execution-service.md"
       ],
       "implementation": [
         "services/execution-service/Cargo.toml",
+        "services/execution-service/src/state.rs",
         "services/execution-service/src/bin/execution-provider-dispatch-worker.rs"
       ],
       "verification": [
-        "scripts/check-external-agent-runtime-boundary.py"
+        "scripts/check-external-agent-runtime-boundary.py",
+        "scripts/check-execution-default-state-boundary.py"
       ],
       "hosted_gate": ".github/workflows/rust-service-gate.yml"
     },
