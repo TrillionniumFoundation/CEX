@@ -1,0 +1,127 @@
+name: seq53-matrix-lock-and-package-gate
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/cex-v12-seq53-close-repository-gaps-20260904
+    paths:
+      - apps/matrix-bot-poller/**
+      - apps/matrix-bot-relay/**
+      - services/matrix-entry-adapter/migrations/0001_transport_durability.sql
+      - .github/workflows/seq53-matrix-lock-and-gate.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seq53-matrix-lock-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  lock-and-package-gate:
+    if: github.actor != 'github-actions[bot]' || github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          ref: fix/cex-v12-seq53-close-repository-gaps-20260904
+
+      - name: Verify runner toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --version
+          cargo --version
+          rustfmt --version
+          python3 --version
+          git status --short
+
+      - name: Compile Matrix runtimes and refresh the existing lock minimally
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp Cargo.lock "$RUNNER_TEMP/Cargo.lock.before"
+          cargo check -p matrix-bot-poller -p matrix-bot-relay --all-targets
+
+      - name: Prove lockfile drift is limited to the two Matrix workspace packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import tomllib
+
+          before = tomllib.loads(Path(__import__('os').environ['RUNNER_TEMP'], 'Cargo.lock.before').read_text())
+          after = tomllib.loads(Path('Cargo.lock').read_text())
+
+          def keyed(doc):
+              result = {}
+              for package in doc.get('package', []):
+                  key = (package['name'], package['version'], package.get('source'))
+                  if key in result:
+                      raise SystemExit(f'duplicate Cargo.lock package key: {key}')
+                  result[key] = package
+              return result
+
+          old = keyed(before)
+          new = keyed(after)
+          if old.keys() != new.keys():
+              added = sorted(new.keys() - old.keys())
+              removed = sorted(old.keys() - new.keys())
+              raise SystemExit(f'unexpected Cargo.lock package-set drift; added={added}, removed={removed}')
+
+          mutable = {'matrix-bot-poller', 'matrix-bot-relay'}
+          changed = set()
+          for key in old:
+              left = dict(old[key])
+              right = dict(new[key])
+              if left == right:
+                  continue
+              name = key[0]
+              changed.add(name)
+              if name not in mutable:
+                  raise SystemExit(f'unexpected Cargo.lock change outside Matrix apps: {key}')
+              left_deps = left.pop('dependencies', [])
+              right_deps = right.pop('dependencies', [])
+              if left != right:
+                  raise SystemExit(f'non-dependency lock metadata changed for {key}')
+              required = {'anyhow', 'sqlx'}
+              right_names = {dep.split()[0] for dep in right_deps}
+              if not required.issubset(right_names) or 'sha2' not in right_names:
+                  raise SystemExit(f'Matrix package is missing required durable-runtime dependencies: {key}: {right_deps}')
+              if 'chrono' in right_names:
+                  raise SystemExit(f'obsolete chrono dependency remains in {key}')
+              print(f'{name}: {left_deps} -> {right_deps}')
+
+          if changed != mutable:
+              raise SystemExit(f'expected both Matrix package lock entries to change, got {sorted(changed)}')
+          PY
+          test "$(git diff --name-only | sort -u)" = "Cargo.lock"
+          git diff --check
+          git diff -- Cargo.lock
+
+      - name: Run exact locked Matrix package gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          cargo check --locked -p matrix-bot-poller -p matrix-bot-relay --all-targets
+          cargo test --locked -p matrix-bot-poller -p matrix-bot-relay --all-targets
+          cargo clippy --locked -p matrix-bot-poller -p matrix-bot-relay --all-targets -- -D warnings
+          python3 scripts/check-matrix-transport-durability.py
+          python3 scripts/test-matrix-transport-durability.py
+
+      - name: Commit the verified lockfile only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git diff --name-only | sort -u)" = "Cargo.lock"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          git commit -m "chore(matrix): refresh lockfile for durable runtimes"
+          git push origin HEAD:fix/cex-v12-seq53-close-repository-gaps-20260904
