@@ -248,8 +248,8 @@
         "services/execution-service/tests/external_agent_boundary.rs"
       ],
       "verification": [
-        "cargo test -p execution-service --all-targets",
-        "cargo clippy -p execution-service --all-targets -- -D warnings",
+        "cargo test --locked -p execution-service --all-targets",
+        "cargo clippy --locked -p execution-service --all-targets -- -D warnings",
         "python3 scripts/check-external-agent-runtime-boundary.py",
         "python3 scripts/check-execution-settlement-commands.py",
         "bash scripts/check-execution-settlement-commands-postgres.sh",
@@ -403,11 +403,15 @@
       "documentation": "docs/modules/matrix-entry-adapter.md",
       "source_entrypoints": [
         "services/matrix-entry-adapter/src/main.rs",
-        "services/matrix-entry-adapter/src/lib.rs"
+        "services/matrix-entry-adapter/src/lib.rs",
+        "services/matrix-entry-adapter/src/runtime_profile.rs",
+        "services/matrix-entry-adapter/migrations/0001_transport_durability.sql",
+        "services/matrix-entry-adapter/migrations/0002_source_observation_replay.sql"
       ],
       "verification": [
         "cargo test -p matrix-entry-adapter",
-        "cargo clippy -p matrix-entry-adapter --all-targets -- -D warnings"
+        "cargo clippy -p matrix-entry-adapter --all-targets -- -D warnings",
+        "bash scripts/check-matrix-source-observation-postgres.sh"
       ]
     },
     {
@@ -424,8 +428,8 @@
         "apps/matrix-bot-relay/src/main.rs"
       ],
       "verification": [
-        "cargo test -p matrix-bot-relay",
-        "cargo clippy -p matrix-bot-relay --all-targets -- -D warnings"
+        "cargo test --locked -p matrix-bot-relay --all-targets",
+        "cargo clippy --locked -p matrix-bot-relay --all-targets -- -D warnings"
       ]
     },
     {
@@ -442,8 +446,8 @@
         "apps/matrix-bot-poller/src/main.rs"
       ],
       "verification": [
-        "cargo test -p matrix-bot-poller",
-        "cargo clippy -p matrix-bot-poller --all-targets -- -D warnings"
+        "cargo test --locked -p matrix-bot-poller --all-targets",
+        "cargo clippy --locked -p matrix-bot-poller --all-targets -- -D warnings"
       ]
     }
   ],
