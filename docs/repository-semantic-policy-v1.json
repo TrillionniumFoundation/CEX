@@ -1,0 +1,345 @@
+{
+  "schema": "cex.repository-semantic-policy.v1",
+  "status": "active",
+  "production_authorization": "not_granted",
+  "selection": "first_matching_rule_after_fact_type_and_path/value_filters",
+  "required_fields": [
+    "bounded_context",
+    "authority_mode",
+    "authentication",
+    "authorization",
+    "data_classification",
+    "retirement"
+  ],
+  "rules": [
+    {
+      "id": "consumer-world-projection",
+      "fact_types": ["route", "config"],
+      "path_globs": [
+        "services/consumer-entry-api/src/world_*.rs",
+        "services/consumer-entry-api/src/real_world_map_shell.rs",
+        "services/consumer-entry-api/src/openstreetmap_geodata.rs",
+        "services/consumer-entry-api/src/trillionnium_world_adapters.rs"
+      ],
+      "bounded_context": "consumer-world-projection",
+      "authority_mode": "projection_only",
+      "authentication": "consumer_session_or_internal_edge",
+      "authorization": "subject_and_tenant_bound_projection_access",
+      "data_classification": "consumer_projection",
+      "retirement": "externalize_to_trillionnium-world_then_remove_edge_compatibility"
+    },
+    {
+      "id": "consumer-league-projection",
+      "fact_types": ["route", "config"],
+      "path_globs": ["services/consumer-entry-api/src/league_*.rs"],
+      "bounded_context": "consumer-league-projection",
+      "authority_mode": "projection_only",
+      "authentication": "consumer_session_or_internal_edge",
+      "authorization": "subject_and_tenant_bound_projection_access",
+      "data_classification": "consumer_projection",
+      "retirement": "externalize_to_nakama_or_product_bff_then_remove_compatibility"
+    },
+    {
+      "id": "consumer-term-exchange-adapter",
+      "fact_types": ["route", "config"],
+      "path_globs": ["services/consumer-entry-api/src/term_exchange*.rs"],
+      "bounded_context": "consumer-economy-adapter",
+      "authority_mode": "adapter_only",
+      "authentication": "consumer_session_and_internal_service_credential",
+      "authorization": "subject_tenant_and_receipt_bound",
+      "data_classification": "financial_projection_and_transport",
+      "retirement": "versioned_cutover_to_trnm_economy_authority"
+    },
+    {
+      "id": "consumer-identity-governance",
+      "fact_types": ["route", "config"],
+      "path_globs": ["services/consumer-entry-api/src/identity_admin_routes.rs"],
+      "bounded_context": "consumer-identity-governance",
+      "authority_mode": "edge_governance_only",
+      "authentication": "operator_authenticated",
+      "authorization": "approved_revision_actor_allowlist_and_reference_integrity",
+      "data_classification": "identity_governance",
+      "retirement": "migrate_to_identity-service_control_plane"
+    },
+    {
+      "id": "consumer-task-admission",
+      "fact_types": ["route", "config"],
+      "path_globs": [
+        "services/consumer-entry-api/src/consumer_ingress.rs",
+        "services/consumer-entry-api/src/task_routes.rs"
+      ],
+      "bounded_context": "consumer-task-admission",
+      "authority_mode": "edge_admission_only",
+      "authentication": "signed_consumer_session",
+      "authorization": "subject_tenant_csrf_idempotency_and_rate_limit",
+      "data_classification": "consumer_task_projection",
+      "retirement": "versioned_route_retirement_with_consumer_inventory"
+    },
+    {
+      "id": "consumer-presentation",
+      "fact_types": ["route", "config"],
+      "path_globs": [
+        "services/consumer-entry-api/src/client_*.rs",
+        "services/consumer-entry-api/src/account_client_shell.rs"
+      ],
+      "bounded_context": "consumer-presentation",
+      "authority_mode": "presentation_only",
+      "authentication": "route_specific_consumer_session",
+      "authorization": "read_projection_or_csrf_guarded_edge_action",
+      "data_classification": "presentation",
+      "retirement": "replaceable_client_surface"
+    },
+    {
+      "id": "consumer-observability",
+      "fact_types": ["route", "config"],
+      "path_globs": ["services/consumer-entry-api/src/health_metrics.rs"],
+      "bounded_context": "consumer-observability",
+      "authority_mode": "operational_observation_only",
+      "authentication": "private_or_loopback_metrics_and_bounded_health",
+      "authorization": "operator_network_policy",
+      "data_classification": "aggregate_operational",
+      "retirement": "stable_operational_contract"
+    },
+    {
+      "id": "matrix-transport",
+      "fact_types": ["route", "config"],
+      "path_globs": [
+        "apps/matrix-bot-poller/**",
+        "apps/matrix-bot-relay/**",
+        "services/matrix-entry-adapter/**"
+      ],
+      "bounded_context": "matrix-transport",
+      "authority_mode": "transport_only",
+      "authentication": "matrix_or_internal_transport_credential",
+      "authorization": "stable_event_delivery_and_partition_scope",
+      "data_classification": "bounded_transport_metadata",
+      "retirement": "versioned_matrix_transport_protocol"
+    },
+    {
+      "id": "paper-raid-edge",
+      "fact_types": ["route", "config"],
+      "path_globs": ["services/paper-raid-bff/**"],
+      "bounded_context": "paper-raid-consumer-edge",
+      "authority_mode": "edge_session_and_projection_only",
+      "authentication": "session_oidc_or_operator_accessctl",
+      "authorization": "csrf_replay_invite_quota_and_downstream_receipt",
+      "data_classification": "edge_session_and_research_projection",
+      "retirement": "versioned_alpha_to_public_identity_cutover"
+    },
+    {
+      "id": "capability-descriptive-registry",
+      "fact_types": ["route", "config"],
+      "path_globs": ["services/capability-service/**"],
+      "bounded_context": "external-agent-capability-registry",
+      "authority_mode": "descriptive_registry_only",
+      "authentication": "deployment_privacy_policy",
+      "authorization": "read_only_no_execution_or_entitlement_grant",
+      "data_classification": "public_bounded_capability_metadata",
+      "retirement": "versioned_registry_snapshot_protocol"
+    },
+    {
+      "id": "gateway-admission",
+      "fact_types": ["route", "config"],
+      "path_globs": ["services/gateway-service/**"],
+      "bounded_context": "invocation-and-reserve-admission",
+      "authority_mode": "admission_and_command_preparation",
+      "authentication": "internal_service_credential",
+      "authorization": "tenant_principal_idempotency_and_exact_money_contract",
+      "data_classification": "invocation_and_reserve_command",
+      "retirement": "versioned_gateway_contract"
+    },
+    {
+      "id": "execution-runtime",
+      "fact_types": ["route", "config"],
+      "path_globs": ["services/execution-service/**"],
+      "bounded_context": "execution-request-lifecycle",
+      "authority_mode": "execution_request_and_provider_evidence",
+      "authentication": "internal_service_and_operator_credential",
+      "authorization": "tenant_request_lease_provider_and_settlement_contract",
+      "data_classification": "execution_and_provider_evidence",
+      "retirement": "versioned_execution_and_provider_contract"
+    },
+    {
+      "id": "ledger-authority",
+      "fact_types": ["route", "config"],
+      "path_globs": ["services/ledger-service/**"],
+      "bounded_context": "exact-ledger",
+      "authority_mode": "authoritative_exact_account_effects",
+      "authentication": "internal_ledger_principal",
+      "authorization": "tenant_account_operation_identity_and_receipt_contract",
+      "data_classification": "financial_authoritative",
+      "retirement": "explicit_ledger_protocol_version_and_cutover"
+    },
+    {
+      "id": "audit-authority",
+      "fact_types": ["route", "config"],
+      "path_globs": ["services/audit-service/**"],
+      "bounded_context": "audit-integrity",
+      "authority_mode": "authoritative_append_only_audit",
+      "authentication": "registered_audit_writer_or_operator_reader",
+      "authorization": "writer_scope_tenant_event_identity_and_chain_contract",
+      "data_classification": "audit_evidence",
+      "retirement": "append_only_versioned_audit_protocol"
+    },
+    {
+      "id": "identity-authority",
+      "fact_types": ["route", "config"],
+      "path_globs": ["services/identity-service/**"],
+      "bounded_context": "identity-control-plane",
+      "authority_mode": "authoritative_tenant_identity_and_api_key_governance",
+      "authentication": "operator_or_registered_workload",
+      "authorization": "organization_tenant_actor_and_key_lifecycle",
+      "data_classification": "identity_sensitive",
+      "retirement": "versioned_identity_protocol"
+    },
+    {
+      "id": "hepta-research-authority",
+      "fact_types": ["route", "config"],
+      "path_globs": ["services/hepta-research-league/**"],
+      "bounded_context": "hepta-research-control-plane",
+      "authority_mode": "authoritative_research_workflow_and_evidence",
+      "authentication": "human_agent_nakama_consumer_or_operator_contract",
+      "authorization": "consent_key_epoch_team_role_review_and_receipt",
+      "data_classification": "research_evidence_and_identity",
+      "retirement": "explicit_protocol_version_and_finality_projection_cutover"
+    },
+    {
+      "id": "trnm-economy-admission",
+      "fact_types": ["route", "config"],
+      "path_globs": ["services/trnm-economy-service/**"],
+      "bounded_context": "trnm-economy-adapter",
+      "authority_mode": "economic_intent_admission_not_chain_finality",
+      "authentication": "signed_issuer_and_internal_service_credential",
+      "authorization": "intent_hash_issuer_account_and_receipt_contract",
+      "data_classification": "financial_intent_and_receipt_projection",
+      "retirement": "versioned_trnm_adapter_contract"
+    },
+    {
+      "id": "shared-contract-library",
+      "fact_types": ["config"],
+      "path_globs": ["crates/**"],
+      "bounded_context": "shared-platform-contract",
+      "authority_mode": "contract_or_validation_only",
+      "authentication": "not_applicable_library",
+      "authorization": "callers_retain_domain_authority",
+      "data_classification": "configuration_or_protocol_metadata",
+      "retirement": "semantic_version_and_consumer_inventory"
+    },
+    {
+      "id": "matrix-transport-data",
+      "fact_types": ["data"],
+      "value_regex": "^matrix_transport_",
+      "path_globs": ["**/*.sql"],
+      "bounded_context": "matrix-transport",
+      "authority_mode": "authoritative_transport_evidence_only",
+      "authentication": "least_privilege_database_role",
+      "authorization": "stored_procedure_owner_fence_revision_and_identity",
+      "data_classification": "transport_evidence",
+      "retirement": "expand_verify_cutover_contract_migration"
+    },
+    {
+      "id": "consumer-world-data",
+      "fact_types": ["data"],
+      "value_regex": "^trillionnium_(world|league)_",
+      "path_globs": ["**/*.sql"],
+      "bounded_context": "legacy-product-projection",
+      "authority_mode": "projection_only",
+      "authentication": "database_role_only",
+      "authorization": "edge_projection_writer_and_subject_scoped_reader",
+      "data_classification": "legacy_product_projection",
+      "retirement": "externalize_owner_then_contract_legacy_schema"
+    },
+    {
+      "id": "term-exchange-data",
+      "fact_types": ["data"],
+      "value_regex": "^(term_exchange_|trnm_)",
+      "path_globs": ["**/*.sql"],
+      "bounded_context": "trnm-economy-and-receipt",
+      "authority_mode": "intent_or_receipt_projection_per_table_contract",
+      "authentication": "least_privilege_database_role",
+      "authorization": "stable_intent_receipt_and_account_identity",
+      "data_classification": "financial_sensitive",
+      "retirement": "versioned_trnm_cutover_and_receipt_retention"
+    },
+    {
+      "id": "hepta-research-data",
+      "fact_types": ["data"],
+      "value_regex": "^hepta_",
+      "path_globs": ["**/*.sql"],
+      "bounded_context": "hepta-research-control-plane",
+      "authority_mode": "authoritative_or_explicit_projection_per_migration",
+      "authentication": "least_privilege_research_database_role",
+      "authorization": "tenant_team_agent_consent_review_and_finality_contract",
+      "data_classification": "research_evidence_and_identity",
+      "retirement": "append_or_expand_verify_cutover_contract"
+    },
+    {
+      "id": "ledger-data",
+      "fact_types": ["data"],
+      "value_regex": "^(ledger_|accounts$|account_|invocation_ledger_|gateway_exact_|execution_ledger_)",
+      "path_globs": ["**/*.sql"],
+      "bounded_context": "exact-ledger-and-settlement",
+      "authority_mode": "authoritative_exact_value_or_durable_command",
+      "authentication": "least_privilege_ledger_database_role",
+      "authorization": "operation_identity_account_tenant_claim_and_receipt",
+      "data_classification": "financial_authoritative",
+      "retirement": "expand_verify_cutover_contract_with_reconciliation"
+    },
+    {
+      "id": "audit-data",
+      "fact_types": ["data"],
+      "value_regex": "^(audit_|source_audit_)",
+      "path_globs": ["**/*.sql"],
+      "bounded_context": "audit-integrity",
+      "authority_mode": "append_only_audit_or_outbox_evidence",
+      "authentication": "least_privilege_audit_database_role",
+      "authorization": "writer_scope_sequence_hash_claim_and_ack",
+      "data_classification": "audit_evidence",
+      "retirement": "append_only_retention_and_versioned_reader_cutover"
+    },
+    {
+      "id": "paper-raid-edge-data",
+      "fact_types": ["data"],
+      "path_globs": ["services/paper-raid-bff/migrations/*.sql"],
+      "bounded_context": "paper-raid-consumer-edge",
+      "authority_mode": "edge_session_access_replay_and_projection_only",
+      "authentication": "separate_schema_and_runtime_database_roles",
+      "authorization": "session_invite_csrf_quota_and_operator_contract",
+      "data_classification": "edge_identity_and_access_sensitive",
+      "retirement": "versioned_edge_schema_migration"
+    },
+    {
+      "id": "matrix-adapter-data",
+      "fact_types": ["data"],
+      "path_globs": ["services/matrix-entry-adapter/migrations/*.sql"],
+      "bounded_context": "matrix-transport",
+      "authority_mode": "transport_evidence_only",
+      "authentication": "least_privilege_matrix_database_role",
+      "authorization": "procedure_scoped_identity_claim_fence_and_ack",
+      "data_classification": "transport_evidence",
+      "retirement": "versioned_matrix_transport_migration"
+    },
+    {
+      "id": "legacy-cross-context-data",
+      "fact_types": ["data"],
+      "path_globs": ["migrations/*.sql", "deploy/sql/*.sql", "services/*/migrations/*.sql"],
+      "bounded_context": "legacy-cross-context-schema",
+      "authority_mode": "explicit_migration_owner_required_no_implicit_transfer",
+      "authentication": "database_owner_or_migration_role_only",
+      "authorization": "table_specific_constraints_and_runtime_role_separation",
+      "data_classification": "domain_specific",
+      "retirement": "split_to_owning_module_or_record_compatibility_retention"
+    },
+    {
+      "id": "generic-module-route-config",
+      "fact_types": ["route", "config"],
+      "path_globs": ["apps/**", "services/**", "crates/**"],
+      "bounded_context": "module_default",
+      "authority_mode": "inherit_exact_module_catalog_authority",
+      "authentication": "module_contract_required",
+      "authorization": "module_contract_and_stable_identity_required",
+      "data_classification": "module_specific",
+      "retirement": "versioned_change_with_consumer_inventory"
+    }
+  ]
+}
