@@ -10,11 +10,15 @@ set +x
 [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
 ROOT="$(git rev-parse --show-toplevel)"
 [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
-command -v docker >/dev/null
 WORK="$(mktemp -d "$RUNNER_TEMP/cex-matrix-validation.XXXXXXXX")"
 chmod 700 "$WORK"
 OUT="$ROOT/run/isolated-matrix"
 mkdir -p "$OUT"
+printf 'candidate=%s\n' "$GITHUB_SHA" > "$OUT/identity.txt"
+printf 'tree=%s\n' "$(git rev-parse 'HEAD^{tree}')" >> "$OUT/identity.txt"
+# A source snapshot remains diagnostic input, even when no container can start.
+git archive --format=tar HEAD > "$OUT/source-$GITHUB_SHA.tar"
+command -v docker >/dev/null
 # Only this unique directory, network, database and image are ever removed.
 SUFFIX="${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}"
 NETWORK="cex-matrix-$SUFFIX"
@@ -30,17 +34,15 @@ cleanup() {
 trap cleanup EXIT
 mkdir "$WORK/build" "$WORK/output" "$WORK/cache" "$WORK/context"
 cat > "$WORK/context/Dockerfile" <<'DOCKER'
-FROM rust:1.98.1-bookworm
+FROM rust:1.98.0-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends python3 postgresql-client ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN rustup component add rustfmt clippy
 DOCKER
 # No repository code or credentials are included in the image build context.
 docker build --pull -t "$IMAGE" "$WORK/context" > "$OUT/image-build.log" 2>&1
-printf 'candidate=%s\n' "$GITHUB_SHA" > "$OUT/identity.txt"
 docker image inspect "$IMAGE" --format '{{.Id}}' >> "$OUT/identity.txt"
-# Archive only tracked source bytes; never .git, credentials, or the runner home.
-git archive --format=tar HEAD > "$OUT/source-$GITHUB_SHA.tar"
 UID_VALUE="$(id -u)"; GID_VALUE="$(id -g)"
+[[ "$UID_VALUE" != 0 ]] || { echo "runner must be unprivileged" >&2; exit 1; }
 BASE=(docker run --rm --read-only --user "$UID_VALUE:$GID_VALUE"
   --cap-drop ALL --security-opt no-new-privileges --pids-limit 512
   --cpus 2 --memory 6g --tmpfs /tmp:rw,nosuid,nodev,size=1g
