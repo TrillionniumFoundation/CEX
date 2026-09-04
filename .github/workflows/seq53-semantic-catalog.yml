@@ -1,0 +1,58 @@
+name: seq53-generate-repository-semantic-catalog
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/cex-v12-seq53-close-repository-gaps-20260904
+    paths:
+      - apps/**
+      - services/**
+      - crates/**
+      - migrations/**
+      - deploy/sql/**
+      - docs/module-catalog-v1.json
+      - docs/repository-semantic-policy-v1.json
+      - scripts/generate-repository-semantics.py
+      - .github/workflows/seq53-semantic-catalog.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seq53-semantic-catalog-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  generate-and-check:
+    if: github.actor != 'github-actions[bot]' || github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          ref: fix/cex-v12-seq53-close-repository-gaps-20260904
+
+      - name: Generate semantic catalog from source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 --version
+          python3 scripts/generate-repository-semantics.py --write
+          python3 scripts/generate-repository-semantics.py --check
+          python3 scripts/check-matrix-runtime-wiring.py
+          git diff --check
+          test "$(git diff --name-only | sort -u)" = "docs/repository-contract-semantics-v1.json"
+
+      - name: Commit generated semantic catalog only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git diff --name-only | sort -u)" = "docs/repository-contract-semantics-v1.json"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/repository-contract-semantics-v1.json
+          git commit -m "docs(semantics): bind repository facts to authority policy"
+          git push origin HEAD:fix/cex-v12-seq53-close-repository-gaps-20260904
