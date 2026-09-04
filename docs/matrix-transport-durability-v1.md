@@ -1,77 +1,196 @@
-# Matrix transport durability v1
+# Matrix Transport Durability Contract v1
 
-Status: active Matrix transport durability contract  
-Implementation owner: `matrix-integration`  
-Migration: `services/matrix-entry-adapter/migrations/0001_transport_durability.sql`  
-Production authorization: `not_granted`
+Status: repository implementation candidate  
+Owner: `matrix-integration`  
+Production authorization: `not_granted`  
+Schema owner: `services/matrix-entry-adapter/migrations/0001_transport_durability.sql`
 
-## Scope
+This document is normative for the CEX-owned Matrix transport path. It binds the poller, relay, adapter boundary, PostgreSQL schema, recovery rules and executable gates. It does not prove that a particular deployment, Matrix homeserver or candidate SHA has passed qualification.
 
-This contract defines durable transport state shared by the Matrix entry adapter, poller and relay. It does not make Matrix user, room or event claims authoritative for CEX domains. Identity, research, Ledger, World/Game and finality decisions remain with their owning services. The transport layer owns only opaque sync position, stable source-event identity, delivery intent, lease history and poison-event observations.
+## 1. Scope and authority
 
-## Cursor compare-and-set and lease fencing
+The contract covers transport from Matrix `/sync` observation through durable event admission, downstream adapter delivery, optional reply enqueue and Matrix homeserver send.
 
-Each polling partition has one opaque cursor, monotonically increasing revision and monotonically increasing lease fence. A worker must acquire the partition lease before reading or advancing its cursor. A different owner cannot take an unexpired lease; takeover after expiry receives a higher fence. Cursor advancement requires the exact owner, fence, expected revision and an unexpired lease.
+Matrix owns source events, room membership, sender identity and opaque sync cursors. CEX Matrix transport owns only:
 
-The cursor value is opaque Matrix transport data. CEX never parses it to infer room, user or domain authority. A stale owner, stale fence, stale revision or expired lease cannot advance the cursor. Multi-instance operation is permitted only through these compare-and-set and lease fencing rules.
+- fenced cursor-lease observations;
+- immutable source-event identity and hash;
+- immutable delivery identity, destination, payload and payload hash;
+- claim attempts, lease fences, retry/dead-letter state and transition history;
+- bounded poison-event observations and explicit acknowledgement.
 
-## Inbox identity and atomic admission
+The Matrix transport path grants no CEX identity, entitlement, task, research, financial, World/Game or finality authority. An HTTP success is transport evidence only.
 
-Every source event is bound to a stable Matrix event ID and SHA-256 of the exact bounded normalized bytes. First admission is `accepted`; an exact retry is `replay`; reuse of the same event ID with different bytes is an identity collision and aborts the transaction. Inbox records are immutable.
+## 2. Runtime topology
 
-`cex_matrix_register_delivery_and_advance_v1` verifies the cursor lease, accepts the event, creates or replays one stable delivery and advances the cursor in one PostgreSQL transaction. If any identity, lease, payload or revision check fails, none of the three state changes commits. A poller must not advance a cursor merely because a remote HTTP request was attempted.
+The v1 runtime has three boundaries:
 
-For Matrix sync batches containing multiple supported events, callers must register all deliveries in one explicit database transaction and advance the batch cursor only after every supported event has durable acceptance. The single-event helper is the canonical primitive and does not authorize skipping unregistered events.
+1. `matrix-bot-poller` acquires a cursor lease, reads Matrix `/sync`, validates supported events, registers the entire returned batch and advances the cursor through CAS.
+2. `matrix-bot-relay` is the only outbox claimant. It dispatches `matrix-relay-adapter-v1` and `matrix-homeserver-v1` deliveries.
+3. `matrix-entry-adapter` authenticates and normalizes the CEX-facing Matrix event. Its result may contain a presentation-only `projected_reply` that the relay enqueues durably.
 
-## Outbox, retry and response loss
+Poller and relay share PostgreSQL procedures; they do not share process-local queues, cursor files or in-memory acceptance authority.
 
-A delivery has one UUID, source event ID, destination, immutable payload bytes represented by JSON plus SHA-256, maximum attempt count and append-only transition history. Delivery identity and payload fields cannot be updated after insertion. Claims use `FOR UPDATE SKIP LOCKED`, increment the fence and commit before network I/O.
+## 3. Durable schema
 
-Only the current owner with the exact fence and an unexpired lease can finish a claim. Retryable failure returns the same stable delivery to `pending` while budget remains; budget exhaustion or permanent failure enters `dead_letter`; verified downstream acceptance enters `sent`. An expired claim may be reclaimed with a higher fence and the history records whether the previous state was `pending` or `claimed`.
+### 3.1 `matrix_transport_cursors`
 
-Downstream requests must carry the stable delivery ID as their idempotency identity. If the remote effect may have occurred and the local acknowledgement response is lost, the worker recovers through `cex_matrix_lookup_delivery_v1` and downstream lookup/replay using the same delivery ID and payload hash. It must not create a second delivery identity or advance the cursor from transport success alone.
+One row exists per explicit partition. The row stores an opaque cursor, monotonically increasing `cursor_revision`, lease owner, monotonically increasing `lease_fence`, expiry and update time. The cursor is never parsed, synthesized or reset to make a deployment appear healthy.
 
-## Poison-event isolation
+### 3.2 `matrix_transport_inbox`
 
-Unsupported, malformed or repeatedly failing source events are recorded by stable ID, exact hash, partition and bounded failure code. Exact repeated observation increments a counter; different bytes or classification under the same event identity collide. Operators can acknowledge the record without deleting it. Poison-event acknowledgement is not permission to invent a downstream success or silently skip a cursor range.
+The inbox stores one immutable row per Matrix source event ID with a SHA-256 source fingerprint, partition and observed cursor. Update and delete are rejected by trigger. Exact replay returns `replay`; a reused event ID with different hash or partition raises an identity collision.
 
-A production poller needs an explicit policy mapping each failure class to retry, durable poison isolation or operator stop. The default must stop or isolate with evidence; it may not discard an unknown event and continue advancing the same cursor without a reviewed rule.
+### 3.3 `matrix_transport_outbox`
 
-## Database security
+The outbox stores one immutable delivery identity per `(source_event_id, destination)`, including delivery UUID, payload SHA-256, JSON payload and max-attempt policy. Identity-bearing fields are protected by trigger. Mutable claim/outcome fields are restricted to the stored procedures.
 
-All functions pin `search_path` to `pg_catalog, public` and are revoked from `public`. Runtime deployments grant only the required functions to a least-privilege transport role; migration ownership remains separate. Inbox and delivery-history rows reject update/delete. The outbox trigger freezes delivery ID, source identity, destination, payload hash, payload, retry budget and creation time.
+Allowed states are `pending`, `claimed`, `sent` and `dead_letter`. `claimed` requires owner and expiry. `sent` requires `sent_at`.
 
-Payloads are bounded to one MiB at the database boundary. Tokens, unrestricted message bodies, Agent private keys, CEX credentials and provider secrets must not enter payload, errors, metrics or poison notes. Application-level request and response bounds remain mandatory before database calls.
+### 3.4 `matrix_transport_delivery_history`
 
-## Verification
+Every creation, claim and completion transition is appended with delivery ID, lease fence, prior state, new state, owner and bounded error code. Update and delete are rejected by trigger.
 
-Static and regression checks:
+### 3.5 `matrix_transport_poison_events`
+
+A poison row binds source event ID, source hash, partition and failure code. Exact recurrence increments the observation count. Different bytes or classification under the same event ID raise a collision. Operator acknowledgement is one-time, actor-bound and note-bound; it never edits the original identity or advances a cursor.
+
+## 4. Stored procedure contract
+
+The migration exposes twelve procedures/functions and revokes public execution:
+
+| Function | Contract |
+|---|---|
+| `cex_matrix_reject_immutable_mutation_v1` | rejects mutation of immutable evidence tables |
+| `cex_matrix_guard_outbox_identity_v1` | rejects changes to delivery identity, payload or creation policy |
+| `cex_matrix_acquire_cursor_lease_v1` | creates/acquires a live partition lease and increments fence |
+| `cex_matrix_advance_cursor_v1` | owner/fence/revision/expiry-bound cursor CAS |
+| `cex_matrix_accept_source_event_v1` | exact replay or fail-closed event collision |
+| `cex_matrix_enqueue_delivery_v1` | exact replay or fail-closed delivery collision |
+| `cex_matrix_register_delivery_and_advance_v1` | single-event atomic registration plus cursor CAS helper |
+| `cex_matrix_claim_delivery_v1` | `FOR UPDATE SKIP LOCKED` claim with attempt and fence increment |
+| `cex_matrix_finish_delivery_v1` | matching live claim to sent, pending or dead letter |
+| `cex_matrix_lookup_delivery_v1` | response-loss lookup bound to delivery ID and payload hash |
+| `cex_matrix_record_poison_event_v1` | exact poison recurrence or collision |
+| `cex_matrix_acknowledge_poison_event_v1` | one-time operator acknowledgement |
+
+Runtime roles receive only explicitly reviewed execute grants; table-owner or broad public access is not an activation requirement.
+
+## 5. Poller transaction and cursor rules
+
+For one successful `/sync` response, the poller:
+
+1. holds a live lease for the configured partition;
+2. validates all supported events before authority changes;
+3. begins one PostgreSQL transaction;
+4. calls source-event admission for each supported event;
+5. enqueues the deterministic `matrix-relay-adapter-v1` delivery for each event;
+6. calls cursor CAS once with the same owner, fence and expected revision;
+7. commits only after CAS succeeds.
+
+Any error rolls back the entire batch. Unsupported event kinds may be ignored. A malformed event in a supported class is recorded as poison outside the batch transaction and the cursor is held, preventing silent loss.
+
+An empty but valid sync batch still advances the opaque cursor through CAS. Poller restart reuses the persisted cursor and deterministic identities.
+
+## 6. Relay claim and delivery rules
+
+The relay is the sole generic outbox claimant. Claims are ordered by creation and delivery ID, use `SKIP LOCKED`, increment attempt count and fence, and expire after a bounded lease.
+
+### 6.1 Adapter destination
+
+For `matrix-relay-adapter-v1`, the relay sends:
+
+- stable delivery UUID;
+- stable payload SHA-256;
+- stable idempotency key;
+- authenticated adapter credential;
+- bounded event payload.
+
+If the adapter returns `projected_reply`, the relay creates a deterministic `matrix-homeserver-v1` delivery and completes the adapter delivery in the same PostgreSQL transaction. Failure of either action rolls back both.
+
+### 6.2 Matrix destination
+
+For `matrix-homeserver-v1`, the delivery UUID is the Matrix transaction ID. A timeout, response loss, process crash or expired claim therefore retries the same Matrix send identity. The runtime must never generate a new transaction ID for a retry.
+
+### 6.3 Outcome classification
+
+- HTTP 2xx with a valid bounded response permits transport completion.
+- 408, 425, 429 and 5xx are retryable.
+- other 4xx responses are permanent unless a later protocol version explicitly classifies them otherwise.
+- transport errors and bounded-response failures are retryable until the attempt budget is exhausted.
+- unknown destination, invalid stored payload or identity mismatch is poison/permanent failure.
+
+A stale owner or stale fence cannot finish a claim. When a process dies after a possible remote effect, lease expiry makes the same immutable delivery eligible for recovery.
+
+## 7. Authentication and secret separation
+
+The direct relay compatibility route requires `x-relay-token`. Poller-to-database, relay ingress, relay-to-adapter and relay-to-Matrix credentials are separate authorities. In production-like profiles the relay ingress, adapter and Matrix tokens must be pairwise distinct.
+
+Production-like HTTP endpoints require HTTPS. Redirects are disabled. Tokens, database URLs, message bodies, raw cursors and unrestricted payloads are forbidden in logs, metrics and errors.
+
+## 8. Bounded configuration
+
+The implementation recognizes the following operational classes:
+
+- identity: partition ID, poller worker ID, relay worker ID;
+- timing: Matrix sync timeout, cursor lease, relay HTTP timeout, relay claim lease, poll interval;
+- capacity: sync maximum bytes, relay maximum attempts and fixed claim batch size;
+- trust: Matrix homeserver URL/token, adapter URL/token, relay ingress token and PostgreSQL URL;
+- posture: `CEX_RUNTIME_PROFILE` or reviewed compatibility alias.
+
+Cursor lease must exceed sync timeout by at least five seconds. Relay lease must exceed HTTP timeout by at least five seconds. Production-like startup fails before polling, listening or claiming when required durable state, explicit identities, HTTPS endpoints or credential separation are absent.
+
+## 9. Recovery matrix
+
+| Failure point | Required result |
+|---|---|
+| before inbox insert | no cursor advancement; event is observed again |
+| after inbox insert but before outbox enqueue | transaction rollback; event is observed again |
+| after outbox enqueue but before cursor CAS | transaction rollback; event is observed again |
+| after commit but before poller log/ack | persisted cursor prevents old-batch re-fetch; exact identities remain |
+| adapter accepted, response lost | same delivery ID and payload hash are retried/reconciled |
+| reply enqueued, adapter completion fails | both roll back |
+| Matrix accepted, response lost | same Matrix transaction ID is retried |
+| worker dies while claimed | expiry exposes same delivery with a higher fence |
+| stale worker finishes | rejected by owner/fence/expiry check |
+| malformed supported event | poison row; cursor held |
+| attempt budget exhausted | delivery enters immutable-history-backed dead letter |
+
+## 10. Verification and evidence
+
+Repository checks:
 
 ```text
-python3 scripts/test-matrix-transport-durability.py
+cargo fmt --all -- --check
+cargo check --locked -p matrix-bot-poller -p matrix-bot-relay --all-targets
+cargo test --locked -p matrix-bot-poller -p matrix-bot-relay --all-targets
+cargo clippy --locked -p matrix-bot-poller -p matrix-bot-relay --all-targets -- -D warnings
+python3 scripts/check-matrix-runtime-wiring.py
 python3 scripts/check-matrix-transport-durability.py
+python3 scripts/test-matrix-transport-durability.py
+bash scripts/check-matrix-transport-postgres.sh
 ```
 
-PostgreSQL behavior check:
+Qualification additionally requires exact-candidate hosted evidence for:
 
-```text
-MATRIX_TEST_DATABASE_URL=postgres://... \
-  bash scripts/check-matrix-transport-postgres.sh \
-  --evidence run/matrix-transport-postgres.json
-```
+- PostgreSQL procedure execution and trigger enforcement;
+- concurrent claim and stale-fence rejection;
+- process-kill recovery at every matrix in section 9;
+- real Matrix transaction-ID response-loss behavior;
+- adapter exact replay/collision behavior;
+- sustained backlog/load and poison/dead-letter operations;
+- credential custody, alert routing and rollback rehearsal.
 
-The PostgreSQL check must cover active lease exclusion, expired-lease takeover, stale fence/revision rejection, atomic event/delivery/cursor commit, exact replay and collision, concurrent-safe claim, wrong-owner completion rejection, retry exhaustion, dead letter, sent lookup, immutable history/payload, poison-event replay/collision and acknowledgement.
+Static source markers, successful formatting, an unexecuted workflow, a locally fabricated report or a different SHA do not qualify the candidate.
 
-## Deployment and rollback
+## 11. Deployment and rollback
 
-Apply the migration with the approved schema owner before enabling durable workers. Start with active polling and sending disabled, import or explicitly initialize each partition cursor, then qualify one partition in shadow. Readiness requires database connectivity, schema/function presence, credential separation and a valid partition lease; process liveness alone is insufficient.
+Apply the migration through an approved schema owner, revoke owner access from resident processes, then start adapter, relay and poller under separate least-privilege credentials. Readiness must expose database/schema validity separately from external Matrix or adapter reachability.
 
-Rollback stops pollers and delivery workers before reverting application code. The migration is additive and durable records remain available for recovery; normal rollback must not drop inbox, outbox, cursor, history or poison evidence. A destructive retirement requires a separate migration, zero-use evidence, retained export and independent review.
+Rollback stops new poller lease acquisition and relay claims, waits for or fences active claims, preserves cursor/inbox/outbox/history/poison evidence, and deploys only a schema/protocol-compatible binary. Operators must never delete evidence, reset cursors, lower fences or mark unknown outcomes successful to clear an alert.
 
-## Current implementation boundary
+## 12. Compatibility and change protocol
 
-The migration and executable database contract close the reusable persistence primitives. Existing `matrix-bot-poller`, `matrix-bot-relay` and `matrix-entry-adapter` processes remain supporting Alpha until their runtime paths use the durable functions, carry stable delivery identity to downstream services and pass restart/multi-instance tests against PostgreSQL. Source presence or static validation alone is not runtime promotion.
+Opaque cursors, source hashes, destination names, payload hashes, delivery UUIDs and Matrix transaction IDs are protocol identities. Any change requires an explicit version, golden replay and collision fixtures, expand/backfill/verify/cutover/contract migration steps, consumer inventory, rollback evidence and a new exact-tree candidate.
 
-## Change protocol
-
-Changes to cursor semantics, delivery identity, retry classification, payload bounds, poison policy, migration functions, application wiring or downstream idempotency require this contract, affected module contracts, module catalog, executable negative tests and exact-head hosted evidence to change together. No checker or migration can grant production authorization.
+No document, script, repository commit or module owner may grant production authorization. Final activation remains an independent human and operational authority.
