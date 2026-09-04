@@ -9,33 +9,37 @@ Deployable: yes
 Owner role: `execution-runtime`  
 Production authorization: `not_granted`
 
-This contract is indexed by `docs/module-catalog-v1.json`. It defines the module boundary for one exact repository tree; it is not release evidence.
+This contract is indexed by `docs/module-catalog-v1.json`. It defines the module boundary for one exact repository tree; it is not release evidence. `docs/execution-lifecycle-verification-v1.md` is the executable coverage contract for lifecycle, authentication, provider evidence, exact settlement and recovery.
 
 ## Purpose and non-goals
 
-**Purpose.** Owns the durable execution-request lifecycle, external-Agent work/evidence correlation, terminal Ledger settlement commands, and operator recovery records.
+**Purpose.** Owns the durable lifecycle of an admitted execution request, coordinates work through the reviewed external-Agent/provider boundary, retains immutable provider-dispatch and success/reconciliation evidence, and derives exactly one terminal Ledger consume/refund command under the execution identity.
 
-**Non-goals.** It does not host, route, schedule, or execute participating Agents; it does not provide model inference, Prompt hosting, or provider credential custody; it must not hold SQL transactions across remote calls, infer a remote outcome, or own Ledger balances.
+**Non-goals.** It does not own caller or tenant identity, host or discover local models, grant Agent ownership, mutate Ledger balances directly, infer provider success from transport status, decide scientific truth, own World/Game state, prove Chain finality, or grant production authorization.
 
 ## Authority and owned state
 
-Execution Service is authoritative for execution request state, immutable operation identity, claim/lease history, external-Agent dispatch intent references, received evidence correlation, terminal settlement commands, and operator recovery acknowledgements.
+The service is authoritative for execution-request state, immutable dispatch identity and bytes, provider attempt/claim/reconciliation records, verified provider evidence bound to that dispatch, exact terminal settlement-command intent, settlement receipt projection and operator recovery evidence.
 
-Provider-dispatch rows created by migrations `0078` through `0088` are retained as historical compatibility and reconciliation evidence. Their presence does not authorize CEX to run an Agent. Agent identity, capability, and signed scientific output remain governed by `hepta_agent_protocol_v1`; Ledger and Chain retain their own authority.
+Identity Service remains authoritative for caller/tenant identity. External providers remain authoritative for their own work facts, subject to evidence validation. Ledger remains authoritative for account/effect truth and exact receipts. A cache, process state, HTTP success, provider acknowledgement or compatibility row never transfers those authorities.
 
-A projection, cache, compatibility row, HTTP success, or transport acknowledgement never transfers authority from its owning component.
+Owned durable state includes request identity and snapshots, expected versions, queue/claim/lease state, bounded attempt budget, dispatch identity, immutable provider request bytes, possible-side-effect/unknown-outcome state, success evidence, reconciliation observations, settlement command identity/hash/status, receipt binding, dead-letter/operator actions and transactional audit/outbox evidence defined by the migrations.
 
 ## Source layout and entry points
 
-- `api.rs`: execution admission, lifecycle, claim/lease, terminal evidence, and recovery handlers. Its retired local-process handler is not routed by the default service.
-- `dispatch_policy.rs`: bounded dispatch-state policy; it grants no Agent runtime authority.
-- `ledger_settlement.rs` and `settlement_worker_*`: durable consume/refund command handling.
-- `state.rs`: durable/in-memory state boundary. In default builds its provider-input facade discards retired-route Prompt material and local-provider environment settings resolve only to inert values.
-- `providers.rs`: pure provider identity/input/output types plus the default fail-closed external-Agent-required boundary; it contains no local inference implementation.
-- `provider_dispatch.rs` and `bin/execution-provider-dispatch-worker.rs`: retained historical command/reconciliation compatibility source, excluded from the default build behind `legacy-local-provider-dispatch` and forbidden in production-like profiles.
-- `tests/external_agent_boundary.rs`: default integration regression proving no process route, provider Prompt retention, local-provider configuration, network inference, subprocess execution, or prompt echo.
-
-- `lib.rs`: library entry point and default router assembly; the retired process route remains absent.
+- `main.rs`: startup, runtime-profile validation, listener and worker composition.
+- `lib.rs`: public package boundary and module exports.
+- `api.rs`: authenticated HTTP admission, reads and governed transitions.
+- `state.rs`: execution lifecycle persistence and invariants.
+- `providers.rs`: reviewed external provider interface and response vocabulary.
+- `provider_dispatch.rs`: durable provider-dispatch claim/I/O/outcome ordering.
+- `dispatch_policy.rs`: bounded provider selection and dispatch policy.
+- `ledger_settlement.rs`: exact consume/refund derivation, receipt validation and response-loss handling.
+- `settlement_worker_config.rs`, `settlement_worker_helpers.rs`, `settlement_worker_runtime.rs`: dedicated settlement worker configuration and loop.
+- `bin/execution-provider-dispatch-worker.rs`: external-provider dispatch worker.
+- `bin/execution-settlement-worker.rs`: terminal Ledger settlement worker.
+- `tests/external_agent_boundary.rs`: external-Agent-only architectural regression.
+- `migrations/0067`–`0074`, `0078`, `0082`, `0084`, `0088`: settlement, provider dispatch, unknown-outcome reconciliation and terminal evidence guards.
 
 Catalog-bound entry points:
 
@@ -52,71 +56,78 @@ Catalog-bound entry points:
 - `services/execution-service/src/bin/execution-settlement-worker.rs`
 - `services/execution-service/tests/external_agent_boundary.rs`
 
-Any new binary, public source boundary, migration owner, or removed path must update the catalog and this document in the same commit.
+Any new process target, public route, provider adapter, state owner, migration, retry classification or operator action must update the module catalog and this document in the same commit.
 
 ## Interfaces and contracts
 
-The default HTTP router exposes execution admission, approval, dispatch-state, start, claim/lease, retry, terminal status, dead-letter/reconciliation reads, and settlement-recovery operations. The retired `/process` route is absent from the default router and returns `404 Not Found`. The default workspace build does not compile or route to local provider adapters.
+HTTP and worker interfaces require authenticated internal principals, tenant/organization binding, stable execution/request identity, expected-version or claim ownership where applicable, bounded bodies and explicit error/retry semantics. Caller-provided principal fields never override the authenticated principal.
 
-External Agent work and results use the public Hepta Agent protocol with stable Agent identity, explicit versions, signed claims, immutable content hashes, and bounded evidence. Requests and events define authentication, tenant/subject binding, size bounds, immutable identity, idempotency, errors, and retirement conditions. A successful transport status never proves scientific, provider, value, or finality state.
+Provider dispatch uses one immutable dispatch identity and payload fingerprint. The provider boundary must return a bounded typed outcome. Transport success alone is not provider success; terminal success requires the complete evidence contract bound to execution ID, dispatch ID, provider identity, request/payload hash and expected result semantics.
+
+Terminal settlement is an immutable Ledger v2 command derived from the final execution outcome. A successful execution consumes the exact reserved amount only under the reviewed outcome contract; a non-chargeable terminal outcome refunds it. The command carries stable operation and intent identity. Completion requires a complete Ledger receipt with matching account, amount, currency, effect, operation identity and intent hash.
+
+Operator recovery interfaces require authenticated actor, bounded reason, expected state/version, retained evidence and append-only audit. They may reconcile or requeue the same immutable identity; they may not fabricate provider success, Ledger settlement or a second remote operation.
 
 ## Persistence, concurrency, and recovery
 
-Every authoritative remote effect follows durable intent/commit → claim/commit → remote exchange → outcome/commit. Expired leases after a possible side effect enter reconciliation and cannot authorize blind replay or a new operation identity.
+Authoritative execution, dispatch and settlement state is PostgreSQL-backed in production-like profiles. Source/request registration, immutable command creation and local outbox/audit enqueue are transactional. Remote provider or Ledger I/O is performed only after the durable intent or fenced claim commits and after the transaction is released.
 
-Historical provider command/evidence tables remain append-only and covered by PostgreSQL regression so response-loss and upgrade behavior stay explainable. The active external-Agent path correlates signed protocol evidence rather than executing a local model. Settlement commands preserve exact consume/refund mutual exclusion, receipt recovery, dead-letter, and explicit operator requeue semantics.
+Claims contain owner, lease/fence or equivalent expected-state identity, expiry and bounded attempt budget. A stale owner, stale fence, expired lease or wrong expected version cannot finish work. Expired claims expose the same immutable identity for recovery.
 
-The default `ProviderInputStore` is zero-retention: a compatibility insert drops its input and a read returns no Prompt. Retaining storage exists only in a build that explicitly selects the legacy feature. Raw Prompt material is therefore not kept merely to support an endpoint that the default router does not expose.
+A timeout after a possible provider or Ledger side effect enters pending/unknown/reconciliation state. Recovery queries or retries using the same dispatch/operation identity and the same bytes. It never creates a second dispatch or monetary operation. Provider reconciliation replay is terminal-safe; complete terminal provider evidence cannot be overwritten by a later ambiguous observation.
+
+Settlement command and receipt history remain queryable after response loss and process restart. Dead-letter and operator state retain the last error classification, attempts, actor/reason and evidence required for review.
 
 ## Configuration and secrets
 
-The default service uses database, runtime profile, internal service authentication, exact Ledger authority, worker identity, lease/retry limits, and downstream protocol trust anchors. It requires no model-provider inference credential, does not read local model catalogs, and does not read `OLLAMA_BASE_URL`, `OPENCLAW_CLI_BIN`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_STATE_DIR`, `OPENCLAW_AGENT_DIR`, or the legacy provider timeout. Compatibility fields receive inert empty/`None` values in the default build.
+Configuration includes runtime profile, listener, durable database URL/role, authenticated caller registry, body and concurrency limits, provider registry/policy, provider endpoints and credentials, dispatch worker identity/batch/lease/poll/timeout/attempt limits, Ledger endpoint/credential/authority, settlement worker identity/batch/lease/poll/timeout limits, audit endpoint/credential and explicit rollout modes.
 
-The compatibility binary exists only when Cargo feature `legacy-local-provider-dispatch` is selected. It additionally requires `CEX_ENABLE_LEGACY_LOCAL_PROVIDER_DISPATCH=true`, accepts only isolated test/local/dev profiles, and rejects beta, staging, and production before dispatch. Its provider boundary still fails closed and performs no model call. No authoritative workflow or deployment configuration may activate it.
+Production-like startup must fail before listening, claiming or performing remote I/O when durable storage, required schema, trust anchors, explicit provider/Ledger mode, pairwise credential separation or bounded limits are absent. Development placeholders and implicit local-model discovery are rejected.
 
-Production-like startup fails before listening or working when durable storage, credentials, trust anchors, or explicit modes are missing. Example values are not activation evidence.
+Provider, Ledger, audit, operator and ingress credentials are separate authorities and come from approved secret custody. They are not embedded in committed examples, payload snapshots, logs, metrics or errors.
 
 ## Security and trust boundaries
 
-Agent private keys and model-provider inference keys stay outside CEX. Inputs, result references, and receipts are bounded and validated before state changes; unrestricted prompts, outputs, credentials, and response bodies must not enter retained default state, logs, metrics, ordinary Audit payloads, or database error text.
+Authenticate before tenant lookup or mutation; bind service identity to credential rather than request JSON; reject cross-tenant reads/transitions; bound decompressed request and provider response bytes; disable unsafe redirects; validate provider and Ledger endpoint identity; and redact credentials, database URLs, unrestricted prompts/results, private research material and high-cardinality identifiers from telemetry.
 
-Legacy command/reconciliation source is not a supported production trust boundary. Re-enabling local inference requires an ADR that supersedes ADR-004, bounded transport, a privacy/cost/threat model, dedicated tests, and independent review. Operator reconciliation evidence must bind immutable URI/digest, exact attempt, and outcome without inventing success.
+External-Agent/provider output is untrusted until complete evidence validation. Provider identity, dispatch identity, payload hash, result hash, timestamps/expiry and configured policy must match. Local model directories, CLIs or process-local allowlists are not provider authority.
+
+Ledger response validation is fail closed. A transport acknowledgement, status code, compatibility amount or projection cannot become exact account/effect truth. Break-glass behavior requires a separate authenticated, audited and evidence-bound operator contract.
 
 ## Verification
 
-Required commands:
+Required exact-SHA commands:
 
 ```text
-cargo test -p execution-service --all-targets
-cargo clippy -p execution-service --all-targets -- -D warnings
-python3 scripts/check-external-agent-runtime-boundary.py
+cargo fmt --all -- --check
+cargo test --locked -p execution-service --all-targets
+cargo clippy --locked -p execution-service --all-targets -- -D warnings
+python3 scripts/check-execution-lifecycle-coverage.py
 python3 scripts/check-execution-default-state-boundary.py
+python3 scripts/check-execution-ledger-settlement.py
 python3 scripts/check-execution-settlement-commands.py
-bash scripts/check-execution-settlement-commands-postgres.sh
 python3 scripts/check-provider-success-evidence.py
+python3 scripts/check-external-agent-runtime-boundary.py
+bash scripts/check-execution-settlement-commands-postgres.sh
 bash scripts/check-provider-reconciliation-postgres.sh
 ```
 
-Required behavioral focus:
+`.github/workflows/execution-lifecycle-gate.yml` must execute the complete command set on one checkout. Required hostile coverage includes missing/mismatched caller identity, cross-tenant access, duplicate identity collision, stale/expired claim, attempt exhaustion, provider success without evidence, tampered/wrong evidence, timeout after possible provider acceptance, wrong exact settlement command, invalid/mismatched receipt, response loss, second-operation rejection and unauthorised operator repair.
 
-- The default build excludes local provider adapters and the default router does not expose the retired `/process` route.
-- A request to the retired path returns 404, and source-level regression prevents the route from being restored silently.
-- Default state discards provider Prompt inserts and resolves all local-provider compatibility fields to inert values without reading their environment variables.
-- The compatibility provider function always returns `external_agent_runtime_required`, performs no network/process execution, and never echoes prompt/target details.
-- Execution state transitions, claim ownership, terminal mutual exclusion, and settlement recovery remain deterministic.
-- Historical provider evidence still rejects malformed/mismatched/nonterminal success, unsafe lease replay, and evidence collisions.
-- External Agent capability/work/result identity remains protocol-bound and does not become platform inference authority.
-
-The exact candidate SHA must also pass the authoritative hosted workflow and appear in the generated immutable candidate manifest.
+The exact candidate SHA must also pass the repository aggregate release gate and appear in the immutable candidate manifest. A local run, static marker, skipped PostgreSQL probe or a workflow created but not allocated to a runner is not qualification evidence.
 
 ## Deployment and operations
 
-Deploy only the default external-Agent-only Execution service and settlement worker. Do not build or deploy `execution-provider-dispatch-worker`; the feature and opt-in flag are local compatibility controls, not rollout switches.
+Apply expand migrations with a schema owner, verify constraints/procedures, remove the owner secret from resident processes, then run API, provider-dispatch worker and settlement worker under separate least-privilege identities. Enable creation/dispatch/settlement through explicit staged rollout switches; never infer activation from deployed code alone.
 
-Operators record artifact identity, runtime profile, dependency identities, readiness, rollback boundary, retained evidence, alerts, and owner escalation. Rollback stops active workers while preserving commands and evidence. Repository CI does not replace representative-volume recovery, external Agent deployment proof, sustained load, credential custody, or independent approval.
+Readiness reports database/schema, caller-auth registry, provider policy/trust, Ledger trust and worker posture separately. Monitor oldest queued request, claim age/expiry, attempt exhaustion, provider unknown-outcome age, reconciliation backlog, settlement-command age, invalid receipt count, dead-letter count and operator actions.
+
+Rollback stops new admission/claims, fences active workers, preserves immutable request/dispatch/settlement/evidence state, and switches only to a schema/protocol-compatible artifact. Unknown provider or Ledger outcomes must be reconciled before destructive rollback or retry-policy change.
 
 ## Compatibility and change protocol
 
-Legacy provider rows and reconciliation functions remain readable until an evidence-backed retirement migration proves they are no longer needed. They may not be used to reintroduce platform-owned Agent execution. New execution integrations must use versioned external-Agent contracts.
+Legacy reads may remain during migration, but new authoritative writes use the canonical durable request, provider-dispatch and exact settlement contracts. Compatibility fields may not infer precision, evidence, success or finality that the source contract did not provide.
 
-Changes to authority, routes, retained state, environment reads, persistence, configuration, migrations, retry semantics, features, or topology require this contract, the module catalog, ADR-004, the Sequence-52 architecture closure contract, executable tests, hosted gate wiring, and a new shared candidate trigger. No module document may declare repository closure or production authorization.
+Changes to lifecycle states, authority, routes/types, provider evidence, persistence, configuration, migrations, retry semantics, operator controls, settlement derivation or topology require this contract, `docs/execution-lifecycle-verification-v1.md`, the module catalog, relevant ADR/protocol/traceability, executable positive and hostile tests, hosted gate wiring and a new shared candidate trigger.
+
+No module document may declare repository closure or production authorization.
