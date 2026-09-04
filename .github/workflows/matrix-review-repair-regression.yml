@@ -114,5 +114,27 @@ jobs:
       - name: No source mutation
         run: git diff --exit-code
 
+  isolated-trusted-runner:
+    if: github.event_name == 'push' && github.repository == 'TrillionniumFoundation/CEX' && github.ref == 'refs/heads/fix/cex-v12-audit-remediation-20260905'
+    runs-on: [self-hosted, linux, x64, rog]
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          path: isolated-cex-checkout
+      - name: Isolated exact-head Rust and PostgreSQL tests
+        working-directory: isolated-cex-checkout
+        run: bash scripts/run-isolated-matrix-tests.sh
+      - name: Retain exact-head diagnostics including failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cex-isolated-matrix-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: isolated-cex-checkout/run/isolated-matrix/
+          if-no-files-found: error
+          retention-days: 7
+
 # Supporting regression only. These jobs do not replace the five v12 authority
 # workflows, their exact-tree candidate manifest, or independent production gates.
