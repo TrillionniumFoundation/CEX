@@ -1,0 +1,56 @@
+name: repository-semantic-contract-gate
+
+on:
+  pull_request:
+    paths:
+      - apps/**
+      - services/**
+      - crates/**
+      - migrations/**
+      - deploy/sql/**
+      - docs/module-catalog-v1.json
+      - docs/repository-semantic-policy-v1.json
+      - docs/repository-contract-semantics-v1.json
+      - scripts/generate-repository-semantics.py
+      - scripts/check-consumer-projection-boundary.py
+      - .github/workflows/repository-semantic-contract-gate.yml
+  push:
+    branches: [main]
+    paths:
+      - apps/**
+      - services/**
+      - crates/**
+      - migrations/**
+      - deploy/sql/**
+      - docs/module-catalog-v1.json
+      - docs/repository-semantic-policy-v1.json
+      - docs/repository-contract-semantics-v1.json
+      - scripts/generate-repository-semantics.py
+      - scripts/check-consumer-projection-boundary.py
+      - .github/workflows/repository-semantic-contract-gate.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-semantic-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  semantic-contract:
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+
+      - name: Check generated route config and data semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/generate-repository-semantics.py --check
+          python3 scripts/check-consumer-projection-boundary.py
+          git diff --exit-code
