@@ -1,1207 +1,982 @@
+use anyhow::{anyhow, bail, Context, Result};
 use axum::{
-    extract::State,
-    http::StatusCode as HttpStatusCode,
+    extract::{DefaultBodyLimit, State},
+    http::{header, uri::PathAndQuery, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
-use chrono::Utc;
-use reqwest::{Client, StatusCode as ReqStatusCode};
+use reqwest::{
+    redirect::Policy, Client, Response as ReqwestResponse, StatusCode as ReqwestStatus, Url,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use shared_tracing::init_tracing;
-use std::{
-    collections::VecDeque,
-    env, fs,
-    path::Path,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
-    time::{SystemTime, UNIX_EPOCH},
-};
-use tokio::{
-    sync::Mutex,
-    time::{sleep, Duration},
-};
+use sqlx::{postgres::PgPoolOptions, PgPool, Postgres, Row, Transaction};
+use std::{env, sync::Arc};
+use tokio::time::{sleep, timeout, Duration};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-#[derive(Debug)]
-struct RelayMetrics {
-    inbound_events: AtomicU64,
-    self_events: AtomicU64,
-    duplicate_events: AtomicU64,
-    projected_reply_missing: AtomicU64,
-    adapter_requests: AtomicU64,
-    adapter_failures: AtomicU64,
-    matrix_send_attempts: AtomicU64,
-    matrix_send_successes: AtomicU64,
-    matrix_send_failures: AtomicU64,
-    matrix_send_queue_enqueued: AtomicU64,
-    matrix_send_queue_attempts: AtomicU64,
-    matrix_send_queue_success: AtomicU64,
-    matrix_send_queue_failures: AtomicU64,
-    matrix_send_queue_requeues: AtomicU64,
-    matrix_send_queue_drops: AtomicU64,
-    queue_depth_peak: AtomicU64,
-    queue_depth_observations: AtomicU64,
-    queue_depth_sum: AtomicU64,
-}
-
-impl RelayMetrics {
-    fn new() -> Self {
-        Self {
-            inbound_events: AtomicU64::new(0),
-            self_events: AtomicU64::new(0),
-            duplicate_events: AtomicU64::new(0),
-            projected_reply_missing: AtomicU64::new(0),
-            adapter_requests: AtomicU64::new(0),
-            adapter_failures: AtomicU64::new(0),
-            matrix_send_attempts: AtomicU64::new(0),
-            matrix_send_successes: AtomicU64::new(0),
-            matrix_send_failures: AtomicU64::new(0),
-            matrix_send_queue_enqueued: AtomicU64::new(0),
-            matrix_send_queue_attempts: AtomicU64::new(0),
-            matrix_send_queue_success: AtomicU64::new(0),
-            matrix_send_queue_failures: AtomicU64::new(0),
-            matrix_send_queue_requeues: AtomicU64::new(0),
-            matrix_send_queue_drops: AtomicU64::new(0),
-            queue_depth_peak: AtomicU64::new(0),
-            queue_depth_observations: AtomicU64::new(0),
-            queue_depth_sum: AtomicU64::new(0),
-        }
-    }
-
-    fn inc_inbound_events(&self) {
-        self.inbound_events.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn inc_self_events(&self) {
-        self.self_events.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn inc_duplicate_events(&self) {
-        self.duplicate_events.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn inc_projected_reply_missing(&self) {
-        self.projected_reply_missing.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn inc_adapter_request(&self) {
-        self.adapter_requests.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn inc_adapter_failure(&self) {
-        self.adapter_failures.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn inc_matrix_send_attempt(&self) {
-        self.matrix_send_attempts.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn inc_matrix_send_success(&self) {
-        self.matrix_send_successes.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn inc_matrix_send_failure(&self) {
-        self.matrix_send_failures.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn inc_queue_enqueued(&self) {
-        self.matrix_send_queue_enqueued
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn inc_queue_attempt(&self) {
-        self.matrix_send_queue_attempts
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn inc_queue_success(&self) {
-        self.matrix_send_queue_success
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn inc_queue_failure(&self) {
-        self.matrix_send_queue_failures
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn inc_queue_requeue(&self) {
-        self.matrix_send_queue_requeues
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn inc_queue_drop(&self) {
-        self.matrix_send_queue_drops.fetch_add(1, Ordering::Relaxed);
-    }
-
-    fn record_queue_depth(&self, depth: usize) {
-        let depth_u64 = depth as u64;
-        self.queue_depth_observations
-            .fetch_add(1, Ordering::Relaxed);
-        self.queue_depth_sum.fetch_add(depth_u64, Ordering::Relaxed);
-
-        loop {
-            let current_peak = self.queue_depth_peak.load(Ordering::Acquire);
-            if depth_u64 <= current_peak {
-                return;
-            }
-
-            if self
-                .queue_depth_peak
-                .compare_exchange(current_peak, depth_u64, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                return;
-            }
-        }
-    }
-
-    fn snapshot(&self, queue_len: usize) -> Value {
-        let inbound = self.inbound_events.load(Ordering::Relaxed);
-        let duplicates = self.duplicate_events.load(Ordering::Relaxed);
-        let duplicate_rate = if inbound > 0 {
-            (duplicates as f64 / inbound as f64) * 100.0
-        } else {
-            0.0
-        };
-
-        let queue_observations = self.queue_depth_observations.load(Ordering::Relaxed);
-        let queue_depth_sum = self.queue_depth_sum.load(Ordering::Relaxed);
-        let avg_queue_depth = if queue_observations > 0 {
-            queue_depth_sum as f64 / queue_observations as f64
-        } else {
-            0.0
-        };
-
-        let queue_attempts = self.matrix_send_queue_attempts.load(Ordering::Relaxed);
-        let queue_success = self.matrix_send_queue_success.load(Ordering::Relaxed);
-        let queue_requeues = self.matrix_send_queue_requeues.load(Ordering::Relaxed);
-        let queue_failures = self.matrix_send_queue_failures.load(Ordering::Relaxed);
-        let queue_success_rate = if queue_attempts > 0 {
-            (queue_success as f64 / queue_attempts as f64) * 100.0
-        } else {
-            0.0
-        };
-
-        let direct_send_attempts = self
-            .matrix_send_attempts
-            .load(Ordering::Relaxed)
-            .saturating_sub(queue_attempts);
-        let direct_send_success = self
-            .matrix_send_successes
-            .load(Ordering::Relaxed)
-            .saturating_sub(queue_success);
-        let direct_send_rate = if direct_send_attempts > 0 {
-            (direct_send_success as f64 / direct_send_attempts as f64) * 100.0
-        } else {
-            0.0
-        };
-
-        let total_send_attempts = self.matrix_send_attempts.load(Ordering::Relaxed);
-        let total_send_success = self.matrix_send_successes.load(Ordering::Relaxed);
-        let total_send_failure = self.matrix_send_failures.load(Ordering::Relaxed);
-        let total_send_success_rate = if total_send_attempts > 0 {
-            (total_send_success as f64 / total_send_attempts as f64) * 100.0
-        } else {
-            0.0
-        };
-
-        json!({
-            "inbound_events_total": inbound,
-            "self_events_total": self.self_events.load(Ordering::Relaxed),
-            "duplicate_events_total": duplicates,
-            "duplicate_event_rate_pct": duplicate_rate,
-            "projected_reply_missing_total": self.projected_reply_missing.load(Ordering::Relaxed),
-            "adapter_requests_total": self.adapter_requests.load(Ordering::Relaxed),
-            "adapter_failures_total": self.adapter_failures.load(Ordering::Relaxed),
-            "matrix_send_attempts_total": total_send_attempts,
-            "matrix_send_successes_total": total_send_success,
-            "matrix_send_failures_total": total_send_failure,
-            "matrix_send_success_rate_pct": total_send_success_rate,
-            "direct_send_attempts_total": direct_send_attempts,
-            "direct_send_successes_total": direct_send_success,
-            "direct_send_failures_total": total_send_failure.saturating_sub(queue_failures),
-            "direct_send_success_rate_pct": direct_send_rate,
-            "queue_send_attempts_total": queue_attempts,
-            "queue_send_success_total": queue_success,
-            "queue_send_failures_total": queue_failures,
-            "queue_send_requeues_total": queue_requeues,
-            "queue_send_drops_total": self.matrix_send_queue_drops.load(Ordering::Relaxed),
-            "queue_send_success_rate_pct": queue_success_rate,
-            "queue_len_current": queue_len,
-            "queue_len_peak": self.queue_depth_peak.load(Ordering::Relaxed),
-            "queue_len_avg": avg_queue_depth,
-            "queue_depth_observations": queue_observations,
-            "queue_depth_sum": queue_depth_sum,
-            "enqueued_total": self.matrix_send_queue_enqueued.load(Ordering::Relaxed),
-        })
-    }
-}
+const ADAPTER_DESTINATION: &str = "matrix-relay-adapter-v1";
+const MATRIX_DESTINATION: &str = "matrix-homeserver-v1";
+const MAX_DATABASE_CONNECTIONS: u32 = 8;
 
 #[derive(Clone)]
 struct AppState {
-    inner: Arc<AppStateInner>,
-}
-
-struct AppStateInner {
+    pool: PgPool,
     http: Client,
-    config: RelayConfig,
-    recent_event_ids: Mutex<VecDeque<String>>,
-    send_queue: Mutex<VecDeque<QueuedMatrixSend>>,
-    metrics: RelayMetrics,
+    config: Arc<RelayConfig>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 struct RelayConfig {
     bind_addr: String,
-    matrix_adapter_base_url: String,
-    matrix_adapter_ingress_token: Option<String>,
+    database_url: String,
+    worker_id: String,
+    claim_lease_seconds: i32,
+    http_timeout_seconds: u64,
+    poll_interval_ms: u64,
+    ingress_token: String,
+    ingress_max_bytes: usize,
+    adapter_base_url: String,
+    adapter_token: String,
     matrix_homeserver_base_url: String,
     matrix_access_token: String,
-    matrix_bot_user_id: String,
-    max_recent_event_ids: usize,
-    matrix_send_max_attempts: usize,
-    matrix_send_initial_delay_ms: u64,
-    matrix_send_max_delay_ms: u64,
-    matrix_send_queue_enabled: bool,
-    matrix_send_queue_path: String,
-    matrix_send_queue_poll_interval_ms: u64,
-    matrix_send_queue_max_size: usize,
-}
-
-impl RelayConfig {
-    fn from_env() -> Self {
-        Self {
-            bind_addr: env::var("MATRIX_BOT_RELAY_BIND_ADDR")
-                .unwrap_or_else(|_| "127.0.0.1:8092".to_string()),
-            matrix_adapter_base_url: env::var("MATRIX_ADAPTER_BASE_URL")
-                .unwrap_or_else(|_| "http://127.0.0.1:8091".to_string()),
-            matrix_adapter_ingress_token: env::var("MATRIX_ENTRY_INGRESS_TOKEN")
-                .ok()
-                .filter(|v| !v.trim().is_empty()),
-            matrix_homeserver_base_url: env::var("MATRIX_HOMESERVER_BASE_URL")
-                .unwrap_or_else(|_| "http://127.0.0.1:8008".to_string()),
-            matrix_access_token: env::var("MATRIX_ACCESS_TOKEN").unwrap_or_default(),
-            matrix_bot_user_id: env::var("MATRIX_BOT_USER_ID")
-                .unwrap_or_else(|_| "@cex-bot:local.dev".to_string()),
-            max_recent_event_ids: env::var("MATRIX_RELAY_MAX_RECENT_EVENT_IDS")
-                .ok()
-                .and_then(|v| v.parse::<usize>().ok())
-                .unwrap_or(1000),
-            matrix_send_max_attempts: env::var("MATRIX_RELAY_SEND_MAX_ATTEMPTS")
-                .ok()
-                .and_then(|v| v.parse::<usize>().ok())
-                .filter(|v| *v > 0)
-                .unwrap_or(3),
-            matrix_send_initial_delay_ms: env::var("MATRIX_RELAY_SEND_INITIAL_DELAY_MS")
-                .ok()
-                .and_then(|v| v.parse::<u64>().ok())
-                .filter(|v| *v > 0)
-                .unwrap_or(200),
-            matrix_send_max_delay_ms: env::var("MATRIX_RELAY_SEND_MAX_DELAY_MS")
-                .ok()
-                .and_then(|v| v.parse::<u64>().ok())
-                .filter(|v| *v > 0)
-                .unwrap_or(2500),
-            matrix_send_queue_enabled: env::var("MATRIX_RELAY_QUEUE_ENABLED")
-                .ok()
-                .and_then(|v| v.parse::<bool>().ok())
-                .unwrap_or(true),
-            matrix_send_queue_path: env::var("MATRIX_RELAY_QUEUE_PATH")
-                .unwrap_or_else(|_| "/tmp/matrix-bot-relay-queue.json".to_string()),
-            matrix_send_queue_poll_interval_ms: env::var("MATRIX_RELAY_QUEUE_POLL_INTERVAL_MS")
-                .ok()
-                .and_then(|v| v.parse::<u64>().ok())
-                .filter(|v| *v > 0)
-                .unwrap_or(4000),
-            matrix_send_queue_max_size: env::var("MATRIX_RELAY_QUEUE_MAX_SIZE")
-                .ok()
-                .and_then(|v| v.parse::<usize>().ok())
-                .filter(|v| *v > 0)
-                .unwrap_or(2000),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct QueuedMatrixSend {
-    queue_id: String,
-    room_id: String,
-    event_id: Option<String>,
-    projected_reply: Value,
-    attempts: usize,
-    max_attempts: usize,
-    created_at_ms: i64,
-    next_retry_at_ms: i64,
-    last_error: Option<String>,
-}
-
-impl AppState {
-    async fn from_env() -> Self {
-        let config = RelayConfig::from_env();
-        let send_queue = load_send_queue(&config.matrix_send_queue_path).await;
-        Self::new(config, send_queue)
-    }
-
-    fn new(config: RelayConfig, send_queue: VecDeque<QueuedMatrixSend>) -> Self {
-        let metrics = RelayMetrics::new();
-        metrics.record_queue_depth(send_queue.len());
-
-        Self {
-            inner: Arc::new(AppStateInner {
-                http: Client::new(),
-                config,
-                recent_event_ids: Mutex::new(VecDeque::new()),
-                send_queue: Mutex::new(send_queue),
-                metrics,
-            }),
-        }
-    }
-
-    fn config(&self) -> &RelayConfig {
-        &self.inner.config
-    }
-
-    fn metrics(&self) -> &RelayMetrics {
-        &self.inner.metrics
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct InboundMatrixEvent {
-    event_id: Option<String>,
-    event_type: Option<String>,
-    room_id: String,
-    sender: String,
-    text: Option<String>,
-    content: Option<Value>,
-    timestamp_ms: Option<i64>,
-    metadata: Option<Value>,
-}
-
-#[derive(Debug, Serialize)]
-struct RelayResponse {
-    accepted: bool,
-    room_id: String,
-    sender: String,
-    upstream: Option<Value>,
-    sent_to_matrix: bool,
-    send_result: Option<Value>,
+    max_response_bytes: usize,
+    delivery_max_attempts: i32,
+    production_like: bool,
 }
 
 #[derive(Debug)]
-struct MatrixSendFailure {
-    kind: &'static str,
-    message: String,
-    status: Option<u16>,
-    details: Option<Value>,
-    attempts: usize,
-    retryable: bool,
-    retry_after_ms: Option<u64>,
+struct ClaimedDelivery {
+    delivery_id: Uuid,
+    source_event_id: String,
+    destination: String,
+    payload_sha256: String,
+    payload: Value,
+    attempt_count: i32,
+    max_attempts: i32,
+    lease_fence: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct InboundMatrixEvent {
+    event_id: Option<String>,
+    room_id: String,
+    sender: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MatrixReplyEnvelope {
+    room_id: String,
+    projected_reply: Value,
+}
+
+#[derive(Debug)]
+enum RemoteOutcome {
+    Success(Value),
+    Retryable(&'static str),
+    Permanent(&'static str),
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     init_tracing();
+    let config = RelayConfig::from_env()?;
+    let pool = PgPoolOptions::new()
+        .max_connections(MAX_DATABASE_CONNECTIONS)
+        .connect(&config.database_url)
+        .await
+        .context("failed to connect to Matrix transport PostgreSQL")?;
+    verify_schema(&pool).await?;
 
-    let state = AppState::from_env().await;
+    let http = Client::builder()
+        .redirect(Policy::none())
+        .timeout(Duration::from_secs(config.http_timeout_seconds))
+        .build()
+        .context("failed to build Matrix relay HTTP client")?;
+    let state = AppState {
+        pool,
+        http,
+        config: Arc::new(config),
+    };
 
-    if state.config().matrix_send_queue_enabled {
-        let queue_worker_state = state.clone();
-        tokio::spawn(async move {
-            run_send_queue_worker(queue_worker_state).await;
-        });
-    }
+    let worker_state = state.clone();
+    tokio::spawn(async move {
+        run_delivery_worker(worker_state).await;
+    });
 
     let app = Router::new()
         .route("/health", get(health))
         .route(
             "/v1/inbound/matrix-event",
-            post(handle_inbound_matrix_event),
+            post(compatibility_ingress),
         )
+        .layer(DefaultBodyLimit::max(state.config.ingress_max_bytes))
         .with_state(state.clone());
 
-    let listener = tokio::net::TcpListener::bind(&state.config().bind_addr)
+    let listener = tokio::net::TcpListener::bind(&state.config.bind_addr)
         .await
-        .unwrap();
-    info!(bind = %state.config().bind_addr, "matrix-bot-relay started");
-    axum::serve(listener, app).await.unwrap();
+        .context("failed to bind matrix-bot-relay")?;
+    info!(
+        bind = %state.config.bind_addr,
+        worker = %state.config.worker_id,
+        lease_seconds = state.config.claim_lease_seconds,
+        production_like = state.config.production_like,
+        "durable matrix-bot-relay started"
+    );
+    axum::serve(listener, app)
+        .await
+        .context("matrix-bot-relay server failed")?;
+    Ok(())
 }
 
-async fn health(State(state): State<AppState>) -> Json<Value> {
-    let queue_len = { state.inner.send_queue.lock().await.len() };
+async fn health(State(state): State<AppState>) -> Response {
+    let result: std::result::Result<(i64, i64), sqlx::Error> = sqlx::query_as(
+        "select \
+             count(*) filter (where status in ('pending', 'claimed'))::bigint, \
+             count(*) filter (where status = 'dead_letter')::bigint \
+         from public.matrix_transport_outbox",
+    )
+    .fetch_one(&state.pool)
+    .await;
 
-    let metrics = state.metrics().snapshot(queue_len);
-
-    Json(json!({
-        "status": "ok",
-        "service": "matrix-bot-relay",
-        "matrix_adapter_base_url": state.config().matrix_adapter_base_url,
-        "matrix_homeserver_base_url": state.config().matrix_homeserver_base_url,
-        "matrix_bot_user_id": state.config().matrix_bot_user_id,
-        "has_access_token": !state.config().matrix_access_token.is_empty(),
-        "max_recent_event_ids": state.config().max_recent_event_ids,
-        "matrix_send_max_attempts": state.config().matrix_send_max_attempts,
-        "matrix_send_initial_delay_ms": state.config().matrix_send_initial_delay_ms,
-        "matrix_send_max_delay_ms": state.config().matrix_send_max_delay_ms,
-        "matrix_send_queue_enabled": state.config().matrix_send_queue_enabled,
-        "matrix_send_queue_path": state.config().matrix_send_queue_path,
-        "matrix_send_queue_poll_interval_ms": state.config().matrix_send_queue_poll_interval_ms,
-        "matrix_send_queue_len": queue_len,
-        "observability": metrics,
-    }))
-}
-
-async fn handle_inbound_matrix_event(
-    State(state): State<AppState>,
-    Json(event): Json<InboundMatrixEvent>,
-) -> Response {
-    state.inner.metrics.inc_inbound_events();
-
-    if event.sender == state.config().matrix_bot_user_id {
-        state.inner.metrics.inc_self_events();
-        return (
-            HttpStatusCode::OK,
-            Json(RelayResponse {
-                accepted: false,
-                room_id: event.room_id,
-                sender: event.sender,
-                upstream: None,
-                sent_to_matrix: false,
-                send_result: Some(json!({ "reason": "ignored_self_event" })),
-            }),
-        )
-            .into_response();
-    }
-
-    if let Some(event_id) = event.event_id.as_deref() {
-        let ids = state.inner.recent_event_ids.lock().await;
-        if ids.contains(&event_id.to_string()) {
-            state.inner.metrics.inc_duplicate_events();
-            return (
-                HttpStatusCode::OK,
-                Json(RelayResponse {
-                    accepted: false,
-                    room_id: event.room_id,
-                    sender: event.sender,
-                    upstream: None,
-                    sent_to_matrix: false,
-                    send_result: Some(json!({ "reason": "duplicate_event", "event_id": event_id })),
-                }),
-            )
-                .into_response();
-        }
-    }
-
-    state.inner.metrics.inc_adapter_request();
-
-    let mut adapter_request = state
-        .inner
-        .http
-        .post(format!(
-            "{}/v1/matrix/events",
-            state.config().matrix_adapter_base_url.trim_end_matches('/')
-        ))
-        .json(&json!({
-            "event_id": event.event_id,
-            "event_type": event.event_type,
-            "room_id": event.room_id,
-            "sender": event.sender,
-            "text": event.text,
-            "content": event.content,
-            "timestamp_ms": event.timestamp_ms,
-            "metadata": event.metadata,
-        }));
-
-    if let Some(token) = &state.config().matrix_adapter_ingress_token {
-        adapter_request = adapter_request.header("x-entry-token", token);
-    }
-
-    let adapter_response = match adapter_request.send().await {
-        Ok(response) => response,
-        Err(err) => {
-            state.inner.metrics.inc_adapter_failure();
-            return error_response(
-                HttpStatusCode::BAD_GATEWAY,
-                "adapter_unreachable",
-                format!("failed to reach matrix-entry-adapter: {err}"),
-                Some(json!({ "retryable": true })),
-            );
-        }
-    };
-
-    let status = HttpStatusCode::from_u16(adapter_response.status().as_u16())
-        .unwrap_or(HttpStatusCode::BAD_GATEWAY);
-    let upstream = match adapter_response.json::<Value>().await {
-        Ok(value) => value,
-        Err(err) => {
-            state.inner.metrics.inc_adapter_failure();
-            return error_response(
-                HttpStatusCode::BAD_GATEWAY,
-                "adapter_invalid_response",
-                format!("matrix-entry-adapter returned non-json response: {err}"),
-                None,
-            );
-        }
-    };
-
-    if !status.is_success() {
-        state.inner.metrics.inc_adapter_failure();
-        return (
-            status,
+    match result {
+        Ok((active, dead_letter)) => (
+            StatusCode::OK,
             Json(json!({
-                "error_code": "adapter_error",
-                "error": "matrix-entry-adapter request failed",
-                "details": upstream,
+                "status": "ready",
+                "service": "matrix-bot-relay",
+                "active_deliveries": active,
+                "dead_letter_deliveries": dead_letter,
+                "production_authorization": "not_granted"
             })),
         )
-            .into_response();
+            .into_response(),
+        Err(_) => api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "matrix_transport_database_unavailable",
+        ),
+    }
+}
+
+async fn compatibility_ingress(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<Value>,
+) -> Response {
+    let supplied_token = headers
+        .get("x-relay-token")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if !constant_time_eq(
+        supplied_token.as_bytes(),
+        state.config.ingress_token.as_bytes(),
+    ) {
+        return api_error(StatusCode::UNAUTHORIZED, "relay_authentication_failed");
     }
 
-    remember_recent_event_id(&state, event.event_id.as_deref()).await;
-
-    let projected_reply = upstream.get("projected_reply").cloned();
-    if projected_reply.is_none() {
-        state.inner.metrics.inc_projected_reply_missing();
-        return (
-            HttpStatusCode::OK,
-            Json(RelayResponse {
-                accepted: true,
-                room_id: upstream
-                    .get("room_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                sender: upstream
-                    .get("sender")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                upstream: Some(upstream),
-                sent_to_matrix: false,
-                send_result: Some(json!({ "reason": "no_projected_reply" })),
-            }),
-        )
-            .into_response();
+    let payload_bytes = match serde_json::to_vec(&payload) {
+        Ok(bytes) if bytes.len() <= state.config.ingress_max_bytes => bytes,
+        _ => return api_error(StatusCode::PAYLOAD_TOO_LARGE, "relay_payload_too_large"),
+    };
+    let payload_sha256 = sha256_prefixed(&payload_bytes);
+    if let Some(supplied_hash) = headers
+        .get("x-cex-payload-sha256")
+        .and_then(|value| value.to_str().ok())
+    {
+        if supplied_hash != payload_sha256.as_str() {
+            return api_error(StatusCode::CONFLICT, "relay_payload_hash_mismatch");
+        }
     }
 
-    if state.config().matrix_access_token.is_empty() {
-        return (
-            HttpStatusCode::ACCEPTED,
-            Json(RelayResponse {
-                accepted: true,
-                room_id: upstream
-                    .get("room_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                sender: upstream
-                    .get("sender")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                upstream: Some(upstream),
-                sent_to_matrix: false,
-                send_result: Some(json!({
-                    "reason": "matrix_access_token_missing",
-                    "projected_reply": projected_reply,
-                })),
-            }),
-        )
-            .into_response();
+    let event: InboundMatrixEvent = match serde_json::from_value(payload.clone()) {
+        Ok(event) => event,
+        Err(_) => return api_error(StatusCode::BAD_REQUEST, "invalid_matrix_event"),
+    };
+    let Some(event_id) = event.event_id.as_deref() else {
+        return api_error(StatusCode::BAD_REQUEST, "matrix_event_id_required");
+    };
+    if validate_identifier(event_id, 512).is_err()
+        || validate_identifier(&event.room_id, 512).is_err()
+        || validate_identifier(&event.sender, 512).is_err()
+    {
+        return api_error(StatusCode::BAD_REQUEST, "invalid_matrix_identity");
     }
 
-    let event_id = event.event_id.clone();
-    let room_id = upstream
-        .get("room_id")
-        .and_then(Value::as_str)
-        .unwrap_or(&event.room_id);
-    let projected_reply = projected_reply.unwrap_or_else(|| json!({}));
+    let delivery_id = match headers
+        .get("x-cex-delivery-id")
+        .and_then(|value| value.to_str().ok())
+    {
+        Some(raw) => match Uuid::parse_str(raw) {
+            Ok(value) => value,
+            Err(_) => return api_error(StatusCode::BAD_REQUEST, "invalid_delivery_id"),
+        },
+        None => deterministic_uuid(
+            "cex.matrix.relay.ingress.v1",
+            &[event_id, ADAPTER_DESTINATION, &payload_sha256],
+        ),
+    };
 
-    let send_result = match send_matrix_reply(
+    match admit_compatibility_event(
         &state,
-        room_id,
-        &projected_reply,
-        event_id.as_deref(),
-        state.config().matrix_send_max_attempts,
+        event_id,
+        delivery_id,
+        &payload_sha256,
+        payload,
     )
     .await
     {
-        Ok(value) => (
-            HttpStatusCode::OK,
-            Json(RelayResponse {
-                accepted: true,
-                room_id: room_id.to_string(),
-                sender: upstream
-                    .get("sender")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                upstream: Some(upstream),
-                sent_to_matrix: true,
-                send_result: Some(value),
-            }),
+        Ok((event_disposition, delivery_disposition)) => (
+            StatusCode::ACCEPTED,
+            Json(json!({
+                "accepted": true,
+                "source_event_id": event_id,
+                "delivery_id": delivery_id,
+                "payload_sha256": payload_sha256,
+                "event_disposition": event_disposition,
+                "delivery_disposition": delivery_disposition,
+                "production_authorization": "not_granted"
+            })),
         )
             .into_response(),
-        Err(failure) => {
-            if should_queue_failure(&failure, &state).await {
-                let queue_item = make_queue_item(
-                    room_id,
-                    event_id.clone(),
-                    projected_reply,
-                    &failure,
-                    state.config().matrix_send_initial_delay_ms,
-                    state.config().matrix_send_max_delay_ms,
-                );
-                let queued = enqueue_send(state.clone(), queue_item).await;
-
-                if queued {
-                    warn!(
-                        room_id = room_id,
-                        event_id = event_id.as_deref().unwrap_or("<missing>"),
-                        status_code = failure.status,
-                        kind = failure.kind,
-                        attempts = failure.attempts,
-                        "matrix send failed and queued for retry"
-                    );
-                } else {
-                    state.inner.metrics.inc_queue_drop();
-                    warn!(
-                        room_id = room_id,
-                        event_id = event_id.as_deref().unwrap_or("<missing>"),
-                        status_code = failure.status,
-                        kind = failure.kind,
-                        attempts = failure.attempts,
-                        "matrix send failed but queue rejected duplicate or saturated event"
-                    );
-                }
-
-                return (
-                    HttpStatusCode::ACCEPTED,
-                    Json(RelayResponse {
-                        accepted: false,
-                        room_id: room_id.to_string(),
-                        sender: upstream
-                            .get("sender")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string(),
-                        upstream: Some(upstream),
-                        sent_to_matrix: false,
-                        send_result: Some(json!({
-                            "reason": "queued_for_retry",
-                            "attempts": failure.attempts,
-                            "max_attempts": state.config().matrix_send_max_attempts,
-                            "retry_after_ms": compute_next_retry_delay(
-                                failure.attempts,
-                                failure.retry_after_ms,
-                                state.config().matrix_send_initial_delay_ms,
-                                state.config().matrix_send_max_delay_ms,
-                            )
-                        })),
-                    }),
-                )
-                    .into_response();
-            }
-
-            let status = failure
-                .status
-                .and_then(|code| HttpStatusCode::from_u16(code).ok())
-                .unwrap_or(HttpStatusCode::BAD_GATEWAY);
-
-            error!(
-                room_id = room_id,
-                event_id = event_id.as_deref().unwrap_or("<missing>"),
-                status_code = failure.status,
-                kind = failure.kind,
-                "matrix send failed and was not queued"
-            );
-
-            error_response(
-                status,
-                failure.kind,
-                failure.message,
-                Some(json!({
-                    "attempts": failure.attempts,
-                    "status_code": failure.status,
-                    "details": failure.details,
-                    "retryable": failure.retryable,
-                })),
-            )
-        }
-    };
-
-    send_result
-}
-
-async fn remember_recent_event_id(state: &AppState, event_id: Option<&str>) {
-    let Some(event_id) = event_id else {
-        return;
-    };
-    let mut ids = state.inner.recent_event_ids.lock().await;
-    if ids.contains(&event_id.to_string()) {
-        return;
-    }
-    ids.push_front(event_id.to_string());
-    while ids.len() > state.config().max_recent_event_ids {
-        ids.pop_back();
-    }
-}
-
-fn is_retryable_status(status: ReqStatusCode) -> bool {
-    status.is_server_error()
-        || status == ReqStatusCode::TOO_MANY_REQUESTS
-        || status == ReqStatusCode::REQUEST_TIMEOUT
-}
-
-fn parse_retry_after_ms(header_value: Option<&str>) -> Option<u64> {
-    header_value
-        .and_then(|raw| raw.parse::<u64>().ok())
-        .map(|v| v.saturating_mul(1000))
-}
-
-async fn should_queue_failure(failure: &MatrixSendFailure, state: &AppState) -> bool {
-    if !state.config().matrix_send_queue_enabled {
-        return false;
-    }
-
-    if !failure.retryable {
-        return false;
-    }
-
-    failure.attempts < state.config().matrix_send_max_attempts
-}
-
-fn make_queue_item(
-    room_id: &str,
-    event_id: Option<String>,
-    projected_reply: Value,
-    failure: &MatrixSendFailure,
-    initial_delay_ms: u64,
-    max_delay_ms: u64,
-) -> QueuedMatrixSend {
-    let now_ms = now_millis_i64();
-    let delay_ms = compute_next_retry_delay(
-        failure.attempts,
-        failure.retry_after_ms,
-        initial_delay_ms,
-        max_delay_ms,
-    );
-
-    QueuedMatrixSend {
-        queue_id: Uuid::new_v4().to_string(),
-        room_id: room_id.to_string(),
-        event_id,
-        projected_reply,
-        attempts: failure.attempts,
-        max_attempts: 0,
-        created_at_ms: now_ms,
-        next_retry_at_ms: now_ms + delay_ms as i64,
-        last_error: Some(failure.message.clone()),
-    }
-}
-
-fn compute_next_retry_delay(
-    attempt: usize,
-    retry_after_ms: Option<u64>,
-    initial_ms: u64,
-    max_ms: u64,
-) -> u64 {
-    if let Some(delay) = retry_after_ms {
-        return delay;
-    }
-
-    let exponent = attempt.saturating_sub(1) as u32;
-    let mut delay = initial_ms.saturating_mul(2_u64.pow(exponent.min(31)));
-    if delay > max_ms {
-        delay = max_ms;
-    }
-    delay
-}
-
-fn now_millis_i64() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or_default()
-}
-
-async fn send_matrix_reply(
-    state: &AppState,
-    room_id: &str,
-    projected_reply: &Value,
-    event_id: Option<&str>,
-    max_attempts: usize,
-) -> Result<Value, MatrixSendFailure> {
-    let mut last_error = MatrixSendFailure {
-        kind: "matrix_send_unset",
-        message: "initializing".to_string(),
-        status: None,
-        details: None,
-        attempts: 0,
-        retryable: true,
-        retry_after_ms: None,
-    };
-
-    let mut delay_ms = state.config().matrix_send_initial_delay_ms;
-    let max_delay_ms = state.config().matrix_send_max_delay_ms.max(delay_ms);
-
-    for attempt in 1..=max_attempts {
-        let result = send_matrix_reply_once(state, room_id, projected_reply, event_id).await;
-
-        match result {
-            Ok(value) => return Ok(value),
-            Err(mut failure) => {
-                failure.attempts = attempt;
-                last_error = failure;
-
-                if !last_error.retryable || attempt >= max_attempts {
-                    last_error.kind = if attempt >= max_attempts && last_error.retryable {
-                        "matrix_send_http_retry_exhausted"
-                    } else {
-                        last_error.kind
-                    };
-                    break;
-                }
-
-                warn!(
-                    room_id = %room_id,
-                    event_id = event_id.unwrap_or("<missing>"),
-                    attempt = attempt,
-                    error = %last_error.message,
-                    "matrix send attempt failed, retrying"
-                );
-                if let Some(wait_ms) = last_error.retry_after_ms {
-                    sleep(Duration::from_millis(wait_ms)).await;
-                } else {
-                    sleep(Duration::from_millis(delay_ms)).await;
-                    delay_ms = (delay_ms.saturating_mul(2)).min(max_delay_ms);
-                }
-            }
-        }
-    }
-
-    Err(last_error)
-}
-
-async fn send_matrix_reply_once(
-    state: &AppState,
-    room_id: &str,
-    projected_reply: &Value,
-    _event_id: Option<&str>,
-) -> Result<Value, MatrixSendFailure> {
-    let config = state.config().clone();
-    let txn_id = format!(
-        "cexbot-{}-{}",
-        Utc::now().timestamp_millis(),
-        Uuid::new_v4()
-    );
-    let send_url = format!(
-        "{}/_matrix/client/v3/rooms/{}/send/m.room.message/{}",
-        config.matrix_homeserver_base_url.trim_end_matches('/'),
-        encode_path(room_id),
-        txn_id,
-    );
-
-    state.inner.metrics.inc_matrix_send_attempt();
-
-    let result = state
-        .inner
-        .http
-        .put(send_url)
-        .bearer_auth(&config.matrix_access_token)
-        .json(projected_reply)
-        .send()
-        .await;
-
-    match result {
-        Ok(resp) => {
-            let status = resp.status();
-            let retry_after_ms = resp
-                .headers()
-                .get("retry-after")
-                .and_then(|h| h.to_str().ok())
-                .and_then(|raw| parse_retry_after_ms(Some(raw)));
-            let text = resp.text().await.unwrap_or_else(|_| "".to_string());
-            let details = serde_json::from_str::<Value>(&text).ok().or_else(|| {
-                if text.is_empty() {
-                    None
-                } else {
-                    Some(json!({ "raw_body": text }))
-                }
-            });
-
-            if status.is_success() {
-                state.inner.metrics.inc_matrix_send_success();
-                return Ok(details.unwrap_or_else(|| json!({ "status": status.as_u16() })));
-            }
-
-            state.inner.metrics.inc_matrix_send_failure();
-            let retryable = is_retryable_status(status);
-            let kind = if retryable {
-                "matrix_send_http_retryable_error"
-            } else {
-                "matrix_send_http_error"
-            };
-
-            Err(MatrixSendFailure {
-                kind,
-                message: format!("matrix send returned status {status}"),
-                status: Some(status.as_u16()),
-                details,
-                attempts: 0,
-                retryable,
-                retry_after_ms,
-            })
-        }
         Err(err) => {
-            state.inner.metrics.inc_matrix_send_failure();
-
-            Err(MatrixSendFailure {
-                kind: "matrix_send_network_error",
-                message: format!("failed to send reply to matrix homeserver: {err}"),
-                status: None,
-                details: Some(json!({ "error": err.to_string() })),
-                attempts: 0,
-                retryable: true,
-                retry_after_ms: None,
-            })
+            warn!(error = %err, source_event_id = %event_id, "failed to admit compatibility Matrix event");
+            api_error(StatusCode::CONFLICT, "matrix_event_admission_failed")
         }
     }
 }
 
-async fn enqueue_send(state: AppState, mut item: QueuedMatrixSend) -> bool {
-    if !state.config().matrix_send_queue_enabled {
-        return false;
-    }
-
-    let mut queue = state.inner.send_queue.lock().await;
-
-    if queue.iter().any(|entry| {
-        entry.queue_id == item.queue_id
-            || (entry.room_id == item.room_id
-                && entry.event_id.is_some()
-                && entry.event_id == item.event_id
-                && entry.projected_reply == item.projected_reply)
-    }) {
-        return false;
-    }
-
-    if let Some(event_id) = item.event_id.as_ref() {
-        if queue
-            .iter()
-            .filter(|q| q.event_id.as_ref() == Some(event_id))
-            .count()
-            >= 1
-        {
-            return false;
-        }
-    }
-
-    if item.max_attempts == 0 {
-        item.max_attempts = state.config().matrix_send_max_attempts;
-    }
-
-    queue.push_back(item);
-
-    let mut dropped_count = 0usize;
-    while queue.len() > state.config().matrix_send_queue_max_size {
-        queue.pop_front();
-        dropped_count = dropped_count.saturating_add(1);
-    }
-
-    state.inner.metrics.inc_queue_enqueued();
-
-    for _ in 0..dropped_count {
-        state.inner.metrics.inc_queue_drop();
-    }
-
-    let queue_len = queue.len();
-    state.inner.metrics.record_queue_depth(queue_len);
-
-    if let Err(err) = persist_send_queue(&state.config().matrix_send_queue_path, &queue).await {
-        warn!(
-            path = %state.config().matrix_send_queue_path,
-            error = %err,
-            "failed to persist relay send queue"
-        );
-    }
-
-    true
+async fn admit_compatibility_event(
+    state: &AppState,
+    event_id: &str,
+    delivery_id: Uuid,
+    payload_sha256: &str,
+    payload: Value,
+) -> Result<(String, String)> {
+    let mut tx: Transaction<'_, Postgres> = state.pool.begin().await?;
+    let event_disposition: String = sqlx::query_scalar(
+        "select public.cex_matrix_accept_source_event_v1($1, $2, $3, $4)",
+    )
+    .bind(event_id)
+    .bind(payload_sha256)
+    .bind("matrix-relay-http-v1")
+    .bind(Option::<&str>::None)
+    .fetch_one(&mut *tx)
+    .await?;
+    let delivery_disposition: String = sqlx::query_scalar(
+        "select public.cex_matrix_enqueue_delivery_v1($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(delivery_id)
+    .bind(event_id)
+    .bind(ADAPTER_DESTINATION)
+    .bind(payload_sha256)
+    .bind(sqlx::types::Json(payload))
+    .bind(state.config.delivery_max_attempts)
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok((event_disposition, delivery_disposition))
 }
 
-async fn run_send_queue_worker(state: AppState) {
-    let poll_interval_ms = state.config().matrix_send_queue_poll_interval_ms;
-    info!(
-        interval_ms = poll_interval_ms,
-        "starting matrix relay send queue worker"
-    );
-
+async fn run_delivery_worker(state: AppState) {
     loop {
-        process_due_queue_items(state.clone()).await;
-        sleep(Duration::from_millis(poll_interval_ms)).await;
-    }
-}
-
-async fn process_due_queue_items(state: AppState) {
-    let now_ms = now_millis_i64();
-    let mut due: Vec<QueuedMatrixSend> = Vec::new();
-
-    {
-        let mut queue = state.inner.send_queue.lock().await;
-        let mut remaining = VecDeque::new();
-        while let Some(item) = queue.pop_front() {
-            if item.next_retry_at_ms <= now_ms {
-                due.push(item);
-            } else {
-                remaining.push_back(item);
-            }
-        }
-
-        *queue = remaining;
-        state.inner.metrics.record_queue_depth(queue.len());
-
-        if let Err(err) = persist_send_queue(&state.config().matrix_send_queue_path, &queue).await {
-            warn!(
-                path = %state.config().matrix_send_queue_path,
-                error = %err,
-                "failed to persist queue state"
-            );
-        }
-    }
-
-    for mut item in due {
-        state.inner.metrics.inc_queue_attempt();
-
-        match send_matrix_reply_once(
-            &state,
-            &item.room_id,
-            &item.projected_reply,
-            item.event_id.as_deref(),
-        )
-        .await
-        {
-            Ok(_) => {
-                state.inner.metrics.inc_queue_success();
+        match claim_delivery(&state).await {
+            Ok(Some(delivery)) => {
                 info!(
-                    queue_id = %item.queue_id,
-                    room_id = %item.room_id,
-                    event_id = item.event_id.unwrap_or_else(|| "<missing>".to_string()),
-                    attempts = item.attempts,
-                    "queued matrix reply sent successfully"
+                    delivery_id = %delivery.delivery_id,
+                    destination = %delivery.destination,
+                    attempt_count = delivery.attempt_count,
+                    max_attempts = delivery.max_attempts,
+                    lease_fence = delivery.lease_fence,
+                    "claimed durable Matrix delivery"
                 );
-            }
-            Err(failure) => {
-                let next_attempt = item.attempts.saturating_add(1);
-                if !failure.retryable || next_attempt > item.max_attempts {
-                    state.inner.metrics.inc_queue_drop();
-                    state.inner.metrics.inc_queue_failure();
-                    warn!(
-                        queue_id = %item.queue_id,
-                        room_id = %item.room_id,
-                        error = %failure.message,
-                        attempts = item.attempts,
-                        "dropping queue item after exhausting attempts"
+                let delivery_id = delivery.delivery_id;
+                let lease_fence = delivery.lease_fence;
+                if let Err(err) = process_claim(&state, delivery).await {
+                    error!(
+                        error = %err,
+                        delivery_id = %delivery_id,
+                        lease_fence,
+                        "Matrix delivery processing failed"
                     );
-                    continue;
+                    let _ = finish_delivery(
+                        &state.pool,
+                        &state.config.worker_id,
+                        delivery_id,
+                        lease_fence,
+                        "retryable_failure",
+                        Some("relay_internal_error"),
+                    )
+                    .await;
                 }
-
-                let wait_ms = compute_next_retry_delay(
-                    next_attempt,
-                    failure.retry_after_ms,
-                    state.config().matrix_send_initial_delay_ms,
-                    state.config().matrix_send_max_delay_ms,
-                );
-
-                item.attempts = next_attempt;
-                item.next_retry_at_ms = now_millis_i64() + wait_ms as i64;
-                item.last_error = Some(failure.message);
-
-                if enqueue_send(state.clone(), item).await {
-                    state.inner.metrics.inc_queue_requeue();
-                }
+            }
+            Ok(None) => {}
+            Err(err) => {
+                error!(error = %err, "failed to claim Matrix delivery");
             }
         }
+        sleep(Duration::from_millis(state.config.poll_interval_ms)).await;
     }
 }
 
-async fn persist_send_queue(path: &str, queue: &VecDeque<QueuedMatrixSend>) -> Result<(), String> {
-    if path.is_empty() {
+async fn claim_delivery(state: &AppState) -> Result<Option<ClaimedDelivery>> {
+    let row = sqlx::query(
+        "select delivery_id, source_event_id, destination, payload_sha256, payload, \
+                attempt_count, max_attempts, lease_fence \
+         from public.cex_matrix_claim_delivery_v1($1, $2, 1)",
+    )
+    .bind(&state.config.worker_id)
+    .bind(state.config.claim_lease_seconds)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let payload: sqlx::types::Json<Value> = row.try_get("payload")?;
+    Ok(Some(ClaimedDelivery {
+        delivery_id: row.try_get("delivery_id")?,
+        source_event_id: row.try_get("source_event_id")?,
+        destination: row.try_get("destination")?,
+        payload_sha256: row.try_get("payload_sha256")?,
+        payload: payload.0,
+        attempt_count: row.try_get("attempt_count")?,
+        max_attempts: row.try_get("max_attempts")?,
+        lease_fence: row.try_get("lease_fence")?,
+    }))
+}
+
+async fn process_claim(state: &AppState, delivery: ClaimedDelivery) -> Result<()> {
+    let canonical = serde_json::to_vec(&delivery.payload)?;
+    if sha256_prefixed(&canonical) != delivery.payload_sha256 {
+        poison_and_finish(state, &delivery, "delivery_payload_hash_mismatch").await?;
         return Ok(());
     }
 
-    if let Some(parent) = Path::new(path).parent() {
-        if let Err(err) = fs::create_dir_all(parent) {
-            return Err(format!("failed to create queue parent dir: {err}"));
+    match delivery.destination.as_str() {
+        ADAPTER_DESTINATION => process_adapter_delivery(state, &delivery).await,
+        MATRIX_DESTINATION => process_matrix_delivery(state, &delivery).await,
+        _ => {
+            poison_and_finish(state, &delivery, "unknown_delivery_destination").await?;
+            Ok(())
         }
     }
-
-    let encoded = serde_json::to_string_pretty(queue).map_err(|err| err.to_string())?;
-    fs::write(path, encoded).map_err(|err| err.to_string())
 }
 
-async fn load_send_queue(path: &str) -> VecDeque<QueuedMatrixSend> {
-    if path.is_empty() || !Path::new(path).exists() {
-        return VecDeque::new();
-    }
-
-    let raw = match fs::read_to_string(path) {
-        Ok(raw) => raw,
-        Err(err) => {
-            warn!(path = %path, error = %err, "failed to read relay send queue, initializing empty");
-            return VecDeque::new();
+async fn process_adapter_delivery(state: &AppState, delivery: &ClaimedDelivery) -> Result<()> {
+    let event: InboundMatrixEvent = match serde_json::from_value(delivery.payload.clone()) {
+        Ok(event) => event,
+        Err(_) => {
+            poison_and_finish(state, delivery, "invalid_adapter_delivery_payload").await?;
+            return Ok(());
         }
     };
+    if event.event_id.as_deref() != Some(delivery.source_event_id.as_str()) {
+        poison_and_finish(state, delivery, "adapter_source_identity_mismatch").await?;
+        return Ok(());
+    }
 
-    match serde_json::from_str::<Vec<QueuedMatrixSend>>(&raw) {
-        Ok(items) => VecDeque::from(items),
-        Err(err) => {
-            warn!(path = %path, error = %err, "failed to parse relay send queue, initializing empty");
-            VecDeque::new()
+    match call_adapter(state, delivery).await? {
+        RemoteOutcome::Success(upstream) => {
+            complete_adapter_success(state, delivery, &event, upstream).await
+        }
+        RemoteOutcome::Retryable(code) => {
+            finish_delivery(
+                &state.pool,
+                &state.config.worker_id,
+                delivery.delivery_id,
+                delivery.lease_fence,
+                "retryable_failure",
+                Some(code),
+            )
+            .await?;
+            Ok(())
+        }
+        RemoteOutcome::Permanent(code) => {
+            finish_delivery(
+                &state.pool,
+                &state.config.worker_id,
+                delivery.delivery_id,
+                delivery.lease_fence,
+                "permanent_failure",
+                Some(code),
+            )
+            .await?;
+            Ok(())
         }
     }
 }
 
-fn encode_path(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for b in input.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
-            }
-            _ => out.push_str(&format!("%{:02X}", b)),
-        }
-    }
-    out
-}
+async fn call_adapter(state: &AppState, delivery: &ClaimedDelivery) -> Result<RemoteOutcome> {
+    let request = state
+        .http
+        .post(format!(
+            "{}/v1/matrix/events",
+            state.config.adapter_base_url.trim_end_matches('/')
+        ))
+        .header("x-entry-token", &state.config.adapter_token)
+        .header("x-cex-delivery-id", delivery.delivery_id.to_string())
+        .header("x-cex-payload-sha256", &delivery.payload_sha256)
+        .header("x-idempotency-key", delivery.delivery_id.to_string())
+        .header("idempotency-key", delivery.delivery_id.to_string())
+        .json(&delivery.payload);
 
-fn error_response(
-    status: HttpStatusCode,
-    code: &str,
-    message: String,
-    details: Option<Value>,
-) -> Response {
-    (
-        status,
-        Json(json!({
-            "error_code": code,
-            "error": message,
-            "details": details,
-        })),
+    let response = match timeout(
+        Duration::from_secs(state.config.http_timeout_seconds),
+        request.send(),
     )
-        .into_response()
+    .await
+    {
+        Err(_) => return Ok(RemoteOutcome::Retryable("adapter_timeout")),
+        Ok(Err(_)) => return Ok(RemoteOutcome::Retryable("adapter_network_error")),
+        Ok(Ok(response)) => response,
+    };
+    let status = response.status();
+    let body = match read_bounded_body(response, state.config.max_response_bytes).await {
+        Ok(body) => body,
+        Err(_) => return Ok(RemoteOutcome::Permanent("adapter_response_too_large")),
+    };
+
+    if status.is_success() {
+        return match serde_json::from_slice::<Value>(&body) {
+            Ok(value) => Ok(RemoteOutcome::Success(value)),
+            Err(_) => Ok(RemoteOutcome::Permanent("adapter_invalid_json")),
+        };
+    }
+    if is_retryable_status(status) {
+        Ok(RemoteOutcome::Retryable("adapter_retryable_status"))
+    } else {
+        Ok(RemoteOutcome::Permanent("adapter_permanent_status"))
+    }
+}
+
+async fn complete_adapter_success(
+    state: &AppState,
+    delivery: &ClaimedDelivery,
+    event: &InboundMatrixEvent,
+    upstream: Value,
+) -> Result<()> {
+    let projected_reply = upstream.get("projected_reply").cloned();
+    let mut tx: Transaction<'_, Postgres> = state.pool.begin().await?;
+
+    if let Some(projected_reply) = projected_reply {
+        let room_id = upstream
+            .get("room_id")
+            .and_then(Value::as_str)
+            .unwrap_or(event.room_id.as_str());
+        validate_identifier(room_id, 512)?;
+        let envelope = MatrixReplyEnvelope {
+            room_id: room_id.to_string(),
+            projected_reply,
+        };
+        let payload = serde_json::to_value(envelope)?;
+        let payload_bytes = serde_json::to_vec(&payload)?;
+        if payload_bytes.len() > 1_048_576 {
+            bail!("projected Matrix reply exceeds durable payload limit");
+        }
+        let payload_sha256 = sha256_prefixed(&payload_bytes);
+        let reply_delivery_id = deterministic_uuid(
+            "cex.matrix.relay.reply.v1",
+            &[
+                &delivery.source_event_id,
+                MATRIX_DESTINATION,
+                room_id,
+                &payload_sha256,
+            ],
+        );
+        let _: String = sqlx::query_scalar(
+            "select public.cex_matrix_enqueue_delivery_v1($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(reply_delivery_id)
+        .bind(&delivery.source_event_id)
+        .bind(MATRIX_DESTINATION)
+        .bind(&payload_sha256)
+        .bind(sqlx::types::Json(payload))
+        .bind(state.config.delivery_max_attempts)
+        .fetch_one(&mut *tx)
+        .await?;
+    }
+
+    let _: String = sqlx::query_scalar(
+        "select public.cex_matrix_finish_delivery_v1($1, $2, $3, 'sent', null)",
+    )
+    .bind(delivery.delivery_id)
+    .bind(&state.config.worker_id)
+    .bind(delivery.lease_fence)
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn process_matrix_delivery(state: &AppState, delivery: &ClaimedDelivery) -> Result<()> {
+    let envelope: MatrixReplyEnvelope = match serde_json::from_value(delivery.payload.clone()) {
+        Ok(envelope) => envelope,
+        Err(_) => {
+            poison_and_finish(state, delivery, "invalid_matrix_reply_payload").await?;
+            return Ok(());
+        }
+    };
+    if validate_identifier(&envelope.room_id, 512).is_err() {
+        poison_and_finish(state, delivery, "invalid_matrix_reply_room").await?;
+        return Ok(());
+    }
+
+    let outcome = call_matrix_homeserver(state, delivery, &envelope).await?;
+    match outcome {
+        RemoteOutcome::Success(_) => {
+            finish_delivery(
+                &state.pool,
+                &state.config.worker_id,
+                delivery.delivery_id,
+                delivery.lease_fence,
+                "sent",
+                None,
+            )
+            .await?;
+        }
+        RemoteOutcome::Retryable(code) => {
+            finish_delivery(
+                &state.pool,
+                &state.config.worker_id,
+                delivery.delivery_id,
+                delivery.lease_fence,
+                "retryable_failure",
+                Some(code),
+            )
+            .await?;
+        }
+        RemoteOutcome::Permanent(code) => {
+            finish_delivery(
+                &state.pool,
+                &state.config.worker_id,
+                delivery.delivery_id,
+                delivery.lease_fence,
+                "permanent_failure",
+                Some(code),
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+async fn call_matrix_homeserver(
+    state: &AppState,
+    delivery: &ClaimedDelivery,
+    envelope: &MatrixReplyEnvelope,
+) -> Result<RemoteOutcome> {
+    let send_url = matrix_send_url(
+        &state.config.matrix_homeserver_base_url,
+        &envelope.room_id,
+        delivery.delivery_id,
+    )?;
+    let request = state
+        .http
+        .put(send_url)
+        .header(
+            header::AUTHORIZATION.as_str(),
+            format!("Bearer {}", state.config.matrix_access_token),
+        )
+        .header("x-cex-delivery-id", delivery.delivery_id.to_string())
+        .header("x-cex-payload-sha256", &delivery.payload_sha256)
+        .header("x-idempotency-key", delivery.delivery_id.to_string())
+        .json(&envelope.projected_reply);
+
+    let response = match timeout(
+        Duration::from_secs(state.config.http_timeout_seconds),
+        request.send(),
+    )
+    .await
+    {
+        Err(_) => return Ok(RemoteOutcome::Retryable("matrix_response_unknown_timeout")),
+        Ok(Err(_)) => return Ok(RemoteOutcome::Retryable("matrix_response_unknown_network")),
+        Ok(Ok(response)) => response,
+    };
+    let status = response.status();
+    if read_bounded_body(response, state.config.max_response_bytes)
+        .await
+        .is_err()
+    {
+        return Ok(RemoteOutcome::Permanent("matrix_response_too_large"));
+    }
+    if status.is_success() {
+        Ok(RemoteOutcome::Success(json!({"status": status.as_u16()})))
+    } else if is_retryable_status(status) {
+        Ok(RemoteOutcome::Retryable("matrix_retryable_status"))
+    } else {
+        Ok(RemoteOutcome::Permanent("matrix_permanent_status"))
+    }
+}
+
+async fn finish_delivery(
+    pool: &PgPool,
+    owner: &str,
+    delivery_id: Uuid,
+    lease_fence: i64,
+    outcome: &str,
+    error_code: Option<&str>,
+) -> Result<String> {
+    let status: String = sqlx::query_scalar(
+        "select public.cex_matrix_finish_delivery_v1($1, $2, $3, $4, $5)",
+    )
+    .bind(delivery_id)
+    .bind(owner)
+    .bind(lease_fence)
+    .bind(outcome)
+    .bind(error_code)
+    .fetch_one(pool)
+    .await?;
+    Ok(status)
+}
+
+async fn poison_and_finish(
+    state: &AppState,
+    delivery: &ClaimedDelivery,
+    failure_code: &'static str,
+) -> Result<()> {
+    let mut tx: Transaction<'_, Postgres> = state.pool.begin().await?;
+    let source_hash: String = sqlx::query_scalar(
+        "select source_event_sha256 from public.matrix_transport_inbox where source_event_id = $1",
+    )
+    .bind(&delivery.source_event_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let partition_id: String = sqlx::query_scalar(
+        "select partition_id from public.matrix_transport_inbox where source_event_id = $1",
+    )
+    .bind(&delivery.source_event_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let _: i64 = sqlx::query_scalar(
+        "select public.cex_matrix_record_poison_event_v1($1, $2, $3, $4)",
+    )
+    .bind(&delivery.source_event_id)
+    .bind(&source_hash)
+    .bind(&partition_id)
+    .bind(failure_code)
+    .fetch_one(&mut *tx)
+    .await?;
+    let _: String = sqlx::query_scalar(
+        "select public.cex_matrix_finish_delivery_v1($1, $2, $3, 'permanent_failure', $4)",
+    )
+    .bind(delivery.delivery_id)
+    .bind(&state.config.worker_id)
+    .bind(delivery.lease_fence)
+    .bind(failure_code)
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn verify_schema(pool: &PgPool) -> Result<()> {
+    let ready: bool = sqlx::query_scalar(
+        "select to_regprocedure('public.cex_matrix_claim_delivery_v1(text,integer,integer)') is not null \
+             and to_regprocedure('public.cex_matrix_enqueue_delivery_v1(uuid,text,text,text,jsonb,integer)') is not null \
+             and to_regprocedure('public.cex_matrix_finish_delivery_v1(uuid,text,bigint,text,text)') is not null",
+    )
+    .fetch_one(pool)
+    .await?;
+    if !ready {
+        bail!("Matrix transport schema/functions are not installed");
+    }
+    Ok(())
+}
+
+async fn read_bounded_body(
+    mut response: ReqwestResponse,
+    max_bytes: usize,
+) -> Result<Vec<u8>> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > max_bytes as u64)
+    {
+        bail!("remote Matrix response exceeded configured bound");
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if bytes.len().saturating_add(chunk.len()) > max_bytes {
+            bail!("remote Matrix response exceeded configured bound");
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
+fn matrix_send_url(base: &str, room_id: &str, delivery_id: Uuid) -> Result<Url> {
+    let path = PathAndQuery::from_maybe_shared(format!(
+        "/_matrix/client/v3/rooms/{}/send/m.room.message/{}",
+        encode_path_segment(room_id),
+        delivery_id
+    ))
+    .context("failed to construct Matrix send path")?;
+    let mut url = Url::parse(base).context("invalid MATRIX_HOMESERVER_BASE_URL")?;
+    url.set_path(path.path());
+    url.set_query(path.query());
+    Ok(url)
+}
+
+fn encode_path_segment(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            use std::fmt::Write;
+            let _ = write!(&mut encoded, "%{byte:02X}");
+        }
+    }
+    encoded
+}
+
+fn is_retryable_status(status: ReqwestStatus) -> bool {
+    status.is_server_error()
+        || status == ReqwestStatus::TOO_MANY_REQUESTS
+        || status == ReqwestStatus::REQUEST_TIMEOUT
+}
+
+fn sha256_prefixed(bytes: &[u8]) -> String {
+    format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+fn deterministic_uuid(domain: &str, parts: &[&str]) -> Uuid {
+    let mut hasher = Sha256::new();
+    hasher.update(domain.as_bytes());
+    for part in parts {
+        hasher.update([0]);
+        hasher.update(part.as_bytes());
+    }
+    let digest = hasher.finalize();
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(bytes)
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    let mut difference = left.len() ^ right.len();
+    let length = left.len().max(right.len());
+    for index in 0..length {
+        let left_byte = left.get(index).copied().unwrap_or(0);
+        let right_byte = right.get(index).copied().unwrap_or(0);
+        difference |= (left_byte ^ right_byte) as usize;
+    }
+    difference == 0
+}
+
+fn validate_identifier(value: &str, max_bytes: usize) -> Result<()> {
+    if value.trim().is_empty()
+        || value.len() > max_bytes
+        || value.chars().any(char::is_control)
+    {
+        bail!("identifier is empty, too long, or contains control characters");
+    }
+    Ok(())
+}
+
+fn api_error(status: StatusCode, code: &'static str) -> Response {
+    (status, Json(json!({"error_code": code}))).into_response()
+}
+
+impl RelayConfig {
+    fn from_env() -> Result<Self> {
+        let production_like = is_production_like();
+        let bind_addr = env::var("MATRIX_BOT_RELAY_BIND")
+            .or_else(|_| env::var("MATRIX_BOT_RELAY_BIND_ADDR"))
+            .unwrap_or_else(|_| "127.0.0.1:8092".to_string());
+        let database_url =
+            required_env("MATRIX_TRANSPORT_DATABASE_URL", Some("DATABASE_URL"))?;
+        let worker_id = required_env("MATRIX_RELAY_WORKER_ID", None)?;
+        let claim_lease_seconds = parse_env_with_alias(
+            "MATRIX_RELAY_CLAIM_LEASE_SECONDS",
+            "MATRIX_RELAY_LEASE_SECONDS",
+            60_i32,
+        )?;
+        let http_timeout_seconds =
+            parse_env("MATRIX_RELAY_HTTP_TIMEOUT_SECONDS", 20_u64)?;
+        let poll_interval_ms = parse_env("MATRIX_RELAY_POLL_INTERVAL_MS", 500_u64)?.max(50);
+        let ingress_token = required_env("MATRIX_RELAY_INGRESS_TOKEN", None)?;
+        let ingress_max_bytes =
+            parse_env("MATRIX_RELAY_INGRESS_MAX_BYTES", 1_048_576_usize)?;
+        let adapter_base_url = env::var("MATRIX_ADAPTER_BASE_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:8091".to_string());
+        let adapter_token = required_env(
+            "MATRIX_ENTRY_ADAPTER_TOKEN",
+            Some("MATRIX_ENTRY_INGRESS_TOKEN"),
+        )?;
+        let matrix_homeserver_base_url = env::var("MATRIX_HOMESERVER_BASE_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:8008".to_string());
+        let matrix_access_token = required_env("MATRIX_ACCESS_TOKEN", None)?;
+        let max_response_bytes =
+            parse_env("MATRIX_RELAY_MAX_RESPONSE_BYTES", 1_048_576_usize)?;
+        let delivery_max_attempts =
+            parse_env("MATRIX_RELAY_DELIVERY_MAX_ATTEMPTS", 8_i32)?;
+
+        if !(5..=3_600).contains(&claim_lease_seconds) {
+            bail!("MATRIX_RELAY_CLAIM_LEASE_SECONDS must be between 5 and 3600");
+        }
+        if http_timeout_seconds == 0
+            || http_timeout_seconds.saturating_add(5) >= claim_lease_seconds as u64
+        {
+            bail!("MATRIX_RELAY_HTTP_TIMEOUT_SECONDS must be at least five seconds shorter than the claim lease");
+        }
+        if !(1..=1_048_576).contains(&ingress_max_bytes)
+            || !(1..=4_194_304).contains(&max_response_bytes)
+        {
+            bail!("Matrix relay body limits are outside allowed bounds");
+        }
+        if !(1..=100).contains(&delivery_max_attempts) {
+            bail!("MATRIX_RELAY_DELIVERY_MAX_ATTEMPTS must be between 1 and 100");
+        }
+        validate_identifier(&worker_id, 256)?;
+
+        let adapter_url = Url::parse(&adapter_base_url)
+            .context("MATRIX_ADAPTER_BASE_URL is not a valid URL")?;
+        let homeserver_url = Url::parse(&matrix_homeserver_base_url)
+            .context("MATRIX_HOMESERVER_BASE_URL is not a valid URL")?;
+        if production_like
+            && (adapter_url.scheme() != "https" || homeserver_url.scheme() != "https")
+        {
+            bail!("production-like Matrix relay downstream URLs must use https");
+        }
+        if production_like {
+            if ingress_token.len() < 32
+                || adapter_token.len() < 32
+                || matrix_access_token.len() < 32
+            {
+                bail!("production-like Matrix relay credentials must be at least 32 bytes");
+            }
+            if ingress_token == adapter_token
+                || ingress_token == matrix_access_token
+                || adapter_token == matrix_access_token
+            {
+                bail!("Matrix relay credentials must be pairwise distinct");
+            }
+        }
+
+        Ok(Self {
+            bind_addr,
+            database_url,
+            worker_id,
+            claim_lease_seconds,
+            http_timeout_seconds,
+            poll_interval_ms,
+            ingress_token,
+            ingress_max_bytes,
+            adapter_base_url,
+            adapter_token,
+            matrix_homeserver_base_url,
+            matrix_access_token,
+            max_response_bytes,
+            delivery_max_attempts,
+            production_like,
+        })
+    }
+}
+
+fn required_env(primary: &str, fallback: Option<&str>) -> Result<String> {
+    let value = env::var(primary)
+        .ok()
+        .or_else(|| fallback.and_then(|name| env::var(name).ok()))
+        .unwrap_or_default();
+    if value.trim().is_empty() {
+        let alternate = fallback
+            .map(|name| format!(" or {name}"))
+            .unwrap_or_default();
+        return Err(anyhow!("{primary}{alternate} is required"));
+    }
+    Ok(value)
+}
+
+fn parse_env<T>(name: &str, default: T) -> Result<T>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    match env::var(name) {
+        Ok(raw) => raw
+            .parse::<T>()
+            .map_err(|error| anyhow!("invalid {name}: {error}")),
+        Err(_) => Ok(default),
+    }
+}
+
+fn parse_env_with_alias<T>(name: &str, alias: &str, default: T) -> Result<T>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    match env::var(name).or_else(|_| env::var(alias)) {
+        Ok(raw) => raw
+            .parse::<T>()
+            .map_err(|error| anyhow!("invalid {name}/{alias}: {error}")),
+        Err(_) => Ok(default),
+    }
+}
+
+fn is_production_like() -> bool {
+    env::var("CEX_RUNTIME_PROFILE")
+        .or_else(|_| env::var("APP_ENV"))
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "production" | "prod" | "staging" | "stage" | "preprod"
+            )
+        })
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::encode_path;
+    use super::*;
 
     #[test]
-    fn room_id_is_percent_encoded() {
-        assert_eq!(encode_path("!room:local.dev"), "%21room%3Alocal.dev");
+    fn deterministic_ids_are_stable_and_content_bound() {
+        let first = deterministic_uuid(
+            "cex.matrix.relay.reply.v1",
+            &["event-1", MATRIX_DESTINATION, "!room:a", "sha256:a"],
+        );
+        let replay = deterministic_uuid(
+            "cex.matrix.relay.reply.v1",
+            &["event-1", MATRIX_DESTINATION, "!room:a", "sha256:a"],
+        );
+        let changed = deterministic_uuid(
+            "cex.matrix.relay.reply.v1",
+            &["event-1", MATRIX_DESTINATION, "!room:a", "sha256:b"],
+        );
+        assert_eq!(first, replay);
+        assert_ne!(first, changed);
+    }
+
+    #[test]
+    fn matrix_transaction_url_uses_stable_delivery_id() {
+        let delivery_id = Uuid::parse_str("00000000-0000-5000-8000-000000000001").unwrap();
+        let url = matrix_send_url(
+            "https://matrix.example",
+            "!room:example",
+            delivery_id,
+        )
+        .unwrap();
+        assert!(url.as_str().contains("%21room%3Aexample"));
+        assert!(url.as_str().ends_with(&delivery_id.to_string()));
+    }
+
+    #[test]
+    fn secret_comparison_rejects_length_and_content_changes() {
+        assert!(constant_time_eq(b"same", b"same"));
+        assert!(!constant_time_eq(b"same", b"diff"));
+        assert!(!constant_time_eq(b"same", b"same-longer"));
+    }
+
+    #[test]
+    fn retry_classification_is_bounded() {
+        assert!(is_retryable_status(ReqwestStatus::TOO_MANY_REQUESTS));
+        assert!(is_retryable_status(ReqwestStatus::BAD_GATEWAY));
+        assert!(!is_retryable_status(ReqwestStatus::BAD_REQUEST));
     }
 }
