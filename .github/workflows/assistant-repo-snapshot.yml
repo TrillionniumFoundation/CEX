@@ -1,0 +1,44 @@
+name: assistant-repo-snapshot
+
+on:
+  push:
+    paths:
+      - '.github/workflows/assistant-repo-snapshot.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact branch tree
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Record exact identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p run/assistant-snapshot
+          git rev-parse HEAD > run/assistant-snapshot/commit.txt
+          git rev-parse 'HEAD^{tree}' > run/assistant-snapshot/tree.txt
+          git status --porcelain=v1 > run/assistant-snapshot/status.txt
+          test ! -s run/assistant-snapshot/status.txt
+
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cex-source-${{ github.sha }}
+          path: |
+            .
+            !.git/**
+            !target/**
+          include-hidden-files: true
+          if-no-files-found: error
+          compression-level: 6
+          retention-days: 3
