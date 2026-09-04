@@ -1,3 +1,6 @@
+mod runtime_profile;
+mod sync_recovery;
+
 use anyhow::{anyhow, bail, Context, Result};
 use reqwest::{redirect::Policy, Client, Response, Url};
 use serde::Deserialize;
@@ -6,14 +9,20 @@ use sha2::{Digest, Sha256};
 use shared_tracing::init_tracing;
 use sqlx::{postgres::PgPoolOptions, PgPool, Postgres, Transaction};
 use std::{collections::BTreeMap, env};
-use tokio::time::{sleep, timeout, Duration};
+use tokio::time::{sleep, timeout, Duration, Instant};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
 const RELAY_DESTINATION: &str = "matrix-relay-adapter-v1";
 const MAX_DATABASE_CONNECTIONS: u32 = 4;
+const PROFILE_ENV_NAME: &str = "MATRIX_POLL_RUNTIME_PROFILE";
+const GAP_PAGE_LIMIT: usize = 100;
+const GAP_PAGE_BUDGET: usize = 100;
+const GAP_EVENT_BUDGET: usize = 10_000;
+const GAP_BYTE_BUDGET: usize = 33_554_432;
+const GAP_DEADLINE_SECONDS: u64 = 120;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct PollerConfig {
     homeserver_base_url: String,
     matrix_access_token: String,
@@ -28,6 +37,7 @@ struct PollerConfig {
     sync_max_bytes: usize,
     delivery_max_attempts: i32,
     production_like: bool,
+    bootstrap_start_now: bool,
 }
 
 #[derive(Debug)]
@@ -60,6 +70,9 @@ struct JoinRoomState {
 struct TimelineState {
     #[serde(default)]
     events: Vec<Value>,
+    #[serde(default)]
+    limited: bool,
+    prev_batch: Option<String>,
 }
 
 #[derive(Debug)]
@@ -75,6 +88,8 @@ enum Admission {
         source_event_id: String,
         source_event_sha256: String,
         failure_code: &'static str,
+        room_id: String,
+        source_payload: Value,
     },
 }
 
@@ -104,7 +119,6 @@ async fn main() -> Result<()> {
         .context("failed to build Matrix HTTP client")?;
 
     info!(
-        homeserver = %config.homeserver_base_url,
         partition = %config.partition_id,
         worker = %config.worker_id,
         lease_seconds = config.cursor_lease_seconds,
@@ -121,15 +135,15 @@ async fn run(config: PollerConfig, pool: PgPool, http: Client) -> Result<()> {
     loop {
         match acquire_cursor_lease(&pool, &config).await {
             Ok(Some(lease)) => {
-                if let Err(err) = poll_once(&pool, &http, &config, lease).await {
-                    warn!(error = %err, "Matrix poll iteration failed; durable cursor was not advanced unless admission committed");
+                if let Err(_err) = poll_once(&pool, &http, &config, lease).await {
+                    warn!("matrix_sync_not_accepted; cursor remains at last committed position; inspect protected recovery evidence");
                 }
             }
             Ok(None) => {
                 info!(partition = %config.partition_id, "Matrix cursor lease is owned by another worker");
             }
-            Err(err) => {
-                error!(error = %err, "failed to acquire Matrix cursor lease");
+            Err(_err) => {
+                error!("matrix_cursor_lease_acquisition_failed");
             }
         }
 
@@ -152,20 +166,33 @@ async fn poll_once(
         request.send(),
     )
     .await
-    .context("Matrix sync request timed out")??;
+    .map_err(|_| anyhow!("matrix_sync_timeout"))?
+    .map_err(|_| anyhow!("matrix_sync_transport_failure"))?;
 
     if !response.status().is_success() {
         bail!("Matrix sync returned status {}", response.status());
     }
 
     let bytes = read_bounded_body(response, config.sync_max_bytes).await?;
-    let body: SyncResponse = serde_json::from_slice(&bytes)
+    let mut body: SyncResponse = serde_json::from_slice(&bytes)
         .context("Matrix sync response was not valid bounded JSON")?;
-    if body.next_batch.is_empty() || body.next_batch.len() > 8_192 {
-        bail!("Matrix sync next_batch is absent or exceeds the durable cursor bound");
-    }
+    sync_recovery::validate_token(&body.next_batch)?;
 
+    if lease.opaque_cursor.is_none() {
+        if !config.bootstrap_start_now {
+            bail!("matrix_initial_cursor_required");
+        }
+        // Explicitly establish the first observation boundary. Historical
+        // messages are never interpreted as fresh commands on first startup.
+        persist_batch(pool, config, &lease, &body.next_batch, Vec::new()).await?;
+        info!("Matrix initial start-now boundary committed; no historical commands admitted");
+        return Ok(());
+    }
+    timeout(Duration::from_secs(GAP_DEADLINE_SECONDS),
+        recover_limited_timelines(pool, http, config, &lease, &mut body))
+        .await.map_err(|_| anyhow!("matrix_gap_recovery_deadline"))??;
     let admissions = prepare_admissions(&body, config)?;
+    persist_poison_observations(pool, config, &lease, &admissions).await?;
     persist_batch(pool, config, &lease, &body.next_batch, admissions).await?;
 
     info!(
@@ -206,12 +233,17 @@ fn prepare_admissions(body: &SyncResponse, config: &PollerConfig) -> Result<Vec<
                 continue;
             }
 
-            let raw_bytes = serde_json::to_vec(raw_event)
+            let mut source_payload = raw_event.clone();
+            if let Some(object) = source_payload.as_object_mut() {
+                object.remove("unsigned");
+                object.remove("room_id");
+            }
+            let raw_bytes = serde_json::to_vec(&source_payload)
                 .context("failed to serialize Matrix source event")?;
             let raw_hash = sha256_prefixed(&raw_bytes);
             let raw_event_id = raw_event.get("event_id").and_then(Value::as_str);
             let poison_source_id = raw_event_id
-                .filter(|value| !value.is_empty() && value.len() <= 512)
+                .filter(|value| validate_identifier("event_id", value, 512).is_ok())
                 .map(ToOwned::to_owned)
                 .unwrap_or_else(|| format!("matrix-poison:{}", &raw_hash[7..]));
 
@@ -220,14 +252,18 @@ fn prepare_admissions(body: &SyncResponse, config: &PollerConfig) -> Result<Vec<
                     source_event_id: poison_source_id,
                     source_event_sha256: raw_hash,
                     failure_code: "missing_event_id",
+                    room_id: room_id.clone(),
+                    source_payload: source_payload.clone(),
                 });
                 continue;
             };
-            if event_id.is_empty() || event_id.len() > 512 {
+            if validate_identifier("event_id", event_id, 512).is_err() {
                 admissions.push(Admission::Poison {
                     source_event_id: poison_source_id,
                     source_event_sha256: raw_hash,
                     failure_code: "invalid_event_id",
+                    room_id: room_id.clone(),
+                    source_payload: source_payload.clone(),
                 });
                 continue;
             }
@@ -237,21 +273,23 @@ fn prepare_admissions(body: &SyncResponse, config: &PollerConfig) -> Result<Vec<
                     source_event_id: event_id.to_string(),
                     source_event_sha256: raw_hash,
                     failure_code: "missing_sender",
+                    room_id: room_id.clone(),
+                    source_payload: source_payload.clone(),
                 });
                 continue;
             };
             if sender == config.bot_user_id {
                 continue;
             }
-            if sender.is_empty()
-                || sender.len() > 512
-                || room_id.is_empty()
-                || room_id.len() > 512
+            if validate_identifier("sender", sender, 512).is_err()
+                || validate_identifier("room_id", room_id, 512).is_err()
             {
                 admissions.push(Admission::Poison {
                     source_event_id: event_id.to_string(),
                     source_event_sha256: raw_hash,
                     failure_code: "invalid_matrix_identity",
+                    room_id: room_id.clone(),
+                    source_payload: source_payload.clone(),
                 });
                 continue;
             }
@@ -260,11 +298,25 @@ fn prepare_admissions(body: &SyncResponse, config: &PollerConfig) -> Result<Vec<
                 .get("content")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
+            if content.get("m.relates_to")
+                .and_then(|relation| relation.get("rel_type"))
+                .and_then(Value::as_str) == Some("m.replace")
+            {
+                // Edits cannot create a second privileged invocation.
+                continue;
+            }
+            if content.get("msgtype").and_then(Value::as_str).is_some_and(|kind| {
+                matches!(kind, "m.image" | "m.video" | "m.audio" | "m.file" | "m.location" | "m.notice" | "m.emote")
+            }) {
+                continue;
+            }
             if content.get("msgtype").and_then(Value::as_str) != Some("m.text") {
                 admissions.push(Admission::Poison {
                     source_event_id: event_id.to_string(),
                     source_event_sha256: raw_hash,
                     failure_code: "unsupported_message_type",
+                    room_id: room_id.clone(),
+                    source_payload: source_payload.clone(),
                 });
                 continue;
             }
@@ -273,6 +325,8 @@ fn prepare_admissions(body: &SyncResponse, config: &PollerConfig) -> Result<Vec<
                     source_event_id: event_id.to_string(),
                     source_event_sha256: raw_hash,
                     failure_code: "missing_message_body",
+                    room_id: room_id.clone(),
+                    source_payload: source_payload.clone(),
                 });
                 continue;
             };
@@ -281,6 +335,8 @@ fn prepare_admissions(body: &SyncResponse, config: &PollerConfig) -> Result<Vec<
                     source_event_id: event_id.to_string(),
                     source_event_sha256: raw_hash,
                     failure_code: "invalid_message_body",
+                    room_id: room_id.clone(),
+                    source_payload: source_payload.clone(),
                 });
                 continue;
             }
@@ -305,6 +361,8 @@ fn prepare_admissions(body: &SyncResponse, config: &PollerConfig) -> Result<Vec<
                     source_event_id: event_id.to_string(),
                     source_event_sha256: raw_hash,
                     failure_code: "normalized_payload_too_large",
+                    room_id: room_id.clone(),
+                    source_payload: source_payload.clone(),
                 });
                 continue;
             }
@@ -354,6 +412,17 @@ async fn persist_batch(
         bail!("matrix_cursor_lease_or_revision_mismatch");
     }
 
+    let blocked: bool = sqlx::query_scalar(
+        "select exists (select 1 from public.matrix_transport_poison_events \
+         where partition_id = $1 and acknowledged_at is null)",
+    )
+    .bind(&config.partition_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if blocked {
+        bail!("matrix_poison_requires_operator_quarantine");
+    }
+
     for admission in admissions {
         match admission {
             Admission::Delivery {
@@ -385,20 +454,10 @@ async fn persist_batch(
                 .fetch_one(&mut *tx)
                 .await?;
             }
-            Admission::Poison {
-                source_event_id,
-                source_event_sha256,
-                failure_code,
-            } => {
-                let _: i64 = sqlx::query_scalar(
-                    "select public.cex_matrix_record_poison_event_v1($1, $2, $3, $4)",
-                )
-                .bind(&source_event_id)
-                .bind(&source_event_sha256)
-                .bind(&config.partition_id)
-                .bind(failure_code)
-                .fetch_one(&mut *tx)
-                .await?;
+            Admission::Poison { .. } => {
+                // The observation transaction persisted the bytes. Only a
+                // separate operator acknowledgement permits quarantine; this
+                // does not declare the malformed message reprocessed.
             }
         }
     }
@@ -417,6 +476,128 @@ async fn persist_batch(
         bail!("matrix_cursor_lease_or_revision_mismatch");
     }
 
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn renew_cursor_lease(pool: &PgPool, config: &PollerConfig, lease: &CursorLease) -> Result<()> {
+    let renewed: bool = sqlx::query_scalar(
+        "select public.cex_matrix_renew_cursor_lease_v1($1,$2,$3,$4,$5)",
+    )
+    .bind(&config.partition_id).bind(&config.worker_id).bind(lease.lease_fence)
+    .bind(lease.cursor_revision).bind(config.cursor_lease_seconds)
+    .fetch_one(pool).await?;
+    if !renewed {
+        bail!("matrix_cursor_lease_or_revision_mismatch");
+    }
+    Ok(())
+}
+
+async fn recover_limited_timelines(
+    pool: &PgPool,
+    http: &Client,
+    config: &PollerConfig,
+    lease: &CursorLease,
+    body: &mut SyncResponse,
+) -> Result<()> {
+    let stop = lease.opaque_cursor.as_deref().ok_or_else(|| anyhow!("matrix_initial_cursor_required"))?;
+    let deadline = Instant::now() + Duration::from_secs(GAP_DEADLINE_SECONDS);
+    let mut page_count = 0_usize;
+    let mut event_count: usize = body.rooms.join.values().map(|room| room.timeline.events.len()).sum();
+    let mut byte_count = 0_usize;
+    if event_count > GAP_EVENT_BUDGET {
+        bail!("matrix_sync_event_budget_exceeded");
+    }
+    for (room_id, room) in &mut body.rooms.join {
+        if !room.timeline.limited {
+            continue;
+        }
+        let from = room.timeline.prev_batch.as_deref().ok_or_else(|| anyhow!("matrix_gap_boundary_missing"))?;
+        let mut pager = sync_recovery::GapPager::new(from, stop)?;
+        let mut backwards = Vec::new();
+        while !pager.complete() {
+            if page_count >= GAP_PAGE_BUDGET || Instant::now() >= deadline {
+                bail!("matrix_gap_recovery_budget_exceeded");
+            }
+            // Standalone statement commits before the HTTP request. Never
+            // renew an expired/stolen fence or hold a SQL transaction over I/O.
+            renew_cursor_lease(pool, config, lease).await?;
+            let url = sync_recovery::messages_url(
+                &config.homeserver_base_url, room_id, pager.cursor(), stop, GAP_PAGE_LIMIT,
+            )?;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let bytes = timeout(remaining, async {
+                let response = http.get(url).bearer_auth(&config.matrix_access_token).send().await
+                    .map_err(|_| anyhow!("matrix_gap_transport_failure"))?;
+                if response.status() != reqwest::StatusCode::OK {
+                    bail!("matrix_gap_http_rejected");
+                }
+                read_bounded_body(response, config.sync_max_bytes).await
+            }).await.map_err(|_| anyhow!("matrix_gap_recovery_deadline"))??;
+            byte_count = byte_count.checked_add(bytes.len()).ok_or_else(|| anyhow!("matrix_gap_byte_budget_exceeded"))?;
+            if byte_count > GAP_BYTE_BUDGET {
+                bail!("matrix_gap_byte_budget_exceeded");
+            }
+            let page: sync_recovery::MessagePage = serde_json::from_slice(&bytes)
+                .map_err(|_| anyhow!("matrix_gap_invalid_json"))?;
+            pager.accept(&page, GAP_PAGE_LIMIT)?;
+            page_count += 1;
+            event_count = event_count.checked_add(page.chunk.len()).ok_or_else(|| anyhow!("matrix_gap_event_budget_exceeded"))?;
+            if event_count > GAP_EVENT_BUDGET {
+                bail!("matrix_gap_event_budget_exceeded");
+            }
+            for event in &page.chunk {
+                if event.get("room_id").is_some_and(|room| room.as_str() != Some(room_id.as_str())) {
+                    bail!("matrix_gap_room_identity_mismatch");
+                }
+            }
+            backwards.extend(page.chunk);
+        }
+        backwards.reverse();
+        backwards.append(&mut room.timeline.events);
+        room.timeline.events = backwards;
+        room.timeline.limited = false;
+    }
+    renew_cursor_lease(pool, config, lease).await?;
+    Ok(())
+}
+
+async fn persist_poison_observations(
+    pool: &PgPool,
+    config: &PollerConfig,
+    lease: &CursorLease,
+    admissions: &[Admission],
+) -> Result<()> {
+    if !admissions.iter().any(|item| matches!(item, Admission::Poison { .. })) {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await?;
+    let owned: bool = sqlx::query_scalar(
+        "select public.cex_matrix_renew_cursor_lease_v1($1,$2,$3,$4,$5)",
+    )
+    .bind(&config.partition_id).bind(&config.worker_id).bind(lease.lease_fence)
+    .bind(lease.cursor_revision).bind(config.cursor_lease_seconds)
+    .fetch_one(&mut *tx).await?;
+    if !owned {
+        bail!("matrix_cursor_lease_or_revision_mismatch");
+    }
+    for item in admissions {
+        if let Admission::Poison { source_event_id, source_event_sha256, failure_code, room_id, source_payload } = item {
+            let _: i64 = sqlx::query_scalar(
+                "select public.cex_matrix_record_poison_event_v1($1,$2,$3,$4)",
+            )
+            .bind(source_event_id).bind(source_event_sha256).bind(&config.partition_id)
+            .bind(*failure_code).fetch_one(&mut *tx).await?;
+            let _: String = sqlx::query_scalar(
+                "select public.cex_matrix_store_poison_payload_v1($1,$2,$3,$4,$5)",
+            )
+            .bind(source_event_id).bind(source_event_sha256).bind(&config.partition_id)
+            .bind(room_id).bind(sqlx::types::Json(source_payload.clone()))
+            .fetch_one(&mut *tx).await?;
+        }
+    }
+    // Poison evidence survives even though the subsequent admission/cursor
+    // transaction is rejected. It is never silently rolled back with that batch.
     tx.commit().await?;
     Ok(())
 }
@@ -448,7 +629,10 @@ async fn verify_schema(pool: &PgPool) -> Result<()> {
     let ready: bool = sqlx::query_scalar(
         "select to_regprocedure('public.cex_matrix_acquire_cursor_lease_v1(text,text,integer)') is not null \
              and to_regprocedure('public.cex_matrix_enqueue_delivery_v1(uuid,text,text,text,jsonb,integer)') is not null \
-             and to_regprocedure('public.cex_matrix_advance_cursor_v1(text,text,bigint,bigint,text)') is not null",
+             and to_regprocedure('public.cex_matrix_advance_cursor_v1(text,text,bigint,bigint,text)') is not null \
+             and to_regprocedure('public.cex_matrix_renew_cursor_lease_v1(text,text,bigint,bigint,integer)') is not null \
+             and to_regclass('public.matrix_transport_poison_payloads') is not null \
+             and to_regclass('public.matrix_transport_cursor_history') is not null",
     )
     .fetch_one(pool)
     .await?;
@@ -467,7 +651,8 @@ async fn read_bounded_body(mut response: Response, max_bytes: usize) -> Result<V
     }
 
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await? {
+    while let Some(chunk) = response.chunk().await
+        .map_err(|_| anyhow!("matrix_sync_body_interrupted"))? {
         if bytes.len().saturating_add(chunk.len()) > max_bytes {
             bail!("Matrix sync response exceeds MATRIX_POLL_SYNC_MAX_BYTES");
         }
@@ -497,7 +682,13 @@ fn deterministic_uuid(domain: &str, parts: &[&str]) -> Uuid {
 
 impl PollerConfig {
     fn from_env() -> Result<Self> {
-        let production_like = is_production_like();
+        let production_like = is_production_like()?;
+        let bootstrap_start_now = match env::var("MATRIX_POLL_BOOTSTRAP_MODE") {
+            Ok(value) if value == "start_now" => true,
+            Ok(value) if value == "require_cursor" => false,
+            Err(env::VarError::NotPresent) => false,
+            _ => bail!("invalid_matrix_bootstrap_mode"),
+        };
         let homeserver_base_url = env::var("MATRIX_POLL_HOMESERVER")
             .unwrap_or_else(|_| "http://127.0.0.1:8008".to_string());
         let matrix_access_token = required_env("MATRIX_ACCESS_TOKEN", None)?;
@@ -538,6 +729,12 @@ impl PollerConfig {
 
         let url = Url::parse(&homeserver_base_url)
             .context("MATRIX_POLL_HOMESERVER is not a valid URL")?;
+        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none()
+            || !url.username().is_empty() || url.password().is_some()
+            || url.query().is_some() || url.fragment().is_some()
+        {
+            bail!("invalid_matrix_homeserver_authority");
+        }
         if production_like && url.scheme() != "https" {
             bail!("production-like MATRIX_POLL_HOMESERVER must use https");
         }
@@ -556,6 +753,7 @@ impl PollerConfig {
             sync_max_bytes,
             delivery_max_attempts,
             production_like,
+            bootstrap_start_now,
         })
     }
 }
@@ -597,16 +795,17 @@ fn validate_identifier(name: &str, value: &str, max_bytes: usize) -> Result<()> 
     Ok(())
 }
 
-fn is_production_like() -> bool {
-    env::var("CEX_RUNTIME_PROFILE")
-        .or_else(|_| env::var("APP_ENV"))
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "production" | "prod" | "staging" | "stage" | "preprod"
-            )
-        })
-        .unwrap_or(false)
+fn is_production_like() -> Result<bool> {
+    let mut values = Vec::new();
+    for name in [PROFILE_ENV_NAME, "CEX_RUNTIME_PROFILE", "APP_ENV"] {
+        match env::var(name) {
+            Ok(value) => values.push(Some(value)),
+            Err(env::VarError::NotPresent) => values.push(None),
+            Err(env::VarError::NotUnicode(_)) => bail!("non_unicode_matrix_runtime_profile"),
+        }
+    }
+    let selected = runtime_profile::resolve_profiles(&values).map_err(|code| anyhow!(code))?;
+    Ok(selected.legacy_value() != "local_dev")
 }
 
 #[cfg(test)]
@@ -639,4 +838,83 @@ mod tests {
         assert_eq!(first.len(), 71);
         assert_ne!(first, second);
     }
+
+    fn test_config() -> PollerConfig {
+        PollerConfig {
+            homeserver_base_url: "https://matrix.example".into(),
+            matrix_access_token: "unit-test-not-a-secret".into(),
+            bot_user_id: "@bot:example".into(),
+            database_url: "postgres://unit/test".into(),
+            partition_id: "test-partition".into(),
+            worker_id: "test-worker".into(),
+            cursor_lease_seconds: 60,
+            poll_interval_ms: 100,
+            sync_timeout_ms: 1000,
+            sync_filter: None,
+            sync_max_bytes: 4096,
+            delivery_max_attempts: 3,
+            production_like: false,
+            bootstrap_start_now: false,
+        }
+    }
+
+    fn test_batch(event: Value) -> SyncResponse {
+        serde_json::from_value(json!({
+            "next_batch": "next",
+            "rooms": {"join": {"!room:example": {"timeline": {"events": [event]}}}}
+        })).unwrap()
+    }
+
+    #[test]
+    fn text_admission_remains_stable_across_unsigned_observations() {
+        let mut event = json!({"type":"m.room.message", "event_id":"$one",
+            "sender":"@human:example", "origin_server_ts":1,
+            "content":{"msgtype":"m.text","body":"hello"}});
+        let first = prepare_admissions(&test_batch(event.clone()), &test_config()).unwrap();
+        event["unsigned"] = json!({"age": 999});
+        let second = prepare_admissions(&test_batch(event), &test_config()).unwrap();
+        match (&first[0], &second[0]) {
+            (Admission::Delivery { delivery_id: a, payload_sha256: ah, .. },
+             Admission::Delivery { delivery_id: b, payload_sha256: bh, .. }) => {
+                assert_eq!(a, b);
+                assert_eq!(ah, bh);
+            }
+            _ => panic!("valid text must be an immutable delivery"),
+        }
+    }
+
+    #[test]
+    fn malformed_text_retains_recoverable_poison_bytes() {
+        let event = json!({"type":"m.room.message", "event_id":"$one",
+            "sender":"@human:example", "unsigned":{"age":10},
+            "content":{"msgtype":"m.text"}});
+        let admissions = prepare_admissions(&test_batch(event), &test_config()).unwrap();
+        match &admissions[0] {
+            Admission::Poison { failure_code, source_payload, room_id, .. } => {
+                assert_eq!(*failure_code, "missing_message_body");
+                assert_eq!(room_id, "!room:example");
+                assert!(source_payload.get("unsigned").is_none());
+                assert_eq!(source_payload["event_id"], "$one");
+            }
+            _ => panic!("malformed text must not become a business command"),
+        }
+    }
+
+    #[test]
+    fn edits_are_not_new_commands() {
+        let event = json!({"type":"m.room.message", "event_id":"$edit",
+            "sender":"@human:example", "content":{"msgtype":"m.text","body":"replacement",
+            "m.relates_to":{"rel_type":"m.replace","event_id":"$one"}}});
+        assert!(prepare_admissions(&test_batch(event), &test_config()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn known_nontext_and_bot_echoes_are_ignored() {
+        for (sender, kind) in [("@human:example", "m.image"), ("@bot:example", "m.text")] {
+            let event = json!({"type":"m.room.message", "event_id":"$one",
+                "sender":sender, "content":{"msgtype":kind,"body":"ignored"}});
+            assert!(prepare_admissions(&test_batch(event), &test_config()).unwrap().is_empty());
+        }
+    }
+
 }

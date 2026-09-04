@@ -9,96 +9,139 @@ Deployable: yes
 Owner role: `matrix-integration`  
 Production authorization: `not_granted`
 
-This contract is indexed by `docs/module-catalog-v1.json`. It defines the module boundary for one exact repository tree; it is not release evidence. The durable runtime wiring described below remains a repository candidate until the exact candidate SHA passes hosted Rust and PostgreSQL recovery gates.
+This is an unqualified source implementation. Tests and exact-tree hosted evidence,
+not this contract, determine acceptance. See `docs/matrix-recovery-and-receipt-contract-v2.md`.
 
 ## Purpose and non-goals
 
-**Purpose.** Polls an authenticated Matrix `/sync` stream, validates bounded supported events, durably registers source identity and downstream delivery intent, and advances the opaque Matrix cursor only through PostgreSQL compare-and-set under an unexpired fenced lease.
-
-**Non-goals.** It is not an event store for Matrix, a Matrix identity authority, a scheduler for arbitrary CEX work, a user/room governance service, a response sender, or a substitute for homeserver ordering, edit and redaction semantics.
+The poller admits supported joined-room Matrix events into a durable inbox/outbox
+and advances an opaque cursor only under a fenced PostgreSQL lease. It now fills
+limited incremental timelines before admission. It is not a homeserver, Agent,
+user authority, financial writer, scientific evaluator, response sender, or proof
+that inaccessible/deleted history can be reconstructed.
 
 ## Authority and owned state
 
-The poller owns only the transport-local observation that a source event was admitted to the Matrix transport inbox and that its relay delivery intent was durably enqueued. Matrix remains authoritative for source events and sync tokens; downstream services remain authoritative for accepted actions.
-
-Durable state is limited to one cursor row per declared partition, immutable source-event identity and hash, and the first relay delivery intent. It owns no consumer, research, Agent, financial, World/Game or finality state. A process-local value, successful HTTP response or advanced in-memory token is never durable acceptance evidence.
+Owned facts are cursor revision, fenced lease, source observations and relay
+intents. Matrix owns source events. Consumer Entry and Hepta own accepted business
+actions. A sync token, presentation field, signature-free sender claim, in-memory
+result or HTTP success does not transfer identity or business authority.
+The transport migration also preserves quarantine snapshots and cursor history.
 
 ## Source layout and entry points
 
-- `src/main.rs`: fail-closed configuration, bounded `/sync` client, event validation, stable hashing and delivery identity, PostgreSQL lease acquisition, transactional inbox/outbox registration, poison isolation, and cursor CAS advancement.
-- `Cargo.toml`: declares direct `sqlx`, `sha2` and `anyhow` dependencies required by the durable runtime.
-- `services/matrix-entry-adapter/migrations/0001_transport_durability.sql`: shared Matrix transport schema and stored-procedure authority.
-
 Catalog-bound entry points:
 
-- `apps/matrix-bot-poller/src/main.rs`
+- `apps/matrix-bot-poller/src/main.rs`: sync, bounded gap fetch, separate poison
+  persistence, atomic inbox/outbox/cursor admission, startup and recovery.
+- `apps/matrix-bot-poller/src/sync_recovery.rs`: opaque-token pagination state,
+  cycle/shape checks and safely encoded fixed-authority messages URLs.
+- `apps/matrix-bot-poller/src/runtime_profile.rs`: strict pure profile parser.
 
-Any new worker, partitioning strategy, storage owner or public command grammar must update the module catalog and this contract in the same commit.
+The zero-dependency parser is temporarily replicated byte-for-byte in the adapter
+and relay; the source gate rejects divergence. It adds no Cargo dependency.
+Shared-crate extraction remains an explicit future refactor, not an inferred result.
 
 ## Interfaces and contracts
 
-The executable consumes Matrix Client-Server API v3 `/sync`. It sends the configured bearer token, an explicit long-poll timeout, optional opaque `since` cursor and optional Matrix filter. Redirects are disabled and the response is rejected when either declared or observed bytes exceed `MATRIX_SYNC_MAX_BYTES`.
+Use authenticated Matrix Client-Server v3 `/sync`. For an incremental joined-room
+`limited` timeline, fetch `/rooms/{roomId}/messages` backwards from `prev_batch`
+to the previously committed sync token. Validate every page's `start`, token
+bounds, event limit, room binding and cursor progress. Empty chunks with `end`
+continue. An absent `end` exhausts the server-visible range; it does not prove
+that removed or permission-hidden history exists. Reverse recovered pages into
+chronological order before combining with the returned timeline.
 
-Supported input is currently a complete `m.room.message` event with `msgtype=m.text`, stable `event_id`, `room_id`, `sender` and non-blank body. Unsupported event kinds are ignored without acquiring CEX authority. A malformed event in the supported class is recorded as poison and prevents cursor advancement for the batch.
-
-Each accepted message becomes `cex.matrix-inbound-event.v1`. Its source hash and relay payload hash are deterministic SHA-256 values. The relay delivery UUID is deterministically derived from source event ID, destination and payload hash. A replay with identical identity and bytes is accepted; reused identity with different bytes is a collision.
+Supported actions are nonblank bounded `m.room.message` / `m.text`. Known other
+message types are ignored, edits (`m.replace`) do not create another invocation,
+and malformed supported messages become poison. Normal message normalization
+and delivery-ID derivation are unchanged, preserving existing healthy replays.
 
 ## Persistence, concurrency, and recovery
 
-`cex_matrix_acquire_cursor_lease_v1` creates or acquires a partition lease and monotonically increases `lease_fence`. Another owner receives no row while the lease is live. `cex_matrix_accept_source_event_v1` and `cex_matrix_enqueue_delivery_v1` run inside one SQL transaction for every event in the returned sync batch. `cex_matrix_advance_cursor_v1` is the final statement and succeeds only for the expected partition, owner, fence, cursor revision and unexpired lease.
+Apply transport migrations 0001, 0002 and 0003 in order. Renewals require the same
+unexpired owner, fence and revision; an expired lease cannot be resurrected.
+Each renewal statement commits before HTTP. Recovery is bounded by 100 pages,
+100 events per page, 10,000 combined events, 32 MiB gap bytes and 120 seconds.
+Limits, malformed pages, cycles or transport failures leave the cursor unchanged.
+An interrupted process re-fetches from the unchanged committed cursor; partial
+pages are not separately checkpointed or allowed to create remote actions.
 
-If any event registration, delivery enqueue or cursor CAS fails, the transaction rolls back and the cursor is not advanced. Restart, timeout or process loss therefore replays the same Matrix cursor and the same event/delivery identities. The immutable inbox and unique `(source_event_id, destination)` outbox constraint are the duplicate barrier.
-
-Poison observations are durable and collision checked. They require an explicit one-time operator acknowledgement through the database contract; acknowledgement alone does not advance or rewrite a cursor. Multiple pollers may target one partition only through the fenced lease contract.
+Poison observations and canonical snapshots commit in a separate transaction
+before the business-admission transaction. Unacknowledged poison anywhere in the
+partition blocks advancement, including when it disappears from a later sync.
+An explicit operator acknowledgement authorizes quarantine, not reprocessing.
+Canonical payload snapshots remain recoverable in restricted custody. The normal
+fenced transaction then admits healthy events and advances the cursor atomically.
+Every cursor revision has an immutable history entry. SQL role isolation and real
+multi-instance/crash recovery still require executed tests and deployment review.
 
 ## Configuration and secrets
 
-Required runtime inputs are `MATRIX_ACCESS_TOKEN` and `MATRIX_TRANSPORT_DATABASE_URL` or `DATABASE_URL`. Production-like profiles additionally require explicit `MATRIX_POLL_WORKER_ID` and `MATRIX_POLL_PARTITION_ID`.
+Required settings are `MATRIX_ACCESS_TOKEN`, `MATRIX_BOT_USER_ID`,
+`MATRIX_TRANSPORT_DATABASE_URL` (or `DATABASE_URL`), `MATRIX_POLL_PARTITION_ID` and
+`MATRIX_POLL_WORKER_ID`. Profile sources are `MATRIX_POLL_RUNTIME_PROFILE`,
+`CEX_RUNTIME_PROFILE`, `APP_ENV`; unknown, empty, non-Unicode and conflicting
+explicit values fail. Beta, staging and production all use production-like checks.
 
-Other bounded settings are `MATRIX_POLL_HOMESERVER`, `MATRIX_BOT_USER_ID`, `MATRIX_SYNC_FILTER`, `MATRIX_SYNC_TIMEOUT_MS`, `MATRIX_SYNC_MAX_BYTES`, `MATRIX_POLL_INTERVAL_MS`, `MATRIX_CURSOR_LEASE_SECONDS`, and `MATRIX_RELAY_DELIVERY_MAX_ATTEMPTS`. The cursor lease must exceed the sync timeout by at least five seconds. Production-like homeserver transport must use HTTPS.
+| Key | Current default / constraint |
+|---|---|
+| `MATRIX_POLL_HOMESERVER` | loopback HTTP only for local use; production-like requires HTTPS |
+| `MATRIX_POLL_CURSOR_LEASE_SECONDS` | 60; 5–3600; must exceed sync timeout by more than 10 seconds |
+| `MATRIX_POLL_SYNC_TIMEOUT_MS` | 30000; minimum 1000 |
+| `MATRIX_POLL_SYNC_MAX_BYTES` | 2097152; maximum 4194304 |
+| `MATRIX_POLL_INTERVAL_MS` | 3000; effective minimum 100 |
+| `MATRIX_POLL_DELIVERY_MAX_ATTEMPTS` | 8; 1–100 |
+| `MATRIX_SYNC_FILTER` | optional Matrix filter; no local inference authority |
+| `MATRIX_POLL_BOOTSTRAP_MODE` | `require_cursor` by default; explicit `start_now` establishes the first boundary without executing historical messages |
 
-The Matrix access token and database URL come from approved secret custody and must never be logged, committed, placed in payloads or reused as downstream credentials.
+A missing cursor cannot silently consume old commands. Under explicit `start_now`,
+commit the first next-batch cursor with no deliveries; later syncs follow normal
+recovery. This defines coverage from that recorded start, not from room creation.
+Endpoint credentials, query strings and fragments are rejected. Tokens, cursors,
+source messages and database diagnostics are not emitted to ordinary telemetry.
 
 ## Security and trust boundaries
 
-The poller trusts only the configured homeserver transport endpoint and its bearer-token response. Caller-visible Matrix sender, room and event fields remain untrusted source claims until the homeserver and downstream identity contracts validate them. Bot-authored messages are ignored to prevent reply loops.
-
-HTTP redirects are disabled, bodies are bounded before JSON decoding, supported events fail closed when incomplete, and telemetry excludes message bodies, tokens, sync cursors, raw payloads and high-cardinality personal identifiers. A Matrix event never grants CEX identity, entitlement, research, value or finality authority.
+Transport trust comes from the configured homeserver and token, not message
+fields. Disable redirects, bound response bodies, validate identifiers and isolate
+poison bytes. Do not use raw database/HTTP exception bodies in normal logging.
+Unknown outcomes never invent business completion. Historical poison hashes using
+old mutable metadata may require an operator-reviewed migration decision; they
+must not be rewritten or marked acknowledged by this upgrade.
 
 ## Verification
 
-Required commands:
-
 ```text
-cargo fmt --all -- --check
-cargo check --locked -p matrix-bot-poller --all-targets
 cargo test --locked -p matrix-bot-poller --all-targets
 cargo clippy --locked -p matrix-bot-poller --all-targets -- -D warnings
-python3 scripts/check-matrix-runtime-wiring.py
-python3 scripts/check-matrix-transport-durability.py
-python3 scripts/test-matrix-transport-durability.py
-bash scripts/check-matrix-transport-postgres.sh
+python3 scripts/check-matrix-recovery-contract.py
+python3 scripts/test-matrix-recovery-contract.py
 ```
 
-Required behavioral focus:
-
-- exact replay versus event/delivery collision;
-- lease acquisition, revision CAS, stale fence rejection and expired-owner recovery;
-- whole-batch rollback when registration or cursor advancement fails;
-- restart after durable enqueue but before local acknowledgement;
-- bounded `/sync`, redirect rejection, malformed supported-event poison isolation, and bot-loop suppression;
-- absence of file-backed or process-local cursor authority.
-
-The exact candidate SHA must pass the authoritative hosted workflow and appear in the generated immutable candidate manifest. Source formatting and static checks are necessary but not sufficient.
+Run all three Matrix packages and `bash scripts/check-matrix-source-observation-postgres.sh`
+on a disposable PostgreSQL 16 database with explicit reset consent. Required cases
+include empty continuation, cycles, malformed pages, room mismatch, budgets,
+restart replay, stale renewal, poison blocking/quarantine, and cursor history.
+Python checks are source-contract tests; they do not execute Rust, SQL or Matrix.
 
 ## Deployment and operations
 
-Apply the Matrix transport migration with an approved schema owner before starting the poller. Run with a least-privilege role permitted to execute only the required transport procedures. Assign exactly one stable partition identity per Matrix account/filter stream; scale through disjoint partitions or the fenced lease contract, never through an unfenced shared cursor.
+Readiness requires all three transport migrations and valid security settings.
+Configure an explicit first-start policy and stable account/filter partition.
+Monitor cursor age, recovery holds, poison inventory and pending deliveries.
+Recovery limit exhaustion is an operator hold, not a skip; tune capacity only
+through a reviewed source/configuration change and requalification.
 
-Readiness is false unless configuration, PostgreSQL schema and credential policy validate. Monitor sync lag, cursor revision age, lease expiry, poison count, oldest pending relay delivery and collision rejects. Rollback stops lease acquisition before switching binaries and preserves the exact cursor, inbox, outbox, history and poison records.
+Rollback stops admission and lease acquisition before switching compatible
+binaries. Preserve all cursor, source, poison and outbox history. Never drop the
+new evidence tables or reinstate old auto-advance behavior as a recovery shortcut.
+A real homeserver and representative load qualification remain required.
 
 ## Compatibility and change protocol
 
-Matrix cursors are opaque and are never parsed or synthesized. Changes to event filtering, payload schema, source hashing, destination identity, partitioning, cursor representation or poison policy require a new explicit protocol version, replay fixtures and migration/rollback evidence.
-
-Changes to authority, interfaces, persistence, configuration, retry semantics or deployment topology require this contract, the module catalog, Matrix durability design, executable tests, hosted gate wiring and a new shared candidate trigger. No module document may declare repository closure or production authorization.
+Cursors remain opaque. Healthy source hashing and UUID derivation are unchanged.
+New bootstrap semantics are explicit and only affect a stream with no cursor.
+Changes to filtering, pagination, hash rules, partitioning, quarantine, persistence
+or limits update the module catalog, this contract, tests and exact-tree evidence.
+No source document or local result grants repository or production authorization.

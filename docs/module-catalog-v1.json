@@ -406,7 +406,8 @@
         "services/matrix-entry-adapter/src/lib.rs",
         "services/matrix-entry-adapter/src/runtime_profile.rs",
         "services/matrix-entry-adapter/migrations/0001_transport_durability.sql",
-        "services/matrix-entry-adapter/migrations/0002_source_observation_replay.sql"
+        "services/matrix-entry-adapter/migrations/0002_source_observation_replay.sql",
+        "services/matrix-entry-adapter/migrations/0003_sync_recovery_and_send_receipts.sql"
       ],
       "verification": [
         "cargo test -p matrix-entry-adapter",
@@ -425,11 +426,15 @@
       "authority": "Webhook/relay transport only; downstream services decide identity, task, research, value, and finality authority.",
       "documentation": "docs/modules/matrix-bot-relay.md",
       "source_entrypoints": [
-        "apps/matrix-bot-relay/src/main.rs"
+        "apps/matrix-bot-relay/src/main.rs",
+        "apps/matrix-bot-relay/src/runtime_profile.rs",
+        "apps/matrix-bot-relay/src/response_contract.rs"
       ],
       "verification": [
         "cargo test --locked -p matrix-bot-relay --all-targets",
-        "cargo clippy --locked -p matrix-bot-relay --all-targets -- -D warnings"
+        "cargo clippy --locked -p matrix-bot-relay --all-targets -- -D warnings",
+        "python3 scripts/check-matrix-recovery-contract.py",
+        "python3 scripts/test-matrix-recovery-contract.py"
       ]
     },
     {
@@ -443,11 +448,15 @@
       "authority": "Polling/cursor transport only; it owns no consumer, research, financial, or finality state.",
       "documentation": "docs/modules/matrix-bot-poller.md",
       "source_entrypoints": [
-        "apps/matrix-bot-poller/src/main.rs"
+        "apps/matrix-bot-poller/src/main.rs",
+        "apps/matrix-bot-poller/src/runtime_profile.rs",
+        "apps/matrix-bot-poller/src/sync_recovery.rs"
       ],
       "verification": [
         "cargo test --locked -p matrix-bot-poller --all-targets",
-        "cargo clippy --locked -p matrix-bot-poller --all-targets -- -D warnings"
+        "cargo clippy --locked -p matrix-bot-poller --all-targets -- -D warnings",
+        "python3 scripts/check-matrix-recovery-contract.py",
+        "python3 scripts/test-matrix-recovery-contract.py"
       ]
     }
   ],

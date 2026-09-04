@@ -3,7 +3,7 @@
   "status": "unqualified_working_change",
   "parent_plan": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
   "parent_addendum": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md",
-  "patch_base": "52a5fd33f404fc998a7bea5783617af9a804cc93",
+  "patch_base": "0977bca60d2769c3a7467b8b6ad55fe8963d33b1",
   "architecture_sequence": 52,
   "candidate_freeze_authority": "docs/release-evidence/p0-candidate-trigger.json",
   "is_candidate_freeze": false,
@@ -17,29 +17,36 @@
     "Add migration 0002 preserving immutable inbox rows while separating cursor observations from same-partition source replay identity.",
     "Add source-observation PostgreSQL tests and explicit disposable-database reset consent; keep the complete original transport regression.",
     "Correct Execution current-versus-legacy runtime, credential and deployment documentation.",
-    "Add read-only supporting exact-head regression jobs without replacing or weakening authoritative release gates."
+    "Add read-only supporting exact-head regression jobs without replacing or weakening authoritative release gates.",
+    "Bounded limited-timeline pagination, lease renewal and explicit first-cursor bootstrap; no cursor advance on failed recovery.",
+    "Durable restricted poison payloads, partition hold, explicit quarantine acknowledgement and append-only cursor history.",
+    "Fail-closed expired/ambiguous adapter outcomes, original-room reply validation, typed response loss, immutable Matrix send scope and event receipts.",
+    "Byte-identical strict profile selection for adapter, poller and relay; shared-crate and embedded-caller consolidation still open.",
+    "Add migration 0003 and SQL hostile regression; add 29 Rust unit tests and 24 Python source mutation tests, preserving original gates."
   ],
   "local_verification_scope": {
-    "python_source_contract_and_shell_negative_tests": 12,
+    "python_source_contract_and_shell_negative_tests": 36,
     "rust_tests_executed": false,
     "postgres_tests_executed": false,
     "full_repository_checks_executed": false,
-    "hosted_exact_sha_qualification_proven": false
+    "hosted_exact_sha_qualification_proven": false,
+    "source_checks_do_not_prove_runtime_behavior": true
   },
   "open_repository_work": [
-    "Apply and verify the separately prepared Sequence 54 governance, lockfile, semantic inventory and authoritative-gate changes against the final integrated tree.",
-    "Implement bounded Matrix limited-timeline gap recovery before cursor advancement and qualify real homeserver behavior.",
-    "Resolve poison-event blocking versus quarantine semantics in poller code, recovery procedures and end-to-end tests.",
-    "Complete adapter durable response-loss replay, runtime-role permissions and multi-instance validation.",
-    "Validate relay response-loss classification, returned Matrix event receipts and original-room binding.",
-    "Consolidate runtime profile parsing across embedded adapter callers, poller, relay and shared-config.",
-    "Produce and commit source-derived semantic inventory with correct route/method binding; improve module-specific API, schema, error and configuration specifications.",
-    "Run full Rust formatting, locked compilation, strict lint, PostgreSQL migration/recovery, five authoritative workflows and the aggregate on one final frozen candidate."
+    "Integrate and verify Sequence 54 governance, Cargo.lock, generated semantic inventory and authoritative-gate changes on a complete checkout.",
+    "Compile, format and lint all changed Rust code; execute complete PostgreSQL migration/role/concurrency/recovery and real homeserver integration tests.",
+    "Implement durable adapter result lookup and principal-bound response-loss reconciliation; ambiguous adapter effects currently hold safely rather than auto-retry.",
+    "Qualify large-gap backfill beyond the bounded per-iteration budget, Matrix filter/room-scope transitions, redaction/edit semantics and operational poison recovery.",
+    "Validate least-privilege SQL roles, secret rotation/reconciliation, poison snapshot retention/erasure, real readiness and queue-age/SLO behavior.",
+    "Consolidate Matrix parser copies and embedded adapter callers into a reviewed shared configuration API without introducing dependency/lock drift.",
+    "Complete module-specific API/schema/error/config specs, generated method/router binding, Consumer authority tests and cross-repository first-playable rehearsal.",
+    "Freeze one final candidate through the existing sole trigger only after integration, run all five authoritative hosted workflows and aggregate, retain exact-head evidence."
   ],
   "external_or_independent_gates": [
     "Non-empty allocated hosted runner execution and immutable final-candidate artifacts.",
     "Enforceable protected-main governance and independent exact-head review.",
     "Pinned World/Game/Chain integration and complete first-playable rehearsal.",
     "V12-X1 representative-volume recovery; X2 deployment/cutover/rollback; X3 real external-Agent reconciliation; X4 credential custody; X5 sustained soak; X6 independent security/operations/financial review; X7 applicable legal/provider approvals; X8 final accountable human decision."
-  ]
+  ],
+  "revision": "matrix-recovery-round-2"
 }

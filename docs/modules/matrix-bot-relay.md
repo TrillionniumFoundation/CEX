@@ -9,102 +9,140 @@ Deployable: yes
 Owner role: `matrix-integration`  
 Production authorization: `not_granted`
 
-This contract is indexed by `docs/module-catalog-v1.json`. It defines the module boundary for one exact repository tree; it is not release evidence. The durable runtime remains a repository candidate until its exact SHA passes hosted Rust, PostgreSQL recovery and live Matrix evidence gates.
+This contract defines unqualified source behavior. It is not real homeserver,
+PostgreSQL recovery, exact-SHA hosted or production evidence.
 
 ## Purpose and non-goals
 
-**Purpose.** Owns delivery of the shared Matrix transport outbox. It relays admitted Matrix events to the Matrix entry adapter, atomically creates an optional homeserver reply delivery, and sends replies with a stable Matrix transaction identity so response loss can be retried without creating a second message.
-
-**Non-goals.** It does not authorize Matrix users, grant CEX identity or entitlement, parse privileged CEX administration, own downstream task/research facts, debit value, decide Chain finality, or act as a Matrix homeserver.
+Relay the durable Matrix outbox to the entry adapter and deliver bounded replies
+to the original room. The relay does not grant user, research, financial,
+World/Game or Chain finality authority and does not execute participating Agents.
+Transport acknowledgement is not a proof of the downstream business result.
 
 ## Authority and owned state
 
-The relay is authoritative only for outbox claim ownership, delivery attempt history and transport completion under the shared PostgreSQL contract. Adapter, Consumer Entry, Hepta, Ledger, TRNM and Matrix retain their own domain authority.
-
-Owned state is limited to durable delivery intents, monotonically fenced claims, attempt counts, retry/dead-letter state, immutable transition history and poison observations. Direct HTTP ingress is a compatibility admission path that first persists the source event and outbox delivery; it is never a process-local queue.
+Own delivery claims, bounded attempts, immutable delivery history, outgoing
+Matrix idempotency-scope bindings and validated send receipts. The same delivery
+UUID remains the Matrix transaction ID. External services retain their business
+and messaging authority. Dead-letter can mean unresolved remote effect; it is
+never a declaration that the downstream operation definitely did not execute.
 
 ## Source layout and entry points
 
-- `src/main.rs`: fail-closed configuration, authenticated compatibility ingress, health/metrics, PostgreSQL outbox worker, adapter client, homeserver client, bounded response handling, retry classification and deterministic delivery identity.
-- `Cargo.toml`: declares direct `sqlx`, `sha2` and `anyhow` dependencies required by the durable runtime.
-- `services/matrix-entry-adapter/migrations/0001_transport_durability.sql`: shared inbox/outbox, claim/fence, transition history, lookup and poison authority.
-
 Catalog-bound entry points:
 
-- `apps/matrix-bot-relay/src/main.rs`
+- `apps/matrix-bot-relay/src/main.rs`: ingress, durable claims, fixed destinations,
+  transaction boundaries, credential-scope binding, send receipts and recovery.
+- `apps/matrix-bot-relay/src/response_contract.rs`: bounded response classification
+  and original-room reply validation, with hostile response fixtures.
+- `apps/matrix-bot-relay/src/runtime_profile.rs`: strict pure configuration parser,
+  kept byte-identical with poller and adapter pending shared-crate extraction.
 
-Any new destination, worker, response format, queue owner or public ingress must update the module catalog, durability design and this document in the same commit.
+Use shared transport migrations 0001, 0002 and 0003 in the adapter-owned directory.
+Changing destination, receipt or source identity requires catalog and protocol review.
 
 ## Interfaces and contracts
 
-The compatibility route `POST /v1/inbound/matrix-event` requires `x-relay-token`, validates a bounded Matrix event, verifies optional `x-cex-payload-sha256`, accepts an optional stable `x-cex-delivery-id`, and durably performs source-event registration plus adapter-delivery enqueue before returning `202 Accepted`.
+Authenticated compatibility ingress `POST /v1/inbound/matrix-event` persists
+source and adapter-delivery intent before `202`. Adapter delivery calls
+`/v1/matrix/events` with immutable delivery/hash/idempotency headers. Unknown
+destinations remain rejected. Replies may not change the original room, even
+when a response supplies a different or malformed `room_id`. Only bounded
+`m.text` or `m.notice` reply objects with a nonblank body are sent.
 
-The worker currently recognizes exactly two versioned destinations:
-
-- `matrix-relay-adapter-v1`: calls the Matrix entry adapter at `/v1/matrix/events` with `x-entry-token`, `x-cex-delivery-id`, `x-cex-payload-sha256` and `idempotency-key` bound to the immutable delivery;
-- `matrix-homeserver-v1`: sends `m.room.message` through Matrix Client-Server API v3 using the delivery UUID as the Matrix transaction ID and as the idempotency key.
-
-Unknown destinations fail permanently. Successful adapter responses may include `projected_reply`; reply enqueue and completion of the adapter delivery occur in the same database transaction. A downstream HTTP success is not accepted as CEX domain authority, only as transport evidence for the owning delivery contract.
+Matrix delivery uses Client-Server v3 send with the immutable delivery UUID as
+transaction ID. Only HTTP 200 plus a bounded valid `$...` event ID and no errcode
+is accepted. Empty, partial, malformed or receipt-free 2xx responses are not
+success. The complete accepted event identity is durably recorded before `sent`.
 
 ## Persistence, concurrency, and recovery
 
-`cex_matrix_claim_delivery_v1` uses `FOR UPDATE SKIP LOCKED`, increments `lease_fence`, persists claim history and returns immutable payload identity. The runtime claims one delivery per worker iteration; multiple replicas may cooperate because stale owners cannot finish a claim with a different owner or fence.
+Claims commit before I/O. Reply enqueue and adapter-delivery completion share a
+transaction. Before a Matrix send, durably bind delivery, payload hash, room,
+homeserver and a SHA-256 credential fingerprint. A changed credential or endpoint
+holds the operation rather than silently creating a different deduplication scope.
+Do not rotate unresolved send credentials without an explicit reconciliation plan.
 
-`cex_matrix_finish_delivery_v1` accepts only an unexpired matching claim. Success becomes `sent`; retryable failure becomes `pending` until `max_attempts`; permanent failure or exhausted attempts becomes `dead_letter`. Every transition is appended to immutable history.
+Record the validated send receipt and mark `sent` in one transaction. Database
+triggers reject new Matrix sent transitions without a matching immutable receipt.
+Repeated identical receipts replay; conflicting event IDs are rejected. Partial
+body reads are distinguished from size violations. Ambiguous Matrix transport
+may retry only the same bound scope, ID and bytes within the attempt budget.
 
-Adapter transport failure, timeout or lost response retries the same delivery ID and payload hash. Matrix send failure or response loss retries the same Matrix transaction ID, so the homeserver must treat the retry as the same send operation. If the relay dies after a possible remote effect and before local completion, lease expiry exposes the same immutable claim for recovery; it never creates a new operation identity.
-
-Malformed stored payloads and source/delivery identity mismatch are recorded as poison and dead-lettered. The runtime contains no `/tmp` JSON queue, `VecDeque` authority or file-backed replay state.
+Adapter durable business replay is not yet qualified. Timeouts, transport/body
+loss and ambiguous error statuses therefore enter an operator hold rather than
+being blindly resent. Expired adapter claims are dead-lettered with an explicit
+unknown-outcome reason and prior-owner provenance. This conservative safety
+control does not close adapter end-to-end availability or response-recovery gaps.
+A runtime internal failure likewise holds rather than risking another effect.
 
 ## Configuration and secrets
 
-Required inputs are `MATRIX_TRANSPORT_DATABASE_URL` or `DATABASE_URL`, `MATRIX_ENTRY_ADAPTER_TOKEN`, and `MATRIX_ACCESS_TOKEN`. Production-like profiles additionally require `MATRIX_RELAY_WORKER_ID` and a distinct `MATRIX_RELAY_INGRESS_TOKEN`.
+Required settings: `MATRIX_TRANSPORT_DATABASE_URL` or `DATABASE_URL`,
+`MATRIX_RELAY_WORKER_ID`, `MATRIX_RELAY_INGRESS_TOKEN`,
+`MATRIX_ENTRY_ADAPTER_TOKEN` or `MATRIX_ENTRY_INGRESS_TOKEN`, and `MATRIX_ACCESS_TOKEN`.
+Profile sources `MATRIX_RELAY_RUNTIME_PROFILE`, `CEX_RUNTIME_PROFILE`, `APP_ENV`
+reject unknown, empty, non-Unicode or conflicting explicit values. Beta, staging
+and production are production-like, with HTTPS and separated credentials.
 
-Other bounded settings are `MATRIX_BOT_RELAY_BIND`, `MATRIX_RELAY_POLL_INTERVAL_MS`, `MATRIX_RELAY_LEASE_SECONDS`, `MATRIX_RELAY_BATCH_SIZE`, `MATRIX_RELAY_MAX_ATTEMPTS`, `MATRIX_ENTRY_ADAPTER_URL`, `MATRIX_HOMESERVER_BASE_URL`, and `MATRIX_RELAY_HTTP_TIMEOUT_SECONDS`. The current batch size is fixed to one and the lease must exceed the HTTP timeout by at least five seconds.
+| Key | Default / bounds |
+|---|---|
+| `MATRIX_BOT_RELAY_BIND` / `MATRIX_BOT_RELAY_BIND_ADDR` | `127.0.0.1:8092` |
+| `MATRIX_ADAPTER_BASE_URL` | local `http://127.0.0.1:8091` |
+| `MATRIX_HOMESERVER_BASE_URL` | local `http://127.0.0.1:8008` |
+| `MATRIX_RELAY_CLAIM_LEASE_SECONDS` / `MATRIX_RELAY_LEASE_SECONDS` | 60; 5–3600 |
+| `MATRIX_RELAY_HTTP_TIMEOUT_SECONDS` | 20; positive and more than 5 seconds below lease |
+| `MATRIX_RELAY_POLL_INTERVAL_MS` | 500; effective minimum 50 |
+| `MATRIX_RELAY_INGRESS_MAX_BYTES` | 1048576; maximum 1048576 |
+| `MATRIX_RELAY_MAX_RESPONSE_BYTES` | 1048576; maximum 4194304 |
+| `MATRIX_RELAY_DELIVERY_MAX_ATTEMPTS` | 8; 1–100 |
 
-In production-like profiles, ingress, adapter and Matrix credentials must be pairwise distinct, external endpoints must use HTTPS, and all credentials must come from approved secret custody.
+Claims remain single-delivery per iteration. Endpoint userinfo, query and fragment
+are rejected. Secrets must not enter committed fixtures, logs, request snapshots
+or receipts. The credential fingerprint is restricted operational binding data,
+not a credential source or public identifier.
 
 ## Security and trust boundaries
 
-Inbound compatibility requests are authenticated before persistence. Redirects are disabled for adapter and Matrix clients. HTTP request and response bodies are bounded. Stored payload identity is checked against source event identity before dispatch, and raw message bodies, bearer tokens, database URLs, cursors and high-cardinality personal identifiers are excluded from telemetry.
-
-Matrix sender/room fields are source claims, not CEX authorization. Adapter replies are presentation projections and cannot create identity, task, research, value or finality authority. Credentials for ingress, downstream adapter and Matrix homeserver are separated to limit confused-deputy and lateral-movement risk.
+Authenticate ingress before persistence, disable redirects and bound bodies.
+Original-room binding prevents the adapter from turning the relay into a cross-room
+sender. Server responses remain untrusted until the receipt shape and configured
+transport authority validate. The Matrix event receipt proves a messaging response,
+not Ledger value, scientific quality or Chain finality. Do not expose raw SQL
+errors that may include private source payloads.
 
 ## Verification
 
-Required commands:
-
 ```text
-cargo fmt --all -- --check
-cargo check --locked -p matrix-bot-relay --all-targets
 cargo test --locked -p matrix-bot-relay --all-targets
 cargo clippy --locked -p matrix-bot-relay --all-targets -- -D warnings
-python3 scripts/check-matrix-runtime-wiring.py
-python3 scripts/check-matrix-transport-durability.py
-python3 scripts/test-matrix-transport-durability.py
-bash scripts/check-matrix-transport-postgres.sh
+python3 scripts/check-matrix-recovery-contract.py
+python3 scripts/test-matrix-recovery-contract.py
 ```
 
-Required behavioral focus:
-
-- authenticated direct ingress and exact replay/collision;
-- concurrent claim fencing, wrong-owner finish rejection and expired-claim recovery;
-- adapter timeout, response loss, malformed response and permanent/retryable status classification;
-- atomic adapter-complete/reply-enqueue behavior;
-- stable Matrix transaction ID across transport timeout and process restart;
-- max-attempt dead letter, poison isolation and immutable history;
-- absence of local file or memory queue authority.
-
-The exact candidate SHA must pass the authoritative hosted workflow and appear in the generated immutable candidate manifest. A green health endpoint or local static test is not production evidence.
+Database regression must cover wrong owner/fence, receipt-required completion,
+receipt replay/collision, binding drift, expired adapter hold, Matrix scoped retry,
+poison byte immutability and history. Source checks and pure response fixtures do
+not substitute for executed PostgreSQL and real homeserver failure injection.
+Existing full v12 authority gates and the aggregate remain independently required.
 
 ## Deployment and operations
 
-Apply the shared migration before starting the relay. Run under a least-privilege role permitted to execute the admission, enqueue, claim, finish and poison procedures. Readiness is false unless database schema and security configuration validate; liveness reports process health only.
+Apply migrations under the schema owner, remove that credential from resident
+processes and use reviewed least-privilege grants. Readiness requires the new
+receipt/binding functions, not simply a reachable database. Monitor pending age,
+unknown-outcome holds, scoped-retry failures, receipt conflicts and dead letters.
+An operator must distinguish an effect-unknown hold from confirmed rejection.
 
-Monitor pending and claimed delivery age, attempts, expired claims, dead-letter count, poison count, adapter outcome rate and Matrix outcome rate. Rollback stops new claims, waits for or fences current claims, preserves all immutable delivery/history evidence, and resumes only with a schema/protocol-compatible binary.
+Rollback stops claims, fences workers and retains all immutable identities,
+bindings and receipts. Do not resume an older worker that automatically reclaims
+adapter side effects or marks sends complete from status alone. Use a reviewed
+forward migration for any semantic reversal. Production authorization is not granted.
 
 ## Compatibility and change protocol
 
-Destination names, payload hashes, delivery IDs and Matrix transaction IDs are protocol identities. A new adapter or homeserver API version requires a new destination, compatibility fixtures and shadow/replay evidence. Unknown commands or destinations must never map to a privileged default.
-
-Changes to authority, routes, payloads, persistence, configuration, retry semantics or topology require this contract, the module catalog, Matrix durability design, executable tests, hosted gate wiring and a new shared candidate trigger. No module document may declare repository closure or production authorization.
+Destination strings, healthy payload hashes and delivery UUIDs remain unchanged.
+Older terminal rows are preserved as historical evidence, not upgraded to verified
+receipts. API/credential rotation, bounds, retry classification, schema and
+quarantine changes require this contract, module catalog, protocol review,
+positive/hostile tests and fresh exact-tree evidence. No document self-qualifies.

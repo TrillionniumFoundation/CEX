@@ -38,16 +38,34 @@ PY
     echo 'database configuration rejected' >&2
     exit 65
 fi
-# Validate first, then retain the original complete durability regression.
-# It resets transport tables and must run only against a disposable test DB.
-bash "$ROOT/scripts/check-matrix-transport-postgres.sh"
+# Only an explicitly consented disposable test database reaches this point.
 unset PGSERVICE PGSERVICEFILE
 # shellcheck disable=SC1090
 eval "$pg_environment"
-unset pg_environment MATRIX_TEST_DATABASE_URL
-MIGRATION="$ROOT/services/matrix-entry-adapter/migrations/0002_source_observation_replay.sql"
-psql -X -q -v ON_ERROR_STOP=1 -f "$MIGRATION"
-# Re-apply to verify additive migration/backfill idempotency.
-psql -X -q -v ON_ERROR_STOP=1 -f "$MIGRATION"
+unset pg_environment
+# Clean extension-only histories before the original suite reuses test identities.
+psql -X -q -v ON_ERROR_STOP=1 <<'SQL'
+do $cleanup$
+declare t text;
+begin
+    foreach t in array array['matrix_transport_source_observations',
+        'matrix_transport_poison_payloads', 'matrix_transport_cursor_history',
+        'matrix_transport_send_bindings', 'matrix_transport_send_receipts'] loop
+        if to_regclass('public.' || t) is not null then
+            execute format('truncate table public.%I restart identity', t);
+        end if;
+    end loop;
+end;
+$cleanup$;
+SQL
+# Retain the complete original transport behavior regression.
+bash "$ROOT/scripts/check-matrix-transport-postgres.sh"
+unset MATRIX_TEST_DATABASE_URL
+for NAME in 0002_source_observation_replay.sql 0003_sync_recovery_and_send_receipts.sql; do
+  MIGRATION="$ROOT/services/matrix-entry-adapter/migrations/$NAME"
+  psql -X -q -v ON_ERROR_STOP=1 -f "$MIGRATION"
+  psql -X -q -v ON_ERROR_STOP=1 -f "$MIGRATION"
+done
 psql -X -q -v ON_ERROR_STOP=1 -f "$ROOT/scripts/test-matrix-source-observation-replay.sql"
-printf '%s\n' '{"schema":"cex.matrix-source-observation-check.v1","status":"ok","production_authorization":"not_granted"}'
+psql -X -q -v ON_ERROR_STOP=1 -f "$ROOT/scripts/test-matrix-sync-recovery-postgres.sql"
+printf '%s\n' '{"schema":"cex.matrix-recovery-postgres-check.v2","status":"ok","production_authorization":"not_granted"}'

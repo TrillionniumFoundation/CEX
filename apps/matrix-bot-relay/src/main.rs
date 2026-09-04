@@ -1,3 +1,6 @@
+mod runtime_profile;
+mod response_contract;
+
 use anyhow::{anyhow, bail, Context, Result};
 use axum::{
     extract::{DefaultBodyLimit, State},
@@ -22,6 +25,7 @@ use uuid::Uuid;
 const ADAPTER_DESTINATION: &str = "matrix-relay-adapter-v1";
 const MATRIX_DESTINATION: &str = "matrix-homeserver-v1";
 const MAX_DATABASE_CONNECTIONS: u32 = 8;
+const PROFILE_ENV_NAME: &str = "MATRIX_RELAY_RUNTIME_PROFILE";
 
 #[derive(Clone)]
 struct AppState {
@@ -30,7 +34,7 @@ struct AppState {
     config: Arc<RelayConfig>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct RelayConfig {
     bind_addr: String,
     database_url: String,
@@ -243,7 +247,8 @@ async fn compatibility_ingress(
         )
             .into_response(),
         Err(err) => {
-            warn!(error = %err, source_event_id = %event_id, "failed to admit compatibility Matrix event");
+            let _ = err;
+            warn!("matrix_event_admission_failed; inspect protected database evidence");
             api_error(StatusCode::CONFLICT, "matrix_event_admission_failed")
         }
     }
@@ -295,9 +300,9 @@ async fn run_delivery_worker(state: AppState) {
                 );
                 let delivery_id = delivery.delivery_id;
                 let lease_fence = delivery.lease_fence;
-                if let Err(err) = process_claim(&state, delivery).await {
+                if let Err(_err) = process_claim(&state, delivery).await {
                     error!(
-                        error = %err,
+                        error_code = "matrix_delivery_processing_failed",
                         delivery_id = %delivery_id,
                         lease_fence,
                         "Matrix delivery processing failed"
@@ -307,15 +312,15 @@ async fn run_delivery_worker(state: AppState) {
                         &state.config.worker_id,
                         delivery_id,
                         lease_fence,
-                        "retryable_failure",
-                        Some("relay_internal_error"),
+                        "permanent_failure",
+                        Some("relay_internal_unknown_outcome"),
                     )
                     .await;
                 }
             }
             Ok(None) => {}
-            Err(err) => {
-                error!(error = %err, "failed to claim Matrix delivery");
+            Err(_err) => {
+                error!("matrix_delivery_claim_failed");
             }
         }
         sleep(Duration::from_millis(state.config.poll_interval_ms)).await;
@@ -430,24 +435,29 @@ async fn call_adapter(state: &AppState, delivery: &ClaimedDelivery) -> Result<Re
     )
     .await
     {
-        Err(_) => return Ok(RemoteOutcome::Retryable("adapter_timeout")),
-        Ok(Err(_)) => return Ok(RemoteOutcome::Retryable("adapter_network_error")),
+        Err(_) => return Ok(RemoteOutcome::Permanent("adapter_response_unknown_timeout")),
+        Ok(Err(_)) => return Ok(RemoteOutcome::Permanent("adapter_response_unknown_network")),
         Ok(Ok(response)) => response,
     };
     let status = response.status();
     let body = match read_bounded_body(response, state.config.max_response_bytes).await {
         Ok(body) => body,
-        Err(_) => return Ok(RemoteOutcome::Permanent("adapter_response_too_large")),
+        Err(response_contract::BodyFailure::TooLarge) => {
+            return Ok(RemoteOutcome::Permanent("adapter_unverified_oversized_response"));
+        }
+        Err(response_contract::BodyFailure::Interrupted) => {
+            return Ok(RemoteOutcome::Permanent("adapter_response_unknown_interrupted"));
+        }
     };
 
     if status.is_success() {
         return match serde_json::from_slice::<Value>(&body) {
-            Ok(value) => Ok(RemoteOutcome::Success(value)),
-            Err(_) => Ok(RemoteOutcome::Permanent("adapter_invalid_json")),
+            Ok(value) if value.is_object() => Ok(RemoteOutcome::Success(value)),
+            _ => Ok(RemoteOutcome::Permanent("adapter_response_unknown_invalid_json")),
         };
     }
     if is_retryable_status(status) {
-        Ok(RemoteOutcome::Retryable("adapter_retryable_status"))
+        Ok(RemoteOutcome::Permanent("adapter_response_unknown_status"))
     } else {
         Ok(RemoteOutcome::Permanent("adapter_permanent_status"))
     }
@@ -459,14 +469,18 @@ async fn complete_adapter_success(
     event: &InboundMatrixEvent,
     upstream: Value,
 ) -> Result<()> {
-    let projected_reply = upstream.get("projected_reply").cloned();
+    let projected_reply = match response_contract::bound_reply(&upstream, &event.room_id) {
+        Ok(reply) => reply,
+        Err(code) => {
+            finish_delivery(&state.pool, &state.config.worker_id, delivery.delivery_id,
+                delivery.lease_fence, "permanent_failure", Some(code)).await?;
+            return Ok(());
+        }
+    };
     let mut tx: Transaction<'_, Postgres> = state.pool.begin().await?;
 
     if let Some(projected_reply) = projected_reply {
-        let room_id = upstream
-            .get("room_id")
-            .and_then(Value::as_str)
-            .unwrap_or(event.room_id.as_str());
+        let room_id = event.room_id.as_str();
         validate_identifier(room_id, 512)?;
         let envelope = MatrixReplyEnvelope {
             room_id: room_id.to_string(),
@@ -527,16 +541,28 @@ async fn process_matrix_delivery(state: &AppState, delivery: &ClaimedDelivery) -
 
     let outcome = call_matrix_homeserver(state, delivery, &envelope).await?;
     match outcome {
-        RemoteOutcome::Success(_) => {
-            finish_delivery(
-                &state.pool,
-                &state.config.worker_id,
-                delivery.delivery_id,
-                delivery.lease_fence,
-                "sent",
-                None,
+        RemoteOutcome::Success(receipt) => {
+            let event_id = receipt.get("event_id").and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("matrix_receipt_contract_mismatch"))?;
+            let mut tx = state.pool.begin().await?;
+            let _: String = sqlx::query_scalar(
+                "select public.cex_matrix_record_send_receipt_v1($1,$2,$3,$4,$5,$6)",
             )
-            .await?;
+            .bind(delivery.delivery_id)
+            .bind(&state.config.worker_id)
+            .bind(delivery.lease_fence)
+            .bind(&delivery.payload_sha256)
+            .bind(&envelope.room_id)
+            .bind(event_id)
+            .fetch_one(&mut *tx).await?;
+            let _: String = sqlx::query_scalar(
+                "select public.cex_matrix_finish_delivery_v1($1,$2,$3,'sent',null)",
+            )
+            .bind(delivery.delivery_id)
+            .bind(&state.config.worker_id)
+            .bind(delivery.lease_fence)
+            .fetch_one(&mut *tx).await?;
+            tx.commit().await?;
         }
         RemoteOutcome::Retryable(code) => {
             finish_delivery(
@@ -569,6 +595,19 @@ async fn call_matrix_homeserver(
     delivery: &ClaimedDelivery,
     envelope: &MatrixReplyEnvelope,
 ) -> Result<RemoteOutcome> {
+    // Bind the credential scope before network I/O. A replacement access token
+    // or homeserver must not silently turn a retry into a new Matrix operation.
+    let credential_tag = sha256_prefixed(state.config.matrix_access_token.as_bytes());
+    let binding: std::result::Result<String, sqlx::Error> = sqlx::query_scalar(
+        "select public.cex_matrix_bind_send_attempt_v1($1,$2,$3,$4,$5,$6,$7)",
+    )
+    .bind(delivery.delivery_id).bind(&state.config.worker_id).bind(delivery.lease_fence)
+    .bind(&delivery.payload_sha256).bind(&envelope.room_id)
+    .bind(&state.config.matrix_homeserver_base_url).bind(&credential_tag)
+    .fetch_one(&state.pool).await;
+    if binding.is_err() {
+        return Ok(RemoteOutcome::Permanent("matrix_send_binding_unverified"));
+    }
     let send_url = matrix_send_url(
         &state.config.matrix_homeserver_base_url,
         &envelope.room_id,
@@ -597,18 +636,11 @@ async fn call_matrix_homeserver(
         Ok(Ok(response)) => response,
     };
     let status = response.status();
-    if read_bounded_body(response, state.config.max_response_bytes)
-        .await
-        .is_err()
-    {
-        return Ok(RemoteOutcome::Permanent("matrix_response_too_large"));
-    }
-    if status.is_success() {
-        Ok(RemoteOutcome::Success(json!({"status": status.as_u16()})))
-    } else if is_retryable_status(status) {
-        Ok(RemoteOutcome::Retryable("matrix_retryable_status"))
-    } else {
-        Ok(RemoteOutcome::Permanent("matrix_permanent_status"))
+    let body = read_bounded_body(response, state.config.max_response_bytes).await;
+    match response_contract::classify_matrix_response(status.as_u16(), body) {
+        response_contract::MatrixDecision::Accepted(receipt) => Ok(RemoteOutcome::Success(receipt)),
+        response_contract::MatrixDecision::Retry(code) => Ok(RemoteOutcome::Retryable(code)),
+        response_contract::MatrixDecision::Hold(code) => Ok(RemoteOutcome::Permanent(code)),
     }
 }
 
@@ -677,7 +709,8 @@ async fn verify_schema(pool: &PgPool) -> Result<()> {
     let ready: bool = sqlx::query_scalar(
         "select to_regprocedure('public.cex_matrix_claim_delivery_v1(text,integer,integer)') is not null \
              and to_regprocedure('public.cex_matrix_enqueue_delivery_v1(uuid,text,text,text,jsonb,integer)') is not null \
-             and to_regprocedure('public.cex_matrix_finish_delivery_v1(uuid,text,bigint,text,text)') is not null",
+             and to_regprocedure('public.cex_matrix_finish_delivery_v1(uuid,text,bigint,text,text)') is not null \
+             and to_regprocedure('public.cex_matrix_record_send_receipt_v1(uuid,text,bigint,text,text,text)') is not null",
     )
     .fetch_one(pool)
     .await?;
@@ -690,17 +723,15 @@ async fn verify_schema(pool: &PgPool) -> Result<()> {
 async fn read_bounded_body(
     mut response: ReqwestResponse,
     max_bytes: usize,
-) -> Result<Vec<u8>> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > max_bytes as u64)
-    {
-        bail!("remote Matrix response exceeded configured bound");
+) -> std::result::Result<Vec<u8>, response_contract::BodyFailure> {
+    if response.content_length().is_some_and(|length| length > max_bytes as u64) {
+        return Err(response_contract::BodyFailure::TooLarge);
     }
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await? {
+    while let Some(chunk) = response.chunk().await
+        .map_err(|_| response_contract::BodyFailure::Interrupted)? {
         if bytes.len().saturating_add(chunk.len()) > max_bytes {
-            bail!("remote Matrix response exceeded configured bound");
+            return Err(response_contract::BodyFailure::TooLarge);
         }
         bytes.extend_from_slice(&chunk);
     }
@@ -785,7 +816,7 @@ fn api_error(status: StatusCode, code: &'static str) -> Response {
 
 impl RelayConfig {
     fn from_env() -> Result<Self> {
-        let production_like = is_production_like();
+        let production_like = is_production_like()?;
         let bind_addr = env::var("MATRIX_BOT_RELAY_BIND")
             .or_else(|_| env::var("MATRIX_BOT_RELAY_BIND_ADDR"))
             .unwrap_or_else(|_| "127.0.0.1:8092".to_string());
@@ -839,6 +870,14 @@ impl RelayConfig {
             .context("MATRIX_ADAPTER_BASE_URL is not a valid URL")?;
         let homeserver_url = Url::parse(&matrix_homeserver_base_url)
             .context("MATRIX_HOMESERVER_BASE_URL is not a valid URL")?;
+        for url in [&adapter_url, &homeserver_url] {
+            if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none()
+                || !url.username().is_empty() || url.password().is_some()
+                || url.query().is_some() || url.fragment().is_some()
+            {
+                bail!("invalid_matrix_relay_endpoint_authority");
+            }
+        }
         if production_like
             && (adapter_url.scheme() != "https" || homeserver_url.scheme() != "https")
         {
@@ -919,16 +958,17 @@ where
     }
 }
 
-fn is_production_like() -> bool {
-    env::var("CEX_RUNTIME_PROFILE")
-        .or_else(|_| env::var("APP_ENV"))
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "production" | "prod" | "staging" | "stage" | "preprod"
-            )
-        })
-        .unwrap_or(false)
+fn is_production_like() -> Result<bool> {
+    let mut values = Vec::new();
+    for name in [PROFILE_ENV_NAME, "CEX_RUNTIME_PROFILE", "APP_ENV"] {
+        match env::var(name) {
+            Ok(value) => values.push(Some(value)),
+            Err(env::VarError::NotPresent) => values.push(None),
+            Err(env::VarError::NotUnicode(_)) => bail!("non_unicode_matrix_runtime_profile"),
+        }
+    }
+    let selected = runtime_profile::resolve_profiles(&values).map_err(|code| anyhow!(code))?;
+    Ok(selected.legacy_value() != "local_dev")
 }
 
 #[cfg(test)]

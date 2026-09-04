@@ -49,6 +49,10 @@ New process targets and persistence boundaries require same-change catalog and
 contract updates. Splitting the large library into bounded internal modules must
 preserve route, principal, replay and privacy behavior.
 
+- `services/matrix-entry-adapter/migrations/0003_sync_recovery_and_send_receipts.sql`:
+  fenced renewal, recoverable poison snapshots, guarded cursor history, immutable
+  Matrix credential-scope bindings and send receipts; expired adapter claims are held.
+
 ## Interfaces and contracts
 
 The existing `/v1/matrix/events` boundary and consumer-forwarding behavior remain
@@ -66,7 +70,7 @@ The first inbox row is not rewritten. NULL cursor repeats are deduplicated too.
 
 ## Persistence, concurrency, and recovery
 
-Apply migration 0001 followed by additive 0002 under the schema owner. Migration
+Apply migration 0001 followed by additive 0002 and 0003 under the schema owner. Migration
 0002 backfills first observations without modifying the immutable inbox, preserves
 the four-argument function signature and appends new observations transactionally.
 It does not change the numbered Ledger migration head 0088. Reapplying 0002 is
@@ -131,7 +135,7 @@ bash scripts/check-matrix-source-observation-postgres.sh
 
 The database command requires a disposable PostgreSQL 16 database supplied by
 `MATRIX_TEST_DATABASE_URL` and explicit `MATRIX_TEST_ALLOW_SCHEMA_RESET=1`. It runs
-the existing complete transport regression, applies migration 0002 twice, then
+the existing complete transport regression, applies migrations 0002 and 0003 twice, then
 checks different-cursor exact replay, NULL cursor deduplication, content/partition
 collisions, first-observation preservation and immutable observation history.
 Missing tooling, credentials or reset consent fails; tests are not silently skipped.
@@ -160,3 +164,14 @@ identity remain strict. Event normalization or partition changes need explicit
 versioning, replay fixtures and retirement rules, not rewriting old inbox rows.
 Update this contract, catalog, Matrix design, tests and exact candidate evidence
 for source changes. No module document grants repository or production approval.
+
+## Recovery and receipt extension
+
+The detailed extension is `docs/matrix-recovery-and-receipt-contract-v2.md`.
+A poison acknowledgement explicitly authorizes quarantine of those exact bytes;
+it does not claim successful processing, create a command or advance a cursor.
+The ordinary fenced batch operation advances only after all relevant observations
+are acknowledged. Evidence payloads remain in restricted database custody.
+Migration 0003 also prevents new Matrix `sent` transitions without a validated,
+matching receipt and prevents unsafe automatic reclamation of expired adapter
+claims. Current library caches still do not prove durable business-effect replay.
