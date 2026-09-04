@@ -1,0 +1,46 @@
+name: consumer-projection-boundary-gate
+
+on:
+  pull_request:
+    paths:
+      - services/consumer-entry-api/src/**
+      - docs/modules/consumer-entry-api.md
+      - docs/repository-semantic-policy-v1.json
+      - scripts/check-consumer-projection-boundary.py
+      - scripts/generate-repository-semantics.py
+      - .github/workflows/consumer-projection-boundary-gate.yml
+  push:
+    branches: [main]
+    paths:
+      - services/consumer-entry-api/src/**
+      - docs/modules/consumer-entry-api.md
+      - docs/repository-semantic-policy-v1.json
+      - scripts/check-consumer-projection-boundary.py
+      - scripts/generate-repository-semantics.py
+      - .github/workflows/consumer-projection-boundary-gate.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: consumer-projection-boundary-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  projection-boundary:
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+
+      - name: Check semantic policy and authority escape
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check-consumer-projection-boundary.py
+          python3 scripts/generate-repository-semantics.py --stdout >/dev/null
+          git diff --check
