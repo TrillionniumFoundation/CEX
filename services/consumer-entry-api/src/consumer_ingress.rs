@@ -1,5 +1,10 @@
 use super::*;
 
+#[path = "durable_store.rs"]
+mod durable_store;
+
+const MAX_DURABLE_INGRESS_STATE_BYTES: u64 = 32 * 1024 * 1024;
+
 pub(super) fn authorize_ingress(
     headers: &HeaderMap,
     config: &ConsumerEntryConfig,
@@ -751,6 +756,18 @@ pub(super) fn merge_identity_field(
     }
 }
 
+fn durable_store_unavailable(code: &'static str, error: &std::io::Error) -> Response {
+    tracing::error!(error = %error, durable_store_error = code, "consumer durable state unavailable");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({
+            "error": code,
+            "consumer_status": "durable_state_unavailable"
+        })),
+    )
+        .into_response()
+}
+
 pub(super) async fn replay_cached_response(
     state: &AppState,
     replay_key: Option<&str>,
@@ -761,8 +778,24 @@ pub(super) async fn replay_cached_response(
     let ttl_secs = state.config().replay_window_secs;
     let max_size = state.config().replay_cache_size;
     let mut cache = state.inner.replay_cache.lock().await;
-    prune_replay_cache(&mut cache, now_epoch, ttl_secs, max_size);
 
+    if let Some(path) = state.config().replay_store_path.as_deref() {
+        match durable_store::read_json::<ReplayCache>(
+            StdPath::new(path),
+            MAX_DURABLE_INGRESS_STATE_BYTES,
+        ) {
+            Ok(Some(persisted)) => *cache = persisted,
+            Ok(None) => *cache = ReplayCache::default(),
+            Err(error) => {
+                return Some(durable_store_unavailable(
+                    "replay_store_read_failed",
+                    &error,
+                ))
+            }
+        }
+    }
+
+    prune_replay_cache(&mut cache, now_epoch, ttl_secs, max_size);
     let existing = cache.seen.get(replay_key).cloned()?;
 
     state.inner.metrics.inc_replay_hits();
@@ -788,26 +821,67 @@ pub(super) async fn remember_replay_response(
     state: &AppState,
     replay_key: Option<&str>,
     response: &ConsumerTaskResponse,
-) {
+) -> Result<(), Response> {
     let Some(replay_key) = replay_key.map(str::trim).filter(|v| !v.is_empty()) else {
-        return;
+        return Ok(());
     };
+    let response = serde_json::to_value(response).map_err(|error| {
+        tracing::error!(error = %error, "failed to encode replay response");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "replay_response_encode_failed" })),
+        )
+            .into_response()
+    })?;
 
     let now_epoch = Utc::now().timestamp();
     let ttl_secs = state.config().replay_window_secs;
     let max_size = state.config().replay_cache_size;
     let mut cache = state.inner.replay_cache.lock().await;
+
+    if let Some(path) = state.config().replay_store_path.as_deref() {
+        let result = durable_store::update_json(
+            StdPath::new(path),
+            MAX_DURABLE_INGRESS_STATE_BYTES,
+            ReplayCache::default(),
+            |persisted: &mut ReplayCache| {
+                prune_replay_cache(persisted, now_epoch, ttl_secs, max_size);
+                persisted.seen.insert(
+                    replay_key.to_string(),
+                    ReplayEntry {
+                        seen_at_epoch: now_epoch,
+                        response: Some(response),
+                    },
+                );
+                persisted.order.push_back(replay_key.to_string());
+                prune_replay_cache(persisted, now_epoch, ttl_secs, max_size);
+            },
+        );
+        return match result {
+            Ok((persisted, ())) => {
+                *cache = persisted;
+                Ok(())
+            }
+            Err(error) => Err(durable_store_unavailable(
+                "replay_store_write_failed",
+                &error,
+            )),
+        };
+    }
+
     prune_replay_cache(&mut cache, now_epoch, ttl_secs, max_size);
     cache.seen.insert(
         replay_key.to_string(),
         ReplayEntry {
             seen_at_epoch: now_epoch,
-            response: serde_json::to_value(response).ok(),
+            response: Some(response),
         },
     );
     cache.order.push_back(replay_key.to_string());
     prune_replay_cache(&mut cache, now_epoch, ttl_secs, max_size);
-    persist_replay_cache(&cache, state.config());
+    // Keep the legacy helper referenced for compatibility; with no configured path it is a no-op.
+    super::persist_replay_cache(&cache, state.config());
+    Ok(())
 }
 
 pub(super) fn prune_replay_cache(
@@ -885,6 +959,34 @@ pub(super) async fn enforce_optional_rate_limit(
     enforce_rate_limit(state, key, max_requests, error_code, bucket_kind).await
 }
 
+fn rate_limit_rejection(
+    state: &AppState,
+    max_requests: usize,
+    error_code: &str,
+    bucket_kind: RateLimitBucketKind,
+) -> Response {
+    state.inner.metrics.inc_rate_limited_requests();
+    match bucket_kind {
+        RateLimitBucketKind::SourceScope => {
+            state.inner.metrics.inc_rate_limited_source_scope_requests()
+        }
+        RateLimitBucketKind::User => state.inner.metrics.inc_rate_limited_user_requests(),
+        RateLimitBucketKind::Room => state.inner.metrics.inc_rate_limited_room_requests(),
+        RateLimitBucketKind::Session => state.inner.metrics.inc_rate_limited_session_requests(),
+        RateLimitBucketKind::Org => state.inner.metrics.inc_rate_limited_org_requests(),
+    }
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        Json(json!({
+            "error": error_code,
+            "rate_limit_window_secs": state.config().rate_limit_window_secs,
+            "rate_limit_max_requests": max_requests,
+            "rate_limit_bucket": rate_limit_bucket_name(bucket_kind),
+        })),
+    )
+        .into_response()
+}
+
 pub(super) async fn enforce_rate_limit(
     state: &AppState,
     key: String,
@@ -894,8 +996,56 @@ pub(super) async fn enforce_rate_limit(
 ) -> Result<(), Response> {
     let now_epoch = Utc::now().timestamp();
     let max_entries = max_rate_limit_entries(state.config());
-
     let mut rate_limits = state.inner.rate_limits.lock().await;
+
+    if let Some(path) = state.config().rate_limit_store_path.as_deref() {
+        let result = durable_store::update_json(
+            StdPath::new(path),
+            MAX_DURABLE_INGRESS_STATE_BYTES,
+            RateLimitCache::default(),
+            |persisted: &mut RateLimitCache| {
+                let entries = persisted.seen.entry(key).or_default();
+                prune_rate_limit_entries(
+                    entries,
+                    now_epoch,
+                    state.config().rate_limit_window_secs,
+                    max_entries,
+                );
+                if entries.len() >= max_requests {
+                    false
+                } else {
+                    entries.push_back(now_epoch);
+                    prune_rate_limit_entries(
+                        entries,
+                        now_epoch,
+                        state.config().rate_limit_window_secs,
+                        max_entries,
+                    );
+                    true
+                }
+            },
+        );
+        return match result {
+            Ok((persisted, true)) => {
+                *rate_limits = persisted;
+                Ok(())
+            }
+            Ok((persisted, false)) => {
+                *rate_limits = persisted;
+                Err(rate_limit_rejection(
+                    state,
+                    max_requests,
+                    error_code,
+                    bucket_kind,
+                ))
+            }
+            Err(error) => Err(durable_store_unavailable(
+                "rate_limit_store_write_failed",
+                &error,
+            )),
+        };
+    }
+
     let entries = rate_limits.seen.entry(key).or_default();
     let modified = prune_rate_limit_entries(
         entries,
@@ -903,31 +1053,16 @@ pub(super) async fn enforce_rate_limit(
         state.config().rate_limit_window_secs,
         max_entries,
     );
-
     if entries.len() >= max_requests {
         if modified {
-            persist_rate_limit_cache(&rate_limits, state.config());
+            super::persist_rate_limit_cache(&rate_limits, state.config());
         }
-        state.inner.metrics.inc_rate_limited_requests();
-        match bucket_kind {
-            RateLimitBucketKind::SourceScope => {
-                state.inner.metrics.inc_rate_limited_source_scope_requests()
-            }
-            RateLimitBucketKind::User => state.inner.metrics.inc_rate_limited_user_requests(),
-            RateLimitBucketKind::Room => state.inner.metrics.inc_rate_limited_room_requests(),
-            RateLimitBucketKind::Session => state.inner.metrics.inc_rate_limited_session_requests(),
-            RateLimitBucketKind::Org => state.inner.metrics.inc_rate_limited_org_requests(),
-        }
-        return Err((
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(json!({
-                "error": error_code,
-                "rate_limit_window_secs": state.config().rate_limit_window_secs,
-                "rate_limit_max_requests": max_requests,
-                "rate_limit_bucket": rate_limit_bucket_name(bucket_kind),
-            })),
-        )
-            .into_response());
+        return Err(rate_limit_rejection(
+            state,
+            max_requests,
+            error_code,
+            bucket_kind,
+        ));
     }
 
     entries.push_back(now_epoch);
@@ -937,7 +1072,8 @@ pub(super) async fn enforce_rate_limit(
         state.config().rate_limit_window_secs,
         max_entries,
     );
-    persist_rate_limit_cache(&rate_limits, state.config());
+    // Keep the legacy helper referenced for compatibility; with no configured path it is a no-op.
+    super::persist_rate_limit_cache(&rate_limits, state.config());
     Ok(())
 }
 
