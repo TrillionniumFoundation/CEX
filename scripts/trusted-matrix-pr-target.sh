@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Immutable-base pull_request_target harness. Candidate bytes are data on the
-# host and execute only inside the locked-down container below.
+# Immutable-base allowlist push harness. Candidate bytes are data on the host
+# and execute only inside the locked-down container below.
 set -euo pipefail
 set +x
 
@@ -10,7 +10,7 @@ set +x
   "${PR_NUMBER:?}"
 
 [[ "$GITHUB_REPOSITORY" == "TrillionniumFoundation/CEX" ]]
-[[ "$GITHUB_EVENT_NAME" == "pull_request_target" ]]
+[[ "$GITHUB_EVENT_NAME" == "push" ]]
 [[ "$CANDIDATE_REPOSITORY" == "$GITHUB_REPOSITORY" ]]
 [[ "$CANDIDATE_REF" == "fix/cex-v12-audit-remediation-20260905" ]]
 [[ "$BASE_REF" == "fix/cex-v12-seq53-close-repository-gaps-20260904" ]]
@@ -54,14 +54,14 @@ for package in data.get("package", []):
         raise SystemExit(f"forbidden locked dependency source: {source!r}")
 PY
 
-WORK="$(mktemp -d "$RUNNER_TEMP/cex-trusted-pr-target.XXXXXXXX")"
+WORK="$(mktemp -d "$RUNNER_TEMP/cex-trusted-base-gate.XXXXXXXX")"
 chmod 700 "$WORK"
-OUT="$TRUST_ROOT/run/trusted-matrix-pr-target"
+OUT="$TRUST_ROOT/run/trusted-matrix-base-gate"
 rm -rf -- "$OUT"
 mkdir -p "$OUT" "$WORK/cache" "$WORK/build" "$WORK/output" "$WORK/context"
 chmod 700 "$OUT" "$WORK/cache" "$WORK/build" "$WORK/output" "$WORK/context"
 
-printf 'schema=cex.trusted-matrix-pr-target.v1\n' > "$OUT/identity.txt"
+printf 'schema=cex.trusted-matrix-base-gate.v1\n' > "$OUT/identity.txt"
 printf 'repository=%s\n' "$GITHUB_REPOSITORY" >> "$OUT/identity.txt"
 printf 'pull_request=%s\n' "$PR_NUMBER" >> "$OUT/identity.txt"
 printf 'trusted_base_sha=%s\n' "$TRUSTED_BASE_SHA" >> "$OUT/identity.txt"
@@ -73,6 +73,11 @@ printf 'production_authorization=not_granted\n' >> "$OUT/identity.txt"
 
 git -C "$CANDIDATE" archive --format=tar "$CANDIDATE_SHA" > "$OUT/source-$CANDIDATE_SHA.tar"
 sha256sum "$OUT/source-$CANDIDATE_SHA.tar" > "$OUT/source-$CANDIDATE_SHA.tar.sha256"
+
+SUFFIX="${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}-${PR_NUMBER}"
+NETWORK="cex-trusted-matrix-$SUFFIX"
+DB="cex-trusted-matrix-pg-$SUFFIX"
+IMAGE="cex-trusted-matrix:$SUFFIX"
 
 cat > "$WORK/context/Dockerfile" <<'DOCKER'
 FROM rust:1.98.0-bookworm
@@ -89,19 +94,15 @@ ENV RUST_VERSION=1.98.1 \
     CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
 DOCKER
 
-docker build --pull -t "cex-trusted-matrix:$CANDIDATE_SHA" "$WORK/context" \
+docker build --pull -t "$IMAGE" "$WORK/context" \
   > "$OUT/image-build.log" 2>&1
-IMAGE_ID="$(docker image inspect "cex-trusted-matrix:$CANDIDATE_SHA" --format '{{.Id}}')"
+IMAGE_ID="$(docker image inspect "$IMAGE" --format '{{.Id}}')"
 printf 'image_id=%s\n' "$IMAGE_ID" >> "$OUT/identity.txt"
 
 UID_VALUE="$(id -u)"
 GID_VALUE="$(id -g)"
 [[ "$UID_VALUE" != 0 ]]
 
-SUFFIX="${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}-${PR_NUMBER}"
-NETWORK="cex-trusted-matrix-$SUFFIX"
-DB="cex-trusted-matrix-pg-$SUFFIX"
-IMAGE="cex-trusted-matrix:$CANDIDATE_SHA"
 cleanup() {
   docker rm -f "$DB" >/dev/null 2>&1 || true
   docker network rm "$NETWORK" >/dev/null 2>&1 || true
@@ -209,7 +210,7 @@ expected = {
     "workspace_test", "workspace_clippy", "matrix_postgres"
 }
 result = {
-    "schema": "cex.trusted-matrix-pr-target-results.v1",
+    "schema": "cex.trusted-matrix-base-gate-results.v1",
     "commands": commands,
     "expected_commands": sorted(expected),
     "all_pass": set(commands) == expected and all(code == 0 for code in commands.values()),
