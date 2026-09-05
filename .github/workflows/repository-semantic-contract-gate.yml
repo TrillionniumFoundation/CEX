@@ -8,10 +8,16 @@ on:
       - crates/**
       - migrations/**
       - deploy/sql/**
+      - Cargo.toml
       - docs/module-catalog-v1.json
       - docs/repository-semantic-policy-v1.json
       - docs/repository-contract-semantics-v1.json
       - scripts/generate-repository-semantics.py
+      - scripts/rust_route_contract.py
+      - scripts/semantic_source_snapshot.py
+      - scripts/test-rust-route-contract.py
+      - scripts/test-semantic-source-integration.py
+      - scripts/test-consumer-route-contract.py
       - scripts/check-consumer-projection-boundary.py
       - .github/workflows/repository-semantic-contract-gate.yml
   push:
@@ -22,10 +28,16 @@ on:
       - crates/**
       - migrations/**
       - deploy/sql/**
+      - Cargo.toml
       - docs/module-catalog-v1.json
       - docs/repository-semantic-policy-v1.json
       - docs/repository-contract-semantics-v1.json
       - scripts/generate-repository-semantics.py
+      - scripts/rust_route_contract.py
+      - scripts/semantic_source_snapshot.py
+      - scripts/test-rust-route-contract.py
+      - scripts/test-semantic-source-integration.py
+      - scripts/test-consumer-route-contract.py
       - scripts/check-consumer-projection-boundary.py
       - .github/workflows/repository-semantic-contract-gate.yml
   workflow_dispatch:
@@ -39,13 +51,24 @@ concurrency:
 
 jobs:
   semantic-contract:
-    runs-on: [self-hosted, linux, x64]
+    # Pure source checks do not need access to a persistent self-hosted machine.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout exact candidate
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Route parser and semantic snapshot regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/test-rust-route-contract.py
+          python3 scripts/test-semantic-source-integration.py
+          python3 scripts/test-consumer-route-contract.py
 
       - name: Check generated route config and data semantics
         shell: bash

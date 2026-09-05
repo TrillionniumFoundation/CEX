@@ -11,20 +11,21 @@ import argparse
 import fnmatch
 import hashlib
 import json
+import os
+import tempfile
 from pathlib import Path
 import re
 import sys
 from typing import Any, Iterable
+
+from rust_route_contract import RouteSyntaxError, extract_routes
+from semantic_source_snapshot import InputSnapshot, regular_bytes, require_complete_workspace, tracked_paths
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = ROOT / "docs/repository-contract-semantics-v1.json"
 POLICY_PATH = ROOT / "docs/repository-semantic-policy-v1.json"
 MODULE_CATALOG_PATH = ROOT / "docs/module-catalog-v1.json"
 
-ROUTE_RE = re.compile(
-    r"\.(?:route|route_service|nest)\(\s*(?:r#)?\"([^\"]+)\"#?",
-    re.MULTILINE,
-)
 CONFIG_CALL_RE = re.compile(
     r"(?:std::)?env::(?:var|var_os)\(\s*\"([A-Z][A-Z0-9_]{2,})\""
     r"|(?:required_env|optional_env|get_env|read_env|parse_[a-zA-Z0-9_]*_env)"
@@ -48,7 +49,6 @@ SECRET_KEY_RE = re.compile(
     re.IGNORECASE,
 )
 ENDPOINT_KEY_RE = re.compile(r"(?:URL|URI|ENDPOINT|HOST|HOMESERVER)", re.IGNORECASE)
-METHOD_RE = re.compile(r"\b(get|post|put|patch|delete|head|options)\s*\(")
 
 SOURCE_SUFFIXES = {".rs", ".js", ".mjs", ".ts", ".tsx"}
 SOURCE_ROOTS = (ROOT / "apps", ROOT / "services", ROOT / "crates")
@@ -74,15 +74,21 @@ def normalized_path(path: Path) -> str:
 
 def source_files() -> Iterable[Path]:
     for root in SOURCE_ROOTS:
+        if root.is_symlink():
+            raise AssertionError("semantic source root must not be a symbolic link")
         if not root.exists():
             continue
         for path in sorted(root.rglob("*")):
-            if not path.is_file() or path.suffix not in SOURCE_SUFFIXES:
-                continue
             relative = normalized_path(path)
-            if any(part in {"target", "node_modules", "vendor"} for part in path.parts):
+            if any(part in {"target", "node_modules", "vendor"} for part in path.relative_to(ROOT).parts):
                 continue
-            if relative.startswith("services/paper-raid-bff/browser-e2e/node_modules/"):
+            if path.is_symlink():
+                raise AssertionError(f"symbolic path under semantic source root: {relative}")
+            if path.suffix not in SOURCE_SUFFIXES:
+                continue
+            if not path.is_file():
+                if not path.is_dir():
+                    raise AssertionError(f"nonregular semantic source: {relative}")
                 continue
             yield path
 
@@ -96,9 +102,9 @@ def sql_files() -> Iterable[Path]:
                 yield path
 
 
-def load_json(path: Path) -> dict[str, Any]:
+def load_json(path: Path, snapshot: InputSnapshot | None = None) -> dict[str, Any]:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(snapshot.read(path) if snapshot else regular_bytes(ROOT, path))
     except FileNotFoundError as error:
         raise AssertionError(f"required file is absent: {normalized_path(path)}") from error
     except json.JSONDecodeError as error:
@@ -108,8 +114,8 @@ def load_json(path: Path) -> dict[str, Any]:
     return data
 
 
-def load_modules() -> list[dict[str, Any]]:
-    catalog = load_json(MODULE_CATALOG_PATH)
+def load_modules(snapshot: InputSnapshot | None = None) -> list[dict[str, Any]]:
+    catalog = load_json(MODULE_CATALOG_PATH, snapshot)
     modules = catalog.get("modules")
     if not isinstance(modules, list) or not modules:
         raise AssertionError("module catalog has no modules")
@@ -133,8 +139,8 @@ def owning_module(path: str, modules: list[dict[str, Any]]) -> dict[str, Any] | 
     return None
 
 
-def compile_policy() -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    policy = load_json(POLICY_PATH)
+def compile_policy(snapshot: InputSnapshot | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    policy = load_json(POLICY_PATH, snapshot)
     rules = policy.get("rules")
     if not isinstance(rules, list) or not rules:
         raise AssertionError("semantic policy has no rules")
@@ -190,33 +196,30 @@ def select_rule(rules: list[dict[str, Any]], fact: dict[str, Any]) -> dict[str, 
     )
 
 
-def infer_route_methods(text: str, offset: int) -> list[str]:
-    window = text[offset : offset + 500]
-    methods = sorted({match.group(1).upper() for match in METHOD_RE.finditer(window)})
-    return methods or ["UNRESOLVED"]
-
-
 def extract_route_facts(path: Path, text: str) -> list[dict[str, Any]]:
+    if path.suffix != ".rs":
+        return []  # Non-Rust routing is explicitly excluded in coverage metadata.
     relative = normalized_path(path)
-    facts: list[dict[str, Any]] = []
-    seen: set[tuple[str, tuple[str, ...]]] = set()
-    for match in ROUTE_RE.finditer(text):
-        value = match.group(1)
-        methods = infer_route_methods(text, match.end())
-        key = (value, tuple(methods))
-        if key in seen:
-            continue
-        seen.add(key)
-        facts.append(
-            {
-                "fact_type": "route",
-                "value": value,
-                "methods": methods,
-                "source_path": relative,
-                "source_line": line_number(text, match.start()),
-            }
-        )
-    return facts
+    try:
+        declarations = extract_routes(text)
+    except RouteSyntaxError as error:
+        raise AssertionError(f"route extraction failed in {relative}: {error}") from error
+    return [
+        {
+            "fact_type": "route",
+            "value": declaration.value if declaration.value is not None else "<dynamic-route-path>",
+            "methods": list(declaration.methods),
+            "observed_methods": list(declaration.observed_methods),
+            "registration": declaration.registration,
+            "path_resolution": declaration.path_resolution,
+            "method_resolution": declaration.method_resolution,
+            "expression_sha256": declaration.expression_sha256,
+            "source_path": relative,
+            "source_line": line_number(text, declaration.offset),
+            "source_column": declaration.offset - text.rfind("\n", 0, declaration.offset),
+        }
+        for declaration in declarations
+    ]
 
 
 def looks_like_config_key(value: str, context: str) -> bool:
@@ -298,6 +301,8 @@ def semantic_fact(
     identity_payload = "\0".join(
         [raw["fact_type"], raw["source_path"], str(raw["source_line"]), raw["value"]]
     ).encode("utf-8")
+    if raw["fact_type"] == "route":
+        identity_payload += ("\0" + str(raw["source_column"]) + "\0" + raw["expression_sha256"]).encode("utf-8")
     result: dict[str, Any] = {
         "fact_id": sha256_bytes(identity_payload),
         "fact_type": raw["fact_type"],
@@ -318,7 +323,9 @@ def semantic_fact(
         "production_authorization": "not_granted",
     }
     if "methods" in raw:
-        result["methods"] = raw["methods"]
+        for field in ("methods", "observed_methods", "registration", "path_resolution",
+                      "method_resolution", "expression_sha256", "source_column"):
+            result[field] = raw[field]
     return result
 
 
@@ -355,20 +362,26 @@ def enforce_consumer_projection_boundary(facts: list[dict[str, Any]]) -> None:
 
 
 def build_document() -> dict[str, Any]:
-    policy, rules = compile_policy()
-    modules = load_modules()
+    snapshot = InputSnapshot(ROOT)
+    parser_bytes = snapshot.read(ROOT / "scripts/rust_route_contract.py")
+    snapshot.read(ROOT / "scripts/semantic_source_snapshot.py")
+    snapshot.read(ROOT / "scripts/generate-repository-semantics.py")
+    policy, rules = compile_policy(snapshot)
+    modules = load_modules(snapshot)
+    git_inventory = require_complete_workspace(snapshot, modules)
+    code_paths, data_paths = tuple(source_files()), tuple(sql_files())
     raw_facts: list[dict[str, Any]] = []
     source_hash_inputs: list[bytes] = []
 
-    for path in source_files():
-        data = path.read_bytes()
+    for path in code_paths:
+        data = snapshot.read(path)
         source_hash_inputs.extend([normalized_path(path).encode(), b"\0", data, b"\0"])
         text = data.decode("utf-8")
         raw_facts.extend(extract_route_facts(path, text))
         raw_facts.extend(extract_config_facts(path, text))
 
-    for path in sql_files():
-        data = path.read_bytes()
+    for path in data_paths:
+        data = snapshot.read(path)
         source_hash_inputs.extend([normalized_path(path).encode(), b"\0", data, b"\0"])
         text = data.decode("utf-8")
         raw_facts.extend(extract_data_facts(path, text))
@@ -396,8 +409,11 @@ def build_document() -> dict[str, Any]:
     enforce_consumer_projection_boundary(facts)
 
     counts = {kind: sum(1 for fact in facts if fact["fact_type"] == kind) for kind in ("route", "config", "data")}
-    policy_bytes = POLICY_PATH.read_bytes()
-    module_bytes = MODULE_CATALOG_PATH.read_bytes()
+    policy_bytes = snapshot.read(POLICY_PATH)
+    module_bytes = snapshot.read(MODULE_CATALOG_PATH)
+    snapshot.verify()
+    if git_inventory != tracked_paths(ROOT) or code_paths != tuple(source_files()) or data_paths != tuple(sql_files()):
+        raise AssertionError("semantic source inventory changed during generation")
     source_tree_hash = sha256_bytes(b"".join(source_hash_inputs))
     document = {
         "schema": "cex.repository-contract-semantics.v1",
@@ -414,9 +430,18 @@ def build_document() -> dict[str, Any]:
             "sha256": sha256_bytes(module_bytes),
         },
         "source_tree_sha256": source_tree_hash,
-        "counts": {**counts, "total": len(facts), "unclassified": 0},
+        "counts": {**counts, "total": len(facts), "unclassified": 0,
+                   "unresolved_route_methods": sum(f.get("method_resolution") == "unresolved" for f in facts),
+                   "dynamic_route_paths": sum(f.get("path_resolution") == "dynamic" for f in facts)},
+        "route_extractor": {"path": "scripts/rust_route_contract.py", "sha256": sha256_bytes(parser_bytes),
+                            "scope": "explicit_rust_source_declarations", "implicit_head_inferred": False},
+        "input_coverage": {"workspace_members": len(modules), "source_files": len(code_paths),
+                           "sql_files": len(data_paths), "git_inventory_checked": True,
+                           "non_rust_route_sources_not_analyzed": [normalized_path(p) for p in code_paths if p.suffix != ".rs"]},
         "limitations": [
-            "Route extraction proves source literals, not router reachability or middleware execution.",
+            "Route extraction proves explicit Rust outer-router declarations, not type resolution, cfg/macro expansion, nesting composition or middleware execution.",
+            "JavaScript/TypeScript route registration is not analyzed; see input_coverage. Dynamic paths and unknown constructors remain unresolved.",
+            "GET does not imply an inferred HEAD entry here; constructor methods are not runtime method coverage.",
             "Configuration extraction proves referenced keys, not secret custody or deployed values.",
             "SQL extraction proves referenced object names, not runtime database ownership or migration execution.",
             "Exact-SHA hosted tests and independent production approval remain separate authorities."
@@ -440,16 +465,46 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def checked_output_path(path: Path) -> Path:
+    path = path if path.is_absolute() else ROOT / path
+    try:
+        relative = path.relative_to(ROOT)
+    except ValueError:
+        raise AssertionError("semantic output must stay inside the repository") from None
+    if ".." in relative.parts or path.suffix != ".json":
+        raise AssertionError("invalid semantic output path")
+    for parent in [path, *path.parents]:
+        if parent == ROOT:
+            break
+        if parent.is_symlink():
+            raise AssertionError("semantic output must not traverse symbolic links")
+    return path
+
+
+def write_document(output: Path, rendered: str) -> None:
+    output = checked_output_path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=".semantic-contract-", suffix=".tmp", dir=output.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(rendered)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, output)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def main() -> int:
     args = parse_args()
-    output = args.output if args.output.is_absolute() else ROOT / args.output
+    output = checked_output_path(args.output)
     rendered = rendered_document()
     if args.stdout:
         sys.stdout.write(rendered)
         return 0
     if args.write:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(rendered, encoding="utf-8")
+        write_document(output, rendered)
         document = json.loads(rendered)
         print(f"wrote {output.relative_to(ROOT)} with {document['counts']}")
         return 0

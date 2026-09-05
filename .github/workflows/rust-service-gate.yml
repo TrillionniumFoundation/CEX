@@ -31,6 +31,14 @@ jobs:
       - name: Development gate negative regression tests
         run: python3 scripts/test-development-gates.py
 
+      - name: Semantic extraction regressions and current generated contract
+        run: |
+          python3 scripts/test-rust-route-contract.py
+          python3 scripts/test-semantic-source-integration.py
+          python3 scripts/test-consumer-route-contract.py
+          python3 scripts/generate-repository-semantics.py --check
+          python3 scripts/check-consumer-projection-boundary.py
+
       - name: Validate development-document authority
         run: python3 scripts/check-development-docs.py
 

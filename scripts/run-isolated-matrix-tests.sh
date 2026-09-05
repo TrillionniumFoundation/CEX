@@ -67,7 +67,7 @@ docker run -d --name "$DB" --network "$NETWORK" --network-alias postgres \
   --tmpfs /var/lib/postgresql/data:rw,nosuid,nodev,uid=999,gid=999,mode=700 \
   --tmpfs /var/run/postgresql:rw,nosuid,nodev,uid=999,gid=999,mode=755 \
   -e POSTGRES_USER=cex -e POSTGRES_PASSWORD=disposable_ci_only \
-  -e POSTGRES_DB=matrix_review_ci postgres:16.15-bookworm > /dev/null
+  -e POSTGRES_DB=matrix_review_ci postgres:16.14-bookworm > /dev/null
 READY=0
 for _ in $(seq 1 30); do
   if docker exec "$DB" pg_isready -U cex -d matrix_review_ci >/dev/null 2>&1; then READY=1; break; fi

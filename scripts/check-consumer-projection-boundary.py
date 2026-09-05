@@ -7,6 +7,9 @@ from pathlib import Path
 import re
 import sys
 
+from rust_route_contract import RouteSyntaxError, extract_routes
+from semantic_source_snapshot import regular_bytes
+
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = ROOT / "services/consumer-entry-api/src"
 POLICY = ROOT / "docs/repository-semantic-policy-v1.json"
@@ -27,7 +30,6 @@ DDL_RE = re.compile(
     r"\b(?:create|alter|drop)\s+(?:table|view|materialized\s+view|function|trigger)\b",
     re.IGNORECASE,
 )
-ROUTE_RE = re.compile(r"\.(?:route|nest)\(\s*(?:r#)?\"([^\"]+)\"#?")
 
 ALLOWED_MUTATION_PREFIXES = (
     "trillionnium_world_",
@@ -95,7 +97,7 @@ def source_line(text: str, offset: int) -> int:
 
 
 def check_file(path: Path) -> list[str]:
-    text = path.read_text(encoding="utf-8")
+    text = regular_bytes(ROOT, path).decode("utf-8")
     relative = path.relative_to(ROOT).as_posix()
     problems: list[str] = []
 
@@ -115,14 +117,20 @@ def check_file(path: Path) -> list[str]:
                 f"{relative}:{source_line(text, match.start())}: mutation target {table!r} lacks an approved projection namespace"
             )
 
-    for match in ROUTE_RE.finditer(text):
-        route = match.group(1)
+    try:
+        declarations = extract_routes(text)
+    except RouteSyntaxError as error:
+        raise AssertionError(f"projection route parsing failed in {relative}: {error}") from error
+    for declaration in declarations:
+        line = source_line(text, declaration.offset)
+        if declaration.value is None:
+            problems.append(f"{relative}:{line}: dynamic projection route path requires explicit reviewed resolution")
+            continue
+        route = declaration.value
         segments = {part.lower() for part in route.split("/") if part and not part.startswith(":")}
         forbidden = sorted(segments & FORBIDDEN_ROUTE_SEGMENTS)
         if forbidden:
-            problems.append(
-                f"{relative}:{source_line(text, match.start())}: projection route {route!r} contains authoritative segment(s) {forbidden}"
-            )
+            problems.append(f"{relative}:{line}: projection route {route!r} contains authoritative segment(s) {forbidden}")
 
     for expression in FORBIDDEN_LITERAL_PATTERNS:
         for match in expression.finditer(text):

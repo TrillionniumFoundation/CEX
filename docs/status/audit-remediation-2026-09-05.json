@@ -3,7 +3,7 @@
   "status": "unqualified_working_change",
   "parent_plan": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
   "parent_addendum": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md",
-  "patch_base": "0face4c2aba5e7248c1bbb3cda189f1082839d6e",
+  "patch_base": "0393d144f04d6bc7f35663053559c7e1fc528cd3",
   "architecture_sequence": 52,
   "candidate_freeze_authority": "docs/release-evidence/p0-candidate-trigger.json",
   "is_candidate_freeze": false,
@@ -26,21 +26,31 @@
     "Replace shell/eval SQL orchestration with a strict disposable-DB runner; execute unchanged original assertions against the complete current migration chain, never a downgraded intermediate schema.",
     "Validate adapter response source/event/sender/room/disposition; preserve legitimate null reply and exact status-task compatibility, hold duplicate-cache outcomes rather than asserting business completion.",
     "Preserve Matrix reverse-proxy send path and reject endpoint credential/query injection.",
-    "Add isolated push-only trusted ROG validation without weakening the existing hosted or release gates."
+    "Add isolated push-only trusted ROG validation without weakening the existing hosted or release gates.",
+    "Replace 500-character route-method lookahead with bounded lexical Rust/Axum outer-call extraction; retain unresolved/dynamic declarations and exact source expression identity.",
+    "Bind semantic parsing and hashing to one bounded input snapshot; check workspace/catalog/package/source membership and Git tracked inputs; reject partial materialization, symbolic inputs and detected source/inventory changes.",
+    "Make semantic output repository-local and atomic; preserve read-only missing/stale failure in --check. A complete current CEX generated inventory is still required.",
+    "Reuse decoded registration facts for Consumer projection routing guards; escaped forbidden segments and dynamic paths cannot silently escape the source check.",
+    "Wire semantic regression and inventory checks into the existing repository-integrity job; use exact-head, read-only hosted execution for the pure semantic helper workflow.",
+    "Use the PostgreSQL 16.14-bookworm image tag verified in the official image manifest instead of the unverified 16.15 tag; runtime image pull/execution still required."
   ],
   "local_verification_scope": {
-    "python_source_contract_and_shell_negative_tests": 62,
+    "python_source_contract_and_shell_negative_tests": 139,
+    "python_suites": {
+      "retained_source_and_shell": 12,
+      "matrix_recovery_source_mutations": 29,
+      "postgres_runner_orchestration_fake_client": 21,
+      "rust_route_lexical_extraction": 36,
+      "semantic_generator_synthetic_git_integration": 28,
+      "consumer_route_source_guard": 13
+    },
     "rust_tests_executed": false,
     "postgres_tests_executed": false,
     "full_repository_checks_executed": false,
     "hosted_exact_sha_qualification_proven": false,
     "source_checks_do_not_prove_runtime_behavior": true,
-    "python_suites": {
-      "retained_source_and_shell": 12,
-      "recovery_source_mutations": 29,
-      "postgres_runner_orchestration": 21
-    },
-    "new_rust_test_definitions_not_executed": 8
+    "complete_cex_semantic_inventory_generated": false,
+    "local_source_is_partial_materialization": true
   },
   "open_repository_work": [
     "Integrate and verify Sequence 54 governance, Cargo.lock, generated semantic inventory and authoritative-gate changes on a complete checkout.",
@@ -49,7 +59,7 @@
     "Qualify large-gap backfill beyond the bounded per-iteration budget, Matrix filter/room-scope transitions, redaction/edit semantics and operational poison recovery.",
     "Validate least-privilege SQL roles, secret rotation/reconciliation, poison snapshot retention/erasure, real readiness and queue-age/SLO behavior.",
     "Consolidate Matrix parser copies and embedded adapter callers into a reviewed shared configuration API without introducing dependency/lock drift.",
-    "Complete module-specific API/schema/error/config specs, generated method/router binding, Consumer authority tests and cross-repository first-playable rehearsal.",
+    "Finish the complete current semantic inventory generation/review on a complete checkout, resolve remaining dynamic/unknown route semantics, deepen module API/schema/error/config specs, prove Consumer authority at runtime and complete cross-repository first-playable rehearsal.",
     "Freeze one final candidate through the existing sole trigger only after integration, run all five authoritative hosted workflows and aggregate, retain exact-head evidence."
   ],
   "external_or_independent_gates": [
@@ -58,5 +68,5 @@
     "Pinned World/Game/Chain integration and complete first-playable rehearsal.",
     "V12-X1 representative-volume recovery; X2 deployment/cutover/rollback; X3 real external-Agent reconciliation; X4 credential custody; X5 sustained soak; X6 independent security/operations/financial review; X7 applicable legal/provider approvals; X8 final accountable human decision."
   ],
-  "revision": "matrix-regression-round-3"
+  "revision": "semantic-contract-round-4"
 }
