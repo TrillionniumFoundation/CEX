@@ -1,24 +1,25 @@
-name: matrix-trusted-pr-target
+name: matrix-trusted-base-gate
 
 on:
-  pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review]
+  push:
     branches: [fix/cex-v12-seq53-close-repository-gaps-20260904]
+    paths:
+      - .github/workflows/matrix-trusted-pr-target.yml
+      - scripts/trusted-matrix-pr-target.sh
+      - config/trusted-matrix-candidate.json
 
 permissions:
   contents: read
 
 concurrency:
-  group: matrix-trusted-pr-target-${{ github.event.pull_request.number }}
+  group: matrix-trusted-base-gate
   cancel-in-progress: true
 
 jobs:
   trusted-isolated-matrix:
     if: >-
       github.repository == 'TrillionniumFoundation/CEX' &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'fix/cex-v12-audit-remediation-20260905' &&
-      github.event.pull_request.base.ref == 'fix/cex-v12-seq53-close-repository-gaps-20260904'
+      github.ref == 'refs/heads/fix/cex-v12-seq53-close-repository-gaps-20260904'
     runs-on: [self-hosted, linux, x64, rog]
     timeout-minutes: 120
     env:
@@ -50,10 +51,10 @@ jobs:
                   shutil.rmtree(path)
           PY
 
-      - name: Checkout immutable trusted base harness
+      - name: Checkout immutable trusted base revision
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
           submodules: false
@@ -62,10 +63,51 @@ jobs:
           set-safe-directory: false
           path: trusted
 
-      - name: Checkout candidate as untrusted data
+      - name: Validate base-owned candidate allowlist
+        id: candidate
+        working-directory: trusted
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          python3 - "$GITHUB_OUTPUT" <<'PY'
+          import json
+          from pathlib import Path
+          import re
+          import sys
+          path = Path("config/trusted-matrix-candidate.json")
+          data = json.loads(path.read_text(encoding="utf-8"))
+          expected_keys = {
+              "schema", "repository", "ref", "sha", "pull_request",
+              "production_authorization"
+          }
+          if set(data) != expected_keys:
+              raise SystemExit("candidate allowlist has an unexpected field set")
+          if data["schema"] != "cex.trusted-matrix-candidate.v1":
+              raise SystemExit("candidate allowlist schema mismatch")
+          if data["repository"] != "TrillionniumFoundation/CEX":
+              raise SystemExit("candidate repository mismatch")
+          if data["ref"] != "fix/cex-v12-audit-remediation-20260905":
+              raise SystemExit("candidate branch mismatch")
+          if not isinstance(data["sha"], str) or not re.fullmatch(r"[0-9a-f]{40}", data["sha"]):
+              raise SystemExit("candidate SHA is invalid")
+          if data["pull_request"] != 30:
+              raise SystemExit("candidate PR mismatch")
+          if data["production_authorization"] != "not_granted":
+              raise SystemExit("candidate allowlist may not grant production authority")
+          output = Path(sys.argv[1])
+          with output.open("a", encoding="utf-8") as stream:
+              stream.write(f"repository={data['repository']}\n")
+              stream.write(f"ref={data['ref']}\n")
+              stream.write(f"sha={data['sha']}\n")
+              stream.write(f"pull_request={data['pull_request']}\n")
+          PY
+
+      - name: Checkout allowlisted candidate as untrusted data
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          repository: ${{ steps.candidate.outputs.repository }}
+          ref: ${{ steps.candidate.outputs.sha }}
           fetch-depth: 1
           persist-credentials: false
           submodules: false
@@ -77,25 +119,25 @@ jobs:
       - name: Execute candidate only inside trusted isolation
         working-directory: trusted
         env:
-          TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
-          CANDIDATE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
-          CANDIDATE_REF: ${{ github.event.pull_request.head.ref }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          TRUSTED_BASE_SHA: ${{ github.sha }}
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.sha }}
+          CANDIDATE_REPOSITORY: ${{ steps.candidate.outputs.repository }}
+          CANDIDATE_REF: ${{ steps.candidate.outputs.ref }}
+          BASE_REF: fix/cex-v12-seq53-close-repository-gaps-20260904
+          PR_NUMBER: ${{ steps.candidate.outputs.pull_request }}
         run: bash scripts/trusted-matrix-pr-target.sh "$GITHUB_WORKSPACE/candidate"
 
-      - name: Retain immutable-base diagnostics including failures
+      - name: Retain base-bound diagnostics including failures
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: cex-trusted-matrix-pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}-attempt-${{ github.run_attempt }}
-          path: trusted/run/trusted-matrix-pr-target/
+          name: cex-trusted-matrix-base-${{ steps.candidate.outputs.pull_request }}-${{ steps.candidate.outputs.sha }}-attempt-${{ github.run_attempt }}
+          path: trusted/run/trusted-matrix-base-gate/
           if-no-files-found: error
           retention-days: 14
 
-# The workflow definition and host harness come from the PR base through
-# pull_request_target. Candidate-controlled code is never invoked by a host
-# shell and receives no repository token, host home, Docker socket or external
-# network during build/test execution. This supporting lane cannot grant
-# repository qualification or production authorization.
+# This workflow and the candidate allowlist are both owned by the PR base
+# branch. Candidate-controlled workflows cannot schedule this ROG job. Candidate
+# bytes are checked out only after the exact SHA is validated and are executed
+# only in the no-credential/no-Docker-socket container boundary. The resulting
+# artifact is supporting diagnostic evidence, never production authorization.
