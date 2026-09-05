@@ -36,7 +36,12 @@ mkdir "$WORK/build" "$WORK/output" "$WORK/cache" "$WORK/context"
 cat > "$WORK/context/Dockerfile" <<'DOCKER'
 FROM rust:1.98.0-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends python3 postgresql-client ca-certificates && rm -rf /var/lib/apt/lists/*
-RUN rustup component add rustfmt clippy
+# This published image is only a bootstrap. Do not compile candidate code with
+# its original 1.98.0 compiler (upstream vtable miscompilation).
+RUN rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy \
+    && rustup default 1.98.1 \
+    && rustup toolchain uninstall 1.98.0
+ENV RUST_VERSION=1.98.1
 DOCKER
 # No repository code or credentials are included in the image build context.
 docker build --pull -t "$IMAGE" "$WORK/context" > "$OUT/image-build.log" 2>&1
@@ -84,7 +89,7 @@ set +e
     mkdir -p "$HOME"
     cd /source
     run() { name="$1"; shift; "$@" > "/output/$name.log" 2>&1; code=$?; printf "%s\n" "$code" > "/output/$name.exit"; }
-    run versions bash -c "rustc --version; cargo --version; psql --version"
+    run versions bash -euo pipefail -c '"'"'version="$(rustc --version)"; [[ "$version" == "rustc 1.98.1 "* ]]; cargo --version; rustfmt --version; psql --version'"'"'
     run source12 python3 scripts/test-matrix-review-repairs.py
     run source29 python3 scripts/test-matrix-recovery-contract.py
     run sql-runner21 python3 scripts/test-matrix-postgres-runner.py

@@ -116,6 +116,7 @@ must not be rewritten or marked acknowledged by this upgrade.
 cargo test --locked -p matrix-bot-poller --all-targets
 cargo clippy --locked -p matrix-bot-poller --all-targets -- -D warnings
 python3 scripts/check-matrix-recovery-contract.py
+python3 scripts/check-matrix-lock-coherence.py
 python3 scripts/test-matrix-recovery-contract.py
 ```
 
@@ -145,3 +146,11 @@ New bootstrap semantics are explicit and only affect a stream with no cursor.
 Changes to filtering, pagination, hash rules, partitioning, quarantine, persistence
 or limits update the module catalog, this contract, tests and exact-tree evidence.
 No source document or local result grants repository or production authorization.
+
+## Compiler and committed lock repair
+
+`rust-toolchain.toml` selects Rust 1.98.1. The Matrix direct-dependency lock
+preflight checks the two workspace package entries against their manifests; it
+does not resolve the complete dependency graph or prove compilation. Preserve
+`--locked` and execute the full package gates after applying the reviewed lock
+patch. See `docs/build-unblock-round6.md` for the preimage and remaining evidence.

@@ -435,7 +435,8 @@
         "cargo test --locked -p matrix-bot-relay --all-targets",
         "cargo clippy --locked -p matrix-bot-relay --all-targets -- -D warnings",
         "python3 scripts/check-matrix-recovery-contract.py",
-        "python3 scripts/test-matrix-recovery-contract.py"
+        "python3 scripts/test-matrix-recovery-contract.py",
+        "python3 scripts/check-matrix-lock-coherence.py"
       ]
     },
     {
@@ -457,7 +458,8 @@
         "cargo test --locked -p matrix-bot-poller --all-targets",
         "cargo clippy --locked -p matrix-bot-poller --all-targets -- -D warnings",
         "python3 scripts/check-matrix-recovery-contract.py",
-        "python3 scripts/test-matrix-recovery-contract.py"
+        "python3 scripts/test-matrix-recovery-contract.py",
+        "python3 scripts/check-matrix-lock-coherence.py"
       ]
     }
   ],

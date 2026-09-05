@@ -3,7 +3,7 @@
   "status": "unqualified_working_change",
   "parent_plan": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
   "parent_addendum": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md",
-  "patch_base": "257109a6ef0fb45dd1abc413ed926bd5c3f02589",
+  "patch_base": "cc0c7b27085ad3e7960fae34241075555eebd176",
   "architecture_sequence": 52,
   "candidate_freeze_authority": "docs/release-evidence/p0-candidate-trigger.json",
   "is_candidate_freeze": false,
@@ -37,10 +37,17 @@
     "Keep TRNM qualification on the committed Cargo.lock, require its static dependency job, and bind actual prerequisite step outcomes before artifact collection.",
     "Collect a private closed six-file TRNM build packet outside the checkout, compare source bytes to HEAD, verify exact file set and hashes, and recheck source/binary identity before returning.",
     "Reject source index flags, unexpected files, linked or mutated inputs, missing/failed step observations and source-status overclaims; do not treat local packet integrity as hosted execution or artifact-download verification.",
-    "Add MIT license and security/contribution/changelog policy files, route their review to existing owners, and document the packet profile and remaining qualification boundaries."
+    "Add MIT license and security/contribution/changelog policy files, route their review to existing owners, and document the packet profile and remaining qualification boundaries.",
+    "Apply a minimal change to the full verified Cargo.lock, changing only the two Matrix dependency arrays: add anyhow, sha2 0.10.9 and sqlx, remove relay chrono; no registry package/version/checksum change is part of this patch.",
+    "Select Rust 1.98.1 for the candidate and the affected Matrix/TRNM/Rust workflows; upgrade the published container bootstrap before compiling candidate code.",
+    "Make the isolated compiler-version probe fail when rustc is missing or is not the selected release; do not let a later successful psql command mask the error.",
+    "Add a read-only direct Matrix lock-edge preflight and regression of the exact old/new lock fragments against actual manifests. This is not Cargo dependency resolution.",
+    "Acquire the complete original Cargo.lock, verify its Git blob, and verify only two package dependency arrays differ in the uploaded replacement.",
+    "Execute full Matrix package formatting, tests, strict Clippy and current-schema PostgreSQL regression inside the existing authoritative Rust/Hepta job using a separate disposable database; preserve all original Hepta steps.",
+    "Deepen the existing authoritative Execution settlement job with lifecycle source checks, strict all-target Clippy and historical provider reconciliation negatives; preserve all original tests and SQL lifecycles."
   ],
   "local_verification_scope": {
-    "python_source_contract_and_shell_negative_tests": 174,
+    "python_source_contract_and_shell_negative_tests": 198,
     "python_suites": {
       "retained_source_and_shell": 12,
       "matrix_recovery_source_mutations": 29,
@@ -48,7 +55,8 @@
       "rust_route_lexical_extraction": 36,
       "semantic_generator_synthetic_git_integration": 28,
       "consumer_route_source_guard": 13,
-      "trnm_build_packet_filesystem_git_and_workflow": 35
+      "trnm_build_packet_filesystem_git_and_workflow": 35,
+      "build_unblock_direct_edges_and_compiler_selection": 24
     },
     "rust_tests_executed": false,
     "postgres_tests_executed": false,
@@ -57,10 +65,15 @@
     "source_checks_do_not_prove_runtime_behavior": true,
     "complete_cex_semantic_inventory_generated": false,
     "local_source_is_partial_materialization": true,
-    "binary_fixture_is_synthetic_elf_not_compiled_service": true
+    "binary_fixture_is_synthetic_elf_not_compiled_service": true,
+    "qualification_summary": "198 local source/filesystem/fixture tests passed; full lock bytes verified and direct-edge check passed; Cargo, PostgreSQL and hosted qualification unproven",
+    "complete_cargo_lock_bytes_verified": true,
+    "cargo_dependency_resolution_executed": false,
+    "original_lock_git_blob": "75e9ae18ece0a3e58296b75de5b33b623ff3a7c8",
+    "repaired_lock_git_blob": "2e1b7b25d89591a5615bee066015fce78483c403"
   },
   "open_repository_work": [
-    "Finish Sequence 54 integration on a complete checkout: committed Cargo.lock resolution, current generated semantic inventory and authoritative-gate qualification. Root source policy and retirement of the two CI source writers are implemented, not proof of full closure.",
+    "Qualify the reviewed and integrated Matrix lock changes on a complete checkout with Cargo --locked; complete semantic inventory generation/review and final Sequence 54 gates. Full lock bytes and direct-edge checks alone do not close dependency resolution.",
     "Compile, format and lint all changed Rust code; execute complete PostgreSQL migration/role/concurrency/recovery and real homeserver integration tests.",
     "Implement durable adapter result lookup and principal-bound response-loss reconciliation; ambiguous adapter effects currently hold safely rather than auto-retry.",
     "Qualify large-gap backfill beyond the bounded per-iteration budget, Matrix filter/room-scope transitions, redaction/edit semantics and operational poison recovery.",
@@ -75,5 +88,5 @@
     "Pinned World/Game/Chain integration and complete first-playable rehearsal.",
     "V12-X1 representative-volume recovery; X2 deployment/cutover/rollback; X3 real external-Agent reconciliation; X4 credential custody; X5 sustained soak; X6 independent security/operations/financial review; X7 applicable legal/provider approvals; X8 final accountable human decision."
   ],
-  "revision": "qualification-source-round-5"
+  "revision": "build-and-authority-integration-round-7"
 }

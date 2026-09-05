@@ -117,6 +117,7 @@ errors that may include private source payloads.
 cargo test --locked -p matrix-bot-relay --all-targets
 cargo clippy --locked -p matrix-bot-relay --all-targets -- -D warnings
 python3 scripts/check-matrix-recovery-contract.py
+python3 scripts/check-matrix-lock-coherence.py
 python3 scripts/test-matrix-recovery-contract.py
 ```
 
@@ -159,3 +160,11 @@ hits are unknown-result holds, not proof that a prior effect completed. Typed
 replies and original-room binding still apply. Send endpoints now retain a
 configured reverse-proxy path; embedded endpoint credentials and query/fragment
 values are rejected. Full durable adapter result reconciliation remains open.
+
+## Compiler and committed lock repair
+
+`rust-toolchain.toml` selects Rust 1.98.1. The Matrix direct-dependency lock
+preflight checks the two workspace package entries against their manifests; it
+does not resolve the complete dependency graph or prove compilation. Preserve
+`--locked` and execute the full package gates after applying the reviewed lock
+patch. See `docs/build-unblock-round6.md` for the preimage and remaining evidence.

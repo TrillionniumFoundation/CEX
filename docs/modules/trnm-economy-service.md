@@ -129,3 +129,8 @@ image-digest attestations. The collector cannot certify the hosting job or
 validate external approvals. See `docs/qualification-source-integrity-v1.md` for
 packet contents, verification, limits and compatibility. The final repository
 manifest and independent production gates remain mandatory.
+
+The candidate compiler is Rust 1.98.1, selected by `rust-toolchain.toml` and the
+TRNM workflow. This updates the previous 1.98.0 selection; no old binary or
+artifact is reclassified as rebuilt. Fresh locked compilation, tests, lint and
+build evidence remain required after the version change.

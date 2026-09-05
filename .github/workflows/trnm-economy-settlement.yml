@@ -9,6 +9,7 @@ on:
       - '.github/workflows/trnm-economy-settlement.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'rust-toolchain.toml'
       - 'migrations/**'
       - 'crates/shared-tracing/**'
       - 'services/trnm-economy-service/migrations/settlement_v1.sql'
@@ -25,6 +26,7 @@ on:
       - '.github/workflows/trnm-economy-settlement.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'rust-toolchain.toml'
       - 'migrations/**'
       - 'crates/shared-tracing/**'
       - 'services/trnm-economy-service/migrations/settlement_v1.sql'
@@ -124,8 +126,8 @@ jobs:
           git rev-parse 'HEAD^{tree}'
       - name: Install pinned Rust toolchain
         run: |
-          rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
-          rustup default 1.98.0
+          rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.98.1
           rustc --version --verbose
           cargo --version --verbose
       - name: Enforce committed dependency lock
@@ -159,7 +161,7 @@ jobs:
           TRNM_CLIPPY_OUTCOME: ${{ steps.clippy.outcome }}
           TRNM_BUILD_OUTCOME: ${{ steps.build.outcome }}
           TRNM_SOURCE_UNCHANGED_OUTCOME: ${{ steps.source_unchanged.outcome }}
-          TRNM_RUST_TOOLCHAIN: '1.98.0'
+          TRNM_RUST_TOOLCHAIN: '1.98.1'
           TRNM_POSTGRES_IMAGE: 'postgres:16.4-alpine'
         run: |
           set -euo pipefail

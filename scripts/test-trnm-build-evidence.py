@@ -41,7 +41,7 @@ class BuildPacketTests(unittest.TestCase):
                     'EXPECTED_HEAD_SHA': self.git('rev-parse', 'HEAD').strip(),
                     'GITHUB_EVENT_NAME': 'push', 'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '2',
                     'TRNM_STATIC_RESULT': 'success',
-                    'TRNM_RUST_TOOLCHAIN': '1.98.0', 'TRNM_POSTGRES_IMAGE': 'postgres:16.4-alpine',
+                    'TRNM_RUST_TOOLCHAIN': '1.98.1', 'TRNM_POSTGRES_IMAGE': 'postgres:16.4-alpine',
                     **{'TRNM_' + key.upper() + '_OUTCOME': 'success' for key in E.STEP_KEYS}}
 
     def write(self, relative, data):
