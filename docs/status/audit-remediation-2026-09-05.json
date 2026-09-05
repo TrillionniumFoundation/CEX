@@ -3,7 +3,7 @@
   "status": "unqualified_working_change",
   "parent_plan": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
   "parent_addendum": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md",
-  "patch_base": "0393d144f04d6bc7f35663053559c7e1fc528cd3",
+  "patch_base": "257109a6ef0fb45dd1abc413ed926bd5c3f02589",
   "architecture_sequence": 52,
   "candidate_freeze_authority": "docs/release-evidence/p0-candidate-trigger.json",
   "is_candidate_freeze": false,
@@ -32,17 +32,23 @@
     "Make semantic output repository-local and atomic; preserve read-only missing/stale failure in --check. A complete current CEX generated inventory is still required.",
     "Reuse decoded registration facts for Consumer projection routing guards; escaped forbidden segments and dynamic paths cannot silently escape the source check.",
     "Wire semantic regression and inventory checks into the existing repository-integrity job; use exact-head, read-only hosted execution for the pure semantic helper workflow.",
-    "Use the PostgreSQL 16.14-bookworm image tag verified in the official image manifest instead of the unverified 16.15 tag; runtime image pull/execution still required."
+    "Use the PostgreSQL 16.14-bookworm image tag verified in the official image manifest instead of the unverified 16.15 tag; runtime image pull/execution still required.",
+    "Retire the two Sequence 53 source-writing workflows; qualification no longer uses those automatic branch commits and pushes.",
+    "Keep TRNM qualification on the committed Cargo.lock, require its static dependency job, and bind actual prerequisite step outcomes before artifact collection.",
+    "Collect a private closed six-file TRNM build packet outside the checkout, compare source bytes to HEAD, verify exact file set and hashes, and recheck source/binary identity before returning.",
+    "Reject source index flags, unexpected files, linked or mutated inputs, missing/failed step observations and source-status overclaims; do not treat local packet integrity as hosted execution or artifact-download verification.",
+    "Add MIT license and security/contribution/changelog policy files, route their review to existing owners, and document the packet profile and remaining qualification boundaries."
   ],
   "local_verification_scope": {
-    "python_source_contract_and_shell_negative_tests": 139,
+    "python_source_contract_and_shell_negative_tests": 174,
     "python_suites": {
       "retained_source_and_shell": 12,
       "matrix_recovery_source_mutations": 29,
       "postgres_runner_orchestration_fake_client": 21,
       "rust_route_lexical_extraction": 36,
       "semantic_generator_synthetic_git_integration": 28,
-      "consumer_route_source_guard": 13
+      "consumer_route_source_guard": 13,
+      "trnm_build_packet_filesystem_git_and_workflow": 35
     },
     "rust_tests_executed": false,
     "postgres_tests_executed": false,
@@ -50,10 +56,11 @@
     "hosted_exact_sha_qualification_proven": false,
     "source_checks_do_not_prove_runtime_behavior": true,
     "complete_cex_semantic_inventory_generated": false,
-    "local_source_is_partial_materialization": true
+    "local_source_is_partial_materialization": true,
+    "binary_fixture_is_synthetic_elf_not_compiled_service": true
   },
   "open_repository_work": [
-    "Integrate and verify Sequence 54 governance, Cargo.lock, generated semantic inventory and authoritative-gate changes on a complete checkout.",
+    "Finish Sequence 54 integration on a complete checkout: committed Cargo.lock resolution, current generated semantic inventory and authoritative-gate qualification. Root source policy and retirement of the two CI source writers are implemented, not proof of full closure.",
     "Compile, format and lint all changed Rust code; execute complete PostgreSQL migration/role/concurrency/recovery and real homeserver integration tests.",
     "Implement durable adapter result lookup and principal-bound response-loss reconciliation; ambiguous adapter effects currently hold safely rather than auto-retry.",
     "Qualify large-gap backfill beyond the bounded per-iteration budget, Matrix filter/room-scope transitions, redaction/edit semantics and operational poison recovery.",
@@ -68,5 +75,5 @@
     "Pinned World/Game/Chain integration and complete first-playable rehearsal.",
     "V12-X1 representative-volume recovery; X2 deployment/cutover/rollback; X3 real external-Agent reconciliation; X4 credential custody; X5 sustained soak; X6 independent security/operations/financial review; X7 applicable legal/provider approvals; X8 final accountable human decision."
   ],
-  "revision": "semantic-contract-round-4"
+  "revision": "qualification-source-round-5"
 }

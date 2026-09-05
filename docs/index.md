@@ -55,6 +55,10 @@ The module catalog is verified by `scripts/check-module-documentation.py`; that 
 
 `semantic-route-extraction-v2.md` documents bounded explicit Rust route extraction, unresolved declarations, consistent input snapshots, Consumer projection checks and generated-inventory review. It supports Blocks H and K without changing their authority. Passing its synthetic/source tests does not prove complete module documentation or repository qualification; the complete current generated inventory and exact-tree gates remain required.
 
+## Qualification source and packet integrity
+
+`qualification-source-integrity-v1.md` defines read-only qualification inputs and the TRNM closed build-packet profile. The obsolete Sequence 53 source-writing workflows are retired; committed locks and generated inventories must be prepared before qualification. LICENSE, SECURITY.md, CONTRIBUTING.md and CHANGELOG.md provide repository policy/navigation, not release authority or proof of branch enforcement. None of these files grants production authorization.
+
 ## Runner probe and qualification evidence
 
 The bounded desktop and fleet workflows are manual, no-checkout connectivity probes. A runner probe definition is not execution evidence. A queued job, `runner_id=0`, an empty runner identity, `steps=[]`, missing logs, or an artifact from a different SHA provides no repository-qualification credit. Qualification requires non-empty execution of every required context on one unchanged candidate and a generated immutable candidate manifest.

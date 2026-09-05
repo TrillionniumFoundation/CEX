@@ -31,6 +31,9 @@ jobs:
       - name: Development gate negative regression tests
         run: python3 scripts/test-development-gates.py
 
+      - name: Qualification source and build packet regression
+        run: python3 scripts/test-trnm-build-evidence.py
+
       - name: Semantic extraction regressions and current generated contract
         run: |
           python3 scripts/test-rust-route-contract.py

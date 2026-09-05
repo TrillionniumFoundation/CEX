@@ -39,3 +39,12 @@
 /services/matrix-entry-adapter/ @Tomasrgbsf @ProfHepta
 /apps/matrix-bot-relay/ @Tomasrgbsf @ProfHepta
 /apps/matrix-bot-poller/ @Tomasrgbsf @ProfHepta
+
+# Repository governance and immutable build-packet implementation
+/LICENSE @ProfHepta @Franksudoman
+/SECURITY.md @ProfHepta @Franksudoman
+/CONTRIBUTING.md @ProfHepta @Franksudoman
+/CHANGELOG.md @ProfHepta @Franksudoman
+/scripts/trnm_build_evidence.py @ProfHepta @Franksudoman
+/scripts/test-trnm-build-evidence.py @ProfHepta @Franksudoman
+/docs/qualification-source-integrity-v1.md @ProfHepta @Franksudoman

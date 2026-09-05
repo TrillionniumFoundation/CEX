@@ -17,6 +17,8 @@ on:
       - 'docs/status/trnm-economy-settlement-v1.json'
       - 'scripts/check-trnm-economy-settlement-contract.py'
       - 'scripts/test-trnm-economy-settlement-status-negative.py'
+      - 'scripts/trnm_build_evidence.py'
+      - 'scripts/test-trnm-build-evidence.py'
       - 'docs/release-evidence/p0-candidate-trigger.json'
   push:
     paths:
@@ -31,6 +33,8 @@ on:
       - 'docs/status/trnm-economy-settlement-v1.json'
       - 'scripts/check-trnm-economy-settlement-contract.py'
       - 'scripts/test-trnm-economy-settlement-status-negative.py'
+      - 'scripts/trnm_build_evidence.py'
+      - 'scripts/test-trnm-build-evidence.py'
       - 'docs/release-evidence/p0-candidate-trigger.json'
 
 permissions:
@@ -81,8 +85,11 @@ jobs:
         run: python3 scripts/check-trnm-economy-settlement-contract.py
       - name: Reject promotion overclaims
         run: python3 scripts/test-trnm-economy-settlement-status-negative.py
+      - name: Build packet filesystem and source identity regression
+        run: python3 scripts/test-trnm-build-evidence.py
 
   rust-postgresql-contracts:
+    needs: static-contracts
     name: trnm-economy-settlement/rust-postgresql-contracts
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -121,99 +128,49 @@ jobs:
           rustup default 1.98.0
           rustc --version --verbose
           cargo --version --verbose
-      - name: Bootstrap deterministic dependency lock
-        run: cargo generate-lockfile
-      - name: Resolve workspace
-        run: cargo metadata --locked --no-deps --format-version 1 > /dev/null
+      - name: Enforce committed dependency lock
+        id: lock
+        run: |
+          set -euo pipefail
+          cargo metadata --locked --no-deps --format-version 1 > /dev/null
+          git diff --exit-code HEAD -- Cargo.lock
       - name: Format settlement package only
+        id: format
         run: cargo fmt -p trnm-economy-service -- --check
       - name: Unit and PostgreSQL owner contract
+        id: tests
         run: cargo test -p trnm-economy-service --all-targets --locked
       - name: Strict lint
+        id: clippy
         run: cargo clippy -p trnm-economy-service --all-targets --locked -- -D warnings
       - name: Build immutable candidate binary
+        id: build
         run: cargo build -p trnm-economy-service --release --locked
+      - name: Verify candidate sources remain unchanged
+        id: source_unchanged
+        run: git diff --exit-code HEAD --
       - name: Assemble exact-head evidence packet
+        id: packet
         env:
-          WORKFLOW_RUN_ID: ${{ github.run_id }}
-          WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
-          WORKFLOW_REPOSITORY: ${{ github.repository }}
+          TRNM_STATIC_RESULT: ${{ needs.static-contracts.result }}
+          TRNM_LOCK_OUTCOME: ${{ steps.lock.outcome }}
+          TRNM_FORMAT_OUTCOME: ${{ steps.format.outcome }}
+          TRNM_TESTS_OUTCOME: ${{ steps.tests.outcome }}
+          TRNM_CLIPPY_OUTCOME: ${{ steps.clippy.outcome }}
+          TRNM_BUILD_OUTCOME: ${{ steps.build.outcome }}
+          TRNM_SOURCE_UNCHANGED_OUTCOME: ${{ steps.source_unchanged.outcome }}
+          TRNM_RUST_TOOLCHAIN: '1.98.0'
+          TRNM_POSTGRES_IMAGE: 'postgres:16.4-alpine'
         run: |
-          mkdir -p evidence
-          cp Cargo.lock evidence/Cargo.lock
-          cp target/release/trnm-economy-service evidence/trnm-economy-service
-          cp services/trnm-economy-service/migrations/settlement_v1.sql evidence/settlement_v1.sql
-          cp docs/status/trnm-economy-settlement-v1.json evidence/source-status.json
-          python3 - <<'PY'
-          import hashlib
-          import json
-          import os
-          import pathlib
-          import subprocess
-
-          root = pathlib.Path('.')
-          evidence = root / 'evidence'
-          files = [
-              evidence / 'Cargo.lock',
-              evidence / 'trnm-economy-service',
-              evidence / 'settlement_v1.sql',
-              evidence / 'source-status.json',
-          ]
-          hashes = {
-              path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-              for path in files
-          }
-          payload = {
-              'schema': 'trnm_cex_settlement_build_evidence_v1',
-              'repository': os.environ['WORKFLOW_REPOSITORY'],
-              'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
-              'tree': subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip(),
-              'workflow_run_id': int(os.environ['WORKFLOW_RUN_ID']),
-              'workflow_run_attempt': int(os.environ['WORKFLOW_RUN_ATTEMPT']),
-              'rust_toolchain': '1.98.0',
-              'postgres_image': 'postgres:16.4-alpine',
-              'contract': 'trnm_cex_settlement_receipt_lookup_v1',
-              'checks': [
-                  'exact-head-checkout',
-                  'static-contracts',
-                  'negative-overclaim-fixtures',
-                  'rust-format',
-                  'postgresql-owner-contract',
-                  'exact-intent-byte-immutability',
-                  'strict-clippy',
-                  'release-build',
-                  'extracted-artifact-checksum-verification',
-              ],
-              'sha256': hashes,
-              'limitations': [
-                  'candidate build artifact is not deployment evidence',
-                  'no trusted-settlement or public-online promotion',
-                  'human reviewer and cross-repository lock remain required',
-              ],
-          }
-          canonical = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()
-          payload['payload_sha256'] = hashlib.sha256(canonical).hexdigest()
-          (evidence / 'manifest.json').write_text(
-              json.dumps(payload, indent=2, sort_keys=True) + '\n',
-              encoding='utf-8',
-          )
-          PY
-          (
-            cd evidence
-            sha256sum \
-              Cargo.lock \
-              trnm-economy-service \
-              settlement_v1.sql \
-              source-status.json \
-              manifest.json \
-              | sort > SHA256SUMS
-            sha256sum --check SHA256SUMS
-          )
+          set -euo pipefail
+          packet_dir="$(python3 scripts/trnm_build_evidence.py --root "$PWD" --output-parent "$RUNNER_TEMP")"
+          python3 scripts/trnm_build_evidence.py --verify "$packet_dir"
+          echo "directory=$packet_dir" >> "$GITHUB_OUTPUT"
       - name: Upload exact-head candidate and evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: trnm-cex-settlement-${{ env.EXPECTED_HEAD_SHA }}
-          path: evidence/
+          name: trnm-cex-settlement-${{ env.EXPECTED_HEAD_SHA }}-attempt-${{ github.run_attempt }}
+          path: ${{ steps.packet.outputs.directory }}/
           if-no-files-found: error
           retention-days: 30
           compression-level: 9

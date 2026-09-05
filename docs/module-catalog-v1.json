@@ -189,7 +189,8 @@
       ],
       "verification": [
         "cargo test -p trnm-economy-service",
-        "cargo clippy -p trnm-economy-service --all-targets -- -D warnings"
+        "cargo clippy -p trnm-economy-service --all-targets -- -D warnings",
+        "python3 scripts/test-trnm-build-evidence.py"
       ]
     },
     {

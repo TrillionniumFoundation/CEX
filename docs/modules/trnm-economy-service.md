@@ -80,6 +80,7 @@ Required commands:
 ```text
 cargo test -p trnm-economy-service
 cargo clippy -p trnm-economy-service --all-targets -- -D warnings
+python3 scripts/test-trnm-build-evidence.py
 ```
 
 Required behavioral focus:
@@ -103,3 +104,28 @@ Whole-credit compatibility may convert only through checked scale multiplication
 Changes to authority, public types/routes, persistence, configuration, migrations, retry semantics, or topology require this contract, the module catalog, relevant ADR/protocol/traceability, executable tests, hosted gate wiring, and a new shared candidate trigger.
 
 No module document may declare repository closure or production authorization.
+
+## Qualification source and build packet
+
+The `trnm-economy-settlement` workflow uses the committed `Cargo.lock`; it may not
+regenerate dependencies during a qualification run. Its build job depends on the
+static-contracts job and preserves required PostgreSQL, format, strict lint and
+release-build steps. Successful step outcomes are explicit collector inputs, not
+inferred from a prewritten list in an artifact. Missing or failed prerequisites
+prevent packet creation.
+
+`scripts/trnm_build_evidence.py` compares the lock, service migration and source
+status with the exact Git HEAD blobs, snapshots the candidate ELF bytes, and
+writes a fresh six-file packet outside the checkout. It never uploads the
+repository's existing `evidence/` tree. Closed-file-set verification and a second
+source/identity check precede artifact upload. Artifact names include the run
+attempt. `python3 scripts/test-trnm-build-evidence.py` exercises real temporary
+Git workspaces and hostile filesystem inputs with a synthetic ELF header; those
+tests do not compile or execute the service and do not execute PostgreSQL.
+
+The packet retains `trnm_cex_settlement_build_evidence_v1` with explicit observation
+and non-authorization fields. Its declared toolchain/image are not independent
+image-digest attestations. The collector cannot certify the hosting job or
+validate external approvals. See `docs/qualification-source-integrity-v1.md` for
+packet contents, verification, limits and compatibility. The final repository
+manifest and independent production gates remain mandatory.
