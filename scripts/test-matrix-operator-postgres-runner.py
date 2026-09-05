@@ -39,7 +39,7 @@ class MatrixOperatorPostgresRunnerTests(unittest.TestCase):
 
     def successful_client(self, argv, *, input, env, timeout):
         del env, timeout
-        prefix = re.search(r"CEX_MATRIX_OPERATOR_[0-9a-f]{32}", input)
+        prefix = re.search(r"CEX_MATRIX_[0-9a-f]{32}", input)
         self.assertIsNotNone(prefix)
         marker_prefix = prefix.group(0)
         output: list[str] = []
@@ -99,6 +99,13 @@ class MatrixOperatorPostgresRunnerTests(unittest.TestCase):
         path.write_text("begin;\n\\quit\nrollback;\n", encoding="utf-8")
         with self.assertRaisesRegex(target.base.RegressionError, "backslashes"):
             target.acquired_inputs(root)
+
+    def test_marker_prefix_matches_shared_parser_contract(self):
+        root = self.make_root()
+        stages, _ = target.acquired_inputs(root)
+        script, _ = target.session_sql("matrix_operator_ci", stages, "0" * 32)
+        self.assertIn("CEX_MATRIX_" + "0" * 32 + ":start:server-identity", script)
+        self.assertNotIn("CEX_MATRIX_OPERATOR_", script)
 
     def test_execute_accepts_only_complete_ordered_markers(self):
         root = self.make_root()
