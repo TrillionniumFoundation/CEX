@@ -12,6 +12,7 @@ use shared_config::runtime_guard::matrix_profile::resolve_profiles;
 #[allow(dead_code, unused_attributes)]
 #[path = "implementation.rs"]
 mod implementation;
+mod result_reconciliation;
 
 const PROFILE_ENV_NAMES: [&str; 3] = [
     "MATRIX_ENTRY_RUNTIME_PROFILE",
@@ -71,5 +72,6 @@ impl AppState {
 
 /// Build the production router while keeping implementation constructors private.
 pub fn build_router(state: AppState) -> Router {
-    implementation::build_router(state.inner)
+    let reconciliation = result_reconciliation::router(state.inner.config());
+    implementation::build_router(state.inner).merge(reconciliation)
 }
