@@ -18,7 +18,6 @@ base64 = "0.22"
 hmac = "0.12"
 sha2 = "0.10"
 argon2 = "0.5"
-libc = "0.2"
 sqlx.workspace = true
 shared-tracing = { path = "../../crates/shared-tracing" }
 term-exchange-protocol.workspace = true
