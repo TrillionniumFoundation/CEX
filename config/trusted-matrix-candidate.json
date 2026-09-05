@@ -1,0 +1,8 @@
+{
+  "schema": "cex.trusted-matrix-candidate.v1",
+  "repository": "TrillionniumFoundation/CEX",
+  "ref": "fix/cex-v12-audit-remediation-20260905",
+  "sha": "6385f8be546622d958cc1a0b5ae279348abd42be",
+  "pull_request": 30,
+  "production_authorization": "not_granted"
+}
