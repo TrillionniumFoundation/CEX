@@ -125,7 +125,11 @@ pub(super) async fn create_chat_task(
         Err(response) => return response,
     };
 
-    remember_replay_response(&state, replay_key.as_deref(), &response).await;
+    if let Err(response) =
+        remember_replay_response(&state, replay_key.as_deref(), &response).await
+    {
+        return response;
+    }
     (StatusCode::ACCEPTED, Json(response)).into_response()
 }
 
@@ -254,7 +258,11 @@ pub(super) async fn create_matrix_message_task(
         Err(response) => return response,
     };
 
-    remember_replay_response(&state, replay_key.as_deref(), &response).await;
+    if let Err(response) =
+        remember_replay_response(&state, replay_key.as_deref(), &response).await
+    {
+        return response;
+    }
     (StatusCode::ACCEPTED, Json(response)).into_response()
 }
 
@@ -801,28 +809,30 @@ pub(super) async fn get_matrix_wallet(
     };
 
     let status = response.status();
-    let body =
-        match read_bounded_ledger_body(response).await {
-            Ok(body) => body,
-            Err(err) => return (
+    let body = match read_bounded_ledger_body(response).await {
+        Ok(body) => body,
+        Err(err) => {
+            return (
                 StatusCode::BAD_GATEWAY,
-                Json(
-                    json!({ "error": format!("ledger-service returned invalid response: {err}") }),
-                ),
+                Json(json!({
+                    "error": format!("ledger-service returned invalid response: {err}")
+                })),
             )
-                .into_response(),
-        };
-    let account =
-        match serde_json::from_str::<Value>(&body) {
-            Ok(value) => value,
-            Err(err) => return (
+                .into_response()
+        }
+    };
+    let account = match serde_json::from_str::<Value>(&body) {
+        Ok(value) => value,
+        Err(err) => {
+            return (
                 StatusCode::BAD_GATEWAY,
-                Json(
-                    json!({ "error": format!("ledger-service returned non-json response: {err}") }),
-                ),
+                Json(json!({
+                    "error": format!("ledger-service returned non-json response: {err}")
+                })),
             )
-                .into_response(),
-        };
+                .into_response()
+        }
+    };
 
     if !status.is_success() {
         return (status, Json(account)).into_response();
