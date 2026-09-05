@@ -12,13 +12,10 @@ use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{
-    collections::HashMap,
-    fs::File,
-    io::Read,
-    path::Path,
-    time::Duration,
-};
+use std::{collections::HashMap, time::Duration};
+
+#[path = "replay_store_snapshot.rs"]
+mod replay_store_snapshot;
 
 type HmacSha256 = Hmac<Sha256>;
 type ValidationResult<T> = Result<T, ValidationError>;
@@ -317,28 +314,8 @@ fn resolve_lookup_secret(
 }
 
 fn read_replay_store(path: &str) -> ValidationResult<ReplayStore> {
-    let path = Path::new(path);
-    let link_metadata = std::fs::symlink_metadata(path).map_err(|_| ValidationError)?;
-    if link_metadata.file_type().is_symlink()
-        || !link_metadata.file_type().is_file()
-        || link_metadata.len() > MAX_REPLAY_STORE_BYTES
-    {
-        return Err(ValidationError);
-    }
-
-    let file = File::open(path).map_err(|_| ValidationError)?;
-    let metadata = file.metadata().map_err(|_| ValidationError)?;
-    if !metadata.is_file() || metadata.len() > MAX_REPLAY_STORE_BYTES {
-        return Err(ValidationError);
-    }
-    let capacity = usize::try_from(metadata.len()).map_err(|_| ValidationError)?;
-    let mut bytes = Vec::with_capacity(capacity);
-    file.take(MAX_REPLAY_STORE_BYTES + 1)
-        .read_to_end(&mut bytes)
+    let bytes = replay_store_snapshot::read_stable_regular_file(path, MAX_REPLAY_STORE_BYTES)
         .map_err(|_| ValidationError)?;
-    if bytes.len() as u64 > MAX_REPLAY_STORE_BYTES {
-        return Err(ValidationError);
-    }
     serde_json::from_slice(&bytes).map_err(|_| ValidationError)
 }
 
