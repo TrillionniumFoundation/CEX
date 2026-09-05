@@ -181,5 +181,70 @@ whitespace-only or non-Unicode environment value is invalid. The opaque ID `0`
 is preserved and sent to Matrix; it is no longer a local disable sentinel.
 Deployments that previously configured `0` to request an unfiltered stream must
 remove that variable and have the resulting unfiltered scope reviewed explicitly.
-Other inline-filter bytes, including surrounding whitespace, are preserved.
+Inline filters must begin with `{` as their first character. Trailing whitespace
+is preserved, but leading whitespace is rejected rather than misclassified.
 This avoids binding a different effective stream than the operator configured.
+
+
+## Round 9: filter-preserving backfill and explicit unsupported shapes
+
+The prior backfill path sent `/messages` without a filter even when `/sync` used
+one. Consequently, a filtered-out sender/type could reappear during recovery and
+be normalised into a command. Stream-scope binding alone did not prevent that.
+The same API specification defines a full Filter for `/sync` but a RoomEventFilter
+for `/messages`; they cannot be passed interchangeably.
+
+The updated `stream_scope.rs` parses a supported inline Filter using strict Serde
+structs and derives only its `room.timeline` RoomEventFilter. The poller passes
+that JSON as one URL-encoded `filter` query parameter on every backfill page.
+Sender/type include/exclude lists, URL predicates, room selectors, member-loading
+options and limits are retained. Top-level room includes/excludes and timeline
+room selectors must both allow the particular joined room. An unexpected excluded
+room holds the whole batch; it is not silently advanced or broadened.
+
+The scope continues to retain the original, exact inline input bytes. The derived
+per-room query is not used to replace or rewrite the stored scope. No migration,
+dependency, command identity or cursor algorithm changes in this revision.
+
+Only absent filters and inline filters without a timeline predicate legitimately
+produce no `/messages` filter. A server-side filter ID is not a RoomEventFilter:
+for a nonempty limited-timeline recovery range it raises
+`matrix_gap_filter_id_requires_resolution` before backfill I/O. This includes the
+valid opaque ID `0`; it is never reinterpreted as an unfiltered stream. Ordinary
+unlimited `/sync` requests with an ID retain their existing behaviour. Pinned ID
+definition lookup, its schema validation, and lifecycle evidence remain open.
+No claim is made here about event-field projections hidden behind an unresolved ID.
+
+Inline `event_fields` projections are unsupported because they can remove the
+normaliser's identity fields while allowing cursor advance. Non-client event
+format, include-leave streams and unknown timeline/root/room extensions also
+fail before polling. The current poller does not implement leave-room replay or
+extension-specific membership semantics. Recognised struct fields reject
+malformed types and duplicate selectors. Non-timeline presence/account-data/state
+sections are not interpreted as command selection. This is a deliberately bounded
+subset, not complete support for every Matrix filter extension.
+
+The Matrix `/sync` discriminator examines the first character. An inline object
+with leading whitespace is therefore rejected instead of binding it as JSON and
+sending a value the server treats as a filter ID. Existing such configurations
+need an explicitly reviewed configuration correction, not an automatic scope
+rewrite. Existing unsupported inline filters now fail startup. These changes are
+not a transparent no-downtime upgrade, and do not solve previously missing events.
+
+Required checks, in addition to all existing gates:
+
+```text
+python3 scripts/test-matrix-filter-recovery.py
+python3 scripts/check-matrix-filter-recovery.py
+cargo test --locked -p matrix-bot-poller --all-targets
+cargo clippy --locked -p matrix-bot-poller --all-targets -- -D warnings
+```
+
+Nine new Rust tests define predicate preservation, room intersections, ID holds,
+unsupported projections, duplicate/type negatives and single-parameter URL
+encoding. They have not executed in the current authoring environment. Twelve
+executed Python mutations exercise the source guard and balanced function
+extraction; they do not run Rust or a homeserver. The guard is wired into the
+existing Matrix source job and authoritative repository-integrity job without
+removing any old step. Actual filtered `/sync` plus limited `/messages` integration,
+compiler validation and the unchanged final-candidate gates remain required.

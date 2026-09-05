@@ -190,6 +190,9 @@ async fn run(config: PollerConfig, pool: PgPool, http: Client) -> Result<()> {
                         "matrix_stream_scope_mismatch" => "matrix_stream_scope_mismatch",
                         "matrix_stream_scope_legacy_review_required" => "matrix_stream_scope_legacy_review_required",
                         "matrix_stream_binding_unverified" => "matrix_stream_binding_unverified",
+                        "matrix_gap_filter_id_requires_resolution" => "matrix_gap_filter_id_requires_resolution",
+                        "matrix_gap_room_excluded_by_filter" => "matrix_gap_room_excluded_by_filter",
+                        "matrix_sync_filter_unsupported" => "matrix_sync_filter_unsupported",
                         _ => "matrix_sync_not_accepted",
                     };
                     warn!(error_code = code, "Matrix sync held at last committed cursor; inspect protected recovery evidence");
@@ -575,6 +578,12 @@ async fn recover_limited_timelines(
         }
         let from = room.timeline.prev_batch.as_deref().ok_or_else(|| anyhow!("matrix_gap_boundary_missing"))?;
         let mut pager = sync_recovery::GapPager::new(from, stop)?;
+        let message_filter = if pager.complete() {
+            None
+        } else {
+            stream_scope::backfill_filter(config.sync_filter.as_deref(), room_id)
+                .map_err(|code| anyhow!(code))?
+        };
         let mut backwards = Vec::new();
         while !pager.complete() {
             if page_count >= GAP_PAGE_BUDGET || Instant::now() >= deadline {
@@ -585,6 +594,7 @@ async fn recover_limited_timelines(
             renew_cursor_lease(pool, config, lease).await?;
             let url = sync_recovery::messages_url(
                 &config.homeserver_base_url, room_id, pager.cursor(), stop, GAP_PAGE_LIMIT,
+                message_filter.as_deref(),
             )?;
             let remaining = deadline.saturating_duration_since(Instant::now());
             let bytes = timeout(remaining, async {

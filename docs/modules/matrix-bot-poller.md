@@ -165,3 +165,20 @@ owner-reviewed upgrade; configuration changes cannot auto-rebind an old cursor.
 `python3 scripts/check-matrix-stream-scope.py` is a source check, not runtime proof.
 See `docs/matrix-stream-scope-v1.md` for the scope shape, owner API, privileges,
 compatibility holds and remaining membership/large-gap work. No production grant.
+
+
+## Filter-preserving recovery
+
+`stream_scope.rs` also validates the supported inline Filter shape and derives
+its `room.timeline` RoomEventFilter for the current room. Both room selectors
+must allow that room; all supported timeline predicates remain in the encoded
+`/messages` query. The stored original scope bytes remain unchanged.
+
+`python3 scripts/test-matrix-filter-recovery.py` and
+`python3 scripts/check-matrix-filter-recovery.py` exercise source wiring only.
+They cannot replace the existing complete Rust and PostgreSQL gates. Filter IDs,
+including `0`, still work as IDs on ordinary sync but hold a required nonempty
+gap until a pinned definition protocol is implemented. Leading-space inline
+objects, event-field projection, non-client format, include-leave streams and
+unknown inline extensions are rejected. See `docs/matrix-stream-scope-v1.md` for
+compatibility changes, limits and unexecuted Rust/real-homeserver requirements.

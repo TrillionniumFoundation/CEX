@@ -1,6 +1,7 @@
 //! Immutable sync-stream description; credential configuration is not read.
 //! This describes configuration, not a proof of membership/history coverage.
 use reqwest::Url;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::env::VarError;
 
@@ -37,6 +38,7 @@ pub(super) fn describe(
             }
             let trimmed = raw.trim();
             if trimmed.starts_with('{') {
+                validate_inline(raw)?;
                 let value: Value = serde_json::from_str(trimmed)
                     .map_err(|_| "matrix_stream_filter_invalid")?;
                 if !value.is_object() {
@@ -98,6 +100,126 @@ pub(super) fn verify_account(body: &Value, expected: &str) -> Result<(), &'stati
     Ok(())
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SyncFilter {
+    room: Option<RoomFilter>,
+    event_format: Option<String>,
+    // These sections cannot select timeline events. They are not replayed here.
+    #[serde(rename = "presence")]
+    _presence: Option<Value>,
+    #[serde(rename = "account_data")]
+    _account_data: Option<Value>,
+    // event_fields is intentionally unsupported: projecting away event identity
+    // would cause normalisation to discard events while advancing the cursor.
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RoomFilter {
+    rooms: Option<Vec<String>>,
+    not_rooms: Option<Vec<String>>,
+    include_leave: Option<bool>,
+    timeline: Option<RoomEventFilter>,
+    #[serde(rename = "state")]
+    _state: Option<Value>,
+    #[serde(rename = "ephemeral")]
+    _ephemeral: Option<Value>,
+    #[serde(rename = "account_data")]
+    _account_data: Option<Value>,
+}
+
+#[derive(Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RoomEventFilter {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rooms: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    not_rooms: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    senders: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    not_senders: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    types: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    not_types: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    contains_url: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    limit: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lazy_load_members: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    include_redundant_members: Option<bool>,
+}
+
+fn parse_inline(raw: &str) -> Result<SyncFilter, &'static str> {
+    // Matrix discriminates inline filters by the FIRST character, not trim().
+    if !raw.starts_with('{') || raw.len() > 4096 {
+        return Err("matrix_sync_filter_unsupported");
+    }
+    let filter: SyncFilter =
+        serde_json::from_str(raw).map_err(|_| "matrix_sync_filter_unsupported")?;
+    if filter
+        .event_format
+        .as_deref()
+        .is_some_and(|format| format != "client")
+        || filter
+            .room
+            .as_ref()
+            .is_some_and(|room| room.include_leave == Some(true))
+    {
+        return Err("matrix_sync_filter_unsupported");
+    }
+    Ok(filter)
+}
+
+pub(super) fn validate_inline(raw: &str) -> Result<(), &'static str> {
+    parse_inline(raw).map(|_| ())
+}
+
+fn room_allowed(room: &str, allowed: &Option<Vec<String>>, denied: &Option<Vec<String>>) -> bool {
+    allowed
+        .as_ref()
+        .is_none_or(|rooms| rooms.iter().any(|candidate| candidate == room))
+        && !denied
+            .as_ref()
+            .is_some_and(|rooms| rooms.iter().any(|candidate| candidate == room))
+}
+
+pub(super) fn backfill_filter(
+    raw: Option<&str>,
+    room_id: &str,
+) -> Result<Option<String>, &'static str> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    // Server-side IDs require a pinned definition. Until that protocol exists,
+    // hold this gap instead of silently fetching unfiltered historical commands.
+    if !raw.starts_with('{') {
+        return Err("matrix_gap_filter_id_requires_resolution");
+    }
+    let filter = parse_inline(raw)?;
+    let Some(room) = filter.room else {
+        return Ok(None);
+    };
+    if !room_allowed(room_id, &room.rooms, &room.not_rooms) {
+        return Err("matrix_gap_room_excluded_by_filter");
+    }
+    let Some(timeline) = room.timeline else {
+        return Ok(None);
+    };
+    if !room_allowed(room_id, &timeline.rooms, &timeline.not_rooms) {
+        return Err("matrix_gap_room_excluded_by_filter");
+    }
+    // Retain limits and every supported timeline predicate. Do not copy state,
+    // account-data, presence or top-level room selectors as a RoomEventFilter.
+    serde_json::to_string(&timeline)
+        .map(Some)
+        .map_err(|_| "matrix_sync_filter_unsupported")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,7 +233,8 @@ mod tests {
         }
         assert!(configured_filter(Err(VarError::NotUnicode("not-unicode-fixture".into()))).is_err());
         let raw = r#" { "room": {} } "#.to_string();
-        assert_eq!(configured_filter(Ok(raw.clone())), Ok(Some(raw)));
+        assert_eq!(configured_filter(Ok(raw.clone())), Ok(Some(raw.clone())));
+        assert!(describe("https://m.example", "@bot:example", Some(&raw)).is_err());
     }
 
     #[test]
@@ -169,6 +292,74 @@ mod tests {
             json!({"user_id":"@bot:example","is_guest":null}),
             json!({"user_id":"@bot:example","errcode":"error"})] {
             assert!(verify_account(&value, "@bot:example").is_err());
+        }
+    }
+
+    #[test]
+    fn no_filter_and_no_timeline_predicate_do_not_invent_restrictions() {
+        assert_eq!(backfill_filter(None, "!r:e"), Ok(None));
+        assert_eq!(backfill_filter(Some("{}"), "!r:e"), Ok(None));
+        assert_eq!(backfill_filter(Some(r#"{"room":{"rooms":["!r:e"]}}"#), "!r:e"), Ok(None));
+    }
+
+    #[test]
+    fn timeline_membership_predicates_are_preserved() {
+        let timeline = json!({"senders":["@allowed:e"],"not_senders":["@denied:e"],
+            "types":["m.room.message"],"not_types":["m.room.encrypted"],
+            "contains_url":false,"rooms":["!r:e"],"not_rooms":["!other:e"],
+            "limit":10,"lazy_load_members":true,"include_redundant_members":false});
+        let source = json!({"event_format":"client", "presence":{"limit":0},
+            "room":{"rooms":["!r:e"],"timeline":timeline.clone(),"state":{"types":[]}}});
+        let actual = backfill_filter(Some(&source.to_string()), "!r:e").unwrap().unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&actual).unwrap(), timeline);
+    }
+
+    #[test]
+    fn room_exclusions_cannot_be_ignored_during_backfill() {
+        for raw in [r#"{"room":{"rooms":[]}}"#,
+            r#"{"room":{"rooms":["!other:e"]}}"#,
+            r#"{"room":{"rooms":["!r:e"],"not_rooms":["!r:e"]}}"#,
+            r#"{"room":{"timeline":{"rooms":[]}}}"#,
+            r#"{"room":{"timeline":{"not_rooms":["!r:e"]}}}"#] {
+            assert_eq!(backfill_filter(Some(raw), "!r:e"), Err("matrix_gap_room_excluded_by_filter"));
+        }
+    }
+
+    #[test]
+    fn ids_cannot_turn_into_unfiltered_backfill() {
+        for id in ["0", "opaque-id", "42"] {
+            assert_eq!(backfill_filter(Some(id), "!r:e"), Err("matrix_gap_filter_id_requires_resolution"));
+        }
+    }
+
+    #[test]
+    fn leading_space_is_not_an_inline_filter() {
+        for raw in [" {}", "\t{}", "\n{}"] {
+            assert!(validate_inline(raw).is_err());
+        }
+        assert!(validate_inline("{} \n").is_ok());
+    }
+
+    #[test]
+    fn unsupported_projection_and_extensions_fail_closed() {
+        for raw in [r#"{"event_fields":["content"]}"#,
+            r#"{"event_fields":null}"#,
+            r#"{"event_format":"federation"}"#,
+            r#"{"room":{"include_leave":true}}"#,
+            r#"{"room":{"timeline":{"org.example.filter":true}}}"#,
+            r#"{"org.example.filter":{}}"#] {
+            assert!(validate_inline(raw).is_err());
+        }
+    }
+
+    #[test]
+    fn duplicate_selectors_and_invalid_types_are_not_reinterpreted() {
+        for raw in [r#"{"room":{},"room":{"rooms":[]}}"#,
+            r#"{"room":{"timeline":{"senders":[],"senders":["@a:e"]}}}"#,
+            r#"{"room":{"timeline":{"limit":-1}}}"#,
+            r#"{"room":{"timeline":{"contains_url":"false"}}}"#,
+            r#"{"room":{"rooms":[1]}}"#] {
+            assert!(validate_inline(raw).is_err());
         }
     }
 }

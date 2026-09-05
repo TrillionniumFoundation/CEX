@@ -42,6 +42,8 @@ jobs:
         run: |
           python3 scripts/test-matrix-stream-scope.py
           python3 scripts/check-matrix-stream-scope.py
+          python3 scripts/test-matrix-filter-recovery.py
+          python3 scripts/check-matrix-filter-recovery.py
       - name: Source and shell negative regression
         run: python3 scripts/test-matrix-review-repairs.py
       - name: PostgreSQL runner safety and ordering regression
