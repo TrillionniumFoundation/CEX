@@ -19,6 +19,7 @@ AGENT_BOUNDARY = ROOT / "scripts/check-external-agent-runtime-boundary.py"
 EXECUTION_STATE_BOUNDARY = ROOT / "scripts/check-execution-default-state-boundary.py"
 EXTERNAL = ROOT / "scripts/check-external-production-evidence-contract.py"
 VENDOR_PROVENANCE = ROOT / "scripts/check-vendor-provenance.py"
+ECONOMY_PROVENANCE = ROOT / "scripts/check-economy-vendor-origin.py"
 MAX_OUTPUT_BYTES = 1_048_576
 CHECK_TIMEOUT_SECONDS = 120.0
 
@@ -165,7 +166,8 @@ def main() -> int:
     checks = (
         (AGENT_BOUNDARY, [], "external Agent runtime boundary", "cex.external-agent-runtime-boundary-check.v1"),
         (EXECUTION_STATE_BOUNDARY, [], "Execution default-state privacy boundary", "cex.execution-default-state-boundary-check.v1"),
-        (VENDOR_PROVENANCE, [], "TRNM vendor provenance", "cex.vendor-provenance-check.v1"),
+        (VENDOR_PROVENANCE, [], "TRNM Chain vendor provenance", "cex.vendor-provenance-check.v1"),
+        (ECONOMY_PROVENANCE, [], "TRNM economy CEX source lineage", "cex.trnm-economy-vendor-origin-check.v2"),
         (EXTERNAL, ["--contract-only"], "external evidence contract", "cex.external-production-evidence-contract-check.v1"),
         (EXTERNAL, ["--self-test"], "external evidence binding self-test", "cex.external-production-evidence-binding-self-test.v1"),
     )
