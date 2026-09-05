@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 use std::time::Duration;
 
 type HmacSha256 = Hmac<Sha256>;
+type ValidationResult<T> = Result<T, ValidationError>;
 
 const RECONCILIATION_PATH: &str = "/v1/matrix/results/lookup";
 const CONSUMER_LOOKUP_PATH: &str = "/v1/matrix/messages/result";
@@ -36,6 +37,9 @@ struct ReconciliationState {
     audience: String,
     ttl_secs: u64,
 }
+
+#[derive(Clone, Copy, Debug)]
+struct ValidationError;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -138,9 +142,9 @@ async fn reconcile_matrix_result(
     };
 
     let lookup_body = json!({
-        "event_id": request.event_id,
-        "matrix_user_id": request.sender,
-        "room_id": request.room_id,
+        "event_id": &request.event_id,
+        "matrix_user_id": &request.sender,
+        "room_id": &request.room_id,
     });
     let (assertion, signature) = match sign_lookup_assertion(&state, &request, signing_secret) {
         Ok(value) => value,
@@ -260,13 +264,13 @@ fn sign_lookup_assertion(
     state: &ReconciliationState,
     request: &MatrixResultReconciliationRequest,
     secret: &str,
-) -> Result<(String, String), ()> {
+) -> ValidationResult<(String, String)> {
     if state.issuer.is_empty() || state.audience.is_empty() || state.ttl_secs == 0 {
-        return Err(());
+        return Err(ValidationError);
     }
     let issued_at_epoch = Utc::now().timestamp();
-    let ttl = i64::try_from(state.ttl_secs).map_err(|_| ())?;
-    let expires_at_epoch = issued_at_epoch.checked_add(ttl).ok_or(())?;
+    let ttl = i64::try_from(state.ttl_secs).map_err(|_| ValidationError)?;
+    let expires_at_epoch = issued_at_epoch.checked_add(ttl).ok_or(ValidationError)?;
     let lookup = MatrixResultLookupIdentity {
         event_id: &request.event_id,
         matrix_user_id: &request.sender,
@@ -287,8 +291,11 @@ fn sign_lookup_assertion(
         issued_at_epoch,
         expires_at_epoch,
     };
-    let assertion = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).map_err(|_| ())?);
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).map_err(|_| ())?;
+    let assertion = URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&claims).map_err(|_| ValidationError)?,
+    );
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).map_err(|_| ValidationError)?;
     mac.update(assertion.as_bytes());
     let signature = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
     Ok((assertion, signature))
@@ -321,8 +328,8 @@ fn lookup_request_fingerprint(request: &MatrixResultLookupIdentity<'_>) -> Strin
     )
 }
 
-fn consumer_lookup_url(base: &str) -> Result<Url, ()> {
-    let mut url = Url::parse(base).map_err(|_| ())?;
+fn consumer_lookup_url(base: &str) -> ValidationResult<Url> {
+    let mut url = Url::parse(base).map_err(|_| ValidationError)?;
     if !matches!(url.scheme(), "http" | "https")
         || !url.username().is_empty()
         || url.password().is_some()
@@ -330,7 +337,7 @@ fn consumer_lookup_url(base: &str) -> Result<Url, ()> {
         || url.fragment().is_some()
         || url.host_str().is_none()
     {
-        return Err(());
+        return Err(ValidationError);
     }
     let path = format!(
         "{}{}",
@@ -341,17 +348,17 @@ fn consumer_lookup_url(base: &str) -> Result<Url, ()> {
     Ok(url)
 }
 
-async fn read_bounded_body(mut response: reqwest::Response) -> Result<Vec<u8>, ()> {
+async fn read_bounded_body(mut response: reqwest::Response) -> ValidationResult<Vec<u8>> {
     if response
         .content_length()
         .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
     {
-        return Err(());
+        return Err(ValidationError);
     }
     let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|_| ())? {
+    while let Some(chunk) = response.chunk().await.map_err(|_| ValidationError)? {
         if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
-            return Err(());
+            return Err(ValidationError);
         }
         body.extend_from_slice(&chunk);
     }
@@ -361,40 +368,46 @@ async fn read_bounded_body(mut response: reqwest::Response) -> Result<Vec<u8>, (
 fn validate_lookup_response(
     value: &Value,
     request: &MatrixResultReconciliationRequest,
-) -> Result<Value, ()> {
+) -> ValidationResult<Value> {
     if value.get("schema").and_then(Value::as_str) != Some("cex.matrix.result-lookup.v1")
         || value.get("resolved").and_then(Value::as_bool) != Some(true)
         || value.get("event_id").and_then(Value::as_str) != Some(request.event_id.as_str())
         || value.get("matrix_user_id").and_then(Value::as_str) != Some(request.sender.as_str())
         || value.get("room_id").and_then(Value::as_str) != Some(request.room_id.as_str())
     {
-        return Err(());
+        return Err(ValidationError);
     }
-    let response = value.get("response").cloned().ok_or(())?;
-    let source = response.get("source").and_then(Value::as_object).ok_or(())?;
+    let response = value
+        .get("response")
+        .cloned()
+        .ok_or(ValidationError)?;
+    let source = response
+        .get("source")
+        .and_then(Value::as_object)
+        .ok_or(ValidationError)?;
     if source.get("kind").and_then(Value::as_str) != Some("matrix_message")
         || source.get("event_id").and_then(Value::as_str) != Some(request.event_id.as_str())
         || source.get("matrix_user_id").and_then(Value::as_str) != Some(request.sender.as_str())
         || source.get("room_id").and_then(Value::as_str) != Some(request.room_id.as_str())
     {
-        return Err(());
+        return Err(ValidationError);
     }
     response
         .get("task_id")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty() && value.len() <= 128)
-        .ok_or(())?;
+        .ok_or(ValidationError)?;
     Ok(response)
 }
 
-fn validate_matrix_identifier(value: &str, prefix: char) -> Result<(), ()> {
+fn validate_matrix_identifier(value: &str, prefix: char) -> ValidationResult<()> {
     if value.len() < 2
         || value.len() > 512
         || !value.starts_with(prefix)
         || value.chars().any(char::is_whitespace)
         || value.chars().any(char::is_control)
     {
-        Err(())
+        Err(ValidationError)
     } else {
         Ok(())
     }
@@ -418,9 +431,9 @@ fn reconciliation_error(
 ) -> Response {
     let identity = request.map(|request| {
         json!({
-            "event_id": request.event_id,
-            "room_id": request.room_id,
-            "sender": request.sender,
+            "event_id": &request.event_id,
+            "room_id": &request.room_id,
+            "sender": &request.sender,
         })
     });
     (
@@ -452,7 +465,10 @@ mod tests {
     #[test]
     fn lookup_url_preserves_a_reviewed_reverse_proxy_prefix() {
         let url = consumer_lookup_url("https://entry.example/prefix").unwrap();
-        assert_eq!(url.as_str(), "https://entry.example/prefix/v1/matrix/messages/result");
+        assert_eq!(
+            url.as_str(),
+            "https://entry.example/prefix/v1/matrix/messages/result"
+        );
         for invalid in [
             "ftp://entry.example/prefix",
             "https://user@entry.example/prefix",
@@ -468,16 +484,16 @@ mod tests {
         let value = json!({
             "schema": "cex.matrix.result-lookup.v1",
             "resolved": true,
-            "event_id": request.event_id,
-            "matrix_user_id": request.sender,
-            "room_id": request.room_id,
+            "event_id": request.event_id.clone(),
+            "matrix_user_id": request.sender.clone(),
+            "room_id": request.room_id.clone(),
             "response": {
                 "task_id": "task-1",
                 "source": {
                     "kind": "matrix_message",
-                    "event_id": "$event",
-                    "matrix_user_id": "@alice:example",
-                    "room_id": "!room:example"
+                    "event_id": request.event_id.clone(),
+                    "matrix_user_id": request.sender.clone(),
+                    "room_id": request.room_id.clone()
                 }
             }
         });
