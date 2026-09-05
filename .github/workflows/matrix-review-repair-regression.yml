@@ -41,12 +41,24 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
+
           path = Path('.github/workflows/matrix-review-repair-regression.yml')
           text = path.read_text(encoding='utf-8')
-          forbidden = ('self-hosted', 'runs-on: [self-hosted', 'run-isolated-matrix-tests.sh')
-          found = [token for token in forbidden if token in text]
-          if found:
-              raise SystemExit(f'candidate workflow contains host-execution tokens: {found}')
+          host_runs_on = [
+              value.strip()
+              for value in re.findall(r'(?m)^\s*runs-on:\s*(.+)$', text)
+              if 'self-hosted' in value
+          ]
+          host_script_calls = re.findall(
+              r'(?m)^\s+(?:bash\s+)?scripts/run-isolated-matrix-tests\.sh(?:\s|$)',
+              text,
+          )
+          if host_runs_on or host_script_calls:
+              raise SystemExit(
+                  'candidate workflow contains an executable host boundary: '
+                  f'runs_on={host_runs_on}, script_calls={host_script_calls}'
+              )
           PY
       - name: Matrix direct dependency lock preflight
         run: |
@@ -166,9 +178,9 @@ jobs:
       - name: No source mutation
         run: git diff --exit-code
 
-# The only ROG lane is `.github/workflows/matrix-trusted-pr-target.yml` on the
-# PR base branch. It is loaded by `pull_request_target`, records the immutable
-# base and candidate SHAs, and invokes candidate bytes only inside the trusted
-# container boundary. Candidate workflows never schedule a self-hosted runner.
-# Supporting regression only: these jobs do not replace the five v12 authority
-# workflows, their exact-tree candidate manifest, or independent production gates.
+# The only ROG lane is the base-owned `matrix-trusted-base-gate` push workflow.
+# Its base-owned allowlist binds one immutable candidate SHA and its trusted host
+# harness invokes candidate bytes only inside the isolated container boundary.
+# Candidate workflows never schedule a self-hosted runner. Supporting regression
+# does not replace the five v12 authority workflows, their exact-tree candidate
+# manifest, or independent production gates.
