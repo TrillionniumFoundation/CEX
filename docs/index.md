@@ -113,3 +113,9 @@ contract. It is supporting implementation documentation, not release evidence.
 `matrix-sql-runner-v4.md` defines the unified legacy/current test entrypoints,
 single-session identity and reset controls, retained original assertions, v4
 observation report and its explicit non-qualification boundary.
+
+## Matrix ID filter execution
+
+`matrix-filter-definition-v1.md` defines the migration-0005 immutable definition
+pin and reviewed upgrade. It supersedes ordinary unresolved-ID sync and keeps
+definition acquisition, content validation and exact-tree qualification separate.

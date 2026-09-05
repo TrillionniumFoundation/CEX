@@ -70,7 +70,7 @@ The first inbox row is not rewritten. NULL cursor repeats are deduplicated too.
 
 ## Persistence, concurrency, and recovery
 
-Apply migration 0001 followed by additive 0002, 0003 and 0004 under the schema owner. Migration
+Apply migration 0001 followed by additive 0002, 0003, 0004 and 0005 under the schema owner. Migration
 0002 backfills first observations without modifying the immutable inbox, preserves
 the four-argument function signature and appends new observations transactionally.
 It does not change the numbered Ledger migration head 0088. Reapplying 0002 is
@@ -135,7 +135,7 @@ bash scripts/check-matrix-source-observation-postgres.sh
 
 The database command requires a disposable PostgreSQL 16 database supplied by
 `MATRIX_TEST_DATABASE_URL` and explicit `MATRIX_TEST_ALLOW_SCHEMA_RESET=1`. It runs
-the complete 0001/0002/0003/0004 chain twice before the original transport assertions, then
+the complete 0001/0002/0003/0004/0005 chain twice before the original transport assertions, then
 checks different-cursor exact replay, NULL cursor deduplication, content/partition
 collisions, first-observation preservation and immutable observation history.
 Missing tooling, credentials or reset consent fails; tests are not silently skipped.
@@ -188,9 +188,9 @@ orchestration using a fake client; it is not database execution evidence.
 `services/matrix-entry-adapter/migrations/0004_stream_scope_binding.sql` adds
 immutable poller stream metadata, virgin-stream binding and owner-only legacy
 scope approval. It changes no adapter business authority or source identities.
-Apply all four migrations before starting the updated poller; existing streams
+Apply the complete current migrations before starting the updated poller; existing streams
 will hold until their exact cursor and prior configuration are reviewed. See
-`docs/matrix-stream-scope-v1.md`. The SQL runner now uses the complete four-step
+`docs/matrix-stream-scope-v1.md`. The SQL runner now uses the complete five-step
 chain for both migration replays and all original/new assertions. Runtime
 privilege deployment and real PostgreSQL validation remain mandatory.
 
@@ -204,7 +204,7 @@ original 10,870-byte SQL body is retained unchanged in the dedicated baseline.
 
 The runner verifies PostgreSQL 16 and the exact test database, acquires a
 session-scoped advisory lock, rejects unrelated table/view/foreign-table names,
-and uses a fixed eleven-table reset allowlist before both complete migration
+and uses a fixed twelve-table reset allowlist before both complete migration
 replays and all SQL suites. Successful reports require a zero client exit and
 all ordered post-SQL markers. No per-step subprocess exit code is fabricated.
 The source snapshot is rechecked after the session. See
@@ -214,3 +214,15 @@ output-path restrictions, process limits and remaining execution qualification.
 `python3 scripts/test-matrix-runner-hardening.py` exercises actual subprocesses
 and filesystem operations with fake psql, not PostgreSQL. Database permissions,
 advisory-lock contention and the SQL suite still require real PostgreSQL 16.
+
+## ID filter definition persistence
+
+`services/matrix-entry-adapter/migrations/0005_filter_definition_pins.sql` adds
+immutable exact filter bytes/digest under the original stream ID. Bootstrap is
+virgin-stream-only; reviewed legacy insertion requires the table owner, exact
+cursor/revision and no live lease. No scope/cursor is rewritten. Updated pollers
+resolve ID filters before ordinary sync and use the validated inline snapshot
+for both sync and recovery. See `docs/matrix-filter-definition-v1.md`.
+The SQL runner includes all five migrations and the new pin suite, preserving
+all previous assertion bytes. Runtime permissions and actual SQL execution are
+still required, not granted by this supporting contract.

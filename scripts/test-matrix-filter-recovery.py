@@ -39,7 +39,7 @@ class FilterRecoverySourceTests(unittest.TestCase):
         self.reject('policy', 'serde_json::to_string(&timeline)', 'serde_json::to_string(&RoomEventFilter::default())')
 
     def test_backfill_calls_projection_before_network(self):
-        self.reject('poller', 'stream_scope::backfill_filter(config.sync_filter.as_deref(), room_id)', 'ignore_filter()')
+        self.reject('poller', 'stream_scope::backfill_filter(effective, room_id)', 'ignore_filter()')
 
     def test_backfill_url_receives_filter_argument(self):
         self.reject('poller', 'message_filter.as_deref(),', 'None,')

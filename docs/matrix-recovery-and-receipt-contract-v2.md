@@ -98,7 +98,7 @@ empty JSON object proves an external business outcome.
 
 ## Migration, permissions and rollback
 
-Apply the separate Matrix chain in order: `0001 -> 0002 -> 0003 -> 0004`. Existing source
+Apply the separate Matrix chain in order: `0001 -> 0002 -> 0003 -> 0004 -> 0005`. Existing source
 identities and delivered rows are not rewritten. Receipt requirements govern new
 transitions and do not fabricate receipts for historical sent rows. Each additive
 migration is replayed in the disposable database suite. Never run 0001 alone on an
@@ -205,3 +205,13 @@ be written under `run/`, never over source or a linked/external path. Unknown
 objects are rejected by exact name rather than trusting a transport-like prefix.
 A report confirms only observed stage markers in one psql session; it does not
 prove independent hosted execution, application runtime or deployment roles.
+
+## Round 11: execute a pinned ID filter definition
+
+`docs/matrix-filter-definition-v1.md` defines explicit expected definition hashes,
+bounded authenticated ID resolution, identical sync/backfill execution snapshots
+and the migration-0005 pin/legacy-approval interfaces. This supersedes ordinary
+unresolved-ID sync: the updated poller never sends a cursor with an unresolved
+filter ID. All previous SQL assertions remain, with the complete five-step chain
+reapplied twice before all suites. Rust/SQL/homeserver execution and the separate
+adapter result-reconciliation work remain unqualified or open as documented.

@@ -31,6 +31,7 @@ MIGRATIONS = (
     "0002_source_observation_replay.sql",
     "0003_sync_recovery_and_send_receipts.sql",
     "0004_stream_scope_binding.sql",
+    "0005_filter_definition_pins.sql",
 )
 ENTRYPOINTS = (
     "scripts/check-matrix-transport-postgres.sh",
@@ -42,6 +43,7 @@ REGRESSIONS = (
     "scripts/test-matrix-source-observation-replay.sql",
     "scripts/test-matrix-sync-recovery-postgres.sql",
     "scripts/test-matrix-stream-scope-postgres.sql",
+    "scripts/test-matrix-filter-definition-postgres.sql",
 )
 # A prefix is not an ownership contract: unknown similarly named tables fail.
 TRANSPORT_TABLES = (
@@ -50,6 +52,7 @@ TRANSPORT_TABLES = (
     "matrix_transport_source_observations", "matrix_transport_poison_payloads",
     "matrix_transport_cursor_history", "matrix_transport_send_bindings",
     "matrix_transport_send_receipts", "matrix_transport_stream_scopes",
+    "matrix_transport_filter_definitions",
 )
 MAX_INPUT = 2 * 1024 * 1024
 MAX_OUTPUT = 1024 * 1024

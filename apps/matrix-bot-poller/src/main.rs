@@ -1,3 +1,4 @@
+mod filter_definition;
 mod runtime_profile;
 mod stream_scope;
 mod sync_recovery;
@@ -35,6 +36,8 @@ struct PollerConfig {
     poll_interval_ms: u64,
     sync_timeout_ms: u64,
     sync_filter: Option<String>,
+    sync_filter_definition_sha256: Option<String>,
+    resolved_filter: Option<filter_definition::FilterDefinition>,
     sync_max_bytes: usize,
     delivery_max_attempts: i32,
     production_like: bool,
@@ -97,7 +100,7 @@ enum Admission {
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
-    let config = PollerConfig::from_env()?;
+    let mut config = PollerConfig::from_env()?;
     let pool = PgPoolOptions::new()
         .max_connections(MAX_DATABASE_CONNECTIONS)
         .connect(&config.database_url)
@@ -130,6 +133,11 @@ async fn main() -> Result<()> {
     );
 
     verify_homeserver_account(&http, &config).await?;
+    config.resolved_filter = filter_definition::resolve(
+        &http, &config.homeserver_base_url, &config.bot_user_id,
+        &config.matrix_access_token, config.sync_filter.as_deref(),
+        config.sync_filter_definition_sha256.as_deref(),
+    ).await?;
     run(config, pool, http).await
 }
 
@@ -176,6 +184,33 @@ async fn bind_stream_scope(
     if !matches!(disposition.as_str(), "bound" | "replay") {
         bail!("matrix_stream_binding_unverified");
     }
+    // Scope and definition pin are committed together before a cursor is sent.
+    // The same checks repeat inside the ordinary admission transaction.
+    filter_definition::effective_filter(config.sync_filter.as_deref(), config.resolved_filter.as_ref())
+        .map_err(|code| anyhow!(code))?;
+    if let Some(definition) = config.resolved_filter.as_ref() {
+        let filter_id = config.sync_filter.as_deref()
+            .ok_or_else(|| anyhow!("matrix_filter_definition_unresolved"))?;
+        let result: String = sqlx::query_scalar(
+            "select public.cex_matrix_bind_filter_definition_v1($1,$2,$3,$4,$5,$6,$7)",
+        )
+        .bind(&config.partition_id).bind(&config.worker_id)
+        .bind(lease.lease_fence).bind(lease.cursor_revision).bind(filter_id)
+        .bind(definition.bytes()).bind(definition.sha256())
+        .fetch_one(&mut **tx).await.map_err(|error| {
+            let message = error.as_database_error().map(|db| db.message());
+            anyhow!(match message {
+                Some("matrix_filter_definition_mismatch") => "matrix_filter_definition_mismatch",
+                Some("matrix_filter_definition_legacy_review_required") => "matrix_filter_definition_legacy_review_required",
+                Some("matrix_filter_definition_scope_mismatch") => "matrix_filter_definition_scope_mismatch",
+                Some("matrix_cursor_lease_or_revision_mismatch") => "matrix_cursor_lease_or_revision_mismatch",
+                _ => "matrix_filter_definition_binding_unverified",
+            })
+        })?;
+        if !matches!(result.as_str(), "bound" | "replay") {
+            bail!("matrix_filter_definition_binding_unverified");
+        }
+    }
     Ok(())
 }
 
@@ -193,6 +228,10 @@ async fn run(config: PollerConfig, pool: PgPool, http: Client) -> Result<()> {
                         "matrix_gap_filter_id_requires_resolution" => "matrix_gap_filter_id_requires_resolution",
                         "matrix_gap_room_excluded_by_filter" => "matrix_gap_room_excluded_by_filter",
                         "matrix_sync_filter_unsupported" => "matrix_sync_filter_unsupported",
+                        "matrix_filter_definition_mismatch" => "matrix_filter_definition_mismatch",
+                        "matrix_filter_definition_legacy_review_required" => "matrix_filter_definition_legacy_review_required",
+                        "matrix_filter_definition_scope_mismatch" => "matrix_filter_definition_scope_mismatch",
+                        "matrix_filter_definition_binding_unverified" => "matrix_filter_definition_binding_unverified",
                         _ => "matrix_sync_not_accepted",
                     };
                     warn!(error_code = code, "Matrix sync held at last committed cursor; inspect protected recovery evidence");
@@ -279,7 +318,9 @@ fn build_sync_url(config: &PollerConfig, cursor: Option<&str>) -> Result<Url> {
         if let Some(cursor) = cursor {
             query.append_pair("since", cursor);
         }
-        if let Some(filter) = config.sync_filter.as_deref() {
+        if let Some(filter) = filter_definition::effective_filter(
+            config.sync_filter.as_deref(), config.resolved_filter.as_ref(),
+        ).map_err(|code| anyhow!(code))? {
             query.append_pair("filter", filter);
         }
     }
@@ -581,7 +622,10 @@ async fn recover_limited_timelines(
         let message_filter = if pager.complete() {
             None
         } else {
-            stream_scope::backfill_filter(config.sync_filter.as_deref(), room_id)
+            let effective = filter_definition::effective_filter(
+                config.sync_filter.as_deref(), config.resolved_filter.as_ref(),
+            ).map_err(|code| anyhow!(code))?;
+            stream_scope::backfill_filter(effective, room_id)
                 .map_err(|code| anyhow!(code))?
         };
         let mut backwards = Vec::new();
@@ -704,7 +748,8 @@ async fn verify_schema(pool: &PgPool) -> Result<()> {
              and to_regprocedure('public.cex_matrix_renew_cursor_lease_v1(text,text,bigint,bigint,integer)') is not null \
              and to_regclass('public.matrix_transport_poison_payloads') is not null \
              and to_regclass('public.matrix_transport_cursor_history') is not null \
-             and to_regprocedure('public.cex_matrix_bind_stream_scope_v1(text,text,bigint,bigint,jsonb)') is not null",
+             and to_regprocedure('public.cex_matrix_bind_stream_scope_v1(text,text,bigint,bigint,jsonb)') is not null \
+             and to_regprocedure('public.cex_matrix_bind_filter_definition_v1(text,text,bigint,bigint,text,text,text)') is not null",
     )
     .fetch_one(pool)
     .await?;
@@ -778,6 +823,11 @@ impl PollerConfig {
             parse_env("MATRIX_POLL_DELIVERY_MAX_ATTEMPTS", 8_i32)?;
         let sync_filter = stream_scope::configured_filter(env::var("MATRIX_SYNC_FILTER"))
             .map_err(|code| anyhow!(code))?;
+        stream_scope::describe(&homeserver_base_url, &bot_user_id, sync_filter.as_deref())
+            .map_err(|code| anyhow!(code))?;
+        let sync_filter_definition_sha256 = filter_definition::configured_digest(
+            sync_filter.as_deref(), env::var("MATRIX_SYNC_FILTER_DEFINITION_SHA256"),
+        ).map_err(|code| anyhow!(code))?;
 
         if !(5..=3_600).contains(&cursor_lease_seconds) {
             bail!("MATRIX_POLL_CURSOR_LEASE_SECONDS must be between 5 and 3600");
@@ -821,6 +871,8 @@ impl PollerConfig {
             poll_interval_ms: poll_interval_ms.max(100),
             sync_timeout_ms,
             sync_filter,
+            sync_filter_definition_sha256,
+            resolved_filter: None,
             sync_max_bytes,
             delivery_max_attempts,
             production_like,
@@ -922,6 +974,8 @@ mod tests {
             poll_interval_ms: 100,
             sync_timeout_ms: 1000,
             sync_filter: None,
+            sync_filter_definition_sha256: None,
+            resolved_filter: None,
             sync_max_bytes: 4096,
             delivery_max_attempts: 3,
             production_like: false,
@@ -986,6 +1040,21 @@ mod tests {
                 "sender":sender, "content":{"msgtype":kind,"body":"ignored"}});
             assert!(prepare_admissions(&test_batch(event), &test_config()).unwrap().is_empty());
         }
+    }
+
+    #[test]
+    fn sync_url_uses_the_verified_definition_not_the_remote_id() {
+        let mut config = test_config();
+        config.sync_filter = Some("0".into());
+        assert!(build_sync_url(&config, Some("cursor")).is_err());
+        let bytes = br#"{"room":{"timeline":{"not_senders":["@excluded:example"]}}}"#;
+        let digest = sha256_prefixed(bytes);
+        config.resolved_filter = Some(filter_definition::verify_definition(bytes, &digest).unwrap());
+        let url = build_sync_url(&config, Some("cursor")).unwrap();
+        let actual = url.query_pairs().find(|(key, _)| key == "filter").unwrap().1;
+        assert_eq!(actual, std::str::from_utf8(bytes).unwrap());
+        assert_eq!(url.query_pairs().filter(|(key, _)| key == "filter").count(), 1);
+        assert_eq!(url.query_pairs().find(|(key, _)| key == "since").unwrap().1, "cursor");
     }
 
 }

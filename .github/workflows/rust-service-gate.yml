@@ -42,6 +42,8 @@ jobs:
           python3 scripts/check-matrix-stream-scope.py
           python3 scripts/test-matrix-filter-recovery.py
           python3 scripts/check-matrix-filter-recovery.py
+          python3 scripts/test-matrix-filter-definition.py
+          python3 scripts/check-matrix-filter-definition.py
 
       - name: Matrix SQL entrypoints and single-session regression
         run: |

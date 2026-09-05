@@ -63,7 +63,7 @@ def validate(sources: dict[str, str]) -> None:
     scope = function_body(sources['scope'], 'describe')
     require(scope, 'validate_inline(raw)?')
     recover = function_body(sources['poller'], 'recover_limited_timelines')
-    markers = ['stream_scope::backfill_filter(', 'renew_cursor_lease(', 'sync_recovery::messages_url(',
+    markers = ['filter_definition::effective_filter(', 'stream_scope::backfill_filter(effective, room_id)', 'renew_cursor_lease(', 'sync_recovery::messages_url(',
                'message_filter.as_deref()', 'http.get(url)']
     position = -1
     for marker in markers:

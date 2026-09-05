@@ -47,7 +47,7 @@ not a sandbox for a compromised client or an adversarial database administrator.
 A single psql process/connection performs these stages in order: verify actual
 database and PostgreSQL major 16, acquire the nonblocking advisory lock for this
 test runner, reject unrelated objects, reset allowlisted transport rows, apply
-0001 through 0004 twice, run the original transport SQL, then all three additive
+0001 through 0005 twice, run the original transport SQL, then all four additive
 regression suites. No reconnect or error-waiver psql metacommand is accepted in
 SQL source inputs. The first guard and later mutations cannot choose different
 connections through a host list. A connection loss cannot be auto-retried into
@@ -62,7 +62,7 @@ be separately tested.
 
 ## Exact object ownership and reset scope
 
-The reset allowlist contains eleven exact `public.matrix_transport_*` table
+The reset allowlist contains twelve exact `public.matrix_transport_*` table
 names from the current Matrix chain. A matching prefix alone is insufficient.
 Unrelated ordinary/partitioned tables, views, materialized views or foreign tables
 in application schemas reject the attempt. Reset checks again inside its

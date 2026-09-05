@@ -120,7 +120,7 @@ class EntryPointTests(Fixture):
             self.assertTrue(self.trace.exists())
             record=json.loads(result.stdout)
             self.assertEqual(record['execution_model'],'single_psql_session')
-            self.assertEqual(len(record['stages']),15)
+            self.assertEqual(len(record['stages']),3 + 2 * len(R.MIGRATIONS) + 1 + len(R.REGRESSIONS))
             self.assertEqual(record['production_authorization'],'not_granted')
             self.trace.unlink()
 
@@ -222,7 +222,7 @@ class ConnectionAndSnapshotTests(Fixture):
         with self.assertRaises(R.RegressionError):R.input_stages(self.root)
 
     def test_allowlist_is_exact_and_reset_uses_no_prefix_wildcard(self):
-        self.assertEqual(len(R.TRANSPORT_TABLES),11)
+        self.assertEqual(len(R.TRANSPORT_TABLES),12)
         self.assertIn('matrix_transport_stream_scopes',R.TRANSPORT_TABLES)
         self.assertNotIn("like 'matrix",R.FOREIGN_TABLES_SQL)
         self.assertNotIn("like 'matrix",R.RESET_SQL)

@@ -151,7 +151,7 @@ cargo clippy --locked -p matrix-bot-poller -p matrix-bot-relay --all-targets -- 
 bash scripts/check-matrix-source-observation-postgres.sh
 ```
 
-The SQL runner applies the entire `0001 -> 0002 -> 0003 -> 0004` chain twice
+The SQL runner applies the entire `0001 -> 0002 -> 0003 -> 0004 -> 0005` chain twice
 before every original assertion and all new suites. The new SQL suite covers
 fresh/replayed scope, changed filter, owner/fence checks, immutable metadata,
 legacy/live-lease/wrong-cursor holds, approved restart, null shape guards, and
@@ -186,7 +186,7 @@ is preserved, but leading whitespace is rejected rather than misclassified.
 This avoids binding a different effective stream than the operator configured.
 
 
-## Round 9: filter-preserving backfill and explicit unsupported shapes
+## Round 9: filter-preserving backfill (ID lifecycle superseded below)
 
 The prior backfill path sent `/messages` without a filter even when `/sync` used
 one. Consequently, a filtered-out sender/type could reappear during recovery and
@@ -248,3 +248,15 @@ extraction; they do not run Rust or a homeserver. The guard is wired into the
 existing Matrix source job and authoritative repository-integrity job without
 removing any old step. Actual filtered `/sync` plus limited `/messages` integration,
 compiler validation and the unchanged final-candidate gates remain required.
+
+## Current ID lifecycle: definition pinning
+
+The previous round-9 ordinary-ID behavior is superseded by
+`docs/matrix-filter-definition-v1.md`. ID-backed filters, including `0`, require
+an explicit reviewed SHA-256 and bounded authenticated definition lookup before
+the polling loop. Both `/sync` and gap recovery use the verified inline snapshot,
+not an unresolved remotely managed ID. Migration 0005 preserves the original scope
+and adds an immutable companion definition pin checked before requests and inside
+admission. Existing unpinned ID streams require a stopped, exact-cursor-reviewed
+upgrade. There is no auto-repin or cursor reset. Optional known filter fields
+may be absent but may no longer be JSON null. No runtime qualification is implied.

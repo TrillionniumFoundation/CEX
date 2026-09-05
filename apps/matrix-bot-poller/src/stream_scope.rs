@@ -1,7 +1,7 @@
 //! Immutable sync-stream description; credential configuration is not read.
 //! This describes configuration, not a proof of membership/history coverage.
 use reqwest::Url;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use std::env::VarError;
 
@@ -100,15 +100,30 @@ pub(super) fn verify_account(body: &Value, expected: &str) -> Result<(), &'stati
     Ok(())
 }
 
+// Missing selectors are optional; explicit JSON null is not a valid selector.
+fn present_non_null<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)?
+        .map(Some)
+        .ok_or_else(|| serde::de::Error::custom("matrix_filter_null_field"))
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SyncFilter {
+    #[serde(default, deserialize_with = "present_non_null")]
     room: Option<RoomFilter>,
+    #[serde(default, deserialize_with = "present_non_null")]
     event_format: Option<String>,
     // These sections cannot select timeline events. They are not replayed here.
     #[serde(rename = "presence")]
+    #[serde(default, deserialize_with = "present_non_null")]
     _presence: Option<Value>,
     #[serde(rename = "account_data")]
+    #[serde(default, deserialize_with = "present_non_null")]
     _account_data: Option<Value>,
     // event_fields is intentionally unsupported: projecting away event identity
     // would cause normalisation to discard events while advancing the cursor.
@@ -117,15 +132,22 @@ struct SyncFilter {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RoomFilter {
+    #[serde(default, deserialize_with = "present_non_null")]
     rooms: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "present_non_null")]
     not_rooms: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "present_non_null")]
     include_leave: Option<bool>,
+    #[serde(default, deserialize_with = "present_non_null")]
     timeline: Option<RoomEventFilter>,
     #[serde(rename = "state")]
+    #[serde(default, deserialize_with = "present_non_null")]
     _state: Option<Value>,
     #[serde(rename = "ephemeral")]
+    #[serde(default, deserialize_with = "present_non_null")]
     _ephemeral: Option<Value>,
     #[serde(rename = "account_data")]
+    #[serde(default, deserialize_with = "present_non_null")]
     _account_data: Option<Value>,
 }
 
@@ -133,24 +155,34 @@ struct RoomFilter {
 #[serde(deny_unknown_fields)]
 struct RoomEventFilter {
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present_non_null")]
     rooms: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present_non_null")]
     not_rooms: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present_non_null")]
     senders: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present_non_null")]
     not_senders: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present_non_null")]
     types: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present_non_null")]
     not_types: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present_non_null")]
     contains_url: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present_non_null")]
     limit: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present_non_null")]
     lazy_load_members: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present_non_null")]
     include_redundant_members: Option<bool>,
 }
 

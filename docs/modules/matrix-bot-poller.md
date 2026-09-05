@@ -59,7 +59,7 @@ and delivery-ID derivation are unchanged, preserving existing healthy replays.
 
 ## Persistence, concurrency, and recovery
 
-Apply transport migrations 0001, 0002, 0003 and 0004 in order. Renewals require the same
+Apply transport migrations 0001, 0002, 0003, 0004 and 0005 in order. Renewals require the same
 unexpired owner, fence and revision; an expired lease cannot be resurrected.
 Each renewal statement commits before HTTP. Recovery is bounded by 100 pages,
 100 events per page, 10,000 combined events, 32 MiB gap bytes and 120 seconds.
@@ -128,7 +128,7 @@ Python checks are source-contract tests; they do not execute Rust, SQL or Matrix
 
 ## Deployment and operations
 
-Readiness requires all four transport migrations and valid security settings.
+Readiness requires all five transport migrations and valid security settings.
 Configure an explicit first-start policy and stable account/filter partition.
 Monitor cursor age, recovery holds, poison inventory and pending deliveries.
 Recovery limit exhaustion is an operator hold, not a skip; tune capacity only
@@ -176,9 +176,29 @@ must allow that room; all supported timeline predicates remain in the encoded
 
 `python3 scripts/test-matrix-filter-recovery.py` and
 `python3 scripts/check-matrix-filter-recovery.py` exercise source wiring only.
-They cannot replace the existing complete Rust and PostgreSQL gates. Filter IDs,
-including `0`, still work as IDs on ordinary sync but hold a required nonempty
-gap until a pinned definition protocol is implemented. Leading-space inline
-objects, event-field projection, non-client format, include-leave streams and
-unknown inline extensions are rejected. See `docs/matrix-stream-scope-v1.md` for
-compatibility changes, limits and unexecuted Rust/real-homeserver requirements.
+They cannot replace the existing complete Rust and PostgreSQL gates. ID-backed filters now require a reviewed definition digest and resolution before
+any ordinary sync; both sync and gaps execute the same pinned snapshot rather
+than the remote ID. The round-9 unresolved-ID recovery hold remains a guard for
+invalid embedded callers, not the normal resolved path. Unsupported projections,
+include-leave and unknown filters remain rejected. See the extension below.
+
+## ID definition pinning extension
+
+`apps/matrix-bot-poller/src/filter_definition.rs` implements bounded authenticated
+lookup, exact SHA-256 validation and immutable inline execution selection. An
+ID-valued `MATRIX_SYNC_FILTER`, including `0`, now requires the explicit
+`MATRIX_SYNC_FILTER_DEFINITION_SHA256`; inline/absent filters must omit it.
+The digest is over exact reviewed response bytes, not reserialized JSON.
+
+Migration 0005 binds that definition to the original endpoint/account/ID scope
+before cursor-bearing HTTP and again inside admission. Old non-virgin ID streams
+require owner-reviewed exact-position pin approval with no active lease. No
+cursor reset or repin is implied. Optional selectors must be absent rather than
+JSON null. The detailed lifecycle, privacy, privileges and rollback rules are in
+`docs/matrix-filter-definition-v1.md`.
+
+`python3 scripts/check-matrix-filter-definition.py` and
+`python3 scripts/test-matrix-filter-definition.py` exercise source wiring only.
+Full Rust tests include loopback HTTP definitions but remain unexecuted here;
+real PostgreSQL, homeserver, complete-workspace and hosted qualification still
+apply. A successfully fetched JSON body is not production authorization.
