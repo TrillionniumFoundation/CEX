@@ -1,0 +1,22 @@
+{
+  "schema": "cex.trnm-economy-vendor-origin.v1",
+  "package": "trnm-economy-protocol",
+  "package_version": "2.4.0",
+  "current_path": "vendor/trnm-economy-protocol",
+  "current_git_tree": "4bf9e5de88cbe54d90802d18cbdfa8a21f19ded3",
+  "current_files": {
+    "Cargo.toml": "4c4751d3a8a23d3b9c65c4bf11141aab77977ac4",
+    "src/lib.rs": "6d6def11a1cb06540aebe9400701af8d0c91c912"
+  },
+  "imported_by_cex_commit": "ce681c60d7e09a25f468815a6e7ae6081e8e1a12",
+  "previous_external_path": "../Trillionnium/trillionnium/crates/trnm-economy-protocol",
+  "import_commit_claim": "vendor TRNM protocol for hermetic consumer builds",
+  "external_origin": {
+    "status": "unresolved",
+    "repository": null,
+    "commit": null,
+    "git_tree": null
+  },
+  "resolution_requirement": "Before final-candidate qualification, bind a reviewed external repository identity, immutable commit and exact source tree whose package bytes are reconciled with the imported/current CEX vendor tree. Do not infer these values from the historical relative path or package name.",
+  "production_authorization": "not_granted"
+}
