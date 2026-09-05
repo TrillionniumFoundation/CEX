@@ -21,6 +21,7 @@ use std::{
 };
 
 type HmacSha256 = Hmac<Sha256>;
+type ValidationResult<T> = Result<T, ValidationError>;
 
 const LOOKUP_PATH: &str = "/v1/matrix/messages/result";
 const MAX_LOOKUP_BODY_BYTES: usize = 16 * 1024;
@@ -32,6 +33,9 @@ const LOOKUP_SOURCE_KIND: &str = "matrix_result_lookup";
 struct ResultLookupState {
     config: ConsumerEntryConfig,
 }
+
+#[derive(Clone, Copy, Debug)]
+struct ValidationError;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -132,7 +136,9 @@ async fn lookup_matrix_result(
 
     let now = Utc::now().timestamp();
     let max_age = i64::try_from(state.config.replay_window_secs).unwrap_or(i64::MAX);
-    if entry.seen_at_epoch > now + state.config.session_auth_max_clock_skew_secs as i64
+    let cache_skew =
+        i64::try_from(state.config.session_auth_max_clock_skew_secs).unwrap_or(i64::MAX);
+    if entry.seen_at_epoch > now.saturating_add(cache_skew)
         || now.saturating_sub(entry.seen_at_epoch) > max_age
     {
         return lookup_error(StatusCode::GONE, "matrix_result_lookup_expired");
@@ -167,16 +173,19 @@ async fn lookup_matrix_result(
         .into_response()
 }
 
-fn authorize_ingress(headers: &HeaderMap, config: &ConsumerEntryConfig) -> Result<(), ()> {
-    let expected = config.ingress_token.as_deref().ok_or(())?;
+fn authorize_ingress(
+    headers: &HeaderMap,
+    config: &ConsumerEntryConfig,
+) -> ValidationResult<()> {
+    let expected = config.ingress_token.as_deref().ok_or(ValidationError)?;
     let supplied = headers
         .get("x-entry-token")
         .and_then(|value| value.to_str().ok())
-        .ok_or(())?;
+        .ok_or(ValidationError)?;
     if constant_time_eq(expected.as_bytes(), supplied.as_bytes()) {
         Ok(())
     } else {
-        Err(())
+        Err(ValidationError)
     }
 }
 
@@ -184,24 +193,27 @@ fn authorize_lookup_principal(
     headers: &HeaderMap,
     request: &MatrixResultLookupRequest,
     config: &ConsumerEntryConfig,
-) -> Result<(), ()> {
+) -> ValidationResult<()> {
     let assertion = headers
         .get("x-cex-user-session")
         .and_then(|value| value.to_str().ok())
         .filter(|value| !value.is_empty() && value.len() <= MAX_ASSERTION_BYTES)
-        .ok_or(())?;
+        .ok_or(ValidationError)?;
     let supplied_signature = headers
         .get("x-cex-user-session-signature")
         .and_then(|value| value.to_str().ok())
         .filter(|value| !value.is_empty() && value.len() <= 256)
-        .ok_or(())?;
+        .ok_or(ValidationError)?;
 
-    let assertion_bytes = URL_SAFE_NO_PAD.decode(assertion).map_err(|_| ())?;
+    let assertion_bytes = URL_SAFE_NO_PAD
+        .decode(assertion)
+        .map_err(|_| ValidationError)?;
     if assertion_bytes.len() > MAX_ASSERTION_BYTES {
-        return Err(());
+        return Err(ValidationError);
     }
     let claims: LookupSessionClaims =
-        serde_json::from_slice(&assertion_bytes).map_err(|_| ())?;
+        serde_json::from_slice(&assertion_bytes).map_err(|_| ValidationError)?;
+    let expected_fingerprint = lookup_request_fingerprint(request);
 
     if claims.version != 1
         || claims.source_kind != LOOKUP_SOURCE_KIND
@@ -210,17 +222,16 @@ fn authorize_lookup_principal(
         || claims.session_id.is_some()
         || claims.org_id.is_some()
         || claims.account_id.is_some()
-        || claims.request_fingerprint.as_deref()
-            != Some(lookup_request_fingerprint(request).as_str())
+        || claims.request_fingerprint.as_deref() != Some(expected_fingerprint.as_str())
     {
-        return Err(());
+        return Err(ValidationError);
     }
 
     let audience = config
         .session_auth_expected_audience
         .as_deref()
         .filter(|value| !value.is_empty())
-        .ok_or(())?;
+        .ok_or(ValidationError)?;
     if claims.audience.as_deref() != Some(audience)
         || config.session_auth_allowed_issuers.is_empty()
         || !config
@@ -228,12 +239,14 @@ fn authorize_lookup_principal(
             .iter()
             .any(|issuer| issuer == &claims.issuer)
     {
-        return Err(());
+        return Err(ValidationError);
     }
 
     let now = Utc::now().timestamp();
-    let skew = i64::try_from(config.session_auth_max_clock_skew_secs).map_err(|_| ())?;
-    let max_ttl = i64::try_from(config.session_auth_max_ttl_secs).map_err(|_| ())?;
+    let skew = i64::try_from(config.session_auth_max_clock_skew_secs)
+        .map_err(|_| ValidationError)?;
+    let max_ttl =
+        i64::try_from(config.session_auth_max_ttl_secs).map_err(|_| ValidationError)?;
     if claims.issued_at_epoch > now.saturating_add(skew)
         || claims.expires_at_epoch <= claims.issued_at_epoch
         || claims.expires_at_epoch < now.saturating_sub(skew)
@@ -242,20 +255,21 @@ fn authorize_lookup_principal(
             .saturating_sub(claims.issued_at_epoch)
             > max_ttl
     {
-        return Err(());
+        return Err(ValidationError);
     }
 
-    let secret = resolve_lookup_secret(config, &claims).ok_or(())?;
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).map_err(|_| ())?;
+    let secret = resolve_lookup_secret(config, &claims).ok_or(ValidationError)?;
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).map_err(|_| ValidationError)?;
     mac.update(assertion.as_bytes());
     let expected_signature = mac.finalize().into_bytes();
     let supplied_signature = URL_SAFE_NO_PAD
         .decode(supplied_signature)
-        .map_err(|_| ())?;
+        .map_err(|_| ValidationError)?;
     if supplied_signature.len() != expected_signature.len()
         || !constant_time_eq(&supplied_signature, expected_signature.as_slice())
     {
-        return Err(());
+        return Err(ValidationError);
     }
     Ok(())
 }
@@ -274,15 +288,16 @@ fn resolve_lookup_secret(
             return Some(secret.clone());
         }
         if let Some(entry) = config.session_auth_issuer_registry.get(&claims.issuer) {
-            let value = serde_json::to_value(entry).ok()?;
-            if let Some(secret) = value
-                .get("keys")
-                .and_then(Value::as_object)
-                .and_then(|keys| keys.get(key_id))
-                .and_then(Value::as_str)
-                .filter(|secret| !secret.is_empty())
-            {
-                return Some(secret.to_string());
+            if let Ok(value) = serde_json::to_value(entry) {
+                if let Some(secret) = value
+                    .get("keys")
+                    .and_then(Value::as_object)
+                    .and_then(|keys| keys.get(key_id))
+                    .and_then(Value::as_str)
+                    .filter(|secret| !secret.is_empty())
+                {
+                    return Some(secret.to_string());
+                }
             }
         }
     }
@@ -301,69 +316,73 @@ fn resolve_lookup_secret(
         })
 }
 
-fn read_replay_store(path: &str) -> Result<ReplayStore, ()> {
+fn read_replay_store(path: &str) -> ValidationResult<ReplayStore> {
     let path = Path::new(path);
-    let link_metadata = std::fs::symlink_metadata(path).map_err(|_| ())?;
+    let link_metadata = std::fs::symlink_metadata(path).map_err(|_| ValidationError)?;
     if link_metadata.file_type().is_symlink()
         || !link_metadata.file_type().is_file()
         || link_metadata.len() > MAX_REPLAY_STORE_BYTES
     {
-        return Err(());
+        return Err(ValidationError);
     }
 
-    let mut file = File::open(path).map_err(|_| ())?;
-    let metadata = file.metadata().map_err(|_| ())?;
+    let file = File::open(path).map_err(|_| ValidationError)?;
+    let metadata = file.metadata().map_err(|_| ValidationError)?;
     if !metadata.is_file() || metadata.len() > MAX_REPLAY_STORE_BYTES {
-        return Err(());
+        return Err(ValidationError);
     }
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    let capacity = usize::try_from(metadata.len()).map_err(|_| ValidationError)?;
+    let mut bytes = Vec::with_capacity(capacity);
     file.take(MAX_REPLAY_STORE_BYTES + 1)
         .read_to_end(&mut bytes)
-        .map_err(|_| ())?;
+        .map_err(|_| ValidationError)?;
     if bytes.len() as u64 > MAX_REPLAY_STORE_BYTES {
-        return Err(());
+        return Err(ValidationError);
     }
-    serde_json::from_slice(&bytes).map_err(|_| ())
+    serde_json::from_slice(&bytes).map_err(|_| ValidationError)
 }
 
 fn validate_cached_result(
     response: &Value,
     request: &MatrixResultLookupRequest,
-) -> Result<(), ()> {
-    let source = response.get("source").and_then(Value::as_object).ok_or(())?;
+) -> ValidationResult<()> {
+    let source = response
+        .get("source")
+        .and_then(Value::as_object)
+        .ok_or(ValidationError)?;
     if source.get("kind").and_then(Value::as_str) != Some("matrix_message")
         || source.get("matrix_user_id").and_then(Value::as_str)
             != Some(request.matrix_user_id.as_str())
         || source.get("room_id").and_then(Value::as_str) != Some(request.room_id.as_str())
         || source.get("event_id").and_then(Value::as_str) != Some(request.event_id.as_str())
     {
-        return Err(());
+        return Err(ValidationError);
     }
 
     let identity_scope = source
         .get("identity_scope")
         .and_then(Value::as_object)
-        .ok_or(())?;
+        .ok_or(ValidationError)?;
     if identity_scope.get("user_id").and_then(Value::as_str)
         != Some(request.matrix_user_id.as_str())
         || identity_scope.get("room_id").and_then(Value::as_str)
             != Some(request.room_id.as_str())
     {
-        return Err(());
+        return Err(ValidationError);
     }
 
     let task_id = response
         .get("task_id")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty() && value.len() <= 128)
-        .ok_or(())?;
+        .ok_or(ValidationError)?;
     if let Some(invocation_id) = response
         .get("raw")
         .and_then(|raw| raw.get("invocation_id"))
         .and_then(Value::as_str)
     {
         if invocation_id != task_id {
-            return Err(());
+            return Err(ValidationError);
         }
     }
     Ok(())
@@ -390,14 +409,14 @@ fn lookup_request_fingerprint(request: &MatrixResultLookupRequest) -> String {
     )
 }
 
-fn validate_matrix_identifier(value: &str, prefix: char) -> Result<(), ()> {
+fn validate_matrix_identifier(value: &str, prefix: char) -> ValidationResult<()> {
     if value.len() < 2
         || value.len() > 512
         || !value.starts_with(prefix)
         || value.chars().any(char::is_whitespace)
         || value.chars().any(char::is_control)
     {
-        Err(())
+        Err(ValidationError)
     } else {
         Ok(())
     }
@@ -468,25 +487,25 @@ mod tests {
             "task_id": "task-1",
             "source": {
                 "kind": "matrix_message",
-                "matrix_user_id": request.matrix_user_id,
-                "room_id": request.room_id,
-                "event_id": request.event_id,
+                "matrix_user_id": request.matrix_user_id.clone(),
+                "room_id": request.room_id.clone(),
+                "event_id": request.event_id.clone(),
                 "identity_scope": {
-                    "user_id": "@alice:example",
-                    "room_id": "!room:example"
+                    "user_id": request.matrix_user_id.clone(),
+                    "room_id": request.room_id.clone()
                 }
             },
             "raw": {"invocation_id": "task-1"}
         });
-        assert_eq!(validate_cached_result(&valid, &request), Ok(()));
+        assert!(validate_cached_result(&valid, &request).is_ok());
 
         for pointer in ["matrix_user_id", "room_id", "event_id"] {
             let mut invalid = valid.clone();
             invalid["source"][pointer] = json!("mismatch");
-            assert_eq!(validate_cached_result(&invalid, &request), Err(()));
+            assert!(validate_cached_result(&invalid, &request).is_err());
         }
         let mut invalid = valid;
         invalid["raw"]["invocation_id"] = json!("task-2");
-        assert_eq!(validate_cached_result(&invalid, &request), Err(()));
+        assert!(validate_cached_result(&invalid, &request).is_err());
     }
 }
