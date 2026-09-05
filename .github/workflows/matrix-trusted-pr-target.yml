@@ -1,0 +1,101 @@
+name: matrix-trusted-pr-target
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [fix/cex-v12-seq53-close-repository-gaps-20260904]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: matrix-trusted-pr-target-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  trusted-isolated-matrix:
+    if: >-
+      github.repository == 'TrillionniumFoundation/CEX' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'fix/cex-v12-audit-remediation-20260905' &&
+      github.event.pull_request.base.ref == 'fix/cex-v12-seq53-close-repository-gaps-20260904'
+    runs-on: [self-hosted, linux, x64, rog]
+    timeout-minutes: 120
+    env:
+      HOME: ${{ runner.temp }}/cex-trusted-home-${{ github.run_id }}-${{ github.run_attempt }}
+      GIT_CONFIG_NOSYSTEM: '1'
+      GIT_TERMINAL_PROMPT: '0'
+    steps:
+      - name: Prepare sealed checkout paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          mkdir -p "$HOME"
+          chmod 700 "$HOME"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import shutil
+          root = Path(os.environ["GITHUB_WORKSPACE"]).resolve(strict=True)
+          for name in ("trusted", "candidate"):
+              path = root / name
+              try:
+                  path.lstat()
+              except FileNotFoundError:
+                  continue
+              if path.is_symlink() or not path.is_dir():
+                  path.unlink()
+              else:
+                  shutil.rmtree(path)
+          PY
+
+      - name: Checkout immutable trusted base harness
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+          clean: true
+          set-safe-directory: false
+          path: trusted
+
+      - name: Checkout candidate as untrusted data
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+          clean: true
+          set-safe-directory: false
+          path: candidate
+
+      - name: Execute candidate only inside trusted isolation
+        working-directory: trusted
+        env:
+          TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CANDIDATE_SHA: ${{ github.event.pull_request.head.sha }}
+          CANDIDATE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          CANDIDATE_REF: ${{ github.event.pull_request.head.ref }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: bash scripts/trusted-matrix-pr-target.sh "$GITHUB_WORKSPACE/candidate"
+
+      - name: Retain immutable-base diagnostics including failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cex-trusted-matrix-pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}-attempt-${{ github.run_attempt }}
+          path: trusted/run/trusted-matrix-pr-target/
+          if-no-files-found: error
+          retention-days: 14
+
+# The workflow definition and host harness come from the PR base through
+# pull_request_target. Candidate-controlled code is never invoked by a host
+# shell and receives no repository token, host home, Docker socket or external
+# network during build/test execution. This supporting lane cannot grant
+# repository qualification or production authorization.
