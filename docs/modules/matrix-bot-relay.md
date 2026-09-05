@@ -146,3 +146,16 @@ Older terminal rows are preserved as historical evidence, not upgraded to verifi
 receipts. API/credential rotation, bounds, retry classification, schema and
 quarantine changes require this contract, module catalog, protocol review,
 positive/hostile tests and fresh exact-tree evidence. No document self-qualifies.
+
+## Bound adapter response compatibility
+
+Before any completion transaction, the relay validates `accepted`, `action`,
+source event, sender and room from the actual adapter envelope. Help and ignored
+events may have `accepted=false`; this is a transport disposition, not a business
+success. An explicit null projected reply is valid and sends no message. The
+existing status endpoint's task-ID response is accepted only for the identical
+`/status` argument in the source bytes. Missing/mismatched IDs and duplicate-cache
+hits are unknown-result holds, not proof that a prior effect completed. Typed
+replies and original-room binding still apply. Send endpoints now retain a
+configured reverse-proxy path; embedded endpoint credentials and query/fragment
+values are rejected. Full durable adapter result reconciliation remains open.

@@ -42,6 +42,7 @@ def ordered(text: str, *markers: str) -> None:
 def read_sources(root: Path) -> dict[str, str]:
     names = [POLLER, RELAY, PAGER, RESPONSE, MIGRATION,
              'scripts/check-matrix-source-observation-postgres.sh',
+             'scripts/matrix_postgres_regression.py',
              'scripts/test-matrix-sync-recovery-postgres.sql',
              '.github/workflows/matrix-review-repair-regression.yml',
              'docs/matrix-recovery-and-receipt-contract-v2.md',
@@ -91,6 +92,15 @@ def validate(sources: dict[str, str]) -> None:
             'adapter_response_unknown_network', 'BodyFailure::Interrupted')
     require(function(r, 'complete_adapter_success'), 'response_contract::bound_reply',
             'let room_id = event.room_id.as_str()')
+    ordered(function(r, 'complete_adapter_success'), 'response_contract::validate_adapter_response',
+            'response_contract::bound_reply', 'state.pool.begin()')
+    require(function(response, 'validate_adapter_response'), 'adapter_response_identity_mismatch', 'adapter_response_event_mismatch',
+            'adapter_duplicate_outcome_unknown', 'adapter_status_request_mismatch',
+            'accepted == non_business_action')
+    require(function(response, 'bound_reply'), 'None | Some(Value::Null) => Ok(None)')
+    require(function(r, 'matrix_send_url'), "url.path().trim_end_matches('/')",
+            'url.username()', 'url.password()', 'url.query()', 'url.fragment()')
+
     require(response, 'BodyFailure::Interrupted', 'BodyFailure::TooLarge', 'status == 200',
             'receipt.get("event_id")', "id.starts_with('$')", 'receipt.get("errcode").is_none()',
             'room.as_str() != Some(original_room)', 'matrix_response_unknown_missing_receipt')
@@ -114,9 +124,15 @@ def validate(sources: dict[str, str]) -> None:
         require(function(main, 'is_production_like'), 'resolve_profiles(&values)', 'NotUnicode',
                 'PROFILE_ENV_NAME', '"CEX_RUNTIME_PROFILE"', '"APP_ENV"')
     wrapper = sources['scripts/check-matrix-source-observation-postgres.sh']
-    require(wrapper, 'MATRIX_TEST_ALLOW_SCHEMA_RESET', 'check-matrix-transport-postgres.sh',
+    require(wrapper, 'exec python3', 'matrix_postgres_regression.py')
+    reject(wrapper, 'eval ', 'psql ', 'truncate ', 'docker ')
+    driver = sources['scripts/matrix_postgres_regression.py']
+    require(driver, 'MATRIX_TEST_ALLOW_SCHEMA_RESET', 'check-matrix-transport-postgres.sh',
             '0002_source_observation_replay.sql', '0003_sync_recovery_and_send_receipts.sql',
-            'test-matrix-source-observation-replay.sql', 'test-matrix-sync-recovery-postgres.sql')
+            'test-matrix-source-observation-replay.sql', 'test-matrix-sync-recovery-postgres.sql',
+            'foreign-table-guard', 'server-identity', 'baseline_sql(inputs[BASELINE])',
+            'for iteration in (1, 2)', 'capture_output=True', 'ON_ERROR_STOP=1')
+    reject(driver, 'shell=True', 'eval(', 'check=False)\n    return 0')
     regression = sources['scripts/test-matrix-sync-recovery-postgres.sql']
     require(regression, 'expired adapter claim was blindly resent', 'send succeeded without receipt',
             'credential rotation silently changed retry identity', 'poison bytes lost',

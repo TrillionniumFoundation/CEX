@@ -133,3 +133,51 @@ lanes with read-only permissions. It does not replace the five v12 authoritative
 workflows or aggregate immutable manifest. Independent real-homeserver recovery,
 credential custody, representative volume, first-playable integration, protected
 main, exact-head review and V12-X1-X8 remain separate qualification gates.
+
+## Round 3: exact adapter response and current-schema regression
+
+The relay now validates the adapter's actual response envelope before starting
+its completion transaction. `accepted` must be a JSON boolean and `action` a
+bounded machine identifier; sender and room must equal the immutable source.
+The response event ID must equal the source event ID, except for the existing
+`status_lookup` protocol: that handler returns the requested task ID. The relay
+accepts that exception only when the source bytes contain the same `/status`
+request. A missing/null forwarded source ID stays an explicit unverified hold;
+it is not guessed from response content. Error envelopes cannot complete a claim.
+
+`accepted=false` is legitimate for help, unsupported-command explanations and
+ignored events; it never means a successful business mutation. A duplicate-cache
+response is held as `adapter_duplicate_outcome_unknown`, because the adapter
+inserts its recent-event marker before the downstream outcome is durable. This
+closes a false-success path but is not durable result lookup or reconciliation.
+An explicit `projected_reply: null` is compatible with Serde Option serialization
+and means no reply. Non-null replies still require the bounded Matrix message
+contract. Matrix send URLs retain a configured reverse-proxy path prefix and
+reject embedded credentials, queries or fragments rather than changing authority.
+
+The database entry script delegates to `scripts/matrix_postgres_regression.py`.
+It does not evaluate shell generated from a database URL or execute the old
+bootstrap wrapper. It snapshots the three migrations and all regression inputs,
+compares the migration directory to the fixed manifest, and extracts the original
+SQL assertion body verbatim. On a dedicated PostgreSQL 16 test database it applies
+the full current migration chain twice, then executes ALL original and new SQL
+assertions against the final schema. A stale 0001-only function body cannot be
+what the baseline regression accidentally tests. No original assertion is removed.
+
+Reset requires `MATRIX_TEST_ALLOW_SCHEMA_RESET=1`, a dedicated name matching
+`matrix_*_ci` or `cex_matrix_test_*`, and a database with no unrelated tables.
+The runner verifies server major and actual database before reset. Credentials
+are passed only through a restricted environment, never argv; inherited service,
+password-file and option variables cannot select a different database. Unknown or
+duplicate URL options, malformed ports and encodings fail before a client runs.
+Every command has bounded statement, lock and subprocess timeouts. Failure stops
+later stages and cannot become skip/success. The optional JSON report binds input
+hashes and stage results; Python tests use a fake client and do not prove SQL.
+
+The trusted ROG lane is restricted to push events on the remediation branch.
+It retains the existing hosted jobs and does not replace required release
+contexts. Actual test code runs as a non-root user in resource-bounded containers
+without host home, SSH agent or Docker socket; build/test network access is
+limited to an ephemeral internal PostgreSQL service with no published port.
+Runner availability is not a test result, and image/source snapshots are not
+qualification evidence by themselves. The lane retains failed command results.

@@ -91,10 +91,25 @@ class RecoveryContractTests(unittest.TestCase):
         self.mutation_rejected('docs/modules/matrix-bot-poller.md', '`apps/matrix-bot-poller/src/sync_recovery.rs`', '`undocumented.rs`')
 
     def test_existing_database_regression_retained(self):
-        self.mutation_rejected('scripts/check-matrix-source-observation-postgres.sh', 'check-matrix-transport-postgres.sh', 'skip-old-tests.sh')
+        self.mutation_rejected('scripts/matrix_postgres_regression.py', 'check-matrix-transport-postgres.sh', 'skip-old-tests.sh')
 
     def test_new_database_regression_required(self):
-        self.mutation_rejected('scripts/check-matrix-source-observation-postgres.sh', 'test-matrix-sync-recovery-postgres.sql', 'skip-new-tests.sql')
+        self.mutation_rejected('scripts/matrix_postgres_regression.py', 'test-matrix-sync-recovery-postgres.sql', 'skip-new-tests.sql')
+
+    def test_adapter_response_identity_validation_is_not_optional(self):
+        self.mutation_rejected(CHECK.RELAY, 'response_contract::validate_adapter_response', 'response_contract::unverified_response')
+
+    def test_duplicate_cache_hit_cannot_claim_completion(self):
+        self.mutation_rejected(CHECK.RESPONSE, 'adapter_duplicate_outcome_unknown', 'accept_cached_event')
+
+    def test_status_response_binds_its_requested_task(self):
+        self.mutation_rejected(CHECK.RESPONSE, 'adapter_response_event_mismatch', 'ignore_task_identity')
+
+    def test_null_no_reply_is_preserved(self):
+        self.mutation_rejected(CHECK.RESPONSE, 'None | Some(Value::Null) => Ok(None)', 'None => Ok(None)')
+
+    def test_reverse_proxy_prefix_is_preserved(self):
+        self.mutation_rejected(CHECK.RELAY, "url.path().trim_end_matches('/')", '""')
 
 
 if __name__ == '__main__':

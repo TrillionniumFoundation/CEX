@@ -88,6 +88,7 @@ class ShellNegativeTests(unittest.TestCase):
             bin_dir.mkdir()
             wrapper = scripts / 'check-matrix-source-observation-postgres.sh'
             wrapper.write_text((ROOT / 'scripts' / wrapper.name).read_text())
+            (scripts / 'matrix_postgres_regression.py').write_text((ROOT / 'scripts/matrix_postgres_regression.py').read_text())
             marker = root / 'side-effect'
             (bin_dir / 'psql').write_text('#!/bin/sh\ntouch "$TEST_SIDE_EFFECT"\nexit 0\n')
             (bin_dir / 'psql').chmod(0o755)

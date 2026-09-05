@@ -3,7 +3,7 @@
   "status": "unqualified_working_change",
   "parent_plan": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
   "parent_addendum": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md",
-  "patch_base": "0977bca60d2769c3a7467b8b6ad55fe8963d33b1",
+  "patch_base": "0face4c2aba5e7248c1bbb3cda189f1082839d6e",
   "architecture_sequence": 52,
   "candidate_freeze_authority": "docs/release-evidence/p0-candidate-trigger.json",
   "is_candidate_freeze": false,
@@ -22,15 +22,25 @@
     "Durable restricted poison payloads, partition hold, explicit quarantine acknowledgement and append-only cursor history.",
     "Fail-closed expired/ambiguous adapter outcomes, original-room reply validation, typed response loss, immutable Matrix send scope and event receipts.",
     "Byte-identical strict profile selection for adapter, poller and relay; shared-crate and embedded-caller consolidation still open.",
-    "Add migration 0003 and SQL hostile regression; add 29 Rust unit tests and 24 Python source mutation tests, preserving original gates."
+    "Add migration 0003 and SQL hostile regression; add 29 Rust unit tests and 24 Python source mutation tests, preserving original gates.",
+    "Replace shell/eval SQL orchestration with a strict disposable-DB runner; execute unchanged original assertions against the complete current migration chain, never a downgraded intermediate schema.",
+    "Validate adapter response source/event/sender/room/disposition; preserve legitimate null reply and exact status-task compatibility, hold duplicate-cache outcomes rather than asserting business completion.",
+    "Preserve Matrix reverse-proxy send path and reject endpoint credential/query injection.",
+    "Add isolated push-only trusted ROG validation without weakening the existing hosted or release gates."
   ],
   "local_verification_scope": {
-    "python_source_contract_and_shell_negative_tests": 36,
+    "python_source_contract_and_shell_negative_tests": 62,
     "rust_tests_executed": false,
     "postgres_tests_executed": false,
     "full_repository_checks_executed": false,
     "hosted_exact_sha_qualification_proven": false,
-    "source_checks_do_not_prove_runtime_behavior": true
+    "source_checks_do_not_prove_runtime_behavior": true,
+    "python_suites": {
+      "retained_source_and_shell": 12,
+      "recovery_source_mutations": 29,
+      "postgres_runner_orchestration": 21
+    },
+    "new_rust_test_definitions_not_executed": 8
   },
   "open_repository_work": [
     "Integrate and verify Sequence 54 governance, Cargo.lock, generated semantic inventory and authoritative-gate changes on a complete checkout.",
@@ -48,5 +58,5 @@
     "Pinned World/Game/Chain integration and complete first-playable rehearsal.",
     "V12-X1 representative-volume recovery; X2 deployment/cutover/rollback; X3 real external-Agent reconciliation; X4 credential custody; X5 sustained soak; X6 independent security/operations/financial review; X7 applicable legal/provider approvals; X8 final accountable human decision."
   ],
-  "revision": "matrix-recovery-round-2"
+  "revision": "matrix-regression-round-3"
 }

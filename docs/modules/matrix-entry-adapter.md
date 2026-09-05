@@ -135,7 +135,7 @@ bash scripts/check-matrix-source-observation-postgres.sh
 
 The database command requires a disposable PostgreSQL 16 database supplied by
 `MATRIX_TEST_DATABASE_URL` and explicit `MATRIX_TEST_ALLOW_SCHEMA_RESET=1`. It runs
-the existing complete transport regression, applies migrations 0002 and 0003 twice, then
+the complete 0001/0002/0003 chain twice before the original transport assertions, then
 checks different-cursor exact replay, NULL cursor deduplication, content/partition
 collisions, first-observation preservation and immutable observation history.
 Missing tooling, credentials or reset consent fails; tests are not silently skipped.
@@ -175,3 +175,10 @@ are acknowledged. Evidence payloads remain in restricted database custody.
 Migration 0003 also prevents new Matrix `sent` transitions without a validated,
 matching receipt and prevents unsafe automatic reclamation of expired adapter
 claims. Current library caches still do not prove durable business-effect replay.
+
+The database wrapper invokes `scripts/matrix_postgres_regression.py`. Dedicated
+test names and explicit reset consent are required; server/database identity and
+unrelated-table checks precede every destructive test reset. The original shell
+wrapper is not executed: its entire SQL assertion body is read and run against
+the current schema. `python3 scripts/test-matrix-postgres-runner.py` validates
+orchestration using a fake client; it is not database execution evidence.

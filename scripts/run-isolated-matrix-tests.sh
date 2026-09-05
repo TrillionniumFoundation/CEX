@@ -86,7 +86,8 @@ set +e
     run() { name="$1"; shift; "$@" > "/output/$name.log" 2>&1; code=$?; printf "%s\n" "$code" > "/output/$name.exit"; }
     run versions bash -c "rustc --version; cargo --version; psql --version"
     run source12 python3 scripts/test-matrix-review-repairs.py
-    run source24 python3 scripts/test-matrix-recovery-contract.py
+    run source29 python3 scripts/test-matrix-recovery-contract.py
+    run sql-runner21 python3 scripts/test-matrix-postgres-runner.py
     run module-docs python3 scripts/check-module-documentation.py
     run fmt cargo fmt -p matrix-entry-adapter -p matrix-bot-poller -p matrix-bot-relay -- --check
     run check cargo check --offline --locked -p matrix-entry-adapter -p matrix-bot-poller -p matrix-bot-relay --all-targets
@@ -94,7 +95,7 @@ set +e
     run clippy cargo clippy --offline --locked -p matrix-entry-adapter -p matrix-bot-poller -p matrix-bot-relay --all-targets -- -D warnings
     run postgres bash scripts/check-matrix-source-observation-postgres.sh
     # This tar has diagnostics only. No success is inferred from file presence.
-    python3 -c '\''import json,pathlib; p=pathlib.Path("/output"); r={f.stem:int(f.read_text()) for f in p.glob("*.exit")}; (p/"results.json").write_text(json.dumps({"commands":r,"all_pass":bool(r) and all(v==0 for v in r.values()),"production_authorization":"not_granted"},indent=2)); raise SystemExit(0 if len(r)==9 and all(v==0 for v in r.values()) else 1)'\''
+    python3 -c '\''import json,pathlib; p=pathlib.Path("/output"); r={f.stem:int(f.read_text()) for f in p.glob("*.exit")}; (p/"results.json").write_text(json.dumps({"commands":r,"all_pass":bool(r) and all(v==0 for v in r.values()),"production_authorization":"not_granted"},indent=2)); raise SystemExit(0 if len(r)==10 and all(v==0 for v in r.values()) else 1)'\''
   ' > "$OUT/container.log" 2>&1
 RESULT=$?
 set -e

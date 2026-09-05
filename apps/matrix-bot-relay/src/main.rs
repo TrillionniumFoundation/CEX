@@ -4,7 +4,7 @@ mod response_contract;
 use anyhow::{anyhow, bail, Context, Result};
 use axum::{
     extract::{DefaultBodyLimit, State},
-    http::{header, uri::PathAndQuery, HeaderMap, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -469,6 +469,18 @@ async fn complete_adapter_success(
     event: &InboundMatrixEvent,
     upstream: Value,
 ) -> Result<()> {
+    if let Err(code) = response_contract::validate_adapter_response(&upstream, &delivery.payload) {
+        finish_delivery(
+            &state.pool,
+            &state.config.worker_id,
+            delivery.delivery_id,
+            delivery.lease_fence,
+            "permanent_failure",
+            Some(code),
+        )
+        .await?;
+        return Ok(());
+    }
     let projected_reply = match response_contract::bound_reply(&upstream, &event.room_id) {
         Ok(reply) => reply,
         Err(code) => {
@@ -739,15 +751,25 @@ async fn read_bounded_body(
 }
 
 fn matrix_send_url(base: &str, room_id: &str, delivery_id: Uuid) -> Result<Url> {
-    let path = PathAndQuery::from_maybe_shared(format!(
-        "/_matrix/client/v3/rooms/{}/send/m.room.message/{}",
+    validate_identifier(room_id, 512)?;
+    let mut url = Url::parse(base).map_err(|_| anyhow!("invalid_matrix_send_endpoint"))?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        bail!("invalid_matrix_send_endpoint");
+    }
+    // Keep the configured reverse-proxy prefix, just as the sync/adapter paths do.
+    let path = format!(
+        "{}/_matrix/client/v3/rooms/{}/send/m.room.message/{}",
+        url.path().trim_end_matches('/'),
         encode_path_segment(room_id),
         delivery_id
-    ))
-    .context("failed to construct Matrix send path")?;
-    let mut url = Url::parse(base).context("invalid MATRIX_HOMESERVER_BASE_URL")?;
-    url.set_path(path.path());
-    url.set_query(path.query());
+    );
+    url.set_path(&path);
     Ok(url)
 }
 
@@ -1019,4 +1041,17 @@ mod tests {
         assert!(is_retryable_status(ReqwestStatus::BAD_GATEWAY));
         assert!(!is_retryable_status(ReqwestStatus::BAD_REQUEST));
     }
+    #[test]
+    fn matrix_send_preserves_proxy_prefix_and_rejects_endpoint_credentials() {
+        let id = Uuid::parse_str("00000000-0000-5000-8000-000000000001").unwrap();
+        let url = matrix_send_url("https://matrix.example/proxy/", "!r/?:example", id).unwrap();
+        assert_eq!(url.host_str(), Some("matrix.example"));
+        assert!(url.path().starts_with("/proxy/_matrix/client/v3/rooms/"));
+        assert!(url.path().contains("%21r%2F%3F%3Aexample"));
+        assert!(url.query().is_none());
+        for base in ["file:///not-a-network-endpoint", "https://u:p@matrix.example", "https://matrix.example?q=secret"] {
+            assert!(matrix_send_url(base, "!r:e", id).is_err());
+        }
+    }
+
 }

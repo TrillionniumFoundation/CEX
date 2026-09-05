@@ -31,11 +31,11 @@ def forbid(text: str, path: str, markers: list[str]) -> None:
 def function_source(text: str, name: str) -> str:
     # Function-local ordering avoids satisfying a transaction check with a
     # similarly named helper elsewhere. This remains a static source check.
-    start = re.search(r"(?m)^(?:pub\s+)?(?:async\s+)?fn\s+" + re.escape(name) + r"\s*\(", text)
+    start = re.search(r"(?m)^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+" + re.escape(name) + r"\s*\(", text)
     if start is None:
         raise AssertionError(f"missing function definition: {name}")
     tail = text[start.end():]
-    next_function = re.search(r"(?m)^(?:pub\s+)?(?:async\s+)?fn\s+\w+\s*\(", tail)
+    next_function = re.search(r"(?m)^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+\w+\s*\(", tail)
     return tail[:next_function.start()] if next_function else tail
 
 

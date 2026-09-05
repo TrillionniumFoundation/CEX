@@ -31,6 +31,8 @@ jobs:
           persist-credentials: false
       - name: Source and shell negative regression
         run: python3 scripts/test-matrix-review-repairs.py
+      - name: PostgreSQL runner safety and ordering regression
+        run: python3 scripts/test-matrix-postgres-runner.py
       - name: Recovery contract mutation regressions
         run: |
           python3 scripts/test-matrix-recovery-contract.py
