@@ -49,6 +49,7 @@ jobs:
         run: |
           python3 scripts/test-matrix-postgres-runner.py
           python3 scripts/test-matrix-runner-hardening.py
+          python3 scripts/test-matrix-runner-lifecycle.py
 
       - name: Qualification source and build packet regression
         run: python3 scripts/test-trnm-build-evidence.py

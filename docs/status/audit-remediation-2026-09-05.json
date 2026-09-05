@@ -3,7 +3,7 @@
   "status": "unqualified_working_change",
   "parent_plan": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
   "parent_addendum": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md",
-  "patch_base": "b8a50e19b2b09104de381f88dc7d563c88692a6f",
+  "patch_base": "1521b95b67fd76d3323ebf3b9441e0af40f70dc7",
   "architecture_sequence": 52,
   "candidate_freeze_authority": "docs/release-evidence/p0-candidate-trigger.json",
   "is_candidate_freeze": false,
@@ -64,10 +64,14 @@
     "Require an explicit expected SHA-256 for server-owned Matrix filter IDs and resolve them through the authenticated account-scoped endpoint before polling.",
     "Use the same validated inline filter snapshot for every sync and backfill request, never unresolved IDs; reject unsupported identity projections, duplicate known fields and explicit null selectors.",
     "Add migration 0005 for immutable exact definition pins under the original stream scope; fence bootstrap and require owner-reviewed exact-cursor legacy approval without advancing or rewriting history.",
-    "Keep all original SQL assertion bytes, expand the complete migration chain/reset allowlist and add pin-specific regressions; retain existing authority gates."
+    "Keep all original SQL assertion bytes, expand the complete migration chain/reset allowlist and add pin-specific regressions; retain existing authority gates.",
+    "Reject inline psql metacommands with an explicit no-backslash/no-NUL SQL-source profile before client selection; do not emulate only line-start syntax.",
+    "Observe native client completion with POSIX waitid/WNOWAIT, stop the owned group on normal and error exits before reaping its leader, and close unrelated inheritable descriptors.",
+    "Require supported POSIX process custody and finite bounded timeouts before starting a client; Windows does not silently claim equivalent cleanup.",
+    "Use PostgreSQL temporary-namespace identities instead of name patterns when excluding temporary objects from the unrelated-object reset guard."
   ],
   "local_verification_scope": {
-    "python_source_contract_and_shell_negative_tests": 281,
+    "python_source_contract_and_shell_negative_tests": 298,
     "python_suites": {
       "retained_source_and_shell": 12,
       "matrix_recovery_source_mutations": 29,
@@ -80,7 +84,8 @@
       "matrix_stream_scope_source_mutations": 13,
       "matrix_filter_recovery_source_mutations": 12,
       "matrix_single_session_filesystem_and_subprocess": 33,
-      "matrix_filter_definition_source_mutations": 25
+      "matrix_filter_definition_source_mutations": 25,
+      "matrix_native_process_lifecycle_and_sql_input_profile": 17
     },
     "rust_tests_executed": false,
     "postgres_tests_executed": false,
@@ -90,22 +95,25 @@
     "complete_cex_semantic_inventory_generated": false,
     "local_source_is_partial_materialization": true,
     "binary_fixture_is_synthetic_elf_not_compiled_service": true,
-    "qualification_summary": "281 local source/Python/filesystem/fixture tests passed with no skips. Ten new Rust test definitions (including two loopback HTTP tests) and a new SQL suite were not executed. Complete workspace and hosted qualification remain unproven.",
+    "qualification_summary": "298 local tests passed with no skips: retained 281 plus 17 SQL-input and real POSIX Python parent/descendant tests. Original inline-guard and orphan-process faults were reproduced against the old runner. No PostgreSQL, Rust, complete-checkout or hosted qualification is claimed.",
     "complete_cargo_lock_bytes_verified": true,
     "cargo_dependency_resolution_executed": false,
     "original_lock_git_blob": "75e9ae18ece0a3e58296b75de5b33b623ff3a7c8",
     "repaired_lock_git_blob": "2e1b7b25d89591a5615bee066015fce78483c403",
-    "new_rust_test_definitions_this_round": 10,
+    "new_rust_test_definitions_this_round": 0,
     "new_sql_suite_executed_this_round": false,
     "matrix_migration_head": "0005_filter_definition_pins.sql",
     "matrix_original_sql_assertions_preserved_sha256": "4a773ac20af7115ee5f4fbfdafa484badbea3a34be04b6debae5e69ddd214dd3",
     "postgres_report_schema": "cex.matrix-postgres-regression.v4",
-    "actual_child_process_tests_executed": true
+    "actual_child_process_tests_executed": true,
+    "new_native_process_and_input_tests_this_round": 17,
+    "old_runner_targeted_negative_tests_failed_as_expected": 2,
+    "new_native_fixtures_are_not_psql": true
   },
   "open_repository_work": [
     "Qualify the reviewed and integrated Matrix lock changes on a complete checkout with Cargo --locked; complete semantic inventory generation/review and final Sequence 54 gates. Full lock bytes and direct-edge checks alone do not close dependency resolution.",
     "Compile, format and lint all changed Rust code; execute complete PostgreSQL migration/role/concurrency/recovery and real homeserver integration tests.",
-    "Execute the v4 single-session SQL runner on actual PostgreSQL 16, including the five-migration chain, concurrent-run rejection, wrong database/version refusal, exact-object reset guard, all preserved baseline assertions and migration replay. Strict consumers of old local v3 reports must explicitly adopt v4; the final release manifest schema is unchanged.",
+    "Execute the v4 single-session SQL runner on actual PostgreSQL 16, including the five-migration chain, concurrent-run rejection, wrong database/version refusal, temporary-namespace/exact-object reset guards, all preserved baseline assertions and migration replay. Its current source-input profile forbids backslashes and NUL; native execution requires POSIX waitid/WNOWAIT. Strict v3 consumers must explicitly adopt v4; the final release manifest schema is unchanged.",
     "Execute the new Rust/loopback HTTP and PostgreSQL filter-definition suites, validate reviewed commitments and legacy ID upgrades on supported real homeservers; no prior missing event coverage is inferred.",
     "Implement durable adapter result lookup and principal-bound response-loss reconciliation; ambiguous adapter effects currently hold safely rather than auto-retry.",
     "Qualify filtered backfill and stream-scope upgrade with real Rust/PostgreSQL/homeserver execution; real qualification of the newly implemented pinned-definition/legacy-upgrade lifecycle, large-gap staging, membership/leave transitions, redaction/edit semantics and poison recovery remain open.",
@@ -120,12 +128,12 @@
     "Pinned World/Game/Chain integration and complete first-playable rehearsal.",
     "V12-X1 representative-volume recovery; X2 deployment/cutover/rollback; X3 real external-Agent reconciliation; X4 credential custody; X5 sustained soak; X6 independent security/operations/financial review; X7 applicable legal/provider approvals; X8 final accountable human decision."
   ],
-  "revision": "pinned-filter-definition-round-11",
+  "revision": "native-runner-lifecycle-round-12",
   "current_execution_blockers": {
     "local_compiler_database_tools": "cargo/rustc/rustfmt/psql/postgres/docker unavailable in current authoring environment",
-    "source_materialization": "current working source remains a byte-checked subset, not a complete checkout",
-    "direct_acquisition": "Current-turn native tool lookup and DNS probes found no Rust/PostgreSQL/Docker tools or addresses; official manifest/archive acquisition did not produce installable bytes. No toolchain or complete checkout was acquired.",
-    "hosted_execution": "At current-turn readback all four round-10 Rust authority jobs were completed/failure with runner_id=0 and steps=[]; this is no-execution evidence, not compiler/SQL results. New-head execution must be checked separately.",
+    "source_materialization": "Working source remains a byte-checked partial checkout. Library lookups found prior repair reports/patches, not a usable complete CEX source archive.",
+    "direct_acquisition": "Native Rust/PostgreSQL/Docker tools remain unavailable. Direct official PostgreSQL archive acquisition failed; the inspected public binary release run had no workflow artifacts. No toolchain or complete private checkout was acquired.",
+    "hosted_execution": "Round-11 Rust authority run 33950645643 still had four queued jobs with runner_id=0 and steps=[] at this turn readback. No new-head execution is inferred from old-head observations.",
     "approval_boundary": "independent review and V12-X1-X8 records remain separate mandatory conditions",
     "remote_terminal": "A remote-terminal integration was discovered and suggested but no connected execution host is available in this session."
   }

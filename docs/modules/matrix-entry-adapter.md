@@ -226,3 +226,15 @@ for both sync and recovery. See `docs/matrix-filter-definition-v1.md`.
 The SQL runner includes all five migrations and the new pin suite, preserving
 all previous assertion bytes. Runtime permissions and actual SQL execution are
 still required, not granted by this supporting contract.
+
+
+## SQL test-process lifecycle
+
+`python3 scripts/test-matrix-runner-lifecycle.py` exercises actual POSIX parent
+and descendant processes and the SQL input policy; it does not execute PostgreSQL.
+The shared runner now rejects inline psql controls under a deliberate
+no-backslash/no-NUL source profile and stops its owned process group even after
+a successful client exit, before reaping its leader. Native Windows execution of
+this SQL runner is unsupported and fails before launching a client. The current
+Linux SQL jobs and full migration/assertion requirements remain unchanged. See
+`docs/matrix-sql-runner-v4.md` for limits and pending actual database qualification.

@@ -48,8 +48,9 @@ A single psql process/connection performs these stages in order: verify actual
 database and PostgreSQL major 16, acquire the nonblocking advisory lock for this
 test runner, reject unrelated objects, reset allowlisted transport rows, apply
 0001 through 0005 twice, run the original transport SQL, then all four additive
-regression suites. No reconnect or error-waiver psql metacommand is accepted in
-SQL source inputs. The first guard and later mutations cannot choose different
+regression suites. Source SQL follows the explicit no-backslash/no-NUL profile
+below; reconnect and error-waiver psql metacommands are rejected regardless of
+line position. The first guard and later mutations cannot choose different
 connections through a host list. A connection loss cannot be auto-retried into
 a new successful test session by this runner.
 
@@ -88,9 +89,11 @@ limits remain 30, 5 and 30 seconds respectively. Stdout/stderr go to private
 spool files, not an unbounded in-memory capture. Combined output is monitored
 against a 1 MiB budget and oversized output fails even after a fast child exit.
 Polling may briefly overshoot the threshold; this is not a hard filesystem quota.
-On timeout or growth failure the child process group is killed on POSIX and
-reaped; private spools are removed. Raw server/client diagnostics are not echoed
-because they may contain credentials or data. The last confirmed stage is still
+The current supervisor requires POSIX waitid/WNOWAIT. It stops the owned process
+group on every exit path, including normal client completion, before reaping the
+direct child; private spools are removed. Native Windows execution fails before
+starting psql rather than claiming equivalent process-tree cleanup. Raw server/client
+diagnostics are not echoed because they may contain credentials or data. The last confirmed stage is still
 available in normal partial transcripts. A timeout without a returned transcript
 means progress is unconfirmed, not that no SQL ran.
 
@@ -131,6 +134,7 @@ cannot replace exact-SHA GitHub execution, final candidate aggregation or X1-X8.
 ```text
 python3 scripts/test-matrix-postgres-runner.py
 python3 scripts/test-matrix-runner-hardening.py
+python3 scripts/test-matrix-runner-lifecycle.py
 ```
 
 The suites use real child processes and filesystem operations plus explicitly
@@ -139,7 +143,7 @@ refusal, unchanged original assertions, session construction, transcript failure
 source mutation, time/output limits and atomic publication. They do not execute
 PostgreSQL, compile Rust or verify business behavior. The source recovery checker
 is updated to require the new path and retains all existing SQL-suite requirements.
-Both suites are wired into existing Matrix and repository-integrity jobs.
+All three suites are wired into existing Matrix and repository-integrity jobs.
 
 Actual PostgreSQL 16 qualification must prove guard refusal on wrong database or
 version, concurrent runner rejection, no mutation on rejected foreign objects,
@@ -153,4 +157,63 @@ Primary API references for the implemented connection and locking semantics:
 https://www.postgresql.org/docs/16/app-psql.html
 https://www.postgresql.org/docs/16/explicit-locking.html
 https://www.postgresql.org/docs/16/libpq-connect.html
+```
+
+
+## Round 12: inline control commands and process-group lifecycle
+
+The previous source guard rejected only a backslash at the start of a line.
+PostgreSQL psql permits SQL and client metacommands on the same line, so an input
+such as `select 1;` followed by a backslash command could pass that guard. The
+current fixed regression-input profile rejects every backslash and NUL byte in
+all migration, baseline and additive SQL source inputs before client selection.
+This deliberately also rejects backslashes in SQL string literals, dollar-quoted
+bodies, identifiers and comments. It is not a general-purpose SQL parser. Future
+fixtures requiring literal backslashes need a separately reviewed input protocol;
+do not weaken this guard back to a line-start regular expression. The runner's
+own fixed psql commands remain generated outside the source-input profile.
+No migration or existing assertion file is changed by this repair.
+
+The prior supervisor used Popen.poll(), which reaped a completed direct child
+before cleanup. A parent exiting successfully could leave an already started
+child performing work after the supervisor returned. The repaired supervisor
+uses waitid with WNOWAIT to observe completion without reaping the leader, then
+signals its owned process group and only afterwards waits for the direct child.
+Keeping the leader waitable reserves the process identity during cleanup rather
+than signalling a group after its identifier has been released for reuse. Normal
+exit, nonzero exit, output overflow, timeout and exceptions take this same cleanup
+path. Nonstandard timeout values fail before process creation, and unrelated
+inheritable file descriptors are closed in the child.
+
+This requires a POSIX platform exposing waitid/WNOWAIT and a normal trusted Python
+child-waiting environment. Existing PostgreSQL execution jobs are Linux jobs;
+native Windows has no equivalent implementation here and is rejected before a
+client starts. Process-group custody does not contain descendants that deliberately
+create a new session, other concurrent reapers or privileged hostile processes.
+Only the direct child is reaped by this process; descendant reaping belongs to
+the operating system. An operating-system stall can delay cleanup. The wall/output
+limits remain supervised limits, not hard real-time or filesystem isolation.
+
+Unrelated-object checks now recognize genuine temporary schemas through
+pg_my_temp_schema() and pg_is_other_temp_schema(oid). They no longer exclude
+arbitrary schemas matching pg_temp_% or pg_toast% spelling patterns. The exact
+12-table allowlist and transaction-local reset recheck remain. These function
+calls and their actual database refusal behavior still need PostgreSQL execution;
+a source assertion is not a database test.
+
+The new lifecycle suite has 17 tests. Native fixtures start the current Python
+interpreter with standard-library-only startup, use a ready-file handshake to
+prove the descendant started, then check that no delayed write occurs after
+supervision returns. The suite covers success, nonzero exit, timeout, output
+overflow, preserved child output/exit, waitable-before-kill ordering and descriptor
+isolation. Input-policy tests reject line-inline client commands before selecting
+psql. They neither start PostgreSQL nor simulate a database pass. Existing fake
+psql orchestration tests remain separately identified; all original runtime and
+release gates remain mandatory.
+
+Primary lifecycle and namespace references:
+
+```text
+https://docs.python.org/3/library/os.html#os.waitid
+https://www.postgresql.org/docs/16/functions-info.html
 ```

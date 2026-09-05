@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 import hashlib
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -185,12 +186,20 @@ def input_stages(root: Path) -> tuple[list[tuple[str, str]], dict[str, str]]:
             stages.append((f"migration-{iteration}-{name}", inputs[f"services/matrix-entry-adapter/migrations/{name}"]))
     stages.append(("original-transport-regression", baseline_sql(inputs[BASELINE])))
     stages.extend((Path(path).stem, inputs[path]) for path in REGRESSIONS)
-    # Fixed repository SQL only: no client command may reconnect or turn off errors.
+    # This fixed regression profile forbids every backslash, even in SQL data
+    # or comments. psql allows SQL and metacommands on the SAME line. A line-
+    # anchored regex does not prevent reconnect, error-waiver or shell commands.
+    # Supporting literal backslashes needs a separately reviewed input protocol,
+    # not an incomplete imitation of psql's quote/escape scanner.
     for _, sql in stages:
-        if re.search(r"(?m)^\s*\\", sql):
-            raise RegressionError("psql metacommands are forbidden in regression inputs")
+        validate_sql_source(sql)
     hashes = {path: hashlib.sha256(text.encode()).hexdigest() for path, text in inputs.items()}
     return stages, hashes
+
+
+def validate_sql_source(sql: str) -> None:
+    if "\\" in sql or "\x00" in sql:
+        raise RegressionError("backslashes and NUL are forbidden in regression SQL inputs")
 
 
 def wrapper_source() -> str:
@@ -207,7 +216,8 @@ _TABLE_SQL = ",".join("'" + name + "'" for name in TRANSPORT_TABLES)
 FOREIGN_TABLES_SQL = f"""select count(*) from pg_catalog.pg_class c
 join pg_catalog.pg_namespace n on n.oid = c.relnamespace
 where n.nspname not in ('pg_catalog','information_schema')
-  and n.nspname not like 'pg_toast%' and n.nspname not like 'pg_temp_%'
+  and n.oid <> pg_catalog.pg_my_temp_schema()
+  and not pg_catalog.pg_is_other_temp_schema(n.oid)
   and c.relkind in ('r','p','v','m','f')
   and not (n.nspname = 'public' and c.relkind = 'r' and c.relname in ({_TABLE_SQL}));
 """
@@ -262,11 +272,18 @@ select '{prefix}:version:' || current_setting('server_version_num');
 
 
 def bounded_client(argv: list[str], *, input: str, env: dict[str, str], timeout: float = MAX_RUN_SECONDS):
-    """Use real child execution with private spool files and bounded readback.
+    """Execute a trusted native client with bounded POSIX process-group custody.
 
-    A trusted psql binary is required. Output growth is polled and can briefly
-    exceed the threshold; this is not a hostile-process filesystem sandbox.
+    WNOWAIT leaves the direct child waitable while the owned process group is
+    stopped, including on normal exit. Reaping first would allow PID/PGID reuse.
+    Descendants which deliberately create another session are outside this
+    contract. Output polling is not a hostile-process filesystem quota.
     """
+    if os.name != "posix" or not all(hasattr(os, name) for name in ("waitid", "WNOWAIT", "WEXITED", "WNOHANG", "P_PID")):
+        raise RegressionError("matrix_test_posix_process_custody_required")
+    if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+            or not 0 < timeout <= MAX_RUN_SECONDS or not math.isfinite(timeout)):
+        raise RegressionError("matrix_test_client_timeout_invalid")
     with tempfile.TemporaryDirectory(prefix="cex-matrix-client-") as directory:
         root = Path(directory)
         source = root / "input.sql"
@@ -274,28 +291,34 @@ def bounded_client(argv: list[str], *, input: str, env: dict[str, str], timeout:
         source.chmod(0o600)
         with source.open("rb") as stdin, (root / "stdout").open("w+b") as stdout, (root / "stderr").open("w+b") as stderr:
             process = subprocess.Popen(argv, stdin=stdin, stdout=stdout, stderr=stderr, env=env,
-                                       start_new_session=(os.name == "posix"))
+                                       close_fds=True, start_new_session=True)
             started = time.monotonic()
             failure = None
             try:
-                while process.poll() is None:
+                # Do not use Popen.poll(): it reaps the group leader before
+                # descendants have been stopped and releases the reserved PID.
+                while True:
                     if os.fstat(stdout.fileno()).st_size + os.fstat(stderr.fileno()).st_size > MAX_OUTPUT:
                         failure = "matrix_test_client_output_limit"
                         break
                     if time.monotonic() - started > timeout:
                         failure = "matrix_test_client_timeout"
                         break
+                    observed = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                    if observed is not None:
+                        break
                     time.sleep(0.02)
             finally:
-                if process.poll() is None:
-                    if os.name == "posix":
-                        try:
-                            os.killpg(process.pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
-                    else:
-                        process.kill()
-                process.wait()
+                # Also stop children left behind by a successfully exited client.
+                # The leader is still waitable, so this PGID cannot be recycled.
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                finally:
+                    process.wait()
+            if time.monotonic() - started > timeout:
+                failure = failure or "matrix_test_client_timeout"
             if os.fstat(stdout.fileno()).st_size + os.fstat(stderr.fileno()).st_size > MAX_OUTPUT:
                 failure = "matrix_test_client_output_limit"
             if failure:
