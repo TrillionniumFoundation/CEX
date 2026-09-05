@@ -68,7 +68,9 @@ def acquired_inputs(root: Path) -> tuple[list[tuple[str, str]], dict[str, str]]:
 def session_sql(database: str, stages: list[tuple[str, str]], nonce: str) -> tuple[str, list[str]]:
     if not database or not nonce or len(nonce) != 32:
         raise OperatorRegressionError("invalid operator regression session identity")
-    prefix = "CEX_MATRIX_OPERATOR_" + nonce
+    # Reuse the established parser's exact closed marker prefix; operator stage
+    # names and evidence schema provide the namespace distinction.
+    prefix = "CEX_MATRIX_" + nonce
     safety = f"""do $matrix_operator_identity$
 begin
   if current_database() <> '{database}'
