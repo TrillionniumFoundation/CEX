@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FILES = {
     "consumer_main": "services/consumer-entry-api/src/main.rs",
     "consumer_lookup": "services/consumer-entry-api/src/matrix_result_lookup.rs",
+    "replay_snapshot": "services/consumer-entry-api/src/replay_store_snapshot.rs",
     "adapter_facade": "services/matrix-entry-adapter/src/lib.rs",
     "adapter_reconciliation": "services/matrix-entry-adapter/src/result_reconciliation.rs",
     "relay_response": "apps/matrix-bot-relay/src/response_contract.rs",
@@ -61,7 +62,8 @@ def main() -> int:
             'const LOOKUP_PATH: &str = "/v1/matrix/messages/result";',
             'const LOOKUP_SOURCE_KIND: &str = "matrix_result_lookup";',
             'format!("matrix-event:{}", request.event_id)',
-            "read_replay_store(path)",
+            '#[path = "replay_store_snapshot.rs"]',
+            "read_stable_regular_file(path, MAX_REPLAY_STORE_BYTES)",
             "x-cex-user-session",
             "x-cex-user-session-signature",
             "lookup_request_fingerprint(request)",
@@ -80,8 +82,26 @@ def main() -> int:
             "forward_to_cex_task",
             "create_matrix_message_task",
             ".post(url)",
+            "File::open",
+            "std::fs::symlink_metadata",
+            ".read_to_end",
         ),
-        "consumer lookup must be read-only",
+        "consumer lookup must be read-only and use the stable snapshot boundary",
+    )
+    failures += require(
+        sources["replay_snapshot"],
+        (
+            "pub(super) fn read_stable_regular_file",
+            "fs::symlink_metadata(path)",
+            "File::open(path)",
+            "handle_before != expected",
+            "handle_after != expected || path_after != expected",
+            "metadata.nlink() != 1",
+            "FILE_ATTRIBUTE_REPARSE_POINT",
+            ".take(limit)",
+            "rejects_symbolic_and_hard_linked_inputs",
+        ),
+        "replay-store stable snapshot",
     )
 
     failures += require(
@@ -151,6 +171,7 @@ def main() -> int:
                 "adapter_lookup": "/v1/matrix/results/lookup",
                 "read_only": True,
                 "principal_bound": True,
+                "stable_replay_snapshot": True,
                 "production_authorization": "not_granted",
             },
             sort_keys=True,
