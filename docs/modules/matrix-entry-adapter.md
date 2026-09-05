@@ -9,124 +9,129 @@ Deployable: yes
 Owner role: `matrix-integration`  
 Production authorization: `not_granted`
 
-This contract describes source and required verification, not hosted qualification.
-The module catalog is `docs/module-catalog-v1.json`. The deployment remains Alpha
-until end-to-end recovery and independent operational evidence are accepted.
+This contract describes the current repository source boundary and required
+verification. It is not hosted qualification, production approval or evidence
+that queued jobs executed. The catalog authority is
+`docs/module-catalog-v1.json`.
 
 ## Purpose and non-goals
 
-The adapter validates authenticated Matrix ingress, normalizes supported events,
-and forwards bounded consumer requests. It does not authorize research, value,
-World/Game state or Chain finality. Matrix sender/room fields are source claims,
-not CEX identity. The adapter does not host Agents or run model inference.
+The adapter authenticates Matrix ingress, validates bounded event envelopes,
+normalizes supported text commands and forwards requests to Consumer Entry. It
+returns protocol-shaped Matrix responses and maintains transport observations.
+It does not authorize research, account value, World or Game state, Chain
+finality, room membership or human identity. Matrix sender and room fields are
+untrusted source claims until the configured ingress and downstream identity
+boundaries validate them. The adapter does not host Agents or perform model
+inference.
 
 ## Authority and owned state
 
-The adapter owns transport normalization and local delivery observations only.
-Its current library retains local recent-event/rate-limit caches and optional
-file persistence. Those caches do not establish durable multi-instance exactly-once
-acceptance. Consumer Entry remains responsible for business idempotency and identity.
-The shared PostgreSQL transport schema lives here, but the poller owns cursor
-leases/admission and the relay owns outbox dispatch; schema location does not
-transfer these process responsibilities to the adapter.
+The process owns HTTP normalization, ingress rate limiting, recent-event
+suppression, session-auth issuer selection and local reply construction. Its
+legacy local file/cache state is not authoritative multi-instance exactly-once
+storage. Consumer Entry owns business idempotency and principal authorization.
+The shared Matrix PostgreSQL schema is located under this package, while the
+poller owns cursor leases/admission and the relay owns claimed outbox dispatch.
+Schema ownership does not transfer those runtime responsibilities or grant the
+adapter permission to repair transport history.
 
 ## Source layout and entry points
 
-Catalog-bound files:
+`services/matrix-entry-adapter/src/main.rs` performs synchronous profile
+validation, consumes the resulting token, constructs Tokio, builds validated
+state and starts the listener. `services/matrix-entry-adapter/src/lib.rs` is the
+only public facade. `services/matrix-entry-adapter/src/implementation.rs` is the
+private byte-preserved route/state implementation and original unit-test body.
+`services/matrix-entry-adapter/src/runtime_profile.rs` remains an exact
+compatibility re-export of the shared parser; it contains no policy.
 
-- `services/matrix-entry-adapter/src/main.rs`: synchronous profile validation,
-  followed by Tokio construction, state validation and listener startup.
-- `services/matrix-entry-adapter/src/lib.rs`: existing routes, normalization,
-  credential selection, local caches, forwarding and regression tests.
-- `services/matrix-entry-adapter/src/runtime_profile.rs`: compatibility import
-  for shared-config profile parsing, conflict rejection and legacy mapping.
-- `services/matrix-entry-adapter/migrations/0001_transport_durability.sql`:
-  existing inbox/outbox/cursor, fenced claims and poison observations.
-- `services/matrix-entry-adapter/migrations/0002_source_observation_replay.sql`:
-  additive source-observation history and cursor-independent exact replay.
-
-New process targets and persistence boundaries require same-change catalog and
-contract updates. Splitting the large library into bounded internal modules must
-preserve route, principal, replay and privacy behavior.
-
-- `services/matrix-entry-adapter/migrations/0003_sync_recovery_and_send_receipts.sql`:
-  fenced renewal, recoverable poison snapshots, guarded cursor history, immutable
-  Matrix credential-scope bindings and send receipts; expired adapter claims are held.
+The persistence chain is
+`services/matrix-entry-adapter/migrations/0001_transport_durability.sql`,
+`services/matrix-entry-adapter/migrations/0002_source_observation_replay.sql`,
+`services/matrix-entry-adapter/migrations/0003_sync_recovery_and_send_receipts.sql`,
+`services/matrix-entry-adapter/migrations/0004_stream_scope_binding.sql`, then
+`services/matrix-entry-adapter/migrations/0005_filter_definition_pins.sql`.
+New targets, routes or durable objects require same-change catalog, contract,
+migration and regression updates.
 
 ## Interfaces and contracts
 
-The existing `/v1/matrix/events` boundary and consumer-forwarding behavior remain
-unchanged by the startup repair. The ingress credential authenticates transport;
-it does not authorize caller-supplied subject or tenant fields. Downstream calls
-must carry stable event and scoped idempotency identity. A transport success is
-not proof of a research, account, settlement or finality transition.
+The public Rust construction API is deliberately narrow.
+`validate_process_environment` reads every supported profile source and returns
+`ValidatedMatrixAdapterEnvironment` only after strict shared parsing succeeds.
+The token has a private field and is consumed by
+`AppState::from_validated_env`. The facade exposes neither raw
+`MatrixAdapterConfig` nor legacy `new`/`from_env` state constructors, and it
+keeps `implementation.rs` private. `build_router` consumes the validated facade
+state. See `docs/matrix-adapter-validated-construction-v1.md`.
 
-The replay SQL interface remains
-`cex_matrix_accept_source_event_v1(text,text,text,text) -> text`.
-It returns `accepted` for first admission and `replay` for the same event, content
-hash and stream partition. A different content hash or partition is a collision.
-A later opaque cursor records another observation, not another source identity.
-The first inbox row is not rewritten. NULL cursor repeats are deduplicated too.
+At HTTP ingress, `/v1/matrix/events` accepts only the documented bounded Matrix
+event shape and configured transport credentials. Downstream calls carry stable
+source-event and scoped idempotency identities. HTTP success is not proof that a
+research, account, settlement or finality transition occurred. The replay SQL
+function `cex_matrix_accept_source_event_v1(text,text,text,text) -> text`
+returns `accepted` for first admission and `replay` only for identical event,
+content hash and partition; conflicting content or partition fails closed.
 
 ## Persistence, concurrency, and recovery
 
-Apply migration 0001 followed by additive 0002, 0003, 0004 and 0005 under the schema owner. Migration
-0002 backfills first observations without modifying the immutable inbox, preserves
-the four-argument function signature and appends new observations transactionally.
-It does not change the numbered Ledger migration head 0088. Reapplying 0002 is
-idempotent; deploying only 0001 after 0002 reinstalls old replay semantics and is
-not a valid upgrade or rollback procedure.
+Apply migrations 0001 through 0005 in order under the schema owner. Inbox,
+source-observation, delivery-history, poison-payload, send-binding, send-receipt,
+stream-scope and filter-definition evidence is immutable under the defined
+triggers. Cursor advance requires the current lease owner, fence and exact next
+revision. Poison observations hold the partition until exact operator
+quarantine acknowledgement; acknowledgement is not successful reprocessing.
+Expired ambiguous adapter claims are dead-lettered rather than blindly resent.
+Matrix sends bind delivery, payload, room, homeserver and credential identities
+before network I/O and require a matching event receipt before `sent`.
 
-As with the existing outbox, the admission procedure establishes source linkage;
-there is no cascading delete. Source observations reject UPDATE and DELETE.
-Runtime identities must not receive TRUNCATE, DDL or unrestricted repair authority.
-The existing invoker function needs its reviewed table/sequence permissions; merely
-granting EXECUTE is insufficient. Do not solve permission errors by using an owner
-role, granting superuser, or introducing an unreviewed SECURITY DEFINER function.
-
-Local adapter cache persistence is not a substitute for the shared transactional
-transport. Full adapter response-loss replay and multi-instance business-effect
-tests remain mandatory before production promotion.
+Runtime roles must not receive DDL, TRUNCATE, trigger-disable, owner or blanket
+table privileges. Migration replay is not rollback. Rollback stops new
+admission and claims, preserves all durable identities, and deploys a
+schema-compatible binary or reviewed forward repair. Durable adapter
+result-lookup and principal-bound response-loss reconciliation remain separately
+required; current unknown effects hold safely instead of being declared complete.
 
 ## Configuration and secrets
 
-The executable checks every explicitly present value of
-`MATRIX_ENTRY_RUNTIME_PROFILE`, `CEX_RUNTIME_PROFILE`, and `APP_ENV` before tracing,
-Tokio, asynchronous state construction or listener startup. Accepted aliases are:
+Before tracing, Tokio or worker creation, the executable validates
+`MATRIX_ENTRY_RUNTIME_PROFILE`, `CEX_RUNTIME_PROFILE` and `APP_ENV`. Accepted
+local aliases are `test`, `local`, `local_dev`, `dev`, `development`; beta is
+`beta`; staging is `stage` or `staging`; production is `prod`, `production`,
+`trnm-economy` or `trnm_economy`. Whitespace and case normalize. Explicit empty,
+unknown, non-Unicode or conflicting values fail with exit 78. All absent values
+select explicit local development. Staging and production remain distinct before
+both map to the legacy production policy.
 
-| Group | Accepted values | Legacy adapter policy |
-|---|---|---|
-| Local | `test`, `local`, `local_dev`, `dev`, `development` | `local_dev` |
-| Beta | `beta` | `beta` |
-| Staging | `stage`, `staging` | `production` |
-| Production | `prod`, `production`, `trnm-economy`, `trnm_economy` | `production` |
-
-Whitespace/case normalize. Unknown, explicitly empty, non-Unicode and conflicting
-sources fail with exit 78. All sources absent means local development. Staging and
-production remain distinct selections, so their simultaneous explicit use is a
-conflict even though both enforce the legacy production policy. A local override
-cannot lower an explicitly configured global production policy.
-
-Only the adapter-specific environment value is normalized before threads exist.
-The library's legacy parser is not a public strict configuration API: embedded
-callers must supply validated configuration. The deployable binaries now share
-one parser, but enforcing typed configuration in embedded library callers remains
-a separate, uncompleted refactor. Existing ingress/session secrets, approved registry
-revisions, downstream endpoints and local-cache settings retain their existing
-validation requirements. Secrets and opaque cursors must not enter diagnostics.
+The facade owns this strict read through `validate_process_environment`; the
+binary passes the non-inventible `ValidatedMatrixAdapterEnvironment` into
+`from_validated_env`. Embedded callers can no longer name the legacy public
+configuration/state constructors through this package. Existing ingress tokens,
+session-auth secrets, issuer/key identifiers, approved registry revisions,
+downstream endpoints, cache paths and limits still require their profile-specific
+validation. Secrets, database URLs and opaque cursors must not be emitted in
+errors or evidence.
 
 ## Security and trust boundaries
 
-Unknown runtime configuration cannot select local authority in the deployable
-binary. This repair does not establish key custody, secret strength or permission
-separation for a real deployment. Validate verified ingress identity, tenant
-mapping, bounded bodies, redirects, edit/redaction policy and downstream receipts.
-Do not expose raw messages, tokens, database URLs or high-cardinality identities in
-logs or metrics. An operator poison acknowledgement does not prove reprocessing.
+A valid runtime profile does not authenticate a Matrix sender or authorize a
+business effect. The ingress credential, session issuer/key selection, tenant
+mapping, bounded request body, redirect policy, reply identity and downstream
+receipt all remain independent checks. Unknown configuration cannot silently
+select local authority in either the binary or public facade. The private
+implementation module is not a security sandbox; its safety derives from the
+facade visibility boundary, source checker and exact compiled package.
+
+Operators must protect Matrix access tokens and issuer secrets, separate schema
+ownership from runtime execution, and avoid raw message bodies or high-cardinality
+principal identifiers in logs and metrics. Redaction/edit/membership semantics,
+poison retention/erasure and credential rotation require explicit operational
+policy and real homeserver/database evidence before promotion.
 
 ## Verification
 
-Required commands:
+Required catalog commands are:
 
 ```text
 cargo test -p matrix-entry-adapter
@@ -134,120 +139,52 @@ cargo clippy -p matrix-entry-adapter --all-targets -- -D warnings
 bash scripts/check-matrix-source-observation-postgres.sh
 ```
 
-The database command requires a disposable PostgreSQL 16 database supplied by
-`MATRIX_TEST_DATABASE_URL` and explicit `MATRIX_TEST_ALLOW_SCHEMA_RESET=1`. It runs
-the complete 0001/0002/0003/0004/0005 chain twice before the original transport assertions, then
-checks different-cursor exact replay, NULL cursor deduplication, content/partition
-collisions, first-observation preservation and immutable observation history.
-Missing tooling, credentials or reset consent fails; tests are not silently skipped.
+The stricter exact-head lanes also run:
 
-Rust tests cover strict profile parsing and conflict behavior. Hosted black-box
-startup checks must additionally verify rejection before a listener is available.
-Source inspections and local Python tests are not Rust/PostgreSQL execution proof.
+```text
+python3 scripts/test-matrix-adapter-api-boundary.py
+python3 scripts/check-matrix-adapter-api-boundary.py
+cargo fmt -p matrix-entry-adapter -- --check
+cargo test --locked -p matrix-entry-adapter --all-targets
+cargo clippy --locked -p matrix-entry-adapter --all-targets -- -D warnings
+```
+
+The SQL wrapper requires a disposable PostgreSQL 16 database, explicit
+`MATRIX_TEST_ALLOW_SCHEMA_RESET=1`, one guarded client session and the complete
+0001–0005 chain twice before all preserved and additive assertions. Source and
+Python mutation checks do not prove Rust compilation, PostgreSQL behavior or
+black-box startup. Missing tools, nonzero child status, absent steps or queued
+jobs are failures or unexecuted states, never skips or passes.
 
 ## Deployment and operations
 
-Keep the adapter private and run with a least-privilege identity. Readiness must
-truthfully distinguish its local cache mode from durable poller/relay state.
-Record exact image, schema chain, validated profile, credential identities, cache
-mode and consumer endpoint. Monitor failed ingress, delivery lag, duplicates and
-poison observations. Real homeserver and restart tests remain required.
+Deploy the adapter privately with a dedicated least-privilege identity and a
+validated nonlocal profile where applicable. Readiness must distinguish listener
+health from downstream authentication, issuer-registry validity, database
+transport health, queue age and successful receipt reconciliation. Record exact
+image, commit/tree, schema chain, normalized profile, credential identifiers,
+cache mode and Consumer Entry endpoint. Monitor ingress failures, duplicate
+suppression, delivery age, poison holds, dead letters and response-unknown volume.
 
-Rollback stops new claims/admission before changing binaries. Preserve inbox,
-observations, outbox and poison history. Do not drop migration-0002 data or rerun
-0001 alone; use a reviewed forward migration for a required semantic reversal.
-Restoring an older image cannot authorize loss or recreation of business effects.
+Rollback first stops ingress/admission and new outbox claims, then preserves
+inbox, observations, cursor history, send bindings/receipts and poison evidence.
+Never restore an image that requires weaker constructors or an earlier migration
+semantic against the current schema. Real restart, credential rotation,
+least-privilege role, retention, SLO and homeserver drills remain required before
+production authorization can change from `not_granted`.
 
 ## Compatibility and change protocol
 
-Cursor changes no longer create content collisions, but partition and content
-identity remain strict. Event normalization or partition changes need explicit
-versioning, replay fixtures and retirement rules, not rewriting old inbox rows.
-Update this contract, catalog, Matrix design, tests and exact candidate evidence
-for source changes. No module document grants repository or production approval.
+The facade split preserves the existing route/state implementation blob and its
+unit tests but intentionally removes direct external access to legacy config and
+state constructors. Embedded callers must migrate to
+`validate_process_environment` plus `ValidatedMatrixAdapterEnvironment` and
+`from_validated_env`. Re-exposing `implementation.rs`, adding a caller-inventible
+token, accepting parser precedence, or restoring `AppState::from_env` at the
+facade is a security regression.
 
-## Recovery and receipt extension
-
-The detailed extension is `docs/matrix-recovery-and-receipt-contract-v2.md`.
-A poison acknowledgement explicitly authorizes quarantine of those exact bytes;
-it does not claim successful processing, create a command or advance a cursor.
-The ordinary fenced batch operation advances only after all relevant observations
-are acknowledged. Evidence payloads remain in restricted database custody.
-Migration 0003 also prevents new Matrix `sent` transitions without a validated,
-matching receipt and prevents unsafe automatic reclamation of expired adapter
-claims. Current library caches still do not prove durable business-effect replay.
-
-The database wrapper invokes `scripts/matrix_postgres_regression.py`. Dedicated
-test names and explicit reset consent are required; server/database identity and
-unrelated-table checks precede every destructive test reset. Both shell entrypoints delegate to the same guarded runner. The original SQL
-assertion body lives unchanged in `scripts/test-matrix-transport-baseline.sql`
-and runs against the complete current schema in the same database session. `python3 scripts/test-matrix-postgres-runner.py` validates
-orchestration using a fake client; it is not database execution evidence.
-
-## Stream-scope migration extension
-
-`services/matrix-entry-adapter/migrations/0004_stream_scope_binding.sql` adds
-immutable poller stream metadata, virgin-stream binding and owner-only legacy
-scope approval. It changes no adapter business authority or source identities.
-Apply the complete current migrations before starting the updated poller; existing streams
-will hold until their exact cursor and prior configuration are reviewed. See
-`docs/matrix-stream-scope-v1.md`. The SQL runner now uses the complete five-step
-chain for both migration replays and all original/new assertions. Runtime
-privilege deployment and real PostgreSQL validation remain mandatory.
-
-
-## Single-session SQL verification contract
-
-Both `bash scripts/check-matrix-transport-postgres.sh` and the catalog-bound
-`bash scripts/check-matrix-source-observation-postgres.sh` now use one runner.
-Neither can execute a 0001-only upgrade or reset without explicit consent. The
-original 10,870-byte SQL body is retained unchanged in the dedicated baseline.
-
-The runner verifies PostgreSQL 16 and the exact test database, acquires a
-session-scoped advisory lock, rejects unrelated table/view/foreign-table names,
-and uses a fixed twelve-table reset allowlist before both complete migration
-replays and all SQL suites. Successful reports require a zero client exit and
-all ordered post-SQL markers. No per-step subprocess exit code is fabricated.
-The source snapshot is rechecked after the session. See
-`docs/matrix-sql-runner-v4.md` for the deliberately versioned v4 evidence shape,
-output-path restrictions, process limits and remaining execution qualification.
-
-`python3 scripts/test-matrix-runner-hardening.py` exercises actual subprocesses
-and filesystem operations with fake psql, not PostgreSQL. Database permissions,
-advisory-lock contention and the SQL suite still require real PostgreSQL 16.
-
-## ID filter definition persistence
-
-`services/matrix-entry-adapter/migrations/0005_filter_definition_pins.sql` adds
-immutable exact filter bytes/digest under the original stream ID. Bootstrap is
-virgin-stream-only; reviewed legacy insertion requires the table owner, exact
-cursor/revision and no live lease. No scope/cursor is rewritten. Updated pollers
-resolve ID filters before ordinary sync and use the validated inline snapshot
-for both sync and recovery. See `docs/matrix-filter-definition-v1.md`.
-The SQL runner includes all five migrations and the new pin suite, preserving
-all previous assertion bytes. Runtime permissions and actual SQL execution are
-still required, not granted by this supporting contract.
-
-
-## SQL test-process lifecycle
-
-`python3 scripts/test-matrix-runner-lifecycle.py` exercises actual POSIX parent
-and descendant processes and the SQL input policy; it does not execute PostgreSQL.
-The shared runner now rejects inline psql controls under a deliberate
-no-backslash/no-NUL source profile and stops its owned process group even after
-a successful client exit, before reaping its leader. Native Windows execution of
-this SQL runner is unsupported and fails before launching a client. The current
-Linux SQL jobs and full migration/assertion requirements remain unchanged. See
-`docs/matrix-sql-runner-v4.md` for limits and pending actual database qualification.
-
-## Shared profile linkage (round 15)
-
-This package now depends on the existing local `shared-config` crate, and the
-profile compatibility file re-exports its resolver without any local policy.
-The three explicit environment sources, non-Unicode rejection and startup order
-are unchanged. `Cargo.lock` adds only that existing local direct edge. No registry
-package/version/checksum or protocol/schema change is part of this refactor.
-The original semantic tests are retained once in shared-config and must execute
-there; testing only this dependent package does not run dependency unit tests.
-See `docs/matrix-profile-sharing-v1.md`. Actual locked resolution, compilation,
-formatting, lint and black-box startup verification remain required.
+Protocol, partition, normalization, cursor, filter, credential-scope or reply
+changes require versioned fixtures, migration compatibility, replay/rollback
+rules and exact-head evidence. Update this module contract, focused design
+records, source gates and catalog together. No document, source checker or local
+commit can grant repository qualification or production approval.
