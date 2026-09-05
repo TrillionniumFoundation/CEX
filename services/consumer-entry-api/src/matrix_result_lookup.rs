@@ -276,27 +276,30 @@ fn resolve_lookup_secret(
     claims: &LookupSessionClaims,
 ) -> Option<String> {
     if let Some(key_id) = claims.key_id.as_deref() {
-        if let Some(secret) = config
+        // A caller that explicitly names a key is requesting keyed verification.  Unknown,
+        // disabled, or empty key IDs must fail closed and must never downgrade to a legacy
+        // issuer/global secret.
+        return config
             .session_auth_issuer_keys
             .get(&claims.issuer)
             .and_then(|keys| keys.get(key_id))
             .filter(|secret| !secret.is_empty())
-        {
-            return Some(secret.clone());
-        }
-        if let Some(entry) = config.session_auth_issuer_registry.get(&claims.issuer) {
-            if let Ok(value) = serde_json::to_value(entry) {
-                if let Some(secret) = value
-                    .get("keys")
-                    .and_then(Value::as_object)
-                    .and_then(|keys| keys.get(key_id))
-                    .and_then(Value::as_str)
-                    .filter(|secret| !secret.is_empty())
-                {
-                    return Some(secret.to_string());
-                }
-            }
-        }
+            .cloned()
+            .or_else(|| {
+                config
+                    .session_auth_issuer_registry
+                    .get(&claims.issuer)
+                    .and_then(|entry| serde_json::to_value(entry).ok())
+                    .and_then(|value| {
+                        value
+                            .get("keys")
+                            .and_then(Value::as_object)
+                            .and_then(|keys| keys.get(key_id))
+                            .and_then(Value::as_str)
+                            .filter(|secret| !secret.is_empty())
+                            .map(ToString::to_string)
+                    })
+            });
     }
 
     config
@@ -435,6 +438,24 @@ mod tests {
         }
     }
 
+    fn claims(key_id: Option<&str>) -> LookupSessionClaims {
+        LookupSessionClaims {
+            version: 1,
+            issuer: "issuer-a".to_string(),
+            key_id: key_id.map(ToString::to_string),
+            subject: "@alice:example".to_string(),
+            source_kind: LOOKUP_SOURCE_KIND.to_string(),
+            audience: Some("consumer-entry".to_string()),
+            request_fingerprint: Some("sha256:test".to_string()),
+            room_id: Some("!room:example".to_string()),
+            session_id: None,
+            org_id: None,
+            account_id: None,
+            issued_at_epoch: 1,
+            expires_at_epoch: 2,
+        }
+    }
+
     #[test]
     fn fingerprint_is_bound_to_every_identity_component() {
         let base = request();
@@ -484,5 +505,31 @@ mod tests {
         let mut invalid = valid;
         invalid["raw"]["invocation_id"] = json!("task-2");
         assert!(validate_cached_result(&invalid, &request).is_err());
+    }
+
+    #[test]
+    fn explicit_unknown_key_id_never_downgrades_to_legacy_secret() {
+        let mut config = ConsumerEntryConfig::from_env();
+        config.session_auth_issuer_keys.clear();
+        config.session_auth_issuer_registry.clear();
+        config.session_auth_issuer_secrets.clear();
+        config.session_auth_secret = Some("global-legacy".to_string());
+        config
+            .session_auth_issuer_secrets
+            .insert("issuer-a".to_string(), "issuer-legacy".to_string());
+        config.session_auth_issuer_keys.insert(
+            "issuer-a".to_string(),
+            HashMap::from([("active".to_string(), "keyed-secret".to_string())]),
+        );
+
+        assert_eq!(
+            resolve_lookup_secret(&config, &claims(Some("active"))).as_deref(),
+            Some("keyed-secret")
+        );
+        assert!(resolve_lookup_secret(&config, &claims(Some("unknown"))).is_none());
+        assert_eq!(
+            resolve_lookup_secret(&config, &claims(None)).as_deref(),
+            Some("issuer-legacy")
+        );
     }
 }
