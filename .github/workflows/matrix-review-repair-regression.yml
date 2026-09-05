@@ -14,6 +14,7 @@ on:
       - services/matrix-entry-adapter/**
       - apps/matrix-bot-*/**
       - docs/module-catalog-v1.json
+      - docs/repository-contract-semantics-v1.json
       - docs/modules/**
       - docs/matrix-adapter-validated-construction-v1.md
       - scripts/*matrix*
@@ -36,6 +37,17 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Candidate workflow cannot acquire the trusted host
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/matrix-review-repair-regression.yml')
+          text = path.read_text(encoding='utf-8')
+          forbidden = ('self-hosted', 'runs-on: [self-hosted', 'run-isolated-matrix-tests.sh')
+          found = [token for token in forbidden if token in text]
+          if found:
+              raise SystemExit(f'candidate workflow contains host-execution tokens: {found}')
+          PY
       - name: Matrix direct dependency lock preflight
         run: |
           python3 scripts/test-build-unblock.py
@@ -154,27 +166,9 @@ jobs:
       - name: No source mutation
         run: git diff --exit-code
 
-  isolated-trusted-runner:
-    if: github.event_name == 'push' && github.repository == 'TrillionniumFoundation/CEX' && github.ref == 'refs/heads/fix/cex-v12-audit-remediation-20260905'
-    runs-on: [self-hosted, linux, x64, rog]
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-          path: isolated-cex-checkout
-      - name: Isolated exact-head Rust and PostgreSQL tests
-        working-directory: isolated-cex-checkout
-        run: bash scripts/run-isolated-matrix-tests.sh
-      - name: Retain exact-head diagnostics including failures
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: cex-isolated-matrix-${{ github.sha }}-attempt-${{ github.run_attempt }}
-          path: isolated-cex-checkout/run/isolated-matrix/
-          if-no-files-found: error
-          retention-days: 7
-
-# Supporting regression only. These jobs do not replace the five v12 authority
+# The only ROG lane is `.github/workflows/matrix-trusted-pr-target.yml` on the
+# PR base branch. It is loaded by `pull_request_target`, records the immutable
+# base and candidate SHAs, and invokes candidate bytes only inside the trusted
+# container boundary. Candidate workflows never schedule a self-hosted runner.
+# Supporting regression only: these jobs do not replace the five v12 authority
 # workflows, their exact-tree candidate manifest, or independent production gates.
