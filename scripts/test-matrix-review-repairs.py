@@ -9,6 +9,7 @@ from pathlib import Path
 import shlex
 import subprocess
 import tempfile
+import tomllib
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,7 +46,9 @@ class SourceContractTests(unittest.TestCase):
 
     def test_catalog_command_alignment(self):
         catalog = json.loads((ROOT / 'docs/module-catalog-v1.json').read_text())
-        self.assertEqual(len(catalog['modules']), 18)
+        members = tomllib.loads((ROOT / 'Cargo.toml').read_text())['workspace']['members']
+        self.assertEqual(len(catalog['modules']), len(members))
+        self.assertEqual({m['workspace_member'] for m in catalog['modules']}, set(members))
         for name in ['execution-service', 'matrix-bot-poller', 'matrix-bot-relay']:
             module = next(m for m in catalog['modules'] if m['package'] == name)
             commands = [c for c in module['verification'] if c.startswith('cargo')]

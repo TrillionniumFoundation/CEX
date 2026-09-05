@@ -3,7 +3,7 @@
   "status": "unqualified_working_change",
   "parent_plan": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
   "parent_addendum": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md",
-  "patch_base": "1521b95b67fd76d3323ebf3b9441e0af40f70dc7",
+  "patch_base": "f1b09501221ce9885c63447b23b684ff6de8b9ba",
   "architecture_sequence": 52,
   "candidate_freeze_authority": "docs/release-evidence/p0-candidate-trigger.json",
   "is_candidate_freeze": false,
@@ -68,10 +68,18 @@
     "Reject inline psql metacommands with an explicit no-backslash/no-NUL SQL-source profile before client selection; do not emulate only line-start syntax.",
     "Observe native client completion with POSIX waitid/WNOWAIT, stop the owned group on normal and error exits before reaping its leader, and close unrelated inheritable descriptors.",
     "Require supported POSIX process custody and finite bounded timeouts before starting a client; Windows does not silently claim equivalent cleanup.",
-    "Use PostgreSQL temporary-namespace identities instead of name patterns when excluding temporary objects from the unrelated-object reset guard."
+    "Use PostgreSQL temporary-namespace identities instead of name patterns when excluding temporary objects from the unrelated-object reset guard.",
+    "Explicitly enumerate the five existing vendored path packages in the root Cargo workspace and catalog; preserve all 18 prior members and every dependency/lock/vendor byte.",
+    "Add dedicated contracts for the economy protocol, finality types/verifier, canonical transaction protocol and research protocol; distinguish local libraries/Unix CLI from external Chain authority.",
+    "Add a real-Cargo metadata membership and discovered-target gate after toolchain setup in the existing Linux and Windows Rust authority jobs; no saved-metadata or skip mode.",
+    "Replace the Matrix source test literal 18-member count with explicit catalog/workspace equality, while the new Cargo gate independently checks the actual set.",
+    "Retain the observed finality-verifier vendor subtree/provenance-record mismatch as an unresolved review item rather than rewriting provenance digests.",
+    "Integrate the previously unpublished round-13 workspace/catalog/contracts patch without changing vendor or lock bytes.",
+    "Bind conventional Cargo target-directory layout before and after metadata so a newly added unlisted target cannot escape the source stability check.",
+    "Trace the finality-verifier provenance discrepancy to the single test-loop-to-fill change in CEX commit b0105fa6788784df677e4cb124654420dfd63a3d; retain the unresolved byte-for-byte vendor-policy requirement."
   ],
   "local_verification_scope": {
-    "python_source_contract_and_shell_negative_tests": 298,
+    "python_source_contract_and_shell_negative_tests": 331,
     "python_suites": {
       "retained_source_and_shell": 12,
       "matrix_recovery_source_mutations": 29,
@@ -85,7 +93,8 @@
       "matrix_filter_recovery_source_mutations": 12,
       "matrix_single_session_filesystem_and_subprocess": 33,
       "matrix_filter_definition_source_mutations": 25,
-      "matrix_native_process_lifecycle_and_sql_input_profile": 17
+      "matrix_native_process_lifecycle_and_sql_input_profile": 17,
+      "cargo_workspace_authority_metadata_and_filesystem_fixtures": 33
     },
     "rust_tests_executed": false,
     "postgres_tests_executed": false,
@@ -95,7 +104,7 @@
     "complete_cex_semantic_inventory_generated": false,
     "local_source_is_partial_materialization": true,
     "binary_fixture_is_synthetic_elf_not_compiled_service": true,
-    "qualification_summary": "298 local tests passed with no skips: retained 281 plus 17 SQL-input and real POSIX Python parent/descendant tests. Original inline-guard and orphan-process faults were reproduced against the old runner. No PostgreSQL, Rust, complete-checkout or hosted qualification is claimed.",
+    "qualification_summary": "331 local tests across 14 suites passed: retained 323 plus eight target-layout regressions. The late-target test reproduced a false stable-source result against the old round-13 checker. Real Cargo metadata still fails cargo_required_not_executed; no Rust/PostgreSQL/full-source/hosted qualification is claimed.",
     "complete_cargo_lock_bytes_verified": true,
     "cargo_dependency_resolution_executed": false,
     "original_lock_git_blob": "75e9ae18ece0a3e58296b75de5b33b623ff3a7c8",
@@ -106,11 +115,18 @@
     "matrix_original_sql_assertions_preserved_sha256": "4a773ac20af7115ee5f4fbfdafa484badbea3a34be04b6debae5e69ddd214dd3",
     "postgres_report_schema": "cex.matrix-postgres-regression.v4",
     "actual_child_process_tests_executed": true,
-    "new_native_process_and_input_tests_this_round": 17,
-    "old_runner_targeted_negative_tests_failed_as_expected": 2,
-    "new_native_fixtures_are_not_psql": true
+    "new_native_process_and_input_tests_this_round": 0,
+    "old_runner_targeted_negative_tests_failed_as_expected": 0,
+    "new_native_fixtures_are_not_psql": true,
+    "new_metadata_and_filesystem_tests_this_round": 8,
+    "actual_cargo_metadata_succeeded": false,
+    "declared_workspace_member_count": 23,
+    "declared_catalog_member_count": 23,
+    "new_vendor_module_contracts": 5
   },
   "open_repository_work": [
+    "Execute the actual Cargo workspace/target checker on a complete checkout and resolve any additional discovered targets; regenerate/review the complete semantic inventory for the now explicitly enumerated 23-package source baseline. Source-list equality is not actual Cargo proof.",
+    "Reconcile the finality-verifier current vendor subtree 37427509e5913b1c71e35082d5609c69a27a978d with the vendor-manifest recorded subtree 3db7fe2b40faa15d9597ea2824b1079ca93c754c through reviewed source provenance; do not merely replace expected hashes. The economy vendor package needs its own provenance review rather than inheriting the four-crate Chain record.",
     "Qualify the reviewed and integrated Matrix lock changes on a complete checkout with Cargo --locked; complete semantic inventory generation/review and final Sequence 54 gates. Full lock bytes and direct-edge checks alone do not close dependency resolution.",
     "Compile, format and lint all changed Rust code; execute complete PostgreSQL migration/role/concurrency/recovery and real homeserver integration tests.",
     "Execute the v4 single-session SQL runner on actual PostgreSQL 16, including the five-migration chain, concurrent-run rejection, wrong database/version refusal, temporary-namespace/exact-object reset guards, all preserved baseline assertions and migration replay. Its current source-input profile forbids backslashes and NUL; native execution requires POSIX waitid/WNOWAIT. Strict v3 consumers must explicitly adopt v4; the final release manifest schema is unchanged.",
@@ -128,13 +144,25 @@
     "Pinned World/Game/Chain integration and complete first-playable rehearsal.",
     "V12-X1 representative-volume recovery; X2 deployment/cutover/rollback; X3 real external-Agent reconciliation; X4 credential custody; X5 sustained soak; X6 independent security/operations/financial review; X7 applicable legal/provider approvals; X8 final accountable human decision."
   ],
-  "revision": "native-runner-lifecycle-round-12",
+  "revision": "workspace-authority-integration-round-14",
   "current_execution_blockers": {
     "local_compiler_database_tools": "cargo/rustc/rustfmt/psql/postgres/docker unavailable in current authoring environment",
-    "source_materialization": "Working source remains a byte-checked partial checkout. Library lookups found prior repair reports/patches, not a usable complete CEX source archive.",
-    "direct_acquisition": "Native Rust/PostgreSQL/Docker tools remain unavailable. Direct official PostgreSQL archive acquisition failed; the inspected public binary release run had no workflow artifacts. No toolchain or complete private checkout was acquired.",
-    "hosted_execution": "Round-11 Rust authority run 33950645643 still had four queued jobs with runner_id=0 and steps=[] at this turn readback. No new-head execution is inferred from old-head observations.",
+    "source_materialization": "Verified partial source only; no complete checkout or real Cargo/PostgreSQL toolchain was acquired.",
+    "direct_acquisition": "Current-turn official Rust manifest and PostgreSQL source archive acquisition did not obtain installable bytes; direct Git DNS lookup failed. Native Cargo/Rust/PostgreSQL remain unavailable.",
+    "hosted_execution": "All four inspected round-12 Rust authority jobs completed/failure with runner_id=0 and no steps. New-head jobs must be inspected separately; no compiler failure cause or successful execution is inferred.",
     "approval_boundary": "independent review and V12-X1-X8 records remain separate mandatory conditions",
-    "remote_terminal": "A remote-terminal integration was discovered and suggested but no connected execution host is available in this session."
+    "remote_terminal": "A remote-terminal integration was discovered and suggested but no connected execution host is available in this session.",
+    "remote_publication": "Git object write actions succeeded during this integration turn; commit/ref publication and readback are recorded separately, not self-certified by this source ledger."
+  },
+  "observed_vendor_provenance_gap": {
+    "status": "diagnosed_not_resolved",
+    "package": "trnm-finality-verifier",
+    "current_subtree": "37427509e5913b1c71e35082d5609c69a27a978d",
+    "recorded_subtree": "3db7fe2b40faa15d9597ea2824b1079ca93c754c",
+    "changed_path": "src/cometbft.rs",
+    "introduced_by_cex_commit": "b0105fa6788784df677e4cb124654420dfd63a3d",
+    "delta": "one test block changes manual slice assignment to fill",
+    "upstream_policy_waived": false,
+    "vendor_modified_this_round": false
   }
 }

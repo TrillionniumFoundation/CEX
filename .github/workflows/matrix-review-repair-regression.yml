@@ -46,6 +46,8 @@ jobs:
           python3 scripts/check-matrix-filter-recovery.py
           python3 scripts/test-matrix-filter-definition.py
           python3 scripts/check-matrix-filter-definition.py
+      - name: Cargo workspace authority fixture regression
+        run: python3 scripts/test-cargo-workspace-authority.py
       - name: Source and shell negative regression
         run: python3 scripts/test-matrix-review-repairs.py
       - name: PostgreSQL runner safety and ordering regression

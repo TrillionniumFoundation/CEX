@@ -17,7 +17,13 @@ members = [
   "services/paper-raid-bff",
   "services/matrix-entry-adapter",
   "apps/matrix-bot-relay",
-  "apps/matrix-bot-poller"
+  "apps/matrix-bot-poller",
+  # Vendored path dependencies participate in this workspace too.
+  "vendor/trnm-economy-protocol",
+  "vendor/trnm-finality-types",
+  "vendor/trnm-finality-verifier",
+  "vendor/trnm-protocol",
+  "vendor/trnm-research-protocol"
 ]
 resolver = "2"
 

@@ -467,6 +467,108 @@
         "python3 scripts/check-matrix-stream-scope.py",
         "python3 scripts/check-matrix-filter-definition.py"
       ]
+    },
+    {
+      "workspace_member": "vendor/trnm-economy-protocol",
+      "package": "trnm-economy-protocol",
+      "kind": "contract-library",
+      "logical_module": "trnm",
+      "deployable": false,
+      "status": "supporting_alpha",
+      "owner": "trnm-integration",
+      "authority": "Vendored economy policy and entitlement wire shapes, signing-payload construction and compatibility identifiers; shape validation does not authenticate signatures, authorize settlement or create Ledger value.",
+      "documentation": "docs/modules/trnm-economy-protocol.md",
+      "source_entrypoints": [
+        "vendor/trnm-economy-protocol/src/lib.rs"
+      ],
+      "verification": [
+        "cargo test --locked -p trnm-economy-protocol --all-targets",
+        "cargo clippy --locked -p trnm-economy-protocol --all-targets -- -D warnings"
+      ]
+    },
+    {
+      "workspace_member": "vendor/trnm-finality-types",
+      "package": "trnm-finality-types",
+      "kind": "contract-library",
+      "logical_module": "trnm",
+      "deployable": false,
+      "status": "supporting_alpha",
+      "owner": "trnm-integration",
+      "authority": "Vendored Chain receipt, validator, quorum and proof wire types plus domain-separated hashing; serialized types and caller-supplied validators do not establish a trusted Chain anchor.",
+      "documentation": "docs/modules/trnm-finality-types.md",
+      "source_entrypoints": [
+        "vendor/trnm-finality-types/src/lib.rs",
+        "vendor/trnm-finality-types/src/cometbft.rs",
+        "vendor/trnm-finality-types/src/crypto.rs",
+        "vendor/trnm-finality-types/src/protocol.rs",
+        "vendor/trnm-finality-types/src/state_proof.rs"
+      ],
+      "verification": [
+        "cargo test --locked -p trnm-finality-types --all-targets",
+        "cargo clippy --locked -p trnm-finality-types --all-targets -- -D warnings"
+      ]
+    },
+    {
+      "workspace_member": "vendor/trnm-finality-verifier",
+      "package": "trnm-finality-verifier",
+      "kind": "library",
+      "logical_module": "trnm",
+      "deployable": false,
+      "status": "supporting_alpha",
+      "owner": "trnm-integration",
+      "authority": "Vendored node-independent receipt verification library and Unix evidence/signing CLI; accepted proof structure does not create consensus, custody approval, deployment authority or an off-chain financial effect.",
+      "documentation": "docs/modules/trnm-finality-verifier.md",
+      "source_entrypoints": [
+        "vendor/trnm-finality-verifier/src/lib.rs",
+        "vendor/trnm-finality-verifier/src/cometbft.rs",
+        "vendor/trnm-finality-verifier/src/bin/trnm-research-receipt-v2.rs"
+      ],
+      "verification": [
+        "cargo test --locked -p trnm-finality-verifier --all-targets",
+        "cargo clippy --locked -p trnm-finality-verifier --all-targets -- -D warnings"
+      ]
+    },
+    {
+      "workspace_member": "vendor/trnm-protocol",
+      "package": "trnm-protocol",
+      "kind": "contract-library",
+      "logical_module": "trnm",
+      "deployable": false,
+      "status": "supporting_alpha",
+      "owner": "trnm-integration",
+      "authority": "Vendored canonical transaction and applied-record encoding, signed research-envelope binding and protocol errors; byte-valid commands do not themselves prove execution, account authorization or Chain finality.",
+      "documentation": "docs/modules/trnm-protocol.md",
+      "source_entrypoints": [
+        "vendor/trnm-protocol/src/lib.rs"
+      ],
+      "verification": [
+        "cargo test --locked -p trnm-protocol --all-targets",
+        "cargo clippy --locked -p trnm-protocol --all-targets -- -D warnings"
+      ]
+    },
+    {
+      "workspace_member": "vendor/trnm-research-protocol",
+      "package": "trnm-research-protocol",
+      "kind": "contract-library",
+      "logical_module": "trnm",
+      "deployable": false,
+      "status": "supporting_alpha",
+      "owner": "trnm-integration",
+      "authority": "Vendored signed research command encoding and deterministic research state transitions under an explicit authority set; Nakama facts cannot substitute for Hepta evaluation and CEX does not become a consensus node.",
+      "documentation": "docs/modules/trnm-research-protocol.md",
+      "source_entrypoints": [
+        "vendor/trnm-research-protocol/src/lib.rs",
+        "vendor/trnm-research-protocol/src/canonical.rs",
+        "vendor/trnm-research-protocol/src/command.rs",
+        "vendor/trnm-research-protocol/src/state.rs",
+        "vendor/trnm-research-protocol/src/types.rs",
+        "vendor/trnm-research-protocol/src/paper_raid.rs",
+        "vendor/trnm-research-protocol/tests/protocol_v1.rs"
+      ],
+      "verification": [
+        "cargo test --locked -p trnm-research-protocol --all-targets",
+        "cargo clippy --locked -p trnm-research-protocol --all-targets -- -D warnings"
+      ]
     }
   ],
   "external_components": [

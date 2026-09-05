@@ -119,3 +119,19 @@ observation report and its explicit non-qualification boundary.
 `matrix-filter-definition-v1.md` defines the migration-0005 immutable definition
 pin and reviewed upgrade. It supersedes ordinary unresolved-ID sync and keeps
 definition acquisition, content validation and exact-tree qualification separate.
+
+## Actual Cargo workspace authority
+
+`cargo-workspace-authority-v1.md` closes the explicit-member-only inventory blind
+spot: five existing vendored path packages are named in the root workspace,
+catalog and dedicated module contracts. Real `cargo metadata --locked --no-deps`
+must agree with that source inventory and document every discovered target. This
+is not a claim that the complete repository has passed or that a Chain runtime
+has moved into CEX. Vendor provenance, canonical protocol compatibility, generated
+semantic inventory, runtime checks and independent release gates are preserved.
+
+## Vendor identity diagnosis
+
+`status/vendor-provenance-reconciliation-round14.md` records the exact one-file
+verifier divergence and introducing commit. It does not waive the original
+vendor policy or claim source/runtime qualification.

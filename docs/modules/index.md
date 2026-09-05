@@ -3,7 +3,7 @@
 Status: active canonical module index  
 Production authorization: `not_granted`
 
-This index is the human-readable view of `../module-catalog-v1.json`. The machine-readable catalog is authoritative for workspace membership and documentation coverage; each module document is authoritative only within its stated source and ownership boundary.
+This index is the human-readable view of `../module-catalog-v1.json`. Cargo metadata is authoritative for actual workspace membership; the machine-readable catalog records the required documentation coverage; each module document is authoritative only within its stated source and ownership boundary.
 
 ## Completion rule
 
@@ -43,6 +43,11 @@ Participating Agents, model providers, Trillionnium World fixtures and the Trill
 | `services/matrix-entry-adapter` | `matrix-entry-adapter` | adapter-service | hepta | yes | `matrix-integration` | [matrix-entry-adapter.md](matrix-entry-adapter.md) |
 | `apps/matrix-bot-relay` | `matrix-bot-relay` | application | hepta | yes | `matrix-integration` | [matrix-bot-relay.md](matrix-bot-relay.md) |
 | `apps/matrix-bot-poller` | `matrix-bot-poller` | application | hepta | yes | `matrix-integration` | [matrix-bot-poller.md](matrix-bot-poller.md) |
+| `vendor/trnm-economy-protocol` | `trnm-economy-protocol` | contract-library | trnm | no | `trnm-integration` | [trnm-economy-protocol.md](trnm-economy-protocol.md) |
+| `vendor/trnm-finality-types` | `trnm-finality-types` | contract-library | trnm | no | `trnm-integration` | [trnm-finality-types.md](trnm-finality-types.md) |
+| `vendor/trnm-finality-verifier` | `trnm-finality-verifier` | library | trnm | no | `trnm-integration` | [trnm-finality-verifier.md](trnm-finality-verifier.md) |
+| `vendor/trnm-protocol` | `trnm-protocol` | contract-library | trnm | no | `trnm-integration` | [trnm-protocol.md](trnm-protocol.md) |
+| `vendor/trnm-research-protocol` | `trnm-research-protocol` | contract-library | trnm | no | `trnm-integration` | [trnm-research-protocol.md](trnm-research-protocol.md) |
 
 All links in this table are relative to `docs/modules/`; the machine catalog retains the full repository path for each document.
 
@@ -65,3 +70,22 @@ External authorities and pinned integration dependencies have stable catalog IDs
 New workspace members require a catalog entry and module document in the same commit. Removing or renaming a member requires an explicit compatibility and data-retirement decision. Every new binary or integration test used for qualification must be represented by a catalog source entry point.
 
 External IDs are stable protocol names. Renaming, adding or changing one requires the catalog, index, external-component contract, threat-model/compatibility material, checker and consumer migration in the same candidate. A source, workflow, documentation-only or test-only change creates a new exact tree, advances the shared candidate trigger and must be requalified. No catalog or module document may grant production authorization.
+
+## Actual Cargo membership and vendored packages
+
+The explicit list now names 23 packages: the existing 18 first-party members and
+five vendored path dependencies. This is not a new Chain service or fourth product
+domain. The Chain runtime remains external; only the copied libraries and the
+Unix verifier utility are local build targets. Vendored source and its provenance
+manifest are not rewritten by this documentation correction. The economy crate
+is imported as `term-exchange-protocol` but its package name is
+`trnm-economy-protocol`; aliases cannot create or erase catalog identities.
+
+`python3 scripts/check-cargo-workspace-authority.py` invokes real Cargo metadata
+with the committed lock, compares actual members to the explicit list and catalog,
+and rejects an undocumented automatic binary, test, example, benchmark or build
+script target. It is required after toolchain setup in both existing Linux and
+Windows Rust authority lanes. The existing full document, semantic inventory,
+compilation and release gates remain separate requirements. No saved metadata
+file can be supplied as a substitute for that invocation. See
+`../cargo-workspace-authority-v1.md` for source-only versus executed evidence.

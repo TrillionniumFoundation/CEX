@@ -51,6 +51,9 @@ jobs:
           python3 scripts/test-matrix-runner-hardening.py
           python3 scripts/test-matrix-runner-lifecycle.py
 
+      - name: Cargo workspace authority fixture regression
+        run: python3 scripts/test-cargo-workspace-authority.py
+
       - name: Qualification source and build packet regression
         run: python3 scripts/test-trnm-build-evidence.py
 
@@ -117,6 +120,9 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
+      - name: Actual Cargo workspace and target documentation
+        run: python scripts/check-cargo-workspace-authority.py
+
       - name: Verify release manifest contract
         run: python scripts/check-release-baseline-manifest.py docs/templates/cex-release-baseline-manifest-v1.json --allow-template
 
@@ -159,6 +165,9 @@ jobs:
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Actual Cargo workspace and target documentation
+        run: python3 scripts/check-cargo-workspace-authority.py
 
       - name: Verify release manifest contract
         run: python3 scripts/check-release-baseline-manifest.py docs/templates/cex-release-baseline-manifest-v1.json --allow-template
