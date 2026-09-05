@@ -215,3 +215,18 @@ The original semantic tests are retained once in shared-config and must execute
 there; testing only this dependent package does not run dependency unit tests.
 See `docs/matrix-profile-sharing-v1.md`. Actual locked resolution, compilation,
 formatting, lint and black-box startup verification remain required.
+
+## Response-byte and malformed-event boundary (round 16)
+
+`apps/matrix-bot-poller/src/wire_response.rs` checks the original sync/page bytes
+for duplicate decoded keys, top-level error envelopes and complete bounded JSON
+before typed decoding. Both polling and gap recovery use it; HTTP 200 is required.
+Explicit null is no longer equivalent to an absent end/prev_batch token. Existing
+pagination, transaction, scope and poison controls are retained.
+
+Missing, empty or non-string event types now retain restricted poison evidence
+rather than silently disappearing. Known unsupported string event types keep
+the existing ignore policy. Healthy delivery identities are unchanged. See
+`docs/matrix-wire-response-v1.md` for compatibility changes, diagnostic limits and
+new unexecuted Rust regressions. Actual Cargo/PostgreSQL/homeserver acceptance and
+all other repository/independent release requirements remain open.

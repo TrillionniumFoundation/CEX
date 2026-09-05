@@ -111,6 +111,28 @@ class RecoveryContractTests(unittest.TestCase):
     def test_reverse_proxy_prefix_is_preserved(self):
         self.mutation_rejected(CHECK.RELAY, "url.path().trim_end_matches('/')", '""')
 
+    def test_sync_wire_decode_precedes_every_cursor_path(self):
+        self.mutation_rejected(CHECK.POLLER, 'let mut body: SyncResponse = wire_response::decode(&bytes)',
+                               'let mut body: SyncResponse = serde_json::from_slice(&bytes)')
+
+    def test_gap_wire_decode_is_not_optional(self):
+        self.mutation_rejected(CHECK.POLLER, 'let page: sync_recovery::MessagePage = wire_response::decode(&bytes)',
+                               'let page: sync_recovery::MessagePage = serde_json::from_slice(&bytes)')
+
+    def test_explicit_null_end_cannot_revert_to_optional_none(self):
+        self.mutation_rejected(CHECK.PAGER,
+            '#[serde(default, deserialize_with = "super::wire_response::optional_string")]',
+            '#[serde(default)]')
+
+    def test_missing_event_type_quarantine_is_required(self):
+        self.mutation_rejected(CHECK.POLLER, 'failure_code: "invalid_event_type"',
+                               'failure_code: "ignored_event"')
+
+    def test_duplicate_and_error_envelope_guard_cannot_disappear(self):
+        path = 'apps/matrix-bot-poller/src/wire_response.rs'
+        self.mutation_rejected(path, '!keys.insert(key)', 'false')
+        self.mutation_rejected(path, 'self.envelope && key == "errcode"', 'false')
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

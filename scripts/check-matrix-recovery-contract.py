@@ -41,6 +41,7 @@ def ordered(text: str, *markers: str) -> None:
 
 def read_sources(root: Path) -> dict[str, str]:
     names = [POLLER, RELAY, PAGER, RESPONSE, MIGRATION,
+             'apps/matrix-bot-poller/src/wire_response.rs',
              'scripts/check-matrix-source-observation-postgres.sh',
              'scripts/matrix_postgres_regression.py',
              'scripts/test-matrix-sync-recovery-postgres.sql',
@@ -67,8 +68,22 @@ def validate(sources: dict[str, str]) -> None:
     ordered(function(p, 'poll_once'), 'recover_limited_timelines(', 'prepare_admissions(',
             'persist_poison_observations(', 'persist_batch(')
     require(function(p, 'poll_once'), 'matrix_initial_cursor_required', 'Vec::new()', 'bootstrap_start_now')
+    sync = function(p, 'poll_once')
+    ordered(sync, 'response.status() != reqwest::StatusCode::OK',
+            'wire_response::decode(&bytes)', 'validate_token(&body.next_batch)',
+            'if lease.opaque_cursor.is_none()')
+    reject(sync, 'serde_json::from_slice(&bytes)', 'response.status().is_success()')
+    wire = sources['apps/matrix-bot-poller/src/wire_response.rs']
+    require(wire, 'CheckedJson { envelope: true }', 'parser.end()',
+            'self.envelope && key == "errcode"', '!keys.insert(key)',
+            'map.next_value_seed(CheckedJson { envelope: false })',
+            '.next_element_seed(CheckedJson { envelope: false })',
+            'String::deserialize(parser).map(Some)', 'MAX_RESPONSE_BYTES')
+    require(pager, 'deserialize_with = "super::wire_response::optional_string"')
+    require(p, 'deserialize_with = "wire_response::optional_string"',
+            'failure_code: "invalid_event_type"')
     recovery = function(p, 'recover_limited_timelines')
-    ordered(recovery, 'renew_cursor_lease(', 'http.get(url)', 'pager.accept(', 'backwards.reverse()')
+    ordered(recovery, 'renew_cursor_lease(', 'http.get(url)', 'wire_response::decode(&bytes)', 'pager.accept(', 'backwards.reverse()')
     reject(recovery, '.begin()', 'chunk.is_empty()', 'chunk.len() <')
     require(recovery, 'GAP_PAGE_BUDGET', 'GAP_EVENT_BUDGET', 'GAP_BYTE_BUDGET',
             'GAP_DEADLINE_SECONDS', 'matrix_gap_room_identity_mismatch')

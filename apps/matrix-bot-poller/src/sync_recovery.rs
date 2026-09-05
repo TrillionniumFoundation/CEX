@@ -9,6 +9,7 @@ use std::collections::HashSet;
 #[derive(Debug, Deserialize)]
 pub(super) struct MessagePage {
     pub start: String,
+    #[serde(default, deserialize_with = "super::wire_response::optional_string")]
     pub end: Option<String>,
     pub chunk: Vec<Value>,
 }
@@ -177,6 +178,43 @@ mod tests {
     fn message_filter_ids_cannot_be_sent_as_json_filters() {
         for filter in ["0", " {}", ""] {
             assert!(messages_url("https://matrix.example", "!r:e", "new", "old", 100, Some(filter)).is_err());
+        }
+    }
+
+    #[test]
+    fn null_end_is_not_a_terminal_page() {
+        let bytes = br#"{"start":"new","end":null,"chunk":[]}"#;
+        assert!(super::super::wire_response::decode::<MessagePage>(bytes).is_err());
+        // The field-level rule also protects direct typed deserialization.
+        assert!(serde_json::from_slice::<MessagePage>(bytes).is_err());
+    }
+
+    #[test]
+    fn omitted_end_and_empty_continuation_keep_distinct_meanings() {
+        let terminal: MessagePage = super::super::wire_response::decode(
+            br#"{"start":"new","chunk":[]}"#,
+        ).unwrap();
+        let mut pager = GapPager::new("new", "old").unwrap();
+        pager.accept(&terminal, 100).unwrap();
+        assert!(pager.complete());
+
+        let continuation: MessagePage = super::super::wire_response::decode(
+            br#"{"start":"new","end":"middle","chunk":[]}"#,
+        ).unwrap();
+        let mut pager = GapPager::new("new", "old").unwrap();
+        pager.accept(&continuation, 100).unwrap();
+        assert!(!pager.complete());
+        assert_eq!(pager.cursor(), "middle");
+    }
+
+    #[test]
+    fn ambiguous_and_error_pages_never_reach_pagination() {
+        for bytes in [
+            br#"{"start":"new","chunk":[],"errcode":"M_UNKNOWN"}"#.as_slice(),
+            br#"{"start":"new","end":null,"end":"old","chunk":[]}"#.as_slice(),
+            br#"{"start":"new","chunk":[{"type":"m.room.message","type":"m.room.member"}]}"#.as_slice(),
+        ] {
+            assert!(super::super::wire_response::decode::<MessagePage>(bytes).is_err());
         }
     }
 

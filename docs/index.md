@@ -144,3 +144,10 @@ remaining embedded-library/runtime acceptance. It is not execution evidence.
 
 `status/matrix-profile-consolidation-round15.json` records the current parser
 delta; other gaps remain in the parent audit-remediation snapshot.
+
+## Matrix response and quarantine boundary
+
+`matrix-wire-response-v1.md` specifies unambiguous bounded sync/page decoding,
+absent-versus-null pagination and malformed-event quarantine. The current scoped
+delta is `status/matrix-wire-contract-round16.json`; it does not replace the
+remaining profile, vendor, runtime or independent-release requirements.

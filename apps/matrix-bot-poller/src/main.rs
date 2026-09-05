@@ -2,6 +2,7 @@ mod filter_definition;
 mod runtime_profile;
 mod stream_scope;
 mod sync_recovery;
+mod wire_response;
 
 use anyhow::{anyhow, bail, Context, Result};
 use reqwest::{redirect::Policy, Client, Response, Url};
@@ -76,6 +77,7 @@ struct TimelineState {
     events: Vec<Value>,
     #[serde(default)]
     limited: bool,
+    #[serde(default, deserialize_with = "wire_response::optional_string")]
     prev_batch: Option<String>,
 }
 
@@ -271,13 +273,13 @@ async fn poll_once(
     .map_err(|_| anyhow!("matrix_sync_timeout"))?
     .map_err(|_| anyhow!("matrix_sync_transport_failure"))?;
 
-    if !response.status().is_success() {
-        bail!("Matrix sync returned status {}", response.status());
+    if response.status() != reqwest::StatusCode::OK {
+        bail!("matrix_sync_http_rejected");
     }
 
     let bytes = read_bounded_body(response, config.sync_max_bytes).await?;
-    let mut body: SyncResponse = serde_json::from_slice(&bytes)
-        .context("Matrix sync response was not valid bounded JSON")?;
+    let mut body: SyncResponse = wire_response::decode(&bytes)
+        .map_err(|code| anyhow!(code))?;
     sync_recovery::validate_token(&body.next_batch)?;
 
     if lease.opaque_cursor.is_none() {
@@ -333,7 +335,7 @@ fn prepare_admissions(body: &SyncResponse, config: &PollerConfig) -> Result<Vec<
     for (room_id, room) in &body.rooms.join {
         for raw_event in &room.timeline.events {
             let event_type = raw_event.get("type").and_then(Value::as_str);
-            if event_type != Some("m.room.message") {
+            if event_type.is_some_and(|kind| !kind.is_empty() && kind != "m.room.message") {
                 continue;
             }
 
@@ -350,6 +352,19 @@ fn prepare_admissions(body: &SyncResponse, config: &PollerConfig) -> Result<Vec<
                 .filter(|value| validate_identifier("event_id", value, 512).is_ok())
                 .map(ToOwned::to_owned)
                 .unwrap_or_else(|| format!("matrix-poison:{}", &raw_hash[7..]));
+
+            // An absent, empty or non-string type is not a known ignored
+            // event. Retain its bytes and hold the same cursor for quarantine.
+            if event_type != Some("m.room.message") {
+                admissions.push(Admission::Poison {
+                    source_event_id: poison_source_id,
+                    source_event_sha256: raw_hash,
+                    failure_code: "invalid_event_type",
+                    room_id: room_id.clone(),
+                    source_payload: source_payload.clone(),
+                });
+                continue;
+            }
 
             let Some(event_id) = raw_event_id else {
                 admissions.push(Admission::Poison {
@@ -653,8 +668,8 @@ async fn recover_limited_timelines(
             if byte_count > GAP_BYTE_BUDGET {
                 bail!("matrix_gap_byte_budget_exceeded");
             }
-            let page: sync_recovery::MessagePage = serde_json::from_slice(&bytes)
-                .map_err(|_| anyhow!("matrix_gap_invalid_json"))?;
+            let page: sync_recovery::MessagePage = wire_response::decode(&bytes)
+                .map_err(|code| anyhow!(code))?;
             pager.accept(&page, GAP_PAGE_LIMIT)?;
             page_count += 1;
             event_count = event_count.checked_add(page.chunk.len()).ok_or_else(|| anyhow!("matrix_gap_event_budget_exceeded"))?;
@@ -1055,6 +1070,70 @@ mod tests {
         assert_eq!(actual, std::str::from_utf8(bytes).unwrap());
         assert_eq!(url.query_pairs().filter(|(key, _)| key == "filter").count(), 1);
         assert_eq!(url.query_pairs().find(|(key, _)| key == "since").unwrap().1, "cursor");
+    }
+
+    #[test]
+    fn malformed_event_type_is_quarantined_not_silently_skipped() {
+        for event in [
+            Value::Null,
+            json!([]),
+            json!({"event_id":"$one","content":{"body":"command"}}),
+            json!({"event_id":"$one","type":null}),
+            json!({"event_id":"$one","type":42}),
+            json!({"event_id":"$one","type":""}),
+        ] {
+            let admissions = prepare_admissions(&test_batch(event.clone()), &test_config()).unwrap();
+            assert_eq!(admissions.len(), 1);
+            match &admissions[0] {
+                Admission::Poison { failure_code, source_payload, source_event_id, .. } => {
+                    assert_eq!(*failure_code, "invalid_event_type");
+                    assert_eq!(source_payload, &event);
+                    assert!(!source_event_id.is_empty());
+                }
+                _ => panic!("malformed routing data must not become a command or disappear"),
+            }
+        }
+    }
+
+    #[test]
+    fn well_formed_unsupported_event_types_still_do_not_become_commands() {
+        for kind in ["m.room.member", "m.room.encrypted", "org.example.custom"] {
+            let event = json!({"type":kind,"event_id":"$one","content":{}});
+            assert!(prepare_admissions(&test_batch(event), &test_config()).unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn ambiguous_sync_and_error_envelopes_are_not_empty_successes() {
+        for bytes in [
+            br#"{"next_batch":"new","errcode":null}"#.as_slice(),
+            br#"{"next_batch":"new","rooms":{"join":{"!r:e":{},"!r:e":{}}}}"#.as_slice(),
+            br#"{"next_batch":"new","rooms":{"join":{"!r:e":{"timeline":{"prev_batch":null}}}}}"#.as_slice(),
+        ] {
+            assert!(wire_response::decode::<SyncResponse>(bytes).is_err());
+        }
+        assert!(wire_response::decode::<SyncResponse>(br#"{"next_batch":"new"}"#).is_ok());
+    }
+
+    #[test]
+    fn healthy_wire_decode_does_not_change_delivery_identity() {
+        let event = json!({"type":"m.room.message","event_id":"$one",
+            "sender":"@human:example","origin_server_ts":1,
+            "content":{"msgtype":"m.text","body":"hello"}});
+        let direct = prepare_admissions(&test_batch(event.clone()), &test_config()).unwrap();
+        let wire = serde_json::to_vec(&json!({"next_batch":"next","rooms":{"join":{
+            "!room:example":{"timeline":{"events":[event]}}
+        }}})).unwrap();
+        let decoded: SyncResponse = wire_response::decode(&wire).unwrap();
+        let checked = prepare_admissions(&decoded, &test_config()).unwrap();
+        match (&direct[0], &checked[0]) {
+            (Admission::Delivery { delivery_id: a, payload_sha256: ah, .. },
+             Admission::Delivery { delivery_id: b, payload_sha256: bh, .. }) => {
+                assert_eq!(a, b);
+                assert_eq!(ah, bh);
+            }
+            _ => panic!("healthy wire decoding must preserve normal delivery identity"),
+        }
     }
 
 }
