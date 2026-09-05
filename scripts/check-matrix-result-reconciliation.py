@@ -15,6 +15,12 @@ FILES = {
     "adapter_facade": "services/matrix-entry-adapter/src/lib.rs",
     "adapter_reconciliation": "services/matrix-entry-adapter/src/result_reconciliation.rs",
     "relay_response": "apps/matrix-bot-relay/src/response_contract.rs",
+    "operator_hardening": (
+        "services/matrix-entry-adapter/operator-migrations/"
+        "0003_adapter_result_evidence_binding.sql"
+    ),
+    "operator_runner": "scripts/matrix_operator_postgres_regression.py",
+    "operator_regression": "scripts/test-matrix-result-evidence-hardening-postgres.sql",
 }
 
 
@@ -156,6 +162,49 @@ def main() -> int:
         "relay reconciliation response",
     )
 
+    failures += require(
+        sources["operator_hardening"],
+        (
+            "create or replace function public.cex_matrix_reconcile_adapter_result_v1(",
+            "matrix_adapter_result_identity_scope_mismatch",
+            "matrix_adapter_result_raw_task_mismatch",
+            "not p_evidence_context ?& array[",
+            "p_evidence_context - array[",
+            "::timestamptz",
+            "not isfinite(observed_at)",
+            "to cex_matrix_reconciler_runtime;",
+        ),
+        "operator reconciliation hardening",
+    )
+    failures += forbid(
+        sources["operator_hardening"].lower(),
+        ("grant all", " to public;"),
+        "operator reconciliation least privilege",
+    )
+    failures += require(
+        sources["operator_runner"],
+        (
+            '"0003_adapter_result_evidence_binding.sql"',
+            '"scripts/test-matrix-result-evidence-hardening-postgres.sql"',
+            "for pass_number in (1, 2):",
+            "base.validate_sql_source(sql)",
+            "base.bounded_client",
+            '"production_authorization": "not_granted"',
+        ),
+        "operator PostgreSQL runner",
+    )
+    failures += require(
+        sources["operator_regression"],
+        (
+            "matrix_result_identity_scope_mismatch_not_rejected",
+            "matrix_result_raw_task_mismatch_not_rejected",
+            "matrix_result_extra_evidence_key_not_rejected",
+            "matrix_result_invalid_observed_at_not_rejected",
+            "matrix_result_infinite_observed_at_not_rejected",
+        ),
+        "operator hostile PostgreSQL regression",
+    )
+
     if failures:
         print("Matrix result reconciliation contract failed:", file=sys.stderr)
         for failure in failures:
@@ -172,6 +221,8 @@ def main() -> int:
                 "read_only": True,
                 "principal_bound": True,
                 "stable_replay_snapshot": True,
+                "operator_evidence_bound": True,
+                "operator_postgres_runner_present": True,
                 "production_authorization": "not_granted",
             },
             sort_keys=True,
