@@ -38,8 +38,8 @@ Catalog-bound files:
   followed by Tokio construction, state validation and listener startup.
 - `services/matrix-entry-adapter/src/lib.rs`: existing routes, normalization,
   credential selection, local caches, forwarding and regression tests.
-- `services/matrix-entry-adapter/src/runtime_profile.rs`: pure strict profile
-  parsing, cross-source conflict rejection and legacy-policy normalization.
+- `services/matrix-entry-adapter/src/runtime_profile.rs`: compatibility import
+  for shared-config profile parsing, conflict rejection and legacy mapping.
 - `services/matrix-entry-adapter/migrations/0001_transport_durability.sql`:
   existing inbox/outbox/cursor, fenced claims and poison observations.
 - `services/matrix-entry-adapter/migrations/0002_source_observation_replay.sql`:
@@ -109,8 +109,9 @@ cannot lower an explicitly configured global production policy.
 
 Only the adapter-specific environment value is normalized before threads exist.
 The library's legacy parser is not a public strict configuration API: embedded
-callers must supply validated configuration, and central parser consolidation
-remains a separate refactor. Existing ingress/session secrets, approved registry
+callers must supply validated configuration. The deployable binaries now share
+one parser, but enforcing typed configuration in embedded library callers remains
+a separate, uncompleted refactor. Existing ingress/session secrets, approved registry
 revisions, downstream endpoints and local-cache settings retain their existing
 validation requirements. Secrets and opaque cursors must not enter diagnostics.
 
@@ -238,3 +239,15 @@ a successful client exit, before reaping its leader. Native Windows execution of
 this SQL runner is unsupported and fails before launching a client. The current
 Linux SQL jobs and full migration/assertion requirements remain unchanged. See
 `docs/matrix-sql-runner-v4.md` for limits and pending actual database qualification.
+
+## Shared profile linkage (round 15)
+
+This package now depends on the existing local `shared-config` crate, and the
+profile compatibility file re-exports its resolver without any local policy.
+The three explicit environment sources, non-Unicode rejection and startup order
+are unchanged. `Cargo.lock` adds only that existing local direct edge. No registry
+package/version/checksum or protocol/schema change is part of this refactor.
+The original semantic tests are retained once in shared-config and must execute
+there; testing only this dependent package does not run dependency unit tests.
+See `docs/matrix-profile-sharing-v1.md`. Actual locked resolution, compilation,
+formatting, lint and black-box startup verification remain required.

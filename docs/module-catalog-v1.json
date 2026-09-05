@@ -90,7 +90,8 @@
         "crates/shared-config/src/lib.rs",
         "crates/shared-config/src/runtime_guard.rs",
         "crates/shared-config/src/service_auth.rs",
-        "crates/shared-config/src/service_client.rs"
+        "crates/shared-config/src/service_client.rs",
+        "crates/shared-config/src/runtime_guard/matrix_profile.rs"
       ],
       "verification": [
         "cargo test -p shared-config",

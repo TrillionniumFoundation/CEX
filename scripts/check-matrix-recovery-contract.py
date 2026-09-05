@@ -46,6 +46,8 @@ def read_sources(root: Path) -> dict[str, str]:
              'scripts/test-matrix-sync-recovery-postgres.sql',
              '.github/workflows/matrix-review-repair-regression.yml',
              'docs/matrix-recovery-and-receipt-contract-v2.md',
+             'crates/shared-config/src/runtime_guard.rs',
+             'crates/shared-config/src/runtime_guard/matrix_profile.rs',
              'services/matrix-entry-adapter/src/runtime_profile.rs',
              'apps/matrix-bot-poller/src/runtime_profile.rs',
              'apps/matrix-bot-relay/src/runtime_profile.rs',
@@ -118,8 +120,27 @@ def validate(sources: dict[str, str]) -> None:
         'services/matrix-entry-adapter/src/runtime_profile.rs',
         'apps/matrix-bot-poller/src/runtime_profile.rs',
         'apps/matrix-bot-relay/src/runtime_profile.rs']]
-    if len(set(profiles)) != 1:
-        raise AssertionError('Matrix profile parsers must remain byte-identical until shared-crate consolidation')
+    expected_import = ("// Compatibility import only; parsing and tests are owned by shared-config.\n"
+                       "pub use shared_config::runtime_guard::matrix_profile::resolve_profiles;\n")
+    if any(profile != expected_import for profile in profiles):
+        raise AssertionError('Matrix profile wrappers must only re-export the shared parser')
+    require(sources['crates/shared-config/src/runtime_guard.rs'], 'pub mod matrix_profile;')
+    shared_profile = sources['crates/shared-config/src/runtime_guard/matrix_profile.rs']
+    profile_spec = importlib.util.spec_from_file_location(
+        'matrix_profile_functions', ROOT / 'scripts/check-matrix-filter-recovery.py')
+    assert profile_spec and profile_spec.loader
+    profile_wiring = importlib.util.module_from_spec(profile_spec)
+    profile_spec.loader.exec_module(profile_wiring)
+    shared_function = profile_wiring.function_body
+    require(shared_function(shared_profile, 'parse'), '"stage" | "staging"',
+            '"prod" | "production" | "trnm-economy" | "trnm_economy"',
+            'Err("invalid_matrix_runtime_profile")')
+    require(shared_function(shared_profile, 'resolve_profiles'), 'AdapterProfile::parse(raw)?',
+            'previous != parsed', 'Err("conflicting_matrix_runtime_profiles")',
+            'selected.unwrap_or(AdapterProfile::Local)')
+    require(shared_function(shared_profile, 'legacy_value'),
+            'Self::Staging | Self::Production => "production"', 'Self::Beta => "beta"')
+    reject(shared_profile, 'set_var(', 'unsafe ', 'std::env::', 'include!')
     for main in [p, r]:
         require(function(main, 'is_production_like'), 'resolve_profiles(&values)', 'NotUnicode',
                 'PROFILE_ENV_NAME', '"CEX_RUNTIME_PROFILE"', '"APP_ENV"')

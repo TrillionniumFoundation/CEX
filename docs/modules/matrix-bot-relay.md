@@ -35,8 +35,8 @@ Catalog-bound entry points:
   transaction boundaries, credential-scope binding, send receipts and recovery.
 - `apps/matrix-bot-relay/src/response_contract.rs`: bounded response classification
   and original-room reply validation, with hostile response fixtures.
-- `apps/matrix-bot-relay/src/runtime_profile.rs`: strict pure configuration parser,
-  kept byte-identical with poller and adapter pending shared-crate extraction.
+- `apps/matrix-bot-relay/src/runtime_profile.rs`: two-line compatibility re-export
+  of the strict parser owned by shared-config; there is no local parser logic.
 
 Use shared transport migrations 0001, 0002, 0003, 0004 and 0005 in the adapter-owned directory.
 Changing destination, receipt or source identity requires catalog and protocol review.
@@ -177,3 +177,15 @@ mentions, relations or unknown extensions to a nominal plain-text reply. Rich
 reply extensions now hold and need explicit protocol review; this does not
 sanitize the plain text itself or promise client notification behavior. See
 `docs/matrix-stream-scope-v1.md`; Rust/real homeserver tests remain required.
+
+## Shared profile linkage (round 15)
+
+This package now depends on the existing local `shared-config` crate, and the
+profile compatibility file re-exports its resolver without any local policy.
+The three explicit environment sources, non-Unicode rejection and startup order
+are unchanged. `Cargo.lock` adds only that existing local direct edge. No registry
+package/version/checksum or protocol/schema change is part of this refactor.
+The original semantic tests are retained once in shared-config and must execute
+there; testing only this dependent package does not run dependency unit tests.
+See `docs/matrix-profile-sharing-v1.md`. Actual locked resolution, compilation,
+formatting, lint and black-box startup verification remain required.

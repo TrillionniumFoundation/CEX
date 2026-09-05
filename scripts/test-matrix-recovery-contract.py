@@ -82,7 +82,7 @@ class RecoveryContractTests(unittest.TestCase):
         self.mutation_rejected(CHECK.MIGRATION, 'language plpgsql', 'language plpgsql security definer')
 
     def test_parser_drift_rejected(self):
-        self.mutation_rejected('apps/matrix-bot-relay/src/runtime_profile.rs', '"stage" | "staging"', '"stage"')
+        self.mutation_rejected('apps/matrix-bot-relay/src/runtime_profile.rs', 'pub use shared_config::runtime_guard::matrix_profile::resolve_profiles;', 'fn resolve_profiles() {}')
 
     def test_skipping_ci_rejected(self):
         self.mutation_rejected('.github/workflows/matrix-review-repair-regression.yml', 'contents: read', 'contents: read\n  continue-on-error: true')

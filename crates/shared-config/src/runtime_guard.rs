@@ -4,6 +4,9 @@
 //! This boundary owns the pre-runtime environment preparation required by
 //! binaries whose legacy state constructors still read process configuration.
 
+/// Strict Matrix profile selection, separate from the service guard policy.
+pub mod matrix_profile;
+
 mod implementation {
     include!("runtime_guard_impl.rs");
 

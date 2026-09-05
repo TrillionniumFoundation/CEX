@@ -51,6 +51,9 @@ jobs:
           python3 scripts/test-matrix-runner-hardening.py
           python3 scripts/test-matrix-runner-lifecycle.py
 
+      - name: Matrix shared profile linkage regression
+        run: python3 scripts/test-matrix-profile-consolidation.py
+
       - name: Cargo workspace authority fixture regression
         run: python3 scripts/test-cargo-workspace-authority.py
 
@@ -229,6 +232,12 @@ jobs:
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Shared Matrix profile implementation and complete package tests
+        run: |
+          cargo fmt -p shared-config -- --check
+          cargo test --locked -p shared-config --all-targets
+          cargo clippy --locked -p shared-config --all-targets -- -D warnings
 
       - name: Create separate disposable Matrix database
         env:

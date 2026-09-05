@@ -7,6 +7,7 @@ on:
     paths:
       - Cargo.toml
       - Cargo.lock
+      - crates/shared-config/**
       - rust-toolchain.toml
       - scripts/test-build-unblock.py
       - scripts/fixtures/matrix-lock/**
@@ -55,6 +56,8 @@ jobs:
           python3 scripts/test-matrix-postgres-runner.py
           python3 scripts/test-matrix-runner-hardening.py
           python3 scripts/test-matrix-runner-lifecycle.py
+      - name: Matrix shared profile linkage regression
+        run: python3 scripts/test-matrix-profile-consolidation.py
       - name: Recovery contract mutation regressions
         run: |
           python3 scripts/test-matrix-recovery-contract.py
@@ -77,6 +80,12 @@ jobs:
         with:
           toolchain: 1.98.1
           components: rustfmt, clippy
+      - name: Shared Matrix profile implementation and complete package tests
+        run: |
+          cargo fmt -p shared-config -- --check
+          cargo test --locked -p shared-config --all-targets
+          cargo clippy --locked -p shared-config --all-targets -- -D warnings
+
       - name: Formatting
         run: cargo fmt -p matrix-entry-adapter -- --check
       - name: Complete adapter targets

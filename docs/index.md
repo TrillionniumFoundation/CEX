@@ -135,3 +135,12 @@ semantic inventory, runtime checks and independent release gates are preserved.
 `status/vendor-provenance-reconciliation-round14.md` records the exact one-file
 verifier divergence and introducing commit. It does not waive the original
 vendor policy or claim source/runtime qualification.
+
+## Shared Matrix profile implementation
+
+`matrix-profile-sharing-v1.md` records consolidation into the existing
+shared-config crate, unchanged profile semantics, retained startup boundaries and
+remaining embedded-library/runtime acceptance. It is not execution evidence.
+
+`status/matrix-profile-consolidation-round15.json` records the current parser
+delta; other gaps remain in the parent audit-remediation snapshot.

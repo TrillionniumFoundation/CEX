@@ -29,7 +29,7 @@ class LockEdgesTests(unittest.TestCase):
         findings = LOCK.check(self.before, self.manifests)
         self.assertEqual(len(findings), 2)
         for item in findings:
-            self.assertEqual(item['missing'], ['anyhow', 'sha2', 'sqlx'])
+            self.assertEqual(item['missing'], ['anyhow', 'sha2', 'shared-config', 'sqlx'])
         self.assertEqual(findings[1]['unexpected'], ['chrono'])
 
     def test_proposed_edges_match_both_real_manifests(self):

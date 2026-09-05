@@ -118,7 +118,7 @@ credential scopes must be reconciled, not erased or reissued with fresh identiti
 
 ## Verification and independent qualification
 
-The Python recovery checker validates source wiring, parser parity, documentation
+The Python recovery checker validates source wiring, shared-parser linkage, documentation
 and preserved CI requirements. Mutation tests demonstrate rejection of selected
 source regressions. They do not compile Rust or execute PostgreSQL.
 

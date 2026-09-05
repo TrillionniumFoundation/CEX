@@ -36,11 +36,12 @@ Catalog-bound entry points:
   persistence, atomic inbox/outbox/cursor admission, startup and recovery.
 - `apps/matrix-bot-poller/src/sync_recovery.rs`: opaque-token pagination state,
   cycle/shape checks and safely encoded fixed-authority messages URLs.
-- `apps/matrix-bot-poller/src/runtime_profile.rs`: strict pure profile parser.
+- `apps/matrix-bot-poller/src/runtime_profile.rs`: compatibility import for the strict shared parser.
 
-The zero-dependency parser is temporarily replicated byte-for-byte in the adapter
-and relay; the source gate rejects divergence. It adds no Cargo dependency.
-Shared-crate extraction remains an explicit future refactor, not an inferred result.
+The local runtime-profile file is now a two-line re-export from the existing
+shared-config crate. Parsing logic and its semantic tests live only in
+`crates/shared-config/src/runtime_guard/matrix_profile.rs`. The source gate
+rejects independent implementations in the three compatibility import files.
 
 ## Interfaces and contracts
 
@@ -202,3 +203,15 @@ JSON null. The detailed lifecycle, privacy, privileges and rollback rules are in
 Full Rust tests include loopback HTTP definitions but remain unexecuted here;
 real PostgreSQL, homeserver, complete-workspace and hosted qualification still
 apply. A successfully fetched JSON body is not production authorization.
+
+## Shared profile linkage (round 15)
+
+This package now depends on the existing local `shared-config` crate, and the
+profile compatibility file re-exports its resolver without any local policy.
+The three explicit environment sources, non-Unicode rejection and startup order
+are unchanged. `Cargo.lock` adds only that existing local direct edge. No registry
+package/version/checksum or protocol/schema change is part of this refactor.
+The original semantic tests are retained once in shared-config and must execute
+there; testing only this dependent package does not run dependency unit tests.
+See `docs/matrix-profile-sharing-v1.md`. Actual locked resolution, compilation,
+formatting, lint and black-box startup verification remain required.

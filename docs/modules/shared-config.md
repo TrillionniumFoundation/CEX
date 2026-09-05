@@ -36,6 +36,7 @@ Catalog-bound entry points:
 
 - `crates/shared-config/src/lib.rs`
 - `crates/shared-config/src/runtime_guard.rs`
+- `crates/shared-config/src/runtime_guard/matrix_profile.rs`
 - `crates/shared-config/src/service_auth.rs`
 - `crates/shared-config/src/service_client.rs`
 
@@ -94,3 +95,28 @@ Changing normalization or default behavior can alter every service. Such changes
 Changes to authority, public types/routes, persistence, configuration, migrations, retry semantics, or topology require this contract, the module catalog, relevant ADR/protocol/traceability, executable tests, hosted gate wiring, and a new shared candidate trigger.
 
 No module document may declare repository closure or production authorization.
+
+## Shared Matrix profile API
+
+`shared_config::runtime_guard::matrix_profile` now owns `AdapterProfile::parse`,
+`AdapterProfile::legacy_value`, and `resolve_profiles(&[Option<String>])`.
+The Matrix-specific policy stays separate from the existing `RuntimeProfile`
+service guard; this addition does not alter the reviewed implementation blob in
+`runtime_guard_impl.rs` or the Identity/Gateway/Execution startup policies.
+
+The resolver is pure: no environment reads/writes, I/O or runtime construction.
+All explicit sources must parse and agree on Local, Beta, Staging or Production.
+Absent sources select Local; empty/unknown values fail. Staging and Production
+remain distinct during comparison even though both map to legacy `production`.
+The three Matrix binaries retain responsibility for reading all three configured
+profile sources and rejecting non-Unicode values before using this API. The
+adapter still canonicalizes its legacy environment value before Tokio; embedding
+its legacy library without that boundary is not made safe merely by this module.
+
+The original six semantic tests now live once in this crate. Four additional
+Rust tests cover all alias pairs, invalid sources in each position, stage/prod
+conflicts and unchanged inputs. Existing Matrix CI jobs run the complete
+`cargo test --locked -p shared-config --all-targets` and strict all-target Clippy,
+not merely compilation of shared-config as a dependency. These Rust commands
+remain unexecuted in the authoring environment. See
+`docs/matrix-profile-sharing-v1.md` for linkage, compatibility and open acceptance.
