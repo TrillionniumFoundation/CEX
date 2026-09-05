@@ -3,7 +3,7 @@
   "status": "unqualified_working_change",
   "parent_plan": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
   "parent_addendum": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md",
-  "patch_base": "cc0c7b27085ad3e7960fae34241075555eebd176",
+  "patch_base": "90af2edca6a82fdbf8742e982b7d48860b6a6eed",
   "architecture_sequence": 52,
   "candidate_freeze_authority": "docs/release-evidence/p0-candidate-trigger.json",
   "is_candidate_freeze": false,
@@ -44,10 +44,16 @@
     "Add a read-only direct Matrix lock-edge preflight and regression of the exact old/new lock fragments against actual manifests. This is not Cargo dependency resolution.",
     "Acquire the complete original Cargo.lock, verify its Git blob, and verify only two package dependency arrays differ in the uploaded replacement.",
     "Execute full Matrix package formatting, tests, strict Clippy and current-schema PostgreSQL regression inside the existing authoritative Rust/Hepta job using a separate disposable database; preserve all original Hepta steps.",
-    "Deepen the existing authoritative Execution settlement job with lifecycle source checks, strict all-target Clippy and historical provider reconciliation negatives; preserve all original tests and SQL lifecycles."
+    "Deepen the existing authoritative Execution settlement job with lifecycle source checks, strict all-target Clippy and historical provider reconciliation negatives; preserve all original tests and SQL lifecycles.",
+    "Add immutable Matrix endpoint/account/filter scope binding before cursor-bearing requests and again during admission, using the existing fenced cursor lease.",
+    "Verify the token-owner whoami response before polling; bound full read time/size and reject mismatched/guest/error envelopes.",
+    "Add migration 0004 with virgin-stream-only bootstrap and owner-only exact-cursor legacy approval; no automatic historical scope inference or cursor rewriting.",
+    "Restrict projected replies to msgtype/body keys so structured edits, HTML, mentions and other undeclared controls are not relayed.",
+    "Retain all old SQL assertions and migration replays in the expanded four-migration chain; add unexecuted SQL/Rust regression definitions and executed source mutation tests.",
+    "Preserve the opaque Matrix filter ID 0; only an absent variable disables filtering, while empty or non-Unicode configuration fails before polling."
   ],
   "local_verification_scope": {
-    "python_source_contract_and_shell_negative_tests": 198,
+    "python_source_contract_and_shell_negative_tests": 211,
     "python_suites": {
       "retained_source_and_shell": 12,
       "matrix_recovery_source_mutations": 29,
@@ -56,7 +62,8 @@
       "semantic_generator_synthetic_git_integration": 28,
       "consumer_route_source_guard": 13,
       "trnm_build_packet_filesystem_git_and_workflow": 35,
-      "build_unblock_direct_edges_and_compiler_selection": 24
+      "build_unblock_direct_edges_and_compiler_selection": 24,
+      "matrix_stream_scope_source_mutations": 13
     },
     "rust_tests_executed": false,
     "postgres_tests_executed": false,
@@ -66,17 +73,20 @@
     "complete_cex_semantic_inventory_generated": false,
     "local_source_is_partial_materialization": true,
     "binary_fixture_is_synthetic_elf_not_compiled_service": true,
-    "qualification_summary": "198 local source/filesystem/fixture tests passed; full lock bytes verified and direct-edge check passed; Cargo, PostgreSQL and hosted qualification unproven",
+    "qualification_summary": "211 local source/filesystem/fixture tests passed; new Rust and SQL scope tests defined but not executed; complete repository and hosted qualification unproven",
     "complete_cargo_lock_bytes_verified": true,
     "cargo_dependency_resolution_executed": false,
     "original_lock_git_blob": "75e9ae18ece0a3e58296b75de5b33b623ff3a7c8",
-    "repaired_lock_git_blob": "2e1b7b25d89591a5615bee066015fce78483c403"
+    "repaired_lock_git_blob": "2e1b7b25d89591a5615bee066015fce78483c403",
+    "new_rust_test_definitions_this_round": 7,
+    "new_sql_suite_executed_this_round": false,
+    "matrix_migration_head": "0004_stream_scope_binding.sql"
   },
   "open_repository_work": [
     "Qualify the reviewed and integrated Matrix lock changes on a complete checkout with Cargo --locked; complete semantic inventory generation/review and final Sequence 54 gates. Full lock bytes and direct-edge checks alone do not close dependency resolution.",
     "Compile, format and lint all changed Rust code; execute complete PostgreSQL migration/role/concurrency/recovery and real homeserver integration tests.",
     "Implement durable adapter result lookup and principal-bound response-loss reconciliation; ambiguous adapter effects currently hold safely rather than auto-retry.",
-    "Qualify large-gap backfill beyond the bounded per-iteration budget, Matrix filter/room-scope transitions, redaction/edit semantics and operational poison recovery.",
+    "Execute and qualify new immutable stream-scope guards and legacy upgrade on PostgreSQL/real homeservers; large-gap staging, room membership transitions, filter-ID lifecycle, redaction/edit semantics and poison operational recovery remain open.",
     "Validate least-privilege SQL roles, secret rotation/reconciliation, poison snapshot retention/erasure, real readiness and queue-age/SLO behavior.",
     "Consolidate Matrix parser copies and embedded adapter callers into a reviewed shared configuration API without introducing dependency/lock drift.",
     "Finish the complete current semantic inventory generation/review on a complete checkout, resolve remaining dynamic/unknown route semantics, deepen module API/schema/error/config specs, prove Consumer authority at runtime and complete cross-repository first-playable rehearsal.",
@@ -88,5 +98,5 @@
     "Pinned World/Game/Chain integration and complete first-playable rehearsal.",
     "V12-X1 representative-volume recovery; X2 deployment/cutover/rollback; X3 real external-Agent reconciliation; X4 credential custody; X5 sustained soak; X6 independent security/operations/financial review; X7 applicable legal/provider approvals; X8 final accountable human decision."
   ],
-  "revision": "build-and-authority-integration-round-7"
+  "revision": "matrix-stream-scope-round-8"
 }

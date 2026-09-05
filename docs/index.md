@@ -100,3 +100,9 @@ A change to any active authority or workspace member must:
 6. pass `scripts/check-external-agent-runtime-boundary.py`, `scripts/check-module-documentation.py`, `scripts/check-external-production-evidence-contract.py --contract-only`, and `scripts/check-development-docs.py`;
 7. pass repository-integrity attestation on the exact tree;
 8. update the sole shared candidate trigger and rerun all authoritative v12 hosted gates before repository qualification.
+
+## Matrix scope upgrade
+
+`matrix-stream-scope-v1.md` specifies migration-0004 immutable stream identity,
+token-owner checks, legacy-cursor upgrade holds and the narrowed plain-reply
+contract. It is supporting implementation documentation, not release evidence.

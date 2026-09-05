@@ -118,7 +118,9 @@ pub(super) fn bound_reply(upstream: &Value, original_room: &str) -> Result<Optio
     }
     match upstream.get("projected_reply") {
         None | Some(Value::Null) => Ok(None),
-        Some(reply) if reply.is_object()
+        Some(reply) if reply.as_object().is_some_and(|object| {
+            object.keys().all(|key| matches!(key.as_str(), "msgtype" | "body"))
+        })
             && reply.get("msgtype").and_then(Value::as_str).is_some_and(|kind| matches!(kind, "m.text" | "m.notice"))
             && reply.get("body").and_then(Value::as_str).is_some_and(|body| {
                 !body.trim().is_empty() && body.len() <= 65_536
@@ -163,6 +165,16 @@ mod tests {
         assert_eq!(bound_reply(&reply, "!original:e"), Err("adapter_reply_room_mismatch"));
         let reply = json!({"room_id": null});
         assert_eq!(bound_reply(&reply, "!original:e"), Err("adapter_reply_room_mismatch"));
+    }
+
+    #[test]
+    fn presentation_reply_cannot_carry_edit_html_or_mention_control_fields() {
+        for field in ["m.relates_to", "m.new_content", "m.mentions", "format", "formatted_body", "url"] {
+            let mut reply = json!({"msgtype":"m.text", "body":"bounded"});
+            reply[field] = json!({"unexpected":true});
+            assert_eq!(bound_reply(&json!({"projected_reply":reply}), "!r:e"),
+                Err("adapter_reply_contract_mismatch"));
+        }
     }
 
     #[test]

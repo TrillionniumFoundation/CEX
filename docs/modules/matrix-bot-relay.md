@@ -168,3 +168,12 @@ preflight checks the two workspace package entries against their manifests; it
 does not resolve the complete dependency graph or prove compilation. Preserve
 `--locked` and execute the full package gates after applying the reviewed lock
 patch. See `docs/build-unblock-round6.md` for the preimage and remaining evidence.
+
+## Plain-reply extension boundary
+
+`response_contract::bound_reply` now rejects every reply key except `msgtype` and
+`body`. An adapter cannot attach structured edits, replacement content, HTML,
+mentions, relations or unknown extensions to a nominal plain-text reply. Rich
+reply extensions now hold and need explicit protocol review; this does not
+sanitize the plain text itself or promise client notification behavior. See
+`docs/matrix-stream-scope-v1.md`; Rust/real homeserver tests remain required.

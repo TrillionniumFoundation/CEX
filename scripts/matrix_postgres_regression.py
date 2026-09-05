@@ -24,11 +24,13 @@ MIGRATIONS = (
     "0001_transport_durability.sql",
     "0002_source_observation_replay.sql",
     "0003_sync_recovery_and_send_receipts.sql",
+    "0004_stream_scope_binding.sql",
 )
 BASELINE = "scripts/check-matrix-transport-postgres.sh"
 REGRESSIONS = (
     "scripts/test-matrix-source-observation-replay.sql",
     "scripts/test-matrix-sync-recovery-postgres.sql",
+    "scripts/test-matrix-stream-scope-postgres.sql",
 )
 MAX_INPUT = 2 * 1024 * 1024
 BASELINE_MARKER = "psql -X -q -v ON_ERROR_STOP=1 <<'SQL'\n"

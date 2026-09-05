@@ -59,7 +59,7 @@ and delivery-ID derivation are unchanged, preserving existing healthy replays.
 
 ## Persistence, concurrency, and recovery
 
-Apply transport migrations 0001, 0002 and 0003 in order. Renewals require the same
+Apply transport migrations 0001, 0002, 0003 and 0004 in order. Renewals require the same
 unexpired owner, fence and revision; an expired lease cannot be resurrected.
 Each renewal statement commits before HTTP. Recovery is bounded by 100 pages,
 100 events per page, 10,000 combined events, 32 MiB gap bytes and 120 seconds.
@@ -128,7 +128,7 @@ Python checks are source-contract tests; they do not execute Rust, SQL or Matrix
 
 ## Deployment and operations
 
-Readiness requires all three transport migrations and valid security settings.
+Readiness requires all four transport migrations and valid security settings.
 Configure an explicit first-start policy and stable account/filter partition.
 Monitor cursor age, recovery holds, poison inventory and pending deliveries.
 Recovery limit exhaustion is an operator hold, not a skip; tune capacity only
@@ -154,3 +154,14 @@ preflight checks the two workspace package entries against their manifests; it
 does not resolve the complete dependency graph or prove compilation. Preserve
 `--locked` and execute the full package gates after applying the reviewed lock
 patch. See `docs/build-unblock-round6.md` for the preimage and remaining evidence.
+
+## Immutable stream scope extension
+
+`apps/matrix-bot-poller/src/stream_scope.rs` validates the token-owner response
+and describes the endpoint, account and exact filter input. Before any cursor
+request and again inside admission, the poller requires a matching immutable
+binding from migration 0004. Existing non-virgin partitions require a stopped,
+owner-reviewed upgrade; configuration changes cannot auto-rebind an old cursor.
+`python3 scripts/check-matrix-stream-scope.py` is a source check, not runtime proof.
+See `docs/matrix-stream-scope-v1.md` for the scope shape, owner API, privileges,
+compatibility holds and remaining membership/large-gap work. No production grant.

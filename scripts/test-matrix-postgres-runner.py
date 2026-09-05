@@ -116,9 +116,9 @@ class ExecutionTests(unittest.TestCase):
     def test_full_chain_precedes_all_original_assertions(self):
         result = self.execute()
         self.assertEqual(result["status"], "ok")
-        self.assertEqual(len(result["stages"]), 12)
-        self.assertEqual(self.calls[9][1]["input"], BASE_SQL)
-        for offset in (3, 6):
+        self.assertEqual(len(result["stages"]), 3 + 2 * len(R.MIGRATIONS) + 1 + len(R.REGRESSIONS))
+        self.assertEqual(self.calls[3 + 2 * len(R.MIGRATIONS)][1]["input"], BASE_SQL)
+        for offset in (3, 3 + len(R.MIGRATIONS)):
             for index, name in enumerate(R.MIGRATIONS):
                 self.assertIn(name, self.calls[offset + index][1]["input"])
         self.assertEqual(result["production_authorization"], "not_granted")

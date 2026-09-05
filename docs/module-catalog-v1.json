@@ -408,7 +408,8 @@
         "services/matrix-entry-adapter/src/runtime_profile.rs",
         "services/matrix-entry-adapter/migrations/0001_transport_durability.sql",
         "services/matrix-entry-adapter/migrations/0002_source_observation_replay.sql",
-        "services/matrix-entry-adapter/migrations/0003_sync_recovery_and_send_receipts.sql"
+        "services/matrix-entry-adapter/migrations/0003_sync_recovery_and_send_receipts.sql",
+        "services/matrix-entry-adapter/migrations/0004_stream_scope_binding.sql"
       ],
       "verification": [
         "cargo test -p matrix-entry-adapter",
@@ -452,14 +453,16 @@
       "source_entrypoints": [
         "apps/matrix-bot-poller/src/main.rs",
         "apps/matrix-bot-poller/src/runtime_profile.rs",
-        "apps/matrix-bot-poller/src/sync_recovery.rs"
+        "apps/matrix-bot-poller/src/sync_recovery.rs",
+        "apps/matrix-bot-poller/src/stream_scope.rs"
       ],
       "verification": [
         "cargo test --locked -p matrix-bot-poller --all-targets",
         "cargo clippy --locked -p matrix-bot-poller --all-targets -- -D warnings",
         "python3 scripts/check-matrix-recovery-contract.py",
         "python3 scripts/test-matrix-recovery-contract.py",
-        "python3 scripts/check-matrix-lock-coherence.py"
+        "python3 scripts/check-matrix-lock-coherence.py",
+        "python3 scripts/check-matrix-stream-scope.py"
       ]
     }
   ],

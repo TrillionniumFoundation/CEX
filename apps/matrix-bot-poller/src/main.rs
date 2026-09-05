@@ -1,4 +1,5 @@
 mod runtime_profile;
+mod stream_scope;
 mod sync_recovery;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -128,15 +129,70 @@ async fn main() -> Result<()> {
         "starting durable matrix-bot-poller"
     );
 
+    verify_homeserver_account(&http, &config).await?;
     run(config, pool, http).await
+}
+
+async fn verify_homeserver_account(http: &Client, config: &PollerConfig) -> Result<()> {
+    // This bounded read verifies the token's account; no token is persisted.
+    stream_scope::describe(&config.homeserver_base_url, &config.bot_user_id,
+        config.sync_filter.as_deref()).map_err(|code| anyhow!(code))?;
+    let url = stream_scope::whoami_url(&config.homeserver_base_url)
+        .map_err(|code| anyhow!(code))?;
+    timeout(Duration::from_secs(10), async {
+        let response = http.get(url).bearer_auth(&config.matrix_access_token).send().await
+            .map_err(|_| anyhow!("matrix_stream_account_transport_failure"))?;
+        if response.status() != reqwest::StatusCode::OK {
+            bail!("matrix_stream_account_http_rejected");
+        }
+        let bytes = read_bounded_body(response, 4096).await?;
+        let body: Value = serde_json::from_slice(&bytes)
+            .map_err(|_| anyhow!("matrix_stream_account_invalid_json"))?;
+        stream_scope::verify_account(&body, &config.bot_user_id).map_err(|code| anyhow!(code))
+    }).await.map_err(|_| anyhow!("matrix_stream_account_timeout"))?
+}
+
+async fn bind_stream_scope(
+    tx: &mut Transaction<'_, Postgres>,
+    config: &PollerConfig,
+    lease: &CursorLease,
+) -> Result<()> {
+    let scope = stream_scope::describe(&config.homeserver_base_url, &config.bot_user_id,
+        config.sync_filter.as_deref()).map_err(|code| anyhow!(code))?;
+    let disposition: String = sqlx::query_scalar(
+        "select public.cex_matrix_bind_stream_scope_v1($1,$2,$3,$4,$5)",
+    )
+    .bind(&config.partition_id).bind(&config.worker_id)
+    .bind(lease.lease_fence).bind(lease.cursor_revision).bind(sqlx::types::Json(scope))
+    .fetch_one(&mut **tx).await.map_err(|error| {
+        let code = error.as_database_error().map(|db| db.message());
+        anyhow!(match code {
+            Some("matrix_stream_scope_mismatch") => "matrix_stream_scope_mismatch",
+            Some("matrix_stream_scope_legacy_review_required") => "matrix_stream_scope_legacy_review_required",
+            Some("matrix_cursor_lease_or_revision_mismatch") => "matrix_cursor_lease_or_revision_mismatch",
+            _ => "matrix_stream_binding_unverified",
+        })
+    })?;
+    if !matches!(disposition.as_str(), "bound" | "replay") {
+        bail!("matrix_stream_binding_unverified");
+    }
+    Ok(())
 }
 
 async fn run(config: PollerConfig, pool: PgPool, http: Client) -> Result<()> {
     loop {
         match acquire_cursor_lease(&pool, &config).await {
             Ok(Some(lease)) => {
-                if let Err(_err) = poll_once(&pool, &http, &config, lease).await {
-                    warn!("matrix_sync_not_accepted; cursor remains at last committed position; inspect protected recovery evidence");
+                if let Err(error) = poll_once(&pool, &http, &config, lease).await {
+                    // Only emit closed-set machine codes, never SQL diagnostics,
+                    // endpoint strings, opaque cursors or message bodies.
+                    let code = match error.to_string().as_str() {
+                        "matrix_stream_scope_mismatch" => "matrix_stream_scope_mismatch",
+                        "matrix_stream_scope_legacy_review_required" => "matrix_stream_scope_legacy_review_required",
+                        "matrix_stream_binding_unverified" => "matrix_stream_binding_unverified",
+                        _ => "matrix_sync_not_accepted",
+                    };
+                    warn!(error_code = code, "Matrix sync held at last committed cursor; inspect protected recovery evidence");
                 }
             }
             Ok(None) => {
@@ -157,6 +213,10 @@ async fn poll_once(
     config: &PollerConfig,
     lease: CursorLease,
 ) -> Result<()> {
+    // Commit/verify the stream scope before any cursor-bearing HTTP request.
+    let mut scope_tx = pool.begin().await?;
+    bind_stream_scope(&mut scope_tx, config, &lease).await?;
+    scope_tx.commit().await?;
     let sync_url = build_sync_url(config, lease.opaque_cursor.as_deref())?;
     let request = http
         .get(sync_url)
@@ -392,6 +452,7 @@ async fn persist_batch(
     admissions: Vec<Admission>,
 ) -> Result<()> {
     let mut tx: Transaction<'_, Postgres> = pool.begin().await?;
+    bind_stream_scope(&mut tx, config, lease).await?;
 
     let locked: Option<(String, i64, i64)> = sqlx::query_as(
         "select lease_owner, lease_fence, cursor_revision \
@@ -632,7 +693,8 @@ async fn verify_schema(pool: &PgPool) -> Result<()> {
              and to_regprocedure('public.cex_matrix_advance_cursor_v1(text,text,bigint,bigint,text)') is not null \
              and to_regprocedure('public.cex_matrix_renew_cursor_lease_v1(text,text,bigint,bigint,integer)') is not null \
              and to_regclass('public.matrix_transport_poison_payloads') is not null \
-             and to_regclass('public.matrix_transport_cursor_history') is not null",
+             and to_regclass('public.matrix_transport_cursor_history') is not null \
+             and to_regprocedure('public.cex_matrix_bind_stream_scope_v1(text,text,bigint,bigint,jsonb)') is not null",
     )
     .fetch_one(pool)
     .await?;
@@ -704,9 +766,8 @@ impl PollerConfig {
         let sync_max_bytes = parse_env("MATRIX_POLL_SYNC_MAX_BYTES", 2_097_152_usize)?;
         let delivery_max_attempts =
             parse_env("MATRIX_POLL_DELIVERY_MAX_ATTEMPTS", 8_i32)?;
-        let sync_filter = env::var("MATRIX_SYNC_FILTER")
-            .ok()
-            .filter(|value| !value.trim().is_empty() && value != "0");
+        let sync_filter = stream_scope::configured_filter(env::var("MATRIX_SYNC_FILTER"))
+            .map_err(|code| anyhow!(code))?;
 
         if !(5..=3_600).contains(&cursor_lease_seconds) {
             bail!("MATRIX_POLL_CURSOR_LEASE_SECONDS must be between 5 and 3600");

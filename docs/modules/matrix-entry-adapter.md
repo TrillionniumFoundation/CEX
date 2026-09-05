@@ -70,7 +70,7 @@ The first inbox row is not rewritten. NULL cursor repeats are deduplicated too.
 
 ## Persistence, concurrency, and recovery
 
-Apply migration 0001 followed by additive 0002 and 0003 under the schema owner. Migration
+Apply migration 0001 followed by additive 0002, 0003 and 0004 under the schema owner. Migration
 0002 backfills first observations without modifying the immutable inbox, preserves
 the four-argument function signature and appends new observations transactionally.
 It does not change the numbered Ledger migration head 0088. Reapplying 0002 is
@@ -135,7 +135,7 @@ bash scripts/check-matrix-source-observation-postgres.sh
 
 The database command requires a disposable PostgreSQL 16 database supplied by
 `MATRIX_TEST_DATABASE_URL` and explicit `MATRIX_TEST_ALLOW_SCHEMA_RESET=1`. It runs
-the complete 0001/0002/0003 chain twice before the original transport assertions, then
+the complete 0001/0002/0003/0004 chain twice before the original transport assertions, then
 checks different-cursor exact replay, NULL cursor deduplication, content/partition
 collisions, first-observation preservation and immutable observation history.
 Missing tooling, credentials or reset consent fails; tests are not silently skipped.
@@ -182,3 +182,14 @@ unrelated-table checks precede every destructive test reset. The original shell
 wrapper is not executed: its entire SQL assertion body is read and run against
 the current schema. `python3 scripts/test-matrix-postgres-runner.py` validates
 orchestration using a fake client; it is not database execution evidence.
+
+## Stream-scope migration extension
+
+`services/matrix-entry-adapter/migrations/0004_stream_scope_binding.sql` adds
+immutable poller stream metadata, virgin-stream binding and owner-only legacy
+scope approval. It changes no adapter business authority or source identities.
+Apply all four migrations before starting the updated poller; existing streams
+will hold until their exact cursor and prior configuration are reviewed. See
+`docs/matrix-stream-scope-v1.md`. The SQL runner now uses the complete four-step
+chain for both migration replays and all original/new assertions. Runtime
+privilege deployment and real PostgreSQL validation remain mandatory.

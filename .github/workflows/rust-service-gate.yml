@@ -36,6 +36,11 @@ jobs:
           python3 scripts/test-build-unblock.py
           python3 scripts/check-matrix-lock-coherence.py
 
+      - name: Matrix stream-scope source regression
+        run: |
+          python3 scripts/test-matrix-stream-scope.py
+          python3 scripts/check-matrix-stream-scope.py
+
       - name: Qualification source and build packet regression
         run: python3 scripts/test-trnm-build-evidence.py
 

@@ -98,7 +98,7 @@ empty JSON object proves an external business outcome.
 
 ## Migration, permissions and rollback
 
-Apply the separate Matrix chain in order: `0001 -> 0002 -> 0003`. Existing source
+Apply the separate Matrix chain in order: `0001 -> 0002 -> 0003 -> 0004`. Existing source
 identities and delivered rows are not rewritten. Receipt requirements govern new
 transitions and do not fabricate receipts for historical sent rows. Each additive
 migration is replayed in the disposable database suite. Never run 0001 alone on an
@@ -157,7 +157,7 @@ reject embedded credentials, queries or fragments rather than changing authority
 
 The database entry script delegates to `scripts/matrix_postgres_regression.py`.
 It does not evaluate shell generated from a database URL or execute the old
-bootstrap wrapper. It snapshots the three migrations and all regression inputs,
+bootstrap wrapper. It snapshots the complete migration chain and all regression inputs,
 compares the migration directory to the fixed manifest, and extracts the original
 SQL assertion body verbatim. On a dedicated PostgreSQL 16 test database it applies
 the full current migration chain twice, then executes ALL original and new SQL
@@ -181,3 +181,14 @@ without host home, SSH agent or Docker socket; build/test network access is
 limited to an ephemeral internal PostgreSQL service with no published port.
 Runner availability is not a test result, and image/source snapshots are not
 qualification evidence by themselves. The lane retains failed command results.
+
+## Round 8: immutable stream scope and plain replies
+
+`docs/matrix-stream-scope-v1.md` adds the migration-0004 upgrade boundary. Updated
+pollers verify token ownership at startup, bind immutable endpoint/account/filter
+metadata before cursor-bearing HTTP, and check it again during admission. Old
+unbound streams require owner-reviewed exact-cursor approval with no live lease.
+Binding does not advance history or grant a new scope. The full current SQL chain
+now has four migrations; no prior assertion is removed. Replies now admit only
+`msgtype` and `body`, with other structured control fields rejected. These are
+unqualified source changes, not completed Rust/SQL/homeserver or production gates.
