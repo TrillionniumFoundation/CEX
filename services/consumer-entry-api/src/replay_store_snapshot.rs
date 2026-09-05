@@ -1,9 +1,11 @@
 use std::{
-    fs::{File, Metadata, OpenOptions},
+    fs::{File, OpenOptions},
     io::Read,
     path::Path,
 };
 
+#[cfg(not(windows))]
+use std::fs::Metadata;
 #[cfg(any(test, not(any(unix, windows))))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -25,10 +27,10 @@ pub(super) struct SnapshotError;
 
 /// Open and read one immutable view of a regular file.
 ///
-/// The leaf is opened with no-follow/non-blocking semantics where the platform exposes them.
-/// The open handle, a second independently-opened path handle, and a final path handle must all
-/// identify the same object.  This removes the former lstat/open race and prevents FIFOs or device
-/// nodes from blocking the result-lookup endpoint.
+/// A pre-open path identity, the open handle, and independently-opened path handles before and
+/// after the read must all identify the same object. Unix opens use `O_NONBLOCK`, preventing a
+/// path substitution with a FIFO from hanging the endpoint. Windows opens the reparse point itself
+/// and rejects it rather than following it.
 pub(super) fn read_stable_regular_file(
     path: &str,
     max_bytes: u64,
@@ -38,9 +40,10 @@ pub(super) fn read_stable_regular_file(
     }
     let path = Path::new(path);
 
+    let before = path_identity(path)?;
     let mut file = open_snapshot(path)?;
     let expected = file_identity(&file)?;
-    if expected.length > max_bytes {
+    if expected != before || expected.length > max_bytes {
         return Err(SnapshotError);
     }
 
@@ -62,7 +65,7 @@ pub(super) fn read_stable_regular_file(
         return Err(SnapshotError);
     }
 
-    if file_identity(&file)? != expected {
+    if file_identity(&file)? != expected || path_identity(path)? != expected {
         return Err(SnapshotError);
     }
     let path_after = open_snapshot(path)?;
@@ -75,21 +78,86 @@ pub(super) fn read_stable_regular_file(
 fn open_snapshot(path: &Path) -> Result<File, SnapshotError> {
     let mut options = OpenOptions::new();
     options.read(true);
+    configure_safe_open(&mut options);
+    let file = options.open(path).map_err(|_| SnapshotError)?;
+    // Validate the opened object before reading any bytes.
+    file_identity(&file)?;
+    Ok(file)
+}
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
+#[cfg(unix)]
+fn configure_safe_open(options: &mut OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt;
+    options.custom_flags(unix_nonblock_flag());
+}
 
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    }
+#[cfg(windows)]
+fn configure_safe_open(options: &mut OpenOptions) {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+}
 
-    options.open(path).map_err(|_| SnapshotError)
+#[cfg(not(any(unix, windows)))]
+fn configure_safe_open(_options: &mut OpenOptions) {}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const fn unix_nonblock_flag() -> i32 {
+    0o4000
+}
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+    target_os = "openbsd",
+    target_os = "netbsd"
+))]
+const fn unix_nonblock_flag() -> i32 {
+    0x0000_0004
+}
+
+#[cfg(any(target_os = "solaris", target_os = "illumos"))]
+const fn unix_nonblock_flag() -> i32 {
+    0x0000_0080
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "solaris",
+        target_os = "illumos"
+    ))
+))]
+const fn unix_nonblock_flag() -> i32 {
+    0
+}
+
+#[cfg(unix)]
+fn path_identity(path: &Path) -> Result<SnapshotIdentity, SnapshotError> {
+    snapshot_identity(&std::fs::symlink_metadata(path).map_err(|_| SnapshotError)?)
+        .ok_or(SnapshotError)
+}
+
+#[cfg(windows)]
+fn path_identity(path: &Path) -> Result<SnapshotIdentity, SnapshotError> {
+    let file = open_snapshot(path)?;
+    file_identity(&file)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn path_identity(path: &Path) -> Result<SnapshotIdentity, SnapshotError> {
+    snapshot_identity(&std::fs::symlink_metadata(path).map_err(|_| SnapshotError)?)
+        .ok_or(SnapshotError)
 }
 
 #[cfg(unix)]
@@ -167,7 +235,7 @@ fn file_identity(file: &File) -> Result<SnapshotIdentity, SnapshotError> {
 }
 
 #[cfg(windows)]
-fn combine_u32(high: u32, low: u32) -> u64 {
+const fn combine_u32(high: u32, low: u32) -> u64 {
     (u64::from(high) << 32) | u64::from(low)
 }
 
@@ -180,7 +248,8 @@ fn file_identity(file: &File) -> Result<SnapshotIdentity, SnapshotError> {
 fn snapshot_identity(metadata: &Metadata) -> Option<SnapshotIdentity> {
     use std::os::unix::fs::MetadataExt;
 
-    if !metadata.file_type().is_file() || metadata.nlink() != 1 {
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() || metadata.nlink() != 1
+    {
         return None;
     }
     Some(SnapshotIdentity {
@@ -283,12 +352,14 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn rejects_fifo_without_blocking() {
-        use std::{ffi::CString, os::unix::ffi::OsStrExt};
+        use std::process::Command;
 
         let fifo = temporary_path("fifo");
-        let path = CString::new(fifo.as_os_str().as_bytes()).expect("FIFO path has no NUL");
-        let status = unsafe { libc::mkfifo(path.as_ptr(), 0o600) };
-        assert_eq!(status, 0, "create FIFO: {}", std::io::Error::last_os_error());
+        let status = Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("execute mkfifo");
+        assert!(status.success(), "mkfifo failed with {status}");
         assert!(read_stable_regular_file(fifo.to_str().expect("UTF-8 path"), 1024).is_err());
         fs::remove_file(fifo).expect("remove FIFO");
     }
