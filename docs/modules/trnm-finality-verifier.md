@@ -9,7 +9,7 @@ Deployable: no resident CEX service
 Owner role: `trnm-integration`
 Production authorization: `not_granted`
 
-This contract records the inspected source boundary and required integration checks. It is not a successful build, provenance attestation or production qualification.
+This contract records the inspected source boundary and required integration checks. It is not a successful build or production qualification.
 
 ## Purpose and non-goals
 
@@ -47,18 +47,22 @@ CLI arguments distinguish signing input/private-key paths from verification evid
 
 ## Security and trust boundaries
 
-A receipt cannot bootstrap trust in its own validators/header. Keep legacy receipt verification separate from the CometBFT/AppHash trust-anchor path and bind the verified outcome to the expected command and chain before use. Source provenance must be checked independently: the currently observed verifier subtree differs from the subtree recorded in the vendor manifest, so this contract does not certify byte-for-byte provenance. The introducing test-block change is now traced in `docs/status/vendor-provenance-reconciliation-round14.md`; it does not satisfy the unchanged byte-for-byte vendor policy. Do not update hashes merely to make that discrepancy disappear.
+A receipt cannot bootstrap trust in its own validators/header. Keep legacy receipt verification separate from the CometBFT/AppHash trust-anchor path and bind the verified outcome to the expected command and chain before use.
+
+Source provenance uses two identities rather than pretending the current tree is byte-identical to upstream. `vendor/trnm-chain-vendor-manifest.json` remains the pinned upstream origin record. `vendor/trnm-chain-downstream-patches-v1.json` records the exact current verifier tree/blob for the single test-only Rust 1.98 lint patch, together with the original tree/blob/digest and introducing CEX commit. `docs/trnm-chain-downstream-vendor-patch-policy-v1.md` permits only test-only, runtime-neutral overlays under this v1 mechanism. `scripts/check-vendor-provenance.py` fails on unlisted bytes, extra files, a different patched blob/tree or a broadened runtime patch. The round-17 reconciliation records this policy transition. None of these records replaces Cargo/golden-vector or independent trust qualification.
 
 ## Verification
 
 Required Linux qualification commands:
 
 ```text
+python3 scripts/test-vendor-provenance.py
+python3 scripts/check-vendor-provenance.py
 cargo test --locked -p trnm-finality-verifier --all-targets
 cargo clippy --locked -p trnm-finality-verifier --all-targets -- -D warnings
 ```
 
-Run against the committed Cargo.lock and complete checkout. Missing toolchain or source is failure, not a skip. In addition, `python3 scripts/check-cargo-workspace-authority.py` must bind actual Cargo membership and discovered targets to this catalog entry. The full document, semantic inventory and consumer integration gates remain required. None of these Rust commands executed in the current authoring environment.
+Run against the committed Cargo.lock and complete checkout. Missing toolchain or source is failure, not a skip. In addition, `python3 scripts/check-cargo-workspace-authority.py` must bind actual Cargo membership and discovered targets to this catalog entry. The provenance checker proves the repository source/overlay identity only; it does not execute Rust. The full document, semantic inventory and consumer integration gates remain required. The Rust commands have not been accepted without real exact-head execution evidence.
 
 ## Deployment and operations
 
@@ -66,4 +70,4 @@ Not independently deployable as a resident CEX service. Build and qualify the li
 
 ## Compatibility and change protocol
 
-Current package identity remains 0.1.0 and the vendored library/CLI bytes are untouched. A provenance mismatch, platform extension, new receipt version or changed filesystem policy needs reviewed source reconciliation and relevant hostile/golden fixtures. Root workspace enumeration is not a protocol upgrade. Full compilation, strict lint, actual CLI execution and external trust/custody review remain separate acceptance conditions.
+Current package identity remains 0.1.0. The source manifest remains the immutable upstream origin; the current test-only overlay has a separate immutable ledger identity and mandatory upstream-rebase disposition. Any new vendor divergence that is not exactly allowed by the active patch policy fails closed. A runtime-affecting source change, platform extension, new receipt version or changed filesystem policy needs reviewed source reconciliation and relevant hostile/golden fixtures. Root workspace enumeration is not a protocol upgrade. Full compilation, strict lint, actual CLI execution and external trust/custody review remain separate acceptance conditions.

@@ -18,6 +18,7 @@ CORE = ROOT / "scripts/check-development-docs-core.py"
 AGENT_BOUNDARY = ROOT / "scripts/check-external-agent-runtime-boundary.py"
 EXECUTION_STATE_BOUNDARY = ROOT / "scripts/check-execution-default-state-boundary.py"
 EXTERNAL = ROOT / "scripts/check-external-production-evidence-contract.py"
+VENDOR_PROVENANCE = ROOT / "scripts/check-vendor-provenance.py"
 MAX_OUTPUT_BYTES = 1_048_576
 CHECK_TIMEOUT_SECONDS = 120.0
 
@@ -36,7 +37,6 @@ def reject_constant(_value: str) -> None:
 
 
 def stop_process(process: subprocess.Popen[bytes]) -> None:
-    # These children are checkers, not services. Reap their descendants too.
     if os.name == "posix":
         try:
             os.killpg(process.pid, signal.SIGKILL)
@@ -56,11 +56,7 @@ def stop_process(process: subprocess.Popen[bytes]) -> None:
     process.wait(timeout=5)
 
 
-def run_json(
-    arguments: list[str], label: str
-) -> tuple[int, dict[str, Any] | None, str]:
-    # Spool separately to disk; never buffer unbounded child output in memory
-    # and never treat stderr as a substitute for the stdout result object.
+def run_json(arguments: list[str], label: str) -> tuple[int, dict[str, Any] | None, str]:
     try:
         with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
             process = subprocess.Popen(
@@ -93,8 +89,6 @@ def run_json(
             return code, None, f"{label}: JSON root must be an object"
         return code, value, ""
     except (OSError, ValueError, RecursionError, subprocess.TimeoutExpired):
-        # Child bytes can contain credentials or private research material.
-        # Do not echo malformed stdout/stderr or raw exception strings.
         return 1, None, f"{label}: unavailable checker or invalid JSON result"
 
 
@@ -125,8 +119,6 @@ def validate_result(
     problems: list[str] = []
     if result is None:
         return [diagnostic or f"{label}: missing result object"]
-    # Each assertion is independent. Empty diagnostics must not hide a failed
-    # status, missing status, unexpected schema, or nonzero exit code.
     if code != 0:
         problems.append(f"{label}: exited nonzero ({code})")
     if result.get("status") != "ok":
@@ -139,8 +131,7 @@ def validate_result(
         problems.append(f"{label}: missing explicit authorization denial")
     children = result.get("problems")
     if not isinstance(children, list) or len(children) > 200 or any(
-        not isinstance(item, str) or not item.strip() or len(item) > 4096
-        for item in children
+        not isinstance(item, str) or not item.strip() or len(item) > 4096 for item in children
     ):
         problems.append(f"{label}: invalid problems array")
     else:
@@ -165,8 +156,6 @@ def main() -> int:
         expected_schema="cex.development-doc-check.v1", require_denial_flag=False,
     )
     result = fallback_result("")
-    # Emit only the established public result fields, never arbitrary child
-    # metadata. Verify all authority fields before normalizing the result.
     if core is not None:
         for key, value in result.items():
             if key not in {"status", "problems"} and (
@@ -176,6 +165,7 @@ def main() -> int:
     checks = (
         (AGENT_BOUNDARY, [], "external Agent runtime boundary", "cex.external-agent-runtime-boundary-check.v1"),
         (EXECUTION_STATE_BOUNDARY, [], "Execution default-state privacy boundary", "cex.execution-default-state-boundary-check.v1"),
+        (VENDOR_PROVENANCE, [], "TRNM vendor provenance", "cex.vendor-provenance-check.v1"),
         (EXTERNAL, ["--contract-only"], "external evidence contract", "cex.external-production-evidence-contract-check.v1"),
         (EXTERNAL, ["--self-test"], "external evidence binding self-test", "cex.external-production-evidence-binding-self-test.v1"),
     )

@@ -1,0 +1,24 @@
+{
+  "schema": "cex.trnm-chain-downstream-patches.v1",
+  "source_manifest": "vendor/trnm-chain-vendor-manifest.json",
+  "policy": "Origin identity remains immutable. A vendored source divergence is accepted only when this ledger binds the exact source tree/blob/digest, exact current tree/blob, introducing CEX commit, test-only scope, no runtime behavior change, and a mandatory upstream-rebase disposition. Unlisted or runtime-affecting source divergence fails closed.",
+  "production_authorization": "not_granted",
+  "patches": [
+    {
+      "id": "finality-verifier-rust-1.98-test-fill",
+      "package": "trnm-finality-verifier",
+      "path": "src/cometbft.rs",
+      "source_git_tree": "3db7fe2b40faa15d9597ea2824b1079ca93c754c",
+      "source_git_blob": "51b4ae91185f50b4dd454eb365ea67e42deceddb",
+      "source_sha256": "a59ea2540efd1e7482e6ba148dc15bb9ff7522f5b3d6592ebe2b38512b7fbf9c",
+      "vendored_git_tree": "37427509e5913b1c71e35082d5609c69a27a978d",
+      "vendored_git_blob": "1164e0de867432a7ef9603d00178c109635ec503",
+      "introduced_by_cex_commit": "b0105fa6788784df677e4cb124654420dfd63a3d",
+      "scope": "test_only",
+      "runtime_behavior_changed": false,
+      "upstream_identity_unchanged": true,
+      "reason": "Rust 1.98 Clippy-compatible replacement of a test-only slice-assignment loop with slice::fill; production verifier code and golden fixtures are unchanged.",
+      "required_rebase_disposition": "Remove this downstream patch record when a reviewed pinned upstream Chain tree contains the equivalent change, or replace it only through an explicit reviewed provenance update that preserves both old and new immutable identities."
+    }
+  ]
+}
