@@ -1,5 +1,5 @@
 use std::{
-    fs::{self, File, Metadata},
+    fs::{File, Metadata, OpenOptions},
     io::Read,
     path::Path,
 };
@@ -23,6 +23,12 @@ struct SnapshotIdentity {
 #[derive(Clone, Copy, Debug)]
 pub(super) struct SnapshotError;
 
+/// Open and read one immutable view of a regular file.
+///
+/// The leaf is opened with no-follow/non-blocking semantics where the platform exposes them.
+/// The open handle, a second independently-opened path handle, and a final path handle must all
+/// identify the same object.  This removes the former lstat/open race and prevents FIFOs or device
+/// nodes from blocking the result-lookup endpoint.
 pub(super) fn read_stable_regular_file(
     path: &str,
     max_bytes: u64,
@@ -31,20 +37,18 @@ pub(super) fn read_stable_regular_file(
         return Err(SnapshotError);
     }
     let path = Path::new(path);
-    let path_before = fs::symlink_metadata(path).map_err(|_| SnapshotError)?;
-    let expected = snapshot_identity(&path_before).ok_or(SnapshotError)?;
+
+    let mut file = open_snapshot(path)?;
+    let expected = file_identity(&file)?;
     if expected.length > max_bytes {
         return Err(SnapshotError);
     }
 
-    let mut file = File::open(path).map_err(|_| SnapshotError)?;
-    let handle_before = file
-        .metadata()
-        .map_err(|_| SnapshotError)
-        .and_then(|metadata| snapshot_identity(&metadata).ok_or(SnapshotError))?;
-    if handle_before != expected {
+    let path_before = open_snapshot(path)?;
+    if file_identity(&path_before)? != expected {
         return Err(SnapshotError);
     }
+    drop(path_before);
 
     let capacity = usize::try_from(expected.length).map_err(|_| SnapshotError)?;
     let limit = max_bytes.checked_add(1).ok_or(SnapshotError)?;
@@ -53,21 +57,123 @@ pub(super) fn read_stable_regular_file(
         .take(limit)
         .read_to_end(&mut bytes)
         .map_err(|_| SnapshotError)?;
-    if u64::try_from(bytes.len()).map_err(|_| SnapshotError)? > max_bytes {
+    let observed_length = u64::try_from(bytes.len()).map_err(|_| SnapshotError)?;
+    if observed_length > max_bytes || observed_length != expected.length {
         return Err(SnapshotError);
     }
 
-    let handle_after = file
-        .metadata()
-        .map_err(|_| SnapshotError)
-        .and_then(|metadata| snapshot_identity(&metadata).ok_or(SnapshotError))?;
-    let path_after = fs::symlink_metadata(path)
-        .map_err(|_| SnapshotError)
-        .and_then(|metadata| snapshot_identity(&metadata).ok_or(SnapshotError))?;
-    if handle_after != expected || path_after != expected {
+    if file_identity(&file)? != expected {
+        return Err(SnapshotError);
+    }
+    let path_after = open_snapshot(path)?;
+    if file_identity(&path_after)? != expected {
         return Err(SnapshotError);
     }
     Ok(bytes)
+}
+
+fn open_snapshot(path: &Path) -> Result<File, SnapshotError> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+
+    options.open(path).map_err(|_| SnapshotError)
+}
+
+#[cfg(unix)]
+fn file_identity(file: &File) -> Result<SnapshotIdentity, SnapshotError> {
+    snapshot_identity(&file.metadata().map_err(|_| SnapshotError)?).ok_or(SnapshotError)
+}
+
+#[cfg(windows)]
+fn file_identity(file: &File) -> Result<SnapshotIdentity, SnapshotError> {
+    use std::{ffi::c_void, mem::MaybeUninit, os::windows::io::AsRawHandle};
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct FileTime {
+        low: u32,
+        high: u32,
+    }
+
+    #[repr(C)]
+    struct ByHandleFileInformation {
+        file_attributes: u32,
+        creation_time: FileTime,
+        last_access_time: FileTime,
+        last_write_time: FileTime,
+        volume_serial_number: u32,
+        file_size_high: u32,
+        file_size_low: u32,
+        number_of_links: u32,
+        file_index_high: u32,
+        file_index_low: u32,
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetFileInformationByHandle(
+            file: *mut c_void,
+            information: *mut ByHandleFileInformation,
+        ) -> i32;
+    }
+
+    const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+
+    let mut information = MaybeUninit::<ByHandleFileInformation>::uninit();
+    let status = unsafe {
+        GetFileInformationByHandle(file.as_raw_handle().cast(), information.as_mut_ptr())
+    };
+    if status == 0 {
+        return Err(SnapshotError);
+    }
+    let information = unsafe { information.assume_init() };
+    if information.file_attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) != 0
+        || information.number_of_links != 1
+    {
+        return Err(SnapshotError);
+    }
+
+    Ok(SnapshotIdentity {
+        key_a: u64::from(information.volume_serial_number),
+        key_b: combine_u32(information.file_index_high, information.file_index_low),
+        length: combine_u32(information.file_size_high, information.file_size_low),
+        write_time_a: combine_u32(
+            information.last_write_time.high,
+            information.last_write_time.low,
+        ),
+        write_time_b: 0,
+        change_time_a: combine_u32(
+            information.creation_time.high,
+            information.creation_time.low,
+        ),
+        change_time_b: 0,
+        links: u64::from(information.number_of_links),
+        attributes: u64::from(information.file_attributes),
+    })
+}
+
+#[cfg(windows)]
+fn combine_u32(high: u32, low: u32) -> u64 {
+    (u64::from(high) << 32) | u64::from(low)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn file_identity(file: &File) -> Result<SnapshotIdentity, SnapshotError> {
+    snapshot_identity(&file.metadata().map_err(|_| SnapshotError)?).ok_or(SnapshotError)
 }
 
 #[cfg(unix)]
@@ -87,30 +193,6 @@ fn snapshot_identity(metadata: &Metadata) -> Option<SnapshotIdentity> {
         change_time_b: metadata.ctime_nsec() as u64,
         links: metadata.nlink(),
         attributes: u64::from(metadata.mode()),
-    })
-}
-
-#[cfg(windows)]
-fn snapshot_identity(metadata: &Metadata) -> Option<SnapshotIdentity> {
-    use std::os::windows::fs::MetadataExt;
-
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
-    if !metadata.file_type().is_file()
-        || metadata.file_type().is_symlink()
-        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-    {
-        return None;
-    }
-    Some(SnapshotIdentity {
-        key_a: metadata.creation_time(),
-        key_b: 0,
-        length: metadata.file_size(),
-        write_time_a: metadata.last_write_time(),
-        write_time_b: 0,
-        change_time_a: 0,
-        change_time_b: 0,
-        links: 1,
-        attributes: u64::from(metadata.file_attributes()),
     })
 }
 
@@ -196,5 +278,18 @@ mod tests {
         fs::remove_file(symbolic).expect("remove symbolic link");
         fs::remove_file(hard).expect("remove hard link");
         fs::remove_file(target).expect("remove target");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_fifo_without_blocking() {
+        use std::{ffi::CString, os::unix::ffi::OsStrExt};
+
+        let fifo = temporary_path("fifo");
+        let path = CString::new(fifo.as_os_str().as_bytes()).expect("FIFO path has no NUL");
+        let status = unsafe { libc::mkfifo(path.as_ptr(), 0o600) };
+        assert_eq!(status, 0, "create FIFO: {}", std::io::Error::last_os_error());
+        assert!(read_stable_regular_file(fifo.to_str().expect("UTF-8 path"), 1024).is_err());
+        fs::remove_file(fifo).expect("remove FIFO");
     }
 }
