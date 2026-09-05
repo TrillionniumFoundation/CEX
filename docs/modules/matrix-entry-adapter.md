@@ -178,9 +178,9 @@ claims. Current library caches still do not prove durable business-effect replay
 
 The database wrapper invokes `scripts/matrix_postgres_regression.py`. Dedicated
 test names and explicit reset consent are required; server/database identity and
-unrelated-table checks precede every destructive test reset. The original shell
-wrapper is not executed: its entire SQL assertion body is read and run against
-the current schema. `python3 scripts/test-matrix-postgres-runner.py` validates
+unrelated-table checks precede every destructive test reset. Both shell entrypoints delegate to the same guarded runner. The original SQL
+assertion body lives unchanged in `scripts/test-matrix-transport-baseline.sql`
+and runs against the complete current schema in the same database session. `python3 scripts/test-matrix-postgres-runner.py` validates
 orchestration using a fake client; it is not database execution evidence.
 
 ## Stream-scope migration extension
@@ -193,3 +193,24 @@ will hold until their exact cursor and prior configuration are reviewed. See
 `docs/matrix-stream-scope-v1.md`. The SQL runner now uses the complete four-step
 chain for both migration replays and all original/new assertions. Runtime
 privilege deployment and real PostgreSQL validation remain mandatory.
+
+
+## Single-session SQL verification contract
+
+Both `bash scripts/check-matrix-transport-postgres.sh` and the catalog-bound
+`bash scripts/check-matrix-source-observation-postgres.sh` now use one runner.
+Neither can execute a 0001-only upgrade or reset without explicit consent. The
+original 10,870-byte SQL body is retained unchanged in the dedicated baseline.
+
+The runner verifies PostgreSQL 16 and the exact test database, acquires a
+session-scoped advisory lock, rejects unrelated table/view/foreign-table names,
+and uses a fixed eleven-table reset allowlist before both complete migration
+replays and all SQL suites. Successful reports require a zero client exit and
+all ordered post-SQL markers. No per-step subprocess exit code is fabricated.
+The source snapshot is rechecked after the session. See
+`docs/matrix-sql-runner-v4.md` for the deliberately versioned v4 evidence shape,
+output-path restrictions, process limits and remaining execution qualification.
+
+`python3 scripts/test-matrix-runner-hardening.py` exercises actual subprocesses
+and filesystem operations with fake psql, not PostgreSQL. Database permissions,
+advisory-lock contention and the SQL suite still require real PostgreSQL 16.

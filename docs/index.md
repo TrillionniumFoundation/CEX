@@ -106,3 +106,10 @@ A change to any active authority or workspace member must:
 `matrix-stream-scope-v1.md` specifies migration-0004 immutable stream identity,
 token-owner checks, legacy-cursor upgrade holds and the narrowed plain-reply
 contract. It is supporting implementation documentation, not release evidence.
+
+
+## Matrix SQL execution safety
+
+`matrix-sql-runner-v4.md` defines the unified legacy/current test entrypoints,
+single-session identity and reset controls, retained original assertions, v4
+observation report and its explicit non-qualification boundary.

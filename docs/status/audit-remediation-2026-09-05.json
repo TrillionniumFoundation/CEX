@@ -3,7 +3,7 @@
   "status": "unqualified_working_change",
   "parent_plan": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
   "parent_addendum": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md",
-  "patch_base": "31e375313786b5a3d8088949aabbaf96ca45ed54",
+  "patch_base": "af750b9e38d55756c52c31b79bb56bf601873f85",
   "architecture_sequence": 52,
   "candidate_freeze_authority": "docs/release-evidence/p0-candidate-trigger.json",
   "is_candidate_freeze": false,
@@ -54,10 +54,16 @@
     "Preserve supported inline sync timeline predicates in every messages backfill request; enforce both room selectors and URL-encode the derived RoomEventFilter as one query parameter.",
     "Hold nonempty limited recovery when a server-side filter ID has no pinned definition; never interpret valid ID 0 or an unresolved ID as no filter.",
     "Reject leading-space inline JSON and unsupported event identity projections, non-client formats, include-leave streams and unknown command-affecting inline extensions before polling.",
-    "Add balanced-function source regression guards without replacing real compiler, SQL or homeserver validation."
+    "Add balanced-function source regression guards without replacing real compiler, SQL or homeserver validation.",
+    "Unify both Matrix SQL entrypoints on the guarded complete-chain runner; remove the legacy eval and 0001-only mutation path.",
+    "Move the original 10870-byte SQL assertion body byte-for-byte into test-matrix-transport-baseline.sql; SHA-256 4a773ac20af7115ee5f4fbfdafa484badbea3a34be04b6debae5e69ddd214dd3.",
+    "Run database/version verification, advisory locking, exact-object guard, allowlisted reset, both full migration replays and all SQL suites in one psql session; no reconnect or client metacommands in source inputs.",
+    "Require complete ordered post-SQL observations plus a zero client exit; bound client time/output and reject changed source or incomplete success transcripts.",
+    "Validate evidence paths before database access and publish private atomic JSON under run only; linked, external and source-overwriting paths are rejected.",
+    "Reject multi-host/encoded connection ambiguity and linked/nonregular/mutated source inputs; preserve restricted credential environment and raw-diagnostic privacy."
   ],
   "local_verification_scope": {
-    "python_source_contract_and_shell_negative_tests": 223,
+    "python_source_contract_and_shell_negative_tests": 256,
     "python_suites": {
       "retained_source_and_shell": 12,
       "matrix_recovery_source_mutations": 29,
@@ -68,7 +74,8 @@
       "trnm_build_packet_filesystem_git_and_workflow": 35,
       "build_unblock_direct_edges_and_compiler_selection": 24,
       "matrix_stream_scope_source_mutations": 13,
-      "matrix_filter_recovery_source_mutations": 12
+      "matrix_filter_recovery_source_mutations": 12,
+      "matrix_single_session_filesystem_and_subprocess": 33
     },
     "rust_tests_executed": false,
     "postgres_tests_executed": false,
@@ -78,18 +85,22 @@
     "complete_cex_semantic_inventory_generated": false,
     "local_source_is_partial_materialization": true,
     "binary_fixture_is_synthetic_elf_not_compiled_service": true,
-    "qualification_summary": "223 local source/filesystem/fixture tests passed with no skips; nine new Rust test definitions were not executed; Cargo, SQL, homeserver and complete repository qualification remain unproven",
+    "qualification_summary": "256 local Python/source/filesystem/fixture tests passed, including actual subprocess orchestration with explicitly fake psql. No Rust/PostgreSQL/homeserver execution or full-tree qualification is claimed.",
     "complete_cargo_lock_bytes_verified": true,
     "cargo_dependency_resolution_executed": false,
     "original_lock_git_blob": "75e9ae18ece0a3e58296b75de5b33b623ff3a7c8",
     "repaired_lock_git_blob": "2e1b7b25d89591a5615bee066015fce78483c403",
-    "new_rust_test_definitions_this_round": 9,
+    "new_rust_test_definitions_this_round": 0,
     "new_sql_suite_executed_this_round": false,
-    "matrix_migration_head": "0004_stream_scope_binding.sql"
+    "matrix_migration_head": "0004_stream_scope_binding.sql",
+    "matrix_original_sql_assertions_preserved_sha256": "4a773ac20af7115ee5f4fbfdafa484badbea3a34be04b6debae5e69ddd214dd3",
+    "postgres_report_schema": "cex.matrix-postgres-regression.v4",
+    "actual_child_process_tests_executed": true
   },
   "open_repository_work": [
     "Qualify the reviewed and integrated Matrix lock changes on a complete checkout with Cargo --locked; complete semantic inventory generation/review and final Sequence 54 gates. Full lock bytes and direct-edge checks alone do not close dependency resolution.",
     "Compile, format and lint all changed Rust code; execute complete PostgreSQL migration/role/concurrency/recovery and real homeserver integration tests.",
+    "Execute the v4 single-session SQL runner on actual PostgreSQL 16, including concurrent-run rejection, wrong database/version refusal, exact-object reset guard, all preserved baseline assertions and migration replay. Strict consumers of old local v3 reports must explicitly adopt v4; the final release manifest schema is unchanged.",
     "Implement durable adapter result lookup and principal-bound response-loss reconciliation; ambiguous adapter effects currently hold safely rather than auto-retry.",
     "Qualify filtered backfill and stream-scope upgrade with real Rust/PostgreSQL/homeserver execution; pinned server-side filter definition/schema/lifecycle, large-gap staging, membership/leave transitions, redaction/edit semantics and poison recovery remain open.",
     "Validate least-privilege SQL roles, secret rotation/reconciliation, poison snapshot retention/erasure, real readiness and queue-age/SLO behavior.",
@@ -103,12 +114,13 @@
     "Pinned World/Game/Chain integration and complete first-playable rehearsal.",
     "V12-X1 representative-volume recovery; X2 deployment/cutover/rollback; X3 real external-Agent reconciliation; X4 credential custody; X5 sustained soak; X6 independent security/operations/financial review; X7 applicable legal/provider approvals; X8 final accountable human decision."
   ],
-  "revision": "filtered-backfill-blocker-round-9",
+  "revision": "single-session-sql-blocker-round-10",
   "current_execution_blockers": {
     "local_compiler_database_tools": "cargo/rustc/rustfmt/psql/postgres/docker unavailable in current authoring environment",
     "source_materialization": "current working source remains a byte-checked subset, not a complete checkout",
-    "direct_acquisition": "direct official download probes failed DNS resolution; no toolchain or complete checkout was acquired",
+    "direct_acquisition": "No native Rust/PostgreSQL tools or direct network checkout acquired in this turn; DNS lookups returned no addresses and the supported official download route did not produce a manifest.",
     "hosted_execution": "latest inspected existing-head workflow jobs still lack successful execution; no exact-head pass is inferred",
-    "approval_boundary": "independent review and V12-X1-X8 records remain separate mandatory conditions"
+    "approval_boundary": "independent review and V12-X1-X8 records remain separate mandatory conditions",
+    "remote_terminal": "A remote-terminal integration was discovered and suggested but no connected execution host is available in this session."
   }
 }

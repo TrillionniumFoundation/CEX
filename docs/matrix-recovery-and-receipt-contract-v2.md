@@ -156,10 +156,11 @@ contract. Matrix send URLs retain a configured reverse-proxy path prefix and
 reject embedded credentials, queries or fragments rather than changing authority.
 
 The database entry script delegates to `scripts/matrix_postgres_regression.py`.
-It does not evaluate shell generated from a database URL or execute the old
-bootstrap wrapper. It snapshots the complete migration chain and all regression inputs,
-compares the migration directory to the fixed manifest, and extracts the original
-SQL assertion body verbatim. On a dedicated PostgreSQL 16 test database it applies
+Both public shell entrypoints use the same runner; the old eval/0001-only
+bootstrap implementation is removed. The complete original SQL body is retained
+byte-for-byte in `scripts/test-matrix-transport-baseline.sql`. The runner snapshots
+the complete migration chain and regression inputs and compares the migration
+directory to its fixed manifest. On a dedicated PostgreSQL 16 test database it applies
 the full current migration chain twice, then executes ALL original and new SQL
 assertions against the final schema. A stale 0001-only function body cannot be
 what the baseline regression accidentally tests. No original assertion is removed.
@@ -170,8 +171,9 @@ The runner verifies server major and actual database before reset. Credentials
 are passed only through a restricted environment, never argv; inherited service,
 password-file and option variables cannot select a different database. Unknown or
 duplicate URL options, malformed ports and encodings fail before a client runs.
-Every command has bounded statement, lock and subprocess timeouts. Failure stops
-later stages and cannot become skip/success. The optional JSON report binds input
+One database session covers identity checks, an advisory lock, object guards,
+reset, all migration replays and regressions. Statement/lock timeouts and a
+900-second client wall limit are enforced. Failure cannot become skip/success. The optional JSON report binds input
 hashes and stage results; Python tests use a fake client and do not prove SQL.
 
 The trusted ROG lane is restricted to push events on the remediation branch.
@@ -192,3 +194,14 @@ Binding does not advance history or grant a new scope. The full current SQL chai
 now has four migrations; no prior assertion is removed. Replies now admit only
 `msgtype` and `body`, with other structured control fields rejected. These are
 unqualified source changes, not completed Rust/SQL/homeserver or production gates.
+
+
+## Round 10: one guarded SQL entrypoint implementation
+
+`docs/matrix-sql-runner-v4.md` supersedes the old multi-connection runner/report
+shape. Both existing shell command names remain usable, but both now require
+explicit disposable-DB consent and run the complete current chain. Reports must
+be written under `run/`, never over source or a linked/external path. Unknown
+objects are rejected by exact name rather than trusting a transport-like prefix.
+A report confirms only observed stage markers in one psql session; it does not
+prove independent hosted execution, application runtime or deployment roles.

@@ -131,7 +131,8 @@ def validate(sources: dict[str, str]) -> None:
             '0002_source_observation_replay.sql', '0003_sync_recovery_and_send_receipts.sql',
             'test-matrix-source-observation-replay.sql', 'test-matrix-sync-recovery-postgres.sql',
             'foreign-table-guard', 'server-identity', 'baseline_sql(inputs[BASELINE])',
-            'for iteration in (1, 2)', 'capture_output=True', 'ON_ERROR_STOP=1')
+            'for iteration in (1, 2)', 'subprocess.Popen', 'ON_ERROR_STOP=1',
+            'single_psql_session', 'pg_try_advisory_lock', 'test-matrix-transport-baseline.sql')
     reject(driver, 'shell=True', 'eval(', 'check=False)\n    return 0')
     regression = sources['scripts/test-matrix-sync-recovery-postgres.sql']
     require(regression, 'expired adapter claim was blindly resent', 'send succeeded without receipt',

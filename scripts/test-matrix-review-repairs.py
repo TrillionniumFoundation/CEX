@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -90,7 +91,7 @@ class ShellNegativeTests(unittest.TestCase):
             wrapper.write_text((ROOT / 'scripts' / wrapper.name).read_text())
             (scripts / 'matrix_postgres_regression.py').write_text((ROOT / 'scripts/matrix_postgres_regression.py').read_text())
             marker = root / 'side-effect'
-            (bin_dir / 'psql').write_text('#!/bin/sh\ntouch "$TEST_SIDE_EFFECT"\nexit 0\n')
+            (bin_dir / 'psql').write_text('#!/bin/sh\ntouch ' + shlex.quote(str(marker)) + '\nexit 0\n')
             (bin_dir / 'psql').chmod(0o755)
             (scripts / 'check-matrix-transport-postgres.sh').write_text(
                 '#!/bin/sh\ntouch "$TEST_SIDE_EFFECT"\nexit 0\n')

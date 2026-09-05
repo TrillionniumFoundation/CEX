@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -24,6 +25,17 @@ def config(**updates):
            "MATRIX_TEST_ALLOW_SCHEMA_RESET": "1", "PATH": os.defpath}
     env.update(updates)
     return env
+
+
+def transcript(script):
+    """Explicit fake psql transcript: tests orchestration, not SQL semantics."""
+    lines = []
+    for line in script.splitlines():
+        if line.startswith("\\echo "):
+            lines.append(line[len("\\echo "):])
+        elif line.startswith("select 'CEX_MATRIX_"):
+            lines.append(re.search(r"'(CEX_MATRIX_[a-f0-9]+:version:)'", line).group(1) + "160015")
+    return "\n".join(lines) + "\n"
 
 
 class ConfigurationTests(unittest.TestCase):
@@ -72,18 +84,16 @@ class ConfigurationTests(unittest.TestCase):
 
 
 class InputTests(unittest.TestCase):
-    def test_extracts_verbatim_sql_without_running_shell(self):
-        script = "#!/bin/bash\nexit 99\n" + R.BASELINE_MARKER + BASE_SQL + "SQL\necho forbidden\n"
-        self.assertEqual(R.baseline_sql(script), BASE_SQL)
+    def test_preserves_verbatim_sql_without_running_shell(self):
+        self.assertEqual(R.baseline_sql(BASE_SQL), BASE_SQL)
 
-    def test_delimiter_must_be_unique_and_closed(self):
-        for script in ["no regression", R.BASELINE_MARKER + BASE_SQL, (R.BASELINE_MARKER + BASE_SQL + "SQL\n") * 2]:
-            with self.assertRaises(R.RegressionError):
-                R.baseline_sql(script)
+    def test_sql_body_must_be_unique_and_complete(self):
+        for sql in ["no regression", BASE_SQL + BASE_SQL, BASE_SQL[:-3]]:
+            with self.assertRaises(R.RegressionError): R.baseline_sql(sql)
 
-    def test_empty_assertion_body_rejected(self):
-        with self.assertRaises(R.RegressionError):
-            R.baseline_sql(R.BASELINE_MARKER + "select 1;\nSQL\n")
+    def test_empty_assertion_body_and_shell_wrapper_rejected(self):
+        for sql in ["select 1;", "#!/bin/bash\n" + BASE_SQL]:
+            with self.assertRaises(R.RegressionError): R.baseline_sql(sql)
 
 
 class ExecutionTests(unittest.TestCase):
@@ -93,7 +103,10 @@ class ExecutionTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         for name in R.MIGRATIONS:
             self.write(f"services/matrix-entry-adapter/migrations/{name}", f"begin;\n-- {name}\ncommit;\n")
-        self.write(R.BASELINE, R.BASELINE_MARKER + BASE_SQL + "SQL\n")
+        self.write(R.BASELINE, BASE_SQL)
+        self.write(R.RUNNER_SOURCE, Path(R.__file__).read_text())
+        for path in R.ENTRYPOINTS:
+            self.write(path, R.wrapper_source())
         for path in R.REGRESSIONS:
             self.write(path, "begin; select 1; rollback;\n")
         self.calls = []
@@ -105,9 +118,7 @@ class ExecutionTests(unittest.TestCase):
 
     def invoke(self, argv, **kwargs):
         self.calls.append((argv, kwargs))
-        sql = kwargs["input"]
-        stdout = "160015\nmatrix_review_ci\n" if sql.startswith("show server") else ("0\n" if sql == R.FOREIGN_TABLES_SQL else "")
-        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+        return SimpleNamespace(returncode=0, stdout=transcript(kwargs["input"]), stderr="")
 
     def execute(self, invoke=None):
         with patch.object(R.shutil, "which", return_value="/fake/psql"):
@@ -116,11 +127,14 @@ class ExecutionTests(unittest.TestCase):
     def test_full_chain_precedes_all_original_assertions(self):
         result = self.execute()
         self.assertEqual(result["status"], "ok")
+        self.assertEqual(len(self.calls), 1)  # same connection, not one per stage
         self.assertEqual(len(result["stages"]), 3 + 2 * len(R.MIGRATIONS) + 1 + len(R.REGRESSIONS))
-        self.assertEqual(self.calls[3 + 2 * len(R.MIGRATIONS)][1]["input"], BASE_SQL)
-        for offset in (3, 3 + len(R.MIGRATIONS)):
-            for index, name in enumerate(R.MIGRATIONS):
-                self.assertIn(name, self.calls[offset + index][1]["input"])
+        sql = self.calls[0][1]["input"]
+        position = -1
+        for iteration in (1, 2):
+            for name in R.MIGRATIONS:
+                position = sql.index(f":start:migration-{iteration}-{name}", position + 1)
+        self.assertGreater(sql.index(BASE_SQL), position)
         self.assertEqual(result["production_authorization"], "not_granted")
 
     def test_credentials_never_enter_argv_or_report(self):
@@ -132,34 +146,38 @@ class ExecutionTests(unittest.TestCase):
             self.assertFalse(kw.get("shell", False))
         self.assertNotIn("test-secret", repr(result))
 
-    def test_wrong_server_version_stops_before_any_migration(self):
+    def test_wrong_server_version_cannot_produce_success(self):
         def old(argv, **kwargs):
-            self.calls.append((argv, kwargs))
-            return SimpleNamespace(returncode=0, stdout="150013\nmatrix_review_ci\n", stderr="")
+            answer = self.invoke(argv, **kwargs)
+            answer.stdout = answer.stdout.replace(":version:160015", ":version:150013")
+            return answer
         result = self.execute(old)
         self.assertEqual(result["status"], "failed")
         self.assertEqual(len(self.calls), 1)
+        self.assertIn("not between 160000 and 169999", self.calls[0][1]["input"])
 
-    def test_unrelated_tables_prevent_reset(self):
+    def test_unrelated_objects_guard_precedes_reset_in_same_session(self):
         def nonempty(argv, **kwargs):
-            response = self.invoke(argv, **kwargs)
-            if kwargs["input"] == R.FOREIGN_TABLES_SQL:
-                response.stdout = "1\n"
-            return response
+            answer = self.invoke(argv, **kwargs)
+            answer.stdout = answer.stdout.split(":ok:foreign-table-guard")[0].rsplit("\n", 1)[0]
+            answer.returncode = 3
+            return answer
         result = self.execute(nonempty)
         self.assertEqual(result["status"], "failed")
-        self.assertEqual(len(self.calls), 2)
+        self.assertFalse(any(r["name"] == "reset-transport-test-rows" for r in result["stages"]))
+        self.assertEqual(len(self.calls), 1)
 
-    def test_failure_stops_later_stages_and_does_not_leak_diagnostics(self):
+    def test_failure_stops_confirmed_stages_and_does_not_leak_diagnostics(self):
         def fails(argv, **kwargs):
-            response = self.invoke(argv, **kwargs)
-            if len(self.calls) == 4:
-                response.returncode, response.stderr = 1, "test-secret private data"
-            return response
+            answer = self.invoke(argv, **kwargs)
+            answer.returncode, answer.stderr = 3, "test-secret private data"
+            marker = ":ok:migration-1-" + R.MIGRATIONS[0]
+            answer.stdout = answer.stdout.split(marker)[0].rsplit("\n", 1)[0]
+            return answer
         result = self.execute(fails)
         self.assertEqual(result["status"], "failed")
-        self.assertEqual(len(self.calls), 4)
-        self.assertEqual(result["stages"][-1]["status"], "failed")
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(result["stages"][-1]["status"], "not_completed")
         self.assertNotIn("test-secret", repr(result))
 
     def test_timeout_is_not_pass_or_skip(self):
@@ -167,7 +185,7 @@ class ExecutionTests(unittest.TestCase):
             raise subprocess.TimeoutExpired("psql", 180)
         result = self.execute(expires)
         self.assertEqual(result["status"], "failed")
-        self.assertEqual(result["stages"][0]["status"], "not_completed")
+        self.assertEqual(result["stages"], [])
 
     def test_missing_migration_never_opens_database(self):
         (self.root / "services/matrix-entry-adapter/migrations" / R.MIGRATIONS[1]).unlink()

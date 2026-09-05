@@ -47,7 +47,9 @@ jobs:
       - name: Source and shell negative regression
         run: python3 scripts/test-matrix-review-repairs.py
       - name: PostgreSQL runner safety and ordering regression
-        run: python3 scripts/test-matrix-postgres-runner.py
+        run: |
+          python3 scripts/test-matrix-postgres-runner.py
+          python3 scripts/test-matrix-runner-hardening.py
       - name: Recovery contract mutation regressions
         run: |
           python3 scripts/test-matrix-recovery-contract.py

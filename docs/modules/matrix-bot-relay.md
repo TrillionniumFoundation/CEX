@@ -38,7 +38,7 @@ Catalog-bound entry points:
 - `apps/matrix-bot-relay/src/runtime_profile.rs`: strict pure configuration parser,
   kept byte-identical with poller and adapter pending shared-crate extraction.
 
-Use shared transport migrations 0001, 0002 and 0003 in the adapter-owned directory.
+Use shared transport migrations 0001, 0002, 0003 and 0004 in the adapter-owned directory.
 Changing destination, receipt or source identity requires catalog and protocol review.
 
 ## Interfaces and contracts
