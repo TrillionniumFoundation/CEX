@@ -10,13 +10,16 @@
   "world_source": {
     "pull_request": 60,
     "branch": "feat/p0-world-authority-cutover-20260906",
-    "head_sha": "aa0f0effd9088efdea2134cce9442167968de19e",
+    "head_sha": "ff2155a6ada81cae0a4c83dda73083469ec9a828",
     "historical_source_parent": "d44d8930c917b55da7b23eb19e9645feb8f4ee59",
     "restored_server_crate_count": 7,
     "restored_historical_file_count": 15,
     "provenance_manifest": "docs/contracts/trillionnium-world-authority-provenance-v1.json",
     "durable_base_migration": "deploy/postgres/trnm-world-authority-cutover-v1.sql",
     "mandatory_hardening_migration": "deploy/postgres/trnm-world-authority-cutover-v1-hardening.sql",
+    "state_machine_qualification": "scripts/check-trnm-world-authority-postgres.sh",
+    "installation_qualification": "scripts/check-trnm-world-authority-postgres-installation.sh",
+    "qualification_runner": "scripts/run-trnm-world-authority-postgres-check.sh",
     "ordinary_actions_run_observed": false,
     "source_ci_status": "pending_final_exact_sha_validation_and_native_world_contexts"
   },
@@ -56,6 +59,9 @@
     "migration_version_conflict_fail_closed": true,
     "cold_backup_restore_source_gate": true,
     "postgres_outage_fail_closed_source_gate": true,
+    "bundle_reapply_idempotency_gate": true,
+    "base_only_partial_install_recovery_gate": true,
+    "wrong_same_name_index_rejection_gate": true,
     "rust_toolchain_pinned": "1.98.1",
     "cargo_audit_version_pinned": "0.22.2",
     "cargo_deny_version_pinned": "0.20.2"
@@ -68,6 +74,11 @@
     },
     {
       "id": "world_postgres_hostile_state_machine",
+      "status": "implemented_pending_final_exact_sha_gate_run",
+      "blocking": true
+    },
+    {
+      "id": "world_postgres_installation_protocol",
       "status": "implemented_pending_final_exact_sha_gate_run",
       "blocking": true
     },
@@ -112,5 +123,5 @@
       "blocking": true
     }
   ],
-  "truth_boundary": "Source, unit, PostgreSQL-hostile, and development HTTP evidence cannot grant production authority. Production cutover still requires exact runtime backfill reconciliation, native protected contexts, deployment-specific no-dual-writer evidence, and explicit authorization."
+  "truth_boundary": "Source, unit, PostgreSQL-hostile, installation-protocol, and development HTTP evidence cannot grant production authority. Production cutover still requires exact runtime backfill reconciliation, native protected contexts, deployment-specific no-dual-writer evidence, and explicit authorization."
 }
