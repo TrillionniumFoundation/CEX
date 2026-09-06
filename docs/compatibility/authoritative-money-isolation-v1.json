@@ -37,10 +37,6 @@
     {
       "path": "services/execution-service/src/state.rs",
       "classification": "legacy_policy_display_compatibility"
-    },
-    {
-      "path": "services/consumer-entry-api/src/task_routes.rs",
-      "classification": "display_projection_only"
     }
   ],
   "production_invariants": [
