@@ -10,7 +10,7 @@
   "world_source": {
     "pull_request": 60,
     "branch": "feat/p0-world-authority-cutover-20260906",
-    "head_sha": "ff2155a6ada81cae0a4c83dda73083469ec9a828",
+    "head_sha": "83c3cfb939ed683e15b831cae8a47e3c03f77ea8",
     "historical_source_parent": "d44d8930c917b55da7b23eb19e9645feb8f4ee59",
     "restored_server_crate_count": 7,
     "restored_historical_file_count": 15,
