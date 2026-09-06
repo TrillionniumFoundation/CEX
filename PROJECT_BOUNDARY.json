@@ -19,9 +19,10 @@
   },
   "cargo": {
     "workspace_manifest": "Cargo.toml",
-    "external_path_dependencies": "forbid"
+    "external_path_dependencies": "forbid",
+    "reachable_local_dependency_graph": "exact_allowlist"
   },
   "compatibility_inventory": "docs/compatibility/world-surface-freeze-v1.json",
   "compatibility_change_policy": "freeze_or_extract_with_explicit_manifest_review",
-  "deny_changed_paths_regex": "^(services/(consumer-entry-api|matrix-entry-adapter)/(Cargo\\.toml|build\\.rs|src(?:/|$))|docs/(trillionnium-world|compatibility/world-surface)|scripts/playwright/trillionnium)"
+  "deny_changed_paths_regex": "^(Cargo\\.toml|\\.cargo/(?:config|config\\.toml)|services/(?:consumer-entry-api|matrix-entry-adapter|ledger-service)(?:/|$)|crates/(?:shared-tracing|shared-config|shared-types)(?:/|$)|vendor/trnm-economy-protocol(?:/|$)|docs/(?:trillionnium-world|compatibility/world-surface)|scripts/playwright/trillionnium)"
 }
