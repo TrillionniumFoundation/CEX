@@ -7,7 +7,7 @@ production_authorization: `not_granted`
 
 `TrillionniumFoundation/Trillionnium-World` owns World topology, movement, tactics, commerce, company/shop/work-order, progression and their source-versioned projections. CEX owns authenticated ingress, identity/session binding, request normalization and exact economic settlement integration. CEX must not remain a second World state writer.
 
-World PR #60 provides a bounded seven-crate server authority workspace and mandatory PostgreSQL cutover hardening at exact commit `ff2155a6ada81cae0a4c83dda73083469ec9a828`. CEX PR #34 adds a remote-only adapter plus a production write fence. Neither change self-grants production authority.
+World PR #60 provides a bounded seven-crate server authority workspace and mandatory PostgreSQL cutover hardening at exact commit `83c3cfb939ed683e15b831cae8a47e3c03f77ea8`. CEX PR #34 adds a remote-only adapter plus a production write fence. Neither change self-grants production authority.
 
 ## CEX runtime modes
 
@@ -61,7 +61,8 @@ and then verifies both exact migration markers and the semantic definition of th
 - a per-idempotency-key lock and post-lock receipt re-read;
 - exact replay versus conflicting replay separation;
 - fail-closed migration-version conflict handling;
-- terminal rollback that disables the writer while retaining append-only evidence.
+- terminal rollback that disables the writer while retaining append-only evidence;
+- idempotent reapplication of every hardening constraint.
 
 The PostgreSQL 16 state-machine suite exercises concurrent activation of different epochs, concurrent exact replay, noncanonical snapshot and command JSON, migration marker conflicts, mutation after rollback, database outage, and cold `pg_dump`/`pg_restore`.
 
@@ -75,7 +76,7 @@ These are source-level database qualifications, not evidence that any production
 
 ## Cross-repository source gates
 
-`.github/workflows/p0-world-authority-cutover-gate.yml` checks out World commit `ff2155a6ada81cae0a4c83dda73083469ec9a828` by exact SHA. `.github/workflows/p0-world-authority-postgres-v2-gate.yml` independently runs the durable state-machine and installation-protocol hostile suites against the same exact World candidate. Checkout, Rust toolchain and artifact upload actions are pinned to immutable commits, and Rust is pinned to `1.98.1`.
+`.github/workflows/p0-world-authority-cutover-gate.yml` checks out World commit `83c3cfb939ed683e15b831cae8a47e3c03f77ea8` by exact SHA. `.github/workflows/p0-world-authority-postgres-v2-gate.yml` independently runs the durable state-machine and installation-protocol hostile suites against the same exact World candidate. Checkout, Rust toolchain and artifact upload actions are pinned to immutable commits, and Rust is pinned to `1.98.1`.
 
 The World protected source definitions also include the `trnm-game-ci`, `trnm-world-p0-boundaries`, `trnm-world-status-evidence`, and `trnm-world-postgres-cutover` contexts. GitHub has not created native World workflow runs for the current exact head, so checked-in workflow definitions are not treated as successful status checks.
 
