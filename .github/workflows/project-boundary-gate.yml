@@ -4,26 +4,42 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - 'Cargo.toml'
+      - '.cargo/**'
       - 'PROJECT_BOUNDARY.json'
       - 'PROJECT_BOUNDARY.md'
       - 'services/consumer-entry-api/**'
       - 'services/matrix-entry-adapter/**'
+      - 'services/ledger-service/**'
+      - 'crates/shared-tracing/**'
+      - 'crates/shared-config/**'
+      - 'crates/shared-types/**'
+      - 'vendor/trnm-economy-protocol/**'
       - 'docs/compatibility/world-surface-freeze-v1.json'
       - 'docs/compatibility/world-surface-freeze-v1.md'
       - 'scripts/check-project-boundary.py'
+      - 'scripts/check-project-boundary-cargo-closure.py'
       - '.github/workflows/project-boundary-gate.yml'
   push:
     branches:
       - main
       - 'fix/hepta-p0-blocker-closure-*'
     paths:
+      - 'Cargo.toml'
+      - '.cargo/**'
       - 'PROJECT_BOUNDARY.json'
       - 'PROJECT_BOUNDARY.md'
       - 'services/consumer-entry-api/**'
       - 'services/matrix-entry-adapter/**'
+      - 'services/ledger-service/**'
+      - 'crates/shared-tracing/**'
+      - 'crates/shared-config/**'
+      - 'crates/shared-types/**'
+      - 'vendor/trnm-economy-protocol/**'
       - 'docs/compatibility/world-surface-freeze-v1.json'
       - 'docs/compatibility/world-surface-freeze-v1.md'
       - 'scripts/check-project-boundary.py'
+      - 'scripts/check-project-boundary-cargo-closure.py'
       - '.github/workflows/project-boundary-gate.yml'
 
 permissions:
@@ -41,9 +57,9 @@ env:
 
 jobs:
   recursive-source-closure:
-    name: project-boundary/recursive-source-closure
+    name: project-boundary/recursive-source-and-cargo-closure
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout exact source head
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -84,15 +100,17 @@ jobs:
             echo "merge_commit=$merge_commit"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Validate exact source recursive closure
+      - name: Validate exact source recursive source and Cargo closure
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p run/project-boundary
           python3 scripts/check-project-boundary.py \
-            | tee run/project-boundary/source-head.json
+            | tee run/project-boundary/source-head-source.json
+          python3 scripts/check-project-boundary-cargo-closure.py \
+            | tee run/project-boundary/source-head-cargo.json
 
-      - name: Validate prospective merge recursive closure
+      - name: Validate prospective merge recursive source and Cargo closure
         if: github.event_name == 'pull_request'
         shell: bash
         env:
@@ -107,7 +125,11 @@ jobs:
           (
             cd "$worktree"
             python3 scripts/check-project-boundary.py
-          ) | tee run/project-boundary/prospective-merge.json
+          ) | tee run/project-boundary/prospective-merge-source.json
+          (
+            cd "$worktree"
+            python3 scripts/check-project-boundary-cargo-closure.py
+          ) | tee run/project-boundary/prospective-merge-cargo.json
           test -z "$(git -C "$worktree" status --porcelain --untracked-files=no)"
 
       - name: Record immutable boundary evidence
@@ -136,17 +158,23 @@ jobs:
                   ['git', *args], check=True, text=True, stdout=subprocess.PIPE
               ).stdout.strip()
 
+          evidence_files = (
+              'source-head-source.json',
+              'source-head-cargo.json',
+              'prospective-merge-source.json',
+              'prospective-merge-cargo.json',
+          )
           outcomes = {}
-          for name in ('source-head.json', 'prospective-merge.json'):
+          for name in evidence_files:
               path = out / name
               if path.is_file():
                   outcomes[name] = json.loads(path.read_text()).get('status')
 
           summary = {
-              'schema': 'cex.project-boundary.evidence.v1',
-              'status': 'recursive_source_closure_green'
+              'schema': 'cex.project-boundary.evidence.v2',
+              'status': 'recursive_source_and_cargo_closure_green'
                   if outcomes and all(value == 'ok' for value in outcomes.values())
-                  else 'recursive_source_closure_failed',
+                  else 'recursive_source_or_cargo_closure_failed',
               'repository': os.environ['GITHUB_REPOSITORY'],
               'event_name': os.environ['GITHUB_EVENT_NAME'],
               'source_head_sha': os.environ['SOURCE_HEAD_SHA'],
@@ -162,8 +190,11 @@ jobs:
               'boundary_manifest_blob_sha': git(
                   'rev-parse', 'HEAD:docs/compatibility/world-surface-freeze-v1.json'
               ),
-              'boundary_checker_blob_sha': git(
+              'source_checker_blob_sha': git(
                   'rev-parse', 'HEAD:scripts/check-project-boundary.py'
+              ),
+              'cargo_closure_checker_blob_sha': git(
+                  'rev-parse', 'HEAD:scripts/check-project-boundary-cargo-closure.py'
               ),
               'actions': {
                   'actions/checkout': os.environ['CHECKOUT_ACTION_SHA'],
@@ -178,7 +209,7 @@ jobs:
 
           files = sorted(path for path in out.iterdir() if path.is_file() and path.name != 'manifest.json')
           manifest = {
-              'schema': 'cex.project-boundary.artifact-manifest.v1',
+              'schema': 'cex.project-boundary.artifact-manifest.v2',
               'source_head_sha': os.environ['SOURCE_HEAD_SHA'],
               'files': [
                   {'path': path.name, 'bytes': path.stat().st_size, 'sha256': sha256(path)}
