@@ -3,9 +3,21 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORLD_ROOT="${1:-$ROOT/.world-source}"
-WORLD_SHA="${WORLD_SOURCE_SHA:-554761417edbb37a2f20deed23917a9b05abdfe2}"
+EVIDENCE="$ROOT/docs/traceability/world-authority-cutover-v1.json"
+EVIDENCE_DIR="${WORLD_AUTHORITY_EVIDENCE_DIR:-}"
+WORLD_SHA="${WORLD_SOURCE_SHA:-$(python3 - "$EVIDENCE" <<'PY'
+import json
+import pathlib
+import sys
+print(json.loads(pathlib.Path(sys.argv[1]).read_text())["world_source"]["head_sha"])
+PY
+)}"
 WORLD_MANIFEST="$WORLD_ROOT/trillionnium/crates/world-authority/Cargo.toml"
 
+[[ "$WORLD_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+  echo "invalid exact World source SHA: $WORLD_SHA" >&2
+  exit 1
+}
 [[ -f "$WORLD_MANIFEST" ]] || {
   echo "missing exact-SHA World source checkout at $WORLD_ROOT" >&2
   exit 1
@@ -197,12 +209,14 @@ start_world false
 curl --fail --silent --show-error \
   http://127.0.0.1:18096/v1/world/state \
   >"$RUN/state-rolled-back.json"
-python3 - "$RUN" <<'PY'
+python3 - "$RUN" "$WORLD_SHA" <<'PY'
+import hashlib
 import json
 import pathlib
 import sys
 
 root = pathlib.Path(sys.argv[1])
+world_sha = sys.argv[2]
 nodes = json.loads((root / "nodes.json").read_text())
 rolled_back = json.loads((root / "state-rolled-back.json").read_text())
 node = next(
@@ -212,9 +226,13 @@ node = next(
 )
 if node != nodes["before"]:
     raise SystemExit(f"World rollback drift: expected={nodes['before']} actual={node}")
+
+def sha256(name):
+    return hashlib.sha256((root / name).read_bytes()).hexdigest()
+
 summary = {
-    "schema": "cex.world.authority.cross-repo-smoke.v1",
-    "world_source_sha": "554761417edbb37a2f20deed23917a9b05abdfe2",
+    "schema": "cex.world.authority.cross-repo-smoke.v2",
+    "world_source_sha": world_sha,
     "world_api_contract": "trillionnium_world_api_v1",
     "adapter_contract": "cex_trillionnium_world_authority_adapter_v1",
     "success_forwarding": True,
@@ -224,9 +242,32 @@ summary = {
     "local_fallback_used": False,
     "repeated_read_stable": True,
     "development_snapshot_rollback": True,
+    "state_hashes": {
+        "before": sha256("state-before.json"),
+        "after": sha256("state-after.json"),
+        "restarted": sha256("state-restarted.json"),
+        "rolled_back": sha256("state-rolled-back.json"),
+    },
+    "player_nodes": nodes,
     "mutation_idempotency": "not_claimed_pending_durable_world_adapter",
     "production_authorization": "not_granted",
 }
-(root / "cross-repo-smoke-summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-print(json.dumps(summary, indent=2))
+(root / "cross-repo-smoke-summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+print(json.dumps(summary, indent=2, sort_keys=True))
 PY
+
+if [[ -n "$EVIDENCE_DIR" ]]; then
+  mkdir -p "$EVIDENCE_DIR"
+  for file in \
+    cross-repo-smoke-summary.json \
+    full-split.json \
+    command.json \
+    outage.json \
+    nodes.json \
+    state-before.json \
+    state-after.json \
+    state-restarted.json \
+    state-rolled-back.json; do
+    cp "$RUN/$file" "$EVIDENCE_DIR/$file"
+  done
+fi
