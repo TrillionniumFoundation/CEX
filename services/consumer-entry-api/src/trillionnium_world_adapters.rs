@@ -5,13 +5,10 @@ use term_exchange_protocol::{
 };
 
 const CEX_TRNM_ECONOMY_ADAPTER_CONTRACT: &str = "cex_trnm_game_economy_adapter_v1";
-const CEX_WORLD_AUTHORITY_ADAPTER_CONTRACT: &str =
-    "cex_trillionnium_world_authority_adapter_v1";
+const CEX_WORLD_AUTHORITY_ADAPTER_CONTRACT: &str = "cex_trillionnium_world_authority_adapter_v1";
 const TRILLIONNIUM_WORLD_API_CONTRACT: &str = "trillionnium_world_api_v1";
-const TRILLIONNIUM_WORLD_CUTOVER_CONTRACT: &str =
-    "trillionnium_world_authority_cutover_v1";
-const TRILLIONNIUM_WORLD_OWNER_REPOSITORY: &str =
-    "TrillionniumFoundation/Trillionnium-World";
+const TRILLIONNIUM_WORLD_CUTOVER_CONTRACT: &str = "trillionnium_world_authority_cutover_v1";
+const TRILLIONNIUM_WORLD_OWNER_REPOSITORY: &str = "TrillionniumFoundation/Trillionnium-World";
 
 fn first_non_empty_world_env(names: &[&str]) -> Option<String> {
     names.iter().find_map(|name| {
