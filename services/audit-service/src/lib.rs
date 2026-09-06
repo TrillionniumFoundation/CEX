@@ -1,3 +1,6 @@
+// Audit uses only the writer-auth subset of this shared, source-included module.
+// Keep the allowance local so unrelated dead code remains denied workspace-wide.
+#[allow(dead_code)]
 #[path = "../../../crates/shared-config/src/service_auth.rs"]
 pub(crate) mod service_auth;
 
