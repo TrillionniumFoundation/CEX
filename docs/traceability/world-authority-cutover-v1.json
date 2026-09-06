@@ -10,13 +10,13 @@
   "world_source": {
     "pull_request": 60,
     "branch": "feat/p0-world-authority-cutover-20260906",
-    "head_sha": "1f88be0d0ac10cecd31efb9dadb44ea8214a815a",
+    "head_sha": "08b5ea85ded043838cb2eb8645ae4df6797d12ae",
     "historical_source_parent": "d44d8930c917b55da7b23eb19e9645feb8f4ee59",
     "restored_server_crate_count": 7,
     "restored_historical_file_count": 15,
     "provenance_manifest": "docs/contracts/trillionnium-world-authority-provenance-v1.json",
     "ordinary_actions_run_observed": false,
-    "source_ci_status": "pending_independent_exact_sha_validation_from_cex_gate"
+    "source_ci_status": "pending_independent_exact_sha_validation_from_cex_gate_and_native_world_contexts"
   },
   "cex_candidate": {
     "pull_request": 34,
@@ -43,12 +43,20 @@
     "provenance_hostile_fixtures_defined": true,
     "world_lockfile_committed_and_immutable_during_gate": true,
     "github_actions_pinned_to_commit_sha": true,
-    "rust_toolchain_pinned": "1.98.1"
+    "world_protected_game_ci_actions_pinned_to_commit_sha": true,
+    "rust_toolchain_pinned": "1.98.1",
+    "cargo_audit_version_pinned": "0.22.2",
+    "cargo_deny_version_pinned": "0.20.2"
   },
   "evidence_matrix": [
     {
       "id": "world_exact_sha_source_qualification",
       "status": "pending_gate_run",
+      "blocking": true
+    },
+    {
+      "id": "world_native_protected_contexts",
+      "status": "not_created_by_github_actions",
       "blocking": true
     },
     {
@@ -87,5 +95,5 @@
       "blocking": true
     }
   ],
-  "truth_boundary": "No source, unit, fixture, or development smoke grants production authority. Production cutover requires exact runtime reconciliation and no-dual-writer evidence."
+  "truth_boundary": "No source, unit, fixture, development smoke, or missing native status context grants production authority. Production cutover requires exact runtime reconciliation and no-dual-writer evidence."
 }
