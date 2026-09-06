@@ -325,6 +325,9 @@ fn decode_record(row: PgRow) -> Result<AuditEventRecordV2, String> {
     })
 }
 
+// Returning Axum's concrete response keeps this helper aligned with the route's
+// fail-closed HTTP semantics. Scope the size exception to this boundary only.
+#[allow(clippy::result_large_err)]
 fn authorize_audit_read(
     state: &AppState,
     headers: &HeaderMap,
