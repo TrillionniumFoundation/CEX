@@ -48,6 +48,8 @@ def committed_blob_sha(relative: str, fallback_bytes: bytes) -> str:
     result = subprocess.run(
         ["git", "-C", str(ROOT), "rev-parse", f"HEAD:{relative}"],
         text=True,
+        encoding="utf-8",
+        errors="strict",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
@@ -69,6 +71,7 @@ def committed_blob_sha(relative: str, fallback_bytes: bytes) -> str:
 
 def expected_wrapper(body_name: str) -> str:
     return (
+        "#![allow(unfulfilled_lint_expectations)]\n"
         "#![expect(\n"
         "    unused_imports,\n"
         f'    reason = "{REASON}"\n'
