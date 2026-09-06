@@ -1,9 +1,11 @@
+mod runtime_guard;
+
 use ledger_service::{
     build_router,
     repository::{postgres::PostgresLedgerRepository, LedgerRepositoryHandle},
     state::AppState,
 };
-use shared_config::runtime_guard::{self, ServiceKind};
+use runtime_guard::ServiceKind;
 use shared_tracing::init_tracing;
 use std::sync::Arc;
 
