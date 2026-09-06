@@ -1,0 +1,153 @@
+{
+  "schema": "cex.module-catalog.v1",
+  "status": "active",
+  "production_authorization": "not_granted",
+  "workspace_manifest": "Cargo.toml",
+  "documentation_standard": "docs/module-documentation-standard-v1.md",
+  "modules": [
+    {
+      "id": "shared-types",
+      "path": "crates/shared-types",
+      "kind": "crate",
+      "lifecycle": "active",
+      "owner_domain": "Cross-cutting contracts",
+      "document": "crates/shared-types/MODULE.md"
+    },
+    {
+      "id": "shared-errors",
+      "path": "crates/shared-errors",
+      "kind": "crate",
+      "lifecycle": "active",
+      "owner_domain": "Cross-cutting error contracts",
+      "document": "crates/shared-errors/MODULE.md"
+    },
+    {
+      "id": "shared-tracing",
+      "path": "crates/shared-tracing",
+      "kind": "crate",
+      "lifecycle": "active",
+      "owner_domain": "Observability platform",
+      "document": "crates/shared-tracing/MODULE.md"
+    },
+    {
+      "id": "shared-config",
+      "path": "crates/shared-config",
+      "kind": "crate",
+      "lifecycle": "active",
+      "owner_domain": "Runtime configuration and service identity",
+      "document": "crates/shared-config/MODULE.md"
+    },
+    {
+      "id": "hepta-paper-raid-contracts",
+      "path": "crates/hepta-paper-raid-contracts",
+      "kind": "crate",
+      "lifecycle": "active",
+      "owner_domain": "Hepta Paper Raid protocol",
+      "document": "crates/hepta-paper-raid-contracts/MODULE.md"
+    },
+    {
+      "id": "identity-service",
+      "path": "services/identity-service",
+      "kind": "service",
+      "lifecycle": "active",
+      "owner_domain": "Hepta identity and tenancy",
+      "document": "services/identity-service/MODULE.md"
+    },
+    {
+      "id": "ledger-service",
+      "path": "services/ledger-service",
+      "kind": "service",
+      "lifecycle": "active",
+      "owner_domain": "Exact Ledger authority",
+      "document": "services/ledger-service/MODULE.md"
+    },
+    {
+      "id": "trnm-economy-service",
+      "path": "services/trnm-economy-service",
+      "kind": "service",
+      "lifecycle": "active",
+      "owner_domain": "TRNM economy adapter",
+      "document": "services/trnm-economy-service/MODULE.md"
+    },
+    {
+      "id": "gateway-service",
+      "path": "services/gateway-service",
+      "kind": "service",
+      "lifecycle": "active",
+      "owner_domain": "Invocation ingress and exact reserve coordinator",
+      "document": "services/gateway-service/MODULE.md"
+    },
+    {
+      "id": "execution-service",
+      "path": "services/execution-service",
+      "kind": "service",
+      "lifecycle": "active",
+      "owner_domain": "Execution lifecycle and settlement coordination",
+      "document": "services/execution-service/MODULE.md"
+    },
+    {
+      "id": "audit-service",
+      "path": "services/audit-service",
+      "kind": "service",
+      "lifecycle": "active",
+      "owner_domain": "Audit evidence and durable delivery",
+      "document": "services/audit-service/MODULE.md"
+    },
+    {
+      "id": "capability-service",
+      "path": "services/capability-service",
+      "kind": "service",
+      "lifecycle": "active",
+      "owner_domain": "Capability registry",
+      "document": "services/capability-service/MODULE.md"
+    },
+    {
+      "id": "consumer-entry-api",
+      "path": "services/consumer-entry-api",
+      "kind": "service",
+      "lifecycle": "active",
+      "owner_domain": "Consumer edge and projection",
+      "document": "services/consumer-entry-api/MODULE.md"
+    },
+    {
+      "id": "hepta-research-league",
+      "path": "services/hepta-research-league",
+      "kind": "service",
+      "lifecycle": "active",
+      "owner_domain": "Hepta research control plane",
+      "document": "services/hepta-research-league/MODULE.md"
+    },
+    {
+      "id": "paper-raid-bff",
+      "path": "services/paper-raid-bff",
+      "kind": "service",
+      "lifecycle": "active",
+      "owner_domain": "Paper Raid consumer edge",
+      "document": "services/paper-raid-bff/MODULE.md"
+    },
+    {
+      "id": "matrix-entry-adapter",
+      "path": "services/matrix-entry-adapter",
+      "kind": "service",
+      "lifecycle": "active",
+      "owner_domain": "Matrix channel adapter",
+      "document": "services/matrix-entry-adapter/MODULE.md"
+    },
+    {
+      "id": "matrix-bot-relay",
+      "path": "apps/matrix-bot-relay",
+      "kind": "app",
+      "lifecycle": "supporting_alpha",
+      "owner_domain": "Matrix transport",
+      "document": "apps/matrix-bot-relay/MODULE.md"
+    },
+    {
+      "id": "matrix-bot-poller",
+      "path": "apps/matrix-bot-poller",
+      "kind": "app",
+      "lifecycle": "supporting_alpha",
+      "owner_domain": "Matrix bot-mode ingestion",
+      "document": "apps/matrix-bot-poller/MODULE.md"
+    }
+  ]
+}
