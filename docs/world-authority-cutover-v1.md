@@ -1,7 +1,7 @@
 # CEX → Trillionnium World authority cutover v1
 
 Status: cross-repository source candidate  
-`production_authorization: not_granted`
+production_authorization: `not_granted`
 
 ## Decision
 
