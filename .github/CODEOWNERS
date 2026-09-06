@@ -1,0 +1,17 @@
+* @ProfHepta
+
+/.github/workflows/ @ProfHepta
+/.github/CODEOWNERS @ProfHepta
+/docs/development-doc-authority-v1.json @ProfHepta
+/docs/traceability/ @ProfHepta
+/docs/module-catalog-v1.json @ProfHepta
+/docs/compatibility/ @ProfHepta
+/PROJECT_BOUNDARY.json @ProfHepta
+/PROJECT_BOUNDARY.md @ProfHepta
+/migrations/ @ProfHepta
+/crates/shared-types/src/money.rs @ProfHepta
+/crates/shared-types/src/ledger_v2.rs @ProfHepta
+/services/ledger-service/ @ProfHepta
+/services/gateway-service/ @ProfHepta
+/services/execution-service/ @ProfHepta
+/services/capability-service/ @ProfHepta

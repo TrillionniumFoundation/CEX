@@ -1,0 +1,83 @@
+{
+  "schema": "cex.world-surface-freeze.v1",
+  "status": "active",
+  "production_authorization": "not_granted",
+  "owner_repository": "TrillionniumFoundation/Trillionnium-World",
+  "cex_role": "compatibility_edge_only",
+  "transfer_status": "blocked_upstream",
+  "change_policy": "freeze_or_extract_with_explicit_manifest_review",
+  "frozen_files": [
+    {
+      "path": "services/consumer-entry-api/src/openstreetmap_geodata.rs",
+      "git_blob": "402572cf8193d2b65761696a85598059b4b11f15",
+      "kind": "world_source"
+    },
+    {
+      "path": "services/consumer-entry-api/src/real_world_map_shell.rs",
+      "git_blob": "4ec4a8757d1971edd783afb151105f98d740b6ae",
+      "kind": "world_source"
+    },
+    {
+      "path": "services/consumer-entry-api/src/trillionnium_world_adapters.rs",
+      "git_blob": "9a7a697757fbd70fbfaac5460cd627983d8e2851",
+      "kind": "world_source"
+    },
+    {
+      "path": "services/consumer-entry-api/src/world_commerce_routes.rs",
+      "git_blob": "2da014a695180125d33479f6b7be7ec17316b075",
+      "kind": "world_source"
+    },
+    {
+      "path": "services/consumer-entry-api/src/world_indexes.rs",
+      "git_blob": "b4dfb7cba3706966aecf88a4af3481c3be727f1e",
+      "kind": "world_source"
+    },
+    {
+      "path": "services/consumer-entry-api/src/world_map_optimization.rs",
+      "git_blob": "4224445c7955287b5e5ae2c703c89ef284c76233",
+      "kind": "world_source"
+    },
+    {
+      "path": "services/consumer-entry-api/src/world_map_projection.rs",
+      "git_blob": "529f9e62b125cba8b8cf7b9a36e526acc9d0419d",
+      "kind": "world_source"
+    },
+    {
+      "path": "services/consumer-entry-api/src/world_movement.rs",
+      "git_blob": "4dfbc6a01ec3ad2fa2d19a0e576fb8eeb481bcd6",
+      "kind": "world_source"
+    },
+    {
+      "path": "services/consumer-entry-api/src/world_route_projection.rs",
+      "git_blob": "1b1df9f935cea334283d3211846be631d8d20017",
+      "kind": "world_source"
+    },
+    {
+      "path": "services/consumer-entry-api/src/world_routes.rs",
+      "git_blob": "c49ad1ada410344d140c7d544d2d435b7787e581",
+      "kind": "world_source"
+    },
+    {
+      "path": "services/consumer-entry-api/src/world_tactics.rs",
+      "git_blob": "1240c7d073fccb186d1c5442b667de3e80a9e953",
+      "kind": "world_source"
+    },
+    {
+      "path": "services/consumer-entry-api/src/world_web_shell.rs",
+      "git_blob": "d990a3679489ee8f992bd350341c512ee3498cbd",
+      "kind": "world_source"
+    },
+    {
+      "path": "services/matrix-entry-adapter/src/lib.rs",
+      "git_blob": "69c9ff0ad7b44a93fe1cda9e12a9facc0211606c",
+      "kind": "channel_command_carrier"
+    }
+  ],
+  "exit_criteria": [
+    "world_authoritative_state_moved_to_owner_repository",
+    "versioned_adapter_contract_published",
+    "cex_world_routes_are_projection_only",
+    "cross_repository_e2e_evidence_recorded",
+    "legacy_files_removed_or_quarantined"
+  ]
+}

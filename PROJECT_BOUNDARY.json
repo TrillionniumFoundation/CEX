@@ -21,5 +21,7 @@
     "workspace_manifest": "Cargo.toml",
     "external_path_dependencies": "forbid"
   },
-  "deny_changed_paths_regex": "^(services/consumer-entry-api/src/world_|docs/trillionnium-world|scripts/playwright/trillionnium)"
+  "compatibility_inventory": "docs/compatibility/world-surface-freeze-v1.json",
+  "compatibility_change_policy": "freeze_or_extract_with_explicit_manifest_review",
+  "deny_changed_paths_regex": "^(services/consumer-entry-api/src/(world_|real_world_|openstreetmap_|trillionnium_world_)|services/matrix-entry-adapter/src/lib\\.rs|docs/(trillionnium-world|compatibility/world-surface)|scripts/playwright/trillionnium)"
 }

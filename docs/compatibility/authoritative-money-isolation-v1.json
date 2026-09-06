@@ -1,0 +1,54 @@
+{
+  "schema": "cex.authoritative-money-isolation.v1",
+  "status": "active",
+  "production_authorization": "not_granted",
+  "authoritative_exact_files": [
+    "crates/shared-types/src/ledger_v2.rs",
+    "crates/shared-types/src/money.rs",
+    "services/gateway-service/src/infrastructure/ledger_v2_client.rs",
+    "services/execution-service/src/ledger_settlement.rs",
+    "services/trnm-economy-service/src/contract.rs"
+  ],
+  "legacy_value_float_allowlist": [
+    {
+      "path": "services/ledger-service/src/state.rs",
+      "classification": "compatibility_read_or_test_state"
+    },
+    {
+      "path": "services/ledger-service/src/api.rs",
+      "classification": "compatibility_route_and_projection"
+    },
+    {
+      "path": "services/ledger-service/src/exact_memory.rs",
+      "classification": "non_production_test_compatibility"
+    },
+    {
+      "path": "services/ledger-service/src/repository/mod.rs",
+      "classification": "legacy_repository_compatibility"
+    },
+    {
+      "path": "services/gateway-service/src/domain/invocation.rs",
+      "classification": "legacy_ingress_compatibility"
+    },
+    {
+      "path": "services/gateway-service/src/infrastructure/clients.rs",
+      "classification": "legacy_http_compatibility"
+    },
+    {
+      "path": "services/execution-service/src/state.rs",
+      "classification": "legacy_policy_display_compatibility"
+    },
+    {
+      "path": "services/consumer-entry-api/src/task_routes.rs",
+      "classification": "display_projection_only"
+    }
+  ],
+  "production_invariants": [
+    "exact_minor_units_only",
+    "no_float_to_minor_conversion",
+    "v1_value_writes_retired",
+    "postgres_required",
+    "fail_fast_required",
+    "receipt_identity_verified"
+  ]
+}
