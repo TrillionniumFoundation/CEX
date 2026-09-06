@@ -10,16 +10,18 @@
   "world_source": {
     "pull_request": 60,
     "branch": "feat/p0-world-authority-cutover-20260906",
-    "head_sha": "554761417edbb37a2f20deed23917a9b05abdfe2",
+    "head_sha": "1f88be0d0ac10cecd31efb9dadb44ea8214a815a",
     "historical_source_parent": "d44d8930c917b55da7b23eb19e9645feb8f4ee59",
     "restored_server_crate_count": 7,
+    "restored_historical_file_count": 15,
+    "provenance_manifest": "docs/contracts/trillionnium-world-authority-provenance-v1.json",
     "ordinary_actions_run_observed": false,
     "source_ci_status": "pending_independent_exact_sha_validation_from_cex_gate"
   },
   "cex_candidate": {
     "pull_request": 34,
     "branch": "fix/hepta-p0-blocker-closure-20260906",
-    "head_binding": "github_actions_GITHUB_SHA",
+    "head_binding": "github_event_pull_request_head_sha_or_github_sha",
     "remote_adapter_binary": "world-authority-adapter",
     "local_world_writer_production_status": "quarantined",
     "local_world_writer_development_status": "compatibility_and_migration_source_only",
@@ -36,7 +38,12 @@
     "adapter_request_body_limit_bytes": 2097152,
     "adapter_failure_local_fallback": false,
     "cross_repository_exact_sha_checkout_gate_defined": true,
-    "development_restart_and_rollback_smoke_defined": true
+    "development_restart_and_rollback_smoke_defined": true,
+    "historical_tree_and_blob_provenance_bound": true,
+    "provenance_hostile_fixtures_defined": true,
+    "world_lockfile_committed_and_immutable_during_gate": true,
+    "github_actions_pinned_to_commit_sha": true,
+    "rust_toolchain_pinned": "1.98.1"
   },
   "evidence_matrix": [
     {
