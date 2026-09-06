@@ -36,6 +36,7 @@ TEMPORARY_EXACT_PATHS = (
     ".github/workflows/p0-v12-trnm-exact-cutover.yml",
     ".github/workflows/p0-v12-trnm-exact-cutover-runner.yml",
     ".github/workflows/p0-v12-trnm-receipt-smoke.yml",
+    ".github/workflows/seq44-exact-sha-convergence.yml",
 )
 TEMPORARY_WORKFLOW_PATTERNS = (
     ".github/workflows/*self-repair*.yml",
@@ -63,6 +64,7 @@ UNPINNED_ACTION = re.compile(
     r"^\s*uses:\s*[^#\s]+@(v\d+|stable|main|master)\s*(?:#.*)?$", re.MULTILINE
 )
 PULL_REQUEST_EVENT = re.compile(r"(?m)^\s{2}pull_request:\s*$")
+CONTENTS_WRITE_PERMISSION = re.compile(r"(?m)^\s*contents:\s*write\s*$")
 MIGRATION_RE = re.compile(r"^(\d{4})_[a-z0-9][a-z0-9._-]*\.sql$")
 
 
@@ -81,15 +83,25 @@ def require_file(path: str) -> str:
 for pattern in (
     ".github/workflows/closure-*.yml",
     ".github/workflows/closure-*.yaml",
-    "scripts/closure-ci-trigger-*",
-    "migrations/closure-ci-trigger-*",
+    "**/closure-ci-trigger-*",
     *TEMPORARY_WORKFLOW_PATTERNS,
 ):
     for path in sorted(ROOT.glob(pattern)):
-        PROBLEMS.append(f"temporary closure artifact remains: {relative(path)}")
+        if path.is_file():
+            PROBLEMS.append(f"temporary closure artifact remains: {relative(path)}")
 for path in TEMPORARY_EXACT_PATHS:
     if (ROOT / path).exists():
         PROBLEMS.append(f"temporary patcher remains: {path}")
+
+# Repository workflows are evidence producers, not source-control writers. Any
+# future write-capable workflow must be reviewed as an explicit administration
+# boundary rather than silently inheriting the default token.
+for workflow in sorted((ROOT / ".github/workflows").glob("*.y*ml")):
+    content = workflow.read_text(encoding="utf-8")
+    if CONTENTS_WRITE_PERMISSION.search(content):
+        PROBLEMS.append(
+            f"workflow has forbidden contents: write permission: {relative(workflow)}"
+        )
 
 plan = require_file(ACTIVE_PLAN)
 for marker in (
@@ -105,6 +117,8 @@ addendum = require_file(ACTIVE_ADDENDUM)
 for marker in (
     "Block H",
     "Block I",
+    "Block J",
+    "Block K",
     "REPOSITORY_CLOSED_CANDIDATE",
     "External production gates remain upstream blockers",
 ):
@@ -193,6 +207,8 @@ result = {
     "shared_trigger": TRIGGER_PATH,
     "migration_head": numbered[-1][1] if numbered else None,
     "documentation_contract": "ok" if documentation.returncode == 0 else "failed",
+    "workflow_contents_write": "forbidden",
+    "recursive_temporary_artifact_scan": true,
     "problems": PROBLEMS,
 }
 print(json.dumps(result, indent=2, ensure_ascii=False))
