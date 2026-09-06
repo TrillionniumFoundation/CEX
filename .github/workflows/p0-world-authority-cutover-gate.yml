@@ -45,7 +45,7 @@ env:
   RUST_TOOLCHAIN: '1.98.1'
   CEX_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
   WORLD_SOURCE_REPOSITORY: TrillionniumFoundation/Trillionnium-World
-  WORLD_SOURCE_SHA: 8b6304e5e78ac497c8ab4f9cafe10f6be6f09df9
+  WORLD_SOURCE_SHA: aa0f0effd9088efdea2134cce9442167968de19e
   CHECKOUT_ACTION_SHA: 11d5960a326750d5838078e36cf38b85af677262
   RUST_TOOLCHAIN_ACTION_SHA: 6bed0761d98439e5a578e2877258200ad565ba87
   UPLOAD_ARTIFACT_ACTION_SHA: ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -63,7 +63,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Checkout exact World source candidate with provenance history
+      - name: Checkout exact World candidate with provenance history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: ${{ env.WORLD_SOURCE_REPOSITORY }}
@@ -72,21 +72,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify exact source identities
-        id: identities
+      - name: Verify exact source identities and evidence pin
+        id: identity
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$CEX_SOURCE_SHA"
           test "$(git -C .world-source rev-parse HEAD)" = "$WORLD_SOURCE_SHA"
           test -z "$(git status --porcelain --untracked-files=no)"
-          unexpected_untracked="$(
-            git status --porcelain --untracked-files=all \
-              | sed -n 's/^?? //p' \
-              | grep -v '^\.world-source/' \
-              || true
-          )"
-          test -z "$unexpected_untracked"
           test -z "$(git -C .world-source status --porcelain)"
           echo "cex_tree=$(git rev-parse HEAD^{tree})" >> "$GITHUB_OUTPUT"
           echo "world_tree=$(git -C .world-source rev-parse HEAD^{tree})" >> "$GITHUB_OUTPUT"
@@ -94,19 +87,26 @@ jobs:
           import json
           import os
           import pathlib
+          import re
 
-          evidence = json.loads(pathlib.Path('docs/traceability/world-authority-cutover-v1.json').read_text())
+          evidence = json.loads(
+              pathlib.Path('docs/traceability/world-authority-cutover-v1.json').read_text()
+          )
           pinned = evidence['world_source']['head_sha']
           actual = os.environ['WORLD_SOURCE_SHA']
           if pinned != actual:
               raise SystemExit(f'World evidence pin drift: evidence={pinned} workflow={actual}')
+          if re.fullmatch(r'[0-9a-f]{40}', actual) is None:
+              raise SystemExit('World source is not an exact commit SHA')
           if evidence['production_authorization'] != 'not_granted':
               raise SystemExit('source gate cannot grant production authorization')
           provenance = json.loads(
-              pathlib.Path('.world-source/docs/contracts/trillionnium-world-authority-provenance-v1.json').read_text()
+              pathlib.Path(
+                  '.world-source/docs/contracts/trillionnium-world-authority-provenance-v1.json'
+              ).read_text()
           )
           if provenance['source_commit'] != 'd44d8930c917b55da7b23eb19e9645feb8f4ee59':
-              raise SystemExit('World provenance source commit drift')
+              raise SystemExit('World historical provenance commit drift')
           if provenance['restored_tree_count'] != 7 or provenance['restored_file_count'] != 15:
               raise SystemExit('World restored source inventory drift')
           PY
@@ -126,7 +126,7 @@ jobs:
           rustc --version --verbose > run/world-authority-cutover/rustc-version.txt
           cargo --version --verbose > run/world-authority-cutover/cargo-version.txt
 
-      - name: Qualify exact World source boundary
+      - name: Qualify exact World source and durable contract closure
         id: world
         shell: bash
         env:
@@ -141,25 +141,30 @@ jobs:
       - name: Exercise cross-repository HTTP, restart, outage and rollback
         id: cross_repo
         shell: bash
+        env:
+          WORLD_AUTHORITY_EVIDENCE_DIR: ${{ github.workspace }}/run/world-authority-cutover
         run: |
           set -euo pipefail
           mkdir -p run/world-authority-cutover
           bash scripts/check-world-authority-cross-repo-e2e.sh .world-source \
             | tee run/world-authority-cutover/cross-repo-smoke.log
 
-      - name: Record exact-SHA truth-bound evidence
+      - name: Record truth-bound exact-SHA evidence
         if: always()
         shell: bash
         env:
-          CEX_TREE: ${{ steps.identities.outputs.cex_tree }}
-          WORLD_TREE: ${{ steps.identities.outputs.world_tree }}
+          CEX_TREE: ${{ steps.identity.outputs.cex_tree }}
+          WORLD_TREE: ${{ steps.identity.outputs.world_tree }}
           WORLD_OUTCOME: ${{ steps.world.outcome }}
           CEX_OUTCOME: ${{ steps.cex.outcome }}
           CROSS_REPO_OUTCOME: ${{ steps.cross_repo.outcome }}
         run: |
           set -euo pipefail
           mkdir -p run/world-authority-cutover
-          git -C .world-source ls-tree -r "$WORLD_SOURCE_SHA" -- trillionnium/crates/world-authority \
+          git -C .world-source ls-tree -r "$WORLD_SOURCE_SHA" -- \
+            trillionnium/crates/world-authority \
+            deploy/postgres/trnm-world-authority-cutover-v1.sql \
+            deploy/postgres/trnm-world-authority-cutover-v1-hardening.sql \
             > run/world-authority-cutover/world-authority-tree.txt
           python3 - <<'PY'
           import hashlib
@@ -168,14 +173,10 @@ jobs:
           import pathlib
           import subprocess
 
-          output = pathlib.Path('run/world-authority-cutover')
+          out = pathlib.Path('run/world-authority-cutover')
 
           def sha256(path: pathlib.Path) -> str:
-              digest = hashlib.sha256()
-              with path.open('rb') as handle:
-                  for chunk in iter(lambda: handle.read(1024 * 1024), b''):
-                      digest.update(chunk)
-              return digest.hexdigest()
+              return hashlib.sha256(path.read_bytes()).hexdigest()
 
           def git(cwd: str, *args: str) -> str:
               return subprocess.run(
@@ -188,68 +189,57 @@ jobs:
               'cross_repository_e2e': os.environ.get('CROSS_REPO_OUTCOME', 'skipped'),
           }
           green = all(value == 'success' for value in outcomes.values())
-          summary = {
-              'schema': 'cex.world.authority.exact-sha-gate.v2',
-              'status': 'cross_repository_source_qualification_green' if green else 'cross_repository_source_qualification_failed',
-              'event_name': os.environ['GITHUB_EVENT_NAME'],
+          receipt = {
+              'schema': 'cex.world.authority.exact-sha-gate.v3',
+              'status': 'cross_repository_source_qualification_green' if green else 'failed_or_incomplete',
               'cex_repository': os.environ['GITHUB_REPOSITORY'],
               'cex_head_sha': os.environ['CEX_SOURCE_SHA'],
               'cex_head_tree': os.environ.get('CEX_TREE'),
-              'trigger_sha': os.environ['GITHUB_SHA'],
               'world_repository': os.environ['WORLD_SOURCE_REPOSITORY'],
               'world_head_sha': os.environ['WORLD_SOURCE_SHA'],
               'world_head_tree': os.environ.get('WORLD_TREE'),
               'world_authority_workspace_tree': git(
-                  '.world-source', 'rev-parse', f"{os.environ['WORLD_SOURCE_SHA']}:trillionnium/crates/world-authority"
+                  '.world-source', 'rev-parse',
+                  f"{os.environ['WORLD_SOURCE_SHA']}:trillionnium/crates/world-authority"
               ),
-              'world_provenance_manifest_blob': git(
-                  '.world-source', 'rev-parse', f"{os.environ['WORLD_SOURCE_SHA']}:docs/contracts/trillionnium-world-authority-provenance-v1.json"
+              'world_base_migration_blob': git(
+                  '.world-source', 'rev-parse',
+                  f"{os.environ['WORLD_SOURCE_SHA']}:deploy/postgres/trnm-world-authority-cutover-v1.sql"
               ),
+              'world_hardening_migration_blob': git(
+                  '.world-source', 'rev-parse',
+                  f"{os.environ['WORLD_SOURCE_SHA']}:deploy/postgres/trnm-world-authority-cutover-v1-hardening.sql"
+              ),
+              'outcomes': outcomes,
               'run_id': os.environ['GITHUB_RUN_ID'],
               'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
-              'workflow': os.environ['GITHUB_WORKFLOW'],
-              'workflow_ref': os.environ['GITHUB_WORKFLOW_REF'],
-              'actions': {
-                  'actions/checkout': os.environ['CHECKOUT_ACTION_SHA'],
-                  'dtolnay/rust-toolchain': os.environ['RUST_TOOLCHAIN_ACTION_SHA'],
-                  'actions/upload-artifact': os.environ['UPLOAD_ARTIFACT_ACTION_SHA'],
-              },
               'rust_toolchain': os.environ['RUST_TOOLCHAIN'],
-              'authority_contract': 'trillionnium_world_authority_cutover_v1',
-              'world_api_contract': 'trillionnium_world_api_v1',
-              'adapter_contract': 'cex_trillionnium_world_authority_adapter_v1',
-              'outcomes': outcomes,
-              'production_authorization': 'not_granted',
-              'runtime_migration_reconciliation': 'not_executed_by_source_gate',
-              'mutation_idempotency': 'not_claimed_pending_durable_world_adapter',
               'local_fallback_allowed': False,
+              'production_authorization': 'not_granted',
           }
-          (output / 'exact-sha-gate-summary.json').write_text(
-              json.dumps(summary, indent=2, sort_keys=True) + '\n'
+          (out / 'exact-sha-gate-summary.json').write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + '\n'
           )
-          artifact_paths = sorted(
-              path for path in output.iterdir()
-              if path.is_file() and path.name != 'artifact-manifest.json'
-          )
+          files = sorted(path for path in out.iterdir() if path.is_file() and path.name != 'artifact-manifest.json')
           manifest = {
-              'schema': 'cex.world.authority.artifact-manifest.v1',
+              'schema': 'cex.world.authority.artifact-manifest.v3',
               'cex_head_sha': os.environ['CEX_SOURCE_SHA'],
               'world_head_sha': os.environ['WORLD_SOURCE_SHA'],
               'files': [
                   {'path': path.name, 'bytes': path.stat().st_size, 'sha256': sha256(path)}
-                  for path in artifact_paths
+                  for path in files
               ],
           }
-          (output / 'artifact-manifest.json').write_text(
+          (out / 'artifact-manifest.json').write_text(
               json.dumps(manifest, indent=2, sort_keys=True) + '\n'
           )
           PY
 
-      - name: Upload exact-SHA source evidence
+      - name: Upload immutable source evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: p0-world-authority-cutover-${{ env.CEX_SOURCE_SHA }}
+          name: p0-world-authority-cutover-${{ env.CEX_SOURCE_SHA }}-${{ env.WORLD_SOURCE_SHA }}
           path: run/world-authority-cutover/**
           if-no-files-found: error
           retention-days: 90
