@@ -15,6 +15,7 @@ RUNNER="scripts/run-world-authority-adapter.sh"
 python3 - "$MAIN" "$ADAPTER" "$READINESS" "$EVIDENCE" "$ENV_EXAMPLE" "$DOC" "$RUNNER" <<'PY'
 import json
 import pathlib
+import re
 import sys
 
 main_path, adapter_path, readiness_path, evidence_path, env_path, doc_path, runner_path = map(pathlib.Path, sys.argv[1:])
@@ -131,28 +132,53 @@ if evidence.get("schema") != "cex.world.authority.cutover.evidence.v1":
     raise SystemExit("World cutover evidence schema mismatch")
 if evidence.get("production_authorization") != "not_granted":
     raise SystemExit("World cutover source evidence cannot grant production authorization")
+if evidence.get("authority_owner") != "TrillionniumFoundation/Trillionnium-World":
+    raise SystemExit("World authority owner repository drift")
 world_source = evidence.get("world_source", {})
 if world_source.get("pull_request") != 60:
     raise SystemExit("World source PR is not pinned to #60")
-if world_source.get("head_sha") != "554761417edbb37a2f20deed23917a9b05abdfe2":
-    raise SystemExit("World source must be pinned to the reviewed exact SHA")
+if world_source.get("branch") != "feat/p0-world-authority-cutover-20260906":
+    raise SystemExit("World source branch drift")
+head_sha = world_source.get("head_sha")
+if not isinstance(head_sha, str) or re.fullmatch(r"[0-9a-f]{40}", head_sha) is None:
+    raise SystemExit("World source head_sha is not an exact commit SHA")
+if world_source.get("historical_source_parent") != "d44d8930c917b55da7b23eb19e9645feb8f4ee59":
+    raise SystemExit("World historical source parent drift")
+if world_source.get("restored_server_crate_count") != 7:
+    raise SystemExit("World restored server crate count drift")
+if world_source.get("restored_historical_file_count") != 15:
+    raise SystemExit("World restored historical file count drift")
+if world_source.get("provenance_manifest") != "docs/contracts/trillionnium-world-authority-provenance-v1.json":
+    raise SystemExit("World provenance manifest path drift")
 if evidence.get("cex_candidate", {}).get("local_world_writer_production_status") != "quarantined":
     raise SystemExit("CEX production World writer quarantine is not recorded")
 controls = evidence.get("implemented_controls", {})
-for key in (
+required_true_controls = (
     "production_startup_requires_remote_mode",
+    "production_startup_requires_non_loopback_world_url",
+    "production_startup_requires_exact_api_contract",
+    "production_adapter_requires_strong_service_token",
     "production_local_world_mutations_return_503",
-    "adapter_failure_local_fallback",
     "cross_repository_exact_sha_checkout_gate_defined",
-):
-    if key not in controls:
-        raise SystemExit(f"World cutover control missing: {key}")
+    "development_restart_and_rollback_smoke_defined",
+    "historical_tree_and_blob_provenance_bound",
+    "provenance_hostile_fixtures_defined",
+    "world_lockfile_committed_and_immutable_during_gate",
+    "github_actions_pinned_to_commit_sha",
+)
+for key in required_true_controls:
+    if controls.get(key) is not True:
+        raise SystemExit(f"World cutover control is not true: {key}")
+if controls.get("adapter_has_local_world_state") is not False:
+    raise SystemExit("World adapter must not carry local World state")
 if controls.get("adapter_failure_local_fallback") is not False:
     raise SystemExit("World adapter must not use a local fallback")
+if controls.get("rust_toolchain_pinned") != "1.98.1":
+    raise SystemExit("World cutover Rust toolchain pin drift")
 blocking = [row for row in evidence.get("evidence_matrix", []) if row.get("blocking")]
 if not blocking:
     raise SystemExit("evidence matrix must retain unresolved production blockers")
-print("World authority static contracts and truth boundaries: ok")
+print(f"World authority static contracts and truth boundaries: ok ({head_sha})")
 PY
 
 cargo fmt --all -- --check
