@@ -119,8 +119,12 @@ for marker in (
     "Block I",
     "Block J",
     "Block K",
+    "Block L",
+    "Block M",
+    "Block N",
+    "Block O",
     "REPOSITORY_CLOSED_CANDIDATE",
-    "External production gates remain upstream blockers",
+    "External production and administration gates remain upstream blockers",
 ):
     if marker not in addendum:
         PROBLEMS.append(f"v12 addendum lacks required marker: {marker}")
