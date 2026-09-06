@@ -79,10 +79,7 @@ fn validate_world_authority_startup_from_env() -> Result<(), String> {
 }
 
 fn is_world_authoritative_write(method: &Method, path: &str) -> bool {
-    let write_method = method == Method::POST
-        || method == Method::PUT
-        || method == Method::PATCH
-        || method == Method::DELETE;
+    let write_method = matches!(method.as_str(), "POST" | "PUT" | "PATCH" | "DELETE");
     if !write_method {
         return false;
     }
