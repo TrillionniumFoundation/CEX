@@ -45,7 +45,7 @@ env:
   RUST_TOOLCHAIN: '1.98.1'
   CEX_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
   WORLD_SOURCE_REPOSITORY: TrillionniumFoundation/Trillionnium-World
-  WORLD_SOURCE_SHA: aa0f0effd9088efdea2134cce9442167968de19e
+  WORLD_SOURCE_SHA: ff2155a6ada81cae0a4c83dda73083469ec9a828
   CHECKOUT_ACTION_SHA: 11d5960a326750d5838078e36cf38b85af677262
   RUST_TOOLCHAIN_ACTION_SHA: 6bed0761d98439e5a578e2877258200ad565ba87
   UPLOAD_ARTIFACT_ACTION_SHA: ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -165,6 +165,10 @@ jobs:
             trillionnium/crates/world-authority \
             deploy/postgres/trnm-world-authority-cutover-v1.sql \
             deploy/postgres/trnm-world-authority-cutover-v1-hardening.sql \
+            scripts/apply-trnm-world-authority-cutover-v1.sh \
+            scripts/check-trnm-world-authority-postgres.sh \
+            scripts/check-trnm-world-authority-postgres-installation.sh \
+            scripts/run-trnm-world-authority-postgres-check.sh \
             > run/world-authority-cutover/world-authority-tree.txt
           python3 - <<'PY'
           import hashlib
@@ -190,7 +194,7 @@ jobs:
           }
           green = all(value == 'success' for value in outcomes.values())
           receipt = {
-              'schema': 'cex.world.authority.exact-sha-gate.v3',
+              'schema': 'cex.world.authority.exact-sha-gate.v4',
               'status': 'cross_repository_source_qualification_green' if green else 'failed_or_incomplete',
               'cex_repository': os.environ['GITHUB_REPOSITORY'],
               'cex_head_sha': os.environ['CEX_SOURCE_SHA'],
@@ -210,6 +214,10 @@ jobs:
                   '.world-source', 'rev-parse',
                   f"{os.environ['WORLD_SOURCE_SHA']}:deploy/postgres/trnm-world-authority-cutover-v1-hardening.sql"
               ),
+              'world_installation_checker_blob': git(
+                  '.world-source', 'rev-parse',
+                  f"{os.environ['WORLD_SOURCE_SHA']}:scripts/check-trnm-world-authority-postgres-installation.sh"
+              ),
               'outcomes': outcomes,
               'run_id': os.environ['GITHUB_RUN_ID'],
               'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
@@ -222,7 +230,7 @@ jobs:
           )
           files = sorted(path for path in out.iterdir() if path.is_file() and path.name != 'artifact-manifest.json')
           manifest = {
-              'schema': 'cex.world.authority.artifact-manifest.v3',
+              'schema': 'cex.world.authority.artifact-manifest.v4',
               'cex_head_sha': os.environ['CEX_SOURCE_SHA'],
               'world_head_sha': os.environ['WORLD_SOURCE_SHA'],
               'files': [
