@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply PROJECT_BOUNDARY deny policy to the actual base-to-head changed-path set."""
+"""Apply the project-boundary policy to the actual base-to-head changed-path set."""
 
 from __future__ import annotations
 
@@ -9,20 +9,21 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parents[1]
 BOUNDARY_PATH = "PROJECT_BOUNDARY.json"
 MANIFEST_PATH = "docs/compatibility/world-surface-freeze-v1.json"
-QUARANTINED_ROOTS = (
-    "services/consumer-entry-api",
-    "services/matrix-entry-adapter",
-)
+CARGO_CLOSURE_CHECKER = "scripts/check-project-boundary-cargo-closure.py"
 SHA1_RE = re.compile(r"^[0-9a-f]{40}$")
+CARGO_CARRIER_PATH = re.compile(
+    r"^(?:crates|services|apps|vendor|tools)/[^/]+/"
+    r"(?:Cargo\.toml|build\.rs|src(?:/|$)|tests(?:/|$)|examples(?:/|$)|benches(?:/|$))"
+)
 
 
 class ChangedPathViolation(RuntimeError):
-    pass
+    """Raised when a changed path escapes the reviewed project boundary."""
 
 
 def require(condition: bool, message: str) -> None:
@@ -40,12 +41,13 @@ def git(*args: str, check: bool = True) -> str:
     )
     if check and result.returncode != 0:
         raise ChangedPathViolation(
-            f"git {' '.join(args)} failed: {result.stderr.strip() or result.stdout.strip()}"
+            f"git {' '.join(args)} failed: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
         )
     return result.stdout.strip()
 
 
-def load_json(relative: str) -> dict:
+def load_json(relative: str) -> dict[str, Any]:
     try:
         value = json.loads((ROOT / relative).read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -86,7 +88,7 @@ def committed_path_exists(path: str) -> bool:
     return result.returncode == 0
 
 
-def manifest_source_paths(manifest: dict) -> set[str]:
+def manifest_root_source_paths(manifest: dict[str, Any]) -> set[str]:
     paths: set[str] = set()
     crates = manifest.get("quarantined_crates")
     require(isinstance(crates, list), "quarantined_crates must be a list")
@@ -101,103 +103,53 @@ def manifest_source_paths(manifest: dict) -> set[str]:
     return paths
 
 
-def is_controlled_code_path(path: str) -> bool:
-    return any(
-        path == f"{root}/Cargo.toml"
-        or path == f"{root}/build.rs"
-        or path.startswith(f"{root}/src/")
-        for root in QUARANTINED_ROOTS
+def manifest_controlled_packages(manifest: dict[str, Any]) -> set[str]:
+    packages: set[str] = set()
+    for field in ("quarantined_crates", "local_cargo_dependency_closure"):
+        entries = manifest.get(field)
+        require(isinstance(entries, list), f"{field} must be a list")
+        for entry in entries:
+            require(isinstance(entry, dict), f"{field} entry must be an object")
+            path = entry.get("path")
+            require(isinstance(path, str) and path, f"{field} package path missing")
+            require(path not in packages, f"duplicate controlled package: {path}")
+            packages.add(path)
+    return packages
+
+
+def package_for_path(path: str, packages: set[str]) -> str | None:
+    matches = [
+        package
+        for package in packages
+        if path == package or path.startswith(f"{package}/")
+    ]
+    if not matches:
+        return None
+    return max(matches, key=len)
+
+
+def run_cargo_closure_checker() -> dict[str, Any]:
+    result = subprocess.run(
+        [sys.executable, str(ROOT / CARGO_CLOSURE_CHECKER)],
+        cwd=ROOT,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
-
-
-def validate_changed_paths(
-    changed_paths: set[str],
-    deny_pattern: re.Pattern[str],
-    source_paths: set[str],
-) -> dict:
-    controlled = sorted(path for path in changed_paths if is_controlled_code_path(path))
-    matched = sorted(path for path in changed_paths if deny_pattern.match(path))
-    unmatched_controlled = sorted(path for path in controlled if deny_pattern.match(path) is None)
-    require(
-        not unmatched_controlled,
-        f"actual controlled changed paths escape deny_changed_paths_regex: {unmatched_controlled}",
-    )
-
-    if controlled:
-        require(
-            MANIFEST_PATH in changed_paths,
-            "quarantined source/Cargo changed without an explicit World surface manifest update",
-        )
-
-    for path in controlled:
-        if path.endswith("/build.rs"):
-            require(
-                not committed_path_exists(path),
-                f"Cargo build script exists after the candidate change: {path}",
-            )
-        elif "/src/" in path and committed_path_exists(path):
-            require(
-                path in source_paths,
-                f"actual changed source is not bound by the recursive manifest: {path}",
-            )
-
-    require(
-        deny_pattern.match("services/consumer-entry-api/src/world/economy.rs") is not None,
-        "deny regex does not match nested World source",
-    )
-    require(
-        deny_pattern.match("services/consumer-entry-api/src/cache.rs") is not None,
-        "deny regex does not match neutral-stem source",
-    )
-    require(
-        deny_pattern.match("services/matrix-entry-adapter/src/relay_extra.rs") is not None,
-        "deny regex does not match additional Matrix carrier",
-    )
-    require(
-        deny_pattern.match("services/consumer-entry-api/build.rs") is not None,
-        "deny regex does not match consumer build script",
-    )
-    require(
-        deny_pattern.match("services/matrix-entry-adapter/build.rs") is not None,
-        "deny regex does not match Matrix build script",
-    )
-
-    return {
-        "changed_path_count": len(changed_paths),
-        "controlled_changed_paths": controlled,
-        "deny_matched_changed_paths": matched,
-        "manifest_review_bound": not controlled or MANIFEST_PATH in changed_paths,
-    }
-
-
-def expect_rejected(label: str, operation) -> None:
     try:
-        operation()
-    except ChangedPathViolation:
-        print(f"hostile changed-path fixture rejected: {label}", file=sys.stderr)
-        return
-    raise ChangedPathViolation(f"hostile changed-path fixture accepted: {label}")
-
-
-def run_hostile_tests(deny_pattern: re.Pattern[str], source_paths: set[str]) -> list[str]:
-    executed: list[str] = []
-    for label, path in (
-        ("nested_without_manifest", "services/consumer-entry-api/src/world/economy.rs"),
-        ("neutral_without_manifest", "services/consumer-entry-api/src/cache.rs"),
-        ("matrix_carrier_without_manifest", "services/matrix-entry-adapter/src/relay_extra.rs"),
-    ):
-        expect_rejected(
-            label,
-            lambda path=path: validate_changed_paths({path}, deny_pattern, source_paths),
-        )
-        executed.append(label)
-
-    expect_rejected(
-        "existing_build_script_with_manifest",
-        lambda: require(False, "synthetic build script must be rejected"),
+        evidence = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise ChangedPathViolation(
+            "Cargo closure checker did not emit one JSON object: "
+            f"{result.stdout[:500]!r}; stderr={result.stderr[:500]!r}"
+        ) from error
+    require(
+        result.returncode == 0 and evidence.get("status") == "ok",
+        "transitive Cargo closure failed before changed-path acceptance: "
+        f"{evidence.get('problems') or result.stderr.strip()}",
     )
-    executed.append("existing_build_script_with_manifest")
-    return executed
+    return evidence
 
 
 def changed_paths_between(base_sha: str, head_sha: str = "HEAD") -> set[str]:
@@ -214,6 +166,154 @@ def changed_paths_between(base_sha: str, head_sha: str = "HEAD") -> set[str]:
     return {line for line in output.splitlines() if line}
 
 
+def validate_changed_paths(
+    changed_paths: set[str],
+    deny_pattern: re.Pattern[str],
+    root_source_paths: set[str],
+    controlled_packages: set[str],
+    cargo_closure_green: bool,
+) -> dict[str, Any]:
+    controlled = sorted(
+        path
+        for path in changed_paths
+        if path == "Cargo.toml"
+        or path in {".cargo/config", ".cargo/config.toml"}
+        or package_for_path(path, controlled_packages) is not None
+    )
+    potential_carriers = sorted(
+        path for path in changed_paths if CARGO_CARRIER_PATH.match(path)
+    )
+    matched = sorted(path for path in changed_paths if deny_pattern.match(path))
+    unmatched_controlled = sorted(
+        path for path in controlled if deny_pattern.match(path) is None
+    )
+    require(
+        not unmatched_controlled,
+        "actual controlled changed paths escape deny_changed_paths_regex: "
+        f"{unmatched_controlled}",
+    )
+    require(
+        cargo_closure_green,
+        "changed-path acceptance requires the exact transitive Cargo closure checker",
+    )
+
+    if controlled:
+        require(
+            MANIFEST_PATH in changed_paths,
+            "controlled source/Cargo/package tree changed without an explicit "
+            "World surface manifest update",
+        )
+
+    for path in controlled:
+        package = package_for_path(path, controlled_packages)
+        if path.endswith("/build.rs") or path in {
+            "services/consumer-entry-api/build.rs",
+            "services/matrix-entry-adapter/build.rs",
+        }:
+            require(
+                not committed_path_exists(path),
+                f"Cargo build script exists after the candidate change: {path}",
+            )
+        if package in {
+            "services/consumer-entry-api",
+            "services/matrix-entry-adapter",
+        } and "/src/" in path and committed_path_exists(path):
+            require(
+                path in root_source_paths,
+                f"actual quarantined source is not bound by the recursive manifest: {path}",
+            )
+
+    coverage_samples = (
+        "Cargo.toml",
+        "services/consumer-entry-api/src/world/economy.rs",
+        "services/consumer-entry-api/src/cache.rs",
+        "services/matrix-entry-adapter/src/relay_extra.rs",
+        "services/ledger-service/src/lib.rs",
+        "crates/shared-tracing/src/lib.rs",
+        "crates/shared-config/src/lib.rs",
+        "crates/shared-types/src/lib.rs",
+        "vendor/trnm-economy-protocol/src/lib.rs",
+        "services/consumer-entry-api/build.rs",
+        "services/matrix-entry-adapter/build.rs",
+    )
+    for sample in coverage_samples:
+        require(
+            deny_pattern.match(sample) is not None,
+            f"deny regex does not cover controlled or hostile path: {sample}",
+        )
+
+    return {
+        "changed_path_count": len(changed_paths),
+        "controlled_changed_paths": controlled,
+        "potential_local_cargo_carrier_changed_paths": potential_carriers,
+        "deny_matched_changed_paths": matched,
+        "manifest_review_bound": not controlled or MANIFEST_PATH in changed_paths,
+        "cargo_closure_verified": cargo_closure_green,
+    }
+
+
+def expect_rejected(label: str, operation: Callable[[], None]) -> None:
+    try:
+        operation()
+    except ChangedPathViolation:
+        print(f"hostile changed-path fixture rejected: {label}", file=sys.stderr)
+        return
+    raise ChangedPathViolation(f"hostile changed-path fixture accepted: {label}")
+
+
+def run_hostile_tests(
+    deny_pattern: re.Pattern[str],
+    root_source_paths: set[str],
+    controlled_packages: set[str],
+) -> list[str]:
+    executed: list[str] = []
+    fixtures = (
+        (
+            "nested_without_manifest",
+            {"services/consumer-entry-api/src/world/economy.rs"},
+            True,
+        ),
+        (
+            "neutral_without_manifest",
+            {"services/consumer-entry-api/src/cache.rs"},
+            True,
+        ),
+        (
+            "matrix_carrier_without_manifest",
+            {"services/matrix-entry-adapter/src/relay_extra.rs"},
+            True,
+        ),
+        (
+            "dependency_package_without_manifest",
+            {"services/ledger-service/src/lib.rs"},
+            True,
+        ),
+        (
+            "workspace_manifest_without_boundary_manifest",
+            {"Cargo.toml"},
+            True,
+        ),
+        (
+            "closure_checker_failure",
+            {MANIFEST_PATH, "Cargo.toml"},
+            False,
+        ),
+    )
+    for label, paths, cargo_green in fixtures:
+        expect_rejected(
+            label,
+            lambda paths=paths, cargo_green=cargo_green: validate_changed_paths(
+                paths,
+                deny_pattern,
+                root_source_paths,
+                controlled_packages,
+                cargo_green,
+            ),
+        )
+        executed.append(label)
+    return executed
+
+
 def main() -> int:
     try:
         boundary = load_json(BOUNDARY_PATH)
@@ -227,25 +327,51 @@ def main() -> int:
         try:
             deny_pattern = re.compile(regex)
         except re.error as error:
-            raise ChangedPathViolation(f"invalid deny_changed_paths_regex: {error}") from error
+            raise ChangedPathViolation(
+                f"invalid deny_changed_paths_regex: {error}"
+            ) from error
 
         base_sha = event_base_sha()
         require(
             base_sha is not None,
-            "actual changed-path validation requires PROJECT_BOUNDARY_BASE_SHA, BASE_SHA, GITHUB_BASE_SHA or a GitHub event base",
+            "actual changed-path validation requires PROJECT_BOUNDARY_BASE_SHA, "
+            "BASE_SHA, GITHUB_BASE_SHA or a GitHub event base",
         )
         head_sha = git("rev-parse", "HEAD")
-        source_paths = manifest_source_paths(manifest)
+        root_source_paths = manifest_root_source_paths(manifest)
+        controlled_packages = manifest_controlled_packages(manifest)
+        cargo_evidence = run_cargo_closure_checker()
         changed_paths = changed_paths_between(base_sha)
-        evidence = validate_changed_paths(changed_paths, deny_pattern, source_paths)
-        hostile = run_hostile_tests(deny_pattern, source_paths)
+        evidence = validate_changed_paths(
+            changed_paths,
+            deny_pattern,
+            root_source_paths,
+            controlled_packages,
+            cargo_evidence.get("status") == "ok",
+        )
+        hostile = run_hostile_tests(
+            deny_pattern,
+            root_source_paths,
+            controlled_packages,
+        )
 
         result = {
-            "schema": "cex.project-boundary.changed-path-check.v1",
+            "schema": "cex.project-boundary.changed-path-check.v2",
             "status": "ok",
             "base_sha": base_sha,
             "head_sha": head_sha,
+            "controlled_packages": sorted(controlled_packages),
             **evidence,
+            "cargo_closure_summary": {
+                "reachable_local_packages": cargo_evidence.get(
+                    "reachable_local_packages",
+                    [],
+                ),
+                "local_dependency_edges": cargo_evidence.get(
+                    "local_dependency_edges",
+                    0,
+                ),
+            },
             "hostile_fixtures_rejected": hostile,
             "deny_changed_paths_regex": regex,
             "production_authorization": "not_granted",
@@ -257,7 +383,7 @@ def main() -> int:
         print(
             json.dumps(
                 {
-                    "schema": "cex.project-boundary.changed-path-check.v1",
+                    "schema": "cex.project-boundary.changed-path-check.v2",
                     "status": "failed",
                     "production_authorization": "not_granted",
                     "problems": [str(error)],
