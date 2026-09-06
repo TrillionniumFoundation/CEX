@@ -22,6 +22,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Install selected formatter
@@ -30,7 +31,7 @@ jobs:
           toolchain: 1.98.1
           components: rustfmt
 
-      - name: Produce reviewable formatting delta
+      - name: Produce reviewable formatting delta and source snapshot
         shell: bash
         run: |
           set -euo pipefail
@@ -48,14 +49,15 @@ jobs:
                 ;;
             esac
           done < run/rustfmt/files.txt
-          sha256sum run/rustfmt/rustfmt.patch > run/rustfmt/SHA256SUMS
+          git ls-files -z | tar --null --files-from=- --create --gzip --file=run/rustfmt/formatted-source.tar.gz
+          sha256sum run/rustfmt/rustfmt.patch run/rustfmt/formatted-source.tar.gz > run/rustfmt/SHA256SUMS
           printf '%s\n' "${GITHUB_SHA}" > run/rustfmt/HEAD
           git rev-parse 'HEAD^{tree}' > run/rustfmt/TREE
 
       - name: Upload exact-head formatter artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: cex-rustfmt-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          name: cex-rustfmt-source-${{ github.sha }}-attempt-${{ github.run_attempt }}
           path: run/rustfmt/
           if-no-files-found: error
           retention-days: 3
