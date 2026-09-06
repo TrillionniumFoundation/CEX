@@ -26,7 +26,7 @@ concurrency:
 env:
   CEX_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
   WORLD_SOURCE_REPOSITORY: TrillionniumFoundation/Trillionnium-World
-  WORLD_SOURCE_SHA: aa0f0effd9088efdea2134cce9442167968de19e
+  WORLD_SOURCE_SHA: ff2155a6ada81cae0a4c83dda73083469ec9a828
   CHECKOUT_ACTION_SHA: 11d5960a326750d5838078e36cf38b85af677262
   UPLOAD_ARTIFACT_ACTION_SHA: ea165f8d65b6e75b540449e92b4886f43607fa02
   PGHOST: 127.0.0.1
@@ -88,7 +88,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends postgresql-client
           test "$(psql -X -Atc 'show server_version_num' | cut -c1-2)" = "16"
 
-      - name: Run durable migration and hostile matrix
+      - name: Run durable state-machine and installation hostile matrices
         id: postgres
         shell: bash
         env:
@@ -112,7 +112,7 @@ jobs:
               return hashlib.sha256(path.read_bytes()).hexdigest()
           outcome = os.environ.get('POSTGRES_OUTCOME', 'skipped')
           receipt = {
-              'schema': 'cex.world.postgres-cutover-exact-sha.v2',
+              'schema': 'cex.world.postgres-cutover-exact-sha.v3',
               'status': 'qualified' if outcome == 'success' else 'failed_or_incomplete',
               'postgres_outcome': outcome,
               'cex_head_sha': os.environ['CEX_SOURCE_SHA'],
@@ -121,7 +121,8 @@ jobs:
               'world_head_tree': git('.world-source', 'rev-parse', 'HEAD^{tree}'),
               'base_migration_blob': git('.world-source', 'rev-parse', 'HEAD:deploy/postgres/trnm-world-authority-cutover-v1.sql'),
               'hardening_migration_blob': git('.world-source', 'rev-parse', 'HEAD:deploy/postgres/trnm-world-authority-cutover-v1-hardening.sql'),
-              'checker_blob': git('.world-source', 'rev-parse', 'HEAD:scripts/check-trnm-world-authority-postgres.sh'),
+              'state_checker_blob': git('.world-source', 'rev-parse', 'HEAD:scripts/check-trnm-world-authority-postgres.sh'),
+              'installation_checker_blob': git('.world-source', 'rev-parse', 'HEAD:scripts/check-trnm-world-authority-postgres-installation.sh'),
               'psql_adapter_blob': git('.world-source', 'rev-parse', 'HEAD:scripts/run-trnm-world-authority-postgres-check.sh'),
               'run_id': os.environ['GITHUB_RUN_ID'],
               'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
@@ -130,7 +131,7 @@ jobs:
           (out / 'exact-sha-identity.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
           files = sorted(p for p in out.iterdir() if p.is_file() and p.name != 'artifact-manifest.json')
           manifest = {
-              'schema': 'cex.world.postgres-cutover-artifact-manifest.v2',
+              'schema': 'cex.world.postgres-cutover-artifact-manifest.v3',
               'files': [{'path': p.name, 'bytes': p.stat().st_size, 'sha256': sha256(p)} for p in files],
           }
           (out / 'artifact-manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
@@ -140,7 +141,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: p0-world-authority-postgres-v2-${{ env.CEX_SOURCE_SHA }}-${{ env.WORLD_SOURCE_SHA }}
+          name: p0-world-authority-postgres-v3-${{ env.CEX_SOURCE_SHA }}-${{ env.WORLD_SOURCE_SHA }}
           path: run/world-authority-postgres-v2/**
           if-no-files-found: error
           retention-days: 90
