@@ -1,0 +1,146 @@
+name: p0-world-authority-postgres-v2-gate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/p0-world-authority-postgres-v2-gate.yml'
+      - 'docs/traceability/world-authority-cutover-v1.json'
+      - 'docs/world-authority-cutover-v1.md'
+  push:
+    branches:
+      - main
+      - 'fix/hepta-p0-blocker-closure-*'
+    paths:
+      - '.github/workflows/p0-world-authority-postgres-v2-gate.yml'
+      - 'docs/traceability/world-authority-cutover-v1.json'
+      - 'docs/world-authority-cutover-v1.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p0-world-authority-postgres-v2-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CEX_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  WORLD_SOURCE_REPOSITORY: TrillionniumFoundation/Trillionnium-World
+  WORLD_SOURCE_SHA: 06fd3f8f7c7c46a385165e817bd4e859fea7639b
+  CHECKOUT_ACTION_SHA: 11d5960a326750d5838078e36cf38b85af677262
+  UPLOAD_ARTIFACT_ACTION_SHA: ea165f8d65b6e75b540449e92b4886f43607fa02
+  PGHOST: 127.0.0.1
+  PGPORT: '5432'
+  PGUSER: postgres
+  PGPASSWORD: postgres
+  PGDATABASE: postgres
+
+jobs:
+  postgres-cutover-state-machine:
+    name: p0-world-authority-postgres-v2/exact-sha-state-machine
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Checkout exact CEX candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.CEX_SOURCE_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout exact World candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ${{ env.WORLD_SOURCE_REPOSITORY }}
+          ref: ${{ env.WORLD_SOURCE_SHA }}
+          path: .world-source
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CEX_SOURCE_SHA"
+          test "$(git -C .world-source rev-parse HEAD)" = "$WORLD_SOURCE_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          test -z "$(git -C .world-source status --porcelain)"
+
+      - name: Install PostgreSQL client
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-client
+          test "$(psql -X -Atc 'show server_version_num' | cut -c1-2)" = "16"
+
+      - name: Run durable migration and hostile matrix
+        id: postgres
+        shell: bash
+        env:
+          TRNM_WORLD_POSTGRES_EVIDENCE_DIR: ${{ github.workspace }}/run/world-authority-postgres-v2
+        run: bash .world-source/scripts/run-trnm-world-authority-postgres-check.sh
+
+      - name: Record exact identities and outcomes
+        if: always()
+        shell: bash
+        env:
+          POSTGRES_OUTCOME: ${{ steps.postgres.outcome }}
+        run: |
+          set -euo pipefail
+          mkdir -p run/world-authority-postgres-v2
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          out = pathlib.Path('run/world-authority-postgres-v2')
+          def git(cwd, *args):
+              return subprocess.run(['git', *args], cwd=cwd, check=True, text=True, stdout=subprocess.PIPE).stdout.strip()
+          def sha256(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+          outcome = os.environ.get('POSTGRES_OUTCOME', 'skipped')
+          receipt = {
+              'schema': 'cex.world.postgres-cutover-exact-sha.v2',
+              'status': 'qualified' if outcome == 'success' else 'failed_or_incomplete',
+              'postgres_outcome': outcome,
+              'cex_head_sha': os.environ['CEX_SOURCE_SHA'],
+              'cex_head_tree': git('.', 'rev-parse', 'HEAD^{tree}'),
+              'world_head_sha': os.environ['WORLD_SOURCE_SHA'],
+              'world_head_tree': git('.world-source', 'rev-parse', 'HEAD^{tree}'),
+              'base_migration_blob': git('.world-source', 'rev-parse', 'HEAD:deploy/postgres/trnm-world-authority-cutover-v1.sql'),
+              'hardening_migration_blob': git('.world-source', 'rev-parse', 'HEAD:deploy/postgres/trnm-world-authority-cutover-v1-hardening.sql'),
+              'checker_blob': git('.world-source', 'rev-parse', 'HEAD:scripts/check-trnm-world-authority-postgres.sh'),
+              'psql_adapter_blob': git('.world-source', 'rev-parse', 'HEAD:scripts/run-trnm-world-authority-postgres-check.sh'),
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'production_authorization': 'not_granted',
+          }
+          (out / 'exact-sha-identity.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
+          files = sorted(p for p in out.iterdir() if p.is_file() and p.name != 'artifact-manifest.json')
+          manifest = {
+              'schema': 'cex.world.postgres-cutover-artifact-manifest.v2',
+              'files': [{'path': p.name, 'bytes': p.stat().st_size, 'sha256': sha256(p)} for p in files],
+          }
+          (out / 'artifact-manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
+          PY
+
+      - name: Upload immutable evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: p0-world-authority-postgres-v2-${{ env.CEX_SOURCE_SHA }}-${{ env.WORLD_SOURCE_SHA }}
+          path: run/world-authority-postgres-v2/**
+          if-no-files-found: error
+          retention-days: 90
