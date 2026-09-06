@@ -1,8 +1,8 @@
 {
   "schema": "cex.p0-candidate-trigger.v1",
   "plan": "CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
-  "sequence": 10,
-  "purpose": "Qualify one exact v12 tree after development-document authority deepening, exact-tree integrity binding, strict Hepta PostgreSQL recovery, complete-suite lint ownership, native TRNM cutover, and removal of closure scaffolding.",
-  "qualification_scope": "repository-exact-money-control-plane-plus-hepta-durability-doc-integrity-and-full-suite-lint",
+  "sequence": 11,
+  "purpose": "Qualify one exact v12 tree after closing repository-actionable P0 blockers: complete workspace module documentation, fail-closed Capability authority, authoritative exact-money isolation, World/Consumer scope containment, reviewed source governance, service-owned TRNM settlement migration evidence, strict Hepta PostgreSQL recovery, and removal of write-capable closure scaffolding.",
+  "qualification_scope": "repository-exact-money-control-plane-plus-hepta-durability-module-docs-capability-boundary-world-freeze-and-source-governance",
   "production_authorization": "not_granted"
 }
