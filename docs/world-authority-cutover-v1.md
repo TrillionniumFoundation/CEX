@@ -7,7 +7,7 @@ production_authorization: `not_granted`
 
 `TrillionniumFoundation/Trillionnium-World` owns World topology, movement, tactics, commerce, company/shop/work-order, progression and their source-versioned projections. CEX owns authenticated ingress, identity/session binding, request normalization and exact economic settlement integration. CEX must not remain a second World state writer.
 
-World PR #60 provides a bounded seven-crate server authority workspace and mandatory PostgreSQL cutover hardening at exact commit `aa0f0effd9088efdea2134cce9442167968de19e`. CEX PR #34 adds a remote-only adapter plus a production write fence. Neither change self-grants production authority.
+World PR #60 provides a bounded seven-crate server authority workspace and mandatory PostgreSQL cutover hardening at exact commit `ff2155a6ada81cae0a4c83dda73083469ec9a828`. CEX PR #34 adds a remote-only adapter plus a production write fence. Neither change self-grants production authority.
 
 ## CEX runtime modes
 
@@ -51,7 +51,7 @@ deploy/postgres/trnm-world-authority-cutover-v1.sql
 deploy/postgres/trnm-world-authority-cutover-v1-hardening.sql
 ```
 
-and then verifies both exact migration markers. The mandatory hardening adds:
+and then verifies both exact migration markers and the semantic definition of the single-active-writer index. The mandatory hardening adds:
 
 - a database unique constraint allowing at most one active, write-enabled epoch;
 - global transaction-level activation serialization;
@@ -63,11 +63,19 @@ and then verifies both exact migration markers. The mandatory hardening adds:
 - fail-closed migration-version conflict handling;
 - terminal rollback that disables the writer while retaining append-only evidence.
 
-The PostgreSQL 16 hostile suite exercises concurrent activation of different epochs, concurrent exact replay, noncanonical snapshot and command JSON, migration marker conflicts, mutation after rollback, database outage, and cold `pg_dump`/`pg_restore`. These are source-level database qualifications, not evidence that any production dataset has been migrated.
+The PostgreSQL 16 state-machine suite exercises concurrent activation of different epochs, concurrent exact replay, noncanonical snapshot and command JSON, migration marker conflicts, mutation after rollback, database outage, and cold `pg_dump`/`pg_restore`.
+
+A separate installation-protocol suite additionally proves:
+
+- applying the complete supported bundle twice is idempotent;
+- a base-only partial schema is explicitly unqualified and is recovered by the supported installer;
+- a pre-existing same-name index with a wrong expression or predicate is rejected rather than being mistaken for the single-writer control.
+
+These are source-level database qualifications, not evidence that any production dataset has been migrated.
 
 ## Cross-repository source gates
 
-`.github/workflows/p0-world-authority-cutover-gate.yml` checks out World commit `aa0f0effd9088efdea2134cce9442167968de19e` by exact SHA. `.github/workflows/p0-world-authority-postgres-v2-gate.yml` independently runs the durable database hostile suite against the same exact World candidate. Checkout, Rust toolchain and artifact upload actions are pinned to immutable commits, and Rust is pinned to `1.98.1`.
+`.github/workflows/p0-world-authority-cutover-gate.yml` checks out World commit `ff2155a6ada81cae0a4c83dda73083469ec9a828` by exact SHA. `.github/workflows/p0-world-authority-postgres-v2-gate.yml` independently runs the durable state-machine and installation-protocol hostile suites against the same exact World candidate. Checkout, Rust toolchain and artifact upload actions are pinned to immutable commits, and Rust is pinned to `1.98.1`.
 
 The World protected source definitions also include the `trnm-game-ci`, `trnm-world-p0-boundaries`, `trnm-world-status-evidence`, and `trnm-world-postgres-cutover` contexts. GitHub has not created native World workflow runs for the current exact head, so checked-in workflow definitions are not treated as successful status checks.
 
@@ -85,7 +93,7 @@ The CEX gates verify:
 10. fail-closed `503` behavior while the World process is unavailable;
 11. file-snapshot rollback in the development evidence harness;
 12. stable repeated read projections;
-13. the PostgreSQL hostile state-machine matrix and cold backup/restore;
+13. the PostgreSQL hostile state-machine, installation, cold backup/restore, and outage matrices;
 14. exact CEX and World commit/tree identities plus SHA-256 artifact manifests.
 
 These qualifications do not substitute for native World protected-context execution, live backfill reconciliation, deployment-specific secrets/IAM, or a production rollback drill.
