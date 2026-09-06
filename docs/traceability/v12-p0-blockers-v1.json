@@ -79,10 +79,14 @@
       ],
       "verification": [
         "scripts/check-project-boundary.py",
+        "scripts/check-project-boundary-cargo-closure.py",
+        "scripts/check-project-boundary-changed-paths.py",
         "scripts/project-preflight.sh"
       ],
       "gates": [
-        ".github/workflows/rust-service-gate.yml"
+        ".github/workflows/rust-service-gate.yml",
+        ".github/workflows/project-boundary-gate.yml",
+        ".github/workflows/project-boundary-changed-path-gate.yml"
       ]
     },
     {
