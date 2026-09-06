@@ -9,11 +9,19 @@ on:
         type: string
   pull_request:
     paths:
+      - 'Cargo.toml'
+      - '.cargo/**'
       - 'PROJECT_BOUNDARY.json'
       - 'services/consumer-entry-api/**'
       - 'services/matrix-entry-adapter/**'
+      - 'services/ledger-service/**'
+      - 'crates/shared-tracing/**'
+      - 'crates/shared-config/**'
+      - 'crates/shared-types/**'
+      - 'vendor/trnm-economy-protocol/**'
       - 'docs/compatibility/world-surface-freeze-v1.json'
       - 'scripts/check-project-boundary.py'
+      - 'scripts/check-project-boundary-cargo-closure.py'
       - 'scripts/check-project-boundary-changed-paths.py'
       - '.github/workflows/project-boundary-gate.yml'
       - '.github/workflows/project-boundary-changed-path-gate.yml'
@@ -22,11 +30,19 @@ on:
       - main
       - 'fix/hepta-p0-blocker-closure-*'
     paths:
+      - 'Cargo.toml'
+      - '.cargo/**'
       - 'PROJECT_BOUNDARY.json'
       - 'services/consumer-entry-api/**'
       - 'services/matrix-entry-adapter/**'
+      - 'services/ledger-service/**'
+      - 'crates/shared-tracing/**'
+      - 'crates/shared-config/**'
+      - 'crates/shared-types/**'
+      - 'vendor/trnm-economy-protocol/**'
       - 'docs/compatibility/world-surface-freeze-v1.json'
       - 'scripts/check-project-boundary.py'
+      - 'scripts/check-project-boundary-cargo-closure.py'
       - 'scripts/check-project-boundary-changed-paths.py'
       - '.github/workflows/project-boundary-gate.yml'
       - '.github/workflows/project-boundary-changed-path-gate.yml'
@@ -46,9 +62,9 @@ env:
 
 jobs:
   actual-changed-path-semantics:
-    name: project-boundary/actual-changed-path-semantics
+    name: project-boundary/actual-changed-path-and-cargo-semantics
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout exact source head and base history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -57,7 +73,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Validate exact source changed-path set
+      - name: Validate exact source changed-path and Cargo closure set
         shell: bash
         run: |
           set -euo pipefail
@@ -69,7 +85,7 @@ jobs:
             python3 scripts/check-project-boundary-changed-paths.py \
             | tee run/project-boundary-changed-path/source-head.json
 
-      - name: Resolve and validate prospective merge changed-path set
+      - name: Resolve and validate prospective merge changed-path and Cargo closure set
         if: github.event_name == 'pull_request'
         shell: bash
         run: |
@@ -129,10 +145,10 @@ jobs:
               if path.is_file():
                   outcomes[name] = json.loads(path.read_text()).get('status')
           summary = {
-              'schema': 'cex.project-boundary.changed-path-evidence.v1',
-              'status': 'actual_changed_path_semantics_green'
+              'schema': 'cex.project-boundary.changed-path-evidence.v2',
+              'status': 'actual_changed_path_and_cargo_semantics_green'
                   if outcomes and all(value == 'ok' for value in outcomes.values())
-                  else 'actual_changed_path_semantics_failed',
+                  else 'actual_changed_path_or_cargo_semantics_failed',
               'repository': os.environ['GITHUB_REPOSITORY'],
               'event_name': os.environ['GITHUB_EVENT_NAME'],
               'source_head_sha': os.environ['SOURCE_HEAD_SHA'],
@@ -144,8 +160,11 @@ jobs:
               'workflow_blob_sha': git(
                   'rev-parse', 'HEAD:.github/workflows/project-boundary-changed-path-gate.yml'
               ),
-              'checker_blob_sha': git(
+              'changed_path_checker_blob_sha': git(
                   'rev-parse', 'HEAD:scripts/check-project-boundary-changed-paths.py'
+              ),
+              'cargo_closure_checker_blob_sha': git(
+                  'rev-parse', 'HEAD:scripts/check-project-boundary-cargo-closure.py'
               ),
               'policy_blob_sha': git('rev-parse', 'HEAD:PROJECT_BOUNDARY.json'),
               'manifest_blob_sha': git(
@@ -163,7 +182,7 @@ jobs:
           )
           files = sorted(path for path in out.iterdir() if path.is_file() and path.name != 'manifest.json')
           manifest = {
-              'schema': 'cex.project-boundary.changed-path-artifact-manifest.v1',
+              'schema': 'cex.project-boundary.changed-path-artifact-manifest.v2',
               'source_head_sha': os.environ['SOURCE_HEAD_SHA'],
               'files': [
                   {'path': path.name, 'bytes': path.stat().st_size, 'sha256': sha256(path)}
