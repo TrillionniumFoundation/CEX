@@ -116,9 +116,7 @@ impl AdapterConfig {
                 "TRILLIONNIUM_WORLD_AUTH_TOKEN is required in production-like profiles".to_string()
             })?;
             if weak_secret(token) {
-                return Err(
-                    "TRILLIONNIUM_WORLD_AUTH_TOKEN is weak or placeholder-like".to_string(),
-                );
+                return Err("TRILLIONNIUM_WORLD_AUTH_TOKEN is weak or placeholder-like".to_string());
             }
         }
 
@@ -132,8 +130,7 @@ impl AdapterConfig {
             .unwrap_or(DEFAULT_TIMEOUT_MS);
         if !(250..=30_000).contains(&timeout_ms) {
             return Err(
-                "WORLD_AUTHORITY_ADAPTER_TIMEOUT_MS must be between 250 and 30000"
-                    .to_string(),
+                "WORLD_AUTHORITY_ADAPTER_TIMEOUT_MS must be between 250 and 30000".to_string(),
             );
         }
 
@@ -274,7 +271,10 @@ async fn proxy_world(State(state): State<AdapterState>, request: Request) -> Res
     }
     upstream = upstream
         .header("x-trillionnium-world-api-contract", WORLD_API_CONTRACT)
-        .header("x-trillionnium-world-cutover-contract", WORLD_CUTOVER_CONTRACT)
+        .header(
+            "x-trillionnium-world-cutover-contract",
+            WORLD_CUTOVER_CONTRACT,
+        )
         .header("x-cex-world-adapter-contract", ADAPTER_CONTRACT)
         .body(body);
     if let Some(token) = state.auth_token.as_deref() {
@@ -411,8 +411,7 @@ mod tests {
 
     #[test]
     fn compatible_json_requires_a_world_contract() {
-        let compatible =
-            Bytes::from_static(br#"{"api_contract":"trillionnium_world_api_v1"}"#);
+        let compatible = Bytes::from_static(br#"{"api_contract":"trillionnium_world_api_v1"}"#);
         let incompatible = Bytes::from_static(br#"{"status":"ok"}"#);
         assert!(json_contract_is_compatible(&compatible));
         assert!(!json_contract_is_compatible(&incompatible));
