@@ -1,13 +1,13 @@
 # CEX → Trillionnium World authority cutover v1
 
 Status: cross-repository source candidate  
-Production authorization: `not_granted`
+`production_authorization: not_granted`
 
 ## Decision
 
 `TrillionniumFoundation/Trillionnium-World` owns World topology, movement, tactics, commerce, company/shop/work-order, progression and their source-versioned projections. CEX owns authenticated ingress, identity/session binding, request normalization and exact economic settlement integration. CEX must not remain a second World state writer.
 
-World PR #60 restores a bounded seven-crate server authority workspace at exact commit `554761417edbb37a2f20deed23917a9b05abdfe2`. CEX PR #34 adds a remote-only adapter plus a production write fence. Neither change self-grants production authority.
+World PR #60 restores a bounded seven-crate server authority workspace at exact commit `1f88be0d0ac10cecd31efb9dadb44ea8214a815a`. CEX PR #34 adds a remote-only adapter plus a production write fence. Neither change self-grants production authority.
 
 ## CEX runtime modes
 
@@ -44,18 +44,23 @@ Production-like adapter profiles additionally require a strong non-placeholder s
 
 ## Cross-repository source gate
 
-`.github/workflows/p0-world-authority-cutover-gate.yml` checks out World commit `554761417edbb37a2f20deed23917a9b05abdfe2` by exact SHA instead of a mutable branch. The gate verifies:
+`.github/workflows/p0-world-authority-cutover-gate.yml` checks out World commit `1f88be0d0ac10cecd31efb9dadb44ea8214a815a` by exact SHA instead of a mutable branch. Checkout, Rust toolchain and artifact upload actions are pinned to immutable commit SHAs, and Rust is pinned to `1.98.1`.
 
-1. the World seven-crate dependency closure and historical provenance;
-2. World format, tests, Clippy and restart/reload smoke;
-3. CEX static authority boundaries and negative startup guards;
-4. CEX adapter and consumer-entry binary tests plus Clippy;
-5. real local HTTP forwarding from CEX to the World server;
-6. a World command mutation through the adapter;
-7. persistence after World process restart;
-8. fail-closed `503` behavior while the World process is unavailable;
-9. file-snapshot rollback in the development evidence harness;
-10. stable repeated read projections.
+The gate verifies:
+
+1. the World seven-crate dependency closure;
+2. all seven restored tree objects and 15 restored file blobs against historical commit `d44d8930c917b55da7b23eb19e9645feb8f4ee59`;
+3. omission, substitution, extra-file and omitted-tree hostile provenance fixtures;
+4. World format, tests, strict Clippy, committed lockfile immutability and structured restart/reload evidence;
+5. CEX static authority boundaries and negative startup guards;
+6. CEX adapter and consumer-entry binary tests plus strict Clippy;
+7. real local HTTP forwarding from CEX to the World server;
+8. a World command mutation through the adapter;
+9. persistence after World process restart;
+10. fail-closed `503` behavior while the World process is unavailable;
+11. file-snapshot rollback in the development evidence harness;
+12. stable repeated read projections;
+13. exact CEX and World commit/tree identities plus a SHA-256 artifact manifest.
 
 These are source and development-runtime qualifications. They do not substitute for a durable production repository, live migration reconciliation or a production rollback drill.
 
@@ -75,4 +80,4 @@ Any mismatch keeps `production_authorization=not_granted`.
 
 ## Evidence truth
 
-The machine-readable current matrix is `docs/traceability/world-authority-cutover-v1.json`. CI evidence binds the CEX side to `GITHUB_SHA`; the World source is pinned to the exact SHA above. Runtime migration data, durable adapter evidence, mutation-idempotency evidence and the production cutover fence remain blocking until actually executed.
+The machine-readable current matrix is `docs/traceability/world-authority-cutover-v1.json`. CI evidence binds the CEX side to the pull-request head SHA or push SHA and binds the World source to the exact SHA above. Runtime migration data, durable adapter evidence, mutation-idempotency evidence and the production cutover fence remain blocking until actually executed.
