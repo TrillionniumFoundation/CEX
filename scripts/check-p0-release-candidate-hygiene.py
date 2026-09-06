@@ -208,7 +208,7 @@ result = {
     "migration_head": numbered[-1][1] if numbered else None,
     "documentation_contract": "ok" if documentation.returncode == 0 else "failed",
     "workflow_contents_write": "forbidden",
-    "recursive_temporary_artifact_scan": true,
+    "recursive_temporary_artifact_scan": True,
     "problems": PROBLEMS,
 }
 print(json.dumps(result, indent=2, ensure_ascii=False))
