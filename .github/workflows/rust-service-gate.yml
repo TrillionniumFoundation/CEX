@@ -16,16 +16,18 @@ concurrency:
 env:
   CARGO_TERM_COLOR: never
   CARGO_INCREMENTAL: '0'
+  RUST_TOOLCHAIN: '1.98.1'
 
 jobs:
   repository-integrity:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - name: Checkout exact tree
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Validate workspace module documentation
         run: python3 scripts/check-module-documentation.py
@@ -35,6 +37,7 @@ jobs:
           python3 scripts/check-capability-production-posture.py
           python3 scripts/check-authoritative-money-isolation.py
           python3 scripts/check-project-boundary.py
+          python3 scripts/check-project-boundary-cargo-closure.py
           python3 scripts/check-source-governance.py
 
       - name: Validate development-document authority
@@ -48,7 +51,7 @@ jobs:
             --output run/repository-integrity.json
 
       - name: Upload repository-integrity evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: cex-repository-integrity-${{ github.sha }}
           path: run/repository-integrity.json
@@ -61,8 +64,10 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Checkout exact tree
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
 
       - name: Workspace module documentation contract
         run: python scripts/check-module-documentation.py
@@ -72,6 +77,7 @@ jobs:
           python scripts/check-capability-production-posture.py
           python scripts/check-authoritative-money-isolation.py
           python scripts/check-project-boundary.py
+          python scripts/check-project-boundary-cargo-closure.py
           python scripts/check-source-governance.py
 
       - name: Development-document contract
@@ -83,13 +89,14 @@ jobs:
       - name: Verify P0 static wiring
         run: python scripts/check-p0-wiring.py
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - name: Install immutable Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
+          toolchain: 1.98.1
           components: rustfmt
 
       - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
 
       - name: Verify release manifest contract
         run: python scripts/check-release-baseline-manifest.py docs/templates/cex-release-baseline-manifest-v1.json --allow-template
@@ -106,13 +113,15 @@ jobs:
         run: ./gate-local.ps1 -ServiceLocalOnly
 
   service-local-gate-linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         shell: bash
     steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Checkout exact tree
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
 
       - name: Workspace module documentation contract
         run: python3 scripts/check-module-documentation.py
@@ -122,6 +131,7 @@ jobs:
           python3 scripts/check-capability-production-posture.py
           python3 scripts/check-authoritative-money-isolation.py
           python3 scripts/check-project-boundary.py
+          python3 scripts/check-project-boundary-cargo-closure.py
           python3 scripts/check-source-governance.py
 
       - name: Development-document contract
@@ -133,13 +143,14 @@ jobs:
       - name: Verify P0 static wiring
         run: python3 scripts/check-p0-wiring.py
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - name: Install immutable Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
+          toolchain: 1.98.1
           components: rustfmt
 
       - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
 
       - name: Verify release manifest contract
         run: python3 scripts/check-release-baseline-manifest.py docs/templates/cex-release-baseline-manifest-v1.json --allow-template
@@ -154,7 +165,7 @@ jobs:
         run: bash ./scripts/gate-local-linux.sh --service-local-only --skip-db-bootstrap
 
   hepta-postgres-integration:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       HEPTA_TEST_DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/hepta_ci
@@ -174,8 +185,10 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Checkout exact tree
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
 
       - name: Workspace module documentation contract
         run: python3 scripts/check-module-documentation.py
@@ -185,6 +198,7 @@ jobs:
           python3 scripts/check-capability-production-posture.py
           python3 scripts/check-authoritative-money-isolation.py
           python3 scripts/check-project-boundary.py
+          python3 scripts/check-project-boundary-cargo-closure.py
           python3 scripts/check-source-governance.py
 
       - name: Development-document contract
@@ -193,13 +207,14 @@ jobs:
       - name: Exact Hepta lint ownership contract
         run: python3 scripts/check-hepta-lint-ownership.py
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - name: Install immutable Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
+          toolchain: 1.98.1
           components: clippy
 
       - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
 
       - name: Strict Hepta PostgreSQL package gate
         run: |
@@ -208,7 +223,7 @@ jobs:
             --evidence run/hepta-postgres-integration.json
 
       - name: Upload Hepta PostgreSQL evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: cex-hepta-postgres-${{ github.sha }}
           path: run/hepta-postgres-integration.json
