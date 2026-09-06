@@ -171,6 +171,10 @@ def verify_exact_contracts() -> None:
         "scripts/check-ledger-caller-cutover.py",
         "scripts/check-invocation-ledger-contract-static.py",
         "scripts/check-execution-ledger-settlement.py",
+        "scripts/check-capability-production-posture.py",
+        "scripts/check-authoritative-money-isolation.py",
+        "scripts/check-project-boundary.py",
+        "scripts/check-source-governance.py",
     ):
         try:
             result = subprocess.run(
@@ -206,6 +210,11 @@ def verify_gates_and_plan() -> None:
         ".github/workflows/rust-service-gate.yml",
         "scripts/check-p0-wiring.py",
         "scripts/check-development-docs.py",
+        "scripts/check-module-documentation.py",
+        "scripts/check-capability-production-posture.py",
+        "scripts/check-authoritative-money-isolation.py",
+        "scripts/check-project-boundary.py",
+        "scripts/check-source-governance.py",
         "scripts/check-repository-integrity.py",
         "scripts/check-hepta-postgres-integration.sh",
         "repository-integrity:",
@@ -256,8 +265,14 @@ def verify_gates_and_plan() -> None:
         ACTIVE_ADDENDUM,
         "Block H",
         "Block I",
+        "Block J",
+        "Block K",
+        "Block L",
+        "Block M",
+        "Block N",
+        "Block O",
         "REPOSITORY_CLOSED_CANDIDATE",
-        "External production gates remain upstream blockers",
+        "External production and administration gates remain upstream blockers",
     )
     require_text(
         "services/hepta-research-league/tests/postgres_recovery.rs",
@@ -288,6 +303,7 @@ def main() -> int:
         "migration_number": migration_number,
         "migration_head": migration_filename,
         "checks": 6,
+        "p0_blocks": ["H", "I", "J", "K", "L", "M", "N", "O"],
         "problems": PROBLEMS,
     }
     print(json.dumps(result, ensure_ascii=False, indent=2))
