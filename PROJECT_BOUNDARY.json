@@ -23,5 +23,5 @@
   },
   "compatibility_inventory": "docs/compatibility/world-surface-freeze-v1.json",
   "compatibility_change_policy": "freeze_or_extract_with_explicit_manifest_review",
-  "deny_changed_paths_regex": "^(services/consumer-entry-api/src/(world_|real_world_|openstreetmap_|trillionnium_world_)|services/matrix-entry-adapter/src/lib\\.rs|docs/(trillionnium-world|compatibility/world-surface)|scripts/playwright/trillionnium)"
+  "deny_changed_paths_regex": "^(services/(consumer-entry-api|matrix-entry-adapter)/(Cargo\\.toml|build\\.rs|src(?:/|$))|docs/(trillionnium-world|compatibility/world-surface)|scripts/playwright/trillionnium)"
 }
