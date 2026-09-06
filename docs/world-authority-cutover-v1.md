@@ -7,7 +7,7 @@ production_authorization: `not_granted`
 
 `TrillionniumFoundation/Trillionnium-World` owns World topology, movement, tactics, commerce, company/shop/work-order, progression and their source-versioned projections. CEX owns authenticated ingress, identity/session binding, request normalization and exact economic settlement integration. CEX must not remain a second World state writer.
 
-World PR #60 restores a bounded seven-crate server authority workspace at exact commit `1f88be0d0ac10cecd31efb9dadb44ea8214a815a`. CEX PR #34 adds a remote-only adapter plus a production write fence. Neither change self-grants production authority.
+World PR #60 restores a bounded seven-crate server authority workspace at exact commit `08b5ea85ded043838cb2eb8645ae4df6797d12ae`. CEX PR #34 adds a remote-only adapter plus a production write fence. Neither change self-grants production authority.
 
 ## CEX runtime modes
 
@@ -44,9 +44,11 @@ Production-like adapter profiles additionally require a strong non-placeholder s
 
 ## Cross-repository source gate
 
-`.github/workflows/p0-world-authority-cutover-gate.yml` checks out World commit `1f88be0d0ac10cecd31efb9dadb44ea8214a815a` by exact SHA instead of a mutable branch. Checkout, Rust toolchain and artifact upload actions are pinned to immutable commit SHAs, and Rust is pinned to `1.98.1`.
+`.github/workflows/p0-world-authority-cutover-gate.yml` checks out World commit `08b5ea85ded043838cb2eb8645ae4df6797d12ae` by exact SHA instead of a mutable branch. Checkout, Rust toolchain and artifact upload actions are pinned to immutable commit SHAs, and Rust is pinned to `1.98.1`.
 
-The gate verifies:
+The World protected `trnm-game-ci` candidate is also immutable at this source head: checkout, Rust setup, supply-chain tool installer and artifact upload are commit-pinned; Rust is fixed at `1.98.1`; `cargo-audit` is fixed at `0.22.2`; `cargo-deny` is fixed at `0.20.2`. It defines explicit source-head and prospective-merge qualification. GitHub has not yet created native World workflow runs for this head, so these source definitions are not treated as successful status checks.
+
+The CEX exact-SHA gate verifies:
 
 1. the World seven-crate dependency closure;
 2. all seven restored tree objects and 15 restored file blobs against historical commit `d44d8930c917b55da7b23eb19e9645feb8f4ee59`;
@@ -62,7 +64,7 @@ The gate verifies:
 12. stable repeated read projections;
 13. exact CEX and World commit/tree identities plus a SHA-256 artifact manifest.
 
-These are source and development-runtime qualifications. They do not substitute for a durable production repository, live migration reconciliation or a production rollback drill.
+These are source and development-runtime qualifications. They do not substitute for native World protected-context execution, a durable production repository, live migration reconciliation or a production rollback drill.
 
 ## Required migration protocol
 
@@ -80,4 +82,4 @@ Any mismatch keeps `production_authorization=not_granted`.
 
 ## Evidence truth
 
-The machine-readable current matrix is `docs/traceability/world-authority-cutover-v1.json`. CI evidence binds the CEX side to the pull-request head SHA or push SHA and binds the World source to the exact SHA above. Runtime migration data, durable adapter evidence, mutation-idempotency evidence and the production cutover fence remain blocking until actually executed.
+The machine-readable current matrix is `docs/traceability/world-authority-cutover-v1.json`. CI evidence binds the CEX side to the pull-request head SHA or push SHA and binds the World source to the exact SHA above. Runtime migration data, durable adapter evidence, mutation-idempotency evidence, native World protected contexts and the production cutover fence remain blocking until actually executed.
