@@ -48,7 +48,7 @@
       "path": "services/ledger-service",
       "package": "ledger-service",
       "classification": "test_fixture_only",
-      "package_git_tree": "4363215b37a14403a4f407706d70b5984398e62a",
+      "package_git_tree": "4bfd45dc1b1349e6c1b8abfbb6e058d59ea1be84",
       "cargo_manifest_blob": "87423470525bdac673a89e71eb40b22229cd3a7d",
       "source_git_tree": "df2b22b63931d566d7b6ca3bbeacff0ac9036995",
       "tests_git_tree": "36f8870378c7c66c56b58e59b1b1de4f09457eb2"
