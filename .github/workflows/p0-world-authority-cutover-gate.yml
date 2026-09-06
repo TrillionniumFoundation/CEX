@@ -101,7 +101,16 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Qualify exact World source boundary
+      - name: Regenerate stale World authority lockfile for repair artifact
+        run: |
+          set -euo pipefail
+          manifest=.world-source/trillionnium/crates/world-authority/Cargo.toml
+          cargo generate-lockfile --manifest-path "$manifest"
+          mkdir -p run/world-authority-cutover
+          cp .world-source/trillionnium/crates/world-authority/Cargo.lock \
+            run/world-authority-cutover/world-authority-Cargo.lock
+
+      - name: Qualify exact World source boundary after lock repair
         run: bash .world-source/scripts/check-trnm-world-authority-cutover.sh
 
       - name: Qualify CEX remote adapter and production write fence
@@ -138,6 +147,7 @@ jobs:
               'production_authorization': 'not_granted',
               'runtime_migration_reconciliation': 'not_executed_by_source_gate',
               'mutation_idempotency': 'not_claimed_pending_durable_world_adapter',
+              'world_lockfile_repair_probe': True,
           }
           (output / 'exact-sha-gate-summary.json').write_text(json.dumps(summary, indent=2) + '\n')
           PY
