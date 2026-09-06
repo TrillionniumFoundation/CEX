@@ -1,0 +1,84 @@
+{
+  "schema": "cex.world.authority.cutover.evidence.v1",
+  "status": "cross_repository_source_candidate",
+  "production_authorization": "not_granted",
+  "authority_contract": "trillionnium_world_authority_cutover_v1",
+  "world_api_contract": "trillionnium_world_api_v1",
+  "cex_adapter_contract": "cex_trillionnium_world_authority_adapter_v1",
+  "authority_owner": "TrillionniumFoundation/Trillionnium-World",
+  "cex_repository": "TrillionniumFoundation/CEX",
+  "world_source": {
+    "pull_request": 60,
+    "branch": "feat/p0-world-authority-cutover-20260906",
+    "head_sha": "554761417edbb37a2f20deed23917a9b05abdfe2",
+    "historical_source_parent": "d44d8930c917b55da7b23eb19e9645feb8f4ee59",
+    "restored_server_crate_count": 7,
+    "ordinary_actions_run_observed": false,
+    "source_ci_status": "pending_independent_exact_sha_validation_from_cex_gate"
+  },
+  "cex_candidate": {
+    "pull_request": 34,
+    "branch": "fix/hepta-p0-blocker-closure-20260906",
+    "head_binding": "github_actions_GITHUB_SHA",
+    "remote_adapter_binary": "world-authority-adapter",
+    "local_world_writer_production_status": "quarantined",
+    "local_world_writer_development_status": "compatibility_and_migration_source_only",
+    "sibling_repository_cargo_path_dependency": false
+  },
+  "implemented_controls": {
+    "production_startup_requires_remote_mode": true,
+    "production_startup_requires_non_loopback_world_url": true,
+    "production_startup_requires_exact_api_contract": true,
+    "production_adapter_requires_strong_service_token": true,
+    "production_local_world_mutations_return_503": true,
+    "adapter_has_local_world_state": false,
+    "adapter_redirects_disabled": true,
+    "adapter_request_body_limit_bytes": 2097152,
+    "adapter_failure_local_fallback": false,
+    "cross_repository_exact_sha_checkout_gate_defined": true,
+    "development_restart_and_rollback_smoke_defined": true
+  },
+  "evidence_matrix": [
+    {
+      "id": "world_exact_sha_source_qualification",
+      "status": "pending_gate_run",
+      "blocking": true
+    },
+    {
+      "id": "cex_exact_sha_adapter_qualification",
+      "status": "pending_gate_run",
+      "blocking": true
+    },
+    {
+      "id": "cross_repository_success_and_outage_smoke",
+      "status": "implemented_pending_gate_run",
+      "blocking": true
+    },
+    {
+      "id": "backfill_count_and_content_hash_reconciliation",
+      "status": "pending_runtime_data",
+      "blocking": true
+    },
+    {
+      "id": "mutation_replay_and_idempotency",
+      "status": "pending_durable_world_adapter",
+      "blocking": true
+    },
+    {
+      "id": "partial_outage_and_rollback",
+      "status": "development_smoke_defined_production_drill_pending",
+      "blocking": true
+    },
+    {
+      "id": "no_dual_writer_proof",
+      "status": "production_cex_writer_quarantined_cutover_fence_not_exercised",
+      "blocking": true
+    },
+    {
+      "id": "embedded_cex_world_source_retirement",
+      "status": "quarantined_not_removed",
+      "blocking": true
+    }
+  ],
+  "truth_boundary": "No source, unit, fixture, or development smoke grants production authority. Production cutover requires exact runtime reconciliation and no-dual-writer evidence."
+}

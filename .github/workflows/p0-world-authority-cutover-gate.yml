@@ -1,0 +1,141 @@
+name: p0-world-authority-cutover-gate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'services/consumer-entry-api/src/main.rs'
+      - 'services/consumer-entry-api/src/bin/world-authority-adapter.rs'
+      - 'services/consumer-entry-api/src/trillionnium_world_adapters.rs'
+      - 'config/world-authority-adapter.env.example'
+      - 'docs/world-authority-cutover-v1.md'
+      - 'docs/traceability/world-authority-cutover-v1.json'
+      - 'scripts/run-world-authority-adapter.sh'
+      - 'scripts/check-world-authority-cutover.sh'
+      - 'scripts/check-world-authority-cross-repo-e2e.sh'
+      - '.github/workflows/p0-world-authority-cutover-gate.yml'
+  push:
+    branches:
+      - main
+      - 'fix/hepta-p0-blocker-closure-*'
+    paths:
+      - 'services/consumer-entry-api/src/main.rs'
+      - 'services/consumer-entry-api/src/bin/world-authority-adapter.rs'
+      - 'services/consumer-entry-api/src/trillionnium_world_adapters.rs'
+      - 'config/world-authority-adapter.env.example'
+      - 'docs/world-authority-cutover-v1.md'
+      - 'docs/traceability/world-authority-cutover-v1.json'
+      - 'scripts/run-world-authority-adapter.sh'
+      - 'scripts/check-world-authority-cutover.sh'
+      - 'scripts/check-world-authority-cross-repo-e2e.sh'
+      - '.github/workflows/p0-world-authority-cutover-gate.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p0-world-authority-cutover-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: '0'
+  RUST_BACKTRACE: '1'
+  RUST_TEST_THREADS: '1'
+  WORLD_SOURCE_REPOSITORY: TrillionniumFoundation/Trillionnium-World
+  WORLD_SOURCE_SHA: 554761417edbb37a2f20deed23917a9b05abdfe2
+
+jobs:
+  exact-sha-cross-repository-qualification:
+    name: p0-world-authority-cutover/exact-sha-cross-repository-qualification
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact CEX candidate
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout exact World source candidate
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.WORLD_SOURCE_REPOSITORY }}
+          ref: ${{ env.WORLD_SOURCE_SHA }}
+          path: .world-source
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact source identities
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C .world-source rev-parse HEAD)" = "$WORLD_SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+          test -z "$(git -C .world-source status --porcelain)"
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+
+          evidence = json.loads(pathlib.Path('docs/traceability/world-authority-cutover-v1.json').read_text())
+          pinned = evidence['world_source']['head_sha']
+          actual = os.environ['WORLD_SOURCE_SHA']
+          if pinned != actual:
+              raise SystemExit(f'World evidence pin drift: evidence={pinned} workflow={actual}')
+          if evidence['production_authorization'] != 'not_granted':
+              raise SystemExit('source gate cannot grant production authorization')
+          PY
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Qualify exact World source boundary
+        run: bash .world-source/scripts/check-trnm-world-authority-cutover.sh
+
+      - name: Qualify CEX remote adapter and production write fence
+        run: bash scripts/check-world-authority-cutover.sh
+
+      - name: Exercise cross-repository HTTP, restart, outage and rollback
+        run: |
+          set -euo pipefail
+          mkdir -p run/world-authority-cutover
+          bash scripts/check-world-authority-cross-repo-e2e.sh .world-source \
+            | tee run/world-authority-cutover/cross-repo-smoke.log
+
+      - name: Record exact-SHA truth-bound evidence
+        if: always()
+        run: |
+          mkdir -p run/world-authority-cutover
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+
+          output = pathlib.Path('run/world-authority-cutover')
+          summary = {
+              'schema': 'cex.world.authority.exact-sha-gate.v1',
+              'cex_repository': os.environ['GITHUB_REPOSITORY'],
+              'cex_head_sha': os.environ['GITHUB_SHA'],
+              'world_repository': os.environ['WORLD_SOURCE_REPOSITORY'],
+              'world_head_sha': os.environ['WORLD_SOURCE_SHA'],
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'authority_contract': 'trillionnium_world_authority_cutover_v1',
+              'world_api_contract': 'trillionnium_world_api_v1',
+              'adapter_contract': 'cex_trillionnium_world_authority_adapter_v1',
+              'production_authorization': 'not_granted',
+              'runtime_migration_reconciliation': 'not_executed_by_source_gate',
+              'mutation_idempotency': 'not_claimed_pending_durable_world_adapter',
+          }
+          (output / 'exact-sha-gate-summary.json').write_text(json.dumps(summary, indent=2) + '\n')
+          PY
+
+      - name: Upload exact-SHA source evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p0-world-authority-cutover-${{ github.sha }}
+          path: run/world-authority-cutover/**
+          if-no-files-found: error
