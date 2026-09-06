@@ -13,7 +13,7 @@ STATUS = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else (
     ROOT / "docs/status/trnm-economy-settlement-v1.json"
 )
 
-MIGRATION = ROOT / "migrations/0010_trnm_economy_settlement_v1.sql"
+MIGRATION = ROOT / "services/trnm-economy-service/migrations/settlement_v1.sql"
 API = ROOT / "services/trnm-economy-service/src/api.rs"
 CONFIG = ROOT / "services/trnm-economy-service/src/config.rs"
 CONTRACT = ROOT / "services/trnm-economy-service/src/contract.rs"
