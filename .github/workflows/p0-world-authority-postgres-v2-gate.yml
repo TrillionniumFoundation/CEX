@@ -26,7 +26,7 @@ concurrency:
 env:
   CEX_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
   WORLD_SOURCE_REPOSITORY: TrillionniumFoundation/Trillionnium-World
-  WORLD_SOURCE_SHA: 06fd3f8f7c7c46a385165e817bd4e859fea7639b
+  WORLD_SOURCE_SHA: aa0f0effd9088efdea2134cce9442167968de19e
   CHECKOUT_ACTION_SHA: 11d5960a326750d5838078e36cf38b85af677262
   UPLOAD_ARTIFACT_ACTION_SHA: ea165f8d65b6e75b540449e92b4886f43607fa02
   PGHOST: 127.0.0.1
