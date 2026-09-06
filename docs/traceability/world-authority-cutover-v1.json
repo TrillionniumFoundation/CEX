@@ -10,7 +10,7 @@
   "world_source": {
     "pull_request": 60,
     "branch": "feat/p0-world-authority-cutover-20260906",
-    "head_sha": "08b5ea85ded043838cb2eb8645ae4df6797d12ae",
+    "head_sha": "8b6304e5e78ac497c8ab4f9cafe10f6be6f09df9",
     "historical_source_parent": "d44d8930c917b55da7b23eb19e9645feb8f4ee59",
     "restored_server_crate_count": 7,
     "restored_historical_file_count": 15,
@@ -44,6 +44,8 @@
     "world_lockfile_committed_and_immutable_during_gate": true,
     "github_actions_pinned_to_commit_sha": true,
     "world_protected_game_ci_actions_pinned_to_commit_sha": true,
+    "world_game_evidence_fail_closed_by_required_gate_conclusions": true,
+    "world_game_qualified_and_unqualified_artifacts_are_distinct": true,
     "rust_toolchain_pinned": "1.98.1",
     "cargo_audit_version_pinned": "0.22.2",
     "cargo_deny_version_pinned": "0.20.2"
