@@ -1,0 +1,61 @@
+name: candidate-format-diagnostics
+
+on:
+  push:
+    branches:
+      - fix/cex-v12-audit-remediation-20260905
+
+permissions:
+  contents: read
+
+concurrency:
+  group: candidate-format-diagnostics-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rustfmt-artifact:
+    if: github.repository == 'TrillionniumFoundation/CEX'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install selected formatter
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.98.1
+          components: rustfmt
+
+      - name: Produce reviewable formatting delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p run/rustfmt/formatted
+          cargo fmt --all
+          git diff --check
+          git diff --binary -- . > run/rustfmt/rustfmt.patch
+          git diff --name-only --diff-filter=ACM -- . > run/rustfmt/files.txt
+          while IFS= read -r path; do
+            [ -n "$path" ] || continue
+            case "$path" in
+              *.rs)
+                mkdir -p "run/rustfmt/formatted/$(dirname "$path")"
+                cp -- "$path" "run/rustfmt/formatted/$path"
+                ;;
+            esac
+          done < run/rustfmt/files.txt
+          sha256sum run/rustfmt/rustfmt.patch > run/rustfmt/SHA256SUMS
+          printf '%s\n' "${GITHUB_SHA}" > run/rustfmt/HEAD
+          git rev-parse 'HEAD^{tree}' > run/rustfmt/TREE
+
+      - name: Upload exact-head formatter artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cex-rustfmt-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: run/rustfmt/
+          if-no-files-found: error
+          retention-days: 3
