@@ -6,6 +6,167 @@
   "cex_role": "compatibility_edge_only",
   "transfer_status": "blocked_upstream",
   "change_policy": "freeze_or_extract_with_explicit_manifest_review",
+  "indirect_source_policy": {
+    "rust_path_attribute": "forbidden",
+    "rust_include_macro": "forbidden",
+    "out_dir_generated_rust": "forbidden",
+    "cargo_build_script": "forbidden",
+    "untracked_or_unmanifested_source": "forbidden"
+  },
+  "quarantined_crates": [
+    {
+      "path": "services/consumer-entry-api",
+      "git_tree": "fe24f467c509a82e4f230090f9a3c688a0c97d01",
+      "root_entries": [
+        "Cargo.toml",
+        "MODULE.md",
+        "src"
+      ],
+      "cargo_manifest_blob": "22716f98fdb98f4eea26672e09d7b96c74c2193d",
+      "module_document_blob": "ed764c5e6973792892a2af3579ce4886c9f7e97d",
+      "source_root": "services/consumer-entry-api/src",
+      "source_git_tree": "eb08b7cc30715ae006315a20f0d2dd97aef7ae84",
+      "source_file_count": 28,
+      "source_files": [
+        {
+          "path": "services/consumer-entry-api/src/account_client_shell.rs",
+          "git_blob": "c97fdf05c15b721bc8bcb33d60d330c9e0d545a3"
+        },
+        {
+          "path": "services/consumer-entry-api/src/bin/world-authority-adapter.rs",
+          "git_blob": "f9c96c5d27b7274cf9697d3746a73dc58eef678c"
+        },
+        {
+          "path": "services/consumer-entry-api/src/client_app_shell.rs",
+          "git_blob": "f1e48a0df0d76b395965246efa19d0343f63aee8"
+        },
+        {
+          "path": "services/consumer-entry-api/src/client_surfaces.rs",
+          "git_blob": "9b47ada9d18c47b9141d1502c6046ea413023193"
+        },
+        {
+          "path": "services/consumer-entry-api/src/consumer_ingress.rs",
+          "git_blob": "7b17fab904868184329fb13ee22a70cb9c910ad0"
+        },
+        {
+          "path": "services/consumer-entry-api/src/health_metrics.rs",
+          "git_blob": "b7727e711fb6208eec120c0af14ceac3e747ca63"
+        },
+        {
+          "path": "services/consumer-entry-api/src/identity_admin_routes.rs",
+          "git_blob": "5f7cd59539134fb42c194c63310b643f83828777"
+        },
+        {
+          "path": "services/consumer-entry-api/src/league_core.rs",
+          "git_blob": "ba386dc2978b9772ead42b0af472dd022f5e22a4"
+        },
+        {
+          "path": "services/consumer-entry-api/src/league_repository.rs",
+          "git_blob": "0991007e52c47750b22a40127b1e50941a1335eb"
+        },
+        {
+          "path": "services/consumer-entry-api/src/league_routes.rs",
+          "git_blob": "97c738a3f69303148af2b08214a363c0101dba86"
+        },
+        {
+          "path": "services/consumer-entry-api/src/lib.rs",
+          "git_blob": "80b83d12b3bbaf66ee6c4397551ba396330fc23b"
+        },
+        {
+          "path": "services/consumer-entry-api/src/main.rs",
+          "git_blob": "a964a24829b2106e9ab6f598823e1a53ba305cfd"
+        },
+        {
+          "path": "services/consumer-entry-api/src/openstreetmap_geodata.rs",
+          "git_blob": "402572cf8193d2b65761696a85598059b4b11f15"
+        },
+        {
+          "path": "services/consumer-entry-api/src/real_world_map_shell.rs",
+          "git_blob": "4ec4a8757d1971edd783afb151105f98d740b6ae"
+        },
+        {
+          "path": "services/consumer-entry-api/src/task_routes.rs",
+          "git_blob": "fd786f4c6e1f4e4325e4fe4f9c989e96e68e6fed"
+        },
+        {
+          "path": "services/consumer-entry-api/src/term_exchange_backend.rs",
+          "git_blob": "aeeea4442eab574edef8709d3c3a9a086e8cb09d"
+        },
+        {
+          "path": "services/consumer-entry-api/src/term_exchange_kernel_routes.rs",
+          "git_blob": "b3644f80a847b5cd28edc3fe7290662b9378b504"
+        },
+        {
+          "path": "services/consumer-entry-api/src/tests.rs",
+          "git_blob": "be9860541fdae1e699da06eb6eb3544dab7c9284"
+        },
+        {
+          "path": "services/consumer-entry-api/src/trillionnium_world_adapters.rs",
+          "git_blob": "d297c302450047d417fad9038cc34ba62394e6d6"
+        },
+        {
+          "path": "services/consumer-entry-api/src/world_commerce_routes.rs",
+          "git_blob": "2da014a695180125d33479f6b7be7ec17316b075"
+        },
+        {
+          "path": "services/consumer-entry-api/src/world_indexes.rs",
+          "git_blob": "b4dfb7cba3706966aecf88a4af3481c3be727f1e"
+        },
+        {
+          "path": "services/consumer-entry-api/src/world_map_optimization.rs",
+          "git_blob": "4224445c7955287b5e5ae2c703c89ef284c76233"
+        },
+        {
+          "path": "services/consumer-entry-api/src/world_map_projection.rs",
+          "git_blob": "529f9e62b125cba8b8cf7b9a36e526acc9d0419d"
+        },
+        {
+          "path": "services/consumer-entry-api/src/world_movement.rs",
+          "git_blob": "4dfbc6a01ec3ad2fa2d19a0e576fb8eeb481bcd6"
+        },
+        {
+          "path": "services/consumer-entry-api/src/world_route_projection.rs",
+          "git_blob": "1b1df9f935cea334283d3211846be631d8d20017"
+        },
+        {
+          "path": "services/consumer-entry-api/src/world_routes.rs",
+          "git_blob": "c49ad1ada410344d140c7d544d2d435b7787e581"
+        },
+        {
+          "path": "services/consumer-entry-api/src/world_tactics.rs",
+          "git_blob": "1240c7d073fccb186d1c5442b667de3e80a9e953"
+        },
+        {
+          "path": "services/consumer-entry-api/src/world_web_shell.rs",
+          "git_blob": "d990a3679489ee8f992bd350341c512ee3498cbd"
+        }
+      ]
+    },
+    {
+      "path": "services/matrix-entry-adapter",
+      "git_tree": "63d72a2c44839bf97b95ade5f603e9b6b9f34822",
+      "root_entries": [
+        "Cargo.toml",
+        "MODULE.md",
+        "src"
+      ],
+      "cargo_manifest_blob": "30409ece44750e98103d484e362dea5f58855f56",
+      "module_document_blob": "9c2a3224068002abf75ce3910f9710ddf4578793",
+      "source_root": "services/matrix-entry-adapter/src",
+      "source_git_tree": "231d7bf8c6e281b26973c813c67ad8b08f64b3b4",
+      "source_file_count": 2,
+      "source_files": [
+        {
+          "path": "services/matrix-entry-adapter/src/lib.rs",
+          "git_blob": "69c9ff0ad7b44a93fe1cda9e12a9facc0211606c"
+        },
+        {
+          "path": "services/matrix-entry-adapter/src/main.rs",
+          "git_blob": "8fc4e964654bd546d59ca31221dc3d44d033e86b"
+        }
+      ]
+    }
+  ],
   "frozen_files": [
     {
       "path": "services/consumer-entry-api/src/openstreetmap_geodata.rs",
@@ -19,7 +180,7 @@
     },
     {
       "path": "services/consumer-entry-api/src/trillionnium_world_adapters.rs",
-      "git_blob": "9a7a697757fbd70fbfaac5460cd627983d8e2851",
+      "git_blob": "d297c302450047d417fad9038cc34ba62394e6d6",
       "kind": "world_source"
     },
     {
@@ -72,6 +233,16 @@
       "git_blob": "69c9ff0ad7b44a93fe1cda9e12a9facc0211606c",
       "kind": "channel_command_carrier"
     }
+  ],
+  "hostile_fixtures": [
+    "nested_world_module",
+    "neutral_stem_module",
+    "rust_path_attribute",
+    "rust_include_macro",
+    "out_dir_generated_rust",
+    "cargo_build_script",
+    "additional_matrix_carrier",
+    "sibling_repository_path_dependency"
   ],
   "exit_criteria": [
     "world_authoritative_state_moved_to_owner_repository",
