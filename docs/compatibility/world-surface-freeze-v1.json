@@ -6,6 +6,7 @@
   "cex_role": "compatibility_edge_only",
   "transfer_status": "blocked_upstream",
   "change_policy": "freeze_or_extract_with_explicit_manifest_review",
+  "workspace_manifest_blob": "3dab0a2e4d95f50063e2fe3ad77296055d461b57",
   "indirect_source_policy": {
     "rust_path_attribute": "forbidden",
     "rust_include_macro": "forbidden",
@@ -13,10 +14,140 @@
     "cargo_build_script": "forbidden",
     "untracked_or_unmanifested_source": "forbidden"
   },
+  "local_cargo_dependency_policy": {
+    "reachable_graph": "exact_allowlist",
+    "new_local_packages": "forbidden",
+    "new_local_edges": "forbidden",
+    "target_specific_dependencies": "included",
+    "dev_dependencies": "included",
+    "build_dependencies": "included",
+    "package_aliases": "identity_bound",
+    "proc_macro_packages": "forbidden",
+    "build_scripts": "forbidden",
+    "cargo_source_replacement": "forbidden",
+    "generated_rust_inputs": "forbidden"
+  },
+  "local_cargo_dependency_closure": [
+    {
+      "path": "crates/shared-tracing",
+      "package": "shared-tracing",
+      "classification": "observability_support_only",
+      "package_git_tree": "0a299d06bbd5888d642e45fc40888bc014fa8d41",
+      "cargo_manifest_blob": "454e4c05bb381cb9e84ec756cab6417317f904b9",
+      "source_git_tree": "c6308994e400279ca46e71aaf739b03ee91c3ff8"
+    },
+    {
+      "path": "vendor/trnm-economy-protocol",
+      "package": "trnm-economy-protocol",
+      "classification": "versioned_economy_protocol_only",
+      "package_git_tree": "4bf9e5de88cbe54d90802d18cbdfa8a21f19ded3",
+      "cargo_manifest_blob": "4c4751d3a8a23d3b9c65c4bf11141aab77977ac4",
+      "source_git_tree": "d009c994f50159dbe02fb6d399579a446b56c80a"
+    },
+    {
+      "path": "services/ledger-service",
+      "package": "ledger-service",
+      "classification": "test_fixture_only",
+      "package_git_tree": "0c98325354c2ede208100111cfa357f752ff56bf",
+      "cargo_manifest_blob": "87423470525bdac673a89e71eb40b22229cd3a7d",
+      "source_git_tree": "b3d565d16b21c1aa0100ad3f0dded1dc9f33662a",
+      "tests_git_tree": "36f8870378c7c66c56b58e59b1b1de4f09457eb2"
+    },
+    {
+      "path": "crates/shared-config",
+      "package": "shared-config",
+      "classification": "ledger_support_only",
+      "package_git_tree": "2372805268e7558e3529d277fd0996bde5e84f6c",
+      "cargo_manifest_blob": "dfe47a9d04735ce7bdd93c941d4ac5622e5a5b4c",
+      "source_git_tree": "cb980a2e26ceff60812462714c72cee009e75274"
+    },
+    {
+      "path": "crates/shared-types",
+      "package": "shared-types",
+      "classification": "ledger_support_only",
+      "package_git_tree": "0e9853f7a2a66f230adf15732d6ec6ec3329c18a",
+      "cargo_manifest_blob": "2d1db390ed670350c246daf6aacd2069a7dc8595",
+      "source_git_tree": "e8d41c03e82c129f17e86ef9fb0ca4214f2c52e8"
+    }
+  ],
+  "allowed_local_dependency_edges": [
+    {
+      "from": "services/consumer-entry-api",
+      "alias": "shared-tracing",
+      "package": "shared-tracing",
+      "to": "crates/shared-tracing",
+      "kind": "normal",
+      "target": null,
+      "declaration": "path"
+    },
+    {
+      "from": "services/consumer-entry-api",
+      "alias": "term-exchange-protocol",
+      "package": "trnm-economy-protocol",
+      "to": "vendor/trnm-economy-protocol",
+      "kind": "normal",
+      "target": null,
+      "declaration": "workspace"
+    },
+    {
+      "from": "services/consumer-entry-api",
+      "alias": "ledger-service",
+      "package": "ledger-service",
+      "to": "services/ledger-service",
+      "kind": "dev",
+      "target": null,
+      "declaration": "path"
+    },
+    {
+      "from": "services/matrix-entry-adapter",
+      "alias": "shared-tracing",
+      "package": "shared-tracing",
+      "to": "crates/shared-tracing",
+      "kind": "normal",
+      "target": null,
+      "declaration": "path"
+    },
+    {
+      "from": "services/ledger-service",
+      "alias": "shared-tracing",
+      "package": "shared-tracing",
+      "to": "crates/shared-tracing",
+      "kind": "normal",
+      "target": null,
+      "declaration": "path"
+    },
+    {
+      "from": "services/ledger-service",
+      "alias": "shared-config",
+      "package": "shared-config",
+      "to": "crates/shared-config",
+      "kind": "normal",
+      "target": null,
+      "declaration": "path"
+    },
+    {
+      "from": "services/ledger-service",
+      "alias": "shared-types",
+      "package": "shared-types",
+      "to": "crates/shared-types",
+      "kind": "normal",
+      "target": null,
+      "declaration": "path"
+    },
+    {
+      "from": "services/ledger-service",
+      "alias": "term-exchange-protocol",
+      "package": "trnm-economy-protocol",
+      "to": "vendor/trnm-economy-protocol",
+      "kind": "normal",
+      "target": null,
+      "declaration": "workspace"
+    }
+  ],
   "quarantined_crates": [
     {
       "path": "services/consumer-entry-api",
-      "git_tree": "fe24f467c509a82e4f230090f9a3c688a0c97d01",
+      "git_tree": "274eb53665f7a6282563a4f6f00edf03f7eace2f",
       "root_entries": [
         "Cargo.toml",
         "MODULE.md",
@@ -25,7 +156,7 @@
       "cargo_manifest_blob": "22716f98fdb98f4eea26672e09d7b96c74c2193d",
       "module_document_blob": "ed764c5e6973792892a2af3579ce4886c9f7e97d",
       "source_root": "services/consumer-entry-api/src",
-      "source_git_tree": "eb08b7cc30715ae006315a20f0d2dd97aef7ae84",
+      "source_git_tree": "220a0c61cea3352e6ef9ee595c2cda114138d859",
       "source_file_count": 28,
       "source_files": [
         {
@@ -102,7 +233,7 @@
         },
         {
           "path": "services/consumer-entry-api/src/trillionnium_world_adapters.rs",
-          "git_blob": "d297c302450047d417fad9038cc34ba62394e6d6"
+          "git_blob": "13dec23ec36df11018e5000284b462aae87db9cd"
         },
         {
           "path": "services/consumer-entry-api/src/world_commerce_routes.rs",
@@ -180,7 +311,7 @@
     },
     {
       "path": "services/consumer-entry-api/src/trillionnium_world_adapters.rs",
-      "git_blob": "d297c302450047d417fad9038cc34ba62394e6d6",
+      "git_blob": "13dec23ec36df11018e5000284b462aae87db9cd",
       "kind": "world_source"
     },
     {
@@ -243,6 +374,18 @@
     "cargo_build_script",
     "additional_matrix_carrier",
     "sibling_repository_path_dependency"
+  ],
+  "cargo_closure_hostile_fixtures": [
+    "new_workspace_authority_carrier",
+    "existing_unquarantined_authority_carrier",
+    "renamed_package_alias",
+    "target_specific_dependency",
+    "dev_dependency_carrier",
+    "build_dependency_carrier",
+    "proc_macro_helper",
+    "generated_rust_helper",
+    "carrier_outside_manifest_roots",
+    "cargo_source_replacement"
   ],
   "exit_criteria": [
     "world_authoritative_state_moved_to_owner_repository",
