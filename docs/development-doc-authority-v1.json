@@ -12,13 +12,21 @@
     "entrypoint": "docs/index.md",
     "component_status": "docs/status/component-status-v1.md",
     "traceability": "docs/traceability/v12-requirements-v1.json",
+    "p0_blocker_traceability": "docs/traceability/v12-p0-blockers-v1.json",
     "module_catalog": "docs/module-catalog-v1.json",
     "module_standard": "docs/module-documentation-standard-v1.md",
     "hepta_state_machines": "docs/hepta-paper-raid-state-machines-v1.md",
     "threat_model": "docs/security-threat-model-v1.md",
     "clean_deployment_acceptance": "docs/clean-deployment-acceptance-v1.md",
     "slo_recovery": "docs/slo-recovery-contract-v1.md",
-    "protocol_compatibility": "docs/protocol/version-compatibility-matrix-v1.md"
+    "protocol_compatibility": "docs/protocol/version-compatibility-matrix-v1.md",
+    "capability_posture": "docs/capability-production-posture-v1.md",
+    "money_isolation": "docs/authoritative-money-isolation-v1.md",
+    "money_isolation_manifest": "docs/compatibility/authoritative-money-isolation-v1.json",
+    "project_boundary": "PROJECT_BOUNDARY.md",
+    "world_surface_freeze": "docs/compatibility/world-surface-freeze-v1.md",
+    "world_surface_manifest": "docs/compatibility/world-surface-freeze-v1.json",
+    "repository_governance": "docs/repository-governance-policy-v1.md"
   },
   "authoritative_workflows": [
     ".github/workflows/p0-migration-gate.yml",
@@ -41,7 +49,11 @@
       "hosted_exact_sha_tests",
       "bounded_ci_soak_and_dump_restore",
       "immutable_candidate_evidence",
-      "workspace_module_documentation_completeness"
+      "workspace_module_documentation_completeness",
+      "fail_closed_capability_registry",
+      "authoritative_money_isolation",
+      "world_surface_scope_freeze",
+      "source_governance_controls"
     ]
   },
   "external_production_scope": {
@@ -55,7 +67,9 @@
       "sustained_production_like_soak",
       "independent_security_operations_financial_review",
       "legal_commercial_provider_approval",
-      "final_human_go_no_go"
+      "final_human_go_no_go",
+      "main_branch_ruleset_enforcement",
+      "cross_repository_world_authority_transfer"
     ]
   }
 }
