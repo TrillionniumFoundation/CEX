@@ -3220,6 +3220,8 @@ fn prune_recent_event_cache(
     }
 }
 
+// Preserve the exact Axum rejection response at this internal HTTP boundary.
+#[allow(clippy::result_large_err)]
 async fn enforce_rate_limit(
     state: &AppState,
     key: String,
@@ -4062,6 +4064,8 @@ fn build_consumer_entry_session_auth_headers(
     Ok(Some((assertion, signature)))
 }
 
+// Preserve the exact Axum rejection response at this internal HTTP boundary.
+#[allow(clippy::result_large_err)]
 async fn fetch_wallet_projection(
     state: &AppState,
     matrix_user_id: &str,
@@ -4114,6 +4118,8 @@ async fn fetch_wallet_projection(
     Ok(value)
 }
 
+// Preserve the exact Axum rejection response at this internal HTTP boundary.
+#[allow(clippy::result_large_err)]
 async fn fetch_consumer_entry_get(state: &AppState, path: &str) -> Result<Value, Response> {
     let url = format!(
         "{}{}",
@@ -4142,6 +4148,8 @@ async fn fetch_consumer_entry_get(state: &AppState, path: &str) -> Result<Value,
         .await
 }
 
+// Preserve the exact Axum rejection response at this internal HTTP boundary.
+#[allow(clippy::result_large_err)]
 async fn fetch_consumer_entry_post(
     state: &AppState,
     path: &str,
@@ -4184,6 +4192,8 @@ async fn fetch_consumer_entry_post(
         .await
 }
 
+// Preserve the exact Axum rejection response at this internal HTTP boundary.
+#[allow(clippy::result_large_err)]
 async fn parse_consumer_entry_json_response(
     response: reqwest::Response,
     error_prefix: &str,
@@ -4207,6 +4217,8 @@ async fn parse_consumer_entry_json_response(
     Ok(value)
 }
 
+// Preserve the exact Axum rejection response at this internal HTTP boundary.
+#[allow(clippy::result_large_err)]
 async fn fetch_task_projection(state: &AppState, task_id: &str) -> Result<Value, Response> {
     let url = format!(
         "{}/v1/chat/tasks/{}",
@@ -5782,17 +5794,17 @@ impl RouteStoryCardContext {
             self.route_task_graph_count,
             self.route_preview_item_count,
             linked,
-            &self.route_next_task_id,
-            &self.route_next_action_label,
-            &self.route_next_stage_summary,
-            &self.route_next_panel_id,
-            &self.route_next_location_id,
-            &self.route_next_outcome_summary,
-            &self.route_next_feedback_focus,
-            &self.route_next_opportunity_hint,
-            &self.route_next_opportunity_playbook,
-            &self.route_next_opportunity_command,
-            &self.route_next_command_hint,
+            self.route_next_task_id,
+            self.route_next_action_label,
+            self.route_next_stage_summary,
+            self.route_next_panel_id,
+            self.route_next_location_id,
+            self.route_next_outcome_summary,
+            self.route_next_feedback_focus,
+            self.route_next_opportunity_hint,
+            self.route_next_opportunity_playbook,
+            self.route_next_opportunity_command,
+            self.route_next_command_hint,
         )
     }
 
@@ -6354,10 +6366,10 @@ fn build_trillionnium_world_matrix_reply(value: &Value) -> Value {
     let route_runner_html_block = route_runner.html_block();
     let body = format!(
         "🌍 Trillionnium World\n开放世界总层：现实镜像城市 + Craft 工坊 + Market + League。\nZones: {zone_count} · Locations: {location_count} · Assets: {asset_count} · Companies: {company_count} · Shops: {shop_count} · Listings: {listing_count} · Purchases: {purchase_count} · Work: {work_order_count} · Factions: {faction_count} · Events: {event_count}\nRenderer Adapter: {adapter_id} v{adapter_version} · handle {runtime_handle} · future {future_engine}\n{route_text_block}\n{route_runner_text_block}\n自由行动：/world action 我要开一家 AI 设计公司",
-        adapter_id = &renderer_adapter.adapter_id,
+        adapter_id = renderer_adapter.adapter_id,
         adapter_version = renderer_adapter.adapter_contract_version,
-        runtime_handle = &renderer_adapter.runtime_handle_name,
-        future_engine = &renderer_adapter.future_engine_candidate,
+        runtime_handle = renderer_adapter.runtime_handle_name,
+        future_engine = renderer_adapter.future_engine_candidate,
         route_text_block = route_text_block,
         route_runner_text_block = route_runner_text_block,
     );
@@ -6545,10 +6557,10 @@ fn build_trillionnium_world_map_matrix_reply(value: &Value) -> Value {
         .unwrap_or_else(|| "none".to_string());
     let body = format!(
         "🗺️ Trillionnium World Map\n当前位置：{current_name} ({current_node_id})\n坐标：{x},{y}\n节点：{node_count}\nMap Engine: {map_engine_id} ({tile_provider})\nMirror: {mirror_scope} · Region: {active_region_id}\nRenderer Adapter: {adapter_id} v{adapter_version} · handle {runtime_handle} · future {future_engine}\n{route_text_block}\n{route_runner_text_block}{combat_log_text_block}出口：{exits}\n{description}\n移动：/go <direction|node-id>",
-        adapter_id = &renderer_adapter.adapter_id,
+        adapter_id = renderer_adapter.adapter_id,
         adapter_version = renderer_adapter.adapter_contract_version,
-        runtime_handle = &renderer_adapter.runtime_handle_name,
-        future_engine = &renderer_adapter.future_engine_candidate,
+        runtime_handle = renderer_adapter.runtime_handle_name,
+        future_engine = renderer_adapter.future_engine_candidate,
         route_text_block = route_text_block,
         route_runner_text_block = route_runner_text_block,
         combat_log_text_block = combat_log_text_block,
@@ -6748,12 +6760,12 @@ fn build_trillionnium_client_app_matrix_reply(value: &Value) -> Value {
         .unwrap_or("Use these when you are ready to submit real work with deliverable, evidence, risk controls, next action, and self-review anchors.");
     let body = format!(
         "📱 Trillionnium Client App\n{quick_path_label}: {quick_path_summary}\nStart Here: {onboarding_label} · {onboarding_step_count} steps · target {onboarding_completion_target}\nStart Command: {onboarding_start_command}\nNow: {next_action} @ {next_location}\nWhy: {next_outcome}\n{command_disclosure_label}: {command_disclosure}\nNext Command: {next_command}\nOpportunity Command: {opportunity_command}\n{runner_text_block}\nWorld: {map_node} · {nearby_poi_count} POIs · {live_event_count} live events · {tile_shard_count} tiles\nProgression: Lv.{progression_level} {progression_rank} · {successful_task_count} successes · skills/tools/skins {unlocked_skill_count}/{unlocked_tool_count}/{unlocked_skin_count}\n入口：/map /duel nearby /social /wallet /progression",
-        next_action = &route.route_next_action_label,
-        next_location = &route.route_next_location_id,
-        next_outcome = &route.route_next_outcome_summary,
-        next_command = &route.route_next_command_hint,
-        opportunity_command = &route.route_next_opportunity_command,
-        runner_text_block = &route_runner_text_block,
+        next_action = route.route_next_action_label,
+        next_location = route.route_next_location_id,
+        next_outcome = route.route_next_outcome_summary,
+        next_command = route.route_next_command_hint,
+        opportunity_command = route.route_next_opportunity_command,
+        runner_text_block = route_runner_text_block,
     );
     json!({
         "msgtype": "m.text",

@@ -275,7 +275,7 @@
     },
     {
       "path": "services/matrix-entry-adapter",
-      "git_tree": "63d72a2c44839bf97b95ade5f603e9b6b9f34822",
+      "git_tree": "4edf2221d35f0a1adfd2f1a96d826d13ec590ef2",
       "root_entries": [
         "Cargo.toml",
         "MODULE.md",
@@ -284,12 +284,12 @@
       "cargo_manifest_blob": "30409ece44750e98103d484e362dea5f58855f56",
       "module_document_blob": "9c2a3224068002abf75ce3910f9710ddf4578793",
       "source_root": "services/matrix-entry-adapter/src",
-      "source_git_tree": "231d7bf8c6e281b26973c813c67ad8b08f64b3b4",
+      "source_git_tree": "450843a5e01c6fa8da0924a6d53d22f8e5bfa207",
       "source_file_count": 2,
       "source_files": [
         {
           "path": "services/matrix-entry-adapter/src/lib.rs",
-          "git_blob": "69c9ff0ad7b44a93fe1cda9e12a9facc0211606c"
+          "git_blob": "2897b042eb60671bf6631857ea45840807360037"
         },
         {
           "path": "services/matrix-entry-adapter/src/main.rs",
@@ -361,7 +361,7 @@
     },
     {
       "path": "services/matrix-entry-adapter/src/lib.rs",
-      "git_blob": "69c9ff0ad7b44a93fe1cda9e12a9facc0211606c",
+      "git_blob": "2897b042eb60671bf6631857ea45840807360037",
       "kind": "channel_command_carrier"
     }
   ],
