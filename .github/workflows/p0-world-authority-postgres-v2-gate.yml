@@ -91,22 +91,22 @@ jobs:
           test "$TRNM_WORLD_POSTGRES_CLIENT_IMAGE" = "$POSTGRES_IMAGE_REF"
           docker image inspect "$POSTGRES_IMAGE_REF" >/dev/null 2>&1 \
             || docker pull "$POSTGRES_IMAGE_REF" >/dev/null
-          mkdir -p run/world-authority-postgres-v2/environment
+          mkdir -p run/world-authority-postgres-v2
           docker image inspect "$POSTGRES_IMAGE_REF" \
-            > run/world-authority-postgres-v2/environment/postgres-image-inspect.json
+            > run/world-authority-postgres-v2/environment-postgres-image-inspect.json
           docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$POSTGRES_IMAGE_REF" \
-            | tee run/world-authority-postgres-v2/environment/postgres-repo-digests.txt
+            | tee run/world-authority-postgres-v2/environment-postgres-repo-digests.txt
           grep -F "$POSTGRES_IMAGE_DIGEST" \
-            run/world-authority-postgres-v2/environment/postgres-repo-digests.txt
+            run/world-authority-postgres-v2/environment-postgres-repo-digests.txt
           docker run --rm "$POSTGRES_IMAGE_REF" postgres --version \
-            | tee run/world-authority-postgres-v2/environment/postgres-server-version.txt
+            | tee run/world-authority-postgres-v2/environment-postgres-server-version.txt
           docker run --rm "$POSTGRES_IMAGE_REF" psql --version \
-            | tee run/world-authority-postgres-v2/environment/postgres-client-version.txt
+            | tee run/world-authority-postgres-v2/environment-postgres-client-version.txt
           grep -E '^psql \(PostgreSQL\) 16\.' \
-            run/world-authority-postgres-v2/environment/postgres-client-version.txt
-          cat /etc/os-release > run/world-authority-postgres-v2/environment/runner-os-release.txt
-          uname -a > run/world-authority-postgres-v2/environment/runner-uname.txt
-          docker version > run/world-authority-postgres-v2/environment/docker-version.txt
+            run/world-authority-postgres-v2/environment-postgres-client-version.txt
+          cat /etc/os-release > run/world-authority-postgres-v2/environment-runner-os-release.txt
+          uname -a > run/world-authority-postgres-v2/environment-runner-uname.txt
+          docker version > run/world-authority-postgres-v2/environment-docker-version.txt
 
       - name: Run durable state-machine and installation hostile matrices
         id: postgres
