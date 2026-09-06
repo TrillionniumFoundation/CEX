@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the active CEX v12 documentation authority and traceability contract."""
+"""Validate the active CEX v12 documentation authority and traceability set."""
 
 from __future__ import annotations
 
@@ -12,18 +12,21 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 AUTHORITY_PATH = "docs/development-doc-authority-v1.json"
-TRACEABILITY_PATH = "docs/traceability/v12-requirements-v1.json"
+BASE_TRACEABILITY_PATH = "docs/traceability/v12-requirements-v1.json"
+P0_TRACEABILITY_PATH = "docs/traceability/v12-p0-blockers-v1.json"
 MODULE_CATALOG_PATH = "docs/module-catalog-v1.json"
 MODULE_STANDARD_PATH = "docs/module-documentation-standard-v1.md"
-MODULE_CHECKER = "scripts/check-module-documentation.py"
 EXPECTED_PLAN = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"
 EXPECTED_ADDENDUM = "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md"
 EXPECTED_MIGRATION_HEAD = "0084_make_provider_reconciliation_replay_terminal_safe.sql"
-EXPECTED_REQUIREMENTS = {
+EXPECTED_BASE_REQUIREMENTS = {
     "V12-A", "V12-B", "V12-C", "V12-D", "V12-E", "V12-F", "V12-G",
     "V12-H", "V12-I", "V12-J", "V12-K",
     "V12-X1", "V12-X2", "V12-X3", "V12-X4", "V12-X5", "V12-X6",
     "V12-X7", "V12-X8",
+}
+EXPECTED_P0_REQUIREMENTS = {
+    "V12-L", "V12-M", "V12-N", "V12-O", "V12-X9", "V12-X10",
 }
 PROBLEMS: list[str] = []
 
@@ -114,6 +117,7 @@ def validate_authority() -> dict[str, Any]:
         "entrypoint",
         "component_status",
         "traceability",
+        "p0_blocker_traceability",
         "module_catalog",
         "module_standard",
         "hepta_state_machines",
@@ -121,6 +125,13 @@ def validate_authority() -> dict[str, Any]:
         "clean_deployment_acceptance",
         "slo_recovery",
         "protocol_compatibility",
+        "capability_posture",
+        "money_isolation",
+        "money_isolation_manifest",
+        "project_boundary",
+        "world_surface_freeze",
+        "world_surface_manifest",
+        "repository_governance",
     }
     if not isinstance(canonical, dict) or set(canonical) != required_keys:
         PROBLEMS.append("canonical document set is incomplete or contains unversioned additions")
@@ -140,10 +151,22 @@ def validate_authority() -> dict[str, Any]:
                 )
 
     if isinstance(canonical, dict):
-        if canonical.get("module_catalog") != MODULE_CATALOG_PATH:
-            PROBLEMS.append("canonical module catalog path is stale")
-        if canonical.get("module_standard") != MODULE_STANDARD_PATH:
-            PROBLEMS.append("canonical module standard path is stale")
+        expected_paths = {
+            "traceability": BASE_TRACEABILITY_PATH,
+            "p0_blocker_traceability": P0_TRACEABILITY_PATH,
+            "module_catalog": MODULE_CATALOG_PATH,
+            "module_standard": MODULE_STANDARD_PATH,
+            "capability_posture": "docs/capability-production-posture-v1.md",
+            "money_isolation": "docs/authoritative-money-isolation-v1.md",
+            "money_isolation_manifest": "docs/compatibility/authoritative-money-isolation-v1.json",
+            "project_boundary": "PROJECT_BOUNDARY.md",
+            "world_surface_freeze": "docs/compatibility/world-surface-freeze-v1.md",
+            "world_surface_manifest": "docs/compatibility/world-surface-freeze-v1.json",
+            "repository_governance": "docs/repository-governance-policy-v1.md",
+        }
+        for key, expected in expected_paths.items():
+            if canonical.get(key) != expected:
+                PROBLEMS.append(f"canonical {key} path is stale")
 
     external = authority.get("external_production_scope")
     if (
@@ -154,13 +177,27 @@ def validate_authority() -> dict[str, Any]:
         PROBLEMS.append(
             "external production scope must remain non-self-certifiable and blocked_upstream"
         )
+    elif not {
+        "main_branch_ruleset_enforcement",
+        "cross_repository_world_authority_transfer",
+    }.issubset(set(external.get("includes", []))):
+        PROBLEMS.append(
+            "external scope must retain Ruleset and World transfer blockers"
+        )
     return authority
 
 
-def validate_traceability(authority: dict[str, Any]) -> None:
-    trace = load_json(TRACEABILITY_PATH)
-    if trace.get("schema") != "cex.v12-requirement-traceability.v1":
-        PROBLEMS.append("traceability schema is invalid")
+def validate_requirement_ledger(
+    relative: str,
+    schema: str,
+    expected_requirements: set[str],
+    authority: dict[str, Any],
+) -> set[str]:
+    trace = load_json(relative)
+    if trace.get("schema") != schema:
+        PROBLEMS.append(f"{relative} schema is invalid")
+    if trace.get("status") != "active":
+        PROBLEMS.append(f"{relative} status must be active")
     for field, expected in (
         ("active_plan", EXPECTED_PLAN),
         ("active_addendum", EXPECTED_ADDENDUM),
@@ -168,16 +205,16 @@ def validate_traceability(authority: dict[str, Any]) -> None:
         ("production_authorization", "not_granted"),
     ):
         if trace.get(field) != expected:
-            PROBLEMS.append(f"traceability {field} is stale")
+            PROBLEMS.append(f"{relative} {field} is stale")
 
     requirements = trace.get("requirements")
     if not isinstance(requirements, list):
-        PROBLEMS.append("traceability requirements must be a list")
-        return
+        PROBLEMS.append(f"{relative} requirements must be a list")
+        return set()
 
     seen: set[str] = set()
     for index, item in enumerate(requirements):
-        label = f"requirements[{index}]"
+        label = f"{relative}:requirements[{index}]"
         if not isinstance(item, dict):
             PROBLEMS.append(f"{label} must be an object")
             continue
@@ -186,7 +223,7 @@ def validate_traceability(authority: dict[str, Any]) -> None:
             PROBLEMS.append(f"{label}.id is invalid")
             continue
         if requirement_id in seen:
-            PROBLEMS.append(f"duplicate traceability requirement: {requirement_id}")
+            PROBLEMS.append(f"duplicate traceability requirement in {relative}: {requirement_id}")
         seen.add(requirement_id)
 
         classification = item.get("classification")
@@ -222,20 +259,45 @@ def validate_traceability(authority: dict[str, Any]) -> None:
                 or item.get("status") != "blocked_upstream"
             ):
                 PROBLEMS.append(f"{requirement_id} external evidence policy is invalid")
-            if item.get("gates") or item.get("verification"):
+            if item.get("gates") or item.get("verification") or item.get("implementation"):
                 PROBLEMS.append(
-                    f"{requirement_id} must not claim a repository gate can self-certify it"
+                    f"{requirement_id} must not claim repository implementation or a gate can self-certify it"
                 )
 
-    if seen != EXPECTED_REQUIREMENTS:
+    if seen != expected_requirements:
         PROBLEMS.append(
-            "traceability requirement set mismatch: missing="
-            + ",".join(sorted(EXPECTED_REQUIREMENTS - seen))
+            f"{relative} requirement set mismatch: missing="
+            + ",".join(sorted(expected_requirements - seen))
             + " extra="
-            + ",".join(sorted(seen - EXPECTED_REQUIREMENTS))
+            + ",".join(sorted(seen - expected_requirements))
         )
     if authority and trace.get("active_plan") != authority.get("active_plan"):
-        PROBLEMS.append("authority and traceability disagree on active plan")
+        PROBLEMS.append(f"authority and {relative} disagree on active plan")
+    return seen
+
+
+def validate_traceability(authority: dict[str, Any]) -> None:
+    base_seen = validate_requirement_ledger(
+        BASE_TRACEABILITY_PATH,
+        "cex.v12-requirement-traceability.v1",
+        EXPECTED_BASE_REQUIREMENTS,
+        authority,
+    )
+    p0 = load_json(P0_TRACEABILITY_PATH)
+    if p0.get("base_traceability") != BASE_TRACEABILITY_PATH:
+        PROBLEMS.append("P0 blocker traceability does not bind the base ledger")
+    p0_seen = validate_requirement_ledger(
+        P0_TRACEABILITY_PATH,
+        "cex.v12-p0-blocker-traceability.v1",
+        EXPECTED_P0_REQUIREMENTS,
+        authority,
+    )
+    overlap = base_seen & p0_seen
+    if overlap:
+        PROBLEMS.append(
+            "base and P0 traceability contain duplicate requirement IDs: "
+            + ",".join(sorted(overlap))
+        )
 
 
 def validate_repository_wiring() -> None:
@@ -251,13 +313,17 @@ def validate_repository_wiring() -> None:
         "HEPTA_REQUIRE_POSTGRES_TESTS: '1'",
         "scripts/check-development-docs.py",
         "scripts/check-module-documentation.py",
+        "scripts/check-capability-production-posture.py",
+        "scripts/check-authoritative-money-isolation.py",
+        "scripts/check-project-boundary.py",
+        "scripts/check-source-governance.py",
         "scripts/check-repository-integrity.py",
         "scripts/check-hepta-lint-ownership.py",
         "scripts/check-hepta-postgres-integration.sh",
     ):
         if marker not in rust_gate:
             PROBLEMS.append(
-                f"rust-service-gate lacks required v12 addendum marker: {marker}"
+                f"rust-service-gate lacks required v12 blocker marker: {marker}"
             )
 
     release_gate = read_text(".github/workflows/p0-release-candidate-gate.yml")
@@ -279,20 +345,24 @@ def validate_repository_wiring() -> None:
                 f"Hepta PostgreSQL recovery test can still silently skip: missing {marker}"
             )
 
-    run_checker(
-        "scripts/check-hepta-lint-ownership.py",
-        "Hepta lint ownership contract",
-    )
-    run_checker(
-        MODULE_CHECKER,
-        "workspace module documentation contract",
-    )
+    for relative, label in (
+        ("scripts/check-hepta-lint-ownership.py", "Hepta lint ownership contract"),
+        ("scripts/check-module-documentation.py", "workspace module documentation contract"),
+        ("scripts/check-capability-production-posture.py", "Capability production posture"),
+        ("scripts/check-authoritative-money-isolation.py", "authoritative money isolation"),
+        ("scripts/check-project-boundary.py", "CEX/World project boundary"),
+        ("scripts/check-source-governance.py", "source governance"),
+    ):
+        run_checker(relative, label)
 
     require_markers(
         "docs/index.md",
         "Authority order",
         "Production authorization",
-        "Module catalog",
+        "P0 blocker traceability",
+        "Capability production posture",
+        "World compatibility freeze",
+        "Repository governance",
         "scripts/check-development-docs.py",
     )
     require_markers(
@@ -301,8 +371,12 @@ def validate_repository_wiring() -> None:
         "Block I",
         "Block J",
         "Block K",
+        "Block L",
+        "Block M",
+        "Block N",
+        "Block O",
         "REPOSITORY_CLOSED_CANDIDATE",
-        "External production gates remain upstream blockers",
+        "External production and administration gates remain upstream blockers",
     )
     require_markers(
         MODULE_STANDARD_PATH,
@@ -322,9 +396,11 @@ def main() -> int:
         "active_plan": EXPECTED_PLAN,
         "active_addendum": EXPECTED_ADDENDUM,
         "migration_head": EXPECTED_MIGRATION_HEAD,
-        "requirements": len(EXPECTED_REQUIREMENTS),
+        "requirements": len(EXPECTED_BASE_REQUIREMENTS | EXPECTED_P0_REQUIREMENTS),
         "workspace_module_contract": MODULE_CATALOG_PATH,
+        "p0_blocker_traceability": P0_TRACEABILITY_PATH,
         "production_authorization": "not_granted",
+        "external_blockers": ["V12-X9", "V12-X10"],
         "problems": PROBLEMS,
     }
     print(json.dumps(result, indent=2, ensure_ascii=False, sort_keys=True))

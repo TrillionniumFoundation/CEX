@@ -30,6 +30,13 @@ jobs:
       - name: Validate workspace module documentation
         run: python3 scripts/check-module-documentation.py
 
+      - name: Validate P0 blocker posture
+        run: |
+          python3 scripts/check-capability-production-posture.py
+          python3 scripts/check-authoritative-money-isolation.py
+          python3 scripts/check-project-boundary.py
+          python3 scripts/check-source-governance.py
+
       - name: Validate development-document authority
         run: python3 scripts/check-development-docs.py
 
@@ -59,6 +66,13 @@ jobs:
 
       - name: Workspace module documentation contract
         run: python scripts/check-module-documentation.py
+
+      - name: P0 blocker posture contracts
+        run: |
+          python scripts/check-capability-production-posture.py
+          python scripts/check-authoritative-money-isolation.py
+          python scripts/check-project-boundary.py
+          python scripts/check-source-governance.py
 
       - name: Development-document contract
         run: python scripts/check-development-docs.py
@@ -102,6 +116,13 @@ jobs:
 
       - name: Workspace module documentation contract
         run: python3 scripts/check-module-documentation.py
+
+      - name: P0 blocker posture contracts
+        run: |
+          python3 scripts/check-capability-production-posture.py
+          python3 scripts/check-authoritative-money-isolation.py
+          python3 scripts/check-project-boundary.py
+          python3 scripts/check-source-governance.py
 
       - name: Development-document contract
         run: python3 scripts/check-development-docs.py
@@ -158,6 +179,13 @@ jobs:
 
       - name: Workspace module documentation contract
         run: python3 scripts/check-module-documentation.py
+
+      - name: P0 blocker posture contracts
+        run: |
+          python3 scripts/check-capability-production-posture.py
+          python3 scripts/check-authoritative-money-isolation.py
+          python3 scripts/check-project-boundary.py
+          python3 scripts/check-source-governance.py
 
       - name: Development-document contract
         run: python3 scripts/check-development-docs.py
