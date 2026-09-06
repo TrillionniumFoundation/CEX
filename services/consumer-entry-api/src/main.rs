@@ -23,14 +23,18 @@ fn first_non_empty_env(names: &[&str]) -> Option<String> {
 }
 
 fn production_like_profile() -> bool {
-    first_non_empty_env(&["CONSUMER_ENTRY_RUNTIME_PROFILE", "CEX_RUNTIME_PROFILE", "APP_ENV"])
-        .map(|profile| {
-            matches!(
-                profile.trim().to_ascii_lowercase().as_str(),
-                "beta" | "staging" | "stage" | "production" | "prod"
-            )
-        })
-        .unwrap_or(false)
+    first_non_empty_env(&[
+        "CONSUMER_ENTRY_RUNTIME_PROFILE",
+        "CEX_RUNTIME_PROFILE",
+        "APP_ENV",
+    ])
+    .map(|profile| {
+        matches!(
+            profile.trim().to_ascii_lowercase().as_str(),
+            "beta" | "staging" | "stage" | "production" | "prod"
+        )
+    })
+    .unwrap_or(false)
 }
 
 fn valid_remote_world_base_url(value: &str) -> bool {
@@ -58,8 +62,9 @@ fn validate_world_authority_startup_from_env() -> Result<(), String> {
         ));
     }
 
-    let base_url = first_non_empty_env(&["TRILLIONNIUM_WORLD_BASE_URL"])
-        .ok_or_else(|| "TRILLIONNIUM_WORLD_BASE_URL is required in remote World authority mode".to_string())?;
+    let base_url = first_non_empty_env(&["TRILLIONNIUM_WORLD_BASE_URL"]).ok_or_else(|| {
+        "TRILLIONNIUM_WORLD_BASE_URL is required in remote World authority mode".to_string()
+    })?;
     if !valid_remote_world_base_url(&base_url) {
         return Err(
             "TRILLIONNIUM_WORLD_BASE_URL must be a non-placeholder, non-loopback HTTP(S) service URL"
@@ -67,8 +72,10 @@ fn validate_world_authority_startup_from_env() -> Result<(), String> {
         );
     }
 
-    let api_contract = first_non_empty_env(&["TRILLIONNIUM_WORLD_API_CONTRACT"])
-        .ok_or_else(|| "TRILLIONNIUM_WORLD_API_CONTRACT is required in production-like profiles".to_string())?;
+    let api_contract =
+        first_non_empty_env(&["TRILLIONNIUM_WORLD_API_CONTRACT"]).ok_or_else(|| {
+            "TRILLIONNIUM_WORLD_API_CONTRACT is required in production-like profiles".to_string()
+        })?;
     if api_contract != WORLD_API_CONTRACT {
         return Err(format!(
             "TRILLIONNIUM_WORLD_API_CONTRACT must equal {WORLD_API_CONTRACT}, got {api_contract}"
@@ -185,10 +192,7 @@ mod tests {
             &Method::POST,
             "/world/web/map-rum"
         ));
-        assert!(!is_world_authoritative_write(
-            &Method::POST,
-            "/v1/tasks"
-        ));
+        assert!(!is_world_authoritative_write(&Method::POST, "/v1/tasks"));
     }
 
     #[test]
