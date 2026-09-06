@@ -1,3 +1,12 @@
+#![allow(
+    clippy::result_large_err,
+    reason = "Axum Response is the deliberate HTTP boundary error type; boxing it would add allocation without reducing the wire response"
+)]
+
+#[allow(
+    dead_code,
+    reason = "the shared service-auth source exposes constructors for several services while this crate consumes only execution-create authentication"
+)]
 #[path = "../../../crates/shared-config/src/service_auth.rs"]
 mod service_auth;
 
