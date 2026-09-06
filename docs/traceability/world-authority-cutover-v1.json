@@ -10,7 +10,7 @@
   "world_source": {
     "pull_request": 60,
     "branch": "feat/p0-world-authority-cutover-20260906",
-    "head_sha": "83c3cfb939ed683e15b831cae8a47e3c03f77ea8",
+    "head_sha": "47a9354b4b3e247e27418baef24d6c21c65c671e",
     "historical_source_parent": "d44d8930c917b55da7b23eb19e9645feb8f4ee59",
     "restored_server_crate_count": 7,
     "restored_historical_file_count": 15,
@@ -21,7 +21,7 @@
     "installation_qualification": "scripts/check-trnm-world-authority-postgres-installation.sh",
     "qualification_runner": "scripts/run-trnm-world-authority-postgres-check.sh",
     "ordinary_actions_run_observed": false,
-    "source_ci_status": "pending_final_exact_sha_validation_and_native_world_contexts"
+    "source_ci_status": "cex_exact_sha_validation_pending_native_world_contexts"
   },
   "cex_candidate": {
     "pull_request": 34,
@@ -51,6 +51,9 @@
     "world_protected_game_ci_actions_pinned_to_commit_sha": true,
     "world_game_evidence_fail_closed_by_required_gate_conclusions": true,
     "world_game_qualified_and_unqualified_artifacts_are_distinct": true,
+    "world_postgres_source_and_prospective_merge_gate_defined": true,
+    "postgres_server_client_image_digest_pinned": true,
+    "cex_postgres_exact_digest_gate_defined": true,
     "single_active_writer_epoch_database_constraint": true,
     "global_writer_activation_serialization": true,
     "canonical_json_hash_constraints": true,
@@ -63,23 +66,24 @@
     "base_only_partial_install_recovery_gate": true,
     "wrong_same_name_index_rejection_gate": true,
     "rust_toolchain_pinned": "1.98.1",
+    "postgres_image_digest": "sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94",
     "cargo_audit_version_pinned": "0.22.2",
     "cargo_deny_version_pinned": "0.20.2"
   },
   "evidence_matrix": [
     {
       "id": "world_exact_sha_source_qualification",
-      "status": "pending_final_gate_run",
+      "status": "implemented_pending_final_cex_gate_run",
       "blocking": true
     },
     {
       "id": "world_postgres_hostile_state_machine",
-      "status": "implemented_pending_final_exact_sha_gate_run",
+      "status": "source_and_prospective_merge_gate_implemented_pending_final_exact_sha_run",
       "blocking": true
     },
     {
       "id": "world_postgres_installation_protocol",
-      "status": "implemented_pending_final_exact_sha_gate_run",
+      "status": "source_and_prospective_merge_gate_implemented_pending_final_exact_sha_run",
       "blocking": true
     },
     {
@@ -123,5 +127,5 @@
       "blocking": true
     }
   ],
-  "truth_boundary": "Source, unit, PostgreSQL-hostile, installation-protocol, and development HTTP evidence cannot grant production authority. Production cutover still requires exact runtime backfill reconciliation, native protected contexts, deployment-specific no-dual-writer evidence, and explicit authorization."
+  "truth_boundary": "Source, unit, PostgreSQL-hostile, installation-protocol, and development HTTP evidence cannot grant production authority. Production cutover still requires exact runtime backfill reconciliation, native protected contexts, deployment-specific no-dual-writer evidence, embedded-source retirement, and explicit authorization."
 }

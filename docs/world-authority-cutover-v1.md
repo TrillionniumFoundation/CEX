@@ -7,7 +7,7 @@ production_authorization: `not_granted`
 
 `TrillionniumFoundation/Trillionnium-World` owns World topology, movement, tactics, commerce, company/shop/work-order, progression and their source-versioned projections. CEX owns authenticated ingress, identity/session binding, request normalization and exact economic settlement integration. CEX must not remain a second World state writer.
 
-World PR #60 provides a bounded seven-crate server authority workspace and mandatory PostgreSQL cutover hardening at exact commit `83c3cfb939ed683e15b831cae8a47e3c03f77ea8`. CEX PR #34 adds a remote-only adapter plus a production write fence. Neither change self-grants production authority.
+World PR #60 provides a bounded seven-crate server authority workspace and mandatory PostgreSQL cutover hardening at exact commit `47a9354b4b3e247e27418baef24d6c21c65c671e`. CEX PR #34 adds a remote-only adapter plus a production write fence. Neither change self-grants production authority.
 
 ## CEX runtime modes
 
@@ -72,11 +72,17 @@ A separate installation-protocol suite additionally proves:
 - a base-only partial schema is explicitly unqualified and is recovered by the supported installer;
 - a pre-existing same-name index with a wrong expression or predicate is rejected rather than being mistaken for the single-writer control.
 
-These are source-level database qualifications, not evidence that any production dataset has been migrated.
+The World PostgreSQL workflow now constructs a deterministic prospective-merge object and runs the complete state-machine plus installation matrix against both the exact source head and that merge object. Its PostgreSQL server and command-line clients use the same immutable image digest:
+
+```text
+postgres:16@sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94
+```
+
+The CEX-side independent PostgreSQL gate uses the same digest and records the image, exact World tree, migration/checker blobs and outcome. These are source-level database qualifications, not evidence that any production dataset has been migrated.
 
 ## Cross-repository source gates
 
-`.github/workflows/p0-world-authority-cutover-gate.yml` checks out World commit `83c3cfb939ed683e15b831cae8a47e3c03f77ea8` by exact SHA. `.github/workflows/p0-world-authority-postgres-v2-gate.yml` independently runs the durable state-machine and installation-protocol hostile suites against the same exact World candidate. Checkout, Rust toolchain and artifact upload actions are pinned to immutable commits, and Rust is pinned to `1.98.1`.
+`.github/workflows/p0-world-authority-cutover-gate.yml` checks out World commit `47a9354b4b3e247e27418baef24d6c21c65c671e` by exact SHA. `.github/workflows/p0-world-authority-postgres-v2-gate.yml` independently runs the durable state-machine and installation-protocol hostile suites against the same exact World candidate. Checkout, Rust toolchain and artifact upload actions are pinned to immutable commits, Rust is pinned to `1.98.1`, and PostgreSQL server/client identity is digest-bound.
 
 The World protected source definitions also include the `trnm-game-ci`, `trnm-world-p0-boundaries`, `trnm-world-status-evidence`, and `trnm-world-postgres-cutover` contexts. GitHub has not created native World workflow runs for the current exact head, so checked-in workflow definitions are not treated as successful status checks.
 
@@ -115,4 +121,4 @@ Any mismatch keeps `production_authorization=not_granted`.
 
 ## Evidence truth
 
-The machine-readable current matrix is `docs/traceability/world-authority-cutover-v1.json`. CI evidence binds the CEX side to the pull-request head SHA or push SHA and the World side to the exact SHA above. Source-level database and HTTP tests are now present; runtime data reconciliation, native World contexts, deployment-specific no-dual-writer evidence, embedded-source retirement and explicit go-live authorization remain blocking until actually executed.
+The machine-readable current matrix is `docs/traceability/world-authority-cutover-v1.json`. CI evidence binds the CEX side to the pull-request head SHA or push SHA and the World side to the exact SHA above. Source-level database and HTTP tests are present; runtime data reconciliation, native World contexts, deployment-specific no-dual-writer evidence, embedded-source retirement and explicit go-live authorization remain blocking until actually executed.
