@@ -57,9 +57,9 @@
       "path": "crates/shared-config",
       "package": "shared-config",
       "classification": "ledger_support_only",
-      "package_git_tree": "2372805268e7558e3529d277fd0996bde5e84f6c",
+      "package_git_tree": "4d25719ba2ba3aafa2c095c69fcde286e83fb2dd",
       "cargo_manifest_blob": "dfe47a9d04735ce7bdd93c941d4ac5622e5a5b4c",
-      "source_git_tree": "cb980a2e26ceff60812462714c72cee009e75274"
+      "source_git_tree": "dfce224f65aaa2d5cd2be9f5ff35adb69e71a46b"
     },
     {
       "path": "crates/shared-types",
