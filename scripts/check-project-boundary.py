@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 import sys
@@ -102,7 +101,10 @@ def list_recursive_files(relative: str) -> dict[str, tuple[str, str]]:
         metadata, path = line.split("\t", 1)
         mode, kind, object_id = metadata.split()
         require(kind == "blob", f"non-blob tracked below quarantined source root: {path}")
-        require(mode in {"100644", "100755"}, f"non-regular source entry below quarantine: {path} mode={mode}")
+        require(
+            mode in {"100644", "100755"},
+            f"non-regular source entry below quarantine: {path} mode={mode}",
+        )
         entries[path] = (mode, object_id)
     return entries
 
@@ -110,20 +112,33 @@ def list_recursive_files(relative: str) -> dict[str, tuple[str, str]]:
 def require_inventory_equal(actual: set[str], expected: set[str], label: str) -> None:
     missing = sorted(expected - actual)
     extra = sorted(actual - expected)
-    require(not missing and not extra, f"{label} inventory mismatch: missing={missing} extra={extra}")
+    require(
+        not missing and not extra,
+        f"{label} inventory mismatch: missing={missing} extra={extra}",
+    )
 
 
 def scan_source_text(relative: str, text: str) -> None:
     for policy, pattern in FORBIDDEN_SOURCE_PATTERNS.items():
         if pattern.search(text):
-            raise BoundaryViolation(f"forbidden indirect source mechanism {policy}: {relative}")
+            raise BoundaryViolation(
+                f"forbidden indirect source mechanism {policy}: {relative}"
+            )
 
 
-def module_child_candidates(source_root: PurePosixPath, current: PurePosixPath, name: str) -> tuple[PurePosixPath, PurePosixPath]:
+def module_child_candidates(
+    source_root: PurePosixPath,
+    current: PurePosixPath,
+    name: str,
+) -> tuple[PurePosixPath, PurePosixPath]:
     relative = current.relative_to(source_root)
     if relative in {PurePosixPath("lib.rs"), PurePosixPath("main.rs")}:
         base = current.parent
-    elif len(relative.parts) == 2 and relative.parts[0] == "bin" and relative.suffix == ".rs":
+    elif (
+        len(relative.parts) == 2
+        and relative.parts[0] == "bin"
+        and relative.suffix == ".rs"
+    ):
         base = current.with_suffix("")
     elif current.name == "mod.rs":
         base = current.parent
@@ -140,9 +155,17 @@ def source_entrypoints(source_root: str, files: set[str]) -> set[str]:
         local = path.relative_to(root)
         if local in {PurePosixPath("lib.rs"), PurePosixPath("main.rs")}:
             entries.add(relative)
-        elif len(local.parts) == 2 and local.parts[0] == "bin" and local.suffix == ".rs":
+        elif (
+            len(local.parts) == 2
+            and local.parts[0] == "bin"
+            and local.suffix == ".rs"
+        ):
             entries.add(relative)
-        elif len(local.parts) == 3 and local.parts[0] == "bin" and local.name == "main.rs":
+        elif (
+            len(local.parts) == 3
+            and local.parts[0] == "bin"
+            and local.name == "main.rs"
+        ):
             entries.add(relative)
     return entries
 
@@ -164,21 +187,40 @@ def validate_module_graph(source_root: str, source_files: set[str]) -> None:
         current = PurePosixPath(relative)
         for module_name in MOD_DECL_RE.findall(text):
             candidates = module_child_candidates(root, current, module_name)
-            matches = [candidate.as_posix() for candidate in candidates if candidate.as_posix() in rust_files]
+            matches = [
+                candidate.as_posix()
+                for candidate in candidates
+                if candidate.as_posix() in rust_files
+            ]
             require(
                 len(matches) == 1,
-                f"Rust module declaration must resolve to exactly one manifest-bound file: "
-                f"source={relative} module={module_name} candidates={[str(item) for item in candidates]} matches={matches}",
+                "Rust module declaration must resolve to exactly one "
+                f"manifest-bound file: source={relative} module={module_name} "
+                f"candidates={[str(item) for item in candidates]} matches={matches}",
             )
             if matches[0] not in reachable:
                 pending.append(matches[0])
-    require_inventory_equal(reachable, rust_files, f"Rust module graph for {source_root}")
+    require_inventory_equal(
+        reachable,
+        rust_files,
+        f"Rust module graph for {source_root}",
+    )
 
 
-def validate_no_build_script(crate_path: str, root_entries: set[str], cargo_document: dict[str, Any]) -> None:
-    require("build.rs" not in root_entries, f"Cargo build script is forbidden in quarantined crate: {crate_path}/build.rs")
+def validate_no_build_script(
+    crate_path: str,
+    root_entries: set[str],
+    cargo_document: dict[str, Any],
+) -> None:
+    require(
+        "build.rs" not in root_entries,
+        f"Cargo build script is forbidden in quarantined crate: {crate_path}/build.rs",
+    )
     build_value = cargo_document.get("package", {}).get("build")
-    require(build_value in {None, False}, f"Cargo package build entry is forbidden in quarantined crate: {crate_path}")
+    require(
+        build_value in {None, False},
+        f"Cargo package build entry is forbidden in quarantined crate: {crate_path}",
+    )
 
 
 def resolve_path_dependency(manifest_dir: Path, path_value: str) -> Path:
@@ -187,7 +229,7 @@ def resolve_path_dependency(manifest_dir: Path, path_value: str) -> Path:
         resolved.relative_to(ROOT.resolve())
     except ValueError as error:
         raise BoundaryViolation(
-            f"Cargo path dependency escapes CEX repository: "
+            "Cargo path dependency escapes CEX repository: "
             f"{manifest_dir.relative_to(ROOT)}/{path_value}"
         ) from error
     return resolved
@@ -205,53 +247,125 @@ def walk_paths(value: Any, manifest_dir: Path) -> None:
             walk_paths(nested, manifest_dir)
 
 
-def validate_quarantined_crate(entry: dict[str, Any], deny_pattern: re.Pattern[str]) -> tuple[int, set[str]]:
+def validate_quarantined_crate(
+    entry: dict[str, Any],
+    deny_pattern: re.Pattern[str],
+) -> tuple[int, set[str]]:
     crate_path = entry.get("path")
     source_root = entry.get("source_root")
     require(isinstance(crate_path, str), "quarantined crate path missing")
     require(isinstance(source_root, str), f"source_root missing for {crate_path}")
-    require(source_root == f"{crate_path}/src", f"source_root must be the crate src tree: {crate_path}")
+    require(
+        source_root == f"{crate_path}/src",
+        f"source_root must be the crate src tree: {crate_path}",
+    )
 
     expected_crate_tree = require_sha(entry.get("git_tree"), f"crate tree {crate_path}")
-    expected_source_tree = require_sha(entry.get("source_git_tree"), f"source tree {source_root}")
-    require(committed_object(crate_path) == expected_crate_tree, f"quarantined crate tree drift: {crate_path}")
-    require(committed_object(source_root) == expected_source_tree, f"quarantined source tree drift: {source_root}")
+    expected_source_tree = require_sha(
+        entry.get("source_git_tree"),
+        f"source tree {source_root}",
+    )
+    require(
+        committed_object(crate_path) == expected_crate_tree,
+        f"quarantined crate tree drift: {crate_path}",
+    )
+    require(
+        committed_object(source_root) == expected_source_tree,
+        f"quarantined source tree drift: {source_root}",
+    )
 
     expected_root_entries_raw = entry.get("root_entries")
-    require(isinstance(expected_root_entries_raw, list), f"root_entries must be a list: {crate_path}")
+    require(
+        isinstance(expected_root_entries_raw, list),
+        f"root_entries must be a list: {crate_path}",
+    )
     expected_root_entries = set(expected_root_entries_raw)
-    require(len(expected_root_entries) == len(expected_root_entries_raw), f"duplicate root entry: {crate_path}")
+    require(
+        len(expected_root_entries) == len(expected_root_entries_raw),
+        f"duplicate root entry: {crate_path}",
+    )
     actual_root_entries = list_tree_names(crate_path)
-    require_inventory_equal(actual_root_entries, expected_root_entries, f"crate root {crate_path}")
+    require_inventory_equal(
+        actual_root_entries,
+        expected_root_entries,
+        f"crate root {crate_path}",
+    )
 
     cargo_path = f"{crate_path}/Cargo.toml"
     module_doc_path = f"{crate_path}/MODULE.md"
-    expected_cargo_blob = require_sha(entry.get("cargo_manifest_blob"), f"Cargo manifest blob {crate_path}")
-    expected_module_blob = require_sha(entry.get("module_document_blob"), f"module document blob {crate_path}")
-    require(committed_object(cargo_path) == expected_cargo_blob, f"Cargo manifest blob drift: {cargo_path}")
-    require(committed_object(module_doc_path) == expected_module_blob, f"module document blob drift: {module_doc_path}")
+    expected_cargo_blob = require_sha(
+        entry.get("cargo_manifest_blob"),
+        f"Cargo manifest blob {crate_path}",
+    )
+    expected_module_blob = require_sha(
+        entry.get("module_document_blob"),
+        f"module document blob {crate_path}",
+    )
+    require(
+        committed_object(cargo_path) == expected_cargo_blob,
+        f"Cargo manifest blob drift: {cargo_path}",
+    )
+    require(
+        committed_object(module_doc_path) == expected_module_blob,
+        f"module document blob drift: {module_doc_path}",
+    )
 
     source_entries = entry.get("source_files")
-    require(isinstance(source_entries, list) and source_entries, f"source_files must be nonempty: {crate_path}")
-    require(entry.get("source_file_count") == len(source_entries), f"source_file_count drift: {crate_path}")
+    require(
+        isinstance(source_entries, list) and source_entries,
+        f"source_files must be nonempty: {crate_path}",
+    )
+    require(
+        entry.get("source_file_count") == len(source_entries),
+        f"source_file_count drift: {crate_path}",
+    )
     expected_files: dict[str, str] = {}
     for index, source in enumerate(source_entries):
-        require(isinstance(source, dict), f"source_files[{index}] must be an object: {crate_path}")
+        require(
+            isinstance(source, dict),
+            f"source_files[{index}] must be an object: {crate_path}",
+        )
         path = source.get("path")
-        require(isinstance(path, str) and path.startswith(f"{source_root}/"), f"source file escapes root: {path}")
-        require(path.endswith(".rs"), f"only Rust source is permitted in quarantined src roots: {path}")
+        require(
+            isinstance(path, str) and path.startswith(f"{source_root}/"),
+            f"source file escapes root: {path}",
+        )
+        require(
+            path.endswith(".rs"),
+            f"only Rust source is permitted in quarantined src roots: {path}",
+        )
         require(path not in expected_files, f"duplicate manifest-bound source file: {path}")
-        expected_files[path] = require_sha(source.get("git_blob"), f"source blob {path}")
+        expected_files[path] = require_sha(
+            source.get("git_blob"),
+            f"source blob {path}",
+        )
 
     actual_files = list_recursive_files(source_root)
-    require_inventory_equal(set(actual_files), set(expected_files), f"recursive tracked source root {source_root}")
+    require_inventory_equal(
+        set(actual_files),
+        set(expected_files),
+        f"recursive tracked source root {source_root}",
+    )
     for path, expected_blob in expected_files.items():
         actual_blob = actual_files[path][1]
-        require(actual_blob == expected_blob, f"manifest-bound source blob drift: {path} expected={expected_blob} actual={actual_blob}")
-        require(deny_pattern.match(path) is not None, f"deny_changed_paths_regex does not cover quarantined source: {path}")
+        require(
+            actual_blob == expected_blob,
+            f"manifest-bound source blob drift: {path} "
+            f"expected={expected_blob} actual={actual_blob}",
+        )
+        require(
+            deny_pattern.match(path) is not None,
+            f"deny_changed_paths_regex does not cover quarantined source: {path}",
+        )
 
-    require(deny_pattern.match(cargo_path) is not None, f"deny_changed_paths_regex does not cover quarantined Cargo manifest: {cargo_path}")
-    require(deny_pattern.match(f"{crate_path}/build.rs") is not None, f"deny_changed_paths_regex does not cover build script path: {crate_path}/build.rs")
+    require(
+        deny_pattern.match(cargo_path) is not None,
+        f"deny_changed_paths_regex does not cover quarantined Cargo manifest: {cargo_path}",
+    )
+    require(
+        deny_pattern.match(f"{crate_path}/build.rs") is not None,
+        f"deny_changed_paths_regex does not cover build script path: {crate_path}/build.rs",
+    )
 
     cargo_document = tomllib.loads(committed_text(cargo_path))
     validate_no_build_script(crate_path, actual_root_entries, cargo_document)
@@ -263,7 +377,7 @@ def expect_rejected(label: str, operation: Callable[[], None]) -> None:
     try:
         operation()
     except BoundaryViolation:
-        print(f"hostile boundary fixture rejected: {label}")
+        print(f"hostile boundary fixture rejected: {label}", file=sys.stderr)
         return
     raise BoundaryViolation(f"hostile boundary fixture was accepted: {label}")
 
@@ -295,21 +409,26 @@ def run_hostile_fixtures(deny_pattern: re.Pattern[str]) -> set[str]:
     expect_rejected(
         "rust_path_attribute",
         lambda: scan_source_text(
-            "fixture.rs", '#[path = "world/economy.rs"]\nmod economy;\n'
+            "fixture.rs",
+            '#[path = "world/economy.rs"]\nmod economy;\n',
         ),
     )
     executed.add("rust_path_attribute")
 
     expect_rejected(
         "rust_include_macro",
-        lambda: scan_source_text("fixture.rs", 'include!("world/economy.rs");\n'),
+        lambda: scan_source_text(
+            "fixture.rs",
+            'include!("world/economy.rs");\n',
+        ),
     )
     executed.add("rust_include_macro")
 
     expect_rejected(
         "out_dir_generated_rust",
         lambda: scan_source_text(
-            "fixture.rs", 'include!(concat!(env!("OUT_DIR"), "/world.rs"));\n'
+            "fixture.rs",
+            'include!(concat!(env!("OUT_DIR"), "/world.rs"));\n',
         ),
     )
     executed.add("out_dir_generated_rust")
@@ -324,7 +443,10 @@ def run_hostile_fixtures(deny_pattern: re.Pattern[str]) -> set[str]:
     )
     executed.add("cargo_build_script")
 
-    base_matrix = {"services/matrix-entry-adapter/src/lib.rs", "services/matrix-entry-adapter/src/main.rs"}
+    base_matrix = {
+        "services/matrix-entry-adapter/src/lib.rs",
+        "services/matrix-entry-adapter/src/main.rs",
+    }
     expect_rejected(
         "additional_matrix_carrier",
         lambda: require_inventory_equal(
@@ -353,7 +475,10 @@ def run_hostile_fixtures(deny_pattern: re.Pattern[str]) -> set[str]:
         "services/matrix-entry-adapter/Cargo.toml",
         "services/matrix-entry-adapter/build.rs",
     ):
-        require(deny_pattern.match(path) is not None, f"deny regex hostile coverage gap: {path}")
+        require(
+            deny_pattern.match(path) is not None,
+            f"deny regex hostile coverage gap: {path}",
+        )
     return executed
 
 
@@ -362,11 +487,27 @@ def main() -> int:
         manifest = load_json(MANIFEST_PATH, "World surface manifest")
         boundary = load_json(BOUNDARY_PATH, "PROJECT_BOUNDARY.json")
 
-        require(manifest.get("schema") == "cex.world-surface-freeze.v1", "World surface manifest schema is invalid")
-        require(manifest.get("status") == "active", "World surface manifest must be active")
-        require(manifest.get("production_authorization") == "not_granted", "World surface manifest must deny production authorization")
-        require(manifest.get("owner_repository") == "TrillionniumFoundation/Trillionnium-World", "World authority owner repository is invalid")
-        require(manifest.get("cex_role") == "compatibility_edge_only", "CEX World role must remain compatibility_edge_only")
+        require(
+            manifest.get("schema") == "cex.world-surface-freeze.v1",
+            "World surface manifest schema is invalid",
+        )
+        require(
+            manifest.get("status") == "active",
+            "World surface manifest must be active",
+        )
+        require(
+            manifest.get("production_authorization") == "not_granted",
+            "World surface manifest must deny production authorization",
+        )
+        require(
+            manifest.get("owner_repository")
+            == "TrillionniumFoundation/Trillionnium-World",
+            "World authority owner repository is invalid",
+        )
+        require(
+            manifest.get("cex_role") == "compatibility_edge_only",
+            "CEX World role must remain compatibility_edge_only",
+        )
 
         policy = manifest.get("indirect_source_policy")
         require(isinstance(policy, dict), "indirect_source_policy must be an object")
@@ -377,47 +518,95 @@ def main() -> int:
             "cargo_build_script",
             "untracked_or_unmanifested_source",
         ):
-            require(policy.get(key) == "forbidden", f"indirect source policy must forbid {key}")
+            require(
+                policy.get(key) == "forbidden",
+                f"indirect source policy must forbid {key}",
+            )
 
         deny_regex = boundary.get("deny_changed_paths_regex")
-        require(isinstance(deny_regex, str), "deny_changed_paths_regex must be a string")
+        require(
+            isinstance(deny_regex, str),
+            "deny_changed_paths_regex must be a string",
+        )
         try:
             deny_pattern = re.compile(deny_regex)
         except re.error as error:
-            raise BoundaryViolation(f"deny_changed_paths_regex is invalid: {error}") from error
+            raise BoundaryViolation(
+                f"deny_changed_paths_regex is invalid: {error}"
+            ) from error
 
         quarantined = manifest.get("quarantined_crates")
-        require(isinstance(quarantined, list), "quarantined_crates must be a list")
-        crate_paths = {entry.get("path") for entry in quarantined if isinstance(entry, dict)}
-        require(crate_paths == EXPECTED_QUARANTINED_CRATES, f"quarantined crate set drift: {crate_paths}")
-        require(len(quarantined) == len(EXPECTED_QUARANTINED_CRATES), "duplicate quarantined crate entry")
+        require(
+            isinstance(quarantined, list),
+            "quarantined_crates must be a list",
+        )
+        crate_paths = {
+            entry.get("path")
+            for entry in quarantined
+            if isinstance(entry, dict)
+        }
+        require(
+            crate_paths == EXPECTED_QUARANTINED_CRATES,
+            f"quarantined crate set drift: {crate_paths}",
+        )
+        require(
+            len(quarantined) == len(EXPECTED_QUARANTINED_CRATES),
+            "duplicate quarantined crate entry",
+        )
 
         complete_source_files: set[str] = set()
         total_source_files = 0
         for entry in quarantined:
             count, paths = validate_quarantined_crate(entry, deny_pattern)
-            require(not (complete_source_files & paths), "source file appears in multiple quarantined roots")
+            require(
+                not (complete_source_files & paths),
+                "source file appears in multiple quarantined roots",
+            )
             complete_source_files.update(paths)
             total_source_files += count
 
         frozen_entries = manifest.get("frozen_files")
-        require(isinstance(frozen_entries, list) and frozen_entries, "World frozen_files must be a nonempty list")
+        require(
+            isinstance(frozen_entries, list) and frozen_entries,
+            "World frozen_files must be a nonempty list",
+        )
         frozen_paths: set[str] = set()
         world_paths: set[str] = set()
         for index, entry in enumerate(frozen_entries):
-            require(isinstance(entry, dict), f"frozen_files[{index}] must be an object")
+            require(
+                isinstance(entry, dict),
+                f"frozen_files[{index}] must be an object",
+            )
             relative = entry.get("path")
-            expected_blob = require_sha(entry.get("git_blob"), f"frozen blob at index {index}")
+            expected_blob = require_sha(
+                entry.get("git_blob"),
+                f"frozen blob at index {index}",
+            )
             kind = entry.get("kind")
-            require(isinstance(relative, str), f"frozen_files[{index}] lacks path")
-            require(relative not in frozen_paths, f"duplicate frozen World path: {relative}")
+            require(
+                isinstance(relative, str),
+                f"frozen_files[{index}] lacks path",
+            )
+            require(
+                relative not in frozen_paths,
+                f"duplicate frozen World path: {relative}",
+            )
             frozen_paths.add(relative)
-            require(relative in complete_source_files, f"frozen file escapes recursive quarantine: {relative}")
-            require(committed_object(relative) == expected_blob, f"frozen World file blob drift: {relative}")
+            require(
+                relative in complete_source_files,
+                f"frozen file escapes recursive quarantine: {relative}",
+            )
+            require(
+                committed_object(relative) == expected_blob,
+                f"frozen World file blob drift: {relative}",
+            )
             if kind == "world_source":
                 world_paths.add(relative)
         require(world_paths, "no explicit World source files are classified")
-        require("services/matrix-entry-adapter/src/lib.rs" in frozen_paths, "Matrix World command carrier is not frozen")
+        require(
+            "services/matrix-entry-adapter/src/lib.rs" in frozen_paths,
+            "Matrix World command carrier is not frozen",
+        )
 
         for marker in (
             "hepta-control-plane",
@@ -425,14 +614,23 @@ def main() -> int:
             "external_path_dependencies",
             "compatibility_inventory",
         ):
-            require(marker in json.dumps(boundary, sort_keys=True), f"PROJECT_BOUNDARY.json lacks marker: {marker}")
+            require(
+                marker in json.dumps(boundary, sort_keys=True),
+                f"PROJECT_BOUNDARY.json lacks marker: {marker}",
+            )
 
         workspace = tomllib.loads(committed_text("Cargo.toml"))
         members = workspace.get("workspace", {}).get("members", [])
         for member in members:
             cargo_relative = f"{member}/Cargo.toml"
-            require((ROOT / cargo_relative).is_file(), f"workspace member lacks Cargo.toml: {member}")
-            walk_paths(tomllib.loads(committed_text(cargo_relative)), ROOT / member)
+            require(
+                (ROOT / cargo_relative).is_file(),
+                f"workspace member lacks Cargo.toml: {member}",
+            )
+            walk_paths(
+                tomllib.loads(committed_text(cargo_relative)),
+                ROOT / member,
+            )
 
         for relative in (
             "services/consumer-entry-api/MODULE.md",
@@ -441,14 +639,29 @@ def main() -> int:
         ):
             text = committed_text(relative)
             for marker in ("World", "compatibility", "not_granted"):
-                require(marker in text, f"{relative} lacks boundary marker: {marker}")
+                require(
+                    marker in text,
+                    f"{relative} lacks boundary marker: {marker}",
+                )
 
         declared_hostile = manifest.get("hostile_fixtures")
-        require(isinstance(declared_hostile, list), "hostile_fixtures must be a list")
-        require(set(declared_hostile) == EXPECTED_HOSTILE_FIXTURES, "hostile fixture declaration drift")
-        require(len(declared_hostile) == len(EXPECTED_HOSTILE_FIXTURES), "duplicate hostile fixture declaration")
+        require(
+            isinstance(declared_hostile, list),
+            "hostile_fixtures must be a list",
+        )
+        require(
+            set(declared_hostile) == EXPECTED_HOSTILE_FIXTURES,
+            "hostile fixture declaration drift",
+        )
+        require(
+            len(declared_hostile) == len(EXPECTED_HOSTILE_FIXTURES),
+            "duplicate hostile fixture declaration",
+        )
         executed_hostile = run_hostile_fixtures(deny_pattern)
-        require(executed_hostile == EXPECTED_HOSTILE_FIXTURES, "hostile fixture execution drift")
+        require(
+            executed_hostile == EXPECTED_HOSTILE_FIXTURES,
+            "hostile fixture execution drift",
+        )
 
         result = {
             "schema": "cex.project-boundary-check.v2",
@@ -458,7 +671,9 @@ def main() -> int:
             "explicit_world_source_files": len(world_paths),
             "frozen_files": len(frozen_paths),
             "hostile_fixtures_rejected": sorted(executed_hostile),
-            "module_graph_policy": "all_manifest_bound_rust_sources_reachable_from_standard_entrypoints",
+            "module_graph_policy": (
+                "all_manifest_bound_rust_sources_reachable_from_standard_entrypoints"
+            ),
             "indirect_source_policy": policy,
             "deny_changed_paths_regex_semantically_exercised": True,
             "owner_repository": manifest.get("owner_repository"),
