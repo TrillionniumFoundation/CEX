@@ -79,10 +79,11 @@ fn validate_world_authority_startup_from_env() -> Result<(), String> {
 }
 
 fn is_world_authoritative_write(method: &Method, path: &str) -> bool {
-    if !matches!(
-        *method,
-        Method::POST | Method::PUT | Method::PATCH | Method::DELETE
-    ) {
+    let write_method = method == Method::POST
+        || method == Method::PUT
+        || method == Method::PATCH
+        || method == Method::DELETE;
+    if !write_method {
         return false;
     }
     if !path.starts_with("/world") {
@@ -149,9 +150,8 @@ async fn main() {
             std::process::exit(2);
         }
     };
-    let app: Router = build_router(state.clone()).layer(middleware::from_fn(
-        world_authority_write_fence,
-    ));
+    let app: Router =
+        build_router(state.clone()).layer(middleware::from_fn(world_authority_write_fence));
 
     let listener = tokio::net::TcpListener::bind(&state.config().bind_addr)
         .await
