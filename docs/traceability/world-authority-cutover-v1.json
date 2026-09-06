@@ -10,13 +10,15 @@
   "world_source": {
     "pull_request": 60,
     "branch": "feat/p0-world-authority-cutover-20260906",
-    "head_sha": "8b6304e5e78ac497c8ab4f9cafe10f6be6f09df9",
+    "head_sha": "aa0f0effd9088efdea2134cce9442167968de19e",
     "historical_source_parent": "d44d8930c917b55da7b23eb19e9645feb8f4ee59",
     "restored_server_crate_count": 7,
     "restored_historical_file_count": 15,
     "provenance_manifest": "docs/contracts/trillionnium-world-authority-provenance-v1.json",
+    "durable_base_migration": "deploy/postgres/trnm-world-authority-cutover-v1.sql",
+    "mandatory_hardening_migration": "deploy/postgres/trnm-world-authority-cutover-v1-hardening.sql",
     "ordinary_actions_run_observed": false,
-    "source_ci_status": "pending_independent_exact_sha_validation_from_cex_gate_and_native_world_contexts"
+    "source_ci_status": "pending_final_exact_sha_validation_and_native_world_contexts"
   },
   "cex_candidate": {
     "pull_request": 34,
@@ -46,6 +48,14 @@
     "world_protected_game_ci_actions_pinned_to_commit_sha": true,
     "world_game_evidence_fail_closed_by_required_gate_conclusions": true,
     "world_game_qualified_and_unqualified_artifacts_are_distinct": true,
+    "single_active_writer_epoch_database_constraint": true,
+    "global_writer_activation_serialization": true,
+    "canonical_json_hash_constraints": true,
+    "deterministic_event_identity_constraint": true,
+    "concurrent_exact_replay_lock_and_reread": true,
+    "migration_version_conflict_fail_closed": true,
+    "cold_backup_restore_source_gate": true,
+    "postgres_outage_fail_closed_source_gate": true,
     "rust_toolchain_pinned": "1.98.1",
     "cargo_audit_version_pinned": "0.22.2",
     "cargo_deny_version_pinned": "0.20.2"
@@ -53,7 +63,12 @@
   "evidence_matrix": [
     {
       "id": "world_exact_sha_source_qualification",
-      "status": "pending_gate_run",
+      "status": "pending_final_gate_run",
+      "blocking": true
+    },
+    {
+      "id": "world_postgres_hostile_state_machine",
+      "status": "implemented_pending_final_exact_sha_gate_run",
       "blocking": true
     },
     {
@@ -63,12 +78,12 @@
     },
     {
       "id": "cex_exact_sha_adapter_qualification",
-      "status": "pending_gate_run",
+      "status": "pending_final_gate_run",
       "blocking": true
     },
     {
       "id": "cross_repository_success_and_outage_smoke",
-      "status": "implemented_pending_gate_run",
+      "status": "implemented_pending_final_gate_run",
       "blocking": true
     },
     {
@@ -78,17 +93,17 @@
     },
     {
       "id": "mutation_replay_and_idempotency",
-      "status": "pending_durable_world_adapter",
+      "status": "source_postgres_exact_replay_implemented_production_adapter_pending",
       "blocking": true
     },
     {
       "id": "partial_outage_and_rollback",
-      "status": "development_smoke_defined_production_drill_pending",
+      "status": "source_database_and_development_http_smokes_implemented_production_drill_pending",
       "blocking": true
     },
     {
       "id": "no_dual_writer_proof",
-      "status": "production_cex_writer_quarantined_cutover_fence_not_exercised",
+      "status": "database_single_active_writer_enforced_cex_production_fence_not_exercised",
       "blocking": true
     },
     {
@@ -97,5 +112,5 @@
       "blocking": true
     }
   ],
-  "truth_boundary": "No source, unit, fixture, development smoke, or missing native status context grants production authority. Production cutover requires exact runtime reconciliation and no-dual-writer evidence."
+  "truth_boundary": "Source, unit, PostgreSQL-hostile, and development HTTP evidence cannot grant production authority. Production cutover still requires exact runtime backfill reconciliation, native protected contexts, deployment-specific no-dual-writer evidence, and explicit authorization."
 }
