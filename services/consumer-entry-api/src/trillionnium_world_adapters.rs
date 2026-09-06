@@ -5,6 +5,94 @@ use term_exchange_protocol::{
 };
 
 const CEX_TRNM_ECONOMY_ADAPTER_CONTRACT: &str = "cex_trnm_game_economy_adapter_v1";
+const CEX_WORLD_AUTHORITY_ADAPTER_CONTRACT: &str =
+    "cex_trillionnium_world_authority_adapter_v1";
+const TRILLIONNIUM_WORLD_API_CONTRACT: &str = "trillionnium_world_api_v1";
+const TRILLIONNIUM_WORLD_CUTOVER_CONTRACT: &str =
+    "trillionnium_world_authority_cutover_v1";
+const TRILLIONNIUM_WORLD_OWNER_REPOSITORY: &str =
+    "TrillionniumFoundation/Trillionnium-World";
+
+fn first_non_empty_world_env(names: &[&str]) -> Option<String> {
+    names.iter().find_map(|name| {
+        env::var(name)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+fn world_profile_is_production_like() -> bool {
+    first_non_empty_world_env(&[
+        "CONSUMER_ENTRY_RUNTIME_PROFILE",
+        "CEX_RUNTIME_PROFILE",
+        "APP_ENV",
+    ])
+    .map(|value| {
+        matches!(
+            value.to_ascii_lowercase().as_str(),
+            "beta" | "staging" | "stage" | "production" | "prod"
+        )
+    })
+    .unwrap_or(false)
+}
+
+fn remote_world_authority_readiness_json() -> Value {
+    let production_like = world_profile_is_production_like();
+    let mode = first_non_empty_world_env(&["CEX_WORLD_AUTHORITY_MODE"])
+        .unwrap_or_else(|| "embedded".to_string())
+        .to_ascii_lowercase();
+    let base_url = first_non_empty_world_env(&["TRILLIONNIUM_WORLD_BASE_URL"]);
+    let api_contract = first_non_empty_world_env(&["TRILLIONNIUM_WORLD_API_CONTRACT"]);
+    let auth_token_configured = first_non_empty_world_env(&["TRILLIONNIUM_WORLD_AUTH_TOKEN"])
+        .map(|value| value.len() >= 24)
+        .unwrap_or(false);
+    let remote_mode = mode == "remote";
+    let contract_match = api_contract.as_deref() == Some(TRILLIONNIUM_WORLD_API_CONTRACT);
+    let startup_configuration_ready = remote_mode
+        && base_url.is_some()
+        && contract_match
+        && (!production_like || auth_token_configured);
+
+    json!({
+        "adapter_contract": CEX_WORLD_AUTHORITY_ADAPTER_CONTRACT,
+        "cutover_contract": TRILLIONNIUM_WORLD_CUTOVER_CONTRACT,
+        "api_contract": TRILLIONNIUM_WORLD_API_CONTRACT,
+        "owner_repository": TRILLIONNIUM_WORLD_OWNER_REPOSITORY,
+        "mode": mode,
+        "production_like": production_like,
+        "base_url_configured": base_url.is_some(),
+        "api_contract_match": contract_match,
+        "auth_token_configured": auth_token_configured,
+        "startup_configuration_ready": startup_configuration_ready,
+        "local_world_writer": {
+            "production_status": "quarantined_by_consumer_entry_router_fence",
+            "development_status": "compatibility_and_migration_source_only",
+            "authoritative_after_cutover": false
+        },
+        "remote_adapter_binary": "world-authority-adapter",
+        "source_candidate": {
+            "world_pull_request": 60,
+            "world_repository": TRILLIONNIUM_WORLD_OWNER_REPOSITORY,
+            "production_authorization": "not_granted"
+        },
+        "cutover_status": if startup_configuration_ready {
+            "remote_adapter_configured_waiting_for_exact_cross_repository_evidence"
+        } else {
+            "blocked_until_remote_adapter_configuration_and_world_source_evidence"
+        },
+        "required_remaining_evidence": [
+            "world_exact_sha_source_ci_green",
+            "cex_exact_sha_adapter_ci_green",
+            "backfill_count_and_hash_reconciliation_exact",
+            "success_timeout_replay_partial_outage_and_rollback_green",
+            "no_dual_writer_proof",
+            "embedded_cex_world_sources_removed_or_quarantined"
+        ],
+        "production_adapter_trait_ready": false,
+        "production_authorization": "not_granted"
+    })
+}
 
 pub(super) async fn get_trillionnium_world_adapter_readiness(
     State(state): State<AppState>,
@@ -54,13 +142,13 @@ pub(super) fn cex_trillionnium_world_adapter_readiness_json_for_league(
         "protocol_contract": TERM_EXCHANGE_PROTOCOL_VERSION,
         "backend_contract": TERM_EXCHANGE_BACKEND_CONTRACT_VERSION,
         "domain_contract": "trnm_game_economy_v1",
-        "status": "cex_trnm_game_economy_adapter_ready",
+        "status": "economy_adapter_ready_world_authority_cutover_not_yet_authorized",
         "backend_id": CEX_SETTLEMENT_BACKEND_ID,
         "source_of_truth": "cex_consumer_entry_term_exchange_backend",
-        "legacy_world_dependency_status": "absent_current_game_protocol_only",
+        "world_authority": remote_world_authority_readiness_json(),
         "standalone_runtime_adapter_readiness": {
-            "cutover_status": "cex_depends_on_trnm_owned_economy_protocol_without_legacy_world_crates",
-            "cex_dependency_status": "consumer_entry_api_depends_on_trnm_economy_protocol",
+            "cutover_status": "economy_protocol_connected_world_state_remote_cutover_pending",
+            "cex_dependency_status": "consumer_entry_api_depends_on_trnm_economy_protocol_and_remote_world_http_contract",
             "statuses": statuses,
         },
         "identity": {
@@ -75,7 +163,7 @@ pub(super) fn cex_trillionnium_world_adapter_readiness_json_for_league(
         },
         "repository": {
             "source_of_truth": "cex_postgres_trnm_economic_intents_and_receipts",
-            "status": "atomic_intent_receipt_and_reconciliation_cursor_persistence_ready",
+            "status": "economic_records_authoritative_world_records_migration_source_only",
             "migration_floor": "0029_add_trnm_value_entitlements_and_player_sessions.sql"
         },
         "ledger": {
@@ -104,11 +192,14 @@ pub(super) fn cex_trillionnium_world_adapter_readiness_json_for_league(
             "legacy_records_available_for_migration": record_total,
         },
         "route_records": {
-            "total": record_total
+            "total": record_total,
+            "authority": "migration_source_only_after_remote_cutover"
         },
         "standalone_world_counts": {
             "nodes": world.world_map_nodes.len(),
-            "receipts": receipt_count
-        }
+            "receipts": receipt_count,
+            "authority": "not_authoritative_after_remote_cutover"
+        },
+        "production_authorization": "not_granted"
     })
 }
