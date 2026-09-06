@@ -7,7 +7,7 @@ production_authorization: `not_granted`
 
 `TrillionniumFoundation/Trillionnium-World` owns World topology, movement, tactics, commerce, company/shop/work-order, progression and their source-versioned projections. CEX owns authenticated ingress, identity/session binding, request normalization and exact economic settlement integration. CEX must not remain a second World state writer.
 
-World PR #60 restores a bounded seven-crate server authority workspace at exact commit `8b6304e5e78ac497c8ab4f9cafe10f6be6f09df9`. CEX PR #34 adds a remote-only adapter plus a production write fence. Neither change self-grants production authority.
+World PR #60 provides a bounded seven-crate server authority workspace and mandatory PostgreSQL cutover hardening at exact commit `aa0f0effd9088efdea2134cce9442167968de19e`. CEX PR #34 adds a remote-only adapter plus a production write fence. Neither change self-grants production authority.
 
 ## CEX runtime modes
 
@@ -42,17 +42,36 @@ The dedicated `world-authority-adapter` binary owns remote forwarding. It:
 
 Production-like adapter profiles additionally require a strong non-placeholder service token and reject loopback World URLs.
 
-## Cross-repository source gate
+## Durable PostgreSQL authority boundary
 
-`.github/workflows/p0-world-authority-cutover-gate.yml` checks out World commit `8b6304e5e78ac497c8ab4f9cafe10f6be6f09df9` by exact SHA instead of a mutable branch. Checkout, Rust toolchain and artifact upload actions are pinned to immutable commit SHAs, and Rust is pinned to `1.98.1`.
+The base schema is not a supported standalone migration. The only supported installer applies both:
 
-The World protected `trnm-game-ci` candidate is also immutable at this source head: checkout, Rust setup, supply-chain tool installer and artifact upload are commit-pinned; Rust is fixed at `1.98.1`; `cargo-audit` is fixed at `0.22.2`; `cargo-deny` is fixed at `0.20.2`. It defines explicit source-head and prospective-merge qualification.
+```text
+deploy/postgres/trnm-world-authority-cutover-v1.sql
+deploy/postgres/trnm-world-authority-cutover-v1-hardening.sql
+```
 
-Its evidence path is fail-closed. Every exact-source, package, prospective-merge and supply-chain gate has an explicit conclusion. A qualified receipt and qualified artifact name are produced only when all applicable required conclusions equal `success`; failed, cancelled or incomplete runs produce distinct unqualified states and artifact names. The artifact manifest binds the status, required gates, gate conclusions, exact source identity and file digests.
+and then verifies both exact migration markers. The mandatory hardening adds:
 
-GitHub has not created native World workflow runs for this exact head, so these source definitions are not treated as successful status checks.
+- a database unique constraint allowing at most one active, write-enabled epoch;
+- global transaction-level activation serialization;
+- canonical JSON parity with PostgreSQL `jsonb::text`;
+- request, response and state hash constraints;
+- a deterministic event ID derived from epoch, world, idempotency key and request hash;
+- a per-idempotency-key lock and post-lock receipt re-read;
+- exact replay versus conflicting replay separation;
+- fail-closed migration-version conflict handling;
+- terminal rollback that disables the writer while retaining append-only evidence.
 
-The CEX exact-SHA gate verifies:
+The PostgreSQL 16 hostile suite exercises concurrent activation of different epochs, concurrent exact replay, noncanonical snapshot and command JSON, migration marker conflicts, mutation after rollback, database outage, and cold `pg_dump`/`pg_restore`. These are source-level database qualifications, not evidence that any production dataset has been migrated.
+
+## Cross-repository source gates
+
+`.github/workflows/p0-world-authority-cutover-gate.yml` checks out World commit `aa0f0effd9088efdea2134cce9442167968de19e` by exact SHA. `.github/workflows/p0-world-authority-postgres-v2-gate.yml` independently runs the durable database hostile suite against the same exact World candidate. Checkout, Rust toolchain and artifact upload actions are pinned to immutable commits, and Rust is pinned to `1.98.1`.
+
+The World protected source definitions also include the `trnm-game-ci`, `trnm-world-p0-boundaries`, `trnm-world-status-evidence`, and `trnm-world-postgres-cutover` contexts. GitHub has not created native World workflow runs for the current exact head, so checked-in workflow definitions are not treated as successful status checks.
+
+The CEX gates verify:
 
 1. the World seven-crate dependency closure;
 2. all seven restored tree objects and 15 restored file blobs against historical commit `d44d8930c917b55da7b23eb19e9645feb8f4ee59`;
@@ -66,9 +85,10 @@ The CEX exact-SHA gate verifies:
 10. fail-closed `503` behavior while the World process is unavailable;
 11. file-snapshot rollback in the development evidence harness;
 12. stable repeated read projections;
-13. exact CEX and World commit/tree identities plus a SHA-256 artifact manifest.
+13. the PostgreSQL hostile state-machine matrix and cold backup/restore;
+14. exact CEX and World commit/tree identities plus SHA-256 artifact manifests.
 
-These are source and development-runtime qualifications. They do not substitute for native World protected-context execution, a durable production repository, live migration reconciliation or a production rollback drill.
+These qualifications do not substitute for native World protected-context execution, live backfill reconciliation, deployment-specific secrets/IAM, or a production rollback drill.
 
 ## Required migration protocol
 
@@ -86,4 +106,4 @@ Any mismatch keeps `production_authorization=not_granted`.
 
 ## Evidence truth
 
-The machine-readable current matrix is `docs/traceability/world-authority-cutover-v1.json`. CI evidence binds the CEX side to the pull-request head SHA or push SHA and binds the World source to the exact SHA above. Runtime migration data, durable adapter evidence, mutation-idempotency evidence, native World protected contexts and the production cutover fence remain blocking until actually executed.
+The machine-readable current matrix is `docs/traceability/world-authority-cutover-v1.json`. CI evidence binds the CEX side to the pull-request head SHA or push SHA and the World side to the exact SHA above. Source-level database and HTTP tests are now present; runtime data reconciliation, native World contexts, deployment-specific no-dual-writer evidence, embedded-source retirement and explicit go-live authorization remain blocking until actually executed.
