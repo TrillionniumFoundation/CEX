@@ -12,6 +12,8 @@
     "entrypoint": "docs/index.md",
     "component_status": "docs/status/component-status-v1.md",
     "traceability": "docs/traceability/v12-requirements-v1.json",
+    "module_catalog": "docs/module-catalog-v1.json",
+    "module_standard": "docs/module-documentation-standard-v1.md",
     "hepta_state_machines": "docs/hepta-paper-raid-state-machines-v1.md",
     "threat_model": "docs/security-threat-model-v1.md",
     "clean_deployment_acceptance": "docs/clean-deployment-acceptance-v1.md",
@@ -38,7 +40,8 @@
       "migration_and_upgrade_regression",
       "hosted_exact_sha_tests",
       "bounded_ci_soak_and_dump_restore",
-      "immutable_candidate_evidence"
+      "immutable_candidate_evidence",
+      "workspace_module_documentation_completeness"
     ]
   },
   "external_production_scope": {

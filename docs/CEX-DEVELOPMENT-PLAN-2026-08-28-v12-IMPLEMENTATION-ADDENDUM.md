@@ -67,6 +67,25 @@ Closure evidence:
 - `scripts/check-hepta-postgres-integration.sh --mode full` succeeds;
 - the exact-SHA Hepta job reports every test successful and Clippy clean under warnings denied.
 
+### Block K — workspace module documentation completeness
+
+Documentation completeness is evaluated against the actual Cargo workspace, not a hand-maintained subset of services. Every active workspace member must have one machine-readable catalog entry and one colocated module contract.
+
+Required behavior:
+
+- `[workspace].members` in `Cargo.toml` and `docs/module-catalog-v1.json` are exactly equal and use the same order;
+- every catalog entry identifies stable module ID, repository path, kind, lifecycle, bounded-context owner and canonical `<member>/MODULE.md`;
+- every module contract defines scope, non-goals, authoritative state, interfaces, data/persistence, security/configuration, failure/recovery, observability, verification and compatibility/retirement;
+- module documents deny production authorization and contain no machine-specific absolute paths;
+- a workspace addition, removal, move or ownership transfer updates Cargo, the catalog and the module contract in the same commit;
+- quarantined source is not represented as an active workspace member or current protocol authority.
+
+Closure evidence:
+
+- `scripts/check-module-documentation.py` succeeds;
+- `scripts/check-development-docs.py` invokes and validates the module checker;
+- `repository-integrity`, Linux, Windows and strict Hepta lanes execute the module contract on the exact candidate tree.
+
 ## 2. Documentation completion contract
 
 The active documentation set must define all of the following:
@@ -79,7 +98,8 @@ The active documentation set must define all of the following:
 6. SLI/SLO targets, recovery semantics, and the distinction between CI regression evidence and production qualification;
 7. protocol read/write authority, compatibility, migration, and retirement conditions;
 8. machine-readable requirement-to-code-to-test-to-gate traceability;
-9. complete-suite lint ownership without broad warning suppression.
+9. complete-suite lint ownership without broad warning suppression;
+10. exact Cargo-workspace-to-module-catalog-to-module-document coverage.
 
 Documentation is complete only when the checker validates the files and the exact-tree integrity record binds their digests. Word count or file presence alone is not completion.
 
@@ -88,8 +108,8 @@ Documentation is complete only when the checker validates the files and the exac
 The final candidate sequence is:
 
 1. freeze one candidate commit/tree;
-2. run documentation, hygiene, static wiring, lint-ownership, and repository-integrity checks;
-3. run the five authoritative v12 workflows, with `rust-service-gate` containing Blocks H, I, and J;
+2. run module-documentation, development-document, hygiene, static wiring, lint-ownership, and repository-integrity checks;
+3. run the five authoritative v12 workflows, with `rust-service-gate` containing Blocks H, I, J and K;
 4. run the aggregate candidate workflow on the same SHA;
 5. generate and validate the immutable evidence payload and candidate manifest;
 6. report actual branch/ruleset enforcement without inference;
@@ -107,11 +127,11 @@ Repository closure therefore yields `REPOSITORY_CLOSED_CANDIDATE`, never product
 
 This addendum is closed on one exact commit only when:
 
-- all active documents and machine-readable ledgers validate;
+- all active documents, machine-readable ledgers, module catalog and active module contracts validate;
 - all repository-actionable traceability entries resolve to existing files and executable gates;
 - strict Hepta PostgreSQL recovery cannot skip;
 - the exact Hepta lint ownership contract validates and the complete package suite passes;
 - the exact-tree integrity record is generated and included in release evidence;
 - the five authoritative workflows and aggregate candidate workflow succeed on that SHA;
-- no placeholder, temporary remediation workflow, broad warning allowance, or fabricated external approval is used;
+- no placeholder, temporary remediation workflow, broad warning allowance, fabricated external approval or undocumented workspace module is used;
 - the generated candidate manifest continues to deny production authorization.

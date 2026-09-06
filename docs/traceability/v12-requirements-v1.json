@@ -12,10 +12,19 @@
       "classification": "repository_actionable",
       "status": "required_hosted_exact_sha",
       "self_certifiable": true,
-      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"],
-      "implementation": ["migrations/0084_make_provider_reconciliation_replay_terminal_safe.sql"],
-      "verification": ["scripts/check-p0-migrations.py", "scripts/check-p0-migrations-postgres.sh"],
-      "gates": [".github/workflows/p0-migration-gate.yml"]
+      "source": [
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"
+      ],
+      "implementation": [
+        "migrations/0084_make_provider_reconciliation_replay_terminal_safe.sql"
+      ],
+      "verification": [
+        "scripts/check-p0-migrations.py",
+        "scripts/check-p0-migrations-postgres.sh"
+      ],
+      "gates": [
+        ".github/workflows/p0-migration-gate.yml"
+      ]
     },
     {
       "id": "V12-B",
@@ -23,10 +32,22 @@
       "classification": "repository_actionable",
       "status": "required_hosted_exact_sha",
       "self_certifiable": true,
-      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"],
-      "implementation": ["Cargo.toml", "Cargo.lock", "gate-local.ps1", "scripts/gate-local-linux.sh"],
-      "verification": ["scripts/check-p0-wiring.py", "scripts/check-development-docs.py"],
-      "gates": [".github/workflows/rust-service-gate.yml"]
+      "source": [
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"
+      ],
+      "implementation": [
+        "Cargo.toml",
+        "Cargo.lock",
+        "gate-local.ps1",
+        "scripts/gate-local-linux.sh"
+      ],
+      "verification": [
+        "scripts/check-p0-wiring.py",
+        "scripts/check-development-docs.py"
+      ],
+      "gates": [
+        ".github/workflows/rust-service-gate.yml"
+      ]
     },
     {
       "id": "V12-C",
@@ -34,10 +55,21 @@
       "classification": "repository_actionable",
       "status": "required_hosted_exact_sha",
       "self_certifiable": true,
-      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md", "docs/gateway-exact-reserve-v1.md"],
-      "implementation": ["services/gateway-service/src/infrastructure/ledger_v2_client.rs", "migrations/0073_add_gateway_exact_reserve_commands.sql"],
-      "verification": ["scripts/check-gateway-exact-reserve.py", "scripts/check-gateway-exact-reserve-postgres.sh"],
-      "gates": [".github/workflows/p0-gateway-exact-reserve-gate.yml"]
+      "source": [
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
+        "docs/gateway-exact-reserve-v1.md"
+      ],
+      "implementation": [
+        "services/gateway-service/src/infrastructure/ledger_v2_client.rs",
+        "migrations/0073_add_gateway_exact_reserve_commands.sql"
+      ],
+      "verification": [
+        "scripts/check-gateway-exact-reserve.py",
+        "scripts/check-gateway-exact-reserve-postgres.sh"
+      ],
+      "gates": [
+        ".github/workflows/p0-gateway-exact-reserve-gate.yml"
+      ]
     },
     {
       "id": "V12-D",
@@ -45,10 +77,21 @@
       "classification": "repository_actionable",
       "status": "required_hosted_exact_sha",
       "self_certifiable": true,
-      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md", "docs/execution-ledger-settlement-commands-v1.md"],
-      "implementation": ["services/execution-service/src/ledger_settlement.rs", "migrations/0072_add_execution_ledger_settlement_operator.sql"],
-      "verification": ["scripts/check-execution-settlement-commands.py", "scripts/check-execution-settlement-commands-postgres.sh"],
-      "gates": [".github/workflows/p0-execution-settlement-gate.yml"]
+      "source": [
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
+        "docs/execution-ledger-settlement-commands-v1.md"
+      ],
+      "implementation": [
+        "services/execution-service/src/ledger_settlement.rs",
+        "migrations/0072_add_execution_ledger_settlement_operator.sql"
+      ],
+      "verification": [
+        "scripts/check-execution-settlement-commands.py",
+        "scripts/check-execution-settlement-commands-postgres.sh"
+      ],
+      "gates": [
+        ".github/workflows/p0-execution-settlement-gate.yml"
+      ]
     },
     {
       "id": "V12-E",
@@ -56,10 +99,18 @@
       "classification": "repository_actionable",
       "status": "required_hosted_exact_sha",
       "self_certifiable": true,
-      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"],
-      "implementation": ["migrations/0084_make_provider_reconciliation_replay_terminal_safe.sql"],
-      "verification": ["scripts/check-provider-reconciliation-postgres.sh"],
-      "gates": [".github/workflows/p0-provider-reconciliation-gate.yml"]
+      "source": [
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"
+      ],
+      "implementation": [
+        "migrations/0084_make_provider_reconciliation_replay_terminal_safe.sql"
+      ],
+      "verification": [
+        "scripts/check-provider-reconciliation-postgres.sh"
+      ],
+      "gates": [
+        ".github/workflows/p0-provider-reconciliation-gate.yml"
+      ]
     },
     {
       "id": "V12-F",
@@ -67,10 +118,21 @@
       "classification": "repository_actionable",
       "status": "required_hosted_exact_sha",
       "self_certifiable": true,
-      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md", "docs/audit-source-baseline-backfill-v1.md"],
-      "implementation": ["migrations/0083_fix_audit_baseline_uuid_cursor.sql", "services/audit-service/src/lib.rs"],
-      "verification": ["scripts/check-audit-source-baseline-postgres.sh"],
-      "gates": [".github/workflows/p0-migration-gate.yml", ".github/workflows/p0-release-candidate-gate.yml"]
+      "source": [
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
+        "docs/audit-source-baseline-backfill-v1.md"
+      ],
+      "implementation": [
+        "migrations/0083_fix_audit_baseline_uuid_cursor.sql",
+        "services/audit-service/src/lib.rs"
+      ],
+      "verification": [
+        "scripts/check-audit-source-baseline-postgres.sh"
+      ],
+      "gates": [
+        ".github/workflows/p0-migration-gate.yml",
+        ".github/workflows/p0-release-candidate-gate.yml"
+      ]
     },
     {
       "id": "V12-G",
@@ -78,10 +140,20 @@
       "classification": "repository_actionable",
       "status": "required_hosted_exact_sha",
       "self_certifiable": true,
-      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"],
-      "implementation": ["scripts/p0-release-evidence.py", "docs/templates/cex-release-baseline-manifest-v1.json"],
-      "verification": ["scripts/check-release-baseline-manifest.py", "scripts/check-p0-release-candidate-hygiene.py"],
-      "gates": [".github/workflows/p0-release-candidate-gate.yml"]
+      "source": [
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"
+      ],
+      "implementation": [
+        "scripts/p0-release-evidence.py",
+        "docs/templates/cex-release-baseline-manifest-v1.json"
+      ],
+      "verification": [
+        "scripts/check-release-baseline-manifest.py",
+        "scripts/check-p0-release-candidate-hygiene.py"
+      ],
+      "gates": [
+        ".github/workflows/p0-release-candidate-gate.yml"
+      ]
     },
     {
       "id": "V12-H",
@@ -89,10 +161,22 @@
       "classification": "repository_actionable",
       "status": "required_hosted_exact_sha",
       "self_certifiable": true,
-      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md", "docs/index.md"],
-      "implementation": ["docs/development-doc-authority-v1.json", "scripts/check-repository-integrity.py"],
-      "verification": ["scripts/check-development-docs.py", "scripts/check-repository-integrity.py"],
-      "gates": [".github/workflows/rust-service-gate.yml", ".github/workflows/p0-release-candidate-gate.yml"]
+      "source": [
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md",
+        "docs/index.md"
+      ],
+      "implementation": [
+        "docs/development-doc-authority-v1.json",
+        "scripts/check-repository-integrity.py"
+      ],
+      "verification": [
+        "scripts/check-development-docs.py",
+        "scripts/check-repository-integrity.py"
+      ],
+      "gates": [
+        ".github/workflows/rust-service-gate.yml",
+        ".github/workflows/p0-release-candidate-gate.yml"
+      ]
     },
     {
       "id": "V12-I",
@@ -100,10 +184,20 @@
       "classification": "repository_actionable",
       "status": "required_hosted_exact_sha",
       "self_certifiable": true,
-      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md", "docs/clean-deployment-acceptance-v1.md"],
-      "implementation": ["services/hepta-research-league/tests/postgres_recovery.rs"],
-      "verification": ["scripts/check-hepta-postgres-integration.sh"],
-      "gates": [".github/workflows/rust-service-gate.yml", ".github/workflows/p0-release-candidate-gate.yml"]
+      "source": [
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md",
+        "docs/clean-deployment-acceptance-v1.md"
+      ],
+      "implementation": [
+        "services/hepta-research-league/tests/postgres_recovery.rs"
+      ],
+      "verification": [
+        "scripts/check-hepta-postgres-integration.sh"
+      ],
+      "gates": [
+        ".github/workflows/rust-service-gate.yml",
+        ".github/workflows/p0-release-candidate-gate.yml"
+      ]
     },
     {
       "id": "V12-J",
@@ -111,7 +205,10 @@
       "classification": "repository_actionable",
       "status": "required_hosted_exact_sha",
       "self_certifiable": true,
-      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md", "docs/clean-deployment-acceptance-v1.md"],
+      "source": [
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md",
+        "docs/clean-deployment-acceptance-v1.md"
+      ],
       "implementation": [
         "services/hepta-research-league/src/paper_collaboration_v3.rs",
         "services/hepta-research-league/src/paper_collaboration_v3_body.rs",
@@ -122,8 +219,36 @@
         "services/hepta-research-league/src/paper_raid_v2_tests.rs",
         "services/hepta-research-league/src/paper_raid_v2_tests_body.rs"
       ],
-      "verification": ["scripts/check-hepta-lint-ownership.py", "scripts/check-hepta-postgres-integration.sh"],
-      "gates": [".github/workflows/rust-service-gate.yml"]
+      "verification": [
+        "scripts/check-hepta-lint-ownership.py",
+        "scripts/check-hepta-postgres-integration.sh"
+      ],
+      "gates": [
+        ".github/workflows/rust-service-gate.yml"
+      ]
+    },
+    {
+      "id": "V12-K",
+      "title": "Workspace module documentation completeness",
+      "classification": "repository_actionable",
+      "status": "required_hosted_exact_sha",
+      "self_certifiable": true,
+      "source": [
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md",
+        "docs/module-documentation-standard-v1.md"
+      ],
+      "implementation": [
+        "Cargo.toml",
+        "docs/module-catalog-v1.json",
+        "docs/development-doc-authority-v1.json"
+      ],
+      "verification": [
+        "scripts/check-module-documentation.py",
+        "scripts/check-development-docs.py"
+      ],
+      "gates": [
+        ".github/workflows/rust-service-gate.yml"
+      ]
     },
     {
       "id": "V12-X1",
@@ -131,8 +256,13 @@
       "classification": "external",
       "status": "blocked_upstream",
       "self_certifiable": false,
-      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md", "docs/slo-recovery-contract-v1.md"],
-      "implementation": [], "verification": [], "gates": []
+      "source": [
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
+        "docs/slo-recovery-contract-v1.md"
+      ],
+      "implementation": [],
+      "verification": [],
+      "gates": []
     },
     {
       "id": "V12-X2",
@@ -140,8 +270,13 @@
       "classification": "external",
       "status": "blocked_upstream",
       "self_certifiable": false,
-      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md", "docs/clean-deployment-acceptance-v1.md"],
-      "implementation": [], "verification": [], "gates": []
+      "source": [
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
+        "docs/clean-deployment-acceptance-v1.md"
+      ],
+      "implementation": [],
+      "verification": [],
+      "gates": []
     },
     {
       "id": "V12-X3",
@@ -149,8 +284,13 @@
       "classification": "external",
       "status": "blocked_upstream",
       "self_certifiable": false,
-      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md", "docs/security-threat-model-v1.md"],
-      "implementation": [], "verification": [], "gates": []
+      "source": [
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
+        "docs/security-threat-model-v1.md"
+      ],
+      "implementation": [],
+      "verification": [],
+      "gates": []
     },
     {
       "id": "V12-X4",
@@ -158,8 +298,13 @@
       "classification": "external",
       "status": "blocked_upstream",
       "self_certifiable": false,
-      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md", "docs/security-threat-model-v1.md"],
-      "implementation": [], "verification": [], "gates": []
+      "source": [
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
+        "docs/security-threat-model-v1.md"
+      ],
+      "implementation": [],
+      "verification": [],
+      "gates": []
     },
     {
       "id": "V12-X5",
@@ -167,8 +312,13 @@
       "classification": "external",
       "status": "blocked_upstream",
       "self_certifiable": false,
-      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md", "docs/slo-recovery-contract-v1.md"],
-      "implementation": [], "verification": [], "gates": []
+      "source": [
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
+        "docs/slo-recovery-contract-v1.md"
+      ],
+      "implementation": [],
+      "verification": [],
+      "gates": []
     },
     {
       "id": "V12-X6",
@@ -176,8 +326,13 @@
       "classification": "external",
       "status": "blocked_upstream",
       "self_certifiable": false,
-      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md", "docs/security-threat-model-v1.md"],
-      "implementation": [], "verification": [], "gates": []
+      "source": [
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
+        "docs/security-threat-model-v1.md"
+      ],
+      "implementation": [],
+      "verification": [],
+      "gates": []
     },
     {
       "id": "V12-X7",
@@ -185,8 +340,12 @@
       "classification": "external",
       "status": "blocked_upstream",
       "self_certifiable": false,
-      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"],
-      "implementation": [], "verification": [], "gates": []
+      "source": [
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"
+      ],
+      "implementation": [],
+      "verification": [],
+      "gates": []
     },
     {
       "id": "V12-X8",
@@ -194,8 +353,12 @@
       "classification": "external",
       "status": "blocked_upstream",
       "self_certifiable": false,
-      "source": ["docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"],
-      "implementation": [], "verification": [], "gates": []
+      "source": [
+        "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md"
+      ],
+      "implementation": [],
+      "verification": [],
+      "gates": []
     }
   ]
 }
