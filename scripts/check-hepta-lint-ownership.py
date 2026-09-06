@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -40,6 +42,31 @@ def git_blob_sha(data: bytes) -> str:
     return hashlib.sha1(header + data).hexdigest()
 
 
+def committed_blob_sha(relative: str, fallback_bytes: bytes) -> str:
+    """Return the committed Git object identity, independent of checkout EOL filters."""
+
+    result = subprocess.run(
+        ["git", "-C", str(ROOT), "rev-parse", f"HEAD:{relative}"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    value = result.stdout.strip().lower()
+    if result.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", value):
+        return value
+
+    # Source archives may not carry .git metadata. The tracked Hepta sources use
+    # canonical LF; normalize checkout CRLF before computing the Git blob fallback.
+    normalized = fallback_bytes.replace(b"\r\n", b"\n")
+    fallback = git_blob_sha(normalized)
+    PROBLEMS.append(
+        "Git metadata unavailable while checking exact source body "
+        f"{relative}; normalized worktree fallback={fallback}: {result.stderr.strip()}"
+    )
+    return fallback
+
+
 def expected_wrapper(body_name: str) -> str:
     return (
         "#![expect(\n"
@@ -60,39 +87,42 @@ def main() -> int:
         if not body.is_file():
             PROBLEMS.append(f"missing exact source body: {body.relative_to(ROOT).as_posix()}")
             continue
+
         wrapper_text = wrapper.read_text(encoding="utf-8")
         if wrapper_text != expected_wrapper(body_name):
             PROBLEMS.append(f"lint-ownership wrapper drifted: {wrapper_relative}")
         if "allow(unused_imports" in wrapper_text or "allow(warnings" in wrapper_text:
             PROBLEMS.append(f"broad lint allowance forbidden: {wrapper_relative}")
+
+        body_relative = body.relative_to(ROOT).as_posix()
         body_bytes = body.read_bytes()
-        actual_sha = git_blob_sha(body_bytes)
+        actual_sha = committed_blob_sha(body_relative, body_bytes)
         if actual_sha != expected_sha:
             PROBLEMS.append(
-                f"source body identity drifted: {body.relative_to(ROOT).as_posix()} "
+                f"source body identity drifted: {body_relative} "
                 f"expected={expected_sha} actual={actual_sha}"
             )
+
         try:
-            body_text = body_bytes.decode("utf-8")
+            body_text = body.read_text(encoding="utf-8")
         except UnicodeDecodeError as error:
             PROBLEMS.append(f"source body is not UTF-8: {body}: {error}")
             continue
         if body_text.count(IMPORT) != 1:
             PROBLEMS.append(
-                f"source body must contain exactly one inherited Engine import: "
-                f"{body.relative_to(ROOT).as_posix()}"
+                "source body must contain exactly one inherited Engine import: "
+                f"{body_relative}"
             )
         if "#![allow(unused_imports" in body_text or "#![allow(warnings" in body_text:
-            PROBLEMS.append(
-                f"source body contains a broad lint allowance: {body.relative_to(ROOT).as_posix()}"
-            )
+            PROBLEMS.append(f"source body contains a broad lint allowance: {body_relative}")
 
     result = {
         "schema": "cex.hepta-lint-ownership.v1",
         "status": "failed" if PROBLEMS else "ok",
         "ok": not PROBLEMS,
         "modules": len(MODULES),
-        "policy": "exact_body_hash_plus_module_local_expectation",
+        "policy": "exact_committed_git_blob_plus_module_local_expectation",
+        "cross_platform_eol_independent": True,
         "broad_lint_allowance": False,
         "problems": PROBLEMS,
     }
