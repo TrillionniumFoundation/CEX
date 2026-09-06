@@ -1,7 +1,7 @@
 use axum::{
     body::{to_bytes, Bytes},
     extract::{Request, State},
-    http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode},
+    http::{header, HeaderName, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
     Json, Router,
@@ -411,8 +411,9 @@ mod tests {
 
     #[test]
     fn compatible_json_requires_a_world_contract() {
-        let compatible = Bytes::from_static(br#"{\"api_contract\":\"trillionnium_world_api_v1\"}"#);
-        let incompatible = Bytes::from_static(br#"{\"status\":\"ok\"}"#);
+        let compatible =
+            Bytes::from_static(br#"{"api_contract":"trillionnium_world_api_v1"}"#);
+        let incompatible = Bytes::from_static(br#"{"status":"ok"}"#);
         assert!(json_contract_is_compatible(&compatible));
         assert!(!json_contract_is_compatible(&incompatible));
     }
