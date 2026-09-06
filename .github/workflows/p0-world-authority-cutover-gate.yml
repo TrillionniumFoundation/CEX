@@ -42,6 +42,7 @@ env:
   CARGO_INCREMENTAL: '0'
   RUST_BACKTRACE: '1'
   RUST_TEST_THREADS: '1'
+  CEX_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
   WORLD_SOURCE_REPOSITORY: TrillionniumFoundation/Trillionnium-World
   WORLD_SOURCE_SHA: 554761417edbb37a2f20deed23917a9b05abdfe2
 
@@ -54,6 +55,7 @@ jobs:
       - name: Checkout exact CEX candidate
         uses: actions/checkout@v4
         with:
+          ref: ${{ env.CEX_SOURCE_SHA }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -69,9 +71,16 @@ jobs:
       - name: Verify exact source identities
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$CEX_SOURCE_SHA"
           test "$(git -C .world-source rev-parse HEAD)" = "$WORLD_SOURCE_SHA"
-          test -z "$(git status --porcelain)"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          unexpected_untracked="$(
+            git status --porcelain --untracked-files=all \
+              | sed -n 's/^?? //p' \
+              | grep -v '^\.world-source/' \
+              || true
+          )"
+          test -z "$unexpected_untracked"
           test -z "$(git -C .world-source status --porcelain)"
           python3 - <<'PY'
           import json
@@ -118,7 +127,8 @@ jobs:
           summary = {
               'schema': 'cex.world.authority.exact-sha-gate.v1',
               'cex_repository': os.environ['GITHUB_REPOSITORY'],
-              'cex_head_sha': os.environ['GITHUB_SHA'],
+              'cex_head_sha': os.environ['CEX_SOURCE_SHA'],
+              'trigger_sha': os.environ['GITHUB_SHA'],
               'world_repository': os.environ['WORLD_SOURCE_REPOSITORY'],
               'world_head_sha': os.environ['WORLD_SOURCE_SHA'],
               'run_id': os.environ['GITHUB_RUN_ID'],
@@ -136,6 +146,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: p0-world-authority-cutover-${{ github.sha }}
+          name: p0-world-authority-cutover-${{ env.CEX_SOURCE_SHA }}
           path: run/world-authority-cutover/**
           if-no-files-found: error
