@@ -378,8 +378,7 @@ mod tests {
 
     #[test]
     fn strict_registry_requires_an_enabled_production_record() {
-        let disabled =
-            serde_json::to_string(&vec![record("cap.a", "provider-a", false)]).unwrap();
+        let disabled = serde_json::to_string(&vec![record("cap.a", "provider-a", false)]).unwrap();
         assert!(validate_strict_registry(&disabled, 10).is_err());
 
         let valid = serde_json::to_string(&vec![record("cap.a", "provider-a", true)]).unwrap();
