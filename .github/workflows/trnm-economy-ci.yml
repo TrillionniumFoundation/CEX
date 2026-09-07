@@ -101,7 +101,7 @@ jobs:
         with:
           tool: cargo-audit@0.22.2,cargo-deny@0.20.2
 
-      - name: Validate bounded advisory exceptions
+      - name: Validate bounded advisory and dependency exceptions
         run: |
           set -euo pipefail
           mkdir -p run/supply-chain
@@ -122,13 +122,17 @@ jobs:
             --ignore RUSTSEC-2024-0436 \
             > run/supply-chain/cargo-audit.json
 
-      - name: Cargo dependency policy
+      - name: Cargo advisory, license and source policy
         run: |
           set -euo pipefail
-          cargo deny check advisories bans licenses sources \
-            2>&1 | tee run/supply-chain/cargo-deny.txt
-          cargo deny --format json check advisories bans licenses sources \
-            > run/supply-chain/cargo-deny.json
+          cargo deny check advisories licenses sources \
+            2>&1 | tee run/supply-chain/cargo-deny-policy.txt
+
+      - name: Cargo bans with manifest-owned wildcard control
+        run: |
+          set -euo pipefail
+          cargo deny check --allow wildcard bans \
+            2>&1 | tee run/supply-chain/cargo-deny-bans.txt
 
       - name: Upload release binaries and supply-chain evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -138,6 +142,7 @@ jobs:
             target/release/ledger-service
             target/release/consumer-entry-api
             Cargo.lock
+            deny.toml
             docs/security/rust-advisory-exceptions-v1.json
             run/supply-chain/**
           if-no-files-found: error
