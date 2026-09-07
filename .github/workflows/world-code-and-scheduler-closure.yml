@@ -1,0 +1,70 @@
+name: world-code-and-scheduler-closure
+
+on:
+  push:
+    branches:
+      - tmp/world-single-writer-catalog-closure-20260907
+
+permissions:
+  contents: read
+
+concurrency:
+  group: world-single-writer-catalog-closure
+  cancel-in-progress: false
+
+jobs:
+  close:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      WORLD_REPO_TOKEN: ${{ secrets.WORLD_REPO_TOKEN }}
+      TRILLIONNIUM_WORLD_REPO_TOKEN: ${{ secrets.TRILLIONNIUM_WORLD_REPO_TOKEN }}
+      TRILLIONNIUM_WORLD_TOKEN: ${{ secrets.TRILLIONNIUM_WORLD_TOKEN }}
+      CEX_WORLD_TOKEN: ${{ secrets.CEX_WORLD_TOKEN }}
+      WORLD_TOKEN: ${{ secrets.WORLD_TOKEN }}
+      CROSS_REPO_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+      CROSS_REPO_PAT: ${{ secrets.CROSS_REPO_PAT }}
+      ORG_GITHUB_TOKEN: ${{ secrets.ORG_GITHUB_TOKEN }}
+      ADMIN_GITHUB_TOKEN: ${{ secrets.ADMIN_GITHUB_TOKEN }}
+      GH_PAT: ${{ secrets.GH_PAT }}
+      GITHUB_PAT: ${{ secrets.GITHUB_PAT }}
+      REPO_TOKEN: ${{ secrets.REPO_TOKEN }}
+      PAT: ${{ secrets.PAT }}
+    steps:
+      - name: Checkout bounded maintenance helpers
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Mask configured cross-repository credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in \
+            WORLD_REPO_TOKEN TRILLIONNIUM_WORLD_REPO_TOKEN TRILLIONNIUM_WORLD_TOKEN \
+            CEX_WORLD_TOKEN WORLD_TOKEN CROSS_REPO_TOKEN CROSS_REPO_PAT \
+            ORG_GITHUB_TOKEN ADMIN_GITHUB_TOKEN GH_PAT GITHUB_PAT REPO_TOKEN PAT; do
+            value="${!name:-}"
+            if [[ -n "$value" ]]; then
+              echo "::add-mask::$value"
+            fi
+          done
+
+      - name: Apply and verify atomic World database-control fix
+        env:
+          RESULT_PATH: ${{ github.workspace }}/run/world-code-closure/result.json
+        run: python3 .github/diagnostics/patch-world-single-writer.py
+
+      - name: Repair World repository Actions and create native trigger head
+        env:
+          RESULT_PATH: ${{ github.workspace }}/run/world-actions-repair/result.json
+        run: python3 .github/diagnostics/repair-world-actions-scheduling.py
+
+      - name: Upload code and scheduler receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: world-code-and-scheduler-closure-${{ github.sha }}
+          path: run/**
+          if-no-files-found: warn
+          retention-days: 7
