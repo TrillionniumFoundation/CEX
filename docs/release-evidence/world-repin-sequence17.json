@@ -1,0 +1,14 @@
+{
+  "schema": "cex.world-repin-sequence17.v1",
+  "status": "exact_world_sequence2_pin_recorded",
+  "sequence": 17,
+  "world_repository": "TrillionniumFoundation/Trillionnium-World",
+  "world_pull_request": 60,
+  "world_source_branch": "feat/p0-world-authority-cutover-20260906",
+  "world_source_sha": "405ea4f46a2d171a4faabdfc53a75e30f0883c61",
+  "world_source_tree": "f715bf9d9cee8f013030ce5cb41bd0a305851c6f",
+  "world_contract_sequence": 2,
+  "world_native_actions_required": true,
+  "world_native_actions_observed": false,
+  "production_authorization": "not_granted"
+}
