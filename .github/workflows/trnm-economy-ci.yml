@@ -37,7 +37,9 @@ on:
       - 'migrations/0030*'
       - 'docs/security/rust-advisory-exceptions-v1.json'
       - 'docs/security/rust-release-surfaces-v1.json'
+      - 'docs/security/rust-feature-closure-v1.json'
       - 'docs/release-evidence/p0-candidate-trigger.json'
+      - 'docs/release-evidence/world-repin-sequence17.json'
   push:
     paths:
       - '**/Cargo.toml'
@@ -73,7 +75,9 @@ on:
       - 'migrations/0030*'
       - 'docs/security/rust-advisory-exceptions-v1.json'
       - 'docs/security/rust-release-surfaces-v1.json'
+      - 'docs/security/rust-feature-closure-v1.json'
       - 'docs/release-evidence/p0-candidate-trigger.json'
+      - 'docs/release-evidence/world-repin-sequence17.json'
 
 permissions:
   contents: read
@@ -135,7 +139,7 @@ jobs:
         with:
           tool: cargo-audit@0.22.2,cargo-deny@0.20.2
 
-      - name: Validate fail-closed advisory, package and release-surface closure
+      - name: Validate fail-closed default and all-feature advisory closure
         run: |
           set -euo pipefail
           mkdir -p run/supply-chain
@@ -180,10 +184,13 @@ jobs:
             .github/CODEOWNERS
             docs/security/rust-advisory-exceptions-v1.json
             docs/security/rust-release-surfaces-v1.json
+            docs/security/rust-feature-closure-v1.json
             scripts/check-rust-advisory-exceptions.py
             scripts/rust_advisory_common_v5.py
             scripts/rust_advisory_packages_v5.py
             scripts/rust_advisory_gate_v5.py
+            scripts/rust_advisory_feature_closure_v6.py
+            docs/release-evidence/world-repin-sequence17.json
             run/supply-chain/**
           if-no-files-found: error
           retention-days: 90
