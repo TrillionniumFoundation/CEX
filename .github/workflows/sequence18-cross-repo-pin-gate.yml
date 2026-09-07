@@ -1,0 +1,117 @@
+name: sequence18-cross-repo-pin-gate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/sequence18-cross-repo-pin-gate.yml'
+      - 'docs/release-evidence/p0-candidate-trigger.json'
+      - 'docs/release-evidence/world-repin-sequence17.json'
+      - '.github/workflows/world-*.yml'
+      - 'scripts/check-project-boundary*.py'
+      - 'PROJECT_BOUNDARY.json'
+      - 'docs/compatibility/**'
+  push:
+    paths:
+      - '.github/workflows/sequence18-cross-repo-pin-gate.yml'
+      - 'docs/release-evidence/p0-candidate-trigger.json'
+      - 'docs/release-evidence/world-repin-sequence17.json'
+      - '.github/workflows/world-*.yml'
+      - 'scripts/check-project-boundary*.py'
+      - 'PROJECT_BOUNDARY.json'
+      - 'docs/compatibility/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sequence18-cross-repo-pin-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exact-pin:
+    name: sequence18-cross-repo-pin
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact CEX source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve and validate exact World sequence-2 identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p run/sequence18-cross-repo-pin
+          world_ref="$(
+            curl --fail --silent --show-error --location \
+              --header 'Accept: application/vnd.github+json' \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              'https://api.github.com/repos/TrillionniumFoundation/Trillionnium-World/git/ref/heads/feat%2Fp0-world-authority-cutover-20260906'
+          )"
+          world_sha="$(jq -er '.object.sha | select(test("^[0-9a-f]{40}$"))' <<<"$world_ref")"
+          world_commit="$(
+            curl --fail --silent --show-error --location \
+              --header 'Accept: application/vnd.github+json' \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "https://api.github.com/repos/TrillionniumFoundation/Trillionnium-World/git/commits/$world_sha"
+          )"
+          world_tree="$(jq -er '.tree.sha | select(test("^[0-9a-f]{40}$"))' <<<"$world_commit")"
+
+          test "$world_sha" != 'cff9f3fd3539420c676f3d1397c166b1c1e24ffb'
+          ! git grep -n 'cff9f3fd3539420c676f3d1397c166b1c1e24ffb' -- .
+          ! git grep -n '69494614eace2116afb88aca8bad816f760bb22f' -- .
+          git grep -n "$world_sha" -- . > run/sequence18-cross-repo-pin/world-sha-bindings.txt
+          git grep -n "$world_tree" -- . > run/sequence18-cross-repo-pin/world-tree-bindings.txt
+          test -s run/sequence18-cross-repo-pin/world-sha-bindings.txt
+          test -s run/sequence18-cross-repo-pin/world-tree-bindings.txt
+
+          python3 - "$world_sha" "$world_tree" <<'PY'
+          import json, pathlib, sys
+          world_sha, world_tree = sys.argv[1:]
+          trigger = json.loads(pathlib.Path('docs/release-evidence/p0-candidate-trigger.json').read_text())
+          if trigger.get('sequence') != 18:
+              raise SystemExit(f"sequence drift: {trigger.get('sequence')!r}")
+          if trigger.get('production_authorization') != 'not_granted':
+              raise SystemExit('candidate trigger self-grants production authority')
+
+          report_path = pathlib.Path('docs/release-evidence/world-repin-sequence17.json')
+          if not report_path.is_file():
+              raise SystemExit('World exact-repin report missing')
+          report = json.loads(report_path.read_text())
+          expected = {
+              'world_source_sha': world_sha,
+              'world_source_tree': world_tree,
+              'production_authorization': 'not_granted',
+          }
+          for key, value in expected.items():
+              if report.get(key) != value:
+                  raise SystemExit(
+                      f"World exact-repin report drift: {key} expected={value!r} actual={report.get(key)!r}"
+                  )
+          PY
+
+          jq -n \
+            --arg cex_sha "$GITHUB_SHA" \
+            --arg cex_tree "$(git rev-parse HEAD^{tree})" \
+            --arg world_sha "$world_sha" \
+            --arg world_tree "$world_tree" \
+            '{
+              schema:"cex.sequence18-cross-repo-pin.v1",
+              status:"exact_pin_valid",
+              cex_sha:$cex_sha,
+              cex_tree:$cex_tree,
+              world_sha:$world_sha,
+              world_tree:$world_tree,
+              production_authorization:"not_granted"
+            }' > run/sequence18-cross-repo-pin/summary.json
+
+      - name: Upload exact-pin evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sequence18-cross-repo-pin-${{ github.sha }}
+          path: run/sequence18-cross-repo-pin/**
+          if-no-files-found: error
+          retention-days: 90
