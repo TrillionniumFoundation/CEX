@@ -1,0 +1,43 @@
+name: vendor-provenance-materialize-diagnostic
+
+on:
+  push:
+    branches:
+      - tmp/vendor-provenance-materialize-20260907
+
+permissions:
+  contents: read
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      TARGET_CEX_SHA: be590b64bc49cae5b2b0c146f2d59c07dd860a27
+    steps:
+      - name: Checkout exact CEX source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.TARGET_CEX_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify and stage exact text inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_CEX_SHA"
+          test -z "$(git status --porcelain)"
+          mkdir -p run
+          cp scripts/check-hepta-research-league-release.sh run/
+          cp vendor/trnm-chain-vendor-manifest.json run/
+          cp docs/hepta-chain-contract-source-v1.md run/
+          sha256sum run/* | sort > run/input-sha256s.txt
+
+      - name: Upload exact source inputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: vendor-provenance-inputs-${{ env.TARGET_CEX_SHA }}
+          path: run/**
+          if-no-files-found: error
+          retention-days: 7
