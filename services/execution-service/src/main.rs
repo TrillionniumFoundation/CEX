@@ -1,3 +1,7 @@
+#[allow(
+    dead_code,
+    reason = "the shared runtime guard serves five binaries while execution-service constructs only the execution variant and consumes only its startup fields"
+)]
 #[path = "../../../crates/shared-config/src/runtime_guard.rs"]
 mod runtime_guard;
 #[path = "../../../crates/shared-config/src/service_client.rs"]

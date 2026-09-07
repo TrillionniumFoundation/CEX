@@ -1,5 +1,13 @@
+#[allow(
+    dead_code,
+    reason = "the shared runtime guard serves five binaries while identity-service constructs only the identity variant and consumes only its startup fields"
+)]
 #[path = "../../../crates/shared-config/src/runtime_guard.rs"]
 mod runtime_guard;
+#[allow(
+    dead_code,
+    reason = "the shared service-auth source exposes constructors and middleware for several services while identity-service consumes only identity-resolve authentication"
+)]
 #[path = "../../../crates/shared-config/src/service_auth.rs"]
 mod service_auth;
 #[path = "../../../crates/shared-config/src/service_client.rs"]

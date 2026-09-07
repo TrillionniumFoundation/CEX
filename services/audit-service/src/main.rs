@@ -1,3 +1,7 @@
+#[allow(
+    dead_code,
+    reason = "the shared runtime guard serves five binaries while audit-service constructs only the audit variant and consumes only its startup fields"
+)]
 #[path = "../../../crates/shared-config/src/runtime_guard.rs"]
 mod runtime_guard;
 
