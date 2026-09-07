@@ -1,0 +1,237 @@
+name: cex-world-repin-sequence17
+
+on:
+  push:
+    branches:
+      - tmp/cex-world-repin-sequence17-20260907
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+
+jobs:
+  exact-repin:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      TARGET_BRANCH: fix/hepta-p0-blocker-closure-20260906
+      WORLD_BRANCH: feat/p0-world-authority-cutover-20260906
+      OLD_WORLD_SHA: cff9f3fd3539420c676f3d1397c166b1c1e24ffb
+      OLD_WORLD_TREE: 69494614eace2116afb88aca8bad816f760bb22f
+      PR_NUMBER: '34'
+    steps:
+      - name: Checkout target branch with write credential
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Resolve immutable World identity and repin every tracked old object
+        id: repin
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          world_ref="$(
+            curl --fail --silent --show-error --location \
+              --header 'Accept: application/vnd.github+json' \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              https://api.github.com/repos/TrillionniumFoundation/Trillionnium-World/git/ref/heads/${WORLD_BRANCH//\//%2F}
+          )"
+          world_sha="$(jq -er '.object.sha | select(test("^[0-9a-f]{40}$"))' <<<"$world_ref")"
+          world_commit="$(
+            curl --fail --silent --show-error --location \
+              --header 'Accept: application/vnd.github+json' \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "https://api.github.com/repos/TrillionniumFoundation/Trillionnium-World/git/commits/$world_sha"
+          )"
+          world_tree="$(jq -er '.tree.sha | select(test("^[0-9a-f]{40}$"))' <<<"$world_commit")"
+          test "$world_sha" != "$OLD_WORLD_SHA"
+
+          mapfile -d '' candidates < <(git grep -Ilz -e "$OLD_WORLD_SHA" -e "$OLD_WORLD_TREE" -- . || true)
+          test "${#candidates[@]}" -gt 0
+          python3 - "$OLD_WORLD_SHA" "$world_sha" "$OLD_WORLD_TREE" "$world_tree" "${candidates[@]}" <<'PY'
+          import pathlib, sys
+          old_sha, new_sha, old_tree, new_tree, *paths = sys.argv[1:]
+          changed = []
+          for raw in paths:
+              path = pathlib.Path(raw)
+              data = path.read_bytes()
+              updated = data.replace(old_sha.encode(), new_sha.encode()).replace(old_tree.encode(), new_tree.encode())
+              if updated != data:
+                  path.write_bytes(updated)
+                  changed.append(path.as_posix())
+          if not changed:
+              raise SystemExit('no exact World objects were repinned')
+          print('\n'.join(changed))
+          PY
+
+          mkdir -p docs/release-evidence
+          python3 - "$world_sha" "$world_tree" <<'PY'
+          import json, pathlib, sys
+          world_sha, world_tree = sys.argv[1:]
+          trigger = pathlib.Path('docs/release-evidence/p0-candidate-trigger.json')
+          data = json.loads(trigger.read_text())
+          data['sequence'] = max(int(data.get('sequence', 0)) + 1, 17)
+          data['purpose'] = (
+              'Qualify one exact v12 tree after binding the final World sequence-2 '
+              'single-writer index catalog contract and both hostile same-name/same-predicate '
+              'index impersonation cases. All existing repository, exact-money, capability, '
+              'durability, source-governance and supply-chain controls remain fail closed.'
+          )
+          data['qualification_scope'] = (
+              'v12-sequence-17-world-single-writer-index-catalog-semantics-and-exact-cross-repository-pin'
+          )
+          data['production_authorization'] = 'not_granted'
+          trigger.write_text(json.dumps(data, indent=2, sort_keys=True) + '\n')
+
+          report = {
+              'schema': 'cex.world-exact-repin.v1',
+              'status': 'repinned_unqualified_pending_hosted_gates',
+              'previous_world_sha': 'cff9f3fd3539420c676f3d1397c166b1c1e24ffb',
+              'world_source_sha': world_sha,
+              'world_source_tree': world_tree,
+              'world_branch': 'feat/p0-world-authority-cutover-20260906',
+              'production_authorization': 'not_granted',
+          }
+          pathlib.Path('docs/release-evidence/world-repin-sequence17.json').write_text(
+              json.dumps(report, indent=2, sort_keys=True) + '\n'
+          )
+          PY
+
+          git diff --check
+          python3 -m json.tool docs/release-evidence/p0-candidate-trigger.json >/dev/null
+          python3 -m json.tool docs/release-evidence/world-repin-sequence17.json >/dev/null
+          if git grep -n "$OLD_WORLD_SHA" -- .; then
+            echo 'stale World source SHA remains after exact repin' >&2
+            exit 1
+          fi
+          if git grep -n "$OLD_WORLD_TREE" -- .; then
+            echo 'stale World source tree remains after exact repin' >&2
+            exit 1
+          fi
+
+          git config user.name 'Trillionnium exact-repin automation'
+          git config user.email 'exact-repin@trillionnium.invalid'
+          git add -A
+          git commit -m "chore(world): repin exact authority sequence 2"
+          cex_sha="$(git rev-parse HEAD)"
+          cex_tree="$(git rev-parse HEAD^{tree})"
+          git push origin "HEAD:$TARGET_BRANCH"
+          printf 'world_sha=%s\nworld_tree=%s\ncex_sha=%s\ncex_tree=%s\n' \
+            "$world_sha" "$world_tree" "$cex_sha" "$cex_tree" >> "$GITHUB_OUTPUT"
+
+      - name: Refresh PR exact-object packet without granting admission
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORLD_SHA: ${{ steps.repin.outputs.world_sha }}
+          WORLD_TREE: ${{ steps.repin.outputs.world_tree }}
+          CEX_SHA: ${{ steps.repin.outputs.cex_sha }}
+          CEX_TREE: ${{ steps.repin.outputs.cex_tree }}
+        run: |
+          set -euo pipefail
+          base_sha="$(git rev-parse origin/main)"
+          base_tree="$(git rev-parse origin/main^{tree})"
+          body="$(cat <<EOF
+          ## Scope
+
+          Repository-actionable v12 blocker closure candidate. This packet is bound to the exact objects below and preserves \`production_authorization=not_granted\`.
+
+          ## Exact identities
+
+          - CEX source head: \`$CEX_SHA\`
+          - CEX source tree: \`$CEX_TREE\`
+          - CEX base: \`main@$base_sha\`
+          - CEX base tree: \`$base_tree\`
+          - World PR #60 source head: \`$WORLD_SHA\`
+          - World source tree: \`$WORLD_TREE\`
+          - qualification sequence: \`17\`
+
+          ## Sequence 17 delta
+
+          - preserves the complete RustSec normal+build execution closure, recursive local-package policy, bounded expiry, risk register and independent CODEOWNERS requirement;
+          - binds the final World PostgreSQL singleton-writer index to exact catalog semantics: relation, uniqueness, validity/readiness, constant key \`(1)\`, exact partial predicate, btree/int4 operator class, collation and options;
+          - adds hostile cases for a non-unique same-name/same-predicate index and a unique \`epoch_id\` same-name/same-predicate index;
+          - repins all CEX references from the superseded World object to the exact sequence-2 World head/tree.
+
+          ## Admission truth
+
+          This commit is unqualified until all applicable exact-source and prospective-merge hosted gates are non-empty terminal success and fresh eligible reviews bind the unchanged final heads. CEX live \`main\` protection, World native Actions scheduling, production dataset count/ID/hash reconciliation, deployment IAM/secrets, time-bounded no-dual-writer evidence, embedded-authority retirement and final human go/no-go remain independent fail-closed gates.
+
+          Keep Draft and unmerged. No status fabrication, review dismissal, administrator bypass, deployment, cutover or production authorization.
+          EOF
+          )"
+          jq -n --arg body "$body" '{body:$body}' > /tmp/pr-patch.json
+          curl --fail --silent --show-error --location \
+            --request PATCH \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/TrillionniumFoundation/CEX/pulls/$PR_NUMBER \
+            --data-binary @/tmp/pr-patch.json >/tmp/pr-updated.json
+          test "$(jq -r '.head.sha' /tmp/pr-updated.json)" = "$CEX_SHA"
+
+      - name: Request fresh eligible reviewers
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location \
+            --request POST \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/TrillionniumFoundation/CEX/pulls/$PR_NUMBER/requested_reviewers \
+            --data '{"reviewers":["Franksudoman","Tomasrgbsf"]}' >/tmp/reviewers.json
+
+      - name: Dispatch exact-head source and aggregate gates
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/dispatch
+          workflows=(
+            project-boundary-gate.yml
+            project-boundary-changed-paths.yml
+            trnm-economy-ci.yml
+            trnm-economy-settlement.yml
+            p0-release-candidate-gate.yml
+          )
+          failures=0
+          for workflow in "${workflows[@]}"; do
+            status="$(curl --silent --show-error --location \
+              --request POST \
+              --header 'Accept: application/vnd.github+json' \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --output "/tmp/dispatch/${workflow}.json" \
+              --write-out '%{http_code}' \
+              "https://api.github.com/repos/TrillionniumFoundation/CEX/actions/workflows/${workflow}/dispatches" \
+              --data "{\"ref\":\"$TARGET_BRANCH\"}" || true)"
+            printf '%s %s\n' "$workflow" "$status"
+            if [[ "$status" != 204 ]]; then
+              failures=$((failures + 1))
+            fi
+          done
+          test "$failures" -eq 0
+
+      - name: Delete temporary write-capable branch
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl --silent --show-error --location \
+            --request DELETE \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/TrillionniumFoundation/CEX/git/refs/heads/tmp%2Fcex-world-repin-sequence17-20260907" \
+            --output /tmp/delete-temp-branch.json \
+            --write-out '%{http_code}\n'
