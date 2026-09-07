@@ -1,0 +1,212 @@
+name: cex-closure-controller-r2
+
+on:
+  push:
+    branches:
+      - tmp/cex-closure-state-20260907-r2
+
+permissions:
+  actions: write
+  checks: read
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  converge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: TrillionniumFoundation/CEX
+      PR_NUMBER: '34'
+      EXPECTED_HEAD: 8c31181f7f2dec83a31ac4636191bd2656a6c5bf
+    steps:
+      - name: Rerun and settle exact-head workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p run/closure-controller
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          api = 'https://api.github.com'
+          token = os.environ['GH_TOKEN']
+          repo = os.environ['REPO']
+          pr_number = int(os.environ['PR_NUMBER'])
+          expected = os.environ['EXPECTED_HEAD']
+          out = pathlib.Path('run/closure-controller')
+          required = {
+              'project-boundary-gate',
+              'project-boundary-changed-path-gate',
+              'migration-gate',
+              'p0-gateway-exact-reserve-gate',
+              'p0-execution-settlement-gate',
+              'p0-provider-reconciliation-gate',
+              'trnm-economy-settlement',
+              'p0-world-authority-postgres-v2-gate',
+              'p0-world-authority-cutover-gate',
+              'rust-service-gate',
+              'trnm-economy-ci',
+              'p0-release-candidate-gate',
+          }
+
+          def request(method, path, body=None):
+              data = None if body is None else json.dumps(body).encode()
+              req = urllib.request.Request(
+                  api + path,
+                  data=data,
+                  method=method,
+                  headers={
+                      'Accept': 'application/vnd.github+json',
+                      'Authorization': f'Bearer {token}',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'User-Agent': 'cex-closure-controller-r2',
+                      'Content-Type': 'application/json',
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as response:
+                      raw = response.read()
+                      return response.status, (json.loads(raw) if raw else None)
+              except urllib.error.HTTPError as error:
+                  raw = error.read().decode('utf-8', errors='replace')
+                  try:
+                      detail = json.loads(raw)
+                  except json.JSONDecodeError:
+                      detail = raw[:2000]
+                  return error.code, detail
+
+          def get(path):
+              status, value = request('GET', path)
+              if status != 200:
+                  raise RuntimeError(f'GET {path} -> {status}: {value}')
+              return value
+
+          pr = get(f'/repos/{repo}/pulls/{pr_number}')
+          actual = pr['head']['sha']
+          if actual != expected:
+              raise SystemExit(f'exact head drift: expected={expected} actual={actual}')
+
+          actions = []
+          final = None
+          deadline = time.monotonic() + 28 * 60
+          next_rerun_after = {}
+
+          while time.monotonic() < deadline:
+              runs = get(f'/repos/{repo}/actions/runs?head_sha={expected}&per_page=100')['workflow_runs']
+              grouped = {}
+              for run in runs:
+                  name = run.get('name')
+                  if name not in required:
+                      continue
+                  grouped.setdefault(name, []).append(run)
+              for items in grouped.values():
+                  items.sort(
+                      key=lambda item: (
+                          item.get('run_number') or 0,
+                          item.get('run_attempt') or 0,
+                          item.get('created_at') or '',
+                          item.get('id') or 0,
+                      ),
+                      reverse=True,
+                  )
+
+              missing = sorted(required - grouped.keys())
+              pending = []
+              failing = []
+              successes = {}
+              for name in sorted(required):
+                  items = grouped.get(name, [])
+                  if not items:
+                      continue
+                  latest = items[0]
+                  if latest.get('status') != 'completed':
+                      pending.append({k: latest.get(k) for k in ('id','name','event','status','conclusion','run_number','run_attempt')})
+                  elif latest.get('conclusion') == 'success':
+                      successes[name] = {k: latest.get(k) for k in ('id','name','event','status','conclusion','run_number','run_attempt')}
+                  else:
+                      failing.append({k: latest.get(k) for k in ('id','name','event','status','conclusion','run_number','run_attempt')})
+
+              now = time.monotonic()
+              for run in failing:
+                  run_id = run['id']
+                  if now < next_rerun_after.get(run_id, 0):
+                      continue
+                  endpoint = 'rerun-failed-jobs' if run.get('conclusion') == 'failure' else 'rerun'
+                  status, detail = request('POST', f'/repos/{repo}/actions/runs/{run_id}/{endpoint}')
+                  actions.append({
+                      'run_id': run_id,
+                      'workflow': run['name'],
+                      'previous_conclusion': run.get('conclusion'),
+                      'endpoint': endpoint,
+                      'http_status': status,
+                      'detail': detail,
+                  })
+                  next_rerun_after[run_id] = now + 8 * 60
+
+              final = {
+                  'schema': 'cex.exact-head-workflow-controller.v1',
+                  'head_sha': expected,
+                  'required_workflows': sorted(required),
+                  'missing': missing,
+                  'pending': pending,
+                  'failing': failing,
+                  'successes': successes,
+                  'actions': actions,
+                  'all_required_green': not missing and not pending and not failing and set(successes) == required,
+                  'production_authorization': 'not_granted',
+              }
+              (out / 'latest.json').write_text(json.dumps(final, indent=2, sort_keys=True) + '\n')
+              if final['all_required_green']:
+                  break
+              time.sleep(20)
+
+          if final is None:
+              raise SystemExit('controller produced no state')
+
+          lines = [
+              '## Exact-head workflow controller — sequence 14',
+              '',
+              f"Head: `{expected}`",
+              f"All required workflows green: `{str(final['all_required_green']).lower()}`",
+              '',
+          ]
+          if final['successes']:
+              lines.append('Successful current-head workflows:')
+              for name, run in sorted(final['successes'].items()):
+                  lines.append(f"- `{name}` — run `{run['id']}` attempt `{run['run_attempt']}`")
+              lines.append('')
+          if final['missing']:
+              lines.append('Missing: ' + ', '.join(f'`{name}`' for name in final['missing']))
+          if final['pending']:
+              lines.append('Pending: ' + ', '.join(f"`{run['name']}#{run['id']}`" for run in final['pending']))
+          if final['failing']:
+              lines.append('Failing: ' + ', '.join(f"`{run['name']}#{run['id']}={run['conclusion']}`" for run in final['failing']))
+          lines.extend([
+              '',
+              'No status was synthesized. Any rerun above reused the unchanged exact source SHA. This controller does not grant production authorization or satisfy independent review, World-native execution, live main governance, production reconciliation, IAM/secrets, no-dual-writer, rollback, or go-live gates.',
+          ])
+          comment = '\n'.join(lines)
+          status, detail = request('POST', f'/repos/{repo}/issues/{pr_number}/comments', {'body': comment})
+          (out / 'comment-result.json').write_text(json.dumps({'status': status, 'detail': detail}, indent=2, sort_keys=True) + '\n')
+          (out / 'summary.md').write_text(comment + '\n')
+          print(comment)
+          if not final['all_required_green']:
+              raise SystemExit('exact-head workflow set is not fully green')
+          PY
+
+      - name: Upload controller evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cex-closure-controller-r2-${{ github.sha }}
+          path: run/closure-controller/**
+          if-no-files-found: error
+          retention-days: 7
