@@ -1,8 +1,15 @@
 [advisories]
 yanked = "deny"
+unused-ignored-advisory = "allow"
+ignore = [
+  { id = "RUSTSEC-2023-0071", reason = "rsa 0.9.10 is lockfile-only and absent from the activated all-target and bounded release graphs; the custom reachability gate fails on any expansion" },
+  { id = "RUSTSEC-2026-0214", reason = "gumdrop 0.8.1 is confined to tendermint-testgen as a dev dependency and is absent from normal and bounded release graphs" },
+  { id = "RUSTSEC-2024-0436", reason = "paste 1.0.15 is a transitive Tendermint/flex-error macro and is absent from all bounded CEX release-package graphs pending upstream replacement" },
+]
 
 [licenses]
 confidence-threshold = 0.8
+unused-allowed-license = "allow"
 allow = [
   "Apache-2.0",
   "Apache-2.0 WITH LLVM-exception",
@@ -18,6 +25,16 @@ allow = [
   "Zlib",
 ]
 
+[[licenses.exceptions]]
+name = "webpki-roots"
+version = "=0.26.11"
+allow = ["CDLA-Permissive-2.0"]
+
+[[licenses.exceptions]]
+name = "webpki-roots"
+version = "=1.0.9"
+allow = ["CDLA-Permissive-2.0"]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
@@ -27,4 +44,3 @@ highlight = "all"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = ["https://github.com/TrillionniumFoundation/Trillionnium-Chain.git"]

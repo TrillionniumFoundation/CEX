@@ -1,8 +1,8 @@
 {
   "schema": "cex.p0-candidate-trigger.v1",
   "plan": "CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
-  "sequence": 14,
-  "purpose": "Qualify one exact v12 tree after repairing the final Rust 1.98.1 workspace Clippy bool-assert comparison, repinning both independent CEX World qualification lanes to World PR #60 exact head cff9f3fd3539420c676f3d1397c166b1c1e24ffb, and preserving active Blocks H through O: complete workspace module documentation, fail-closed Capability authority, authoritative exact-money isolation, World/Consumer scope containment, reviewed source governance, service-owned TRNM settlement migration evidence, strict Hepta PostgreSQL recovery, and removal of write-capable closure scaffolding. This trigger requires all five authoritative workflows plus the aggregate candidate workflow to execute on one unchanged exact commit.",
-  "qualification_scope": "repository-exact-money-control-plane-plus-hepta-durability-module-docs-capability-boundary-world-freeze-source-governance-current-p0-wiring-target-local-lint-ownership-bool-assert-fix-and-world-cff9-exact-pin",
+  "sequence": 15,
+  "purpose": "Qualify one exact v12 tree after closing the current RustSec and cargo-deny blocker with expiry-bound and dependency-graph-bound advisory exceptions, crate-and-version-scoped webpki data-license exceptions, and manifest-level rejection of registry wildcard versions, git dependencies, and repository-external path dependencies while preserving active Blocks H through O: complete workspace module documentation, fail-closed Capability authority, authoritative exact-money isolation, World/Consumer scope containment, reviewed source governance, service-owned TRNM settlement migration evidence, strict Hepta PostgreSQL recovery, and removal of write-capable closure scaffolding. This trigger requires all five authoritative workflows plus the aggregate candidate workflow to execute on one unchanged exact commit.",
+  "qualification_scope": "repository-exact-money-control-plane-plus-hepta-durability-module-docs-capability-boundary-world-freeze-source-governance-current-p0-wiring-target-local-lint-ownership-world-cff9-exact-pin-bounded-rustsec-policy-manifest-dependency-closure-and-webpki-license-scope",
   "production_authorization": "not_granted"
 }

@@ -1,0 +1,73 @@
+{
+  "schema": "cex.rust-advisory-exceptions.v1",
+  "status": "active_bounded_exceptions",
+  "created_on": "2026-09-07",
+  "expires_on": "2026-10-07",
+  "production_authorization": "not_granted",
+  "rust_toolchain": "1.98.1",
+  "cargo_audit_version": "0.22.2",
+  "cargo_deny_version": "0.20.2",
+  "release_packages": [
+    "ledger-service",
+    "consumer-entry-api",
+    "execution-service",
+    "gateway-service"
+  ],
+  "exceptions": [
+    {
+      "advisory_id": "RUSTSEC-2023-0071",
+      "package": "rsa",
+      "version": "0.9.10",
+      "classification": "vulnerability",
+      "all_target_graph_must_be_empty": true,
+      "normal_all_target_graph_must_be_empty": true,
+      "forbid_release_package_reachability": true,
+      "required_all_target_markers": [],
+      "required_normal_all_target_markers": [],
+      "reason": "The affected rsa package remains in Cargo.lock through optional transitive metadata but is absent from the activated Cargo graph for every target and from all bounded release-package normal graphs. The exception fails if it becomes reachable.",
+      "removal_condition": "Remove immediately when rsa leaves Cargo.lock, a fixed upstream version is available in the resolved lock, or any activated/release graph reaches rsa."
+    },
+    {
+      "advisory_id": "RUSTSEC-2026-0214",
+      "package": "gumdrop",
+      "version": "0.8.1",
+      "classification": "unmaintained",
+      "all_target_graph_must_be_empty": false,
+      "normal_all_target_graph_must_be_empty": true,
+      "forbid_release_package_reachability": true,
+      "required_all_target_markers": [
+        "gumdrop v0.8.1",
+        "tendermint-testgen v0.40.4",
+        "[dev-dependencies]",
+        "trnm-finality-verifier v0.1.0"
+      ],
+      "required_normal_all_target_markers": [],
+      "reason": "gumdrop is reachable only through the Tendermint test generator used as a dev-dependency by the vendored finality verifier; it is absent from normal all-target and bounded release-package graphs.",
+      "removal_condition": "Remove when tendermint-testgen no longer requires gumdrop or when the finality test generator is replaced. Any normal or release reachability fails the gate."
+    },
+    {
+      "advisory_id": "RUSTSEC-2024-0436",
+      "package": "paste",
+      "version": "1.0.15",
+      "classification": "unmaintained",
+      "all_target_graph_must_be_empty": false,
+      "normal_all_target_graph_must_be_empty": false,
+      "forbid_release_package_reachability": true,
+      "required_all_target_markers": [
+        "paste v1.0.15",
+        "flex-error v0.4.4",
+        "tendermint v0.40.4",
+        "trnm-finality-verifier v0.1.0"
+      ],
+      "required_normal_all_target_markers": [
+        "paste v1.0.15",
+        "flex-error v0.4.4",
+        "tendermint v0.40.4",
+        "trnm-finality-verifier v0.1.0",
+        "hepta-research-league v0.1.0"
+      ],
+      "reason": "paste is an unmaintained transitive proc-macro required by flex-error in the pinned Tendermint finality stack. It is not present in any bounded CEX release-package normal graph; replacement requires an upstream Tendermint/flex-error migration.",
+      "removal_condition": "Remove when the pinned Tendermint stack no longer resolves through flex-error/paste. Any reachability from a bounded release package fails the gate."
+    }
+  ]
+}
