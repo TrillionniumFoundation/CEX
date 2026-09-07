@@ -7,7 +7,7 @@ production_authorization: `not_granted`
 
 `TrillionniumFoundation/Trillionnium-World` owns World topology, movement, tactics, commerce, company/shop/work-order, progression and their source-versioned projections. CEX owns authenticated ingress, identity/session binding, request normalization and exact economic settlement integration. CEX must not remain a second World state writer.
 
-World PR #60 provides a bounded seven-crate server authority workspace and mandatory PostgreSQL cutover hardening at exact commit `cff9f3fd3539420c676f3d1397c166b1c1e24ffb`. CEX PR #34 adds a remote-only adapter plus a production write fence. Neither change self-grants production authority.
+World PR #60 provides a bounded seven-crate server authority workspace and mandatory PostgreSQL cutover hardening at exact commit `611f6f7fe61cc1b69098a7223957110a8d6f8510`, tree `b5fd5cf3aedd1787dd135f6b54e2ab892669b4de`. CEX PR #34 adds a remote-only adapter plus a production write fence. Neither change self-grants production authority.
 
 ## CEX runtime modes
 
@@ -51,7 +51,9 @@ deploy/postgres/trnm-world-authority-cutover-v1.sql
 deploy/postgres/trnm-world-authority-cutover-v1-hardening.sql
 ```
 
-and then verifies both exact migration markers and the semantic definition of the single-active-writer index. The mandatory hardening adds:
+and then verifies both exact migration markers and the complete catalog semantics of the single-active-writer index. Validation is not based on the index name or a predicate substring. It binds the target relation, namespace, relation kind and persistence, B-tree access method, uniqueness, valid/ready/live flags, key and attribute cardinality, constant expression `(1)`, and exact partial predicate.
+
+The mandatory hardening also adds:
 
 - a database unique constraint allowing at most one active, write-enabled epoch;
 - global transaction-level activation serialization;
@@ -70,9 +72,14 @@ A separate installation-protocol suite additionally proves:
 
 - applying the complete supported bundle twice is idempotent;
 - a base-only partial schema is explicitly unqualified and is recovered by the supported installer;
-- a pre-existing same-name index with a wrong expression or predicate is rejected rather than being mistaken for the single-writer control.
+- a same-name non-unique constant-key index with the expected predicate is rejected;
+- a same-name unique index on `epoch_id` with the expected predicate is rejected;
+- a same-name unique constant-key index with the wrong predicate is rejected;
+- the healthy catalog shape and protected schema hash are emitted as machine-readable evidence.
 
-The World PostgreSQL workflow now constructs a deterministic prospective-merge object and runs the complete state-machine plus installation matrix against both the exact source head and that merge object. Its PostgreSQL server and command-line clients use the same immutable image digest:
+The installation checker is stored as valid UTF-8 shell source and the exact World blob is bound by the CEX evidence packet.
+
+The World PostgreSQL workflow constructs a deterministic prospective-merge object and runs the complete state-machine plus installation matrix against both the exact source head and that merge object. Its PostgreSQL server and command-line clients use the same immutable image digest:
 
 ```text
 postgres:16@sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94
@@ -82,7 +89,7 @@ The CEX-side independent PostgreSQL gate uses the same digest and records the im
 
 ## Cross-repository source gates
 
-`.github/workflows/p0-world-authority-cutover-gate.yml` checks out World commit `cff9f3fd3539420c676f3d1397c166b1c1e24ffb` by exact SHA. `.github/workflows/p0-world-authority-postgres-v2-gate.yml` independently runs the durable state-machine and installation-protocol hostile suites against the same exact World candidate. Checkout, Rust toolchain and artifact upload actions are pinned to immutable commits, Rust is pinned to `1.98.1`, and PostgreSQL server/client identity is digest-bound.
+`.github/workflows/p0-world-authority-cutover-gate.yml` checks out World commit `611f6f7fe61cc1b69098a7223957110a8d6f8510` by exact SHA. `.github/workflows/p0-world-authority-postgres-v2-gate.yml` independently runs the durable state-machine and installation-protocol hostile suites against the same exact World candidate. Checkout, Rust toolchain and artifact upload actions are pinned to immutable commits, Rust is pinned to `1.98.1`, and PostgreSQL server/client identity is digest-bound.
 
 The World protected source definitions also include the `trnm-game-ci`, `trnm-world-p0-boundaries`, `trnm-world-status-evidence`, and `trnm-world-postgres-cutover` contexts. GitHub has not created native World workflow runs for the current exact head, so checked-in workflow definitions are not treated as successful status checks.
 
@@ -100,7 +107,7 @@ The CEX gates verify:
 10. fail-closed `503` behavior while the World process is unavailable;
 11. file-snapshot rollback in the development evidence harness;
 12. stable repeated read projections;
-13. the PostgreSQL hostile state-machine, installation, cold backup/restore, and outage matrices;
+13. the PostgreSQL hostile state-machine, exact index-catalog installation, cold backup/restore, and outage matrices;
 14. exact CEX and World commit/tree identities plus SHA-256 artifact manifests.
 
 These qualifications do not substitute for native World protected-context execution, live backfill reconciliation, deployment-specific secrets/IAM, or a production rollback drill.

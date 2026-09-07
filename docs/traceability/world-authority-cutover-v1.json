@@ -10,7 +10,8 @@
   "world_source": {
     "pull_request": 60,
     "branch": "feat/p0-world-authority-cutover-20260906",
-    "head_sha": "cff9f3fd3539420c676f3d1397c166b1c1e24ffb",
+    "head_sha": "611f6f7fe61cc1b69098a7223957110a8d6f8510",
+    "head_tree": "b5fd5cf3aedd1787dd135f6b54e2ab892669b4de",
     "historical_source_parent": "d44d8930c917b55da7b23eb19e9645feb8f4ee59",
     "restored_server_crate_count": 7,
     "restored_historical_file_count": 15,
@@ -21,7 +22,7 @@
     "installation_qualification": "scripts/check-trnm-world-authority-postgres-installation.sh",
     "qualification_runner": "scripts/run-trnm-world-authority-postgres-check.sh",
     "ordinary_actions_run_observed": false,
-    "source_ci_status": "cex_exact_sha_validation_pending_native_world_contexts"
+    "source_ci_status": "cex_exact_sha_validation_required_for_world_head_611f6f7f_and_native_world_contexts_missing"
   },
   "cex_candidate": {
     "pull_request": 34,
@@ -56,6 +57,14 @@
     "cex_postgres_exact_digest_gate_defined": true,
     "single_active_writer_epoch_database_constraint": true,
     "global_writer_activation_serialization": true,
+    "single_writer_index_target_relation_bound": true,
+    "single_writer_index_btree_unique_valid_ready_live_bound": true,
+    "single_writer_index_constant_expression_bound": true,
+    "single_writer_index_exact_partial_predicate_bound": true,
+    "same_name_nonunique_same_predicate_rejection_gate": true,
+    "same_name_unique_wrong_key_same_predicate_rejection_gate": true,
+    "same_name_unique_constant_wrong_predicate_rejection_gate": true,
+    "world_installation_checker_utf8_restored": true,
     "canonical_json_hash_constraints": true,
     "deterministic_event_identity_constraint": true,
     "concurrent_exact_replay_lock_and_reread": true,
@@ -64,7 +73,6 @@
     "postgres_outage_fail_closed_source_gate": true,
     "bundle_reapply_idempotency_gate": true,
     "base_only_partial_install_recovery_gate": true,
-    "wrong_same_name_index_rejection_gate": true,
     "rust_toolchain_pinned": "1.98.1",
     "postgres_image_digest": "sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94",
     "cargo_audit_version_pinned": "0.22.2",
@@ -73,17 +81,17 @@
   "evidence_matrix": [
     {
       "id": "world_exact_sha_source_qualification",
-      "status": "implemented_pending_final_cex_gate_run",
+      "status": "implemented_pending_final_cex_gate_run_on_world_611f6f7f",
       "blocking": true
     },
     {
       "id": "world_postgres_hostile_state_machine",
-      "status": "source_and_prospective_merge_gate_implemented_pending_final_exact_sha_run",
+      "status": "source_and_prospective_merge_gate_implemented_pending_final_exact_sha_run_on_world_611f6f7f",
       "blocking": true
     },
     {
       "id": "world_postgres_installation_protocol",
-      "status": "source_and_prospective_merge_gate_implemented_pending_final_exact_sha_run",
+      "status": "exact_catalog_semantics_and_three_hostile_index_substitutions_implemented_pending_final_exact_sha_run",
       "blocking": true
     },
     {
@@ -93,12 +101,12 @@
     },
     {
       "id": "cex_exact_sha_adapter_qualification",
-      "status": "pending_final_gate_run",
+      "status": "pending_final_gate_run_with_world_611f6f7f",
       "blocking": true
     },
     {
       "id": "cross_repository_success_and_outage_smoke",
-      "status": "implemented_pending_final_gate_run",
+      "status": "implemented_pending_final_gate_run_with_world_611f6f7f",
       "blocking": true
     },
     {
