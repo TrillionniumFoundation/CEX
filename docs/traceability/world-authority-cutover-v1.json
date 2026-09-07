@@ -10,19 +10,20 @@
   "world_source": {
     "pull_request": 60,
     "branch": "feat/p0-world-authority-cutover-20260906",
-    "head_sha": "611f6f7fe61cc1b69098a7223957110a8d6f8510",
-    "head_tree": "b5fd5cf3aedd1787dd135f6b54e2ab892669b4de",
+    "head_sha": "d6d78ee13f2f682d5cd6ad933ad03e81ce1a78c6",
+    "head_tree": "c25ae7963c33997ebb01ee48bf6573bf8e1e458c",
     "historical_source_parent": "d44d8930c917b55da7b23eb19e9645feb8f4ee59",
     "restored_server_crate_count": 7,
     "restored_historical_file_count": 15,
     "provenance_manifest": "docs/contracts/trillionnium-world-authority-provenance-v1.json",
     "durable_base_migration": "deploy/postgres/trnm-world-authority-cutover-v1.sql",
     "mandatory_hardening_migration": "deploy/postgres/trnm-world-authority-cutover-v1-hardening.sql",
+    "catalog_fingerprint": "deploy/postgres/trnm-world-authority-catalog-fingerprint-v1.sql",
     "state_machine_qualification": "scripts/check-trnm-world-authority-postgres.sh",
     "installation_qualification": "scripts/check-trnm-world-authority-postgres-installation.sh",
     "qualification_runner": "scripts/run-trnm-world-authority-postgres-check.sh",
     "ordinary_actions_run_observed": false,
-    "source_ci_status": "cex_exact_sha_validation_required_for_world_head_611f6f7f_and_native_world_contexts_missing"
+    "source_ci_status": "cex_exact_sha_validation_required_for_world_d6d78ee1_and_native_world_contexts_pending"
   },
   "cex_candidate": {
     "pull_request": 34,
@@ -65,6 +66,13 @@
     "same_name_unique_wrong_key_same_predicate_rejection_gate": true,
     "same_name_unique_constant_wrong_predicate_rejection_gate": true,
     "world_installation_checker_utf8_restored": true,
+    "full_authority_catalog_reference_equivalence_gate": true,
+    "catalog_relations_columns_constraints_indexes_triggers_functions_acl_bound": true,
+    "catalog_missing_pk_fk_unique_hostile_fixtures": true,
+    "catalog_nullability_default_not_valid_hostile_fixtures": true,
+    "catalog_disabled_trigger_hostile_fixture": true,
+    "catalog_function_security_search_path_hostile_fixture": true,
+    "catalog_public_overgrant_hostile_fixture": true,
     "canonical_json_hash_constraints": true,
     "deterministic_event_identity_constraint": true,
     "concurrent_exact_replay_lock_and_reread": true,
@@ -79,61 +87,17 @@
     "cargo_deny_version_pinned": "0.20.2"
   },
   "evidence_matrix": [
-    {
-      "id": "world_exact_sha_source_qualification",
-      "status": "implemented_pending_final_cex_gate_run_on_world_611f6f7f",
-      "blocking": true
-    },
-    {
-      "id": "world_postgres_hostile_state_machine",
-      "status": "source_and_prospective_merge_gate_implemented_pending_final_exact_sha_run_on_world_611f6f7f",
-      "blocking": true
-    },
-    {
-      "id": "world_postgres_installation_protocol",
-      "status": "exact_catalog_semantics_and_three_hostile_index_substitutions_implemented_pending_final_exact_sha_run",
-      "blocking": true
-    },
-    {
-      "id": "world_native_protected_contexts",
-      "status": "not_created_by_github_actions",
-      "blocking": true
-    },
-    {
-      "id": "cex_exact_sha_adapter_qualification",
-      "status": "pending_final_gate_run_with_world_611f6f7f",
-      "blocking": true
-    },
-    {
-      "id": "cross_repository_success_and_outage_smoke",
-      "status": "implemented_pending_final_gate_run_with_world_611f6f7f",
-      "blocking": true
-    },
-    {
-      "id": "backfill_count_and_content_hash_reconciliation",
-      "status": "pending_runtime_data",
-      "blocking": true
-    },
-    {
-      "id": "mutation_replay_and_idempotency",
-      "status": "source_postgres_exact_replay_implemented_production_adapter_pending",
-      "blocking": true
-    },
-    {
-      "id": "partial_outage_and_rollback",
-      "status": "source_database_and_development_http_smokes_implemented_production_drill_pending",
-      "blocking": true
-    },
-    {
-      "id": "no_dual_writer_proof",
-      "status": "database_single_active_writer_enforced_cex_production_fence_not_exercised",
-      "blocking": true
-    },
-    {
-      "id": "embedded_cex_world_source_retirement",
-      "status": "quarantined_not_removed",
-      "blocking": true
-    }
+    {"id": "world_exact_sha_source_qualification", "status": "implemented_pending_final_cex_gate_run_on_world_d6d78ee1", "blocking": true},
+    {"id": "world_postgres_hostile_state_machine", "status": "source_and_prospective_merge_gate_implemented_pending_final_exact_sha_run_on_world_d6d78ee1", "blocking": true},
+    {"id": "world_postgres_installation_protocol", "status": "full_catalog_reference_equivalence_and_hostile_drift_matrix_implemented_pending_final_exact_sha_run", "blocking": true},
+    {"id": "world_native_protected_contexts", "status": "pending_exact_head_native_runs", "blocking": true},
+    {"id": "cex_exact_sha_adapter_qualification", "status": "pending_final_gate_run_with_world_d6d78ee1", "blocking": true},
+    {"id": "cross_repository_success_and_outage_smoke", "status": "implemented_pending_final_gate_run_with_world_d6d78ee1", "blocking": true},
+    {"id": "backfill_count_and_content_hash_reconciliation", "status": "pending_runtime_data", "blocking": true},
+    {"id": "mutation_replay_and_idempotency", "status": "source_postgres_exact_replay_implemented_production_adapter_pending", "blocking": true},
+    {"id": "partial_outage_and_rollback", "status": "source_database_and_development_http_smokes_implemented_production_drill_pending", "blocking": true},
+    {"id": "no_dual_writer_proof", "status": "database_single_active_writer_enforced_cex_production_fence_not_exercised", "blocking": true},
+    {"id": "embedded_cex_world_source_retirement", "status": "quarantined_not_removed", "blocking": true}
   ],
-  "truth_boundary": "Source, unit, PostgreSQL-hostile, installation-protocol, and development HTTP evidence cannot grant production authority. Production cutover still requires exact runtime backfill reconciliation, native protected contexts, deployment-specific no-dual-writer evidence, embedded-source retirement, and explicit authorization."
+  "truth_boundary": "Source, unit, PostgreSQL-hostile, installation-protocol, catalog-equivalence, and development HTTP evidence cannot grant production authority. Production cutover still requires exact runtime backfill reconciliation, native protected contexts, deployment-specific no-dual-writer evidence, embedded-source retirement, and explicit authorization."
 }
