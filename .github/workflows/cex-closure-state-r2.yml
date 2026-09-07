@@ -1,0 +1,228 @@
+name: cex-closure-state-r2
+
+on:
+  push:
+    branches:
+      - tmp/cex-closure-state-20260907-r2
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CEX_REPO: TrillionniumFoundation/CEX
+      CEX_PR: '34'
+      CEX_HEAD: 8c31181f7f2dec83a31ac4636191bd2656a6c5bf
+      WORLD_REPO: TrillionniumFoundation/Trillionnium-World
+      WORLD_PR: '60'
+      WORLD_HEAD: cff9f3fd3539420c676f3d1397c166b1c1e24ffb
+    steps:
+      - name: Capture exact GitHub state
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p run/closure-state
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from collections import defaultdict
+
+          token = os.environ['GH_TOKEN']
+          out = pathlib.Path('run/closure-state')
+          api = 'https://api.github.com'
+
+          def get(path):
+              request = urllib.request.Request(
+                  api + path,
+                  headers={
+                      'Accept': 'application/vnd.github+json',
+                      'Authorization': f'Bearer {token}',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'User-Agent': 'cex-closure-state-r2',
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      return {'ok': True, 'status': response.status, 'data': json.load(response)}
+              except urllib.error.HTTPError as error:
+                  body = error.read().decode('utf-8', errors='replace')
+                  try:
+                      detail = json.loads(body)
+                  except json.JSONDecodeError:
+                      detail = body[:2000]
+                  return {'ok': False, 'status': error.code, 'error': detail}
+              except Exception as error:
+                  return {'ok': False, 'status': None, 'error': f'{type(error).__name__}: {error}'}
+
+          def compact_run(run):
+              return {
+                  key: run.get(key)
+                  for key in (
+                      'id', 'name', 'path', 'event', 'status', 'conclusion', 'run_number',
+                      'run_attempt', 'head_sha', 'head_branch', 'created_at', 'updated_at',
+                  )
+              }
+
+          def compact_check(check):
+              return {
+                  'id': check.get('id'),
+                  'name': check.get('name'),
+                  'status': check.get('status'),
+                  'conclusion': check.get('conclusion'),
+                  'started_at': check.get('started_at'),
+                  'completed_at': check.get('completed_at'),
+                  'app': (check.get('app') or {}).get('slug'),
+              }
+
+          def compact_review(review):
+              return {
+                  'id': review.get('id'),
+                  'user': (review.get('user') or {}).get('login'),
+                  'state': review.get('state'),
+                  'commit_id': review.get('commit_id'),
+                  'submitted_at': review.get('submitted_at'),
+              }
+
+          def repo_state(repo, pr_number, head):
+              quoted = urllib.parse.quote(repo, safe='/')
+              pr = get(f'/repos/{quoted}/pulls/{pr_number}')
+              ref_name = None
+              if pr['ok']:
+                  ref_name = (pr['data'].get('head') or {}).get('ref')
+              runs = get(f'/repos/{quoted}/actions/runs?head_sha={head}&per_page=100')
+              checks = get(f'/repos/{quoted}/commits/{head}/check-runs?per_page=100')
+              reviews = get(f'/repos/{quoted}/pulls/{pr_number}/reviews?per_page=100')
+              requested = get(f'/repos/{quoted}/pulls/{pr_number}/requested_reviewers')
+              branch = get(f'/repos/{quoted}/branches/main')
+              protection = get(f'/repos/{quoted}/branches/main/protection')
+              rulesets = get(f'/repos/{quoted}/rulesets?per_page=100')
+              actions_permissions = get(f'/repos/{quoted}/actions/permissions')
+              workflows = get(f'/repos/{quoted}/actions/workflows?per_page=100')
+              head_ref = get(f'/repos/{quoted}/git/ref/heads/{urllib.parse.quote(ref_name, safe="/")}') if ref_name else {'ok': False, 'status': None, 'error': 'head ref unavailable'}
+
+              result = {
+                  'repo': repo,
+                  'expected_head': head,
+                  'pr': {
+                      'ok': pr['ok'],
+                      'status': pr['status'],
+                      'data': ({
+                          'number': pr['data'].get('number'),
+                          'state': pr['data'].get('state'),
+                          'draft': pr['data'].get('draft'),
+                          'merged': pr['data'].get('merged'),
+                          'mergeable': pr['data'].get('mergeable'),
+                          'mergeable_state': pr['data'].get('mergeable_state'),
+                          'head_sha': (pr['data'].get('head') or {}).get('sha'),
+                          'head_ref': ref_name,
+                          'base_sha': (pr['data'].get('base') or {}).get('sha'),
+                          'merge_commit_sha': pr['data'].get('merge_commit_sha'),
+                          'updated_at': pr['data'].get('updated_at'),
+                      } if pr['ok'] else pr.get('error')),
+                  },
+                  'head_ref': head_ref,
+                  'runs': runs,
+                  'checks': checks,
+                  'reviews': reviews,
+                  'requested_reviewers': requested,
+                  'main_branch': branch,
+                  'main_protection': protection,
+                  'rulesets': rulesets,
+                  'actions_permissions': actions_permissions,
+                  'workflows': workflows,
+              }
+
+              raw_runs = (runs.get('data') or {}).get('workflow_runs', []) if runs['ok'] else []
+              raw_checks = (checks.get('data') or {}).get('check_runs', []) if checks['ok'] else []
+              raw_reviews = reviews.get('data', []) if reviews['ok'] else []
+              grouped = defaultdict(list)
+              for run in raw_runs:
+                  grouped[run.get('name') or '<unnamed>'].append(compact_run(run))
+              for items in grouped.values():
+                  items.sort(key=lambda item: (item.get('created_at') or '', item.get('id') or 0), reverse=True)
+
+              latest = {name: items[0] for name, items in sorted(grouped.items())}
+              pending = [item for item in latest.values() if item.get('status') != 'completed']
+              failing = [item for item in latest.values() if item.get('status') == 'completed' and item.get('conclusion') not in ('success', 'neutral', 'skipped')]
+              latest_review_by_user = {}
+              for review in sorted(raw_reviews, key=lambda item: item.get('submitted_at') or ''):
+                  user = (review.get('user') or {}).get('login')
+                  if user:
+                      latest_review_by_user[user] = compact_review(review)
+              exact_approvals = [
+                  review for review in latest_review_by_user.values()
+                  if review.get('state') == 'APPROVED' and review.get('commit_id') == head
+              ]
+              exact_changes = [
+                  review for review in latest_review_by_user.values()
+                  if review.get('state') == 'CHANGES_REQUESTED' and review.get('commit_id') == head
+              ]
+              result['summary'] = {
+                  'head_matches': pr['ok'] and (pr['data'].get('head') or {}).get('sha') == head,
+                  'run_count': len(raw_runs),
+                  'latest_runs': latest,
+                  'latest_pending': pending,
+                  'latest_failing': failing,
+                  'check_runs': [compact_check(item) for item in raw_checks],
+                  'latest_review_by_user': latest_review_by_user,
+                  'exact_head_approvals': exact_approvals,
+                  'exact_head_changes_requested': exact_changes,
+              }
+              return result
+
+          state = {
+              'schema': 'cex.world.closure-state-r2.v1',
+              'event_repository': os.environ['GITHUB_REPOSITORY'],
+              'event_sha': os.environ['GITHUB_SHA'],
+              'event_run_id': os.environ['GITHUB_RUN_ID'],
+              'cex': repo_state(os.environ['CEX_REPO'], int(os.environ['CEX_PR']), os.environ['CEX_HEAD']),
+              'world': repo_state(os.environ['WORLD_REPO'], int(os.environ['WORLD_PR']), os.environ['WORLD_HEAD']),
+              'issues': {
+                  'cex_32': get('/repos/TrillionniumFoundation/CEX/issues/32'),
+                  'cex_33': get('/repos/TrillionniumFoundation/CEX/issues/33'),
+                  'world_4': get('/repos/TrillionniumFoundation/Trillionnium-World/issues/4'),
+                  'world_54': get('/repos/TrillionniumFoundation/Trillionnium-World/issues/54'),
+              },
+              'production_authorization': 'not_granted',
+          }
+          (out / 'state.json').write_text(json.dumps(state, indent=2, sort_keys=True) + '\n')
+
+          lines = []
+          for key in ('cex', 'world'):
+              item = state[key]
+              summary = item['summary']
+              lines.extend([
+                  f'[{key}]',
+                  f"expected_head={item['expected_head']}",
+                  f"head_matches={summary['head_matches']}",
+                  f"run_count={summary['run_count']}",
+                  f"latest_pending={len(summary['latest_pending'])}",
+                  f"latest_failing={len(summary['latest_failing'])}",
+                  f"exact_head_approvals={len(summary['exact_head_approvals'])}",
+                  f"exact_head_changes_requested={len(summary['exact_head_changes_requested'])}",
+                  '',
+              ])
+          lines.append('production_authorization=not_granted')
+          (out / 'state.txt').write_text('\n'.join(lines) + '\n')
+          print('\n'.join(lines))
+          PY
+
+      - name: Upload closure state
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cex-closure-state-r2-${{ github.sha }}
+          path: run/closure-state/**
+          if-no-files-found: error
+          retention-days: 1
