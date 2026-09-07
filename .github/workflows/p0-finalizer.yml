@@ -1,0 +1,516 @@
+name: p0-finalizer-diagnostic
+
+on:
+  push:
+    branches:
+      - tmp/p0-finalizer-20260907
+
+permissions:
+  actions: write
+  checks: read
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CEX_REPOSITORY: TrillionniumFoundation/CEX
+      CEX_PULL_REQUEST: '34'
+      WORLD_REPOSITORY: TrillionniumFoundation/Trillionnium-World
+      WORLD_PULL_REQUEST: '60'
+    steps:
+      - name: Converge current exact heads and write machine truth
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p run/p0-finalizer/logs
+          python3 - <<'PY'
+          import base64
+          import datetime as dt
+          import json
+          import os
+          import pathlib
+          import re
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          token = os.environ['GH_TOKEN']
+          cex_repo = os.environ['CEX_REPOSITORY']
+          world_repo = os.environ['WORLD_REPOSITORY']
+          cex_pr_number = int(os.environ['CEX_PULL_REQUEST'])
+          world_pr_number = int(os.environ['WORLD_PULL_REQUEST'])
+          out = pathlib.Path('run/p0-finalizer')
+          log_dir = out / 'logs'
+
+          def api(method, path, body=None, tolerate=()):
+              url = path if path.startswith('https://') else 'https://api.github.com' + path
+              payload = None if body is None else json.dumps(body).encode('utf-8')
+              headers = {
+                  'Accept': 'application/vnd.github+json',
+                  'Authorization': f'Bearer {token}',
+                  'X-GitHub-Api-Version': '2022-11-28',
+                  'User-Agent': 'cex-p0-finalizer',
+              }
+              if payload is not None:
+                  headers['Content-Type'] = 'application/json'
+              request = urllib.request.Request(url, method=method, data=payload, headers=headers)
+              try:
+                  with urllib.request.urlopen(request, timeout=45) as response:
+                      raw = response.read()
+                      if not raw:
+                          return response.status, None
+                      content_type = response.headers.get('content-type', '')
+                      if 'json' in content_type:
+                          return response.status, json.loads(raw)
+                      return response.status, raw
+              except urllib.error.HTTPError as error:
+                  raw = error.read()
+                  try:
+                      parsed = json.loads(raw) if raw else None
+                  except Exception:
+                      parsed = {'raw': raw.decode('utf-8', 'replace')[:4000]}
+                  if error.code in tolerate:
+                      return error.code, parsed
+                  raise RuntimeError(f'{method} {path} -> {error.code}: {parsed}')
+
+          def get(path, tolerate=()):
+              return api('GET', path, tolerate=tolerate)
+
+          def get_json(path, tolerate=()):
+              status, value = get(path, tolerate=tolerate)
+              return status, value
+
+          def fetch_text(repo, path, ref):
+              status, value = get_json(
+                  f'/repos/{repo}/contents/{path}?ref={urllib.parse.quote(ref, safe="")}',
+                  tolerate=(404,),
+              )
+              if status != 200:
+                  return None
+              return base64.b64decode(value['content']).decode('utf-8')
+
+          def exact_reviews(repo, number, head):
+              _, reviews = get_json(f'/repos/{repo}/pulls/{number}/reviews?per_page=100')
+              latest = {}
+              for item in sorted(reviews, key=lambda row: row.get('submitted_at') or ''):
+                  user = (item.get('user') or {}).get('login')
+                  if user and item.get('commit_id') == head:
+                      latest[user] = item
+              approvals = sorted(
+                  user for user, item in latest.items()
+                  if item.get('state') == 'APPROVED'
+                  and (item.get('user') or {}).get('type') != 'Bot'
+              )
+              changes = sorted(
+                  user for user, item in latest.items()
+                  if item.get('state') == 'CHANGES_REQUESTED'
+              )
+              return {
+                  'approvals': approvals,
+                  'changes_requested': changes,
+                  'records': {
+                      user: {
+                          'state': item.get('state'),
+                          'commit_id': item.get('commit_id'),
+                          'submitted_at': item.get('submitted_at'),
+                      }
+                      for user, item in latest.items()
+                  },
+              }
+
+          def collect_required_workflows(repo, head):
+              required = {
+                  '.github/workflows/p0-release-candidate-gate.yml',
+                  '.github/workflows/rust-service-gate.yml',
+                  '.github/workflows/trnm-economy-ci.yml',
+                  '.github/workflows/trnm-economy-settlement.yml',
+                  '.github/workflows/p0-world-authority-cutover-gate.yml',
+                  '.github/workflows/p0-world-authority-postgres-v2-gate.yml',
+                  '.github/workflows/project-boundary-gate.yml',
+                  '.github/workflows/project-boundary-changed-path-gate.yml',
+                  '.github/workflows/p0-gateway-exact-reserve-gate.yml',
+                  '.github/workflows/execution-settlement-gate.yml',
+                  '.github/workflows/provider-reconciliation-gate.yml',
+                  '.github/workflows/migration-gate.yml',
+              }
+              for path in (
+                  'docs/development-doc-authority-v1.json',
+                  'scripts/check-p0-release-candidate-hygiene.py',
+                  'scripts/check-p0-wiring.py',
+              ):
+                  text = fetch_text(repo, path, head)
+                  if text:
+                      required.update(re.findall(r'\.github/workflows/[A-Za-z0-9._/-]+\.ya?ml', text))
+              _, workflows = get_json(f'/repos/{repo}/actions/workflows?per_page=100')
+              registered = {item['path']: item for item in workflows.get('workflows', [])}
+              return sorted(path for path in required if path in registered), registered
+
+          def latest_by_path_event(runs, head):
+              grouped = {}
+              for run in sorted(runs, key=lambda row: row.get('created_at') or '', reverse=True):
+                  if run.get('head_sha') != head:
+                      continue
+                  key = (run.get('path'), run.get('event'))
+                  grouped.setdefault(key, run)
+              return grouped
+
+          def sanitize_log(raw):
+              if not isinstance(raw, (bytes, bytearray)):
+                  return ''
+              text = raw.decode('utf-8-sig', 'replace')
+              lines = []
+              matcher = re.compile(
+                  r'(?i)(error(?:\[E\d+\])?|failed|failure|panicked|assertion|timed out|startup_failure|UnicodeDecodeError|SQLSTATE|fatal)'
+              )
+              for line in text.splitlines():
+                  line = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', line)
+                  if matcher.search(line):
+                      lines.append(line[-2000:])
+              return '\n'.join(lines[-250:])
+
+          cex_pr = get_json(f'/repos/{cex_repo}/pulls/{cex_pr_number}')[1]
+          world_pr = get_json(f'/repos/{world_repo}/pulls/{world_pr_number}')[1]
+          cex_head = cex_pr['head']['sha']
+          world_head = world_pr['head']['sha']
+          required_paths, registered = collect_required_workflows(cex_repo, cex_head)
+          rerun_once = set()
+          dispatch_once = set()
+          deadline = time.time() + 1800
+          snapshot = {}
+          all_green = False
+
+          while True:
+              _, run_payload = get_json(
+                  f'/repos/{cex_repo}/actions/runs?head_sha={cex_head}&per_page=100'
+              )
+              runs = run_payload.get('workflow_runs', [])
+              grouped = latest_by_path_event(runs, cex_head)
+              by_path = {}
+              for (path, event), run in grouped.items():
+                  by_path.setdefault(path, {})[event] = run
+
+              for path in required_paths:
+                  values = by_path.get(path, {})
+                  if not values and path not in dispatch_once:
+                      workflow = registered[path]
+                      status, response = api(
+                          'POST',
+                          f'/repos/{cex_repo}/actions/workflows/{workflow["id"]}/dispatches',
+                          {'ref': cex_pr['head']['ref']},
+                          tolerate=(204, 403, 404, 422),
+                      )
+                      dispatch_once.add(path)
+                      (log_dir / f'dispatch-{workflow["id"]}.json').write_text(
+                          json.dumps({'path': path, 'status': status, 'response': response}, indent=2) + '\n'
+                      )
+
+              retryable_conclusions = {
+                  'cancelled', 'timed_out', 'startup_failure', 'stale', 'action_required'
+              }
+              for path, events in by_path.items():
+                  for event, run in events.items():
+                      if (
+                          run.get('status') == 'completed'
+                          and run.get('conclusion') in retryable_conclusions
+                          and run['id'] not in rerun_once
+                      ):
+                          status, response = api(
+                              'POST',
+                              f'/repos/{cex_repo}/actions/runs/{run["id"]}/rerun-failed-jobs',
+                              tolerate=(201, 403, 409, 422),
+                          )
+                          rerun_once.add(run['id'])
+                          (log_dir / f'rerun-{run["id"]}.json').write_text(
+                              json.dumps({'path': path, 'event': event, 'status': status, 'response': response}, indent=2) + '\n'
+                          )
+
+              snapshot = {}
+              for path in required_paths:
+                  events = by_path.get(path, {})
+                  entries = [
+                      {
+                          'id': run['id'],
+                          'event': event,
+                          'status': run.get('status'),
+                          'conclusion': run.get('conclusion'),
+                          'attempt': run.get('run_attempt'),
+                          'created_at': run.get('created_at'),
+                          'updated_at': run.get('updated_at'),
+                      }
+                      for event, run in sorted(events.items())
+                  ]
+                  has_success = any(
+                      item['status'] == 'completed' and item['conclusion'] == 'success'
+                      for item in entries
+                  )
+                  nonterminal = any(item['status'] != 'completed' for item in entries)
+                  deterministic_failure = [
+                      item for item in entries
+                      if item['status'] == 'completed'
+                      and item['conclusion'] in {'failure'}
+                  ]
+                  snapshot[path] = {
+                      'runs': entries,
+                      'has_success': has_success,
+                      'nonterminal': nonterminal,
+                      'deterministic_failure': deterministic_failure,
+                  }
+              all_green = bool(required_paths) and all(
+                  state['has_success'] and not state['nonterminal'] and not state['deterministic_failure']
+                  for state in snapshot.values()
+              )
+              if all_green or time.time() >= deadline:
+                  break
+              time.sleep(30)
+
+          # Preserve concise deterministic failure diagnostics.
+          for path, state in snapshot.items():
+              for item in state['deterministic_failure']:
+                  run_id = item['id']
+                  _, jobs = get_json(f'/repos/{cex_repo}/actions/runs/{run_id}/jobs?per_page=100')
+                  for job in jobs.get('jobs', []):
+                      if job.get('conclusion') != 'failure':
+                          continue
+                      status, raw = get(f'/repos/{cex_repo}/actions/jobs/{job["id"]}/logs', tolerate=(302, 403, 404))
+                      if status == 302 and isinstance(raw, dict):
+                          continue
+                      if status == 200 and isinstance(raw, (bytes, bytearray)):
+                          (log_dir / f'failure-{run_id}-{job["id"]}.txt').write_text(
+                              sanitize_log(raw) + '\n', encoding='utf-8'
+                          )
+
+          _, world_run_payload = get_json(
+              f'/repos/{world_repo}/actions/runs?head_sha={world_head}&per_page=100'
+          )
+          world_runs = world_run_payload.get('workflow_runs', [])
+          cex_reviews = exact_reviews(cex_repo, cex_pr_number, cex_head)
+          world_reviews = exact_reviews(world_repo, world_pr_number, world_head)
+
+          cex_rules_status, cex_rules = get_json(
+              f'/repos/{cex_repo}/rulesets?includes_parents=true&per_page=100', tolerate=(403, 404)
+          )
+          world_rules_status, world_rules = get_json(
+              f'/repos/{world_repo}/rulesets?includes_parents=true&per_page=100', tolerate=(403, 404)
+          )
+          cex_protection_status, cex_protection = get_json(
+              f'/repos/{cex_repo}/branches/main/protection', tolerate=(403, 404)
+          )
+          world_protection_status, world_protection = get_json(
+              f'/repos/{world_repo}/branches/main/protection', tolerate=(403, 404)
+          )
+
+          def active_ruleset(value):
+              return isinstance(value, list) and any(
+                  item.get('enforcement') == 'active' for item in value
+              )
+
+          cex_governance_readback = (
+              (cex_rules_status == 200 and active_ruleset(cex_rules))
+              or cex_protection_status == 200
+          )
+          world_governance_readback = (
+              (world_rules_status == 200 and active_ruleset(world_rules))
+              or world_protection_status == 200
+          )
+          cex_review_closed = len(cex_reviews['approvals']) >= 2 and not cex_reviews['changes_requested']
+          world_review_closed = len(world_reviews['approvals']) >= 2 and not world_reviews['changes_requested']
+          world_native_closed = bool(world_runs) and all(
+              run.get('status') == 'completed' and run.get('conclusion') == 'success'
+              for run in world_runs
+          )
+
+          # Production facts cannot be inferred from repository CI. Keep the truth boundary explicit.
+          production_runtime_reconciliation = False
+          no_dual_writer_runtime_proof = False
+          deployment_identity_and_secret_custody = False
+          explicit_go_live_authorization = False
+          production_authorization = 'not_granted'
+
+          report = {
+              'schema': 'cex.world.p0.finalizer.v1',
+              'generated_at': dt.datetime.now(dt.timezone.utc).isoformat(),
+              'cex': {
+                  'pull_request': cex_pr_number,
+                  'head_sha': cex_head,
+                  'base_sha': cex_pr['base']['sha'],
+                  'draft': cex_pr.get('draft'),
+                  'merged': bool(cex_pr.get('merged')),
+                  'mergeable': cex_pr.get('mergeable'),
+                  'mergeable_state': cex_pr.get('mergeable_state'),
+                  'required_workflow_paths': required_paths,
+                  'workflow_state': snapshot,
+                  'all_required_workflows_green': all_green,
+                  'exact_head_reviews': cex_reviews,
+                  'review_gate_closed': cex_review_closed,
+                  'governance_readback': cex_governance_readback,
+                  'rulesets_http_status': cex_rules_status,
+                  'branch_protection_http_status': cex_protection_status,
+              },
+              'world': {
+                  'pull_request': world_pr_number,
+                  'head_sha': world_head,
+                  'base_sha': world_pr['base']['sha'],
+                  'draft': world_pr.get('draft'),
+                  'merged': bool(world_pr.get('merged')),
+                  'mergeable': world_pr.get('mergeable'),
+                  'mergeable_state': world_pr.get('mergeable_state'),
+                  'native_run_count': len(world_runs),
+                  'native_runs': [
+                      {
+                          'id': run['id'],
+                          'name': run.get('name'),
+                          'path': run.get('path'),
+                          'event': run.get('event'),
+                          'status': run.get('status'),
+                          'conclusion': run.get('conclusion'),
+                          'attempt': run.get('run_attempt'),
+                      }
+                      for run in world_runs
+                  ],
+                  'native_context_gate_closed': world_native_closed,
+                  'exact_head_reviews': world_reviews,
+                  'review_gate_closed': world_review_closed,
+                  'governance_readback': world_governance_readback,
+                  'rulesets_http_status': world_rules_status,
+                  'branch_protection_http_status': world_protection_status,
+              },
+              'runtime': {
+                  'production_data_reconciliation': production_runtime_reconciliation,
+                  'deployment_identity_and_secret_custody': deployment_identity_and_secret_custody,
+                  'no_dual_writer_runtime_proof': no_dual_writer_runtime_proof,
+                  'explicit_go_live_authorization': explicit_go_live_authorization,
+              },
+              'gates': {
+                  'cex_exact_head_ci': all_green,
+                  'world_native_exact_head_ci': world_native_closed,
+                  'cex_exact_head_independent_review': cex_review_closed,
+                  'world_exact_head_independent_review': world_review_closed,
+                  'cex_main_governance_readback': cex_governance_readback,
+                  'world_main_governance_readback': world_governance_readback,
+                  'production_data_reconciliation': production_runtime_reconciliation,
+                  'deployment_identity_and_secret_custody': deployment_identity_and_secret_custody,
+                  'no_dual_writer_runtime_proof': no_dual_writer_runtime_proof,
+                  'explicit_go_live_authorization': explicit_go_live_authorization,
+              },
+              'production_authorization': production_authorization,
+          }
+          report['all_repository_actionable_gaps_closed'] = all(
+              report['gates'][key]
+              for key in (
+                  'cex_exact_head_ci',
+                  'world_native_exact_head_ci',
+                  'cex_exact_head_independent_review',
+                  'world_exact_head_independent_review',
+                  'cex_main_governance_readback',
+                  'world_main_governance_readback',
+              )
+          )
+          report['all_gaps_closed'] = all(report['gates'].values()) and production_authorization == 'granted'
+          (out / 'final-truth.json').write_text(
+              json.dumps(report, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
+
+          marker_begin = '<!-- P0_FINALIZER_BEGIN -->'
+          marker_end = '<!-- P0_FINALIZER_END -->'
+          summary_lines = [
+              marker_begin,
+              '## Live exact-head finalizer',
+              '',
+              f'- generated: `{report["generated_at"]}`',
+              f'- CEX head: `{cex_head}`',
+              f'- CEX required workflow families green: `{str(all_green).lower()}`',
+              f'- CEX exact-head eligible approvals: `{len(cex_reviews["approvals"])}`',
+              f'- World head: `{world_head}`',
+              f'- World-native exact-head runs: `{len(world_runs)}`',
+              f'- World-native context gate closed: `{str(world_native_closed).lower()}`',
+              f'- World exact-head eligible approvals: `{len(world_reviews["approvals"])}`',
+              f'- CEX governance readback: `{str(cex_governance_readback).lower()}`',
+              f'- World governance readback: `{str(world_governance_readback).lower()}`',
+              f'- all repository-actionable gaps closed: `{str(report["all_repository_actionable_gaps_closed"]).lower()}`',
+              f'- all gaps closed: `{str(report["all_gaps_closed"]).lower()}`',
+              f'- production authorization: `{production_authorization}`',
+              '',
+              'No old-head result, CEX-side World substitute, self-approval, synthetic status, administrator bypass, merge, release or deployment is credited by this block.',
+              marker_end,
+          ]
+          old_body = cex_pr.get('body') or ''
+          replacement = '\n'.join(summary_lines)
+          if marker_begin in old_body and marker_end in old_body:
+              prefix = old_body.split(marker_begin, 1)[0].rstrip()
+              suffix = old_body.split(marker_end, 1)[1].lstrip()
+              new_body = prefix + '\n\n' + replacement + ('\n\n' + suffix if suffix else '')
+          else:
+              new_body = old_body.rstrip() + '\n\n' + replacement
+          api('PATCH', f'/repos/{cex_repo}/pulls/{cex_pr_number}', {'body': new_body})
+
+          issue_comment = '\n'.join([
+              '## Live finalizer checkpoint',
+              '',
+              f'- CEX exact head: `{cex_head}`; required workflow families green: `{str(all_green).lower()}`',
+              f'- World exact head: `{world_head}`; native runs: `{len(world_runs)}`',
+              f'- CEX/World exact-head eligible approvals: `{len(cex_reviews["approvals"])}` / `{len(world_reviews["approvals"])}`',
+              f'- repository-actionable closure: `{str(report["all_repository_actionable_gaps_closed"]).lower()}`',
+              f'- production authorization: `{production_authorization}`',
+              '',
+              'The retained workflow artifact contains the complete path-by-path run matrix and governance readback. Runtime reconciliation, deployment identity, no-dual-writer and go-live fields remain false unless real environment evidence is supplied.',
+          ])
+          for issue_number in (32, 33):
+              api('POST', f'/repos/{cex_repo}/issues/{issue_number}/comments', {'body': issue_comment}, tolerate=(201, 403, 404))
+          PY
+
+      - name: Upload finalizer evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: p0-finalizer-${{ github.run_id }}
+          path: run/p0-finalizer/**
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Delete temporary CEX refs
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, urllib.error, urllib.parse, urllib.request
+          token = os.environ['GH_TOKEN']
+          repo = os.environ['CEX_REPOSITORY']
+          refs = [
+              'tmp/controller-probe-20260907',
+              'tmp/cex-world-pin-materialize-20260907',
+              'tmp/ruleset-probe-20260907',
+              'tmp/p0-convergence-controller-20260907',
+              'tmp/p0-convergence-controller-20260907-r2',
+              'tmp/p0-convergence-controller-20260907-r3',
+              'tmp/p0-convergence-controller-20260907-r4',
+              'tmp/p0-convergence-controller-20260907-r5',
+              'tmp/p0-convergence-controller-20260907-r6',
+              'tmp/p0-convergence-controller-20260907-final',
+              'tmp/p0-controller-final2',
+              'tmp/p0-controller-final3',
+              'tmp/p0-finalizer-20260907',
+          ]
+          for ref in refs:
+              url = f'https://api.github.com/repos/{repo}/git/refs/heads/{urllib.parse.quote(ref, safe="/")}'
+              request = urllib.request.Request(
+                  url, method='DELETE', headers={
+                      'Accept': 'application/vnd.github+json',
+                      'Authorization': f'Bearer {token}',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'User-Agent': 'cex-p0-finalizer-cleanup',
+                  }
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      print(ref, response.status)
+              except urllib.error.HTTPError as error:
+                  if error.code not in (404, 422):
+                      print(ref, error.code, error.read().decode('utf-8', 'replace')[:500])
+          PY
