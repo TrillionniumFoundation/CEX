@@ -2352,9 +2352,10 @@ mod tests {
             decode_canonical_message::<RawSignedHeader>("signed_header_proto_hex", &signed_bytes)
                 .unwrap();
         let mut signed: block::signed_header::SignedHeader = raw.try_into().unwrap();
-        for signature in &mut signed.commit.signatures {
-            *signature = block::CommitSig::BlockIdFlagAbsent;
-        }
+        signed
+            .commit
+            .signatures
+            .fill(block::CommitSig::BlockIdFlagAbsent);
         let raw: RawSignedHeader = signed.into();
         let mut candidate = proof.clone();
         candidate.signed_header_proto_hex = hex::encode(raw.encode_to_vec());
