@@ -1,4 +1,4 @@
-name: cex-advisory-chain-diagnostic
+name: cex-release-surface-diagnostic
 
 on:
   push:
@@ -9,66 +9,69 @@ permissions:
   contents: read
 
 jobs:
-  trace:
+  inventory:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Checkout exact candidate
+      - name: Checkout exact Sequence 15 candidate
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 8c31181f7f2dec83a31ac4636191bd2656a6c5bf
+          ref: 452de1c8bf0b0bd58a1d932a8222aa1c46d8096d
+          fetch-depth: 1
           persist-credentials: false
       - name: Install exact Rust toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           toolchain: 1.98.1
-      - name: Trace advisory dependency chains across all targets
+      - name: Inventory checked-in release surfaces
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p run/advisory-chain
-          rustc --version --verbose > run/advisory-chain/rustc-version.txt
-          cargo --version --verbose > run/advisory-chain/cargo-version.txt
-          for crate in rsa@0.9.10 gumdrop@0.8.1 paste@1.0.15; do
-            name="${crate%@*}"
-            cargo tree --locked -i "$crate" -e all > "run/advisory-chain/${name}-all.txt"
-            cargo tree --locked --target all -i "$crate" -e all > "run/advisory-chain/${name}-all-targets.txt"
-            cargo tree --locked --target all -i "$crate" -e normal > "run/advisory-chain/${name}-normal-all-targets.txt" || true
-          done
-          for package in ledger-service consumer-entry-api execution-service gateway-service; do
-            cargo tree --locked --target all -p "$package" -e normal > "run/advisory-chain/${package}-normal-all-targets.txt"
-          done
+          mkdir -p run/release-surface
+          grep -RInE 'cargo[[:space:]]+build([^#\n])*--release|target/release/|ExecStart=.*target/release|ExecStart=.*/(ledger-service|consumer-entry-api|execution-service|gateway-service|audit-service|identity-service|capability-service|trnm-economy-service)' \
+            .github/workflows scripts deploy packaging 2>/dev/null \
+            > run/release-surface/text-markers.txt || true
+          cargo metadata --format-version 1 --no-deps --locked > run/release-surface/metadata.json
           python3 - <<'PY'
           import hashlib, json, pathlib, re
-          out = pathlib.Path('run/advisory-chain')
-          summary = {}
-          release_packages = ('ledger-service', 'consumer-entry-api', 'execution-service', 'gateway-service')
-          for name in ('rsa', 'gumdrop', 'paste'):
-              summary[name] = {
-                  'all_edges': (out / f'{name}-all.txt').read_text().splitlines(),
-                  'all_target_edges': (out / f'{name}-all-targets.txt').read_text().splitlines(),
-                  'normal_all_target_edges': (out / f'{name}-normal-all-targets.txt').read_text().splitlines(),
-                  'reachable_from_release_packages_all_targets': {
-                      package: re.search(rf'(?m)^.*\b{re.escape(name)} v', (out / f'{package}-normal-all-targets.txt').read_text()) is not None
-                      for package in release_packages
-                  },
-              }
-          (out / 'summary.json').write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
+          out = pathlib.Path('run/release-surface')
+          root = pathlib.Path('.')
+          metadata = json.loads((out / 'metadata.json').read_text())
+          by_name = {p['name']: p for p in metadata['packages']}
+          markers = (out / 'text-markers.txt').read_text().splitlines()
+          package_hits = {}
+          for line in markers:
+              for name in by_name:
+                  if re.search(rf'(?<![A-Za-z0-9_-]){re.escape(name)}(?![A-Za-z0-9_-])', line):
+                      package_hits.setdefault(name, []).append(line)
+          deployable_binary_packages = sorted(
+              p['name'] for p in metadata['packages']
+              if p['id'] in set(metadata['workspace_members'])
+              and any('bin' in t.get('kind', []) for t in p.get('targets', []))
+          )
+          result = {
+              'schema': 'cex.release-surface-diagnostic.v1',
+              'source_sha': '452de1c8bf0b0bd58a1d932a8222aa1c46d8096d',
+              'workspace_binary_packages': deployable_binary_packages,
+              'packages_named_by_release_install_runtime_markers': {
+                  k: v for k, v in sorted(package_hits.items())
+              },
+              'marker_count': len(markers),
+          }
+          (out / 'summary.json').write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')
           files = sorted(p for p in out.iterdir() if p.is_file() and p.name != 'manifest.json')
-          manifest = {
-              'schema': 'cex.advisory-chain-diagnostic.v2',
-              'source_sha': '8c31181f7f2dec83a31ac4636191bd2656a6c5bf',
+          (out / 'manifest.json').write_text(json.dumps({
+              'schema': 'cex.release-surface-diagnostic-manifest.v1',
               'files': [
                   {'path': p.name, 'bytes': p.stat().st_size, 'sha256': hashlib.sha256(p.read_bytes()).hexdigest()}
                   for p in files
               ],
-          }
-          (out / 'manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
+          }, indent=2, sort_keys=True) + '\n')
           PY
       - name: Upload diagnostic
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: cex-advisory-chain-all-targets-8c31181f7f2dec83a31ac4636191bd2656a6c5bf
-          path: run/advisory-chain/**
+          name: cex-release-surface-452de1c8bf0b0bd58a1d932a8222aa1c46d8096d
+          path: run/release-surface/**
           if-no-files-found: error
           retention-days: 1
