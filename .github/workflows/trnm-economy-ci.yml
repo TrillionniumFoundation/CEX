@@ -4,18 +4,28 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - 'Cargo.toml'
+      - '**/Cargo.toml'
       - 'Cargo.lock'
       - 'deny.toml'
+      - '.cargo/**'
+      - '.github/CODEOWNERS'
       - 'docker-compose.yml'
       - 'services/ledger-service/**'
       - 'services/consumer-entry-api/**'
+      - 'services/execution-service/**'
+      - 'services/gateway-service/**'
+      - 'services/hepta-research-league/**'
+      - 'services/audit-service/**'
       - 'vendor/trnm-economy-protocol/**'
+      - 'vendor/trnm-finality-verifier/**'
       - 'migrations/0027*'
       - 'migrations/0028*'
       - 'migrations/0029*'
       - 'migrations/0030*'
-      - 'deploy/systemd/cex-trnm-*'
+      - 'deploy/systemd/**'
+      - 'ops/systemd/**'
+      - 'scripts/install-*.sh'
+      - 'scripts/package-*.sh'
       - 'scripts/check-trnm-*'
       - 'scripts/check-rust-advisory-exceptions.py'
       - 'docs/security/rust-advisory-exceptions-v1.json'
@@ -24,18 +34,28 @@ on:
       - '.github/workflows/trnm-economy-ci.yml'
   push:
     paths:
-      - 'Cargo.toml'
+      - '**/Cargo.toml'
       - 'Cargo.lock'
       - 'deny.toml'
+      - '.cargo/**'
+      - '.github/CODEOWNERS'
       - 'docker-compose.yml'
       - 'services/ledger-service/**'
       - 'services/consumer-entry-api/**'
+      - 'services/execution-service/**'
+      - 'services/gateway-service/**'
+      - 'services/hepta-research-league/**'
+      - 'services/audit-service/**'
       - 'vendor/trnm-economy-protocol/**'
+      - 'vendor/trnm-finality-verifier/**'
       - 'migrations/0027*'
       - 'migrations/0028*'
       - 'migrations/0029*'
       - 'migrations/0030*'
-      - 'deploy/systemd/cex-trnm-*'
+      - 'deploy/systemd/**'
+      - 'ops/systemd/**'
+      - 'scripts/install-*.sh'
+      - 'scripts/package-*.sh'
       - 'scripts/check-trnm-*'
       - 'scripts/check-rust-advisory-exceptions.py'
       - 'docs/security/rust-advisory-exceptions-v1.json'
@@ -61,11 +81,12 @@ env:
 jobs:
   economy-workspace:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 75
     steps:
-      - name: Checkout exact source
+      - name: Checkout exact source with policy history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: PostgreSQL WAL archive contract
@@ -101,7 +122,7 @@ jobs:
         with:
           tool: cargo-audit@0.22.2,cargo-deny@0.20.2
 
-      - name: Validate bounded advisory and dependency exceptions
+      - name: Validate complete advisory, release and dependency closure
         run: |
           set -euo pipefail
           mkdir -p run/supply-chain
@@ -143,6 +164,7 @@ jobs:
             target/release/consumer-entry-api
             Cargo.lock
             deny.toml
+            .github/CODEOWNERS
             docs/security/rust-advisory-exceptions-v1.json
             run/supply-chain/**
           if-no-files-found: error
