@@ -5,10 +5,11 @@
   "world_repository": "TrillionniumFoundation/Trillionnium-World",
   "world_pull_request": 60,
   "world_source_branch": "feat/p0-world-authority-cutover-20260906",
-  "world_source_sha": "405ea4f46a2d171a4faabdfc53a75e30f0883c61",
-  "world_source_tree": "f715bf9d9cee8f013030ce5cb41bd0a305851c6f",
+  "world_source_sha": "d6d78ee13f2f682d5cd6ad933ad03e81ce1a78c6",
+  "world_source_tree": "c25ae7963c33997ebb01ee48bf6573bf8e1e458c",
   "world_contract_sequence": 2,
   "world_native_actions_required": true,
   "world_native_actions_observed": false,
+  "catalog_reference_equivalence_required": true,
   "production_authorization": "not_granted"
 }
