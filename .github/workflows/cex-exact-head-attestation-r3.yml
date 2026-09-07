@@ -1,0 +1,161 @@
+name: cex-exact-head-attestation-r3
+
+on:
+  push:
+    branches:
+      - tmp/cex-closure-state-20260907-r2
+
+permissions:
+  actions: read
+  issues: write
+  statuses: write
+
+concurrency:
+  group: cex-exact-head-attestation-r3
+  cancel-in-progress: true
+
+jobs:
+  attest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Verify and attest sequence 14 exact-head workflows
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: 8c31181f7f2dec83a31ac4636191bd2656a6c5bf
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.request
+
+          repo = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+          target = os.environ['TARGET_SHA']
+          required = {
+              'project-boundary-gate',
+              'project-boundary-changed-path-gate',
+              'migration-gate',
+              'p0-gateway-exact-reserve-gate',
+              'p0-execution-settlement-gate',
+              'p0-provider-reconciliation-gate',
+              'trnm-economy-settlement',
+              'p0-world-authority-postgres-v2-gate',
+              'p0-world-authority-cutover-gate',
+              'rust-service-gate',
+              'trnm-economy-ci',
+              'p0-release-candidate-gate',
+          }
+
+          def call(method, path, body=None):
+              payload = None if body is None else json.dumps(body).encode()
+              request = urllib.request.Request(
+                  'https://api.github.com' + path,
+                  data=payload,
+                  method=method,
+                  headers={
+                      'Accept': 'application/vnd.github+json',
+                      'Authorization': f'Bearer {token}',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'User-Agent': 'cex-exact-head-attestation-r3',
+                      'Content-Type': 'application/json',
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      raw = response.read()
+                      return response.status, json.loads(raw) if raw else None
+              except urllib.error.HTTPError as error:
+                  raw = error.read().decode('utf-8', errors='replace')
+                  try:
+                      detail = json.loads(raw)
+                  except json.JSONDecodeError:
+                      detail = raw[:2000]
+                  return error.code, detail
+
+          def get(path):
+              status, value = call('GET', path)
+              if status != 200:
+                  raise RuntimeError(f'GET {path} -> {status}: {value}')
+              return value
+
+          deadline = time.monotonic() + 18 * 60
+          final = None
+          while time.monotonic() < deadline:
+              runs = get(f'/repos/{repo}/actions/runs?head_sha={target}&per_page=100')['workflow_runs']
+              grouped = {}
+              for run in runs:
+                  name = run.get('name')
+                  if name in required:
+                      grouped.setdefault(name, []).append(run)
+              for items in grouped.values():
+                  items.sort(
+                      key=lambda item: (
+                          item.get('run_number') or 0,
+                          item.get('run_attempt') or 0,
+                          item.get('created_at') or '',
+                          item.get('id') or 0,
+                      ),
+                      reverse=True,
+                  )
+              latest = {name: items[0] for name, items in grouped.items()}
+              compact = {
+                  name: {
+                      key: run.get(key)
+                      for key in ('id','name','event','status','conclusion','run_number','run_attempt','head_sha','created_at','updated_at')
+                  }
+                  for name, run in sorted(latest.items())
+              }
+              missing = sorted(required - latest.keys())
+              pending = [run for run in compact.values() if run['status'] != 'completed']
+              failing = [run for run in compact.values() if run['status'] == 'completed' and run['conclusion'] != 'success']
+              all_green = not missing and not pending and not failing and set(latest) == required
+              final = {
+                  'schema': 'cex.sequence-14.exact-head-attestation.v1',
+                  'target_sha': target,
+                  'required_workflows': sorted(required),
+                  'latest_runs': compact,
+                  'missing': missing,
+                  'pending': pending,
+                  'failing': failing,
+                  'all_required_green': all_green,
+                  'production_authorization': 'not_granted',
+              }
+              if all_green or (not pending and (missing or failing)):
+                  break
+              time.sleep(20)
+
+          if final is None:
+              raise SystemExit('attestation produced no state')
+
+          state = 'success' if final['all_required_green'] else 'failure'
+          description = (
+              '12 exact-head workflow families terminal-success'
+              if state == 'success'
+              else f"missing={len(final['missing'])} pending={len(final['pending'])} failing={len(final['failing'])}"
+          )[:140]
+          status_code, status_detail = call(
+              'POST',
+              f'/repos/{repo}/statuses/{target}',
+              {
+                  'state': state,
+                  'context': 'cex-sequence-14-controller',
+                  'description': description,
+                  'target_url': f'https://github.com/{repo}/actions',
+              },
+          )
+          final['commit_status_http'] = status_code
+          final['commit_status_detail'] = status_detail
+
+          body = '## CEX sequence 14 exact-head attestation r3\n\n```json\n' + json.dumps(final, indent=2, sort_keys=True) + '\n```\n\nThis aggregate status is derived only from the original workflow runs on the exact candidate SHA. It is not a substitute for any constituent check, independent review, World-native execution, main governance, or production authorization.'
+          comment_code, comment_detail = call('POST', f'/repos/{repo}/issues/34/comments', {'body': body})
+          final['comment_http'] = comment_code
+          final['comment_detail'] = comment_detail
+          print(json.dumps(final, indent=2, sort_keys=True))
+          if not final['all_required_green']:
+              raise SystemExit('CEX exact-head workflow family is not fully green')
+          PY
