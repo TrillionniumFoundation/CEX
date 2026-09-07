@@ -9,29 +9,35 @@ on:
       - 'deny.toml'
       - '.cargo/**'
       - '.github/CODEOWNERS'
-      - 'docker-compose.yml'
-      - 'services/ledger-service/**'
-      - 'services/consumer-entry-api/**'
-      - 'services/execution-service/**'
-      - 'services/gateway-service/**'
-      - 'services/hepta-research-league/**'
-      - 'services/audit-service/**'
-      - 'vendor/trnm-economy-protocol/**'
-      - 'vendor/trnm-finality-verifier/**'
+      - '.github/workflows/**'
+      - '**/Dockerfile*'
+      - '**/Containerfile*'
+      - '**/docker-compose*.yml'
+      - '**/docker-compose*.yaml'
+      - '**/compose*.yml'
+      - '**/compose*.yaml'
+      - 'deploy/**'
+      - 'ops/**'
+      - 'k8s/**'
+      - 'kubernetes/**'
+      - 'helm/**'
+      - 'charts/**'
+      - '**/Makefile'
+      - '**/makefile'
+      - '**/GNUmakefile'
+      - '**/Justfile'
+      - '**/justfile'
+      - '**/*.mk'
+      - 'scripts/**'
+      - 'services/**'
+      - 'vendor/**'
       - 'migrations/0027*'
       - 'migrations/0028*'
       - 'migrations/0029*'
       - 'migrations/0030*'
-      - 'deploy/systemd/**'
-      - 'ops/systemd/**'
-      - 'scripts/install-*.sh'
-      - 'scripts/package-*.sh'
-      - 'scripts/check-trnm-*'
-      - 'scripts/check-rust-advisory-exceptions.py'
       - 'docs/security/rust-advisory-exceptions-v1.json'
-      - 'scripts/postgres-archive-wal.sh'
+      - 'docs/security/rust-release-surfaces-v1.json'
       - 'docs/release-evidence/p0-candidate-trigger.json'
-      - '.github/workflows/trnm-economy-ci.yml'
   push:
     paths:
       - '**/Cargo.toml'
@@ -39,29 +45,35 @@ on:
       - 'deny.toml'
       - '.cargo/**'
       - '.github/CODEOWNERS'
-      - 'docker-compose.yml'
-      - 'services/ledger-service/**'
-      - 'services/consumer-entry-api/**'
-      - 'services/execution-service/**'
-      - 'services/gateway-service/**'
-      - 'services/hepta-research-league/**'
-      - 'services/audit-service/**'
-      - 'vendor/trnm-economy-protocol/**'
-      - 'vendor/trnm-finality-verifier/**'
+      - '.github/workflows/**'
+      - '**/Dockerfile*'
+      - '**/Containerfile*'
+      - '**/docker-compose*.yml'
+      - '**/docker-compose*.yaml'
+      - '**/compose*.yml'
+      - '**/compose*.yaml'
+      - 'deploy/**'
+      - 'ops/**'
+      - 'k8s/**'
+      - 'kubernetes/**'
+      - 'helm/**'
+      - 'charts/**'
+      - '**/Makefile'
+      - '**/makefile'
+      - '**/GNUmakefile'
+      - '**/Justfile'
+      - '**/justfile'
+      - '**/*.mk'
+      - 'scripts/**'
+      - 'services/**'
+      - 'vendor/**'
       - 'migrations/0027*'
       - 'migrations/0028*'
       - 'migrations/0029*'
       - 'migrations/0030*'
-      - 'deploy/systemd/**'
-      - 'ops/systemd/**'
-      - 'scripts/install-*.sh'
-      - 'scripts/package-*.sh'
-      - 'scripts/check-trnm-*'
-      - 'scripts/check-rust-advisory-exceptions.py'
       - 'docs/security/rust-advisory-exceptions-v1.json'
-      - 'scripts/postgres-archive-wal.sh'
+      - 'docs/security/rust-release-surfaces-v1.json'
       - 'docs/release-evidence/p0-candidate-trigger.json'
-      - '.github/workflows/trnm-economy-ci.yml'
 
 permissions:
   contents: read
@@ -81,7 +93,7 @@ env:
 jobs:
   economy-workspace:
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
+    timeout-minutes: 90
     steps:
       - name: Checkout exact source with policy history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -91,6 +103,7 @@ jobs:
 
       - name: PostgreSQL WAL archive contract
         run: |
+          set -euo pipefail
           docker compose config >/dev/null
           scripts/check-trnm-postgres-archive-command.sh
           scripts/check-trnm-postgres-base-backup-contract.sh
@@ -108,21 +121,21 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
 
-      - name: Test
+      - name: Test all workspace targets
         run: cargo test --workspace --all-targets --locked
 
-      - name: Clippy
+      - name: Strict Clippy on all workspace targets
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      - name: Release TRNM economy services
-        run: cargo build --release --locked -p ledger-service -p consumer-entry-api
+      - name: Build all workspace release candidates
+        run: cargo build --release --locked --workspace
 
       - name: Install pinned supply-chain tools
         uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
         with:
           tool: cargo-audit@0.22.2,cargo-deny@0.20.2
 
-      - name: Validate complete advisory, release and dependency closure
+      - name: Validate fail-closed advisory, package and release-surface closure
         run: |
           set -euo pipefail
           mkdir -p run/supply-chain
@@ -166,6 +179,11 @@ jobs:
             deny.toml
             .github/CODEOWNERS
             docs/security/rust-advisory-exceptions-v1.json
+            docs/security/rust-release-surfaces-v1.json
+            scripts/check-rust-advisory-exceptions.py
+            scripts/rust_advisory_common_v5.py
+            scripts/rust_advisory_packages_v5.py
+            scripts/rust_advisory_gate_v5.py
             run/supply-chain/**
           if-no-files-found: error
           retention-days: 90

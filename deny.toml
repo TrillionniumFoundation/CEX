@@ -2,9 +2,9 @@
 yanked = "deny"
 unused-ignored-advisory = "allow"
 ignore = [
-  { id = "RUSTSEC-2023-0071", reason = "rsa 0.9.10 is lockfile-only and absent from the activated all-target and bounded release graphs; the custom reachability gate fails on any expansion" },
-  { id = "RUSTSEC-2026-0214", reason = "gumdrop 0.8.1 is confined to tendermint-testgen as a dev dependency and is absent from normal and bounded release graphs" },
-  { id = "RUSTSEC-2024-0436", reason = "paste 1.0.15 is a transitive Tendermint/flex-error macro and is absent from all bounded CEX release-package graphs pending upstream replacement" },
+  { id = "RUSTSEC-2023-0071", reason = "rsa 0.9.10 is lockfile-only and absent from every activated all-target and all-workspace normal+build graph; any Cargo command failure or reachability expansion fails the custom gate" },
+  { id = "RUSTSEC-2026-0214", reason = "gumdrop 0.8.1 is confined to tendermint-testgen dev metadata and is absent from normal+build execution for every workspace package" },
+  { id = "RUSTSEC-2024-0436", reason = "paste 1.0.15 is an unmaintained compile-time proc macro permitted only in the exact hepta-research-league -> trnm-finality-verifier -> tendermint -> flex-error path; every other workspace package and any path/version expansion is forbidden" },
 ]
 
 [licenses]

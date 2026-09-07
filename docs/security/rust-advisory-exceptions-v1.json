@@ -1,1 +1,129 @@
-{"accountable_owner":"ProfHepta","cargo_audit_version":"0.22.2","cargo_deny_version":"0.20.2","created_on":"2026-09-07","derived_release_package_expectation":["audit-service","consumer-entry-api","execution-service","gateway-service","hepta-research-league","ledger-service"],"exceptions":[{"advisory_id":"RUSTSEC-2023-0071","all_target_graph_must_be_empty":true,"classification":"vulnerability","execution_graph_must_be_empty":true,"expected_release_package_reachability":[],"package":"rsa","reason":"The affected rsa package is retained only as lockfile metadata. It is absent from the activated all-target graph, the normal+build execution graph, and every package derived from checked-in deployment and release sources.","removal_condition":"Remove immediately when rsa leaves Cargo.lock, a fixed resolved version becomes available, or any activated/build/release graph reaches rsa.","required_all_target_markers":[],"required_execution_markers":[],"required_release_path_markers":{},"version":"0.9.10"},{"advisory_id":"RUSTSEC-2026-0214","all_target_graph_must_be_empty":false,"classification":"unmaintained","execution_graph_must_be_empty":true,"expected_release_package_reachability":[],"package":"gumdrop","reason":"gumdrop is reachable only through tendermint-testgen as a dev dependency of the vendored finality verifier. It is forbidden from the normal+build execution graph and every derived release package.","removal_condition":"Remove when tendermint-testgen no longer requires gumdrop or when the finality test generator is replaced. Any normal, build, proc-macro, target-build, or release reachability fails the gate.","required_all_target_markers":["gumdrop v0.8.1","tendermint-testgen v0.40.4","[dev-dependencies]","trnm-finality-verifier v0.1.0"],"required_execution_markers":[],"required_release_path_markers":{},"version":"0.8.1"},{"advisory_id":"RUSTSEC-2024-0436","all_target_graph_must_be_empty":false,"classification":"unmaintained","execution_graph_must_be_empty":false,"expected_release_package_reachability":["hepta-research-league"],"package":"paste","reason":"paste is an unmaintained transitive proc-macro required by flex-error in the latest pinned Tendermint 0.40.4 stack. The only permitted derived release reachability is the explicitly recorded hepta-research-league path; any additional package or path fails.","removal_condition":"Remove when the pinned Tendermint/flex-error stack no longer resolves through paste. Any release reachability outside hepta-research-league, path drift, version drift, or advisory expansion fails the gate.","required_all_target_markers":["paste v1.0.15","flex-error v0.4.4","tendermint v0.40.4","trnm-finality-verifier v0.1.0"],"required_execution_markers":["paste v1.0.15","flex-error v0.4.4","tendermint v0.40.4","trnm-finality-verifier v0.1.0","hepta-research-league v0.1.0"],"required_release_path_markers":{"hepta-research-league":["hepta-research-league v0.1.0","trnm-finality-verifier v0.1.0","tendermint v0.40.4","flex-error v0.4.4","paste v1.0.15"]},"version":"1.0.15"}],"expires_on":"2026-10-07","independent_security_approval":{"evidence_type":"github_pull_request_review","head_binding":"exact_final_head","pull_request":34,"repository":"TrillionniumFoundation/CEX","required_github_login":"Tomasrgbsf","status":"required_external_not_embedded"},"maximum_validity_days":30,"production_authorization":"not_granted","renewal":{"approval_requirement":"fresh_exact_head_github_review","previous_policy_blob":"90670ef0a19bcd6a33cd61c8373ef24a73502ffc","reason":"Close current-head review gaps by binding the complete normal+build release execution graph, recursive local package closure, canonical deploy surfaces, and deterministic hostile fixtures.","renewed_on":"2026-09-07","sequence":1},"risk_register":{"closure_condition":"all_exceptions_removed_or_superseded_by_fresh_approval","issue":35,"repository":"TrillionniumFoundation/CEX","state_required":"open"},"rust_toolchain":"1.98.1","schema":"cex.rust-advisory-exceptions.v2","status":"active_bounded_exceptions"}
+{
+  "accountable_owner": "ProfHepta",
+  "cargo_audit_version": "0.22.2",
+  "cargo_deny_version": "0.20.2",
+  "coverage": {
+    "disconnected_local_packages": "forbidden",
+    "execution_edges": "normal_and_build_all_targets",
+    "inverse_command_failure": "fatal_including_empty_output",
+    "release_candidate_set": "all_workspace_packages",
+    "surface_policy": "docs/security/rust-release-surfaces-v1.json"
+  },
+  "created_on": "2026-09-07",
+  "exceptions": [
+    {
+      "advisory_id": "RUSTSEC-2023-0071",
+      "all_target_graph_must_be_empty": true,
+      "classification": "vulnerability",
+      "execution_graph_must_be_empty": true,
+      "expected_workspace_execution_reachability": [],
+      "package": "rsa",
+      "reason": "rsa 0.9.10 is retained only as Cargo.lock metadata. Strict inverse-tree commands prove that it is absent from the activated all-target graph and from normal+build execution for every workspace package; any Cargo command error or new reachability fails the gate.",
+      "removal_condition": "Remove immediately when rsa leaves Cargo.lock, when a fixed resolved version is available, or when any activated/build/workspace graph reaches rsa.",
+      "required_all_target_markers": [],
+      "required_execution_markers": [],
+      "required_workspace_path_markers": {},
+      "risk_treatment": {
+        "exposure": "no activated compile-time or runtime reachability",
+        "mitigation": "strict successful inverse graphs plus all-workspace execution trees",
+        "rollback": "block every release candidate and remove the dependency edge before rebuilding",
+        "target_removal_date": "2026-10-07"
+      },
+      "version": "0.9.10"
+    },
+    {
+      "advisory_id": "RUSTSEC-2026-0214",
+      "all_target_graph_must_be_empty": false,
+      "classification": "unmaintained",
+      "execution_graph_must_be_empty": true,
+      "expected_workspace_execution_reachability": [],
+      "package": "gumdrop",
+      "reason": "gumdrop 0.8.1 is reachable only through tendermint-testgen as a dev dependency of the vendored finality verifier. It is absent from normal+build execution for every workspace package; target-build, proc-macro, build-helper, or runtime expansion fails.",
+      "removal_condition": "Remove when tendermint-testgen no longer requires gumdrop or when the finality test generator is replaced.",
+      "required_all_target_markers": [
+        "gumdrop v0.8.1",
+        "tendermint-testgen v0.40.4",
+        "[dev-dependencies]",
+        "trnm-finality-verifier v0.1.0"
+      ],
+      "required_execution_markers": [],
+      "required_workspace_path_markers": {},
+      "risk_treatment": {
+        "exposure": "test-only dependency metadata; excluded from normal+build release execution",
+        "mitigation": "all-target inverse marker binding and all-workspace normal+build reachability checks",
+        "rollback": "disable the affected test path and replace the generator before any release build",
+        "target_removal_date": "2026-10-07"
+      },
+      "version": "0.8.1"
+    },
+    {
+      "advisory_id": "RUSTSEC-2024-0436",
+      "all_target_graph_must_be_empty": false,
+      "classification": "unmaintained",
+      "execution_graph_must_be_empty": false,
+      "expected_workspace_execution_reachability": [
+        "hepta-research-league"
+      ],
+      "package": "paste",
+      "reason": "paste 1.0.15 is an unmaintained transitive compile-time proc macro in the pinned Tendermint/flex-error path. Measured normal+build execution is permitted only for the hepta-research-league workspace package; any additional package, version, path, target, or source surface fails.",
+      "removal_condition": "Remove when the pinned Tendermint/flex-error stack no longer resolves through paste, no later than the current policy expiry. Any expansion requires a new policy commit and fresh independent exact-head approval.",
+      "required_all_target_markers": [
+        "paste v1.0.15",
+        "flex-error v0.4.4",
+        "tendermint v0.40.4",
+        "trnm-finality-verifier v0.1.0"
+      ],
+      "required_execution_markers": [
+        "paste v1.0.15",
+        "flex-error v0.4.4",
+        "tendermint v0.40.4",
+        "trnm-finality-verifier v0.1.0",
+        "hepta-research-league v0.1.0"
+      ],
+      "required_workspace_path_markers": {
+        "hepta-research-league": [
+          "hepta-research-league v0.1.0",
+          "trnm-finality-verifier v0.1.0",
+          "tendermint v0.40.4",
+          "flex-error v0.4.4",
+          "paste v1.0.15"
+        ]
+      },
+      "risk_treatment": {
+        "exposure": "compile-time proc-macro execution while building hepta-research-league; no separately shipped paste runtime component",
+        "mitigation": "immutable Cargo.lock, Rust 1.98.1, exact reverse-path markers, all-workspace normal+build closure, no git/external/disconnected packages, and independently owned policy files",
+        "rollback": "remove hepta-research-league from release eligibility and rebuild from the last approved lockfile if the path, version, or package reachability changes",
+        "target_removal_date": "2026-10-07",
+        "upstream_replacement_plan": "migrate the pinned Tendermint/flex-error stack to a maintained macro implementation or remove the dependency"
+      },
+      "version": "1.0.15"
+    }
+  ],
+  "expires_on": "2026-10-07",
+  "independent_security_approval": {
+    "evidence_type": "github_pull_request_review",
+    "head_binding": "exact_final_head",
+    "pull_request": 34,
+    "repository": "TrillionniumFoundation/CEX",
+    "required_github_login": "Tomasrgbsf",
+    "status": "required_external_not_embedded"
+  },
+  "maximum_validity_days": 30,
+  "production_authorization": "not_granted",
+  "renewal": {
+    "approval_requirement": "fresh_exact_head_github_review",
+    "previous_policy_blob": "6c9e57045a8bf03299b2a44e7aa8fd674eab4e27",
+    "reason": "Replace release-entry guessing with the complete workspace package set, make every Cargo command failure fatal even with empty output, scan all tracked build/deploy surfaces, and align the measured paste exposure with the risk register.",
+    "renewed_on": "2026-09-07",
+    "sequence": 2
+  },
+  "risk_register": {
+    "closure_condition": "all_exceptions_removed_or_superseded_by_fresh_approval",
+    "issue": 35,
+    "repository": "TrillionniumFoundation/CEX",
+    "state_required": "open"
+  },
+  "rust_toolchain": "1.98.1",
+  "schema": "cex.rust-advisory-exceptions.v3",
+  "status": "active_bounded_exceptions"
+}
