@@ -1,8 +1,8 @@
 {
   "schema": "cex.p0-candidate-trigger.v1",
   "plan": "CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
-  "sequence": 13,
-  "purpose": "Qualify one exact v12 tree after closing the Rust 1.98.1 target-local source-sharing Clippy blocker while preserving active Blocks H through O: complete workspace module documentation, fail-closed Capability authority, authoritative exact-money isolation, World/Consumer scope containment, reviewed source governance, service-owned TRNM settlement migration evidence, strict Hepta PostgreSQL recovery, and removal of write-capable closure scaffolding. This trigger requires all five authoritative workflows plus the aggregate candidate workflow to execute on one unchanged exact commit.",
-  "qualification_scope": "repository-exact-money-control-plane-plus-hepta-durability-module-docs-capability-boundary-world-freeze-source-governance-current-p0-wiring-and-target-local-lint-ownership",
+  "sequence": 14,
+  "purpose": "Qualify one exact v12 tree after repairing the final Rust 1.98.1 workspace Clippy bool-assert comparison, repinning both independent CEX World qualification lanes to World PR #60 exact head cff9f3fd3539420c676f3d1397c166b1c1e24ffb, and preserving active Blocks H through O: complete workspace module documentation, fail-closed Capability authority, authoritative exact-money isolation, World/Consumer scope containment, reviewed source governance, service-owned TRNM settlement migration evidence, strict Hepta PostgreSQL recovery, and removal of write-capable closure scaffolding. This trigger requires all five authoritative workflows plus the aggregate candidate workflow to execute on one unchanged exact commit.",
+  "qualification_scope": "repository-exact-money-control-plane-plus-hepta-durability-module-docs-capability-boundary-world-freeze-source-governance-current-p0-wiring-target-local-lint-ownership-bool-assert-fix-and-world-cff9-exact-pin",
   "production_authorization": "not_granted"
 }

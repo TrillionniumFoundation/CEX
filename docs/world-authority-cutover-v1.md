@@ -7,7 +7,7 @@ production_authorization: `not_granted`
 
 `TrillionniumFoundation/Trillionnium-World` owns World topology, movement, tactics, commerce, company/shop/work-order, progression and their source-versioned projections. CEX owns authenticated ingress, identity/session binding, request normalization and exact economic settlement integration. CEX must not remain a second World state writer.
 
-World PR #60 provides a bounded seven-crate server authority workspace and mandatory PostgreSQL cutover hardening at exact commit `47a9354b4b3e247e27418baef24d6c21c65c671e`. CEX PR #34 adds a remote-only adapter plus a production write fence. Neither change self-grants production authority.
+World PR #60 provides a bounded seven-crate server authority workspace and mandatory PostgreSQL cutover hardening at exact commit `cff9f3fd3539420c676f3d1397c166b1c1e24ffb`. CEX PR #34 adds a remote-only adapter plus a production write fence. Neither change self-grants production authority.
 
 ## CEX runtime modes
 
@@ -82,7 +82,7 @@ The CEX-side independent PostgreSQL gate uses the same digest and records the im
 
 ## Cross-repository source gates
 
-`.github/workflows/p0-world-authority-cutover-gate.yml` checks out World commit `47a9354b4b3e247e27418baef24d6c21c65c671e` by exact SHA. `.github/workflows/p0-world-authority-postgres-v2-gate.yml` independently runs the durable state-machine and installation-protocol hostile suites against the same exact World candidate. Checkout, Rust toolchain and artifact upload actions are pinned to immutable commits, Rust is pinned to `1.98.1`, and PostgreSQL server/client identity is digest-bound.
+`.github/workflows/p0-world-authority-cutover-gate.yml` checks out World commit `cff9f3fd3539420c676f3d1397c166b1c1e24ffb` by exact SHA. `.github/workflows/p0-world-authority-postgres-v2-gate.yml` independently runs the durable state-machine and installation-protocol hostile suites against the same exact World candidate. Checkout, Rust toolchain and artifact upload actions are pinned to immutable commits, Rust is pinned to `1.98.1`, and PostgreSQL server/client identity is digest-bound.
 
 The World protected source definitions also include the `trnm-game-ci`, `trnm-world-p0-boundaries`, `trnm-world-status-evidence`, and `trnm-world-postgres-cutover` contexts. GitHub has not created native World workflow runs for the current exact head, so checked-in workflow definitions are not treated as successful status checks.
 
