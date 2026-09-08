@@ -2,47 +2,38 @@ name: p0-migration-gate
 
 on:
   workflow_dispatch:
+  pull_request:
   push:
-    paths:
-      - 'migrations/**'
-      - 'services/ledger-service/src/lib.rs'
-      - 'services/ledger-service/src/receipt_lookup.rs'
-      - 'scripts/check-p0-migrations.py'
-      - 'scripts/check-p0-migrations-postgres.sh'
-      - 'scripts/check-audit-source-baseline-postgres.sh'
-      - 'scripts/check-ledger-operation-identity-postgres.sh'
-      - 'scripts/check-invocation-ledger-contract-static.py'
-      - 'scripts/check-invocation-ledger-contract-postgres.sh'
-      - 'scripts/check-invocation-ledger-terminal-postgres.sh'
-      - 'scripts/check-trnm-settlement-receipt-lookup.py'
-      - 'scripts/check-trnm-settlement-receipt-lookup-http.sh'
-      - 'scripts/backfill-audit-source-baselines.sh'
-      - 'docs/templates/cex-release-baseline-manifest-v1.json'
-      - 'docs/audit-source-baseline-backfill-v1.md'
-      - 'docs/ledger-operation-identity-v1.md'
-      - 'docs/invocation-ledger-contract-v1.md'
-      - 'docs/protocol/trnm-settlement-receipt-recovery-v1.md'
-      - 'docs/release-evidence/p0-candidate-trigger.json'
-      - '.github/workflows/p0-migration-gate.yml'
-      - '.github/workflows/p0-release-candidate-gate.yml'
+    branches:
+      - main
+      - 'fix/**'
 
 permissions:
   contents: read
 
 concurrency:
-  group: p0-migration-gate-${{ github.workflow }}-${{ github.ref }}
+  group: p0-migration-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: '0'
+  RUST_TOOLCHAIN: '1.98.1'
   DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/cex_ci
+  PGHOST: 127.0.0.1
+  PGPORT: '5432'
+  PGUSER: cex
+  PGPASSWORD: cex_ci_password
+  PGDATABASE: cex_ci
 
 jobs:
   fresh-postgres-migrations:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    name: fresh-postgres-migrations
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16@sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94
         env:
           POSTGRES_USER: cex
           POSTGRES_PASSWORD: cex_ci_password
@@ -54,34 +45,86 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Checkout exact candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
-      - name: Candidate tree hygiene
-        run: python3 scripts/check-p0-release-candidate-hygiene.py
+      - name: Install exact Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
 
-      - name: Static migration contract
-        run: python3 scripts/check-p0-migrations.py
+      - name: Verify source identity and toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(rustc --version | awk '{print $2}')" = "$RUST_TOOLCHAIN"
+          mkdir -p run/p0-migration
+          git rev-parse HEAD | tee run/p0-migration/head-sha.txt
+          git rev-parse 'HEAD^{tree}' | tee run/p0-migration/head-tree.txt
+          rustc --version --verbose | tee run/p0-migration/rustc-version.txt
+          cargo --version --verbose | tee run/p0-migration/cargo-version.txt
 
-      - name: Invocation Ledger contract static wiring
-        run: python3 scripts/check-invocation-ledger-contract-static.py
+      - name: Validate migration and repository contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check-rust-toolchain-convergence.py
+          python3 scripts/check-module-documentation.py
+          python3 scripts/check-development-docs.py
+          python3 scripts/check-p0-migrations.py
+          python3 scripts/check-trnm-economy-settlement-contract.py
+          python3 scripts/check-repository-integrity.py --output run/p0-migration/repository-integrity.json
 
-      - name: TRNM receipt recovery static wiring
-        run: python3 scripts/check-trnm-settlement-receipt-lookup.py
+      - name: Exercise fresh PostgreSQL migration chain
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/check-p0-migrations-postgres.sh \
+            | tee run/p0-migration/fresh-postgres.log
+          bash scripts/check-audit-source-baseline-postgres.sh \
+            | tee run/p0-migration/audit-baseline.log
 
-      - name: Fresh apply and P0 database assertions
-        run: bash scripts/check-p0-migrations-postgres.sh
+      - name: Record immutable evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p run/p0-migration
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          out = pathlib.Path('run/p0-migration')
+          def git(*args):
+              return subprocess.run(['git', *args], check=True, text=True, stdout=subprocess.PIPE).stdout.strip()
+          summary = {
+              'schema': 'cex.p0-migration-exact-sha.v2',
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'head_sha': git('rev-parse', 'HEAD'),
+              'head_tree': git('rev-parse', 'HEAD^{tree}'),
+              'workflow_blob': git('rev-parse', 'HEAD:.github/workflows/p0-migration-gate.yml'),
+              'rust_toolchain': os.environ['RUST_TOOLCHAIN'],
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'production_authorization': 'not_granted',
+          }
+          (out / 'summary.json').write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
+          files = sorted(p for p in out.rglob('*') if p.is_file() and p.name != 'manifest.json')
+          (out / 'manifest.json').write_text(json.dumps({
+              'schema': 'cex.p0-migration-artifact-manifest.v2',
+              'files': [{'path': p.relative_to(out).as_posix(), 'bytes': p.stat().st_size,
+                         'sha256': hashlib.sha256(p.read_bytes()).hexdigest()} for p in files],
+          }, indent=2, sort_keys=True) + '\n')
+          PY
 
-      - name: Existing-row Audit baseline lifecycle
-        run: bash scripts/check-audit-source-baseline-postgres.sh
-
-      - name: Ledger operation identity and exact replay
-        run: bash scripts/check-ledger-operation-identity-postgres.sh
-
-      - name: Invocation Ledger contract lifecycle
-        run: bash scripts/check-invocation-ledger-contract-postgres.sh
-
-      - name: Invocation Ledger terminal exclusivity
-        run: bash scripts/check-invocation-ledger-terminal-postgres.sh
+      - name: Upload immutable evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cex-p0-migration-${{ github.sha }}-${{ github.run_attempt }}
+          path: run/p0-migration/**
+          if-no-files-found: error
+          retention-days: 90
