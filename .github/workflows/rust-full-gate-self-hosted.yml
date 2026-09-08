@@ -3,117 +3,128 @@ name: rust-full-gate-self-hosted
 on:
   workflow_dispatch:
     inputs:
-      mode:
-        description: Which self-hosted gate mode to run
-        required: true
-        default: full
-        type: choice
-        options:
-          - full
-          - service-local-only
-          - preflight-only
-      bootstrap_env:
-        description: Bootstrap .env from .env.example when missing during preflight
-        required: true
-        default: true
-        type: boolean
-      upload_artifacts:
-        description: Upload the diagnostic artifact bundle at the end of the run
-        required: true
-        default: true
-        type: boolean
-      note:
-        description: Optional operator note for this run
+      reason:
+        description: Reason for running the bounded self-hosted full gate
         required: false
+        default: operator-qualification
         type: string
 
+permissions:
+  contents: read
+
 concurrency:
-  group: rust-full-gate-self-hosted
-  cancel-in-progress: false
+  group: rust-full-self-hosted-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_TOOLCHAIN: '1.98.1'
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: '0'
+  RUST_TEST_THREADS: '1'
 
 jobs:
-  full-local-gate:
-    runs-on:
-      - self-hosted
-      - windows
-      - x64
-      - cex-full-gate
-    timeout-minutes: 120
-    env:
-      ARTIFACT_ROOT: ci-artifacts\self-hosted-full-gate
-      GATE_MODE: ${{ inputs.mode }}
-      BOOTSTRAP_ENV: ${{ inputs.bootstrap_env }}
-      UPLOAD_ARTIFACTS: ${{ inputs.upload_artifacts }}
-    defaults:
-      run:
-        shell: powershell
+  full-gate:
+    name: rust-full-gate-self-hosted
+    runs-on: [self-hosted, linux, x64, rog]
+    timeout-minutes: 240
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
-
-      - name: Prepare artifact directory
-        run: New-Item -ItemType Directory -Force -Path $env:ARTIFACT_ROOT | Out-Null
-
-      - name: Record workflow inputs
+      - name: Enforce trusted manual invocation
+        shell: bash
         run: |
-          @(
-            "mode=${{ inputs.mode }}"
-            "bootstrap_env=${{ inputs.bootstrap_env }}"
-            "upload_artifacts=${{ inputs.upload_artifacts }}"
-            "note=${{ inputs.note }}"
-          ) | Set-Content -LiteralPath (Join-Path $env:ARTIFACT_ROOT 'dispatch-inputs.txt') -Encoding UTF8
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          [[ "$GITHUB_REF" == refs/heads/main || "$GITHUB_REF" == refs/heads/fix/* ]]
+          test -n "$RUNNER_NAME"
 
-      - name: Show operator note
-        if: ${{ inputs.note != '' }}
+      - name: Clean bounded workspace state
+        shell: bash
         run: |
-          $notePath = Join-Path $env:ARTIFACT_ROOT 'operator-note.txt'
-          Write-Host "operator-note=${{ inputs.note }}"
-          Set-Content -LiteralPath $notePath -Value "${{ inputs.note }}" -Encoding UTF8
+          set -euo pipefail
+          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          rm -rf "$RUNNER_TEMP/cex-self-hosted-cargo-home" "$RUNNER_TEMP/cex-self-hosted-target"
+          mkdir -p "$RUNNER_TEMP/cex-self-hosted-cargo-home" "$RUNNER_TEMP/cex-self-hosted-target"
 
-      - name: Bootstrap + validate self-hosted runner
-        run: |
-          $preflightArgs = @()
-          if ($env:BOOTSTRAP_ENV -eq 'true') {
-            $preflightArgs += '-BootstrapEnv'
-          }
-          & .\scripts\self-hosted-runner-preflight.ps1 @preflightArgs *>&1 |
-            Tee-Object -FilePath (Join-Path $env:ARTIFACT_ROOT 'preflight-output.txt')
-          exit $LASTEXITCODE
-
-      - name: Run selected gate mode
-        if: ${{ inputs.mode != 'preflight-only' }}
-        run: |
-          $gateArgs = @()
-          switch ($env:GATE_MODE) {
-            'full' { }
-            'service-local-only' { $gateArgs += '-ServiceLocalOnly' }
-            default { throw "unsupported GATE_MODE=$env:GATE_MODE" }
-          }
-          & .\gate-local.ps1 @gateArgs *>&1 |
-            Tee-Object -FilePath (Join-Path $env:ARTIFACT_ROOT 'gate-output.txt')
-          exit $LASTEXITCODE
-
-      - name: Mark gate as skipped in preflight-only mode
-        if: ${{ inputs.mode == 'preflight-only' }}
-        run: |
-          Set-Content -LiteralPath (Join-Path $env:ARTIFACT_ROOT 'gate-output.txt') -Value 'gate skipped because mode=preflight-only' -Encoding UTF8
-
-      - name: Collect self-hosted gate artifacts
-        if: ${{ always() }}
-        run: |
-          powershell -ExecutionPolicy Bypass -File .\scripts\collect-self-hosted-artifacts.ps1 -OutputDir $env:ARTIFACT_ROOT
-
-      - name: Upload self-hosted gate artifacts
-        if: ${{ always() && inputs.upload_artifacts }}
-        uses: actions/upload-artifact@v4
+      - name: Checkout exact candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          name: rust-full-gate-self-hosted-${{ github.run_id }}
-          path: ci-artifacts/self-hosted-full-gate
-          if-no-files-found: warn
-          retention-days: 14
+          fetch-depth: 0
+          persist-credentials: false
+          clean: true
+
+      - name: Install exact Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt,clippy
+          rustup override set "$RUST_TOOLCHAIN"
+          test "$(rustc --version | awk '{print $2}')" = "$RUST_TOOLCHAIN"
+
+      - name: Record exact identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p run/rust-full-self-hosted
+          git rev-parse HEAD | tee run/rust-full-self-hosted/head-sha.txt
+          git rev-parse 'HEAD^{tree}' | tee run/rust-full-self-hosted/head-tree.txt
+          rustc --version --verbose | tee run/rust-full-self-hosted/rustc-version.txt
+          cargo --version --verbose | tee run/rust-full-self-hosted/cargo-version.txt
+          printf 'runner=%s\nos=%s\narch=%s\nreason=%s\n' \
+            "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH" '${{ inputs.reason }}' \
+            > run/rust-full-self-hosted/runner.txt
+
+      - name: Validate repository contracts
+        shell: bash
+        env:
+          CARGO_HOME: ${{ runner.temp }}/cex-self-hosted-cargo-home
+          CARGO_TARGET_DIR: ${{ runner.temp }}/cex-self-hosted-target
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+          python3 scripts/check-rust-toolchain-convergence.py
+          python3 scripts/check-module-documentation.py
+          python3 scripts/check-capability-production-posture.py
+          python3 scripts/check-authoritative-money-isolation.py
+          python3 scripts/check-project-boundary.py
+          python3 scripts/check-project-boundary-cargo-closure.py
+          python3 scripts/check-source-governance.py
+          python3 scripts/check-development-docs.py
+          python3 scripts/check-hepta-lint-ownership.py
+          python3 scripts/check-p0-release-candidate-hygiene.py
+          python3 scripts/check-p0-wiring.py
+          python3 scripts/check-trnm-economy-settlement-contract.py
+
+      - name: Run complete workspace gate
+        shell: bash
+        env:
+          CARGO_HOME: ${{ runner.temp }}/cex-self-hosted-cargo-home
+          CARGO_TARGET_DIR: ${{ runner.temp }}/cex-self-hosted-target
+        run: |
+          set -euo pipefail
+          cargo metadata --locked --format-version 1 > run/rust-full-self-hosted/cargo-metadata.json
+          cargo fmt --all -- --check
+          cargo test --workspace --all-targets --locked \
+            2>&1 | tee run/rust-full-self-hosted/cargo-test.txt
+          cargo clippy --workspace --all-targets --locked -- -D warnings \
+            2>&1 | tee run/rust-full-self-hosted/cargo-clippy.txt
+          cargo build --workspace --release --locked \
+            2>&1 | tee run/rust-full-self-hosted/cargo-build.txt
+
+      - name: Record evidence checksums
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p run/rust-full-self-hosted
+          find run/rust-full-self-hosted -type f ! -name SHA256SUMS -print0 \
+            | sort -z \
+            | xargs -0 sha256sum \
+            > run/rust-full-self-hosted/SHA256SUMS
+
+      - name: Upload bounded self-hosted evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cex-rust-full-self-hosted-${{ github.sha }}-${{ github.run_attempt }}
+          path: run/rust-full-self-hosted/**
+          if-no-files-found: error
+          retention-days: 30
