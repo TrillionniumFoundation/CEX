@@ -1,0 +1,115 @@
+{
+  "schema": "cex.rust-toolchain-surfaces.v1",
+  "status": "active_fail_closed",
+  "expected_rust_toolchain": "1.98.1",
+  "expected_rust_release_commit": "48a229ceaefd4985c50990b14116b6d856af0985",
+  "production_authorization": "not_granted",
+  "source_inventory": "git_tree_derived",
+  "active_roots": [
+    ".github/actions",
+    ".github/workflows",
+    ".devcontainer",
+    "apps",
+    "crates",
+    "deploy",
+    "ops",
+    "scripts",
+    "services",
+    "tools",
+    "vendor"
+  ],
+  "active_root_files": [
+    ".bazelrc",
+    ".tool-versions",
+    "BUILD",
+    "BUILD.bazel",
+    "Containerfile",
+    "Dockerfile",
+    "GNUmakefile",
+    "Justfile",
+    "Makefile",
+    "WORKSPACE",
+    "WORKSPACE.bazel",
+    "flake.nix",
+    "mise.toml",
+    "rust-toolchain",
+    "rust-toolchain.toml",
+    "shell.nix"
+  ],
+  "historical_prefixes": [
+    "docs/archive/",
+    "evidence/"
+  ],
+  "policy_definition_paths": [
+    "docs/security/rust-toolchain-surfaces-v1.json",
+    "scripts/check-rust-toolchain-convergence.py"
+  ],
+  "registered_text_extensions": [
+    "",
+    ".bash",
+    ".bzl",
+    ".cfg",
+    ".conf",
+    ".json",
+    ".md",
+    ".mk",
+    ".nix",
+    ".ps1",
+    ".py",
+    ".sh",
+    ".toml",
+    ".txt",
+    ".yaml",
+    ".yml"
+  ],
+  "required_bindings": [
+    "rust-toolchain.toml",
+    ".github/workflows/rust-service-gate.yml",
+    ".github/workflows/p0-release-candidate-gate.yml",
+    ".github/workflows/p0-rust-toolchain-convergence.yml",
+    ".github/workflows/p0-gateway-exact-reserve-gate.yml",
+    ".github/workflows/p0-execution-settlement-gate.yml",
+    ".github/workflows/trnm-economy-ci.yml",
+    ".github/workflows/trnm-economy-settlement.yml",
+    ".github/workflows/world-settlement-external-evidence.yml",
+    ".github/workflows/world-settlement-final-convergence-v3.yml",
+    "services/hepta-research-league/Dockerfile",
+    "services/hepta-research-league/docker/rust-toolchain.manifest",
+    "services/paper-raid-bff/Dockerfile",
+    "services/paper-raid-bff/Dockerfile.accessctl"
+  ],
+  "forbidden_active_versions": [
+    "1.95.0",
+    "1.98.0"
+  ],
+  "floating_channels_forbidden": [
+    "beta",
+    "latest",
+    "nightly",
+    "stable"
+  ],
+  "git_entry_policy": {
+    "regular_files": [
+      "100644",
+      "100755"
+    ],
+    "symlink_in_active_roots": "forbidden",
+    "gitlink_in_active_roots": "forbidden",
+    "unregistered_selector_carrier": "forbidden"
+  },
+  "hostile_fixtures": [
+    "nested_workflow_obsolete_version",
+    "composite_action_floating_channel",
+    "dockerfile_obsolete_version",
+    "containerfile_obsolete_version",
+    "rust_toolchain_file_floating_channel",
+    "makefile_obsolete_version",
+    "nix_obsolete_version",
+    "bazel_obsolete_version",
+    "devcontainer_obsolete_version",
+    "script_obsolete_version",
+    "unregistered_binary_carrier",
+    "active_symlink",
+    "active_gitlink"
+  ]
+}
