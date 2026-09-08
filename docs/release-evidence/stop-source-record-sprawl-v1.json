@@ -1,0 +1,5 @@
+{
+  "schema": "cex.stop-source-record-sprawl.v1",
+  "rule": "No additional evidence placeholder files may be added; remaining closure must come from live server and executable evidence.",
+  "production_authorization": "not_granted"
+}
