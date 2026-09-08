@@ -1,3 +1,8 @@
 builder=docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb
-rustc=rustc 1.95.0 (59807616e 2026-04-14)
-cargo=cargo 1.95.0 (f2d3ce0bd 2026-03-21)
+toolchain=1.98.1
+rust_release_commit=48a229ceaefd4985c50990b14116b6d856af0985
+cargo_commit=797e8a9bca276c1c9f9f738d2a20f484fa4eea9d
+dist_date=2026-09-03
+dist_x86_64_unknown_linux_gnu_sha256=5326b36c53de11d148c8f8dab6553a3d1006c2cfd32123683073fad3c302605b
+dist_aarch64_unknown_linux_gnu_sha256=0b514a8cc1cbcd939bff0f151661fe58b6ea5c7a7f645a5098c69e32e8c1e0a2
+production_authorization=not_granted
