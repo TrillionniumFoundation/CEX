@@ -1,9 +1,14 @@
 {
   "schema": "cex.development-doc-authority.v1",
   "status": "active",
-  "candidate_sequence": 52,
+  "candidate_sequence": 54,
   "active_plan": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
   "active_addendum": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md",
+  "integration_plan": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-SEQUENCE54-INTEGRATION.md",
+  "integration_traceability": "docs/traceability/v12-sequence54-integration-v1.json",
+  "integration_gate": ".github/workflows/p0-sequence54-integration.yml",
+  "rust_toolchain_policy": "docs/security/rust-toolchain-surfaces-v1.json",
+  "repository_ruleset_policy": "docs/repository-ruleset-required-contexts-v1.json",
   "architecture_decision": "decisions/adr-004-three-module-external-agent-battle-platform.md",
   "architecture_closure": "docs/architecture/external-agent-runtime-boundary-sequence-52.md",
   "architecture_traceability": "docs/traceability/sequence-52-architecture-v1.json",
@@ -18,7 +23,7 @@
   "external_gate_policy": "independent_evidence_required",
   "runner_probe_policy": {
     "definition_is_execution_evidence": false,
-    "manual_main_only": true,
+    "self_hosted_probe_manual_main_only": true,
     "checkout_allowed": false,
     "repository_permissions": "none",
     "zero_step_or_unallocated_runner_credit": false
@@ -44,7 +49,7 @@
   "aggregate_release_workflow": ".github/workflows/p0-release-candidate-gate.yml",
   "historical_plan_policy": {
     "glob": "docs/CEX-DEVELOPMENT-PLAN-*.md",
-    "authority": "historical_unless_equal_to_active_plan",
+    "authority": "historical_unless_equal_to_active_plan_active_addendum_or_integration_plan",
     "may_establish_current_status": false
   },
   "repository_scope": {
@@ -56,6 +61,10 @@
       "retired_process_route_absence",
       "runner_probe_evidence_separation",
       "migration_and_upgrade_regression",
+      "workspace_23_member_non_regression",
+      "rust_1_98_1_active_surface_convergence",
+      "repository_ruleset_policy_definition",
+      "source_writing_workflow_absence",
       "hosted_exact_sha_tests",
       "bounded_ci_soak_and_dump_restore",
       "immutable_candidate_evidence"
@@ -65,10 +74,14 @@
     "self_certifiable": false,
     "status": "blocked_upstream",
     "includes": [
+      "nonempty_exact_sha_and_prospective_merge_execution",
+      "live_main_ruleset_activation_and_negative_probes",
+      "two_fresh_eligible_reviews_and_independent_security_approval",
       "representative_volume_disaster_recovery",
       "real_deployment_cutover_and_rollback",
       "real_external_agent_and_provider_reconciliation_artifacts",
       "credential_custody_review",
+      "cross_repository_world_authority_transfer_and_no_dual_writer_proof",
       "sustained_production_like_soak",
       "independent_security_operations_financial_review",
       "legal_commercial_provider_approval",

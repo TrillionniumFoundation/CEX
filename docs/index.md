@@ -1,153 +1,119 @@
 # CEX development-document authority index
 
-Status: active
+Status: active  
+Candidate sequence: `54`  
+Production authorization: `not_granted`
 
-This file is the canonical entry point for development, qualification, and operator documentation. The repository root `readme.md` is a non-normative navigation page and cannot establish current status, qualification, or production authorization.
+This is the canonical entry point for CEX development, qualification and operator documentation. The root `readme.md` is navigation only and cannot establish current status, qualification or production authorization.
 
 ## Authority order
 
-When two sources appear to disagree, use the following precedence:
+When sources disagree, apply this precedence:
 
-1. immutable exact-commit release evidence and the generated candidate manifest within the scope they actually prove;
-2. accepted ADRs and versioned protocol specifications, including ADR-004's external-Agent-only product boundary;
-3. `CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md`, its active implementation addendum, and the Sequence 52 architecture closure contract, which may implement but may not silently supersede an accepted ADR;
-4. component status, state-machine, threat-model, acceptance, SLO, compatibility, module-contract, evidence-intake, and runbook documents;
-5. historical plans, archived evidence, research notes, and examples.
+1. immutable exact-commit release evidence and the generated candidate manifest, limited to what the retained artifacts actually prove;
+2. accepted ADRs and versioned protocol specifications, especially ADR-004's external-Agent-only boundary;
+3. the v12 parent plan, active implementation addendum and the Sequence 54 non-regression integration plan;
+4. the frozen Sequence 52 architecture closure and its machine traceability for the external-Agent runtime boundary;
+5. component status, module contracts, state machines, threat model, acceptance, SLO, compatibility, evidence-intake and runbook documents;
+6. historical plans, archived evidence, research notes and examples.
 
-Source presence, prose, a template, a local command result, or a green run on another SHA never overrides exact-tree evidence. An implementation plan cannot reintroduce a capability explicitly rejected by an accepted ADR without a new accepted superseding decision.
+Source presence, prose, a template, a local command, a queued job, a zero-step run or a green result on another SHA never overrides exact-tree evidence.
 
 ## Active authority set
 
-- Architecture decision: `../decisions/adr-004-three-module-external-agent-battle-platform.md`
-- Sequence 52 architecture closure: `architecture/external-agent-runtime-boundary-sequence-52.md`
-- Sequence 52 architecture traceability: `traceability/sequence-52-architecture-v1.json`
-- Plan: `CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md`
-- Implementation addendum: `CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md`
-- Machine-readable authority: `development-doc-authority-v1.json`
-- Machine-readable requirement traceability: `traceability/v12-requirements-v1.json`
-- Component status: `status/component-status-v1.md`
-- Hepta external Agent protocol: `hepta-agent-protocol-v1.md`
-- Hepta state machines: `hepta-paper-raid-state-machines-v1.md`
-- Security threat model: `security-threat-model-v1.md`
-- Clean-deployment acceptance: `clean-deployment-acceptance-v1.md`
-- SLO and recovery contract: `slo-recovery-contract-v1.md`
-- Protocol compatibility matrix: `protocol/version-compatibility-matrix-v1.md`
-- TRNM production credential contract: `trnm-production-credential-contract-v1.md`
+- Parent plan: `docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md`
+- Implementation addendum: `docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md`
+- Current non-regression integration: `docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-SEQUENCE54-INTEGRATION.md`
+- Machine authority: `docs/development-doc-authority-v1.json`
+- Shared candidate trigger: `docs/release-evidence/p0-candidate-trigger.json`
+- Base requirement traceability: `docs/traceability/v12-requirements-v1.json`
+- Sequence 54 integration traceability: `docs/traceability/v12-sequence54-integration-v1.json`
+- Component status: `docs/status/component-status-v1.md`
+- Ruleset policy: `docs/repository-ruleset-required-contexts-v1.json`
+- Rust active-surface policy: `docs/security/rust-toolchain-surfaces-v1.json`
 
-The executable architecture boundary is `scripts/check-external-agent-runtime-boundary.py`. It is called by `scripts/check-development-docs.py` and rejects a default in-process provider route, local inference execution, local model discovery, production activation of the legacy compatibility feature, or documentation that transfers external Agent authority into CEX.
+The Sequence 54 layer does not rewrite history. It preserves the later Sequence 52/53 functional tree—23 Cargo members, migration head `0088_enforce_provider_terminal_evidence_binding.sql`, Matrix durability, provider terminal-evidence binding and Paper Raid product controls—while incorporating the later Rust 1.98.1, container, Ruleset and runner-diagnostics security controls.
 
-## Parent-plan architecture correction
+## External-Agent architecture boundary
 
-The parent v12 plan remains normative for exact Ledger, Gateway, Execution lifecycle, Audit, migration, recovery, and evidence controls. Its provider-specific Ollama/OpenClaw wording is historical compatibility scope under accepted ADR-004. It may be used to verify migration-0088 historical rows and negative evidence handling, but it does not authorize a current CEX-hosted inference path. The active replacement is the signed external-Agent protocol and the Sequence 52 closure contract. The retired `/v1/executions/:id/process` route is absent from the default router.
+- Accepted decision: `decisions/adr-004-three-module-external-agent-battle-platform.md`
+- Sequence 52 architecture closure: `docs/architecture/external-agent-runtime-boundary-sequence-52.md`
+- Sequence 52 architecture traceability: `docs/traceability/sequence-52-architecture-v1.json`
+- Executable checker: `scripts/check-external-agent-runtime-boundary.py`
+- Protocol: `docs/hepta-agent-protocol-v1.md`
+
+Sequence 52 remains the frozen architecture-baseline number. Sequence 54 is the repository candidate number. The two values have different meanings and must not be collapsed.
+
+The parent plan remains normative for exact Ledger, Gateway, Execution lifecycle, Audit, migration, recovery and evidence controls. Its provider-specific Ollama/OpenClaw wording is historical compatibility scope under ADR-004. It does not authorize CEX-hosted inference, local model discovery, provider credentials or Agent private keys. The retired `/v1/executions/:id/process` route is absent from the default router, and the compatibility worker remains non-default and forbidden in production-like profiles.
 
 ## Workspace module contracts
 
-The Cargo workspace is documented through two active supporting contracts:
+The actual Cargo workspace is documented through:
 
-- Machine-readable module catalog: `docs/module-catalog-v1.json`
-- Human module index: `docs/modules/index.md`
+- machine catalog: `docs/module-catalog-v1.json`
+- human index: `docs/modules/index.md`
+- one dedicated file under `docs/modules/` for every active workspace member.
 
-Every Cargo member must appear exactly once in the catalog and have one dedicated document under `docs/modules/`. Nakama, Trillionnium Chain, Matrix homeserver, content-addressed object storage, external providers/Agents, Trillionnium World fixtures, and the Trillionnium Game runtime remain external authorities or integrations and must not be invented as local Cargo members.
+`scripts/check-module-documentation.py` requires exact equality among Cargo members, catalog entries, package identities, source entry points and module documents. External authorities such as Nakama, Trillionnium Chain, Matrix homeserver, object storage, participating Agents/providers and World/Game runtimes are not invented as local Cargo members.
 
-The module catalog is verified by `scripts/check-module-documentation.py`; that checker is executed by `scripts/check-development-docs.py`. The exact repository identity and successful documentation result are recorded by `scripts/check-repository-integrity.py`.
+## Sequence 54 executable controls
 
-## Semantic tooling implementation guide
+- `scripts/check-sequence54-integration.py` prevents regression of the 23-member workspace, migration 0088, module catalog, external-Agent boundary, Matrix durability, Paper Raid controls, Ruleset policy and source-governance constraints.
+- `scripts/check-rust-toolchain-convergence.py` derives active carriers recursively from the Git tree and rejects active Rust 1.95.0/1.98.0 selectors, floating channels, unregistered selectors, symlinks and gitlinks.
+- `.github/workflows/p0-sequence54-integration.yml` executes the integration checker, toolchain checker, document/module contracts, Paper Raid boundary checks, locked metadata, formatting, all-target tests and strict Clippy on one exact SHA.
+- `.github/workflows/p0-rust-toolchain-convergence.yml` binds the source, base and GitHub prospective merge identities and records the executed Rust release commit.
+- `scripts/apply-main-ruleset.py`, `scripts/verify-main-ruleset.py` and `scripts/probe-main-ruleset-v2.sh` apply, read back and negatively exercise the complete main-branch admission policy.
 
-`semantic-route-extraction-v2.md` documents bounded explicit Rust route extraction, unresolved declarations, consistent input snapshots, Consumer projection checks and generated-inventory review. It supports Blocks H and K without changing their authority. Passing its synthetic/source tests does not prove complete module documentation or repository qualification; the complete current generated inventory and exact-tree gates remain required.
-
-## Qualification source and packet integrity
-
-`qualification-source-integrity-v1.md` defines read-only qualification inputs and the TRNM closed build-packet profile. The obsolete Sequence 53 source-writing workflows are retired; committed locks and generated inventories must be prepared before qualification. LICENSE, SECURITY.md, CONTRIBUTING.md and CHANGELOG.md provide repository policy/navigation, not release authority or proof of branch enforcement. None of these files grants production authorization.
+Repository workflows are evidence producers. They must not push source, update `main`, self-approve or manufacture external evidence.
 
 ## Runner probe and qualification evidence
 
-The bounded desktop and fleet workflows are manual, no-checkout connectivity probes. A runner probe definition is not execution evidence. A queued job, `runner_id=0`, an empty runner identity, `steps=[]`, missing logs, or an artifact from a different SHA provides no repository-qualification credit. Qualification requires non-empty execution of every required context on one unchanged candidate and a generated immutable candidate manifest.
+The desktop, ROG, Pocket4 and MacBook self-hosted probes are manual, main-only, no-checkout workflows with `permissions: {}`. A runner probe definition is not execution evidence. A queued job, `runner_id=0`, empty runner identity, `steps=[]`, missing logs or an artifact from a different SHA earns no qualification credit.
+
+The GitHub-hosted allocation diagnostic is also not an admission check. Repository qualification requires non-empty successful execution of every required context on the same unchanged source SHA and prospective merge tree.
+
+## Core technical authority
+
+- Hepta state machines: `docs/hepta-paper-raid-state-machines-v1.md`
+- Security threat model: `docs/security-threat-model-v1.md`
+- Clean-deployment acceptance: `docs/clean-deployment-acceptance-v1.md`
+- SLO and recovery: `docs/slo-recovery-contract-v1.md`
+- Protocol compatibility: `docs/protocol/version-compatibility-matrix-v1.md`
+- TRNM production credential contract: `docs/trnm-production-credential-contract-v1.md`
+- Semantic route extraction: `docs/semantic-route-extraction-v2.md`
+- Qualification source integrity: `docs/qualification-source-integrity-v1.md`
+- Cargo workspace authority: `docs/cargo-workspace-authority-v1.md`
+- Matrix stream scope: `docs/matrix-stream-scope-v1.md`
+- Matrix SQL runner: `docs/matrix-sql-runner-v4.md`
+- Matrix filter definition: `docs/matrix-filter-definition-v1.md`
+- Matrix profile sharing: `docs/matrix-profile-sharing-v1.md`
+- Matrix wire response/quarantine: `docs/matrix-wire-response-v1.md`
 
 ## External production evidence intake
-
-The repository defines a shape and anti-self-certification boundary for the eight external production gates:
 
 - Contract: `docs/external-production-evidence-contract-v1.md`
 - Shape-only template: `docs/templates/cex-external-production-evidence-bundle-v1.json`
 - Structural checker: `scripts/check-external-production-evidence-contract.py`
 
-The source tree may validate only the contract and empty template. Real evidence remains in approved external custody. Structural bundle validation cannot verify that an issuer is genuinely independent and cannot grant production authorization. V12-X1 through V12-X8 remain `blocked_upstream` until the responsible external actors issue and accept immutable evidence for one exact qualified candidate.
-
-## Lifecycle labels
-
-- `active`: normative for current repository work.
-- `accepted`: architectural or protocol decision that remains binding within its scope.
-- `operational`: executable runbook or acceptance procedure.
-- `historical`: retained for audit only; not a source of current status.
-- `template`: shape-only input; never release evidence.
-- `module contract`: the technical boundary for one Cargo member; not release evidence by itself.
-- `external evidence contract`: structural intake policy; never proof that the external activity or approval occurred.
-- `legacy compatibility`: retained source/data needed for upgrade or audit, excluded from default production authority.
+The source tree can validate only the contract and template shape. It cannot certify issuer independence, real deployment, real recovery, legal approval or final go/no-go.
 
 ## Production authorization boundary
 
-Repository qualification may establish that source, migrations, tests, workflows, documentation, architecture boundaries, and generated evidence are internally consistent on one commit/tree. It cannot authorize production. Representative-volume disaster recovery, real deployment and rollback, real external Agent/provider evidence, secret custody, sustained soak, independent reviews, legal/commercial approvals, protected-branch administration, and final human go/no-go remain externally evidenced gates. The production-authorization value remains `not_granted` until those independent records and the final human decision exist.
+Repository qualification may prove source, migrations, tests, workflows, documentation, architecture boundaries and generated evidence are internally consistent on one exact candidate. It cannot authorize production.
+
+The following remain independently evidenced: non-empty exact-SHA and prospective-merge execution; live main Ruleset activation and negative probes; two fresh eligible reviews including independent security approval; representative-volume restore; real deployment/cutover/rollback; external Agent/provider outcomes; credential custody; World authority transfer and no-dual-writer proof; sustained SLO qualification; security, operations, financial, legal and commercial approvals; and final human go/no-go.
+
+Until all such records exist, `production_authorization` remains `not_granted`.
 
 ## Change protocol
 
-A change to any active authority or workspace member must:
+Every active authority or workspace change must:
 
-1. preserve the explicit `not_granted` production-authorization posture;
-2. update the machine-readable authority or traceability document when normative scope changes;
-3. update the affected module-catalog entry and dedicated module contract when membership, ownership, interfaces, persistence, configuration, verification, or deployment changes;
-4. preserve ADR-004 unless a new accepted ADR explicitly supersedes it;
-5. update the external evidence contract, template, and checker together when evidence shape or gate ordering changes;
-6. pass `scripts/check-external-agent-runtime-boundary.py`, `scripts/check-module-documentation.py`, `scripts/check-external-production-evidence-contract.py --contract-only`, and `scripts/check-development-docs.py`;
-7. pass repository-integrity attestation on the exact tree;
-8. update the sole shared candidate trigger and rerun all authoritative v12 hosted gates before repository qualification.
-
-## Matrix scope upgrade
-
-`matrix-stream-scope-v1.md` specifies migration-0004 immutable stream identity,
-token-owner checks, legacy-cursor upgrade holds and the narrowed plain-reply
-contract. It is supporting implementation documentation, not release evidence.
-
-
-## Matrix SQL execution safety
-
-`matrix-sql-runner-v4.md` defines the unified legacy/current test entrypoints,
-single-session identity and reset controls, retained original assertions, v4
-observation report and its explicit non-qualification boundary.
-
-## Matrix ID filter execution
-
-`matrix-filter-definition-v1.md` defines the migration-0005 immutable definition
-pin and reviewed upgrade. It supersedes ordinary unresolved-ID sync and keeps
-definition acquisition, content validation and exact-tree qualification separate.
-
-## Actual Cargo workspace authority
-
-`cargo-workspace-authority-v1.md` closes the explicit-member-only inventory blind
-spot: five existing vendored path packages are named in the root workspace,
-catalog and dedicated module contracts. Real `cargo metadata --locked --no-deps`
-must agree with that source inventory and document every discovered target. This
-is not a claim that the complete repository has passed or that a Chain runtime
-has moved into CEX. Vendor provenance, canonical protocol compatibility, generated
-semantic inventory, runtime checks and independent release gates are preserved.
-
-## Vendor identity diagnosis
-
-`status/vendor-provenance-reconciliation-round14.md` records the exact one-file
-verifier divergence and introducing commit. It does not waive the original
-vendor policy or claim source/runtime qualification.
-
-## Shared Matrix profile implementation
-
-`matrix-profile-sharing-v1.md` records consolidation into the existing
-shared-config crate, unchanged profile semantics, retained startup boundaries and
-remaining embedded-library/runtime acceptance. It is not execution evidence.
-
-`status/matrix-profile-consolidation-round15.json` records the current parser
-delta; other gaps remain in the parent audit-remediation snapshot.
-
-## Matrix response and quarantine boundary
-
-`matrix-wire-response-v1.md` specifies unambiguous bounded sync/page decoding,
-absent-versus-null pagination and malformed-event quarantine. The current scoped
-delta is `status/matrix-wire-contract-round16.json`; it does not replace the
-remaining profile, vendor, runtime or independent-release requirements.
+1. preserve `production_authorization=not_granted`;
+2. update machine authority and traceability in the same candidate;
+3. update the module catalog and affected `docs/modules/` contracts;
+4. preserve ADR-004 unless an accepted superseding ADR exists;
+5. preserve exact migration and protocol compatibility;
+6. pass `scripts/check-external-agent-runtime-boundary.py`, `scripts/check-sequence54-integration.py`, `scripts/check-rust-toolchain-convergence.py`, `scripts/check-module-documentation.py`, the external evidence contract checker and `scripts/check-development-docs.py`;
+7. pass repository-integrity attestation and all required hosted gates on one exact SHA and prospective merge tree;
+8. obtain live Ruleset verification, fresh eligible reviews and a generated immutable candidate manifest before merge.

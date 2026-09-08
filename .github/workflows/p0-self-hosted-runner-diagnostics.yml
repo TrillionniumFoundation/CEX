@@ -2,19 +2,15 @@ name: p0-self-hosted-runner-diagnostics
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - '.github/workflows/p0-self-hosted-runner-diagnostics.yml'
-      - 'docs/release-evidence/p0-candidate-trigger.json'
-  push:
-    branches:
-      - 'fix/cex-v12-final-closure-v4-20260908'
-    paths:
-      - '.github/workflows/p0-self-hosted-runner-diagnostics.yml'
-      - 'docs/release-evidence/p0-candidate-trigger.json'
+    inputs:
+      reason:
+        description: Bounded operator-requested allocation diagnostic
+        required: false
+        default: operator-check
+        type: string
 
-# Allocation-only diagnostics. No checkout, repository contents, secrets, or
-# untrusted pull-request code are exposed to these persistent runners.
+# Allocation-only diagnostics. No checkout, source execution, repository token
+# permissions or secrets are exposed to persistent runners.
 permissions: {}
 
 concurrency:
@@ -24,71 +20,71 @@ concurrency:
 jobs:
   windows-cex-full-gate:
     name: self-hosted-diagnostic/windows-cex-full-gate
+    if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, windows, x64, cex-full-gate]
     timeout-minutes: 5
     steps:
-      - name: Record allocation identity
+      - name: Verify main-only manual allocation
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_EVENT_NAME -ne 'workflow_dispatch') { throw 'manual dispatch required' }
+          if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'main ref required' }
           if (-not $env:RUNNER_NAME) { throw 'RUNNER_NAME is empty' }
           if ($env:RUNNER_OS -ne 'Windows') { throw "unexpected runner OS: $env:RUNNER_OS" }
           if ($env:RUNNER_ARCH -ne 'X64') { throw "unexpected runner arch: $env:RUNNER_ARCH" }
-          @(
-            "repository=$env:GITHUB_REPOSITORY"
-            "event=$env:GITHUB_EVENT_NAME"
-            "sha=$env:GITHUB_SHA"
-            "ref=$env:GITHUB_REF"
-            "runner=$env:RUNNER_NAME"
-            "os=$env:RUNNER_OS"
-            "arch=$env:RUNNER_ARCH"
-            "production_authorization=not_granted"
-          ) -join "`n"
+          Write-Host "runner=$env:RUNNER_NAME os=$env:RUNNER_OS arch=$env:RUNNER_ARCH reason=${{ inputs.reason }} production_authorization=not_granted"
 
   linux-rog:
     name: self-hosted-diagnostic/linux-rog
+    if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, linux, x64, rog]
     timeout-minutes: 5
     steps:
-      - name: Record allocation identity
+      - name: Verify main-only manual allocation
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$RUNNER_NAME"
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
+          test "$RUNNER_NAME" = rog
           test "$RUNNER_OS" = Linux
           test "$RUNNER_ARCH" = X64
-          printf 'repository=%s\nevent=%s\nsha=%s\nref=%s\nrunner=%s\nos=%s\narch=%s\nproduction_authorization=not_granted\n' \
-            "$GITHUB_REPOSITORY" "$GITHUB_EVENT_NAME" "$GITHUB_SHA" "$GITHUB_REF" \
-            "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH"
+          printf 'runner=%s\nos=%s\narch=%s\nreason=%s\nproduction_authorization=not_granted\n' \
+            "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH" '${{ inputs.reason }}'
 
   linux-pocket4:
     name: self-hosted-diagnostic/linux-pocket4
+    if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, linux, x64, pocket4]
     timeout-minutes: 5
     steps:
-      - name: Record allocation identity
+      - name: Verify main-only manual allocation
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$RUNNER_NAME"
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
+          test "$RUNNER_NAME" = pocket4
           test "$RUNNER_OS" = Linux
           test "$RUNNER_ARCH" = X64
-          printf 'repository=%s\nevent=%s\nsha=%s\nref=%s\nrunner=%s\nos=%s\narch=%s\nproduction_authorization=not_granted\n' \
-            "$GITHUB_REPOSITORY" "$GITHUB_EVENT_NAME" "$GITHUB_SHA" "$GITHUB_REF" \
-            "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH"
+          printf 'runner=%s\nos=%s\narch=%s\nreason=%s\nproduction_authorization=not_granted\n' \
+            "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH" '${{ inputs.reason }}'
 
   macbook-arm64:
     name: self-hosted-diagnostic/macbook-arm64
+    if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, macOS, ARM64, macbook]
     timeout-minutes: 5
     steps:
-      - name: Record allocation identity
+      - name: Verify main-only manual allocation
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$RUNNER_NAME"
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
+          test "$RUNNER_NAME" = macbook-pro
           test "$RUNNER_OS" = macOS
           test "$RUNNER_ARCH" = ARM64
-          printf 'repository=%s\nevent=%s\nsha=%s\nref=%s\nrunner=%s\nos=%s\narch=%s\nproduction_authorization=not_granted\n' \
-            "$GITHUB_REPOSITORY" "$GITHUB_EVENT_NAME" "$GITHUB_SHA" "$GITHUB_REF" \
-            "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH"
+          printf 'runner=%s\nos=%s\narch=%s\nreason=%s\nproduction_authorization=not_granted\n' \
+            "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH" '${{ inputs.reason }}'

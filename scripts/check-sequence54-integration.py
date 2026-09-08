@@ -129,14 +129,38 @@ def validate_workspace() -> None:
 
     catalog = load_json("docs/module-catalog-v1.json")
     modules = catalog.get("modules")
-    catalog_paths = [item.get("path") for item in modules] if isinstance(modules, list) else []
-    if catalog_paths != EXPECTED_MEMBERS:
+    catalog_members = (
+        [item.get("workspace_member") for item in modules if isinstance(item, dict)]
+        if isinstance(modules, list)
+        else []
+    )
+    if catalog_members != EXPECTED_MEMBERS:
         PROBLEMS.append("module catalog no longer exactly matches the 23-member workspace")
+    if catalog.get("production_authorization") != "not_granted":
+        PROBLEMS.append("module catalog grants production authorization")
+    if not isinstance(modules, list) or len(modules) != len(EXPECTED_MEMBERS):
+        PROBLEMS.append("module catalog must contain exactly 23 entries")
+        modules = []
+    seen_documents: set[str] = set()
+    for item in modules:
+        if not isinstance(item, dict):
+            PROBLEMS.append("module catalog entry must be an object")
+            continue
+        member = item.get("workspace_member")
+        document = item.get("documentation")
+        if member not in EXPECTED_MEMBERS:
+            PROBLEMS.append(f"unknown catalog workspace member: {member!r}")
+        if not isinstance(document, str) or not document.startswith("docs/modules/"):
+            PROBLEMS.append(f"invalid module documentation path for {member}: {document!r}")
+        elif document in seen_documents:
+            PROBLEMS.append(f"duplicate module documentation path: {document}")
+        else:
+            seen_documents.add(document)
+            if not (ROOT / document).is_file():
+                PROBLEMS.append(f"catalog module documentation is missing: {document}")
     for member in EXPECTED_MEMBERS:
         if not (ROOT / member / "Cargo.toml").is_file():
             PROBLEMS.append(f"workspace member lacks Cargo.toml: {member}")
-        if not (ROOT / member / "MODULE.md").is_file():
-            PROBLEMS.append(f"workspace member lacks MODULE.md: {member}")
 
     workspace_dependencies = root_manifest.get("workspace", {}).get("dependencies", {})
     manifests = [ROOT / "Cargo.toml", *(ROOT / member / "Cargo.toml" for member in EXPECTED_MEMBERS)]
@@ -175,9 +199,10 @@ def validate_workspace() -> None:
 
 def validate_migrations() -> None:
     migrations = sorted((ROOT / "migrations").glob("[0-9][0-9][0-9][0-9]_*.sql"))
-    if not migrations or migrations[-1].name != EXPECTED_MIGRATION_HEAD:
+    actual_head = migrations[-1].name if migrations else None
+    if actual_head != EXPECTED_MIGRATION_HEAD:
         PROBLEMS.append(
-            f"migration head regressed: expected={EXPECTED_MIGRATION_HEAD} actual={migrations[-1].name if migrations else None}"
+            f"migration head regressed: expected={EXPECTED_MIGRATION_HEAD} actual={actual_head}"
         )
     numbers: dict[str, list[str]] = {}
     for path in migrations:
@@ -188,6 +213,18 @@ def validate_migrations() -> None:
 
 
 def validate_candidate_authority() -> None:
+    authority = load_json("docs/development-doc-authority-v1.json")
+    if authority.get("candidate_sequence") != 54:
+        PROBLEMS.append("development-document authority is not Sequence 54")
+    if authority.get("migration_head") != EXPECTED_MIGRATION_HEAD:
+        PROBLEMS.append("development-document authority migration head regressed")
+    if authority.get("integration_plan") != "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-SEQUENCE54-INTEGRATION.md":
+        PROBLEMS.append("development-document authority lacks Sequence 54 plan")
+    if authority.get("integration_traceability") != "docs/traceability/v12-sequence54-integration-v1.json":
+        PROBLEMS.append("development-document authority lacks Sequence 54 traceability")
+    if authority.get("production_authorization") != "not_granted":
+        PROBLEMS.append("development-document authority grants production authorization")
+
     trigger = load_json("docs/release-evidence/p0-candidate-trigger.json")
     if trigger.get("sequence") != 54:
         PROBLEMS.append("candidate trigger is not Sequence 54")
@@ -267,6 +304,15 @@ def validate_sequence52_feature_preservation() -> None:
         ),
     )
     require_markers(
+        "docs/architecture/external-agent-runtime-boundary-sequence-52.md",
+        (
+            "Runtime policy: `external_only`",
+            "participating Agent runtimes",
+            "retired `/process` route",
+            "Production authorization: `not_granted`",
+        ),
+    )
+    require_markers(
         "services/paper-raid-bff/src/hepta.rs",
         (
             "struct PaperRoomEnvelopeV3",
@@ -337,16 +383,12 @@ def validate_sequence52_feature_preservation() -> None:
         ),
     )
     require_markers(
-        "apps/matrix-bot-relay/MODULE.md",
+        "docs/modules/matrix-bot-relay.md",
         ("replay", "queue", "Production authorization: `not_granted`"),
     )
     require_markers(
-        "apps/matrix-bot-poller/MODULE.md",
+        "docs/modules/matrix-bot-poller.md",
         ("cursor", "dedupe", "Production authorization: `not_granted`"),
-    )
-    require_markers(
-        "docs/external-agent-runtime-boundary-v1.md",
-        ("external", "process", "production_authorization"),
     )
 
 
