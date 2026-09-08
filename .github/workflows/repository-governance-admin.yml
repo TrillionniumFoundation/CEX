@@ -1,0 +1,125 @@
+name: repository-governance-admin
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/cex-v12-final-closure-20260908
+    paths:
+      - '.github/workflows/repository-governance-admin.yml'
+      - '.github/workflows/repository-governance-live.yml'
+      - 'docs/governance/main-ruleset-v1.json'
+      - 'scripts/apply-repository-ruleset.py'
+      - 'scripts/verify-repository-ruleset.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-governance-admin
+  cancel-in-progress: false
+
+env:
+  GITHUB_ADMIN_TOKEN: ${{ secrets.CEX_GITHUB_ADMIN_TOKEN || secrets.GITHUB_ADMIN_TOKEN || secrets.REPOSITORY_ADMIN_TOKEN }}
+
+jobs:
+  apply-and-verify-main-ruleset:
+    name: repository-governance-admin/apply-and-verify-main-ruleset
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Enforce the one reviewed bootstrap branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/fix/cex-v12-final-closure-20260908
+          test "$GITHUB_ACTOR" = ProfHepta
+          test -n "$GITHUB_ADMIN_TOKEN"
+
+      - name: Checkout exact governance candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate source policy and exact candidate identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p run/repository-governance-admin
+          git rev-parse HEAD | tee run/repository-governance-admin/head-sha.txt
+          git rev-parse 'HEAD^{tree}' | tee run/repository-governance-admin/head-tree.txt
+          python3 scripts/check-source-governance.py \
+            | tee run/repository-governance-admin/source-governance.json
+          python3 scripts/apply-repository-ruleset.py --dry-run \
+            --output run/repository-governance-admin/application-dry-run.json
+
+      - name: Apply or update the live main ruleset
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/apply-repository-ruleset.py \
+            --output run/repository-governance-admin/application.json
+
+      - name: Read back and verify live enforcement
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ env.GITHUB_ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 scripts/verify-repository-ruleset.py \
+            --output run/repository-governance-admin/live-verification.json
+
+      - name: Dispatch a fresh read-only governance check on the unchanged head
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --request POST \
+            --header 'Accept: application/vnd.github+json' \
+            --header "Authorization: Bearer $GITHUB_ADMIN_TOKEN" \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/repository-governance-live.yml/dispatches" \
+            --data '{"ref":"fix/cex-v12-final-closure-20260908"}'
+
+      - name: Record immutable administration evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p run/repository-governance-admin
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          out = pathlib.Path('run/repository-governance-admin')
+          def git(*args):
+              return subprocess.run(['git', *args], check=True, text=True, stdout=subprocess.PIPE).stdout.strip()
+          summary = {
+              'schema': 'cex.repository-governance-admin-evidence.v1',
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'head_sha': git('rev-parse', 'HEAD'),
+              'head_tree': git('rev-parse', 'HEAD^{tree}'),
+              'workflow_blob': git('rev-parse', 'HEAD:.github/workflows/repository-governance-admin.yml'),
+              'policy_blob': git('rev-parse', 'HEAD:docs/governance/main-ruleset-v1.json'),
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'production_authorization': 'not_granted',
+          }
+          (out / 'summary.json').write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
+          files = sorted(p for p in out.rglob('*') if p.is_file() and p.name != 'manifest.json')
+          (out / 'manifest.json').write_text(json.dumps({
+              'schema': 'cex.repository-governance-admin-artifact-manifest.v1',
+              'files': [
+                  {'path': p.relative_to(out).as_posix(), 'bytes': p.stat().st_size,
+                   'sha256': hashlib.sha256(p.read_bytes()).hexdigest()}
+                  for p in files
+              ],
+          }, indent=2, sort_keys=True) + '\n')
+          PY
+
+      - name: Upload administration evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cex-repository-governance-admin-${{ github.sha }}-${{ github.run_attempt }}
+          path: run/repository-governance-admin/**
+          if-no-files-found: error
+          retention-days: 90
