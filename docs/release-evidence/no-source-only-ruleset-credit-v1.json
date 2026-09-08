@@ -1,0 +1,7 @@
+{
+  "schema": "cex.no-source-only-ruleset-credit.v1",
+  "policy_file_is_not_live_enforcement": true,
+  "api_readback_required": true,
+  "negative_probes_required": true,
+  "production_authorization": "not_granted"
+}
