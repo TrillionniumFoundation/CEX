@@ -1,0 +1,15 @@
+{
+  "schema": "cex.v12-final-closure-checklist.v1",
+  "items": {
+    "source_changes_committed": "required",
+    "rust_1_98_1_converged": "required",
+    "dependency_policy_green": "required",
+    "required_checks_non_empty_success": "required",
+    "main_ruleset_active": "required",
+    "negative_ref_probes_rejected": "required",
+    "exact_head_independent_approval": "required",
+    "external_production_evidence": "required"
+  },
+  "automatic_close_on_source_presence": false,
+  "production_authorization": "not_granted"
+}
