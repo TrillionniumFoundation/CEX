@@ -22,13 +22,15 @@ env:
   RUST_TEST_THREADS: '1'
   RUST_TOOLCHAIN: '1.98.1'
   RUST_RELEASE_COMMIT: 48a229ceaefd4985c50990b14116b6d856af0985
+  CARGO_AUDIT_VERSION: '0.22.2'
+  CARGO_DENY_VERSION: '0.20.2'
   SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
   sequence54-integration-closure:
     name: sequence54-integration-closure
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 150
     steps:
       - name: Checkout exact Sequence 54 candidate
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -43,7 +45,10 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
-          git rev-parse 'HEAD^{tree}'
+          mkdir -p run/sequence54 run/supply-chain
+          SOURCE_TREE="$(git rev-parse 'HEAD^{tree}')"
+          printf '%s\n' "$SOURCE_TREE" | tee run/sequence54/source-tree.txt
+          printf '%s\n' "$SOURCE_SHA" | tee run/sequence54/source-sha.txt
 
       - name: Install immutable Rust 1.98.1 toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
@@ -56,15 +61,51 @@ jobs:
         run: |
           set -euo pipefail
           test "$(rustc --version | awk '{print $2}')" = "$RUST_TOOLCHAIN"
-          rustc --version --verbose | tee rustc-version.txt
-          cargo --version --verbose | tee cargo-version.txt
-          grep -Fx "commit-hash: $RUST_RELEASE_COMMIT" rustc-version.txt
+          rustc --version --verbose | tee run/sequence54/rustc-version.txt
+          cargo --version --verbose | tee run/sequence54/cargo-version.txt
+          grep -Fx "commit-hash: $RUST_RELEASE_COMMIT" run/sequence54/rustc-version.txt
+
+      - name: Install pinned supply-chain tools
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
+        with:
+          tool: cargo-audit@0.22.2,cargo-deny@0.20.2
 
       - name: Validate Sequence 54 non-regression contract
         run: python3 scripts/check-sequence54-integration.py
 
       - name: Validate recursive active-surface toolchain convergence
         run: python3 scripts/check-rust-toolchain-convergence.py
+
+      - name: Validate bounded Rust advisory and all-feature release-surface closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check-rust-advisory-exceptions.py \
+            | tee run/supply-chain/advisory-exception-evidence.json
+
+      - name: Execute pinned Cargo advisory audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo audit --deny warnings \
+            --ignore RUSTSEC-2023-0071 \
+            --ignore RUSTSEC-2026-0214 \
+            --ignore RUSTSEC-2024-0436 \
+            2>&1 | tee run/supply-chain/cargo-audit.txt
+          cargo audit --json \
+            --ignore RUSTSEC-2023-0071 \
+            --ignore RUSTSEC-2026-0214 \
+            --ignore RUSTSEC-2024-0436 \
+            > run/supply-chain/cargo-audit.json
+
+      - name: Execute pinned Cargo dependency policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo deny check advisories licenses sources \
+            2>&1 | tee run/supply-chain/cargo-deny-policy.txt
+          cargo deny check --allow wildcard bans \
+            2>&1 | tee run/supply-chain/cargo-deny-bans.txt
 
       - name: Validate active v12 documentation and module contracts
         shell: bash
@@ -80,8 +121,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo metadata --locked --format-version 1 > cargo-metadata.json
-          test -s cargo-metadata.json
+          cargo metadata --locked --format-version 1 > run/sequence54/cargo-metadata.json
+          test -s run/sequence54/cargo-metadata.json
 
       - name: Verify formatting
         run: cargo fmt --all -- --check
@@ -100,3 +141,26 @@ jobs:
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           test -z "$(git status --porcelain=v1 --untracked-files=no)"
           printf 'production_authorization=not_granted\n'
+
+      - name: Upload Sequence 54 integration evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cex-sequence54-integration-${{ env.SOURCE_SHA }}
+          path: |
+            run/sequence54/**
+            run/supply-chain/**
+            Cargo.lock
+            deny.toml
+            .github/CODEOWNERS
+            docs/security/rust-advisory-exceptions-v1.json
+            docs/security/rust-release-surfaces-v1.json
+            docs/security/rust-feature-closure-v1.json
+            scripts/check-rust-advisory-exceptions.py
+            scripts/rust_advisory_common_v5.py
+            scripts/rust_advisory_packages_v5.py
+            scripts/rust_advisory_gate_v5.py
+            scripts/rust_advisory_feature_closure_v6.py
+            scripts/rust_advisory_policy_v6.py
+          if-no-files-found: error
+          retention-days: 90

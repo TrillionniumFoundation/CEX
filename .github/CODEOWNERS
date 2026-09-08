@@ -25,5 +25,7 @@
 /scripts/rust_advisory_packages_v5.py @Tomasrgbsf
 /scripts/rust_advisory_gate_v5.py @Tomasrgbsf
 /scripts/rust_advisory_feature_closure_v6.py @Tomasrgbsf
+/scripts/rust_advisory_policy_v6.py @Tomasrgbsf
 /deny.toml @Tomasrgbsf
 /.github/workflows/trnm-economy-ci.yml @Tomasrgbsf
+/.github/workflows/p0-sequence54-integration.yml @Tomasrgbsf

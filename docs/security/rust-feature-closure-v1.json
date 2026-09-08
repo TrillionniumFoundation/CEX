@@ -1,0 +1,23 @@
+{
+  "schema": "cex.rust-feature-closure.v1",
+  "status": "active_fail_closed",
+  "resolution_strategy": "all_workspace_packages_all_features_superset",
+  "target_scope": "all",
+  "execution_edges": "normal_and_build",
+  "subset_rule": "Cargo features are additive; every default, no-default-features plus explicit feature, or explicit feature release dependency graph must be a subset of the package all-features dependency union. The all-features graph is used only for dependency/advisory reachability and does not claim that mutually exclusive feature combinations compile together.",
+  "expected_workspace_all_features_execution_reachability": {
+    "RUSTSEC-2023-0071": [],
+    "RUSTSEC-2026-0214": [],
+    "RUSTSEC-2024-0436": ["hepta-research-league"]
+  },
+  "hostile_fixtures_required": [
+    "optional_dependency",
+    "no_default_features_plus_explicit_feature",
+    "build_dependency",
+    "proc_macro_dependency",
+    "target_specific_dependency"
+  ],
+  "command_failure": "fatal_including_empty_output",
+  "approval_requirement": "fresh_exact_head_github_review",
+  "production_authorization": "not_granted"
+}
