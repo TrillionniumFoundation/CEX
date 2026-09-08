@@ -1,0 +1,12 @@
+{
+  "schema": "cex.v12-final-closure-candidate.v1",
+  "status": "repository_remediation_in_progress",
+  "source_branch": "fix/cex-v12-final-closure-v3-20260908",
+  "base_candidate_branch": "fix/hepta-p0-blocker-closure-20260906",
+  "required_toolchain": "1.98.1",
+  "required_ruleset_target": "refs/heads/main",
+  "required_independent_reviewer": "Tomasrgbsf",
+  "hosted_checks_must_be_non_empty": true,
+  "stale_evidence_transfer_credit": false,
+  "production_authorization": "not_granted"
+}
