@@ -3,6 +3,12 @@ FROM docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd5
 
 WORKDIR /src
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=false
+ARG RUST_TOOLCHAIN=1.98.1
+RUN rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt --component clippy \
+    && rustup default "$RUST_TOOLCHAIN" \
+    && test "$(rustc --version | awk '{print $2}')" = "$RUST_TOOLCHAIN" \
+    && test "$(cargo --version | awk '{print $2}')" = "$RUST_TOOLCHAIN"
+ENV RUSTUP_TOOLCHAIN=1.98.1
 
 # The compile DAG is deliberately closed. In particular, the tracked SBOM and
 # all release labels/hashes are absent until after the Rust binary exists.
@@ -50,13 +56,14 @@ COPY docs/openapi/hepta-paper-raid-v2.yaml docs/openapi/hepta-paper-raid-v2.yaml
 
 RUN test "$(sed -n '1p' /toolchain/rust-toolchain.manifest)" = \
       "builder=docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb" \
-    && test "$(sed -n '2p' /toolchain/rust-toolchain.manifest)" = \
-      "rustc=rustc 1.95.0 (59807616e 2026-04-14)" \
-    && test "$(sed -n '3p' /toolchain/rust-toolchain.manifest)" = \
-      "cargo=cargo 1.95.0 (f2d3ce0bd 2026-03-21)" \
-    && test "$(wc -l < /toolchain/rust-toolchain.manifest)" -eq 3 \
-    && test "$(rustc --version)" = "rustc 1.95.0 (59807616e 2026-04-14)" \
-    && test "$(cargo --version)" = "cargo 1.95.0 (f2d3ce0bd 2026-03-21)"
+    && test "$(sed -n '2p' /toolchain/rust-toolchain.manifest)" = "toolchain=1.98.1" \
+    && test "$(sed -n '3p' /toolchain/rust-toolchain.manifest)" = "profile=minimal" \
+    && test "$(sed -n '4p' /toolchain/rust-toolchain.manifest)" = "components=rustfmt,clippy" \
+    && test "$(wc -l < /toolchain/rust-toolchain.manifest)" -eq 4 \
+    && test "$(rustc --version | awk '{print $2}')" = "1.98.1" \
+    && test "$(cargo --version | awk '{print $2}')" = "1.98.1" \
+    && rustc --version --verbose > /toolchain/rustc-version-verbose.txt \
+    && cargo --version --verbose > /toolchain/cargo-version-verbose.txt
 
 FROM workspace AS lockfile-verifier
 COPY services/hepta-research-league/docker/Cargo.lock Cargo.lock
@@ -107,6 +114,12 @@ RUN case "$SOURCE_DATE_EPOCH" in ''|*[!0-9]*) exit 64 ;; esac \
     && install -D -m 0644 -o 65532 -g 65532 \
       /tracked/hepta-research-league.cdx.json \
       /release/usr/share/doc/hepta-research-league/sbom.cdx.json \
+    && install -D -m 0644 -o 65532 -g 65532 \
+      /toolchain/rustc-version-verbose.txt \
+      /release/usr/share/doc/hepta-research-league/rustc-version-verbose.txt \
+    && install -D -m 0644 -o 65532 -g 65532 \
+      /toolchain/cargo-version-verbose.txt \
+      /release/usr/share/doc/hepta-research-league/cargo-version-verbose.txt \
     && find /release -type d -exec touch --no-dereference --date="@$SOURCE_DATE_EPOCH" {} + \
     && find /release -type f -exec touch --no-dereference --date="@$SOURCE_DATE_EPOCH" {} +
 
@@ -130,6 +143,7 @@ LABEL org.opencontainers.image.title="Hepta Research League" \
       org.trillionnium.cargo-lock.sha256="$CARGO_LOCK_SHA256" \
       org.trillionnium.dockerfile.sha256="$DOCKERFILE_SHA256" \
       org.trillionnium.rust-toolchain.sha256="$RUST_TOOLCHAIN_SHA256" \
+      io.trillionnium.hepta.rust-toolchain="1.98.1" \
       io.trillionnium.hepta.source-tree="$SOURCE_TREE" \
       io.trillionnium.hepta.source-date-epoch="$SOURCE_DATE_EPOCH" \
       io.trillionnium.hepta.application-sbom.path="/usr/share/doc/hepta-research-league/sbom.cdx.json" \
