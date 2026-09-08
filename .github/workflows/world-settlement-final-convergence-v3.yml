@@ -1,382 +1,242 @@
 name: world-settlement-final-convergence-v3
 
 on:
-  push:
-    branches:
-      - ci/world-settlement-final-convergence-v2
-    paths:
-      - .github/workflows/world-settlement-final-convergence-v3.yml
   workflow_dispatch:
+    inputs:
+      cex_sha:
+        description: Exact immutable CEX candidate SHA
+        required: true
+        type: string
+      pull_request_number:
+        description: CEX pull request number carrying the exact SHA
+        required: true
+        type: number
+      world_sha:
+        description: Exact immutable World companion SHA
+        required: true
+        type: string
 
 permissions:
   actions: read
   contents: read
+  pull-requests: read
 
 concurrency:
-  group: world-settlement-final-convergence-v3
+  group: world-final-convergence-v3-${{ inputs.cex_sha }}-${{ inputs.world_sha }}
   cancel-in-progress: false
 
 env:
-  WORLD_REPOSITORY: TrillionniumFoundation/Trillionnium-World
-  WORLD_COMMIT: 1d4dee6d5add45a64f5c138f424e3bdab369ecd4
-  WORLD_TREE: 955987798812dd631ee30e28bcc20581a8daa45a
-  BASE_REMEDIATION_RUN_ID: "33245006693"
-  BASE_REMEDIATION_ARTIFACT: world-settlement-final-convergence-1d4dee6d5add45a64f5c138f424e3bdab369ecd4
-  BASE_REMEDIATION_ARTIFACT_DIGEST: sha256:41ebbff850697620f569d11462153160ef2e120ff2dee75fe784d01eb11a6758
-  CARGO_TERM_COLOR: never
-  CARGO_INCREMENTAL: "0"
-  RUST_BACKTRACE: "1"
-  RUST_TEST_THREADS: "1"
-  TRNM_SETTLEMENT_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/world_settlement
-  TRNM_REQUIRE_SETTLEMENT_DATABASE_TEST: "1"
-  TRNM_CEX_SETTLEMENT_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/world_settlement
-  TRNM_REQUIRE_CEX_SETTLEMENT_DATABASE_TEST: "1"
+  CEX_SOURCE_SHA: ${{ inputs.cex_sha }}
+  CEX_PULL_REQUEST: ${{ inputs.pull_request_number }}
+  WORLD_SOURCE_SHA: ${{ inputs.world_sha }}
 
 jobs:
-  converge:
-    name: world-settlement-final-convergence-v3/full-target
+  verify-final-convergence:
+    name: world-settlement-final-convergence-v3
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    services:
-      postgres:
-        image: postgres:16.4-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: world_settlement
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d world_settlement"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-
+    timeout-minutes: 20
     steps:
-      - name: Checkout exact World candidate
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Validate exact identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$CEX_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$WORLD_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CEX_PULL_REQUEST" =~ ^[0-9]+$ ]]
+
+      - name: Checkout exact immutable CEX candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          repository: ${{ env.WORLD_REPOSITORY }}
-          ref: ${{ env.WORLD_COMMIT }}
-          path: world
+          ref: ${{ env.CEX_SOURCE_SHA }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify exact World identity
+      - name: Verify required exact-SHA workflow executions, reviews and governance
         shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git -C world rev-parse HEAD)" = "$WORLD_COMMIT"
-          test "$(git -C world rev-parse 'HEAD^{tree}')" = "$WORLD_TREE"
-          git -C world diff --exit-code
-
-      - name: Download and verify base remediation bytes
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
         run: |
           set -euo pipefail
-          rm -rf base-remediation
-          gh run download "$BASE_REMEDIATION_RUN_ID" \
-            --repo TrillionniumFoundation/CEX \
-            --name "$BASE_REMEDIATION_ARTIFACT" \
-            --dir base-remediation
-          (cd base-remediation && sha256sum --check SHA256SUMS)
-          grep -Fx "candidate_head=$WORLD_COMMIT" base-remediation/identity.txt
-          grep -Fx "candidate_tree=$WORLD_TREE" base-remediation/identity.txt
+          mkdir -p run/world-final-convergence-v3
+          python3 - <<'PY' | tee run/world-final-convergence-v3/verification.json
+          import json, os, re, urllib.error, urllib.parse, urllib.request
 
-      - name: Apply exact base remediation
-        shell: bash
-        run: |
-          set -euo pipefail
-          cp -a base-remediation/files/. world/
-          git -C world diff --check
-          git -C world diff --binary --full-index > applied-base.patch
-          cmp applied-base.patch base-remediation/remediation.patch
+          repository = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+          sha = os.environ['CEX_SOURCE_SHA']
+          pr_number = int(os.environ['CEX_PULL_REQUEST'])
+          required_paths = [
+              '.github/workflows/p0-migration-gate.yml',
+              '.github/workflows/rust-service-gate.yml',
+              '.github/workflows/p0-gateway-exact-reserve-gate.yml',
+              '.github/workflows/p0-execution-settlement-gate.yml',
+              '.github/workflows/p0-provider-reconciliation-gate.yml',
+              '.github/workflows/p0-release-candidate-gate.yml',
+              '.github/workflows/p0-rust-toolchain-convergence.yml',
+              '.github/workflows/trnm-economy-ci.yml',
+              '.github/workflows/trnm-economy-settlement.yml',
+              '.github/workflows/project-boundary-gate.yml',
+              '.github/workflows/project-boundary-changed-path-gate.yml',
+              '.github/workflows/p0-world-authority-cutover-gate.yml',
+              '.github/workflows/p0-world-authority-postgres-v2-gate.yml',
+              '.github/workflows/sequence18-cross-repo-pin-gate.yml',
+          ]
 
-      - name: Replace stale synchronous-backend guard with durable-outbox guard
-        working-directory: world
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
+          def get(path):
+              url = f'https://api.github.com/repos/{repository}{path}'
+              request = urllib.request.Request(url, headers={
+                  'Accept': 'application/vnd.github+json',
+                  'Authorization': f'Bearer {token}',
+                  'User-Agent': 'cex-final-convergence-v3',
+                  'X-GitHub-Api-Version': '2022-11-28',
+              })
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      return response.status, json.load(response)
+              except urllib.error.HTTPError as error:
+                  payload = error.read().decode('utf-8', errors='replace')
+                  try:
+                      return error.code, json.loads(payload)
+                  except json.JSONDecodeError:
+                      return error.code, {'message': payload}
 
-          path = Path("trillionnium/crates/trnm-game-server/tests/p0_boundary_contract.rs")
-          text = path.read_text(encoding="utf-8")
+          status, runs_payload = get('/actions/runs?' + urllib.parse.urlencode({
+              'head_sha': sha, 'per_page': 100,
+          }))
+          if status != 200 or not isinstance(runs_payload, dict):
+              raise SystemExit(f'cannot read workflow runs: HTTP {status}')
+          runs = runs_payload.get('workflow_runs')
+          if not isinstance(runs, list):
+              raise SystemExit('Actions response lacks workflow_runs')
 
-          old_files = '''        } else if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
-              out.push(path);
-          }
-          '''
-          new_files = '''        } else {
-              let file_name = path.file_name().and_then(|name| name.to_str());
-              if path.extension().and_then(|extension| extension.to_str()) == Some("rs")
-                  || file_name.is_some_and(|name| name.ends_with(".rs.in"))
-              {
-                  out.push(path);
+          selected = {}
+          failures = []
+          for path in required_paths:
+              candidates = [
+                  run for run in runs
+                  if run.get('path') == path
+                  and run.get('head_sha') == sha
+                  and run.get('event') in {'pull_request', 'push', 'workflow_dispatch'}
+              ]
+              if not candidates:
+                  failures.append(f'{path}:missing')
+                  continue
+              run = max(candidates, key=lambda value: (
+                  str(value.get('created_at') or ''),
+                  int(value.get('run_attempt') or 0),
+                  int(value.get('id') or 0),
+              ))
+              run_id = int(run['id'])
+              job_status, jobs_payload = get(f'/actions/runs/{run_id}/jobs?per_page=100')
+              jobs = jobs_payload.get('jobs') if isinstance(jobs_payload, dict) else None
+              non_empty = (
+                  job_status == 200
+                  and isinstance(jobs, list)
+                  and bool(jobs)
+                  and all(isinstance(job.get('steps'), list) and bool(job['steps']) for job in jobs)
+              )
+              selected[path] = {
+                  'run_id': run_id,
+                  'attempt': run.get('run_attempt'),
+                  'status': run.get('status'),
+                  'conclusion': run.get('conclusion'),
+                  'jobs_non_empty': non_empty,
               }
+              if run.get('status') != 'completed':
+                  failures.append(f'{path}:not_completed')
+              elif run.get('conclusion') != 'success':
+                  failures.append(f'{path}:{run.get("conclusion")}')
+              elif not non_empty:
+                  failures.append(f'{path}:zero_step_or_missing_jobs')
+
+          pr_status, pull = get(f'/pulls/{pr_number}')
+          if pr_status != 200 or not isinstance(pull, dict):
+              failures.append(f'pull_request:HTTP_{pr_status}')
+          elif pull.get('head', {}).get('sha') != sha:
+              failures.append('pull_request:head_sha_drift')
+          elif pull.get('state') != 'open':
+              failures.append('pull_request:not_open')
+
+          review_status, reviews = get(f'/pulls/{pr_number}/reviews?per_page=100')
+          approved_by = {}
+          if review_status == 200 and isinstance(reviews, list):
+              for review in reviews:
+                  login = review.get('user', {}).get('login')
+                  commit_id = review.get('commit_id')
+                  state = review.get('state')
+                  if isinstance(login, str):
+                      approved_by[login] = {'state': state, 'commit_id': commit_id}
+              exact_approvers = sorted(
+                  login for login, value in approved_by.items()
+                  if value.get('state') == 'APPROVED' and value.get('commit_id') == sha
+              )
+          else:
+              exact_approvers = []
+              failures.append(f'reviews:HTTP_{review_status}')
+          if len(exact_approvers) < 2:
+              failures.append('reviews:fewer_than_two_exact_head_approvals')
+          if 'Tomasrgbsf' not in exact_approvers:
+              failures.append('reviews:missing_required_security_approver')
+
+          repo_status, repo = get('')
+          default_branch = repo.get('default_branch') if repo_status == 200 and isinstance(repo, dict) else None
+          branch_status, branch = get(f'/branches/{urllib.parse.quote(default_branch or "main", safe="")}')
+          protected = branch_status == 200 and isinstance(branch, dict) and branch.get('protected') is True
+          if not protected:
+              failures.append('governance:default_branch_not_protected')
+
+          rulesets_status, rulesets = get('/rulesets?per_page=100')
+          active_rulesets = []
+          if rulesets_status == 200 and isinstance(rulesets, list):
+              active_rulesets = [
+                  {'id': item.get('id'), 'name': item.get('name'), 'enforcement': item.get('enforcement')}
+                  for item in rulesets if item.get('enforcement') == 'active'
+              ]
+          if not active_rulesets:
+              failures.append('governance:no_active_ruleset')
+
+          result = {
+              'schema': 'cex.world-settlement-final-convergence.v3',
+              'status': 'qualified' if not failures else 'blocked',
+              'cex_sha': sha,
+              'world_sha': os.environ['WORLD_SOURCE_SHA'],
+              'pull_request': pr_number,
+              'required_workflows': selected,
+              'exact_head_approvers': exact_approvers,
+              'default_branch': default_branch,
+              'default_branch_protected': protected,
+              'active_rulesets': active_rulesets,
+              'failures': failures,
+              'production_authorization': 'not_granted',
           }
-          '''
-          if text.count(old_files) != 1:
-              raise SystemExit(f"rust source discovery shape count was {text.count(old_files)}, expected 1")
-          text = text.replace(old_files, new_files, 1)
-
-          old_test = '''#[test]
-          fn settlement_external_io_is_not_owned_by_a_database_transaction_function() {
-              let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-              let mut files = Vec::new();
-              rust_files(&root, &mut files);
-              assert!(!files.is_empty(), "game-server source tree is empty");
-
-              let transaction_markers = [
-                  ".begin().await",
-                  "Transaction<'",
-                  "Transaction <'",
-                  "FOR UPDATE",
-                  "for update",
-                  "FOR SHARE",
-                  "for share",
-              ];
-              let external_markers = [
-                  ".reconcile_economy(",
-                  ".execute_authoritative(",
-                  ".blocking_client",
-              ];
-
-              let mut reconcile_count = 0usize;
-              let mut violations = Vec::new();
-              for path in files {
-                  let source = fs::read_to_string(&path)
-                      .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-                  for (name, body) in function_bodies(&source) {
-                      let has_external = external_markers.iter().any(|marker| body.contains(marker));
-                      let has_transaction = transaction_markers
-                          .iter()
-                          .any(|marker| body.contains(marker));
-                      if body.contains(".reconcile_economy(") {
-                          reconcile_count += 1;
-                      }
-                      if has_external && has_transaction {
-                          violations.push(format!("{}::{name}", path.display()));
-                      }
-                  }
-              }
-
-              assert!(
-                  reconcile_count > 0,
-                  "the synchronous economy backend marker disappeared; update ADR-0002 and this reviewed contract with its replacement"
-              );
-              assert!(
-                  violations.is_empty(),
-                  "external settlement work shares a transaction-owning function: {violations:?}"
-              );
-          }
-          '''
-          new_test = '''#[test]
-          fn settlement_external_io_is_not_owned_by_a_database_transaction_function() {
-              let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-              let mut files = Vec::new();
-              rust_files(&root, &mut files);
-              assert!(!files.is_empty(), "game-server source tree is empty");
-
-              let cex_source = fs::read_to_string(root.join("cex.rs"))
-                  .expect("read asynchronous CEX settlement client");
-              assert!(
-                  cex_source.contains("const SETTLEMENT_OUTBOX_REQUIRED"),
-                  "the fail-closed synchronous EconomyBackend retirement marker disappeared"
-              );
-              assert!(
-                  cex_source.contains("Err(SETTLEMENT_OUTBOX_REQUIRED.to_string())"),
-                  "the synchronous EconomyBackend no longer fails closed to the settlement outbox"
-              );
-
-              let worker_source = fs::read_to_string(root.join("settlement_worker.rs.in"))
-                  .expect("read reviewed settlement worker source");
-              let process_start = worker_source
-                  .find("async fn process_claimed_job(")
-                  .expect("settlement worker must own claimed-job external execution");
-              let process_end = worker_source[process_start..]
-                  .find("async fn handle_external_failure(")
-                  .map(|offset| process_start + offset)
-                  .expect("settlement worker failure boundary is missing");
-              let process = &worker_source[process_start..process_end];
-              let remote_attempt = process
-                  .find("trnm_online_begin_settlement_remote_attempt_v1")
-                  .expect("remote-attempt durability fence is missing");
-              let signer = process
-                  .find(".authorize_settlement_intent(")
-                  .expect("isolated signer execution is missing from the worker");
-              let ledger = process
-                  .find(".submit_authorized_settlement_intent(")
-                  .expect("CEX execution is missing from the worker");
-              assert!(
-                  remote_attempt < signer && signer < ledger,
-                  "external execution must follow the durable remote-attempt fence in signer/CEX order"
-              );
-              assert!(
-                  !process.contains(".begin().await")
-                      && !process.contains("Transaction<'")
-                      && !process.contains("Transaction <'"),
-                  "claimed-job external execution reacquired transaction ownership"
-              );
-
-              let transaction_markers = [
-                  ".begin().await",
-                  "Transaction<'",
-                  "Transaction <'",
-                  "FOR UPDATE",
-                  "for update",
-                  "FOR SHARE",
-                  "for share",
-              ];
-              let external_markers = [
-                  ".reconcile_economy(",
-                  ".execute_authoritative(",
-                  ".blocking_client",
-                  ".authorize_settlement_intent(",
-                  ".submit_authorized_settlement_intent(",
-              ];
-
-              let mut external_owner_count = 0usize;
-              let mut violations = Vec::new();
-              for path in files {
-                  let source = fs::read_to_string(&path)
-                      .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-                  for (name, body) in function_bodies(&source) {
-                      let has_external = external_markers.iter().any(|marker| body.contains(marker));
-                      let has_transaction = transaction_markers
-                          .iter()
-                          .any(|marker| body.contains(marker));
-                      if has_external {
-                          external_owner_count += 1;
-                      }
-                      if has_external && has_transaction {
-                          violations.push(format!("{}::{name}", path.display()));
-                      }
-                  }
-              }
-
-              assert!(
-                  external_owner_count >= 2,
-                  "the durable worker signer/CEX execution markers disappeared; update ADR-0002 and this reviewed contract with their replacement"
-              );
-              assert!(
-                  violations.is_empty(),
-                  "external settlement work shares a transaction-owning function: {violations:?}"
-              );
-          }
-          '''
-          if text.count(old_test) != 1:
-              raise SystemExit(f"stale boundary test shape count was {text.count(old_test)}, expected 1")
-          text = text.replace(old_test, new_test, 1)
-          path.write_text(text, encoding="utf-8")
+          print(json.dumps(result, indent=2, sort_keys=True))
+          if failures:
+              raise SystemExit('final convergence is blocked: ' + ', '.join(failures))
           PY
-          git diff --check
 
-      - name: Install pinned Rust toolchain
-        shell: bash
-        run: |
-          set -euo pipefail
-          rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
-          rustup default 1.98.0
-          rustc --version --verbose
-          cargo --version --verbose
-
-      - name: Format reviewed remediation
-        working-directory: world/trillionnium
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo metadata --locked --no-deps --format-version 1 > /dev/null
-          cargo fmt -p trnm-game-server
-          cargo fmt -p trnm-game-server -- --check
-
-      - name: Enforce exact remediation scope
-        working-directory: world
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat > ../expected-files.txt <<'EOF'
-          trillionnium/crates/trnm-game-server/build.rs
-          trillionnium/crates/trnm-game-server/migrations/0018_online_settlement_operator_controls_v1.sql
-          trillionnium/crates/trnm-game-server/src/cex.rs
-          trillionnium/crates/trnm-game-server/tests/p0_boundary_contract.rs
-          trillionnium/crates/trnm-game-server/tests/settlement_database_contract.rs
-          trillionnium/crates/trnm-game-server/tests/settlement_operator_controls_database.rs
-          EOF
-          git diff --name-only > ../actual-files.txt
-          diff -u ../expected-files.txt ../actual-files.txt
-          git diff --check
-
-      - name: Validate static settlement and governance boundaries
-        working-directory: world
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 scripts/check-trnm-settlement-runtime-status.py
-          python3 scripts/test-trnm-settlement-runtime-status-negative.py
-          python3 scripts/check-world-main-governance.py
-          bash scripts/check-trnm-settlement-transaction-boundary.sh
-          bash scripts/check_trnm_settlement_transaction_boundary.sh
-
-      - name: Run complete package and PostgreSQL matrix
-        working-directory: world/trillionnium
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo test -p trnm-game-server --all-targets --locked
-
-      - name: Run strict complete-target lint
-        working-directory: world/trillionnium
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo clippy -p trnm-game-server --all-targets --locked -- -D warnings
-
-      - name: Assemble exact convergence evidence
+      - name: Record exact verifier identity
         if: always()
-        working-directory: world
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf ../convergence-evidence
-          mkdir -p ../convergence-evidence/files
-          git diff --binary --full-index > ../convergence-evidence/remediation.patch
-          git diff --name-only > ../convergence-evidence/changed-files.txt
-          git status --short > ../convergence-evidence/git-status.txt
-          while IFS= read -r path; do
-            test -z "$path" && continue
-            mkdir -p "../convergence-evidence/files/$(dirname "$path")"
-            cp "$path" "../convergence-evidence/files/$path"
-          done < ../convergence-evidence/changed-files.txt
-          printf '%s\n' \
-            "status=${{ job.status }}" \
-            "world_repository=$WORLD_REPOSITORY" \
-            "candidate_head=$(git rev-parse HEAD)" \
-            "candidate_tree=$(git rev-parse 'HEAD^{tree}')" \
-            "base_remediation_run_id=$BASE_REMEDIATION_RUN_ID" \
-            "base_remediation_artifact=$BASE_REMEDIATION_ARTIFACT" \
-            "base_remediation_artifact_digest=$BASE_REMEDIATION_ARTIFACT_DIGEST" \
-            "convergence_repository=$GITHUB_REPOSITORY" \
-            "convergence_commit=$GITHUB_SHA" \
-            "convergence_run_id=$GITHUB_RUN_ID" \
-            "convergence_run_attempt=$GITHUB_RUN_ATTEMPT" \
-            "rust_toolchain=1.98.0" \
-            "postgres=16.4-alpine" \
-            > ../convergence-evidence/identity.txt
-          (
-            cd ../convergence-evidence
-            find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
-            sha256sum --check SHA256SUMS
-          )
+          mkdir -p run/world-final-convergence-v3
+          {
+            echo "cex_sha=$(git rev-parse HEAD)"
+            echo "cex_tree=$(git rev-parse 'HEAD^{tree}')"
+            echo "workflow_blob=$(git rev-parse HEAD:.github/workflows/world-settlement-final-convergence-v3.yml)"
+            echo "world_sha=$WORLD_SOURCE_SHA"
+            echo "run_id=$GITHUB_RUN_ID"
+            echo "run_attempt=$GITHUB_RUN_ATTEMPT"
+            echo "production_authorization=not_granted"
+          } > run/world-final-convergence-v3/identity.txt
+          sha256sum run/world-final-convergence-v3/* \
+            > run/world-final-convergence-v3/SHA256SUMS
 
-      - name: Upload exact convergence evidence
+      - name: Upload convergence evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: world-settlement-final-convergence-v3-${{ env.WORLD_COMMIT }}
-          path: convergence-evidence/
+          name: cex-world-final-convergence-v3-${{ inputs.cex_sha }}-${{ github.run_attempt }}
+          path: run/world-final-convergence-v3/**
           if-no-files-found: error
-          retention-days: 30
-          compression-level: 9
+          retention-days: 90
