@@ -220,14 +220,7 @@ alpha_identities=$(jq -cn \
 } >"$runtime_env"
 chmod 0600 "$runtime_env"
 
-[[ "$(rustc --version)" == "rustc 1.95.0 (59807616e 2026-04-14)" ]] || {
-  echo "browser accessibility host rustc does not match the pinned builder toolchain" >&2
-  exit 1
-}
-[[ "$(cargo --version)" == "cargo 1.95.0 (f2d3ce0bd 2026-03-21)" ]] || {
-  echo "browser accessibility host Cargo does not match the pinned builder toolchain" >&2
-  exit 1
-}
+python3 "$repo_root/scripts/check-rust-toolchain-convergence.py" --verify-installed
 build_root="$scratch_dir/reduced-workspace"
 target_root="$scratch_dir/cargo-target"
 if [[ -n "${PAPER_RAID_BFF_BROWSER_CARGO_TARGET_DIR:-}" ]]; then
