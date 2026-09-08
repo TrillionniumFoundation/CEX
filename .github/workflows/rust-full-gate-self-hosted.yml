@@ -27,6 +27,9 @@ on:
         required: false
         type: string
 
+permissions:
+  contents: read
+
 concurrency:
   group: rust-full-gate-self-hosted
   cancel-in-progress: false
@@ -44,18 +47,27 @@ jobs:
       GATE_MODE: ${{ inputs.mode }}
       BOOTSTRAP_ENV: ${{ inputs.bootstrap_env }}
       UPLOAD_ARTIFACTS: ${{ inputs.upload_artifacts }}
+      RUST_TOOLCHAIN: '1.98.1'
     defaults:
       run:
         shell: powershell
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install exact Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+
+      - name: Verify exact compiler and Cargo identity
+        run: python .\scripts\check-rust-toolchain-convergence.py --verify-installed
 
       - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
 
       - name: Prepare artifact directory
         run: New-Item -ItemType Directory -Force -Path $env:ARTIFACT_ROOT | Out-Null
@@ -67,6 +79,7 @@ jobs:
             "bootstrap_env=${{ inputs.bootstrap_env }}"
             "upload_artifacts=${{ inputs.upload_artifacts }}"
             "note=${{ inputs.note }}"
+            "rust_toolchain=1.98.1"
           ) | Set-Content -LiteralPath (Join-Path $env:ARTIFACT_ROOT 'dispatch-inputs.txt') -Encoding UTF8
 
       - name: Show operator note
@@ -111,7 +124,7 @@ jobs:
 
       - name: Upload self-hosted gate artifacts
         if: ${{ always() && inputs.upload_artifacts }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: rust-full-gate-self-hosted-${{ github.run_id }}
           path: ci-artifacts/self-hosted-full-gate
