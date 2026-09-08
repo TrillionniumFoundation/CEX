@@ -1,0 +1,130 @@
+name: repository-governance-negative-probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/cex-v12-final-closure-20260908
+    paths:
+      - '.github/workflows/repository-governance-negative-probe.yml'
+      - 'docs/governance/main-ruleset-v1.json'
+      - 'scripts/apply-repository-ruleset.py'
+      - 'scripts/verify-repository-ruleset.py'
+      - 'scripts/probe-repository-ruleset.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-governance-negative-probe
+  cancel-in-progress: false
+
+env:
+  GITHUB_ADMIN_TOKEN: ${{ secrets.CEX_GITHUB_ADMIN_TOKEN || secrets.GITHUB_ADMIN_TOKEN || secrets.REPOSITORY_ADMIN_TOKEN }}
+
+jobs:
+  repository-governance-negative-probe:
+    name: repository-governance-negative-probe
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Enforce the one reviewed governance branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/fix/cex-v12-final-closure-20260908
+          test "$GITHUB_ACTOR" = ProfHepta
+          test -n "$GITHUB_ADMIN_TOKEN"
+
+      - name: Checkout exact governance candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Apply and read back the authoritative main ruleset
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p run/repository-governance-negative-probe
+          git rev-parse HEAD | tee run/repository-governance-negative-probe/head-sha.txt
+          git rev-parse 'HEAD^{tree}' | tee run/repository-governance-negative-probe/head-tree.txt
+          python3 scripts/apply-repository-ruleset.py \
+            --output run/repository-governance-negative-probe/application.json
+          GITHUB_TOKEN="$GITHUB_ADMIN_TOKEN" \
+            python3 scripts/verify-repository-ruleset.py \
+            --output run/repository-governance-negative-probe/live-verification.json
+
+      - name: Execute safe disposable rejection probes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/probe-repository-ruleset.py \
+            --output run/repository-governance-negative-probe/negative-probes.json
+
+      - name: Verify main remained unchanged and live ruleset survived cleanup
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ env.GITHUB_ADMIN_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 scripts/verify-repository-ruleset.py \
+            --output run/repository-governance-negative-probe/post-cleanup-verification.json
+          python3 - <<'PY'
+          import json, pathlib
+          out = pathlib.Path('run/repository-governance-negative-probe')
+          probes = json.loads((out / 'negative-probes.json').read_text())
+          if probes.get('status') != 'verified':
+              raise SystemExit('negative probes are not verified')
+          if probes.get('main_unchanged') is not True:
+              raise SystemExit('main changed during negative probes')
+          if probes.get('main_unchanged_after_cleanup') is not True:
+              raise SystemExit('main changed during cleanup')
+          for name in ('direct_update', 'force_update', 'deletion'):
+              if probes.get('rejected_by_repository_rules', {}).get(name) is not True:
+                  raise SystemExit(f'{name} was not rejected by repository rules')
+          PY
+
+      - name: Record immutable probe evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p run/repository-governance-negative-probe
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          out = pathlib.Path('run/repository-governance-negative-probe')
+          def git(*args):
+              return subprocess.run(['git', *args], check=True, text=True, stdout=subprocess.PIPE).stdout.strip()
+          summary = {
+              'schema': 'cex.repository-governance-negative-probe-evidence.v1',
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'head_sha': git('rev-parse', 'HEAD'),
+              'head_tree': git('rev-parse', 'HEAD^{tree}'),
+              'workflow_blob': git('rev-parse', 'HEAD:.github/workflows/repository-governance-negative-probe.yml'),
+              'policy_blob': git('rev-parse', 'HEAD:docs/governance/main-ruleset-v1.json'),
+              'probe_script_blob': git('rev-parse', 'HEAD:scripts/probe-repository-ruleset.py'),
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'production_authorization': 'not_granted',
+          }
+          (out / 'summary.json').write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
+          files = sorted(p for p in out.rglob('*') if p.is_file() and p.name != 'manifest.json')
+          (out / 'manifest.json').write_text(json.dumps({
+              'schema': 'cex.repository-governance-negative-probe-artifact-manifest.v1',
+              'files': [
+                  {'path': p.relative_to(out).as_posix(), 'bytes': p.stat().st_size,
+                   'sha256': hashlib.sha256(p.read_bytes()).hexdigest()}
+                  for p in files
+              ],
+          }, indent=2, sort_keys=True) + '\n')
+          PY
+
+      - name: Upload immutable negative-probe evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cex-repository-governance-negative-probe-${{ github.sha }}-${{ github.run_attempt }}
+          path: run/repository-governance-negative-probe/**
+          if-no-files-found: error
+          retention-days: 90
