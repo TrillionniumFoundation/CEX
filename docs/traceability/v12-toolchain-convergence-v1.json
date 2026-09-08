@@ -1,0 +1,29 @@
+{
+  "schema": "cex.v12-toolchain-convergence.v1",
+  "status": "repository_implementation_complete_hosted_evidence_pending",
+  "active_plan": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
+  "issue": 43,
+  "pull_request": 44,
+  "expected_rust_toolchain": "1.98.1",
+  "repository_pin": "rust-toolchain.toml",
+  "checker": "scripts/check-toolchain-convergence.py",
+  "workflow": ".github/workflows/rust-toolchain-convergence.yml",
+  "container_dockerfile": "services/hepta-research-league/Dockerfile",
+  "container_manifest": "services/hepta-research-league/docker/rust-toolchain.manifest",
+  "required_exact_head_evidence": [
+    "rustc_verbose_1_98_1",
+    "cargo_verbose_1_98_1",
+    "locked_metadata_success",
+    "format_success",
+    "container_executed_toolchain_manifest",
+    "container_binary_rebuilt",
+    "sbom_regenerated",
+    "artifact_checksums_verified",
+    "independent_security_review"
+  ],
+  "evidence_transfer_policy": "no_prior_head_credit",
+  "hosted_execution_status": "pending_non_empty_terminal_success",
+  "container_execution_status": "pending_non_empty_terminal_success",
+  "independent_review_status": "required",
+  "production_authorization": "not_granted"
+}
