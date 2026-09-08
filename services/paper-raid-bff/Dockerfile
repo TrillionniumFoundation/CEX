@@ -1,16 +1,18 @@
 # syntax=docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
 FROM docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb AS builder
 WORKDIR /src
+COPY scripts/install-rust-toolchain-1.98.1.sh /toolchain/install-rust-toolchain.sh
+COPY scripts/check-installed-rust-toolchain.sh /toolchain/check-installed-rust-toolchain.sh
+RUN chmod 0755 /toolchain/install-rust-toolchain.sh /toolchain/check-installed-rust-toolchain.sh
+RUN /toolchain/install-rust-toolchain.sh
+ENV PATH="/opt/cex-rust/1.98.1/bin:${PATH}"
+RUN /toolchain/check-installed-rust-toolchain.sh
 COPY services/paper-raid-bff/docker/workspace.Cargo.toml Cargo.toml
 COPY services/paper-raid-bff/docker/Cargo.lock Cargo.lock
 COPY crates/hepta-paper-raid-contracts crates/hepta-paper-raid-contracts
 COPY services/paper-raid-bff/Cargo.toml services/paper-raid-bff/Cargo.toml
 COPY services/paper-raid-bff/src services/paper-raid-bff/src
 COPY services/paper-raid-bff/migrations services/paper-raid-bff/migrations
-RUN test "$(rustc --version)" = \
-      "rustc 1.95.0 (59807616e 2026-04-14)" \
-    && test "$(cargo --version)" = \
-      "cargo 1.95.0 (f2d3ce0bd 2026-03-21)"
 RUN CARGO_HTTP_TIMEOUT=600 \
     CARGO_HTTP_LOW_SPEED_LIMIT=1 \
     CARGO_NET_RETRY=5 \
@@ -63,7 +65,10 @@ LABEL org.opencontainers.image.title="Hepta Paper Raid BFF" \
       org.opencontainers.image.sbom="/usr/share/doc/paper-raid-bff/sbom.cdx.json" \
       org.trillionnium.cargo-lock.sha256="${PAPER_RAID_BFF_CARGO_LOCK_SHA256}" \
       org.trillionnium.sbom.sha256="${PAPER_RAID_BFF_SBOM_SHA256}" \
-      org.trillionnium.runtime-binary.sha256="${PAPER_RAID_BFF_RUNTIME_BINARY_SHA256}"
+      org.trillionnium.runtime-binary.sha256="${PAPER_RAID_BFF_RUNTIME_BINARY_SHA256}" \
+      org.trillionnium.rust-toolchain="1.98.1" \
+      org.trillionnium.rust-commit="48a229ceaefd4985c50990b14116b6d856af0985" \
+      org.trillionnium.cargo-commit="797e8a9bca276c1c9f9f738d2a20f484fa4eea9d"
 # Copy the complete normalized release tree. Copying lone files lets BuildKit
 # stamp their destination parent directories with wall-clock time, producing a
 # different layer digest even when the Rust binary and SBOM bytes are stable.
