@@ -2,160 +2,144 @@ name: world-authority-external-evidence
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - ci/world-settlement-capture-boundary-v1
-    paths:
-      - '.github/workflows/world-authority-external-evidence.yml'
-      - 'evidence/world-authority-external-lock.json'
-  pull_request:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/world-authority-external-evidence.yml'
-      - 'evidence/world-authority-external-lock.json'
+    inputs:
+      cex_sha:
+        description: Exact CEX candidate SHA
+        required: true
+        type: string
+      world_sha:
+        description: Exact Trillionnium-World candidate SHA
+        required: true
+        type: string
+      world_tree:
+        description: Expected Trillionnium-World tree SHA
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: world-authority-external-evidence-${{ github.ref }}
-  cancel-in-progress: true
+  group: world-authority-external-${{ inputs.cex_sha }}-${{ inputs.world_sha }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: '0'
+  RUST_TOOLCHAIN: '1.98.1'
+  WORLD_SOURCE_REPOSITORY: TrillionniumFoundation/Trillionnium-World
+  CEX_SOURCE_SHA: ${{ inputs.cex_sha }}
+  WORLD_SOURCE_SHA: ${{ inputs.world_sha }}
+  WORLD_SOURCE_TREE: ${{ inputs.world_tree }}
 
 jobs:
-  exact-authority-contracts:
-    name: world-authority-external/exact-source-contracts
+  world-authority-external-evidence:
+    name: world-authority-external-evidence
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 150
     steps:
-      - name: Checkout evidence definition
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - name: Load fail-closed component lock
+      - name: Validate exact input identities
+        shell: bash
         run: |
           set -euo pipefail
-          jq -e '
-            .schema == "trnm_world_authority_external_lock_v1" and
-            .world.repository == "TrillionniumFoundation/Trillionnium-World" and
-            .world.role == "deterministic_fixture_only" and
-            .game_nakama.repository == "TrillionniumFoundation/TrillionniumGame" and
-            .game_nakama.role == "target_authority_candidate" and
-            .cutover_authorized == false and
-            .closed_online_promoted == false and
-            .public_online_enabled == false and
-            .public_player_market_enabled == false and
-            (.world.commit | test("^[0-9a-f]{40}$")) and
-            (.world.tree | test("^[0-9a-f]{40}$")) and
-            (.game_nakama.commit | test("^[0-9a-f]{40}$")) and
-            (.game_nakama.tree | test("^[0-9a-f]{40}$"))
-          ' evidence/world-authority-external-lock.json >/dev/null
-          {
-            echo "WORLD_REPOSITORY=$(jq -r '.world.repository' evidence/world-authority-external-lock.json)"
-            echo "WORLD_COMMIT=$(jq -r '.world.commit' evidence/world-authority-external-lock.json)"
-            echo "WORLD_TREE=$(jq -r '.world.tree' evidence/world-authority-external-lock.json)"
-            echo "GAME_REPOSITORY=$(jq -r '.game_nakama.repository' evidence/world-authority-external-lock.json)"
-            echo "GAME_COMMIT=$(jq -r '.game_nakama.commit' evidence/world-authority-external-lock.json)"
-            echo "GAME_TREE=$(jq -r '.game_nakama.tree' evidence/world-authority-external-lock.json)"
-          } >> "$GITHUB_ENV"
-      - name: Checkout exact World fixture
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+          [[ "$CEX_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$WORLD_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$WORLD_SOURCE_TREE" =~ ^[0-9a-f]{40}$ ]]
+
+      - name: Checkout exact CEX candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          repository: ${{ env.WORLD_REPOSITORY }}
-          ref: ${{ env.WORLD_COMMIT }}
-          path: world
+          ref: ${{ env.CEX_SOURCE_SHA }}
+          fetch-depth: 0
           persist-credentials: false
-      - name: Checkout exact Game authority candidate
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Checkout exact World candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          repository: ${{ env.GAME_REPOSITORY }}
-          ref: ${{ env.GAME_COMMIT }}
-          path: game
+          repository: ${{ env.WORLD_SOURCE_REPOSITORY }}
+          ref: ${{ env.WORLD_SOURCE_SHA }}
+          path: .world-source
+          fetch-depth: 0
           persist-credentials: false
-      - name: Verify exact source identities
-        run: |
-          set -euo pipefail
-          test "$(git -C world rev-parse HEAD)" = "$WORLD_COMMIT"
-          test "$(git -C world rev-parse 'HEAD^{tree}')" = "$WORLD_TREE"
-          test "$(git -C game rev-parse HEAD)" = "$GAME_COMMIT"
-          test "$(git -C game rev-parse 'HEAD^{tree}')" = "$GAME_TREE"
-          git -C world diff --exit-code
-          git -C game diff --exit-code
-      - name: Set up exact Go toolchain
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+
+      - name: Install exact Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
-          go-version-file: game/runtime/go.mod
-          cache: false
-      - name: Validate World fixture ownership boundary
-        working-directory: world
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+
+      - name: Verify immutable source tuple
+        shell: bash
         run: |
           set -euo pipefail
-          bash scripts/check-trnm-world-transition-https-fixture.sh
-          bash scripts/test-trnm-world-transition-https-fixture-negative.sh
-          test -z "$(gofmt -l tools/trnm-world-transition-https-v1)"
-          (cd tools/trnm-world-transition-https-v1 && go test ./... -count=1 && go test -race ./... -count=1 && go vet ./...)
-      - name: Validate Game authority and storage boundary
-        working-directory: game
+          test "$(git rev-parse HEAD)" = "$CEX_SOURCE_SHA"
+          test "$(git -C .world-source rev-parse HEAD)" = "$WORLD_SOURCE_SHA"
+          test "$(git -C .world-source rev-parse 'HEAD^{tree}')" = "$WORLD_SOURCE_TREE"
+          test "$(rustc --version | awk '{print $2}')" = "$RUST_TOOLCHAIN"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          test -z "$(git -C .world-source status --porcelain)"
+          mkdir -p run/world-authority-external
+          rustc --version --verbose | tee run/world-authority-external/rustc-version.txt
+          cargo --version --verbose | tee run/world-authority-external/cargo-version.txt
+
+      - name: Qualify World and CEX source boundaries
+        shell: bash
         run: |
           set -euo pipefail
-          bash scripts/check-world-command-deployed-runtime-v1.sh
-          bash scripts/test-world-command-deployed-runtime-v1-negative.sh
-          bash scripts/check-world-command-faultlab-postgres-binding.sh
-          bash scripts/test-world-command-faultlab-postgres-binding-negative.sh
-          bash scripts/check-world-command-prebuilt-fixture.sh
-      - name: Require zero Game formatting drift
+          python3 scripts/check-rust-toolchain-convergence.py
+          python3 scripts/check-project-boundary.py
+          python3 scripts/check-project-boundary-cargo-closure.py
+          bash .world-source/scripts/check-trnm-world-authority-cutover.sh \
+            | tee run/world-authority-external/world-source.log
+          bash scripts/check-world-authority-cutover.sh \
+            | tee run/world-authority-external/cex-adapter.log
+
+      - name: Exercise exact cross-repository HTTP path
+        shell: bash
+        env:
+          WORLD_AUTHORITY_EVIDENCE_DIR: ${{ github.workspace }}/run/world-authority-external
         run: |
           set -euo pipefail
-          unformatted="$(gofmt -l game/runtime)"
-          test -z "$unformatted" || {
-            printf 'unformatted Game files:\n%s\n' "$unformatted" >&2
-            exit 1
-          }
-      - name: Run Game tests, race contracts, vet and builds
-        working-directory: game/runtime
+          bash scripts/check-world-authority-cross-repo-e2e.sh .world-source \
+            | tee run/world-authority-external/cross-repo-e2e.log
+
+      - name: Record immutable evidence
+        if: always()
+        shell: bash
         run: |
           set -euo pipefail
-          go test ./... -count=1
-          go test -race ./internal/worldcommand ./internal/worldtransition -count=1
-          go vet ./...
-          CGO_ENABLED=1 go build -trimpath -buildmode=plugin -o /tmp/backend.so .
-          CGO_ENABLED=0 go build -trimpath -o /tmp/trnm-world-transition-fixture ./cmd/trnm-world-transition-fixture
-          CGO_ENABLED=0 go build -trimpath -o /tmp/trnm-response-drop-proxy ./cmd/trnm-response-drop-proxy
-          CGO_ENABLED=0 go build -trimpath -o /tmp/trnm-tls-fixture ./cmd/trnm-tls-fixture
-      - name: Write bounded exact-source evidence
-        run: |
-          set -euo pipefail
-          mkdir -p evidence-out
+          mkdir -p run/world-authority-external
           python3 - <<'PY'
-          import hashlib, json, os
-          from pathlib import Path
-          payload = {
-              'schema': 'trnm_world_game_authority_external_evidence_v1',
-              'world': {'repository': os.environ['WORLD_REPOSITORY'], 'commit': os.environ['WORLD_COMMIT'], 'tree': os.environ['WORLD_TREE']},
-              'game_nakama': {'repository': os.environ['GAME_REPOSITORY'], 'commit': os.environ['GAME_COMMIT'], 'tree': os.environ['GAME_TREE']},
-              'workflow_run_id': int(os.environ['GITHUB_RUN_ID']),
-              'workflow_run_attempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
-              'checks': ['world fixture boundary', 'game authority boundary', 'zero gofmt drift', 'go tests', 'race contracts', 'go vet', 'plugin and helper builds'],
-              'activation': 'shadow_only',
-              'cutover_authorized': False,
-              'closed_online_promoted': False,
-              'public_online_enabled': False,
-              'public_player_market_enabled': False,
-              'limitations': [
-                  'external exact-source CI is not owner-repository branch protection',
-                  'no production Nakama deployment or multi-host CAS evidence',
-                  'no active-match drain or credential-revocation evidence',
-                  'no cutover, public-online, public-market, or commercial-release credit',
-              ],
+          import hashlib, json, os, pathlib, subprocess
+          out = pathlib.Path('run/world-authority-external')
+          def git(cwd, *args):
+              return subprocess.run(['git', *args], cwd=cwd, check=True, text=True, stdout=subprocess.PIPE).stdout.strip()
+          summary = {
+              'schema': 'cex.world-authority-external-evidence.v2',
+              'status': 'execution_attempted',
+              'cex_sha': git('.', 'rev-parse', 'HEAD'),
+              'cex_tree': git('.', 'rev-parse', 'HEAD^{tree}'),
+              'world_sha': git('.world-source', 'rev-parse', 'HEAD'),
+              'world_tree': git('.world-source', 'rev-parse', 'HEAD^{tree}'),
+              'rust_toolchain': os.environ['RUST_TOOLCHAIN'],
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'production_authorization': 'not_granted',
           }
-          canonical = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()
-          payload['payload_sha256'] = hashlib.sha256(canonical).hexdigest()
-          Path('evidence-out/world-game-authority.json').write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
+          (out / 'summary.json').write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
+          files = sorted(p for p in out.rglob('*') if p.is_file() and p.name != 'manifest.json')
+          (out / 'manifest.json').write_text(json.dumps({
+              'schema': 'cex.world-authority-external-artifact-manifest.v2',
+              'files': [{'path': p.relative_to(out).as_posix(), 'bytes': p.stat().st_size,
+                         'sha256': hashlib.sha256(p.read_bytes()).hexdigest()} for p in files],
+          }, indent=2, sort_keys=True) + '\n')
           PY
-          sha256sum evidence-out/world-game-authority.json > evidence-out/SHA256SUMS
-      - name: Upload exact-source evidence
+
+      - name: Upload immutable external evidence
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: world-game-authority-${{ env.GAME_COMMIT }}
-          path: evidence-out/
+          name: cex-world-authority-external-${{ inputs.cex_sha }}-${{ inputs.world_sha }}-${{ github.run_attempt }}
+          path: run/world-authority-external/**
           if-no-files-found: error
-          retention-days: 30
-          compression-level: 9
+          retention-days: 90
