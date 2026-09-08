@@ -1,0 +1,92 @@
+name: repository-governance-live
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'fix/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-governance-live-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository-governance-live:
+    name: repository-governance-live
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate ruleset payload without mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p run/repository-governance-live
+          python3 scripts/apply-repository-ruleset.py --dry-run \
+            --output run/repository-governance-live/application-dry-run.json
+
+      - name: Verify live GitHub enforcement
+        id: live
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 scripts/verify-repository-ruleset.py \
+            --output run/repository-governance-live/live-verification.json
+
+      - name: Record exact source and workflow identity
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p run/repository-governance-live
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          out = pathlib.Path('run/repository-governance-live')
+          def git(*args):
+              return subprocess.run(['git', *args], check=True, text=True, stdout=subprocess.PIPE).stdout.strip()
+          summary = {
+              'schema': 'cex.repository-governance-live-evidence.v1',
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'event_name': os.environ['GITHUB_EVENT_NAME'],
+              'head_sha': git('rev-parse', 'HEAD'),
+              'head_tree': git('rev-parse', 'HEAD^{tree}'),
+              'workflow_blob': git('rev-parse', 'HEAD:.github/workflows/repository-governance-live.yml'),
+              'policy_blob': git('rev-parse', 'HEAD:docs/governance/main-ruleset-v1.json'),
+              'verifier_blob': git('rev-parse', 'HEAD:scripts/verify-repository-ruleset.py'),
+              'applier_blob': git('rev-parse', 'HEAD:scripts/apply-repository-ruleset.py'),
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'production_authorization': 'not_granted',
+          }
+          (out / 'summary.json').write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
+          files = sorted(p for p in out.rglob('*') if p.is_file() and p.name != 'manifest.json')
+          (out / 'manifest.json').write_text(json.dumps({
+              'schema': 'cex.repository-governance-live-artifact-manifest.v1',
+              'files': [
+                  {'path': p.relative_to(out).as_posix(), 'bytes': p.stat().st_size,
+                   'sha256': hashlib.sha256(p.read_bytes()).hexdigest()}
+                  for p in files
+              ],
+          }, indent=2, sort_keys=True) + '\n')
+          PY
+
+      - name: Upload live governance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cex-repository-governance-live-${{ github.sha }}-${{ github.run_attempt }}
+          path: run/repository-governance-live/**
+          if-no-files-found: error
+          retention-days: 90
