@@ -1,8 +1,11 @@
 # syntax=docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
 FROM docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb AS workspace
 
+ARG RUST_TOOLCHAIN=1.98.1
 WORKDIR /src
-ENV CARGO_NET_GIT_FETCH_WITH_CLI=false
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=false \
+    RUSTUP_DIST_SERVER=https://static.rust-lang.org \
+    RUSTUP_UPDATE_ROOT=https://static.rust-lang.org/rustup
 
 # The compile DAG is deliberately closed. In particular, the tracked SBOM and
 # all release labels/hashes are absent until after the Rust binary exists.
@@ -48,15 +51,32 @@ COPY migrations/0054_bind_challenge_pack_activation_chain_proof.sql migrations/0
 COPY docs/openapi/hepta-research-league-v1.yaml docs/openapi/hepta-research-league-v1.yaml
 COPY docs/openapi/hepta-paper-raid-v2.yaml docs/openapi/hepta-paper-raid-v2.yaml
 
+# The bootstrap image is immutable but not the release compiler authority. Fetch
+# the official channel manifest and checksum, install the exact point release,
+# then record the compiler/Cargo identities that actually execute the build.
 RUN test "$(sed -n '1p' /toolchain/rust-toolchain.manifest)" = \
-      "builder=docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb" \
+      "bootstrap_builder=docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb" \
     && test "$(sed -n '2p' /toolchain/rust-toolchain.manifest)" = \
-      "rustc=rustc 1.95.0 (59807616e 2026-04-14)" \
+      "rust_toolchain=1.98.1" \
     && test "$(sed -n '3p' /toolchain/rust-toolchain.manifest)" = \
-      "cargo=cargo 1.95.0 (f2d3ce0bd 2026-03-21)" \
+      "rustup_dist_server=https://static.rust-lang.org" \
     && test "$(wc -l < /toolchain/rust-toolchain.manifest)" -eq 3 \
-    && test "$(rustc --version)" = "rustc 1.95.0 (59807616e 2026-04-14)" \
-    && test "$(cargo --version)" = "cargo 1.95.0 (f2d3ce0bd 2026-03-21)"
+    && curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+      "$RUSTUP_DIST_SERVER/dist/channel-rust-${RUST_TOOLCHAIN}.toml" \
+      --output "/tmp/channel-rust-${RUST_TOOLCHAIN}.toml" \
+    && curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+      "$RUSTUP_DIST_SERVER/dist/channel-rust-${RUST_TOOLCHAIN}.toml.sha256" \
+      --output "/tmp/channel-rust-${RUST_TOOLCHAIN}.toml.sha256" \
+    && cd /tmp \
+    && sha256sum --check --strict "channel-rust-${RUST_TOOLCHAIN}.toml.sha256" \
+    && cd /src \
+    && rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt,clippy \
+    && rustup default "$RUST_TOOLCHAIN" \
+    && test "$(rustc --version | awk '{print $2}')" = "$RUST_TOOLCHAIN" \
+    && rustc --version --verbose > /toolchain/rustc-version.txt \
+    && cargo --version --verbose > /toolchain/cargo-version.txt \
+    && rustup show active-toolchain > /toolchain/active-toolchain.txt \
+    && cp "/tmp/channel-rust-${RUST_TOOLCHAIN}.toml.sha256" /toolchain/channel-manifest.sha256
 
 FROM workspace AS lockfile-verifier
 COPY services/hepta-research-league/docker/Cargo.lock Cargo.lock
@@ -90,6 +110,10 @@ COPY --from=builder /src/target/release/hepta-research-league /hepta-research-le
 
 FROM scratch AS sbom-metadata-export
 COPY --from=builder /cargo-metadata.json /cargo-metadata.json
+COPY --from=builder /toolchain/rustc-version.txt /rustc-version.txt
+COPY --from=builder /toolchain/cargo-version.txt /cargo-version.txt
+COPY --from=builder /toolchain/active-toolchain.txt /active-toolchain.txt
+COPY --from=builder /toolchain/channel-manifest.sha256 /channel-manifest.sha256
 
 FROM builder AS release
 ARG SOURCE_DATE_EPOCH
@@ -107,6 +131,18 @@ RUN case "$SOURCE_DATE_EPOCH" in ''|*[!0-9]*) exit 64 ;; esac \
     && install -D -m 0644 -o 65532 -g 65532 \
       /tracked/hepta-research-league.cdx.json \
       /release/usr/share/doc/hepta-research-league/sbom.cdx.json \
+    && install -D -m 0644 -o 65532 -g 65532 \
+      /toolchain/rustc-version.txt \
+      /release/usr/share/doc/hepta-research-league/rustc-version.txt \
+    && install -D -m 0644 -o 65532 -g 65532 \
+      /toolchain/cargo-version.txt \
+      /release/usr/share/doc/hepta-research-league/cargo-version.txt \
+    && install -D -m 0644 -o 65532 -g 65532 \
+      /toolchain/active-toolchain.txt \
+      /release/usr/share/doc/hepta-research-league/active-toolchain.txt \
+    && install -D -m 0644 -o 65532 -g 65532 \
+      /toolchain/channel-manifest.sha256 \
+      /release/usr/share/doc/hepta-research-league/channel-manifest.sha256 \
     && find /release -type d -exec touch --no-dereference --date="@$SOURCE_DATE_EPOCH" {} + \
     && find /release -type f -exec touch --no-dereference --date="@$SOURCE_DATE_EPOCH" {} +
 
@@ -135,6 +171,7 @@ LABEL org.opencontainers.image.title="Hepta Research League" \
       io.trillionnium.hepta.application-sbom.path="/usr/share/doc/hepta-research-league/sbom.cdx.json" \
       io.trillionnium.hepta.application-sbom.sha256="$SBOM_SHA256" \
       io.trillionnium.hepta.runtime-binary.sha256="$RUNTIME_BINARY_SHA256" \
+      io.trillionnium.hepta.rust-toolchain="1.98.1" \
       io.trillionnium.hepta.runtime-base="gcr.io/distroless/cc-debian12@sha256:471dbca9cad607b9a32c10e9c31fb09ffaeb2d460e0afbff86c27abbc80b1b98" \
       io.trillionnium.hepta.builder-base="docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb"
 
