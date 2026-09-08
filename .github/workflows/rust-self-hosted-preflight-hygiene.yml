@@ -5,6 +5,9 @@ on:
   schedule:
     - cron: '15 2 * * 1'
 
+permissions:
+  contents: read
+
 concurrency:
   group: rust-self-hosted-preflight-hygiene
   cancel-in-progress: false
@@ -19,18 +22,27 @@ jobs:
     timeout-minutes: 30
     env:
       ARTIFACT_ROOT: ci-artifacts\self-hosted-preflight-hygiene
+      RUST_TOOLCHAIN: '1.98.1'
     defaults:
       run:
         shell: powershell
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install exact Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+
+      - name: Verify exact compiler and Cargo identity
+        run: python .\scripts\check-rust-toolchain-convergence.py --verify-installed
 
       - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
 
       - name: Prepare artifact directory
         run: New-Item -ItemType Directory -Force -Path $env:ARTIFACT_ROOT | Out-Null
@@ -43,6 +55,7 @@ jobs:
             "sha=${{ github.sha }}"
             "workflow=rust-self-hosted-preflight-hygiene"
             "schedule_utc=15 2 * * 1"
+            "rust_toolchain=1.98.1"
           ) | Set-Content -LiteralPath (Join-Path $env:ARTIFACT_ROOT 'hygiene-context.txt') -Encoding UTF8
 
       - name: Run self-hosted preflight
@@ -63,7 +76,7 @@ jobs:
 
       - name: Upload hygiene artifacts
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: rust-self-hosted-preflight-hygiene-${{ github.run_id }}
           path: ci-artifacts/self-hosted-preflight-hygiene
