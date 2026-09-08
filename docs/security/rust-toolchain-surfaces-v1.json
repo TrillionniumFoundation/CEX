@@ -82,7 +82,6 @@
     ".github/workflows/trnm-economy-ci.yml",
     ".github/workflows/trnm-economy-settlement.yml",
     ".github/workflows/world-settlement-external-evidence.yml",
-    ".github/workflows/world-settlement-final-convergence-v3.yml",
     "services/hepta-research-league/Dockerfile",
     "services/hepta-research-league/docker/rust-toolchain.manifest",
     "services/paper-raid-bff/Dockerfile",
