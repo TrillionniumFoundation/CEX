@@ -13,10 +13,12 @@ on:
       - 'services/execution-service/**'
       - 'scripts/check-execution-settlement-commands.py'
       - 'scripts/check-execution-settlement-commands-postgres.sh'
+      - 'scripts/check-rust-toolchain-convergence.py'
       - 'docs/execution-ledger-settlement-commands-v1.md'
       - 'docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md'
       - 'docs/templates/cex-release-baseline-manifest-v1.json'
       - 'docs/release-evidence/p0-candidate-trigger.json'
+      - 'docs/security/rust-toolchain-surfaces-v1.json'
       - 'config/execution-settlement-worker.env.example'
       - 'ops/systemd/cex-execution-settlement-worker.service'
       - '.github/workflows/p0-execution-settlement-gate.yml'
@@ -30,10 +32,12 @@ concurrency:
 
 env:
   DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/cex_ci
+  RUST_TOOLCHAIN: '1.98.1'
+  RUST_RELEASE_COMMIT: '48a229ceaefd4985c50990b14116b6d856af0985'
 
 jobs:
   execution-settlement:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     services:
       postgres:
@@ -51,19 +55,30 @@ jobs:
           --health-retries 20
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
 
       - name: Candidate tree hygiene
         run: python3 scripts/check-p0-release-candidate-hygiene.py
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - name: Install exact Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
+          toolchain: 1.98.1
           components: rustfmt
 
+      - name: Verify Rust toolchain identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(rustc --version | awk '{print $2}')" = "$RUST_TOOLCHAIN"
+          rustc --version --verbose | grep -Fx "commit-hash: $RUST_RELEASE_COMMIT"
+
       - name: Cache Cargo artifacts
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
 
       - name: Static P0-N5 architecture gate
         run: python3 scripts/check-execution-settlement-commands.py
