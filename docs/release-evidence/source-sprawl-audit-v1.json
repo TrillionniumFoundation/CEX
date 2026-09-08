@@ -1,0 +1,6 @@
+{
+  "schema": "cex.source-sprawl-audit.v1",
+  "new_placeholder_evidence_files_forbidden": true,
+  "remaining_authority": "live_server_readback_only",
+  "production_authorization": "not_granted"
+}
