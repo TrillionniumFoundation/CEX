@@ -10,6 +10,8 @@ on:
       - 'crates/**'
       - 'services/ledger-service/src/lib.rs'
       - 'services/ledger-service/src/receipt_lookup.rs'
+      - 'services/matrix-entry-adapter/migrations/**'
+      - 'services/matrix-entry-adapter/operator-migrations/**'
       - 'scripts/check-p0-migrations.py'
       - 'scripts/check-p0-migrations-postgres.sh'
       - 'scripts/_dev-helpers.sh'
@@ -23,6 +25,17 @@ on:
       - 'scripts/check-trnm-settlement-receipt-lookup-http.sh'
       - 'scripts/check-trnm-economy-settlement-contract.py'
       - 'scripts/test-trnm-economy-settlement-status-negative.py'
+      - 'scripts/check-matrix-result-reconciliation.py'
+      - 'scripts/check-matrix-result-runtime-closure.py'
+      - 'scripts/test-matrix-result-reconciler.py'
+      - 'scripts/matrix_result_reconciler.py'
+      - 'scripts/matrix_postgres_regression.py'
+      - 'scripts/matrix_operator_postgres_regression.py'
+      - 'scripts/check-matrix-source-observation-postgres.sh'
+      - 'scripts/check-matrix-operator-postgres.sh'
+      - 'scripts/test-matrix-result-reconciliation-postgres.sql'
+      - 'scripts/test-matrix-result-evidence-hardening-postgres.sql'
+      - 'scripts/test-matrix-result-runtime-closure-postgres.sql'
       - 'scripts/check-strict-release-evidence-wiring.py'
       - 'scripts/check-release-evidence-contract.py'
       - 'scripts/p0-release-evidence-strict.py'
@@ -31,6 +44,8 @@ on:
       - 'services/trnm-economy-service/**'
       - 'docs/status/trnm-economy-settlement-v1.json'
       - 'docs/trnm-economy-settlement-receipt-lookup-v1.md'
+      - 'docs/matrix-result-reconciliation-v1.md'
+      - 'docs/matrix-result-reconciliation-runtime-v2.md'
       - 'scripts/backfill-audit-source-baselines.sh'
       - 'docs/templates/cex-release-baseline-manifest-v1.json'
       - 'docs/audit-source-baseline-backfill-v1.md'
@@ -50,11 +65,13 @@ concurrency:
 
 env:
   DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/cex_ci
+  MATRIX_TEST_DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/matrix_migration_ci
+  MATRIX_TEST_ALLOW_SCHEMA_RESET: '1'
 
 jobs:
   fresh-postgres-migrations:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:16
@@ -97,6 +114,13 @@ jobs:
           python3 scripts/test-trnm-economy-settlement-status-negative.py
           bash scripts/test-runtime-profile-wiring.sh
 
+      - name: Matrix result-reconciliation source and operator contract
+        run: |
+          python3 scripts/test-matrix-result-reconciler.py
+          python3 scripts/check-matrix-result-reconciliation.py
+          python3 scripts/check-matrix-result-runtime-closure.py
+          python3 scripts/test-matrix-operator-postgres-runner.py
+
       - name: Fresh apply and P0 database assertions
         run: bash scripts/check-p0-migrations-postgres.sh
 
@@ -114,3 +138,20 @@ jobs:
 
       - name: Invocation Ledger terminal exclusivity
         run: bash scripts/check-invocation-ledger-terminal-postgres.sh
+
+      - name: Create disposable Matrix regression database
+        env:
+          PGPASSWORD: cex_ci_password
+        run: |
+          set -euo pipefail
+          psql -h 127.0.0.1 -U cex -d postgres \
+            -v ON_ERROR_STOP=1 \
+            -c 'create database matrix_migration_ci'
+
+      - name: Matrix transport and response-loss PostgreSQL closure
+        run: |
+          bash scripts/check-matrix-source-observation-postgres.sh
+          bash scripts/check-matrix-operator-postgres.sh
+
+      - name: No source mutation
+        run: git diff --exit-code
