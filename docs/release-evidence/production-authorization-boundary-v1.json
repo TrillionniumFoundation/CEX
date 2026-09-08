@@ -1,0 +1,15 @@
+{
+  "schema": "cex.production-authorization-boundary.v1",
+  "repository_qualification_can_authorize_production": false,
+  "required_external_evidence": [
+    "representative_volume_recovery",
+    "real_deployment_cutover_rollback",
+    "provider_outcome_artifacts",
+    "credential_custody_review",
+    "sustained_production_like_soak",
+    "independent_security_operations_financial_review",
+    "legal_commercial_provider_approval",
+    "final_human_go_no_go"
+  ],
+  "production_authorization": "not_granted"
+}
