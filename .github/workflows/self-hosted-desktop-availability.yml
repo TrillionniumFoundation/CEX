@@ -1,4 +1,4 @@
-name: Self-hosted desktop runner availability
+name: Self-hosted desktop availability
 
 on:
   workflow_dispatch:
@@ -9,33 +9,40 @@ on:
         default: operator-check
         type: string
 
-# This probe intentionally does not check out repository code. It only proves
-# that the selected, trusted main/manual lane can acquire the desktop runner.
 permissions: {}
 
+concurrency:
+  group: self-hosted-desktop-availability-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_TOOLCHAIN: '1.98.1'
+
 jobs:
-  runner-probe:
-    name: Desktop runner probe
-    runs-on:
-      - self-hosted
-      - linux
-      - x64
+  desktop:
+    name: Self-hosted desktop probe
+    runs-on: [self-hosted, linux, x64, desktop]
     timeout-minutes: 10
     steps:
-      - name: Verify trusted manual main invocation
+      - name: Verify trusted bounded invocation
         shell: bash
         run: |
           set -euo pipefail
           test "$GITHUB_EVENT_NAME" = workflow_dispatch
           test "$GITHUB_REF" = refs/heads/main
-          test "$RUNNER_NAME" = desktop
+          test -n "$RUNNER_NAME"
           printf 'runner=%s\nos=%s\narch=%s\nref=%s\nreason=%s\n' \
             "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH" "$GITHUB_REF" \
             '${{ inputs.reason }}'
-      - name: Read-only capability snapshot
+
+      - name: Report installed platform capabilities without using them as release authority
         shell: bash
         run: |
           set -euo pipefail
           uname -a
-          if command -v adb >/dev/null 2>&1; then adb devices -l || true; fi
-          if command -v nvidia-smi >/dev/null 2>&1; then nvidia-smi --query-gpu=name --format=csv,noheader || true; fi
+          command -v rustup >/dev/null 2>&1 && rustup --version || true
+          command -v rustc >/dev/null 2>&1 && rustc --version --verbose || true
+          command -v cargo >/dev/null 2>&1 && cargo --version --verbose || true
+          echo "expected_release_toolchain=$RUST_TOOLCHAIN"
+          echo "probe_only=true"
+          echo "production_authorization=not_granted"
