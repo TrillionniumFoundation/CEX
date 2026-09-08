@@ -2,6 +2,12 @@
 FROM docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb AS workspace
 
 WORKDIR /src
+COPY scripts/install-rust-toolchain-1.98.1.sh /toolchain/install-rust-toolchain.sh
+COPY scripts/check-installed-rust-toolchain.sh /toolchain/check-installed-rust-toolchain.sh
+RUN chmod 0755 /toolchain/install-rust-toolchain.sh /toolchain/check-installed-rust-toolchain.sh
+RUN /toolchain/install-rust-toolchain.sh
+ENV PATH="/opt/cex-rust/1.98.1/bin:${PATH}"
+RUN /toolchain/check-installed-rust-toolchain.sh
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=false
 
 # The compile DAG is deliberately closed. In particular, the tracked SBOM and
@@ -48,15 +54,16 @@ COPY migrations/0054_bind_challenge_pack_activation_chain_proof.sql migrations/0
 COPY docs/openapi/hepta-research-league-v1.yaml docs/openapi/hepta-research-league-v1.yaml
 COPY docs/openapi/hepta-paper-raid-v2.yaml docs/openapi/hepta-paper-raid-v2.yaml
 
-RUN test "$(sed -n '1p' /toolchain/rust-toolchain.manifest)" = \
-      "builder=docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb" \
-    && test "$(sed -n '2p' /toolchain/rust-toolchain.manifest)" = \
-      "rustc=rustc 1.95.0 (59807616e 2026-04-14)" \
-    && test "$(sed -n '3p' /toolchain/rust-toolchain.manifest)" = \
-      "cargo=cargo 1.95.0 (f2d3ce0bd 2026-03-21)" \
-    && test "$(wc -l < /toolchain/rust-toolchain.manifest)" -eq 3 \
-    && test "$(rustc --version)" = "rustc 1.95.0 (59807616e 2026-04-14)" \
-    && test "$(cargo --version)" = "cargo 1.95.0 (f2d3ce0bd 2026-03-21)"
+RUN grep -Fx 'builder=docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb' /toolchain/rust-toolchain.manifest \
+    && grep -Fx 'toolchain=1.98.1' /toolchain/rust-toolchain.manifest \
+    && grep -Fx 'rust_release_commit=48a229ceaefd4985c50990b14116b6d856af0985' /toolchain/rust-toolchain.manifest \
+    && grep -Fx 'cargo_commit=797e8a9bca276c1c9f9f738d2a20f484fa4eea9d' /toolchain/rust-toolchain.manifest \
+    && grep -Fx 'dist_date=2026-09-03' /toolchain/rust-toolchain.manifest \
+    && grep -Fx 'dist_x86_64_unknown_linux_gnu_sha256=5326b36c53de11d148c8f8dab6553a3d1006c2cfd32123683073fad3c302605b' /toolchain/rust-toolchain.manifest \
+    && grep -Fx 'dist_aarch64_unknown_linux_gnu_sha256=0b514a8cc1cbcd939bff0f151661fe58b6ea5c7a7f645a5098c69e32e8c1e0a2' /toolchain/rust-toolchain.manifest \
+    && grep -Fx 'production_authorization=not_granted' /toolchain/rust-toolchain.manifest \
+    && test "$(wc -l < /toolchain/rust-toolchain.manifest)" -eq 8 \
+    && /toolchain/check-installed-rust-toolchain.sh
 
 FROM workspace AS lockfile-verifier
 COPY services/hepta-research-league/docker/Cargo.lock Cargo.lock
@@ -135,6 +142,9 @@ LABEL org.opencontainers.image.title="Hepta Research League" \
       io.trillionnium.hepta.application-sbom.path="/usr/share/doc/hepta-research-league/sbom.cdx.json" \
       io.trillionnium.hepta.application-sbom.sha256="$SBOM_SHA256" \
       io.trillionnium.hepta.runtime-binary.sha256="$RUNTIME_BINARY_SHA256" \
+      io.trillionnium.hepta.rust-toolchain="1.98.1" \
+      io.trillionnium.hepta.rust-commit="48a229ceaefd4985c50990b14116b6d856af0985" \
+      io.trillionnium.hepta.cargo-commit="797e8a9bca276c1c9f9f738d2a20f484fa4eea9d" \
       io.trillionnium.hepta.runtime-base="gcr.io/distroless/cc-debian12@sha256:471dbca9cad607b9a32c10e9c31fb09ffaeb2d460e0afbff86c27abbc80b1b98" \
       io.trillionnium.hepta.builder-base="docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb"
 
