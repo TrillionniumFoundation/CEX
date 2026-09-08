@@ -21,6 +21,7 @@
 /docs/security/rust-release-surfaces-v1.json @Tomasrgbsf
 /docs/security/rust-feature-closure-v1.json @Tomasrgbsf
 /scripts/check-rust-advisory-exceptions.py @Tomasrgbsf
+/scripts/check-sequence54-rustsec-admission.py @Tomasrgbsf
 /scripts/rust_advisory_common_v5.py @Tomasrgbsf
 /scripts/rust_advisory_packages_v5.py @Tomasrgbsf
 /scripts/rust_advisory_gate_v5.py @Tomasrgbsf

@@ -73,6 +73,9 @@ jobs:
       - name: Validate Sequence 54 non-regression contract
         run: python3 scripts/check-sequence54-integration.py
 
+      - name: Validate Sequence 54 RustSec admission wiring
+        run: python3 scripts/check-sequence54-rustsec-admission.py
+
       - name: Validate recursive active-surface toolchain convergence
         run: python3 scripts/check-rust-toolchain-convergence.py
 
@@ -156,6 +159,7 @@ jobs:
             docs/security/rust-advisory-exceptions-v1.json
             docs/security/rust-release-surfaces-v1.json
             docs/security/rust-feature-closure-v1.json
+            scripts/check-sequence54-rustsec-admission.py
             scripts/check-rust-advisory-exceptions.py
             scripts/rust_advisory_common_v5.py
             scripts/rust_advisory_packages_v5.py

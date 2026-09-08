@@ -18,10 +18,26 @@
   "normative_document": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-SEQUENCE54-INTEGRATION.md",
   "verification": [
     "scripts/check-sequence54-integration.py",
+    "scripts/check-sequence54-rustsec-admission.py",
+    "scripts/check-rust-advisory-exceptions.py",
     "scripts/check-rust-toolchain-convergence.py",
     "scripts/check-development-docs.py",
     "scripts/check-module-documentation.py"
   ],
+  "rustsec_admission": {
+    "policy": "docs/security/rust-advisory-exceptions-v1.json",
+    "feature_closure": "docs/security/rust-feature-closure-v1.json",
+    "release_surfaces": "docs/security/rust-release-surfaces-v1.json",
+    "risk_issue": 35,
+    "approval_pull_request": 53,
+    "required_independent_security_approver": "Tomasrgbsf",
+    "expiry_ceiling": "2026-10-08",
+    "advisories": [
+      "RUSTSEC-2023-0071",
+      "RUSTSEC-2026-0214",
+      "RUSTSEC-2024-0436"
+    ]
+  },
   "gate": ".github/workflows/p0-sequence54-integration.yml",
   "required_repository_invariants": [
     "workspace_23_members_preserved",
@@ -31,6 +47,8 @@
     "matrix_durability_preserved",
     "paper_raid_sequence52_assertions_preserved",
     "rust_1_98_1_recursive_active_surface_convergence",
+    "bounded_rustsec_policy_and_all_feature_release_surface_closure_preserved",
+    "rustsec_policy_owned_by_independent_codeowner",
     "obsolete_source_writing_workflows_absent",
     "ruleset_policy_complete_and_fail_closed",
     "repository_external_cargo_paths_forbidden"
