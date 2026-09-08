@@ -27,3 +27,16 @@
 /scripts/rust_advisory_feature_closure_v6.py @Tomasrgbsf
 /deny.toml @Tomasrgbsf
 /.github/workflows/trnm-economy-ci.yml @Tomasrgbsf
+
+# Compiler, container and release-candidate toolchain authority require the same independent security owner.
+/scripts/check-rust-toolchain-convergence.py @Tomasrgbsf
+/scripts/rust_toolchain_convergence_v1.py @Tomasrgbsf
+/scripts/check-installed-rust-toolchain.sh @Tomasrgbsf
+/scripts/install-rust-toolchain-1.98.1.sh @Tomasrgbsf
+/services/hepta-research-league/docker/rust-toolchain.manifest @Tomasrgbsf
+/services/hepta-research-league/Dockerfile @Tomasrgbsf
+/services/paper-raid-bff/Dockerfile @Tomasrgbsf
+/services/paper-raid-bff/Dockerfile.accessctl @Tomasrgbsf
+/services/paper-raid-bff/scripts/check-docker-lock.sh @Tomasrgbsf
+/services/paper-raid-bff/scripts/check-boundaries.sh @Tomasrgbsf
+/services/paper-raid-bff/scripts/check-browser-mobile-a11y.sh @Tomasrgbsf
