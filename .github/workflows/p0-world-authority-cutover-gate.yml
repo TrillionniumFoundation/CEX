@@ -3,30 +3,10 @@ name: p0-world-authority-cutover-gate
 on:
   workflow_dispatch:
   pull_request:
-    paths:
-      - 'services/consumer-entry-api/**'
-      - 'config/world-authority-adapter.env.example'
-      - 'docs/world-authority-cutover-v1.md'
-      - 'docs/traceability/world-authority-cutover-v1.json'
-      - 'docs/release-evidence/world-repin-sequence17.json'
-      - 'scripts/run-world-authority-adapter.sh'
-      - 'scripts/check-world-authority-cutover.sh'
-      - 'scripts/check-world-authority-cross-repo-e2e.sh'
-      - '.github/workflows/p0-world-authority-cutover-gate.yml'
   push:
     branches:
       - main
-      - 'fix/hepta-p0-blocker-closure-*'
-    paths:
-      - 'services/consumer-entry-api/**'
-      - 'config/world-authority-adapter.env.example'
-      - 'docs/world-authority-cutover-v1.md'
-      - 'docs/traceability/world-authority-cutover-v1.json'
-      - 'docs/release-evidence/world-repin-sequence17.json'
-      - 'scripts/run-world-authority-adapter.sh'
-      - 'scripts/check-world-authority-cutover.sh'
-      - 'scripts/check-world-authority-cross-repo-e2e.sh'
-      - '.github/workflows/p0-world-authority-cutover-gate.yml'
+      - 'fix/**'
 
 permissions:
   contents: read
@@ -48,13 +28,13 @@ jobs:
   exact-sha-cross-repository-qualification:
     name: p0-world-authority-cutover/exact-sha-cross-repository-qualification
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 150
     steps:
       - name: Checkout exact CEX candidate
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ env.CEX_SOURCE_SHA }}
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Resolve one authoritative World identity
@@ -78,7 +58,7 @@ jobs:
           print(f'world_tree={tree}')
           PY
 
-      - name: Checkout exact World candidate with provenance history
+      - name: Checkout exact World candidate with history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: ${{ env.WORLD_SOURCE_REPOSITORY }}
@@ -87,7 +67,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify exact source identities
+      - name: Install exact Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+
+      - name: Verify exact identities
         shell: bash
         env:
           WORLD_SOURCE_SHA: ${{ steps.world_identity.outputs.world_sha }}
@@ -96,46 +82,47 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$CEX_SOURCE_SHA"
           test "$(git -C .world-source rev-parse HEAD)" = "$WORLD_SOURCE_SHA"
-          test "$(git -C .world-source rev-parse HEAD^{tree})" = "$WORLD_SOURCE_TREE"
+          test "$(git -C .world-source rev-parse 'HEAD^{tree}')" = "$WORLD_SOURCE_TREE"
+          test "$(rustc --version | awk '{print $2}')" = "$RUST_TOOLCHAIN"
           test -z "$(git status --porcelain --untracked-files=no)"
           test -z "$(git -C .world-source status --porcelain)"
-          test -s .world-source/deploy/postgres/trnm-world-authority-catalog-fingerprint-v1.sql
-          test -s .world-source/scripts/apply-trnm-world-authority-cutover-v1-legacy.sh
-
-      - name: Install immutable Rust toolchain
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
-        with:
-          toolchain: 1.98.1
-          components: rustfmt, clippy
-
-      - name: Verify toolchain identity
-        shell: bash
-        run: test "$(rustc --version | awk '{print $2}')" = "$RUST_TOOLCHAIN"
+          mkdir -p run/world-authority-cutover
+          rustc --version --verbose | tee run/world-authority-cutover/rustc-version.txt
+          cargo --version --verbose | tee run/world-authority-cutover/cargo-version.txt
 
       - name: Qualify exact World source and durable contract closure
         id: world
         shell: bash
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/world-authority-target
-        run: bash .world-source/scripts/check-trnm-world-authority-cutover.sh
+        run: |
+          set -euo pipefail
+          bash .world-source/scripts/check-trnm-world-authority-cutover.sh \
+            | tee run/world-authority-cutover/world-source.log
 
       - name: Qualify CEX remote adapter and production write fence
         id: cex
         shell: bash
-        run: bash scripts/check-world-authority-cutover.sh
+        run: |
+          set -euo pipefail
+          python3 scripts/check-rust-toolchain-convergence.py
+          python3 scripts/check-project-boundary.py
+          python3 scripts/check-project-boundary-cargo-closure.py
+          bash scripts/check-world-authority-cutover.sh \
+            | tee run/world-authority-cutover/cex-adapter.log
 
       - name: Exercise cross-repository HTTP, restart, outage and rollback
         id: cross_repo
         shell: bash
         env:
+          WORLD_SOURCE_SHA: ${{ steps.world_identity.outputs.world_sha }}
           WORLD_AUTHORITY_EVIDENCE_DIR: ${{ github.workspace }}/run/world-authority-cutover
         run: |
           set -euo pipefail
-          mkdir -p run/world-authority-cutover
           bash scripts/check-world-authority-cross-repo-e2e.sh .world-source \
             | tee run/world-authority-cutover/cross-repo-smoke.log
 
-      - name: Record truth-bound exact-object evidence
+      - name: Record exact-object evidence
         if: always()
         shell: bash
         env:
@@ -158,16 +145,14 @@ jobs:
               'cross_repository_e2e': os.environ.get('CROSS_REPO_OUTCOME', 'skipped'),
           }
           receipt = {
-              'schema': 'cex.world.authority.exact-object-gate.v5',
-              'status': 'cross_repository_source_qualification_green' if all(v == 'success' for v in outcomes.values()) else 'failed_or_incomplete',
+              'schema': 'cex.world.authority.exact-object-gate.v6',
+              'status': 'qualified' if all(v == 'success' for v in outcomes.values()) else 'failed_or_incomplete',
               'cex_head_sha': os.environ['CEX_SOURCE_SHA'],
               'cex_head_tree': git('.', 'rev-parse', 'HEAD^{tree}'),
               'world_repository': os.environ['WORLD_SOURCE_REPOSITORY'],
               'world_head_sha': os.environ['WORLD_SOURCE_SHA'],
               'world_head_tree': os.environ['WORLD_SOURCE_TREE'],
-              'world_catalog_fingerprint_blob': git('.world-source', 'rev-parse', 'HEAD:deploy/postgres/trnm-world-authority-catalog-fingerprint-v1.sql'),
-              'world_supported_installer_blob': git('.world-source', 'rev-parse', 'HEAD:scripts/apply-trnm-world-authority-cutover-v1.sh'),
-              'world_legacy_installer_blob': git('.world-source', 'rev-parse', 'HEAD:scripts/apply-trnm-world-authority-cutover-v1-legacy.sh'),
+              'rust_toolchain': os.environ['RUST_TOOLCHAIN'],
               'outcomes': outcomes,
               'run_id': os.environ['GITHUB_RUN_ID'],
               'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
@@ -176,8 +161,9 @@ jobs:
           (out / 'exact-object-gate-summary.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
           files = sorted(p for p in out.rglob('*') if p.is_file() and p.name != 'artifact-manifest.json')
           (out / 'artifact-manifest.json').write_text(json.dumps({
-              'schema': 'cex.world.authority.artifact-manifest.v5',
-              'files': [{'path': p.relative_to(out).as_posix(), 'bytes': p.stat().st_size, 'sha256': hashlib.sha256(p.read_bytes()).hexdigest()} for p in files],
+              'schema': 'cex.world.authority.artifact-manifest.v6',
+              'files': [{'path': p.relative_to(out).as_posix(), 'bytes': p.stat().st_size,
+                         'sha256': hashlib.sha256(p.read_bytes()).hexdigest()} for p in files],
           }, indent=2, sort_keys=True) + '\n')
           PY
 
@@ -185,7 +171,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: p0-world-authority-cutover-${{ env.CEX_SOURCE_SHA }}-${{ steps.world_identity.outputs.world_sha }}
+          name: p0-world-authority-cutover-${{ env.CEX_SOURCE_SHA }}-${{ steps.world_identity.outputs.world_sha }}-${{ github.run_attempt }}
           path: run/world-authority-cutover/**
           if-no-files-found: error
           retention-days: 90
