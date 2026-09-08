@@ -13,11 +13,14 @@ on:
       - 'services/trnm-economy-service/**'
       - 'docs/trnm-economy-settlement-receipt-lookup-v1.md'
       - 'docs/status/trnm-economy-settlement-v1.json'
+      - 'docs/security/rust-toolchain-surfaces-v1.json'
+      - 'scripts/check-rust-toolchain-convergence.py'
       - 'scripts/check-trnm-economy-settlement-contract.py'
       - 'scripts/test-trnm-economy-settlement-status-negative.py'
   push:
     branches:
-      - fix/cex-settlement-receipt-lookup-v1
+      - main
+      - 'fix/cex-v12-final-closure-*'
     paths:
       - '.github/workflows/trnm-economy-settlement.yml'
       - 'Cargo.toml'
@@ -26,6 +29,8 @@ on:
       - 'services/trnm-economy-service/**'
       - 'docs/trnm-economy-settlement-receipt-lookup-v1.md'
       - 'docs/status/trnm-economy-settlement-v1.json'
+      - 'docs/security/rust-toolchain-surfaces-v1.json'
+      - 'scripts/check-rust-toolchain-convergence.py'
       - 'scripts/check-trnm-economy-settlement-contract.py'
       - 'scripts/test-trnm-economy-settlement-status-negative.py'
 
@@ -41,6 +46,8 @@ env:
   CARGO_INCREMENTAL: '0'
   RUST_BACKTRACE: '1'
   RUST_TEST_THREADS: '1'
+  RUST_TOOLCHAIN: '1.98.1'
+  RUST_RELEASE_COMMIT: '48a229ceaefd4985c50990b14116b6d856af0985'
   EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
@@ -57,12 +64,14 @@ jobs:
           persist-credentials: false
       - name: Verify exact commit and tree
         run: |
+          set -euo pipefail
           test "$(git rev-parse HEAD)" = "${EXPECTED_HEAD_SHA}"
           git rev-parse HEAD
           git rev-parse 'HEAD^{tree}'
       - name: Parse configuration artifacts
         run: |
           python3 -m py_compile \
+            scripts/check-rust-toolchain-convergence.py \
             scripts/check-trnm-economy-settlement-contract.py \
             scripts/test-trnm-economy-settlement-status-negative.py
           python3 - <<'PY'
@@ -73,8 +82,10 @@ jobs:
           tomllib.loads(Path('Cargo.toml').read_text())
           tomllib.loads(Path('services/trnm-economy-service/Cargo.toml').read_text())
           PY
-      - name: Enforce source and status boundaries
-        run: python3 scripts/check-trnm-economy-settlement-contract.py
+      - name: Enforce source, toolchain and status boundaries
+        run: |
+          python3 scripts/check-rust-toolchain-convergence.py
+          python3 scripts/check-trnm-economy-settlement-contract.py
       - name: Reject promotion overclaims
         run: python3 scripts/test-trnm-economy-settlement-status-negative.py
 
@@ -108,15 +119,20 @@ jobs:
           persist-credentials: false
       - name: Verify exact commit and tree
         run: |
+          set -euo pipefail
           test "$(git rev-parse HEAD)" = "${EXPECTED_HEAD_SHA}"
           git rev-parse HEAD
           git rev-parse 'HEAD^{tree}'
       - name: Install pinned Rust toolchain
         run: |
-          rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
-          rustup default 1.98.0
-          rustc --version --verbose
-          cargo --version --verbose
+          set -euo pipefail
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt,clippy
+          rustup default "$RUST_TOOLCHAIN"
+          rustup show active-toolchain
+          rustc --version --verbose | tee /tmp/trnm-settlement-rustc-version.txt
+          cargo --version --verbose | tee /tmp/trnm-settlement-cargo-version.txt
+          test "$(rustc --version | awk '{print $2}')" = "$RUST_TOOLCHAIN"
+          grep -Fx "commit-hash: $RUST_RELEASE_COMMIT" /tmp/trnm-settlement-rustc-version.txt
       - name: Bootstrap deterministic dependency lock
         run: cargo generate-lockfile
       - name: Resolve workspace
@@ -140,6 +156,8 @@ jobs:
           cp target/release/trnm-economy-service evidence/trnm-economy-service
           cp services/trnm-economy-service/migrations/settlement_v1.sql evidence/settlement_v1.sql
           cp docs/status/trnm-economy-settlement-v1.json evidence/source-status.json
+          cp /tmp/trnm-settlement-rustc-version.txt evidence/rustc-version.txt
+          cp /tmp/trnm-settlement-cargo-version.txt evidence/cargo-version.txt
           python3 - <<'PY'
           import hashlib
           import json
@@ -154,24 +172,28 @@ jobs:
               evidence / 'trnm-economy-service',
               evidence / 'settlement_v1.sql',
               evidence / 'source-status.json',
+              evidence / 'rustc-version.txt',
+              evidence / 'cargo-version.txt',
           ]
           hashes = {
               path.name: hashlib.sha256(path.read_bytes()).hexdigest()
               for path in files
           }
           payload = {
-              'schema': 'trnm_cex_settlement_build_evidence_v1',
+              'schema': 'trnm_cex_settlement_build_evidence_v2',
               'repository': os.environ['WORKFLOW_REPOSITORY'],
               'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
               'tree': subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip(),
               'workflow_run_id': int(os.environ['WORKFLOW_RUN_ID']),
               'workflow_run_attempt': int(os.environ['WORKFLOW_RUN_ATTEMPT']),
-              'rust_toolchain': '1.98.0',
+              'rust_toolchain': '1.98.1',
+              'rust_release_commit': '48a229ceaefd4985c50990b14116b6d856af0985',
               'postgres_image': 'postgres:16.4-alpine',
               'contract': 'trnm_cex_settlement_receipt_lookup_v1',
               'checks': [
                   'exact-head-checkout',
                   'static-contracts',
+                  'toolchain-source-closure',
                   'negative-overclaim-fixtures',
                   'rust-format',
                   'postgresql-owner-contract',
@@ -201,6 +223,8 @@ jobs:
               trnm-economy-service \
               settlement_v1.sql \
               source-status.json \
+              rustc-version.txt \
+              cargo-version.txt \
               manifest.json \
               | sort > SHA256SUMS
             sha256sum --check SHA256SUMS
