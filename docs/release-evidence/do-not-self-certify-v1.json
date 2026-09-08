@@ -1,0 +1,8 @@
+{
+  "schema": "cex.do-not-self-certify.v1",
+  "repository_files_are_not_external_evidence": true,
+  "issue_comments_are_not_approvals": true,
+  "queued_jobs_are_not_success": true,
+  "empty_step_failures_are_not_execution": true,
+  "production_authorization": "not_granted"
+}
