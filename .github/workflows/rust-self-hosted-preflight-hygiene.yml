@@ -5,9 +5,17 @@ on:
   schedule:
     - cron: '15 2 * * 1'
 
+permissions:
+  contents: read
+
 concurrency:
   group: rust-self-hosted-preflight-hygiene
   cancel-in-progress: false
+
+env:
+  SOURCE_SHA: ${{ github.sha }}
+  RUST_TOOLCHAIN: '1.98.1'
+  RUST_RELEASE_COMMIT: '48a229ceaefd4985c50990b14116b6d856af0985'
 
 jobs:
   runner-hygiene:
@@ -23,24 +31,51 @@ jobs:
       run:
         shell: powershell
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Verify immutable source and toolchain carrier closure
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((git rev-parse HEAD) -ne $env:SOURCE_SHA) { throw 'self-hosted hygiene checkout SHA drift' }
+          python scripts/check-rust-toolchain-convergence.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Install exact Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+
+      - name: Verify executed Rust identity
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $short = rustc --version
+          if (($short -split ' ')[1] -ne $env:RUST_TOOLCHAIN) { throw "unexpected rustc identity: $short" }
+          $verbose = rustc --version --verbose
+          if ($verbose -notmatch [regex]::Escape("commit-hash: $env:RUST_RELEASE_COMMIT")) {
+            throw 'rustc release commit drift'
+          }
+          New-Item -ItemType Directory -Force -Path $env:ARTIFACT_ROOT | Out-Null
+          $verbose | Set-Content -LiteralPath (Join-Path $env:ARTIFACT_ROOT 'rustc-version.txt') -Encoding UTF8
+          cargo --version --verbose | Set-Content -LiteralPath (Join-Path $env:ARTIFACT_ROOT 'cargo-version.txt') -Encoding UTF8
 
       - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
-
-      - name: Prepare artifact directory
-        run: New-Item -ItemType Directory -Force -Path $env:ARTIFACT_ROOT | Out-Null
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
 
       - name: Record hygiene workflow context
         run: |
           @(
             "event_name=${{ github.event_name }}"
             "ref=${{ github.ref }}"
-            "sha=${{ github.sha }}"
+            "sha=$env:SOURCE_SHA"
+            "tree=$(git rev-parse 'HEAD^{tree}')"
+            "rust_toolchain=$env:RUST_TOOLCHAIN"
+            "rust_release_commit=$env:RUST_RELEASE_COMMIT"
             "workflow=rust-self-hosted-preflight-hygiene"
             "schedule_utc=15 2 * * 1"
           ) | Set-Content -LiteralPath (Join-Path $env:ARTIFACT_ROOT 'hygiene-context.txt') -Encoding UTF8
@@ -56,6 +91,13 @@ jobs:
         run: |
           Set-Content -LiteralPath (Join-Path $env:ARTIFACT_ROOT 'gate-output.txt') -Value 'gate skipped intentionally; this workflow only runs periodic self-hosted preflight hygiene' -Encoding UTF8
 
+      - name: Reverify immutable source
+        if: ${{ always() }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((git rev-parse HEAD) -ne $env:SOURCE_SHA) { throw 'self-hosted hygiene source moved' }
+          if (git status --porcelain --untracked-files=no) { throw 'tracked source changed during hygiene run' }
+
       - name: Collect hygiene artifacts
         if: ${{ always() }}
         run: |
@@ -63,9 +105,9 @@ jobs:
 
       - name: Upload hygiene artifacts
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: rust-self-hosted-preflight-hygiene-${{ github.run_id }}
+          name: rust-self-hosted-preflight-hygiene-${{ env.SOURCE_SHA }}-${{ github.run_id }}
           path: ci-artifacts/self-hosted-preflight-hygiene
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 21
