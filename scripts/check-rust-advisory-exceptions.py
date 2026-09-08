@@ -4,14 +4,18 @@ import json
 
 import rust_advisory_gate_v5 as baseline
 from rust_advisory_feature_closure_v6 import validate_feature_closure
+from rust_advisory_gate_v5 import main as baseline_main
 from rust_advisory_policy_v6 import validate_authority, validate_time
 
-# Rebind only the candidate/renewal authority layer. The v5 dependency, release-surface,
-# advisory, license, hostile-fixture and tool-version checks remain unchanged.
+# Rebind only the candidate/renewal authority layer. The v5 dependency,
+# release-surface, advisory, license, hostile-fixture and tool-version checks
+# remain unchanged. ``baseline_main`` performs global lookup in the rebound
+# module when invoked, so stale Sequence 19 authority constants receive no
+# execution credit.
 baseline.validate_authority = validate_authority
 baseline.validate_time = validate_time
 
 if __name__ == "__main__":
     feature_evidence = validate_feature_closure()
     print(json.dumps({"feature_closure": feature_evidence}, indent=2, sort_keys=True))
-    raise SystemExit(baseline.main())
+    raise SystemExit(baseline_main())
