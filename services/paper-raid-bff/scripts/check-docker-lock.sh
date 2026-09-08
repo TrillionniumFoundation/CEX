@@ -16,14 +16,7 @@ if ! flock -n 9; then
   exit 75
 fi
 
-cargo_version=$(cargo --version)
-case "$cargo_version" in
-  "cargo 1.95.0 "*) ;;
-  *)
-    echo "Docker lock gate requires cargo 1.95.0, found: $cargo_version" >&2
-    exit 1
-    ;;
-esac
+python3 "$repo_root/scripts/check-rust-toolchain-convergence.py" --verify-installed
 
 copy_minimal_workspace() {
   local destination=$1
