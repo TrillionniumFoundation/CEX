@@ -1,93 +1,113 @@
 #!/usr/bin/env python3
-"""Create or update the CEX v12 main-branch ruleset through GitHub's API."""
+"""Apply the exact CEX main admission Ruleset with compare-and-swap semantics."""
 from __future__ import annotations
 
+import argparse
 import json
-import os
-import urllib.error
-import urllib.request
-from pathlib import Path
-from typing import Any
+import re
 
-ROOT = Path(__file__).resolve().parents[1]
-POLICY = ROOT / "docs/repository-ruleset-required-contexts-v1.json"
-REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "TrillionniumFoundation/CEX")
-TOKEN = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-NAME = "CEX v12 main admission"
-
-if not TOKEN:
-    raise SystemExit("GITHUB_TOKEN or GH_TOKEN is required")
-policy = json.loads(POLICY.read_text(encoding="utf-8"))
-contexts = policy["required_status_checks"]
-pr = policy["pull_request"]
-payload = {
-    "name": NAME,
-    "target": "branch",
-    "enforcement": "active",
-    "bypass_actors": [],
-    "conditions": {"ref_name": {"include": [policy["target"]], "exclude": []}},
-    "rules": [
-        {"type": "deletion"},
-        {"type": "non_fast_forward"},
-        {
-            "type": "pull_request",
-            "parameters": {
-                **pr,
-                "automatic_copilot_code_review_enabled": False,
-                "allowed_merge_methods": ["merge", "squash", "rebase"],
-            },
-        },
-        {
-            "type": "required_status_checks",
-            "parameters": {
-                "strict_required_status_checks_policy": True,
-                "do_not_enforce_on_create": False,
-                "required_status_checks": [{"context": value} for value in contexts],
-            },
-        },
-    ],
-}
-
-
-def request(method: str, path: str, value: Any = None) -> tuple[int, Any]:
-    body = None if value is None else json.dumps(value).encode("utf-8")
-    request = urllib.request.Request(
-        f"https://api.github.com/repos/{REPOSITORY}/{path}",
-        data=body,
-        method=method,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {TOKEN}",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "cex-v12-ruleset-applicator",
-        },
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            return int(response.status), json.load(response)
-    except urllib.error.HTTPError as error:
-        detail = error.read().decode("utf-8", errors="replace")
-        raise SystemExit(
-            f"GitHub API {method} {path} failed: HTTP {error.code}: {detail}"
-        ) from error
-
-
-_, rulesets = request("GET", "rulesets?per_page=100")
-current = next((item for item in rulesets if item.get("name") == NAME), None)
-if current:
-    status, result = request("PUT", f"rulesets/{current['id']}", payload)
-else:
-    status, result = request("POST", "rulesets", payload)
-print(
-    json.dumps(
-        {
-            "schema": "cex.repository-ruleset-application.v1",
-            "status": "applied",
-            "http_status": status,
-            "ruleset": result,
-            "production_authorization": "not_granted",
-        },
-        indent=2,
-        sort_keys=True,
-    )
+from repository_ruleset_common import (
+    RulesetError,
+    api_request,
+    desired_payload,
+    load_policy,
+    main_identity,
+    normalize_ruleset,
+    payload_digest,
+    repository_identity,
+    require,
+    unique_named_ruleset,
+    validate_exact_ruleset,
 )
+
+SHA40 = re.compile(r"^[0-9a-f]{40}$")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--expected-main-sha", required=True)
+    parser.add_argument("--expected-policy-sha256", required=True)
+    parser.add_argument("--allow-create", action="store_true")
+    parser.add_argument("--expected-ruleset-id", type=int)
+    parser.add_argument("--expected-current-ruleset-sha256")
+    args = parser.parse_args()
+
+    policy, policy_sha = load_policy()
+    repository = policy["repository"]["full_name"]
+    require(SHA40.fullmatch(args.expected_main_sha) is not None, "expected main SHA is invalid")
+    require(SHA256.fullmatch(args.expected_policy_sha256) is not None, "expected policy digest is invalid")
+    require(policy_sha == args.expected_policy_sha256, "policy digest changed before application")
+    repository_identity(repository, policy)
+    before = main_identity(repository, policy, args.expected_main_sha)
+    current, _ = unique_named_ruleset(repository, policy)
+    desired = desired_payload(policy)
+    desired_digest = payload_digest(desired)
+
+    operation = "unchanged"
+    request_id = None
+    if current is None:
+        require(args.allow_create, "Ruleset is absent; pass --allow-create for this exact policy/main tuple")
+        require(args.expected_ruleset_id is None, "cannot expect a Ruleset id while creating")
+        require(args.expected_current_ruleset_sha256 is None, "cannot expect a current digest while creating")
+        response = api_request("POST", repository, "rulesets", desired)
+        require(response.status == 201 and isinstance(response.body, dict), "Ruleset creation response is invalid")
+        ruleset_id = response.body.get("id")
+        require(isinstance(ruleset_id, int), "created Ruleset lacks id")
+        operation = "created"
+        request_id = response.request_id
+    else:
+        ruleset_id = current.get("id")
+        require(isinstance(ruleset_id, int), "current Ruleset lacks id")
+        if args.expected_ruleset_id is not None:
+            require(ruleset_id == args.expected_ruleset_id, "Ruleset id changed before application")
+        current_digest = payload_digest(current)
+        if normalize_ruleset(current) != normalize_ruleset(desired):
+            require(
+                args.expected_current_ruleset_sha256 is not None,
+                "live Ruleset drift requires --expected-current-ruleset-sha256",
+            )
+            require(
+                SHA256.fullmatch(args.expected_current_ruleset_sha256) is not None,
+                "expected current Ruleset digest is invalid",
+            )
+            require(current_digest == args.expected_current_ruleset_sha256, "live Ruleset changed after review")
+            response = api_request("PUT", repository, f"rulesets/{ruleset_id}", desired)
+            require(response.status == 200 and isinstance(response.body, dict), "Ruleset update response is invalid")
+            operation = "updated"
+            request_id = response.request_id
+
+    applied, summaries = unique_named_ruleset(repository, policy)
+    require(applied is not None and applied.get("id") == ruleset_id, "applied Ruleset read-back identity drift")
+    validate_exact_ruleset(applied, policy)
+    after = main_identity(repository, policy, args.expected_main_sha)
+    result = {
+        "schema": "cex.repository-ruleset-application.v2",
+        "status": "applied_and_exactly_read_back",
+        "operation": operation,
+        "repository": repository,
+        "repository_id": policy["repository"]["repository_id"],
+        "main_sha_before": before["commit"]["sha"],
+        "main_sha_after": after["commit"]["sha"],
+        "policy_sha256": policy_sha,
+        "desired_ruleset_sha256": desired_digest,
+        "ruleset_id": ruleset_id,
+        "ruleset_count_observed": len(summaries),
+        "request_id": request_id,
+        "production_authorization": "not_granted",
+    }
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except RulesetError as error:
+        print(json.dumps({
+            "schema": "cex.repository-ruleset-application.v2",
+            "status": "failed",
+            "problems": [str(error)],
+            "production_authorization": "not_granted",
+        }, indent=2, sort_keys=True))
+        raise SystemExit(1)
