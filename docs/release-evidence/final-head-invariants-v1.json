@@ -1,0 +1,8 @@
+{
+  "schema": "cex.final-head-invariants.v1",
+  "head_must_not_move_after_approval": true,
+  "head_must_not_move_after_required_checks": true,
+  "all_evidence_must_name_same_sha": true,
+  "prospective_merge_tree_must_be_recorded": true,
+  "production_authorization": "not_granted"
+}
