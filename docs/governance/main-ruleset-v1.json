@@ -1,0 +1,49 @@
+{
+  "schema": "cex.github-main-ruleset.v1",
+  "status": "active_required",
+  "repository": "TrillionniumFoundation/CEX",
+  "ruleset_name": "CEX main fail-closed admission v1",
+  "target": "branch",
+  "target_branch": "main",
+  "enforcement": "active",
+  "bypass_actors": [],
+  "pull_request": {
+    "required_approving_review_count": 2,
+    "dismiss_stale_reviews_on_push": true,
+    "require_code_owner_review": true,
+    "require_last_push_approval": true,
+    "required_review_thread_resolution": true,
+    "allowed_merge_methods": [
+      "merge",
+      "squash",
+      "rebase"
+    ]
+  },
+  "required_status_checks": [
+    "fresh-postgres-migrations",
+    "repository-integrity",
+    "service-local-gate-linux",
+    "service-local-gate-windows",
+    "hepta-postgres-integration",
+    "gateway-exact-reserve",
+    "execution-settlement",
+    "provider-reconciliation",
+    "repository-candidate-qualification",
+    "trnm-economy-settlement",
+    "p0-rust-toolchain-convergence/exact-toolchain-and-container",
+    "project-boundary/recursive-source-and-cargo-closure",
+    "project-boundary/actual-changed-path-and-cargo-semantics",
+    "p0-world-authority-cutover/exact-sha-cross-repository-qualification",
+    "p0-world-authority-postgres-v2/exact-object-state-machine",
+    "sequence18-cross-repo-pin",
+    "economy-workspace",
+    "repository-governance-live"
+  ],
+  "strict_required_status_checks_policy": true,
+  "do_not_enforce_on_create": false,
+  "require_signed_commits": true,
+  "block_deletion": true,
+  "block_non_fast_forward": true,
+  "required_deployments": [],
+  "production_authorization": "not_granted"
+}
