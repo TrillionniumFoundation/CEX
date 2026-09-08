@@ -16,6 +16,21 @@
 /services/execution-service/ @ProfHepta
 /services/capability-service/ @ProfHepta
 
+# Matrix response-loss recovery changes require both domain and independent
+# security ownership. CODEOWNERS routes review only; protected-main rules must
+# independently enforce the approvals on the unchanged candidate.
+/services/matrix-entry-adapter/operator-migrations/ @ProfHepta @Tomasrgbsf
+/scripts/matrix_result_reconciler.py @ProfHepta @Tomasrgbsf
+/scripts/check-matrix-result-runtime-closure.py @ProfHepta @Tomasrgbsf
+/scripts/test-matrix-result-reconciler.py @ProfHepta @Tomasrgbsf
+/scripts/matrix_operator_postgres_regression.py @ProfHepta @Tomasrgbsf
+/scripts/test-matrix-result-runtime-closure-postgres.sql @ProfHepta @Tomasrgbsf
+/.github/workflows/matrix-review-repair-regression.yml @ProfHepta @Tomasrgbsf
+/.github/workflows/p0-migration-gate.yml @ProfHepta @Tomasrgbsf
+/docs/matrix-result-reconciliation-runtime-v2.md @ProfHepta @Tomasrgbsf
+/docs/modules/matrix-entry-adapter.md @ProfHepta @Tomasrgbsf
+/docs/modules/matrix-bot-relay.md @ProfHepta @Tomasrgbsf
+
 # Temporary supply-chain exception and complete release-surface policy require independent security ownership.
 /docs/security/rust-advisory-exceptions-v1.json @Tomasrgbsf
 /docs/security/rust-release-surfaces-v1.json @Tomasrgbsf
