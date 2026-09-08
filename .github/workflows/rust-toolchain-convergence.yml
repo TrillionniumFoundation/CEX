@@ -1,0 +1,94 @@
+name: rust-toolchain-convergence
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'rust-toolchain.toml'
+      - '.github/workflows/**'
+      - 'services/hepta-research-league/Dockerfile'
+      - 'services/hepta-research-league/docker/rust-toolchain.manifest'
+      - 'docs/security/rust-advisory-exceptions-v1.json'
+      - 'scripts/check-toolchain-convergence.py'
+  push:
+    paths:
+      - 'rust-toolchain.toml'
+      - '.github/workflows/**'
+      - 'services/hepta-research-league/Dockerfile'
+      - 'services/hepta-research-league/docker/rust-toolchain.manifest'
+      - 'docs/security/rust-advisory-exceptions-v1.json'
+      - 'scripts/check-toolchain-convergence.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-toolchain-convergence-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: '0'
+  RUST_TOOLCHAIN: '1.98.1'
+
+jobs:
+  convergence:
+    name: rust-toolchain-convergence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install immutable Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+
+      - name: Verify exact compiler and Cargo identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(rustc --version | awk '{print $2}')" = "$RUST_TOOLCHAIN"
+          test "$(cargo --version | awk '{print $2}')" = "$RUST_TOOLCHAIN"
+          mkdir -p run/toolchain-convergence
+          rustc --version --verbose | tee run/toolchain-convergence/rustc-version.txt
+          cargo --version --verbose | tee run/toolchain-convergence/cargo-version.txt
+          rustup show active-toolchain | tee run/toolchain-convergence/active-toolchain.txt
+
+      - name: Validate active repository toolchain surfaces
+        shell: bash
+        run: python3 scripts/check-toolchain-convergence.py | tee run/toolchain-convergence/check.json
+
+      - name: Validate locked workspace metadata and formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo metadata --locked --format-version 1 > run/toolchain-convergence/cargo-metadata.json
+          cargo fmt --all -- --check
+
+      - name: Record exact source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "repository=$GITHUB_REPOSITORY"
+            echo "sha=$GITHUB_SHA"
+            echo "tree=$(git rev-parse HEAD^{tree})"
+            echo "workflow_blob=$(git rev-parse HEAD:.github/workflows/rust-toolchain-convergence.yml)"
+            echo "toolchain_blob=$(git rev-parse HEAD:rust-toolchain.toml)"
+            echo "production_authorization=not_granted"
+          } > run/toolchain-convergence/source-identity.txt
+
+      - name: Upload immutable toolchain evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cex-rust-toolchain-${{ github.sha }}-${{ github.run_attempt }}
+          path: run/toolchain-convergence/**
+          if-no-files-found: error
+          retention-days: 90
