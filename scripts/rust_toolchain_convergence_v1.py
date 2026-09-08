@@ -16,6 +16,7 @@ EXPECTED_CARGO_COMMIT = "797e8a9bca276c1c9f9f738d2a20f484fa4eea9d"
 EXPECTED_DIST_DATE = "2026-09-03"
 EXPECTED_DTOLNAY_ACTION = "dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87"
 EXPECTED_INSTALLER = "scripts/install-rust-toolchain-1.98.1.sh"
+EXPECTED_RUNTIME_CHECKER = "scripts/check-installed-rust-toolchain.sh"
 EXPECTED_PREFIX = "/opt/cex-rust/1.98.1"
 EXPECTED_ARCHIVE_HASHES = {
     "x86_64-unknown-linux-gnu": "5326b36c53de11d148c8f8dab6553a3d1006c2cfd32123683073fad3c302605b",
@@ -31,6 +32,7 @@ ACTIVE_FILES = (
     "services/paper-raid-bff/scripts/check-boundaries.sh",
     "services/paper-raid-bff/scripts/check-browser-mobile-a11y.sh",
     EXPECTED_INSTALLER,
+    EXPECTED_RUNTIME_CHECKER,
 )
 RETIRED_ONE_SHOT_WORKFLOWS = (
     ".github/workflows/world-settlement-external-evidence.yml",
@@ -144,7 +146,8 @@ def validate_static() -> dict[str, object]:
             f"COPY {EXPECTED_INSTALLER} /toolchain/install-rust-toolchain.sh",
             "RUN /toolchain/install-rust-toolchain.sh",
             f'ENV PATH="{EXPECTED_PREFIX}/bin:${{PATH}}"',
-            "python3 scripts/check-rust-toolchain-convergence.py --verify-installed",
+            f"COPY {EXPECTED_RUNTIME_CHECKER} /toolchain/check-installed-rust-toolchain.sh",
+            "RUN /toolchain/check-installed-rust-toolchain.sh",
         ):
             require(marker in text, f"{relative} lacks exact toolchain marker: {marker}")
 
