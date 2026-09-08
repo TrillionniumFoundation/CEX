@@ -37,6 +37,7 @@ TEMPORARY_EXACT_PATHS = (
     ".github/workflows/p0-v12-trnm-exact-cutover-runner.yml",
     ".github/workflows/p0-v12-trnm-receipt-smoke.yml",
     ".github/workflows/seq44-exact-sha-convergence.yml",
+    "docs/release-evidence/DO-NOT-CREATE-MORE-PLACEHOLDERS",
 )
 TEMPORARY_WORKFLOW_PATTERNS = (
     ".github/workflows/*self-repair*.yml",
@@ -60,11 +61,20 @@ TEMPORARY_WORKFLOW_PATTERNS = (
     ".github/workflows/*gap-closure-validate*.yml",
     ".github/workflows/*gap-closure-validate*.yaml",
 )
+TEMPORARY_SENTINEL_PATTERNS = (
+    "tmp/.sequence*",
+    "tmp/**/.sequence*",
+    "docs/release-evidence/*PLACEHOLDER*",
+    "docs/release-evidence/*placeholder*",
+    "docs/release-evidence/DO-NOT-*",
+    "**/closure-ci-trigger-*",
+)
 UNPINNED_ACTION = re.compile(
     r"^\s*uses:\s*[^#\s]+@(v\d+|stable|main|master)\s*(?:#.*)?$", re.MULTILINE
 )
 PULL_REQUEST_EVENT = re.compile(r"(?m)^\s{2}pull_request:\s*$")
 CONTENTS_WRITE_PERMISSION = re.compile(r"(?m)^\s*contents:\s*write\s*$")
+GIT_PUSH = re.compile(r"(?m)^\s*git\s+push(?:\s|$)")
 MIGRATION_RE = re.compile(r"^(\d{4})_[a-z0-9][a-z0-9._-]*\.sql$")
 
 
@@ -80,28 +90,36 @@ def require_file(path: str) -> str:
     return full.read_text(encoding="utf-8")
 
 
+def record_matches(pattern: str, label: str) -> None:
+    for path in sorted(ROOT.glob(pattern)):
+        if path.is_file() or path.is_symlink():
+            PROBLEMS.append(f"{label}: {relative(path)}")
+
+
 for pattern in (
     ".github/workflows/closure-*.yml",
     ".github/workflows/closure-*.yaml",
-    "**/closure-ci-trigger-*",
     *TEMPORARY_WORKFLOW_PATTERNS,
 ):
-    for path in sorted(ROOT.glob(pattern)):
-        if path.is_file():
-            PROBLEMS.append(f"temporary closure artifact remains: {relative(path)}")
+    record_matches(pattern, "temporary closure workflow remains")
+for pattern in TEMPORARY_SENTINEL_PATTERNS:
+    record_matches(pattern, "temporary closure sentinel remains")
 for path in TEMPORARY_EXACT_PATHS:
-    if (ROOT / path).exists():
-        PROBLEMS.append(f"temporary patcher remains: {path}")
+    if (ROOT / path).exists() or (ROOT / path).is_symlink():
+        PROBLEMS.append(f"temporary exact-path artifact remains: {path}")
 
-# Repository workflows are evidence producers, not source-control writers. Any
-# future write-capable workflow must be reviewed as an explicit administration
-# boundary rather than silently inheriting the default token.
+# Repository workflows are evidence producers. They must not push source or
+# silently acquire contents-write. Ruleset administration uses an explicit
+# out-of-band admin credential while retaining contents:read.
 for workflow in sorted((ROOT / ".github/workflows").glob("*.y*ml")):
     content = workflow.read_text(encoding="utf-8")
+    workflow_path = relative(workflow)
     if CONTENTS_WRITE_PERMISSION.search(content):
         PROBLEMS.append(
-            f"workflow has forbidden contents: write permission: {relative(workflow)}"
+            f"workflow has forbidden contents: write permission: {workflow_path}"
         )
+    if GIT_PUSH.search(content):
+        PROBLEMS.append(f"workflow performs forbidden source push: {workflow_path}")
 
 plan = require_file(ACTIVE_PLAN)
 for marker in (
@@ -212,7 +230,9 @@ result = {
     "migration_head": numbered[-1][1] if numbered else None,
     "documentation_contract": "ok" if documentation.returncode == 0 else "failed",
     "workflow_contents_write": "forbidden",
+    "workflow_git_push": "forbidden",
     "recursive_temporary_artifact_scan": True,
+    "sentinel_patterns_forbidden": list(TEMPORARY_SENTINEL_PATTERNS),
     "problems": PROBLEMS,
 }
 print(json.dumps(result, indent=2, ensure_ascii=False))
