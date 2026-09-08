@@ -4,7 +4,7 @@
   "expected_rust_toolchain": "1.98.1",
   "expected_rust_release_commit": "48a229ceaefd4985c50990b14116b6d856af0985",
   "production_authorization": "not_granted",
-  "source_inventory": "git_tree_derived",
+  "source_inventory": "recursive_git_tree_and_blob_content",
   "active_roots": [
     ".github/actions",
     ".github/workflows",
@@ -12,10 +12,6 @@
     "apps",
     "crates",
     "deploy",
-    "docs/release-evidence",
-    "docs/security",
-    "docs/status",
-    "docs/templates",
     "ops",
     "scripts",
     "services",
@@ -35,15 +31,15 @@
     "WORKSPACE",
     "WORKSPACE.bazel",
     "docs/development-doc-authority-v1.json",
+    "docs/release-evidence/cex-v12-final-closure-20260908.json",
+    "docs/security/rust-advisory-exceptions-v1.json",
+    "docs/security/rust-feature-closure-v1.json",
+    "docs/security/rust-toolchain-surfaces-v1.json",
     "flake.nix",
     "mise.toml",
     "rust-toolchain",
     "rust-toolchain.toml",
     "shell.nix"
-  ],
-  "historical_prefixes": [
-    "docs/archive/",
-    "evidence/"
   ],
   "policy_definition_paths": [
     "docs/security/rust-toolchain-surfaces-v1.json",
@@ -104,7 +100,8 @@
     ],
     "symlink_in_active_roots": "forbidden",
     "gitlink_in_active_roots": "forbidden",
-    "unregistered_selector_carrier": "forbidden"
+    "unregistered_selector_carrier": "forbidden",
+    "binary_selector_carrier": "forbidden"
   },
   "hostile_fixtures": [
     "nested_workflow_obsolete_version",
