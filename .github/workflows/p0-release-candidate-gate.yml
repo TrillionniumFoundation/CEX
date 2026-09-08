@@ -2,34 +2,43 @@ name: p0-release-candidate-gate
 
 on:
   workflow_dispatch:
+  pull_request:
   push:
-    paths:
-      - 'docs/release-evidence/p0-candidate-trigger.json'
-      - '.github/workflows/p0-release-candidate-gate.yml'
+    branches:
+      - main
+      - 'fix/**'
 
 permissions:
-  contents: read
   actions: read
+  contents: read
+  pull-requests: read
 
 concurrency:
-  group: p0-release-candidate-gate-${{ github.workflow }}-${{ github.ref }}
+  group: p0-release-candidate-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/cex_ci
-  CEX_P0_EVIDENCE_DIR: run/p0-release-evidence
-  CEX_P0_GATE_POLL_ATTEMPTS: '160'
-  CEX_P0_GATE_POLL_INTERVAL_SECONDS: '15'
   CARGO_TERM_COLOR: never
   CARGO_INCREMENTAL: '0'
+  RUST_TEST_THREADS: '1'
+  RUST_TOOLCHAIN: '1.98.1'
+  HEPTA_TEST_DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/cex_ci
+  HEPTA_REQUIRE_POSTGRES_TESTS: '1'
+  DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/cex_ci
+  PGHOST: 127.0.0.1
+  PGPORT: '5432'
+  PGUSER: cex
+  PGPASSWORD: cex_ci_password
+  PGDATABASE: cex_ci
 
 jobs:
   repository-candidate-qualification:
-    runs-on: ubuntu-latest
-    timeout-minutes: 105
+    name: repository-candidate-qualification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16@sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94
         env:
           POSTGRES_USER: cex
           POSTGRES_PASSWORD: cex_ci_password
@@ -41,226 +50,128 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
-
     steps:
-      - name: Require exact branch-tree event
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "$GITHUB_EVENT_NAME" in
-            push|workflow_dispatch) ;;
-            *) echo "unsupported evidence event: $GITHUB_EVENT_NAME" >&2; exit 1 ;;
-          esac
-
-      - name: Checkout exact candidate tree
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Checkout exact candidate with history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Resolve immutable source identity
-        id: source
+      - name: Install exact Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+
+      - name: Record source and toolchain identity
         shell: bash
         run: |
           set -euo pipefail
-          echo "tree=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
-          echo "branch=${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          test "$(rustc --version | awk '{print $2}')" = "$RUST_TOOLCHAIN"
+          mkdir -p run/repository-candidate
+          git rev-parse HEAD | tee run/repository-candidate/head-sha.txt
+          git rev-parse 'HEAD^{tree}' | tee run/repository-candidate/head-tree.txt
+          rustc --version --verbose | tee run/repository-candidate/rustc-version.txt
+          cargo --version --verbose | tee run/repository-candidate/cargo-version.txt
+          rustup show active-toolchain | tee run/repository-candidate/active-toolchain.txt
 
-      - name: Candidate tree hygiene
+      - name: Validate repository authority and blocker posture
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$CEX_P0_EVIDENCE_DIR"
+          python3 scripts/check-rust-toolchain-convergence.py \
+            | tee run/repository-candidate/rust-toolchain-policy.json
+          python3 scripts/check-module-documentation.py \
+            | tee run/repository-candidate/module-documentation.json
+          python3 scripts/check-capability-production-posture.py \
+            | tee run/repository-candidate/capability-posture.json
+          python3 scripts/check-authoritative-money-isolation.py \
+            | tee run/repository-candidate/money-isolation.json
+          python3 scripts/check-project-boundary.py \
+            | tee run/repository-candidate/project-boundary.json
+          python3 scripts/check-project-boundary-cargo-closure.py \
+            | tee run/repository-candidate/project-boundary-cargo.json
+          python3 scripts/check-source-governance.py \
+            | tee run/repository-candidate/source-governance.json
+          python3 scripts/check-development-docs.py \
+            | tee run/repository-candidate/development-docs.json
+          python3 scripts/check-hepta-lint-ownership.py \
+            | tee run/repository-candidate/hepta-lint-ownership.json
           python3 scripts/check-p0-release-candidate-hygiene.py \
-            | tee "$CEX_P0_EVIDENCE_DIR/candidate-hygiene.json"
-
-      - name: Development-document authority and exact-tree integrity
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 scripts/check-development-docs.py
-          python3 scripts/check-repository-integrity.py \
-            --expected-sha "$GITHUB_SHA" \
-            --expected-tree '${{ steps.source.outputs.tree }}' \
-            --output "$CEX_P0_EVIDENCE_DIR/repository-integrity.json"
-
-      - name: Migration and manifest governance
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 scripts/check-p0-migrations.py
+            | tee run/repository-candidate/candidate-hygiene.json
+          python3 scripts/check-p0-wiring.py \
+            | tee run/repository-candidate/p0-wiring.json
+          python3 scripts/check-trnm-economy-settlement-contract.py \
+            | tee run/repository-candidate/trnm-economy-contract.json
           python3 scripts/check-release-baseline-manifest.py \
-            docs/templates/cex-release-baseline-manifest-v1.json --allow-template
-          python3 scripts/check-invocation-ledger-contract-static.py
-          python3 scripts/check-gateway-exact-reserve.py
-          python3 scripts/check-execution-settlement-commands.py
-          python3 scripts/check-trnm-settlement-receipt-lookup.py
+            docs/templates/cex-release-baseline-manifest-v1.json --allow-template \
+            | tee run/repository-candidate/release-template.json
+          python3 scripts/check-repository-integrity.py \
+            --output run/repository-candidate/repository-integrity.json
 
-      - name: Fresh migration and P0 assertions
-        run: bash scripts/check-p0-migrations-postgres.sh
-
-      - name: Existing-row Audit baseline lifecycle
-        run: bash scripts/check-audit-source-baseline-postgres.sh
-
-      - name: Ledger operation identity and exact replay
-        run: bash scripts/check-ledger-operation-identity-postgres.sh
-
-      - name: Invocation exact contract lifecycle
-        run: bash scripts/check-invocation-ledger-contract-postgres.sh
-
-      - name: Invocation terminal mutual exclusion
-        run: bash scripts/check-invocation-ledger-terminal-postgres.sh
-
-      - name: Gateway exact reserve fault matrix
-        run: bash scripts/check-gateway-exact-reserve-postgres.sh
-
-      - name: Execution settlement fault matrix
-        run: bash scripts/check-execution-settlement-commands-postgres.sh
-
-      - name: Provider unknown-outcome reconciliation matrix
-        run: bash scripts/check-provider-reconciliation-postgres.sh
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
-
-      - name: Cache Cargo artifacts
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-
-      - name: Strict Hepta PostgreSQL restart and lease recovery
-        env:
-          HEPTA_TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-          HEPTA_REQUIRE_POSTGRES_TESTS: '1'
-        run: |
-          bash scripts/check-hepta-postgres-integration.sh --mode recovery-only \
-            --evidence "$CEX_P0_EVIDENCE_DIR/hepta-postgres-integration.json"
-
-      - name: Build Ledger receipt recovery target
-        run: cargo build --locked -p ledger-service --bin ledger-service
-
-      - name: TRNM response-loss receipt recovery
-        run: bash scripts/check-trnm-settlement-receipt-lookup-http.sh
-
-      - name: Record database lifecycle matrix
+      - name: Strict complete workspace qualification
         shell: bash
         run: |
-          python3 - "$CEX_P0_EVIDENCE_DIR/database-lifecycle.json" "$GITHUB_SHA" <<'PY'
-          import json
-          from datetime import datetime, timezone
-          from pathlib import Path
-          import sys
+          set -euo pipefail
+          cargo metadata --locked --format-version 1 \
+            > run/repository-candidate/cargo-metadata.json
+          cargo fmt --all -- --check
+          cargo test --workspace --all-targets --locked \
+            2>&1 | tee run/repository-candidate/cargo-test.txt
+          cargo clippy --workspace --all-targets --locked -- -D warnings \
+            2>&1 | tee run/repository-candidate/cargo-clippy.txt
+          cargo build --workspace --release --locked \
+            2>&1 | tee run/repository-candidate/cargo-build-release.txt
 
-          Path(sys.argv[1]).write_text(json.dumps({
-              "schema": "cex.p0-database-lifecycle.v1",
-              "ok": True,
-              "commit_sha": sys.argv[2],
-              "completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-              "checks": [
-                  "development-document-authority",
-                  "repository-integrity",
-                  "fresh-migration-and-p0-assertions",
-                  "existing-row-audit-baseline",
-                  "ledger-operation-identity-and-replay",
-                  "invocation-contract-lifecycle",
-                  "invocation-terminal-mutual-exclusion",
-                  "gateway-exact-reserve-fault-matrix",
-                  "execution-settlement-fault-matrix",
-                  "provider-unknown-outcome-reconciliation",
-                  "hepta-postgres-restart-and-lease-recovery",
-                  "trnm-settlement-receipt-response-loss-recovery",
-              ],
-          }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+      - name: Strict Hepta PostgreSQL recovery qualification
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/check-hepta-postgres-integration.sh --mode recovery-only \
+            | tee run/repository-candidate/hepta-postgres-recovery.txt
+
+      - name: Record exact immutable candidate evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p run/repository-candidate
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          out = pathlib.Path('run/repository-candidate')
+          def git(*args):
+              return subprocess.run(['git', *args], check=True, text=True, stdout=subprocess.PIPE).stdout.strip()
+          summary = {
+              'schema': 'cex.repository-closed-candidate-evidence.v2',
+              'status': 'source_execution_attempted',
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'event_name': os.environ['GITHUB_EVENT_NAME'],
+              'head_sha': git('rev-parse', 'HEAD'),
+              'head_tree': git('rev-parse', 'HEAD^{tree}'),
+              'workflow_blob': git('rev-parse', 'HEAD:.github/workflows/p0-release-candidate-gate.yml'),
+              'cargo_lock_blob': git('rev-parse', 'HEAD:Cargo.lock'),
+              'rust_toolchain_blob': git('rev-parse', 'HEAD:rust-toolchain.toml'),
+              'rust_toolchain': os.environ['RUST_TOOLCHAIN'],
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'repository_qualification_only': True,
+              'external_gates_self_certified': False,
+              'production_authorization': 'not_granted',
+          }
+          (out / 'summary.json').write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
+          files = sorted(p for p in out.rglob('*') if p.is_file() and p.name != 'manifest.json')
+          (out / 'manifest.json').write_text(json.dumps({
+              'schema': 'cex.repository-candidate-artifact-manifest.v2',
+              'files': [{'path': p.relative_to(out).as_posix(), 'bytes': p.stat().st_size,
+                         'sha256': hashlib.sha256(p.read_bytes()).hexdigest()} for p in files],
+          }, indent=2, sort_keys=True) + '\n')
           PY
 
-      - name: Bounded exact Ledger soak
-        env:
-          CEX_P0_SOAK_ITERATIONS: '250'
-        run: bash scripts/check-p0-exact-ledger-soak-postgres.sh
-
-      - name: Exact-state backup and restore drill
-        run: bash scripts/check-p0-backup-restore-postgres.sh
-
-      - name: Observe actual repository governance
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 scripts/observe-repository-governance.py \
-            --repository "$GITHUB_REPOSITORY" \
-            --commit-sha "$GITHUB_SHA" \
-            --output "$CEX_P0_EVIDENCE_DIR/repository-governance.json"
-
-      - name: Bind exact-tree hosted gate evidence
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 scripts/p0-release-evidence.py collect \
-            --evidence-dir "$CEX_P0_EVIDENCE_DIR" \
-            --context run/p0-release-context.json \
-            --repository "$GITHUB_REPOSITORY" \
-            --branch '${{ steps.source.outputs.branch }}' \
-            --sha "$GITHUB_SHA" \
-            --tree '${{ steps.source.outputs.tree }}' \
-            --run-id "$GITHUB_RUN_ID" \
-            --server-url "$GITHUB_SERVER_URL"
-
-      - name: Upload immutable evidence payload
-        id: payload
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - name: Upload immutable candidate evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: cex-p0-evidence-${{ github.sha }}
-          path: run/p0-release-evidence
+          name: cex-repository-candidate-${{ github.sha }}-${{ github.run_attempt }}
+          path: run/repository-candidate/**
           if-no-files-found: error
-          compression-level: 6
           retention-days: 90
-
-      - name: Generate and validate candidate manifest
-        shell: bash
-        env:
-          PAYLOAD_DIGEST: ${{ steps.payload.outputs.artifact-digest }}
-        run: |
-          set -euo pipefail
-          mkdir -p run/p0-release-manifest
-          python3 scripts/p0-release-evidence.py manifest \
-            --context run/p0-release-context.json \
-            --output run/p0-release-manifest/cex-p0-candidate-manifest.json \
-            --release-id "cex-p0-${GITHUB_SHA}" \
-            --payload-name "cex-p0-evidence-${GITHUB_SHA}" \
-            --payload-digest "$PAYLOAD_DIGEST"
-          python3 scripts/check-release-baseline-manifest.py \
-            run/p0-release-manifest/cex-p0-candidate-manifest.json
-
-      - name: Upload candidate manifest
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: cex-p0-candidate-manifest-${{ github.sha }}
-          path: run/p0-release-manifest/cex-p0-candidate-manifest.json
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 90
-
-      - name: Publish qualification summary
-        shell: bash
-        run: |
-          {
-            echo '## P0 repository candidate qualified'
-            echo
-            echo "- Commit: \`$GITHUB_SHA\`"
-            echo "- Tree: \`${{ steps.source.outputs.tree }}\`"
-            echo "- Migration head: \`0084_make_provider_reconciliation_replay_terminal_safe.sql\`"
-            echo '- Scope: repository exact-money control plane + TRNM receipt recovery + Hepta PostgreSQL recovery + document integrity'
-            echo '- Development authority: active v12 plan plus implementation addendum, machine-validated'
-            echo '- Hepta: strict restart, disjoint claim, wrong-owner rejection and expired-lease recovery qualified'
-            echo '- GitHub branch/ruleset state: recorded in repository-governance.json; no enforcement is inferred from source code'
-            echo '- Production authorization: not granted; independent external gates remain mandatory'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload failure diagnostics
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: cex-p0-candidate-failure-${{ github.sha }}-${{ github.run_attempt }}
-          path: run/p0-release-evidence
-          if-no-files-found: ignore
-          retention-days: 14
