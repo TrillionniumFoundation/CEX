@@ -1,0 +1,12 @@
+{
+  "schema": "cex.github-plugin-permission-attempt.v1",
+  "requested_capabilities": [
+    "contents_write",
+    "pull_requests_write",
+    "actions_read",
+    "administration_read",
+    "administration_write"
+  ],
+  "status": "must_be_confirmed_by_live_api_readback",
+  "production_authorization": "not_granted"
+}
