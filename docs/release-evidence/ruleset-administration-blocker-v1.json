@@ -1,0 +1,9 @@
+{
+  "schema": "cex.ruleset-administration-blocker.v1",
+  "status": "pending_live_api_application_and_readback",
+  "source_policy_is_not_enforcement": true,
+  "applicator": "scripts/apply-main-ruleset.py",
+  "verifier": "scripts/verify-main-ruleset.py",
+  "target": "refs/heads/main",
+  "production_authorization": "not_granted"
+}
