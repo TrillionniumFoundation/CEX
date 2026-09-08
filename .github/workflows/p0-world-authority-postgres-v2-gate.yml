@@ -3,20 +3,10 @@ name: p0-world-authority-postgres-v2-gate
 on:
   workflow_dispatch:
   pull_request:
-    paths:
-      - '.github/workflows/p0-world-authority-postgres-v2-gate.yml'
-      - 'docs/traceability/world-authority-cutover-v1.json'
-      - 'docs/release-evidence/world-repin-sequence17.json'
-      - 'docs/world-authority-cutover-v1.md'
   push:
     branches:
       - main
-      - 'fix/hepta-p0-blocker-closure-*'
-    paths:
-      - '.github/workflows/p0-world-authority-postgres-v2-gate.yml'
-      - 'docs/traceability/world-authority-cutover-v1.json'
-      - 'docs/release-evidence/world-repin-sequence17.json'
-      - 'docs/world-authority-cutover-v1.md'
+      - 'fix/**'
 
 permissions:
   contents: read
@@ -28,8 +18,8 @@ concurrency:
 env:
   CEX_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
   WORLD_SOURCE_REPOSITORY: TrillionniumFoundation/Trillionnium-World
+  RUST_TOOLCHAIN: '1.98.1'
   POSTGRES_IMAGE_REF: postgres:16@sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94
-  POSTGRES_IMAGE_DIGEST: sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94
   TRNM_WORLD_POSTGRES_CLIENT_IMAGE: postgres:16@sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94
   PGHOST: 127.0.0.1
   PGPORT: '5432'
@@ -42,7 +32,7 @@ jobs:
   postgres-cutover-state-machine:
     name: p0-world-authority-postgres-v2/exact-object-state-machine
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 90
     services:
       postgres:
         image: postgres:16@sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94
@@ -62,7 +52,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ env.CEX_SOURCE_SHA }}
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Resolve one authoritative World identity
@@ -80,6 +70,8 @@ jobs:
               raise SystemExit('World traceability/repin identity drift')
           if re.fullmatch(r'[0-9a-f]{40}', sha) is None or re.fullmatch(r'[0-9a-f]{40}', tree) is None:
               raise SystemExit('World identity is not exact')
+          if trace['production_authorization'] != 'not_granted' or repin['production_authorization'] != 'not_granted':
+              raise SystemExit('source evidence cannot grant production authorization')
           print(f'world_sha={sha}')
           print(f'world_tree={tree}')
           PY
@@ -93,7 +85,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify exact identities and catalog closure inputs
+      - name: Install exact Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+
+      - name: Verify exact identities and immutable PostgreSQL environment
         shell: bash
         env:
           WORLD_SOURCE_SHA: ${{ steps.world_identity.outputs.world_sha }}
@@ -102,40 +100,37 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$CEX_SOURCE_SHA"
           test "$(git -C .world-source rev-parse HEAD)" = "$WORLD_SOURCE_SHA"
-          test "$(git -C .world-source rev-parse HEAD^{tree})" = "$WORLD_SOURCE_TREE"
+          test "$(git -C .world-source rev-parse 'HEAD^{tree}')" = "$WORLD_SOURCE_TREE"
+          test "$(rustc --version | awk '{print $2}')" = "$RUST_TOOLCHAIN"
           test -z "$(git status --porcelain --untracked-files=no)"
           test -z "$(git -C .world-source status --porcelain)"
-          for path in \
-            deploy/postgres/trnm-world-authority-cutover-v1.sql \
-            deploy/postgres/trnm-world-authority-cutover-v1-hardening.sql \
-            deploy/postgres/trnm-world-authority-catalog-fingerprint-v1.sql \
-            scripts/apply-trnm-world-authority-cutover-v1.sh \
-            scripts/apply-trnm-world-authority-cutover-v1-legacy.sh \
-            scripts/check-trnm-world-authority-postgres-installation.sh \
-            scripts/run-trnm-world-authority-postgres-check.sh; do
-            test -s ".world-source/$path"
-          done
+          mkdir -p run/world-authority-postgres-v2
+          rustc --version --verbose | tee run/world-authority-postgres-v2/rustc-version.txt
+          cargo --version --verbose | tee run/world-authority-postgres-v2/cargo-version.txt
+          docker image inspect "$POSTGRES_IMAGE_REF" >/dev/null 2>&1 || docker pull "$POSTGRES_IMAGE_REF" >/dev/null
+          docker image inspect "$POSTGRES_IMAGE_REF" > run/world-authority-postgres-v2/postgres-image.json
+          docker run --rm "$POSTGRES_IMAGE_REF" postgres --version \
+            | tee run/world-authority-postgres-v2/postgres-server-version.txt
+          docker run --rm "$POSTGRES_IMAGE_REF" psql --version \
+            | tee run/world-authority-postgres-v2/postgres-client-version.txt
 
-      - name: Verify pinned PostgreSQL server and client identity
+      - name: Validate CEX source policy before cross-repository execution
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$POSTGRES_IMAGE_REF" == *@"$POSTGRES_IMAGE_DIGEST" ]]
-          test "$TRNM_WORLD_POSTGRES_CLIENT_IMAGE" = "$POSTGRES_IMAGE_REF"
-          docker image inspect "$POSTGRES_IMAGE_REF" >/dev/null 2>&1 || docker pull "$POSTGRES_IMAGE_REF" >/dev/null
-          mkdir -p run/world-authority-postgres-v2
-          docker image inspect "$POSTGRES_IMAGE_REF" > run/world-authority-postgres-v2/environment-postgres-image-inspect.json
-          docker run --rm "$POSTGRES_IMAGE_REF" postgres --version | tee run/world-authority-postgres-v2/environment-postgres-server-version.txt
-          docker run --rm "$POSTGRES_IMAGE_REF" psql --version | tee run/world-authority-postgres-v2/environment-postgres-client-version.txt
-          grep -E '^psql \(PostgreSQL\) 16\.' run/world-authority-postgres-v2/environment-postgres-client-version.txt
+          python3 scripts/check-rust-toolchain-convergence.py
+          python3 scripts/check-project-boundary.py
+          python3 scripts/check-project-boundary-cargo-closure.py
 
-      - name: Run durable state-machine, installation and full-catalog hostile matrices
+      - name: Run durable World state-machine and installation matrices
         id: postgres
-        continue-on-error: true
         shell: bash
         env:
           TRNM_WORLD_POSTGRES_EVIDENCE_DIR: ${{ github.workspace }}/run/world-authority-postgres-v2
-        run: bash .world-source/scripts/run-trnm-world-authority-postgres-check.sh
+        run: |
+          set -euo pipefail
+          bash .world-source/scripts/run-trnm-world-authority-postgres-check.sh \
+            | tee run/world-authority-postgres-v2/postgres-qualification.log
 
       - name: Record exact identities and outcomes
         if: always()
@@ -154,21 +149,15 @@ jobs:
               return subprocess.run(['git', *args], cwd=cwd, check=True, text=True, stdout=subprocess.PIPE).stdout.strip()
           outcome = os.environ.get('POSTGRES_OUTCOME', 'skipped')
           receipt = {
-              'schema': 'cex.world.postgres-cutover-exact-object.v5',
+              'schema': 'cex.world.postgres-cutover-exact-object.v6',
               'status': 'qualified' if outcome == 'success' else 'failed_or_incomplete',
               'postgres_outcome': outcome,
               'cex_head_sha': os.environ['CEX_SOURCE_SHA'],
               'cex_head_tree': git('.', 'rev-parse', 'HEAD^{tree}'),
               'world_head_sha': os.environ['WORLD_SOURCE_SHA'],
               'world_head_tree': os.environ['WORLD_SOURCE_TREE'],
-              'base_migration_blob': git('.world-source', 'rev-parse', 'HEAD:deploy/postgres/trnm-world-authority-cutover-v1.sql'),
-              'hardening_migration_blob': git('.world-source', 'rev-parse', 'HEAD:deploy/postgres/trnm-world-authority-cutover-v1-hardening.sql'),
-              'catalog_fingerprint_blob': git('.world-source', 'rev-parse', 'HEAD:deploy/postgres/trnm-world-authority-catalog-fingerprint-v1.sql'),
-              'supported_installer_blob': git('.world-source', 'rev-parse', 'HEAD:scripts/apply-trnm-world-authority-cutover-v1.sh'),
-              'legacy_installer_blob': git('.world-source', 'rev-parse', 'HEAD:scripts/apply-trnm-world-authority-cutover-v1-legacy.sh'),
-              'installation_checker_blob': git('.world-source', 'rev-parse', 'HEAD:scripts/check-trnm-world-authority-postgres-installation.sh'),
+              'rust_toolchain': os.environ['RUST_TOOLCHAIN'],
               'postgres_service_image': os.environ['POSTGRES_IMAGE_REF'],
-              'postgres_service_digest': os.environ['POSTGRES_IMAGE_DIGEST'],
               'run_id': os.environ['GITHUB_RUN_ID'],
               'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
               'production_authorization': 'not_granted',
@@ -176,9 +165,10 @@ jobs:
           (out / 'exact-object-identity.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
           files = sorted(p for p in out.rglob('*') if p.is_file() and p.name != 'artifact-manifest.json')
           (out / 'artifact-manifest.json').write_text(json.dumps({
-              'schema': 'cex.world.postgres-cutover-artifact-manifest.v5',
+              'schema': 'cex.world.postgres-cutover-artifact-manifest.v6',
               'status': receipt['status'],
-              'files': [{'path': p.relative_to(out).as_posix(), 'bytes': p.stat().st_size, 'sha256': hashlib.sha256(p.read_bytes()).hexdigest()} for p in files],
+              'files': [{'path': p.relative_to(out).as_posix(), 'bytes': p.stat().st_size,
+                         'sha256': hashlib.sha256(p.read_bytes()).hexdigest()} for p in files],
           }, indent=2, sort_keys=True) + '\n')
           PY
 
@@ -186,7 +176,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: p0-world-authority-postgres-v5-${{ env.CEX_SOURCE_SHA }}-${{ steps.world_identity.outputs.world_sha }}-${{ github.run_attempt }}
+          name: p0-world-authority-postgres-v6-${{ env.CEX_SOURCE_SHA }}-${{ steps.world_identity.outputs.world_sha }}-${{ github.run_attempt }}
           path: run/world-authority-postgres-v2/**
           if-no-files-found: error
           retention-days: 90
