@@ -1,0 +1,55 @@
+name: p0-runner-diagnostics
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'fix/cex-v12-final-closure-*'
+    paths:
+      - '.github/workflows/p0-runner-diagnostics.yml'
+
+permissions: {}
+
+concurrency:
+  group: p0-runner-diagnostics-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-24:
+    name: runner-diagnostic-linux-24
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - run: |
+          set -euo pipefail
+          echo "runner=$RUNNER_NAME os=$RUNNER_OS arch=$RUNNER_ARCH"
+          uname -a
+  linux-latest:
+    name: runner-diagnostic-linux-latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: |
+          set -euo pipefail
+          echo "runner=$RUNNER_NAME os=$RUNNER_OS arch=$RUNNER_ARCH"
+          uname -a
+  windows:
+    name: runner-diagnostic-windows
+    runs-on: windows-2025
+    timeout-minutes: 5
+    steps:
+      - shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host "runner=$env:RUNNER_NAME os=$env:RUNNER_OS arch=$env:RUNNER_ARCH"
+          Get-ComputerInfo | Select-Object WindowsProductName, WindowsVersion, OsArchitecture
+  macos:
+    name: runner-diagnostic-macos
+    runs-on: macos-15
+    timeout-minutes: 5
+    steps:
+      - run: |
+          set -euo pipefail
+          echo "runner=$RUNNER_NAME os=$RUNNER_OS arch=$RUNNER_ARCH"
+          sw_vers
+          uname -a
