@@ -3,44 +3,10 @@ name: project-boundary-gate
 on:
   workflow_dispatch:
   pull_request:
-    paths:
-      - 'Cargo.toml'
-      - '.cargo/**'
-      - 'PROJECT_BOUNDARY.json'
-      - 'PROJECT_BOUNDARY.md'
-      - 'services/consumer-entry-api/**'
-      - 'services/matrix-entry-adapter/**'
-      - 'services/ledger-service/**'
-      - 'crates/shared-tracing/**'
-      - 'crates/shared-config/**'
-      - 'crates/shared-types/**'
-      - 'vendor/trnm-economy-protocol/**'
-      - 'docs/compatibility/world-surface-freeze-v1.json'
-      - 'docs/compatibility/world-surface-freeze-v1.md'
-      - 'scripts/check-project-boundary.py'
-      - 'scripts/check-project-boundary-cargo-closure.py'
-      - '.github/workflows/project-boundary-gate.yml'
   push:
     branches:
       - main
-      - 'fix/hepta-p0-blocker-closure-*'
-    paths:
-      - 'Cargo.toml'
-      - '.cargo/**'
-      - 'PROJECT_BOUNDARY.json'
-      - 'PROJECT_BOUNDARY.md'
-      - 'services/consumer-entry-api/**'
-      - 'services/matrix-entry-adapter/**'
-      - 'services/ledger-service/**'
-      - 'crates/shared-tracing/**'
-      - 'crates/shared-config/**'
-      - 'crates/shared-types/**'
-      - 'vendor/trnm-economy-protocol/**'
-      - 'docs/compatibility/world-surface-freeze-v1.json'
-      - 'docs/compatibility/world-surface-freeze-v1.md'
-      - 'scripts/check-project-boundary.py'
-      - 'scripts/check-project-boundary-cargo-closure.py'
-      - '.github/workflows/project-boundary-gate.yml'
+      - 'fix/**'
 
 permissions:
   contents: read
@@ -52,21 +18,25 @@ concurrency:
 env:
   SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
   BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
-  CHECKOUT_ACTION_SHA: 11d5960a326750d5838078e36cf38b85af677262
-  UPLOAD_ARTIFACT_ACTION_SHA: ea165f8d65b6e75b540449e92b4886f43607fa02
+  RUST_TOOLCHAIN: '1.98.1'
 
 jobs:
   recursive-source-closure:
     name: project-boundary/recursive-source-and-cargo-closure
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
-      - name: Checkout exact source head
+      - name: Checkout exact source head and history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ env.SOURCE_HEAD_SHA }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Install exact Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
 
       - name: Resolve exact source and prospective merge identities
         id: identity
@@ -74,7 +44,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SOURCE_HEAD_SHA"
-          source_tree="$(git rev-parse HEAD^{tree})"
+          test "$(rustc --version | awk '{print $2}')" = "$RUST_TOOLCHAIN"
+          source_tree="$(git rev-parse 'HEAD^{tree}')"
           if [[ -n "$BASE_SHA" ]]; then
             git cat-file -e "${BASE_SHA}^{commit}"
             merge_output="$(git merge-tree --write-tree "$BASE_SHA" "$SOURCE_HEAD_SHA")"
@@ -86,10 +57,8 @@ jobs:
             export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
             export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
             export GIT_COMMITTER_DATE="$GIT_AUTHOR_DATE"
-            merge_commit="$(
-              printf 'Synthetic prospective merge for boundary qualification only\n' \
-                | git commit-tree "$merge_tree" -p "$BASE_SHA" -p "$SOURCE_HEAD_SHA"
-            )"
+            merge_commit="$(printf 'Synthetic prospective merge for boundary qualification only\n' \
+              | git commit-tree "$merge_tree" -p "$BASE_SHA" -p "$SOURCE_HEAD_SHA")"
           else
             merge_tree="$source_tree"
             merge_commit="$SOURCE_HEAD_SHA"
@@ -100,17 +69,19 @@ jobs:
             echo "merge_commit=$merge_commit"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Validate exact source recursive source and Cargo closure
+      - name: Validate exact source recursive closure
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p run/project-boundary
+          python3 scripts/check-rust-toolchain-convergence.py \
+            | tee run/project-boundary/source-toolchain.json
           python3 scripts/check-project-boundary.py \
-            | tee run/project-boundary/source-head-source.json
+            | tee run/project-boundary/source-boundary.json
           python3 scripts/check-project-boundary-cargo-closure.py \
-            | tee run/project-boundary/source-head-cargo.json
+            | tee run/project-boundary/source-cargo.json
 
-      - name: Validate prospective merge recursive source and Cargo closure
+      - name: Validate prospective merge recursive closure
         if: github.event_name == 'pull_request'
         shell: bash
         env:
@@ -121,15 +92,13 @@ jobs:
           worktree="$RUNNER_TEMP/cex-project-boundary-merge"
           git worktree add --detach "$worktree" "$MERGE_COMMIT"
           trap 'git worktree remove --force "$worktree"' EXIT
-          test "$(git -C "$worktree" rev-parse HEAD^{tree})" = "$MERGE_TREE"
+          test "$(git -C "$worktree" rev-parse 'HEAD^{tree}')" = "$MERGE_TREE"
           (
             cd "$worktree"
+            python3 scripts/check-rust-toolchain-convergence.py
             python3 scripts/check-project-boundary.py
-          ) | tee run/project-boundary/prospective-merge-source.json
-          (
-            cd "$worktree"
             python3 scripts/check-project-boundary-cargo-closure.py
-          ) | tee run/project-boundary/prospective-merge-cargo.json
+          ) | tee run/project-boundary/prospective-merge.log
           test -z "$(git -C "$worktree" status --porcelain --untracked-files=no)"
 
       - name: Record immutable boundary evidence
@@ -142,90 +111,37 @@ jobs:
           set -euo pipefail
           mkdir -p run/project-boundary
           python3 - <<'PY'
-          import hashlib
-          import json
-          import os
-          import pathlib
-          import subprocess
-
+          import hashlib, json, os, pathlib, subprocess
           out = pathlib.Path('run/project-boundary')
-
-          def sha256(path: pathlib.Path) -> str:
-              return hashlib.sha256(path.read_bytes()).hexdigest()
-
-          def git(*args: str) -> str:
-              return subprocess.run(
-                  ['git', *args], check=True, text=True, stdout=subprocess.PIPE
-              ).stdout.strip()
-
-          evidence_files = (
-              'source-head-source.json',
-              'source-head-cargo.json',
-              'prospective-merge-source.json',
-              'prospective-merge-cargo.json',
-          )
-          outcomes = {}
-          for name in evidence_files:
-              path = out / name
-              if path.is_file():
-                  outcomes[name] = json.loads(path.read_text()).get('status')
-
+          def git(*args):
+              return subprocess.run(['git', *args], check=True, text=True, stdout=subprocess.PIPE).stdout.strip()
           summary = {
-              'schema': 'cex.project-boundary.evidence.v2',
-              'status': 'recursive_source_and_cargo_closure_green'
-                  if outcomes and all(value == 'ok' for value in outcomes.values())
-                  else 'recursive_source_or_cargo_closure_failed',
+              'schema': 'cex.project-boundary.evidence.v3',
               'repository': os.environ['GITHUB_REPOSITORY'],
               'event_name': os.environ['GITHUB_EVENT_NAME'],
               'source_head_sha': os.environ['SOURCE_HEAD_SHA'],
               'source_head_tree': os.environ['SOURCE_TREE'],
               'base_sha': os.environ.get('BASE_SHA') or None,
               'prospective_merge_tree': os.environ['MERGE_TREE'],
+              'workflow_blob': git('rev-parse', 'HEAD:.github/workflows/project-boundary-gate.yml'),
               'run_id': os.environ['GITHUB_RUN_ID'],
               'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
-              'workflow_ref': os.environ['GITHUB_WORKFLOW_REF'],
-              'workflow_blob_sha': git(
-                  'rev-parse', 'HEAD:.github/workflows/project-boundary-gate.yml'
-              ),
-              'boundary_manifest_blob_sha': git(
-                  'rev-parse', 'HEAD:docs/compatibility/world-surface-freeze-v1.json'
-              ),
-              'source_checker_blob_sha': git(
-                  'rev-parse', 'HEAD:scripts/check-project-boundary.py'
-              ),
-              'cargo_closure_checker_blob_sha': git(
-                  'rev-parse', 'HEAD:scripts/check-project-boundary-cargo-closure.py'
-              ),
-              'actions': {
-                  'actions/checkout': os.environ['CHECKOUT_ACTION_SHA'],
-                  'actions/upload-artifact': os.environ['UPLOAD_ARTIFACT_ACTION_SHA'],
-              },
-              'outcomes': outcomes,
               'production_authorization': 'not_granted',
           }
-          (out / 'summary.json').write_text(
-              json.dumps(summary, indent=2, sort_keys=True) + '\n'
-          )
-
-          files = sorted(path for path in out.iterdir() if path.is_file() and path.name != 'manifest.json')
-          manifest = {
-              'schema': 'cex.project-boundary.artifact-manifest.v2',
-              'source_head_sha': os.environ['SOURCE_HEAD_SHA'],
-              'files': [
-                  {'path': path.name, 'bytes': path.stat().st_size, 'sha256': sha256(path)}
-                  for path in files
-              ],
-          }
-          (out / 'manifest.json').write_text(
-              json.dumps(manifest, indent=2, sort_keys=True) + '\n'
-          )
+          (out / 'summary.json').write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
+          files = sorted(p for p in out.rglob('*') if p.is_file() and p.name != 'manifest.json')
+          (out / 'manifest.json').write_text(json.dumps({
+              'schema': 'cex.project-boundary.artifact-manifest.v3',
+              'files': [{'path': p.relative_to(out).as_posix(), 'bytes': p.stat().st_size,
+                         'sha256': hashlib.sha256(p.read_bytes()).hexdigest()} for p in files],
+          }, indent=2, sort_keys=True) + '\n')
           PY
 
       - name: Upload recursive boundary evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: cex-project-boundary-${{ env.SOURCE_HEAD_SHA }}
+          name: cex-project-boundary-${{ env.SOURCE_HEAD_SHA }}-${{ github.run_attempt }}
           path: run/project-boundary/**
           if-no-files-found: error
           retention-days: 90
