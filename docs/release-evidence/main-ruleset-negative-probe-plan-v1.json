@@ -1,0 +1,13 @@
+{
+  "schema": "cex.main-ruleset-negative-probe-plan.v1",
+  "target": "refs/heads/main",
+  "required_probes": [
+    "direct_update_rejected",
+    "non_fast_forward_update_rejected",
+    "branch_deletion_rejected"
+  ],
+  "main_unchanged_required": true,
+  "server_response_evidence_required": true,
+  "source_policy_is_not_enforcement": true,
+  "production_authorization": "not_granted"
+}
