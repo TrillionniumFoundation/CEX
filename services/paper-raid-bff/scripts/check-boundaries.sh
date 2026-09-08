@@ -16,6 +16,8 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+python3 "$repo_root/scripts/check-rust-toolchain-convergence.py" --verify-installed
+
 for pattern in \
   "League""State" \
   "/bat""tle" \
@@ -178,8 +180,11 @@ for required in \
   'CARGO_HTTP_TIMEOUT=600' \
   'CARGO_HTTP_LOW_SPEED_LIMIT=1' \
   'CARGO_NET_RETRY=5' \
-  'rustc 1.95.0 (59807616e 2026-04-14)' \
-  'cargo 1.95.0 (f2d3ce0bd 2026-03-21)' \
+  'COPY scripts/install-rust-toolchain-1.98.1.sh /toolchain/install-rust-toolchain.sh' \
+  'RUN /toolchain/install-rust-toolchain.sh' \
+  'ENV PATH="/opt/cex-rust/1.98.1/bin:${PATH}"' \
+  'COPY scripts/check-installed-rust-toolchain.sh /toolchain/check-installed-rust-toolchain.sh' \
+  'RUN /toolchain/check-installed-rust-toolchain.sh' \
   'cargo fetch --locked' \
   'cargo build --locked --offline --release -p paper-raid-bff' \
   'AS runtime-binary-export' \
