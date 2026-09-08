@@ -1,0 +1,6 @@
+{
+  "schema": "cex.admin-capability-boundary.v1",
+  "required_server_capability": "repository_rulesets_write",
+  "source_commit_substitute_allowed": false,
+  "production_authorization": "not_granted"
+}
