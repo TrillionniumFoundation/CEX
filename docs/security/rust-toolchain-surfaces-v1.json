@@ -4,7 +4,8 @@
   "expected_rust_toolchain": "1.98.1",
   "expected_rust_release_commit": "48a229ceaefd4985c50990b14116b6d856af0985",
   "production_authorization": "not_granted",
-  "source_inventory": "recursive_git_tree_and_blob_content",
+  "source_inventory": "git_tree_derived",
+  "source_inventory_detail": "recursive_git_tree_and_blob_content",
   "active_roots": [
     ".github/actions",
     ".github/workflows",
