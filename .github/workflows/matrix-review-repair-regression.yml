@@ -2,7 +2,7 @@ name: matrix-review-repair-regression
 
 on:
   push:
-    branches: [fix/cex-v12-audit-remediation-20260905]
+    branches: [integration/cex-v12-sequence54-20260908]
   pull_request:
     paths:
       - Cargo.toml
@@ -16,10 +16,11 @@ on:
       - services/consumer-entry-api/src/matrix_result_lookup.rs
       - apps/matrix-bot-*/**
       - docs/module-catalog-v1.json
-      - docs/repository-contract-semantics-v1.json
+      - docs/repository-semantic-policy-v1.json
       - docs/modules/**
       - docs/matrix-adapter-validated-construction-v1.md
       - docs/matrix-result-reconciliation-v1.md
+      - docs/matrix-result-reconciliation-runtime-v2.md
       - scripts/*matrix*
       - .github/workflows/matrix-review-repair-regression.yml
 
@@ -82,6 +83,7 @@ jobs:
       - name: PostgreSQL runner safety and ordering regression
         run: |
           python3 scripts/test-matrix-postgres-runner.py
+          python3 scripts/test-matrix-operator-postgres-runner.py
           python3 scripts/test-matrix-runner-hardening.py
           python3 scripts/test-matrix-runner-lifecycle.py
       - name: Matrix shared profile linkage regression
@@ -90,8 +92,11 @@ jobs:
         run: |
           python3 scripts/test-matrix-adapter-api-boundary.py
           python3 scripts/check-matrix-adapter-api-boundary.py
-      - name: Durable result reconciliation source contract
-        run: python3 scripts/check-matrix-result-reconciliation.py
+      - name: Durable result reconciliation source and runtime contract
+        run: |
+          python3 scripts/test-matrix-result-reconciler.py
+          python3 scripts/check-matrix-result-reconciliation.py
+          python3 scripts/check-matrix-result-runtime-closure.py
       - name: Recovery contract mutation regressions
         run: |
           python3 scripts/test-matrix-recovery-contract.py
@@ -175,7 +180,7 @@ jobs:
   matrix-postgres:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       MATRIX_TEST_DATABASE_URL: postgres://cex:disposable_ci_only@127.0.0.1:5432/matrix_review_ci
       MATRIX_TEST_ALLOW_SCHEMA_RESET: '1'
@@ -201,6 +206,8 @@ jobs:
         run: command -v psql
       - name: Existing durability plus additive observation regression
         run: bash scripts/check-matrix-source-observation-postgres.sh
+      - name: Operator result-reconciliation migration and runtime closure
+        run: bash scripts/check-matrix-operator-postgres.sh
       - name: No source mutation
         run: git diff --exit-code
 
