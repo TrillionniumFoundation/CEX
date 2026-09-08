@@ -1,0 +1,21 @@
+{
+  "schema": "cex.rust-toolchain-convergence.v1",
+  "status": "required_hosted_exact_sha",
+  "expected_rust_toolchain": "1.98.1",
+  "workspace_toolchain": "rust-toolchain.toml",
+  "source_checker": "scripts/check-rust-toolchain-convergence.py",
+  "hosted_gate": ".github/workflows/p0-rust-toolchain-convergence.yml",
+  "container_dockerfile": "services/hepta-research-league/Dockerfile",
+  "container_intent": "services/hepta-research-league/docker/rust-toolchain.manifest",
+  "historical_evidence_policy": "retained_but_not_active_authority",
+  "required_evidence": [
+    "non_empty_hosted_success",
+    "exact_head_and_tree",
+    "rustc_verbose_identity",
+    "cargo_verbose_identity",
+    "container_build_identity",
+    "artifact_manifest_sha256",
+    "independent_review"
+  ],
+  "production_authorization": "not_granted"
+}
