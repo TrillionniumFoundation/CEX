@@ -1,0 +1,26 @@
+{
+  "schema": "cex.repository-required-contexts.v1",
+  "status": "active",
+  "target": "refs/heads/main",
+  "required_status_checks": [
+    "fresh-postgres-migrations",
+    "service-local-gate-linux",
+    "service-local-gate-windows",
+    "gateway-exact-reserve",
+    "execution-settlement",
+    "provider-reconciliation",
+    "rust-toolchain-convergence",
+    "repository-candidate-qualification"
+  ],
+  "pull_request": {
+    "required_approving_review_count": 2,
+    "dismiss_stale_reviews_on_push": true,
+    "require_code_owner_review": true,
+    "require_last_push_approval": true,
+    "required_review_thread_resolution": true
+  },
+  "block_deletion": true,
+  "block_non_fast_forward": true,
+  "bypass_actors": [],
+  "production_authorization": "not_granted"
+}
