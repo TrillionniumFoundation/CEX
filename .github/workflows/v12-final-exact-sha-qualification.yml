@@ -1,0 +1,444 @@
+name: v12-final-exact-sha-qualification
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/v12-final-exact-sha-qualification.yml'
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: v12-final-exact-sha-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: '0'
+  RUST_BACKTRACE: '1'
+  RUST_TEST_THREADS: '1'
+  RUST_TOOLCHAIN: '1.98.1'
+  DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/cex
+  PGHOST: 127.0.0.1
+  PGPORT: '5432'
+  PGUSER: cex
+  PGPASSWORD: cex_ci_password
+  PGDATABASE: cex
+
+jobs:
+  hosted-runner-qualification:
+    name: hosted-runner-qualification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Prove a real hosted runner executed
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$RUNNER_NAME"
+          test "$RUNNER_OS" = Linux
+          test "$RUNNER_ARCH" = X64
+          printf 'runner=%s\nos=%s\narch=%s\nsha=%s\nproduction_authorization=not_granted\n' \
+            "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH" "$GITHUB_SHA"
+
+  rust-toolchain-convergence:
+    name: rust-toolchain-convergence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+      - name: Verify exact compiler, Cargo and active surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(rustc --version | awk '{print $2}')" = "$RUST_TOOLCHAIN"
+          test "$(cargo --version | awk '{print $2}')" = "$RUST_TOOLCHAIN"
+          python3 scripts/check-toolchain-convergence.py
+          cargo metadata --locked --format-version 1 >/dev/null
+          cargo fmt --all -- --check
+
+  service-local-gate-linux:
+    name: service-local-gate-linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+      - name: Run complete Linux service-local gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(rustc --version | awk '{print $2}')" = "$RUST_TOOLCHAIN"
+          bash scripts/gate-local-linux.sh --service-local-only --skip-db-bootstrap
+
+  service-local-gate-windows:
+    name: service-local-gate-windows
+    runs-on: windows-2025
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+      - name: Verify exact toolchain and run Windows service-local gate
+        run: |
+          if ((rustc --version).Split(' ')[1] -ne $env:RUST_TOOLCHAIN) { throw 'rustc version mismatch' }
+          if ((cargo --version).Split(' ')[1] -ne $env:RUST_TOOLCHAIN) { throw 'cargo version mismatch' }
+          ./gate-local.ps1 -ServiceLocalOnly
+
+  fresh-postgres-migrations:
+    name: fresh-postgres-migrations
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16@sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94
+        env:
+          POSTGRES_USER: cex
+          POSTGRES_PASSWORD: cex_ci_password
+          POSTGRES_DB: cex
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U cex -d cex"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Exercise migration chain
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check-p0-migrations.py
+          bash scripts/check-p0-migrations-postgres.sh
+
+  gateway-exact-reserve:
+    name: gateway-exact-reserve
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:16@sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94
+        env:
+          POSTGRES_USER: cex
+          POSTGRES_PASSWORD: cex_ci_password
+          POSTGRES_DB: cex
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U cex -d cex"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: clippy
+      - name: Exercise exact reserve
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check-authoritative-money-isolation.py
+          python3 scripts/check-gateway-exact-reserve.py
+          bash scripts/check-gateway-exact-reserve-postgres.sh
+          cargo test --locked -p gateway-service --all-targets
+          cargo clippy --locked -p gateway-service --all-targets -- -D warnings
+
+  execution-settlement:
+    name: execution-settlement
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:16@sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94
+        env:
+          POSTGRES_USER: cex
+          POSTGRES_PASSWORD: cex_ci_password
+          POSTGRES_DB: cex
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U cex -d cex"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: clippy
+      - name: Exercise exact terminal settlement
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check-authoritative-money-isolation.py
+          python3 scripts/check-execution-settlement-commands.py
+          bash scripts/check-execution-settlement-commands-postgres.sh
+          cargo test --locked -p execution-service --all-targets
+          cargo clippy --locked -p execution-service --all-targets -- -D warnings
+
+  provider-reconciliation:
+    name: provider-reconciliation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16@sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94
+        env:
+          POSTGRES_USER: cex
+          POSTGRES_PASSWORD: cex_ci_password
+          POSTGRES_DB: cex
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U cex -d cex"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: clippy
+      - name: Exercise unknown-outcome recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/check-provider-reconciliation-postgres.sh
+          cargo test --locked -p execution-service --all-targets
+          cargo clippy --locked -p execution-service --all-targets -- -D warnings
+
+  hepta-postgres-integration:
+    name: hepta-postgres-integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      HEPTA_REQUIRE_POSTGRES_TESTS: '1'
+      HEPTA_TEST_DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/cex
+    services:
+      postgres:
+        image: postgres:16@sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94
+        env:
+          POSTGRES_USER: cex
+          POSTGRES_PASSWORD: cex_ci_password
+          POSTGRES_DB: cex
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U cex -d cex"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: clippy
+      - name: Run strict Hepta PostgreSQL suite
+        shell: bash
+        run: bash scripts/check-hepta-postgres-integration.sh --mode full
+
+  economy-workspace:
+    name: economy-workspace
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+      - name: Validate full workspace and feature closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --workspace --all-targets
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          python3 scripts/check-rust-advisory-exceptions.py
+      - name: Install pinned supply-chain tools
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
+        with:
+          tool: cargo-audit@0.22.2,cargo-deny@0.20.2
+      - name: Enforce advisory, license, source and ban policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo audit --deny warnings \
+            --ignore RUSTSEC-2023-0071 \
+            --ignore RUSTSEC-2026-0214 \
+            --ignore RUSTSEC-2024-0436
+          cargo deny check advisories licenses sources
+          cargo deny check --allow wildcard bans
+
+  world-boundary-source:
+    name: world-boundary-source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+      - name: Validate complete CEX World quarantine and adapter boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check-project-boundary.py
+          python3 scripts/check-project-boundary-cargo-closure.py
+          bash scripts/check-world-authority-cutover.sh
+
+  hepta-container-toolchain:
+    name: hepta-container-toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build and export executed container toolchain evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p run/hepta-toolchain run/hepta-binary
+          docker build --file services/hepta-research-league/Dockerfile \
+            --target rust-toolchain-evidence-export \
+            --output type=local,dest=run/hepta-toolchain .
+          grep -F 'release: 1.98.1' run/hepta-toolchain/executed-rust-toolchain.manifest
+          grep -F 'cargo 1.98.1' run/hepta-toolchain/executed-rust-toolchain.manifest
+          docker build --file services/hepta-research-league/Dockerfile \
+            --target runtime-binary-export \
+            --output type=local,dest=run/hepta-binary .
+          test -s run/hepta-binary/hepta-research-league
+          sha256sum run/hepta-binary/hepta-research-league > run/hepta-binary/SHA256SUMS
+      - name: Upload container toolchain and binary evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cex-hepta-container-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            run/hepta-toolchain/**
+            run/hepta-binary/**
+          if-no-files-found: error
+          retention-days: 90
+
+  repository-candidate-qualification:
+    name: repository-candidate-qualification
+    if: always()
+    needs:
+      - hosted-runner-qualification
+      - rust-toolchain-convergence
+      - service-local-gate-linux
+      - service-local-gate-windows
+      - fresh-postgres-migrations
+      - gateway-exact-reserve
+      - execution-settlement
+      - provider-reconciliation
+      - hepta-postgres-integration
+      - economy-workspace
+      - world-boundary-source
+      - hepta-container-toolchain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+      - name: Require every prerequisite job to succeed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          needs=json.loads(os.environ['NEEDS_JSON'])
+          failed={name:value.get('result') for name,value in needs.items() if value.get('result')!='success'}
+          print(json.dumps({'needs':needs,'failed':failed},indent=2,sort_keys=True))
+          if failed: raise SystemExit('candidate prerequisite failure: '+json.dumps(failed,sort_keys=True))
+          PY
+      - name: Re-run repository authority checks on the exact aggregate head
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p run/v12-final
+          python3 scripts/check-toolchain-convergence.py
+          python3 scripts/check-module-documentation.py
+          python3 scripts/check-capability-production-posture.py
+          python3 scripts/check-authoritative-money-isolation.py
+          python3 scripts/check-project-boundary.py
+          python3 scripts/check-project-boundary-cargo-closure.py
+          python3 scripts/check-source-governance.py
+          python3 scripts/check-development-docs.py
+          python3 scripts/check-hepta-lint-ownership.py
+          python3 scripts/check-p0-release-candidate-hygiene.py
+          python3 scripts/check-p0-wiring.py
+          python3 scripts/check-trnm-economy-settlement-contract.py
+          python3 scripts/check-repository-integrity.py --output run/v12-final/repository-integrity.json
+      - name: Emit immutable aggregate evidence
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib,subprocess
+          out=pathlib.Path('run/v12-final'); out.mkdir(parents=True,exist_ok=True)
+          def git(*args): return subprocess.run(['git',*args],check=True,text=True,stdout=subprocess.PIPE).stdout.strip()
+          summary={'schema':'cex.v12-final-exact-sha-qualification.v1','status':'repository_qualified',
+            'repository':os.environ['GITHUB_REPOSITORY'],'source_sha':os.environ['GITHUB_SHA'],
+            'source_tree':git('rev-parse','HEAD^{tree}'),'rust_toolchain':'1.98.1',
+            'needs':json.loads(os.environ['NEEDS_JSON']),'run_id':os.environ['GITHUB_RUN_ID'],
+            'run_attempt':os.environ['GITHUB_RUN_ATTEMPT'],'production_authorization':'not_granted'}
+          (out/'summary.json').write_text(json.dumps(summary,indent=2,sort_keys=True)+'\n')
+          files=sorted(p for p in out.iterdir() if p.is_file() and p.name!='manifest.json')
+          (out/'manifest.json').write_text(json.dumps({'schema':'cex.v12-final-artifact-manifest.v1','files':[
+            {'path':p.name,'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in files]},indent=2,sort_keys=True)+'\n')
+          PY
+      - name: Upload immutable aggregate evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cex-v12-final-${{ github.sha }}-${{ github.run_attempt }}
+          path: run/v12-final/**
+          if-no-files-found: error
+          retention-days: 90
