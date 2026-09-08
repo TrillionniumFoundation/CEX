@@ -1,0 +1,133 @@
+name: p0-rust-toolchain-convergence
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'rust-toolchain.toml'
+      - 'scripts/check-rust-toolchain-convergence.py'
+      - '.github/workflows/**'
+      - 'services/hepta-research-league/Dockerfile'
+      - 'services/hepta-research-league/docker/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  push:
+    branches:
+      - main
+      - 'fix/**'
+    paths:
+      - 'rust-toolchain.toml'
+      - 'scripts/check-rust-toolchain-convergence.py'
+      - '.github/workflows/**'
+      - 'services/hepta-research-league/Dockerfile'
+      - 'services/hepta-research-league/docker/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p0-rust-toolchain-convergence-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: '0'
+  RUST_TOOLCHAIN: '1.98.1'
+
+jobs:
+  exact-toolchain-and-container:
+    name: p0-rust-toolchain-convergence/exact-toolchain-and-container
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install exact Rust point release
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+
+      - name: Verify active toolchain and source policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(rustc --version | awk '{print $2}')" = "$RUST_TOOLCHAIN"
+          mkdir -p run/rust-toolchain-convergence
+          rustc --version --verbose | tee run/rust-toolchain-convergence/rustc-version.txt
+          cargo --version --verbose | tee run/rust-toolchain-convergence/cargo-version.txt
+          rustup show active-toolchain | tee run/rust-toolchain-convergence/active-toolchain.txt
+          python3 scripts/check-rust-toolchain-convergence.py \
+            | tee run/rust-toolchain-convergence/source-policy.json
+          cargo metadata --locked --format-version 1 \
+            > run/rust-toolchain-convergence/cargo-metadata.json
+          cargo fmt --all -- --check
+
+      - name: Build Hepta metadata stage with exact compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p run/rust-toolchain-convergence/docker-metadata
+          docker buildx build \
+            --file services/hepta-research-league/Dockerfile \
+            --target sbom-metadata-export \
+            --output type=local,dest=run/rust-toolchain-convergence/docker-metadata \
+            --build-arg RUST_TOOLCHAIN="$RUST_TOOLCHAIN" \
+            .
+          grep -F "release: $RUST_TOOLCHAIN" \
+            run/rust-toolchain-convergence/docker-metadata/active-toolchain.txt
+          grep -F "rustc $RUST_TOOLCHAIN" \
+            run/rust-toolchain-convergence/docker-metadata/rustc-version.txt
+
+      - name: Record exact-object evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p run/rust-toolchain-convergence
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          out = pathlib.Path('run/rust-toolchain-convergence')
+          def git(*args):
+              return subprocess.run(['git', *args], check=True, text=True, stdout=subprocess.PIPE).stdout.strip()
+          files = sorted(p for p in out.rglob('*') if p.is_file() and p.name != 'manifest.json')
+          evidence = {
+              'schema': 'cex.rust-toolchain-convergence-evidence.v1',
+              'status': 'executed' if (out / 'docker-metadata/rustc-version.txt').is_file() else 'failed_or_incomplete',
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'head_sha': git('rev-parse', 'HEAD'),
+              'head_tree': git('rev-parse', 'HEAD^{tree}'),
+              'rust_toolchain': os.environ['RUST_TOOLCHAIN'],
+              'workflow_blob': git('rev-parse', 'HEAD:.github/workflows/p0-rust-toolchain-convergence.yml'),
+              'dockerfile_blob': git('rev-parse', 'HEAD:services/hepta-research-league/Dockerfile'),
+              'toolchain_manifest_blob': git('rev-parse', 'HEAD:services/hepta-research-league/docker/rust-toolchain.manifest'),
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'production_authorization': 'not_granted',
+          }
+          (out / 'summary.json').write_text(json.dumps(evidence, indent=2, sort_keys=True) + '\n')
+          files = sorted(p for p in out.rglob('*') if p.is_file() and p.name != 'manifest.json')
+          (out / 'manifest.json').write_text(json.dumps({
+              'schema': 'cex.rust-toolchain-convergence-artifact-manifest.v1',
+              'files': [
+                  {'path': p.relative_to(out).as_posix(), 'bytes': p.stat().st_size,
+                   'sha256': hashlib.sha256(p.read_bytes()).hexdigest()}
+                  for p in files
+              ],
+          }, indent=2, sort_keys=True) + '\n')
+          PY
+
+      - name: Upload exact toolchain evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cex-rust-toolchain-${{ github.sha }}-${{ github.run_attempt }}
+          path: run/rust-toolchain-convergence/**
+          if-no-files-found: error
+          retention-days: 90
