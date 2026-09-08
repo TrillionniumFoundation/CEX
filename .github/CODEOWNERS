@@ -16,6 +16,14 @@
 /services/execution-service/ @ProfHepta
 /services/capability-service/ @ProfHepta
 
+# Exact Rust compiler and container-build authority requires independent security ownership.
+/rust-toolchain.toml @Tomasrgbsf
+/services/hepta-research-league/Dockerfile @Tomasrgbsf
+/services/hepta-research-league/docker/rust-toolchain.manifest @Tomasrgbsf
+/scripts/check-rust-toolchain-convergence.py @Tomasrgbsf
+/.github/workflows/p0-rust-toolchain-convergence.yml @Tomasrgbsf
+/docs/traceability/rust-toolchain-convergence-v1.json @Tomasrgbsf
+
 # Temporary supply-chain exception and complete release-surface policy require independent security ownership.
 /docs/security/rust-advisory-exceptions-v1.json @Tomasrgbsf
 /docs/security/rust-release-surfaces-v1.json @Tomasrgbsf
