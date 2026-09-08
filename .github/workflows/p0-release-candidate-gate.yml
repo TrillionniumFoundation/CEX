@@ -5,6 +5,15 @@ on:
   push:
     paths:
       - 'docs/release-evidence/p0-candidate-trigger.json'
+      - 'scripts/check-rust-toolchain-convergence.py'
+      - 'scripts/rust_toolchain_convergence_v1.py'
+      - 'scripts/install-rust-toolchain-1.98.1.sh'
+      - 'services/hepta-research-league/Dockerfile'
+      - 'services/hepta-research-league/docker/rust-toolchain.manifest'
+      - 'services/paper-raid-bff/Dockerfile*'
+      - 'services/paper-raid-bff/scripts/check-docker-lock.sh'
+      - 'services/paper-raid-bff/scripts/check-boundaries.sh'
+      - 'services/paper-raid-bff/scripts/check-browser-mobile-a11y.sh'
       - '.github/workflows/p0-release-candidate-gate.yml'
 
 permissions:
@@ -22,14 +31,15 @@ env:
   CEX_P0_GATE_POLL_INTERVAL_SECONDS: '15'
   CARGO_TERM_COLOR: never
   CARGO_INCREMENTAL: '0'
+  RUST_TOOLCHAIN: '1.98.1'
 
 jobs:
   repository-candidate-qualification:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 105
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16@sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94
         env:
           POSTGRES_USER: cex
           POSTGRES_PASSWORD: cex_ci_password
@@ -53,9 +63,10 @@ jobs:
           esac
 
       - name: Checkout exact candidate tree
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Resolve immutable source identity
         id: source
@@ -72,6 +83,8 @@ jobs:
           mkdir -p "$CEX_P0_EVIDENCE_DIR"
           python3 scripts/check-p0-release-candidate-hygiene.py \
             | tee "$CEX_P0_EVIDENCE_DIR/candidate-hygiene.json"
+          python3 scripts/check-rust-toolchain-convergence.py \
+            | tee "$CEX_P0_EVIDENCE_DIR/rust-toolchain-static.json"
 
       - name: Development-document authority and exact-tree integrity
         shell: bash
@@ -119,11 +132,19 @@ jobs:
       - name: Provider unknown-outcome reconciliation matrix
         run: bash scripts/check-provider-reconciliation-postgres.sh
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - name: Install exact Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+
+      - name: Verify exact installed compiler and Cargo identity
+        run: |
+          python3 scripts/check-rust-toolchain-convergence.py --verify-installed \
+            | tee "$CEX_P0_EVIDENCE_DIR/rust-toolchain-runtime.json"
 
       - name: Cache Cargo artifacts
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
 
       - name: Strict Hepta PostgreSQL restart and lease recovery
         env:
@@ -156,6 +177,7 @@ jobs:
               "checks": [
                   "development-document-authority",
                   "repository-integrity",
+                  "rust-toolchain-static-and-runtime-convergence",
                   "fresh-migration-and-p0-assertions",
                   "existing-row-audit-baseline",
                   "ledger-operation-identity-and-replay",
@@ -165,7 +187,7 @@ jobs:
                   "execution-settlement-fault-matrix",
                   "provider-unknown-outcome-reconciliation",
                   "hepta-postgres-restart-and-lease-recovery",
-                  "trnm-settlement-receipt-response-loss-recovery",
+                  "trnm-settlement-receipt-response-loss-recovery"
               ],
           }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
           PY
@@ -207,7 +229,7 @@ jobs:
 
       - name: Upload immutable evidence payload
         id: payload
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: cex-p0-evidence-${{ github.sha }}
           path: run/p0-release-evidence
@@ -232,7 +254,7 @@ jobs:
             run/p0-release-manifest/cex-p0-candidate-manifest.json
 
       - name: Upload candidate manifest
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: cex-p0-candidate-manifest-${{ github.sha }}
           path: run/p0-release-manifest/cex-p0-candidate-manifest.json
@@ -249,6 +271,7 @@ jobs:
             echo "- Commit: \`$GITHUB_SHA\`"
             echo "- Tree: \`${{ steps.source.outputs.tree }}\`"
             echo "- Migration head: \`0084_make_provider_reconciliation_replay_terminal_safe.sql\`"
+            echo '- Rust: exact 1.98.1 release/commit and Cargo commit verified across active release surfaces'
             echo '- Scope: repository exact-money control plane + TRNM receipt recovery + Hepta PostgreSQL recovery + document integrity'
             echo '- Development authority: active v12 plan plus implementation addendum, machine-validated'
             echo '- Hepta: strict restart, disjoint claim, wrong-owner rejection and expired-lease recovery qualified'
@@ -258,7 +281,7 @@ jobs:
 
       - name: Upload failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: cex-p0-candidate-failure-${{ github.sha }}-${{ github.run_attempt }}
           path: run/p0-release-evidence
