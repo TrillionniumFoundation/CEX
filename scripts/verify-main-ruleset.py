@@ -1,113 +1,70 @@
 #!/usr/bin/env python3
-"""Verify live CEX main ruleset enforcement and reject source-only substitutes."""
+"""Verify the unique live CEX main Ruleset as one exact closed policy object."""
 from __future__ import annotations
 
+import argparse
 import json
-import os
-import sys
-import urllib.error
-import urllib.request
-from pathlib import Path
-from typing import Any
+import re
 
-ROOT = Path(__file__).resolve().parents[1]
-POLICY = ROOT / "docs/repository-ruleset-required-contexts-v1.json"
-REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "TrillionniumFoundation/CEX")
-TOKEN = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-NAME = "CEX v12 main admission"
+from repository_ruleset_common import (
+    RulesetError,
+    load_policy,
+    main_identity,
+    payload_digest,
+    repository_identity,
+    require,
+    unique_named_ruleset,
+    validate_exact_ruleset,
+)
 
-if not TOKEN:
-    raise SystemExit("GITHUB_TOKEN or GH_TOKEN is required")
-policy = json.loads(POLICY.read_text(encoding="utf-8"))
-headers = {
-    "Accept": "application/vnd.github+json",
-    "Authorization": f"Bearer {TOKEN}",
-    "X-GitHub-Api-Version": "2022-11-28",
-    "User-Agent": "cex-v12-ruleset-verifier",
-}
+SHA40 = re.compile(r"^[0-9a-f]{40}$")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
-def get(path: str) -> Any:
-    request = urllib.request.Request(
-        f"https://api.github.com/repos/{REPOSITORY}/{path}", headers=headers
-    )
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--expected-main-sha", required=True)
+    parser.add_argument("--expected-policy-sha256", required=True)
+    parser.add_argument("--expected-ruleset-id", required=True, type=int)
+    args = parser.parse_args()
+    policy, policy_sha = load_policy()
+    repository = policy["repository"]["full_name"]
+    require(SHA40.fullmatch(args.expected_main_sha) is not None, "expected main SHA is invalid")
+    require(SHA256.fullmatch(args.expected_policy_sha256) is not None, "expected policy digest is invalid")
+    require(policy_sha == args.expected_policy_sha256, "policy digest changed before verification")
+    repository_identity(repository, policy)
+    branch = main_identity(repository, policy, args.expected_main_sha)
+    actual, summaries = unique_named_ruleset(repository, policy)
+    require(actual is not None, "required Ruleset is absent")
+    require(actual.get("id") == args.expected_ruleset_id, "Ruleset id changed")
+    validate_exact_ruleset(actual, policy)
+    require(branch.get("protected") is True, "GitHub does not report main as protected")
+    result = {
+        "schema": "cex.repository-ruleset-readback.v2",
+        "status": "unique_exact_ruleset_active",
+        "repository": repository,
+        "repository_id": policy["repository"]["repository_id"],
+        "main_sha": args.expected_main_sha,
+        "main_protected": True,
+        "policy_sha256": policy_sha,
+        "ruleset_sha256": payload_digest(actual),
+        "ruleset_id": actual["id"],
+        "ruleset_count_observed": len(summaries),
+        "production_authorization": "not_granted",
+        "problems": [],
+    }
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            return json.load(response)
-    except urllib.error.HTTPError as error:
-        detail = error.read().decode("utf-8", errors="replace")
-        raise SystemExit(f"GitHub API GET {path} failed: HTTP {error.code}: {detail}") from error
-
-
-branch = get("branches/main")
-summaries = get("rulesets?per_page=100")
-summary = next((item for item in summaries if item.get("name") == NAME), None)
-problems: list[str] = []
-full: dict[str, Any] = {}
-if summary is None:
-    problems.append(f"required ruleset is absent: {NAME}")
-else:
-    full = get(f"rulesets/{summary['id']}")
-    if full.get("enforcement") != "active":
-        problems.append("required ruleset is not active")
-    if full.get("target") != "branch":
-        problems.append("required ruleset target is not branch")
-
-    conditions = full.get("conditions", {}).get("ref_name", {})
-    if policy["target"] not in conditions.get("include", []):
-        problems.append("ruleset does not include refs/heads/main")
-
-    rules = full.get("rules", [])
-    rule_types = {rule.get("type") for rule in rules if isinstance(rule, dict)}
-    for required_type in (
-        "deletion",
-        "non_fast_forward",
-        "pull_request",
-        "required_status_checks",
-    ):
-        if required_type not in rule_types:
-            problems.append(f"ruleset lacks rule: {required_type}")
-
-    status_rule = next(
-        (rule for rule in rules if rule.get("type") == "required_status_checks"), {}
-    )
-    status_parameters = status_rule.get("parameters", {})
-    actual_contexts = sorted(
-        value.get("context")
-        for value in status_parameters.get("required_status_checks", [])
-        if isinstance(value, dict) and isinstance(value.get("context"), str)
-    )
-    expected_contexts = sorted(policy["required_status_checks"])
-    if actual_contexts != expected_contexts:
-        problems.append(
-            f"required context mismatch: expected={expected_contexts} actual={actual_contexts}"
-        )
-    if status_parameters.get("strict_required_status_checks_policy") is not True:
-        problems.append("required status checks are not strict")
-
-    pr_rule = next((rule for rule in rules if rule.get("type") == "pull_request"), {})
-    pr_parameters = pr_rule.get("parameters", {})
-    for key, expected in policy["pull_request"].items():
-        if pr_parameters.get(key) != expected:
-            problems.append(
-                f"pull-request rule mismatch for {key}: expected={expected!r} actual={pr_parameters.get(key)!r}"
-            )
-    if full.get("bypass_actors"):
-        problems.append("ruleset contains bypass actors")
-
-if not branch.get("protected"):
-    problems.append("main is not reported protected by GitHub")
-
-result = {
-    "schema": "cex.repository-ruleset-readback.v1",
-    "status": "failed" if problems else "ok",
-    "repository": REPOSITORY,
-    "main_sha": branch.get("commit", {}).get("sha"),
-    "main_protected": bool(branch.get("protected")),
-    "ruleset": full or summary,
-    "expected_required_status_checks": policy["required_status_checks"],
-    "production_authorization": "not_granted",
-    "problems": problems,
-}
-print(json.dumps(result, indent=2, sort_keys=True))
-sys.exit(1 if problems else 0)
+        raise SystemExit(main())
+    except RulesetError as error:
+        print(json.dumps({
+            "schema": "cex.repository-ruleset-readback.v2",
+            "status": "failed",
+            "problems": [str(error)],
+            "production_authorization": "not_granted",
+        }, indent=2, sort_keys=True))
+        raise SystemExit(1)
