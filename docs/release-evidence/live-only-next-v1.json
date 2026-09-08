@@ -1,0 +1,5 @@
+{
+  "schema": "cex.live-only-next.v1",
+  "remaining_closure_sources": ["actions", "ruleset_api", "pull_request_reviews", "external_runtime_evidence"],
+  "production_authorization": "not_granted"
+}
