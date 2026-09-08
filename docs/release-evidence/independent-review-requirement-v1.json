@@ -1,0 +1,9 @@
+{
+  "schema": "cex.independent-review-requirement.v1",
+  "required_reviewer": "Tomasrgbsf",
+  "review_state": "APPROVED",
+  "head_binding": "exact_final_head",
+  "stale_review_accepted": false,
+  "repository_authored_approval_accepted": false,
+  "production_authorization": "not_granted"
+}
