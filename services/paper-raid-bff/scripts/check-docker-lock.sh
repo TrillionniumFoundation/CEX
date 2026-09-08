@@ -4,6 +4,8 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)
 docker_dir="$repo_root/services/paper-raid-bff/docker"
 scratch_dir=$(mktemp -d)
+expected_rust_toolchain=1.98.1
+expected_rust_release_commit=48a229ceaefd4985c50990b14116b6d856af0985
 
 cleanup() {
   rm -rf "$scratch_dir"
@@ -16,14 +18,17 @@ if ! flock -n 9; then
   exit 75
 fi
 
-cargo_version=$(cargo --version)
-case "$cargo_version" in
-  "cargo 1.95.0 "*) ;;
-  *)
-    echo "Docker lock gate requires cargo 1.95.0, found: $cargo_version" >&2
-    exit 1
-    ;;
-esac
+rustc_version=$(rustc --version)
+[[ "$(awk '{print $2}' <<<"$rustc_version")" == "$expected_rust_toolchain" ]] || {
+  echo "Docker lock gate requires rustc $expected_rust_toolchain, found: $rustc_version" >&2
+  exit 1
+}
+rustc --version --verbose >"$scratch_dir/rustc-version.txt"
+grep -Fx "commit-hash: $expected_rust_release_commit" "$scratch_dir/rustc-version.txt" >/dev/null || {
+  echo "Docker lock gate rustc release commit drifted" >&2
+  exit 1
+}
+cargo --version --verbose >"$scratch_dir/cargo-version.txt"
 
 copy_minimal_workspace() {
   local destination=$1

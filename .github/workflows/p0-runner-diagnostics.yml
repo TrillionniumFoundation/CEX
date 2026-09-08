@@ -1,0 +1,80 @@
+name: p0-runner-diagnostics
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'fix/cex-v12-final-closure-*'
+
+permissions: {}
+
+concurrency:
+  group: p0-runner-diagnostics-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+  EVENT_SHA: ${{ github.sha }}
+  SOURCE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+  SOURCE_REPOSITORY_ID: ${{ github.event.pull_request.head.repo.id || github.repository_id }}
+  PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number || 0 }}
+
+jobs:
+  linux-24:
+    name: runner-diagnostic-linux-24
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Record allocation and immutable event identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$SOURCE_REPOSITORY" = "$GITHUB_REPOSITORY"
+          test "$SOURCE_REPOSITORY_ID" = "$GITHUB_REPOSITORY_ID"
+          printf 'runner=%s\nos=%s\narch=%s\nevent=%s\nsource_sha=%s\nbase_sha=%s\nevent_sha=%s\npr=%s\n' \
+            "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH" "$GITHUB_EVENT_NAME" \
+            "$SOURCE_SHA" "$BASE_SHA" "$EVENT_SHA" "$PULL_REQUEST_NUMBER"
+          uname -a
+
+  linux-latest:
+    name: runner-diagnostic-linux-latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Record allocation
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "runner=$RUNNER_NAME os=$RUNNER_OS arch=$RUNNER_ARCH source_sha=$SOURCE_SHA event_sha=$EVENT_SHA"
+          uname -a
+
+  windows:
+    name: runner-diagnostic-windows
+    runs-on: windows-2025
+    timeout-minutes: 5
+    steps:
+      - name: Record allocation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:SOURCE_SHA -notmatch '^[0-9a-f]{40}$') { throw 'SOURCE_SHA is not exact' }
+          Write-Host "runner=$env:RUNNER_NAME os=$env:RUNNER_OS arch=$env:RUNNER_ARCH source_sha=$env:SOURCE_SHA event_sha=$env:EVENT_SHA"
+          Get-ComputerInfo | Select-Object WindowsProductName, WindowsVersion, OsArchitecture
+
+  macos:
+    name: runner-diagnostic-macos
+    runs-on: macos-15
+    timeout-minutes: 5
+    steps:
+      - name: Record allocation
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "runner=$RUNNER_NAME os=$RUNNER_OS arch=$RUNNER_ARCH source_sha=$SOURCE_SHA event_sha=$EVENT_SHA"
+          sw_vers
+          uname -a

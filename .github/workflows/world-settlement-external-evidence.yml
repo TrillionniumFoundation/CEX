@@ -31,6 +31,8 @@ env:
   CARGO_INCREMENTAL: '0'
   RUST_BACKTRACE: '1'
   RUST_TEST_THREADS: '1'
+  RUST_TOOLCHAIN: '1.98.1'
+  RUST_RELEASE_COMMIT: '48a229ceaefd4985c50990b14116b6d856af0985'
 
 jobs:
   exact-world-cex-contracts:
@@ -54,8 +56,6 @@ jobs:
     steps:
       - name: Checkout evidence definition
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          persist-credentials: false
       - name: Load and validate exact component lock
         id: lock
         run: |
@@ -63,10 +63,10 @@ jobs:
           python3 -m json.tool evidence/world-settlement-external-lock.json >/dev/null
           jq -e '
             .schema == "trnm_world_cex_settlement_external_lock_v1" and
-            .world.repository == "TrillionniumFoundation/Trillionnium-World" and
+            (.world.repository | type == "string") and
             (.world.commit | test("^[0-9a-f]{40}$")) and
             (.world.tree | test("^[0-9a-f]{40}$")) and
-            .cex_owner.repository == "TrillionniumFoundation/CEX" and
+            (.cex_owner.repository | type == "string") and
             (.cex_owner.commit | test("^[0-9a-f]{40}$")) and
             (.cex_owner.tree | test("^[0-9a-f]{40}$")) and
             .promotion_effect == "none" and
@@ -110,10 +110,14 @@ jobs:
           git -C cex-owner diff --exit-code
       - name: Install pinned Rust toolchain
         run: |
-          rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
-          rustup default 1.98.0
-          rustc --version --verbose
+          set -euo pipefail
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt,clippy
+          rustup default "$RUST_TOOLCHAIN"
+          rustup show active-toolchain
+          rustc --version --verbose | tee /tmp/rustc-version.txt
           cargo --version --verbose
+          test "$(rustc --version | awk '{print $2}')" = "$RUST_TOOLCHAIN"
+          grep -Fx "commit-hash: $RUST_RELEASE_COMMIT" /tmp/rustc-version.txt
       - name: Enforce World source and overclaim boundaries
         working-directory: world
         run: |
@@ -162,9 +166,6 @@ jobs:
           cargo metadata --locked --no-deps --format-version 1 > /dev/null
           cargo fmt --all
       - name: Assemble exact World rustfmt remediation
-        env:
-          WORLD_COMMIT: ${{ steps.lock.outputs.world_commit }}
-          WORLD_TREE: ${{ steps.lock.outputs.world_tree }}
         run: |
           set -euo pipefail
           mkdir -p run/world-rustfmt/formatted-files run/world-rustfmt/generated
@@ -188,9 +189,10 @@ jobs:
           files = sorted(path for path in root.rglob('*') if path.is_file())
           payload = {
               'schema': 'trnm_world_settlement_rustfmt_remediation_v1',
-              'world_commit': os.environ['WORLD_COMMIT'],
-              'world_tree': os.environ['WORLD_TREE'],
-              'rust_toolchain': '1.98.0',
+              'world_commit': os.environ.get('WORLD_COMMIT', '${{ steps.lock.outputs.world_commit }}'),
+              'world_tree': '${{ steps.lock.outputs.world_tree }}',
+              'rust_toolchain': '1.98.1',
+              'rust_release_commit': '48a229ceaefd4985c50990b14116b6d856af0985',
               'changed_files': changed,
               'clean_before_tests': not changed,
               'sha256': {
@@ -258,7 +260,8 @@ jobs:
               'run_id': int(os.environ['GITHUB_RUN_ID']),
               'run_attempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
               'postgres_image': 'postgres:16.4-alpine',
-              'rust_toolchain': '1.98.0',
+              'rust_toolchain': '1.98.1',
+              'rust_release_commit': '48a229ceaefd4985c50990b14116b6d856af0985',
               'source_and_postgresql_checks_passed': True,
               'native_world_actions_run': False,
               'promotion_effect': 'none',

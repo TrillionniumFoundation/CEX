@@ -1,0 +1,102 @@
+name: p0-sequence54-integration
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - integration/cex-v12-sequence54-20260908
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p0-sequence54-integration-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: '0'
+  RUST_BACKTRACE: '1'
+  RUST_TEST_THREADS: '1'
+  RUST_TOOLCHAIN: '1.98.1'
+  RUST_RELEASE_COMMIT: 48a229ceaefd4985c50990b14116b6d856af0985
+  SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  sequence54-integration-closure:
+    name: sequence54-integration-closure
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout exact Sequence 54 candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source identity and clean tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          git rev-parse 'HEAD^{tree}'
+
+      - name: Install immutable Rust 1.98.1 toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+
+      - name: Verify Rust release identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(rustc --version | awk '{print $2}')" = "$RUST_TOOLCHAIN"
+          rustc --version --verbose | tee rustc-version.txt
+          cargo --version --verbose | tee cargo-version.txt
+          grep -Fx "commit-hash: $RUST_RELEASE_COMMIT" rustc-version.txt
+
+      - name: Validate Sequence 54 non-regression contract
+        run: python3 scripts/check-sequence54-integration.py
+
+      - name: Validate recursive active-surface toolchain convergence
+        run: python3 scripts/check-rust-toolchain-convergence.py
+
+      - name: Validate active v12 documentation and module contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check-development-docs.py
+          python3 scripts/check-module-documentation.py
+
+      - name: Validate Paper Raid retained boundaries
+        run: bash services/paper-raid-bff/scripts/check-boundaries.sh
+
+      - name: Validate locked workspace resolution
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo metadata --locked --format-version 1 > cargo-metadata.json
+          test -s cargo-metadata.json
+
+      - name: Verify formatting
+        run: cargo fmt --all -- --check
+
+      - name: Test all workspace targets
+        run: cargo test --workspace --all-targets --locked
+
+      - name: Strict Clippy on all workspace targets
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Recheck immutable source after execution
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+          printf 'production_authorization=not_granted\n'

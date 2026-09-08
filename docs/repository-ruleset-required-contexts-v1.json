@@ -1,0 +1,109 @@
+{
+  "application_preconditions": {
+    "compare_and_swap_on_drift": true,
+    "duplicate_named_rulesets": "reject",
+    "expected_main_sha_required": true,
+    "expected_policy_sha256_required": true,
+    "main_must_remain_unchanged": true,
+    "pagination": "complete",
+    "repository_identity": "exact"
+  },
+  "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": [
+        "refs/heads/main"
+      ]
+    }
+  },
+  "negative_probe": {
+    "accepted_rule_rejection_http_statuses": [
+      403,
+      422
+    ],
+    "authentication_or_not_found_is_not_protection": true,
+    "default_branch_deletion_is_not_deletion_rule_proof": true,
+    "disposable_canary_ruleset_required_for_deletion_probe": true,
+    "same_actor_positive_control_required": true,
+    "server_error_is_not_protection": true
+  },
+  "production_authorization": "not_granted",
+  "repository": {
+    "default_branch": "main",
+    "full_name": "TrillionniumFoundation/CEX",
+    "repository_id": 1219691992
+  },
+  "rules": {
+    "deletion": {},
+    "non_fast_forward": {},
+    "pull_request": {
+      "allowed_merge_methods": [
+        "merge",
+        "squash",
+        "rebase"
+      ],
+      "automatic_copilot_code_review_enabled": false,
+      "dismiss_stale_reviews_on_push": true,
+      "require_code_owner_review": true,
+      "require_last_push_approval": true,
+      "required_approving_review_count": 2,
+      "required_review_thread_resolution": true
+    },
+    "required_status_checks": {
+      "do_not_enforce_on_create": false,
+      "required_status_checks": [
+        {
+          "context": "fresh-postgres-migrations"
+        },
+        {
+          "context": "repository-integrity"
+        },
+        {
+          "context": "service-local-gate-linux"
+        },
+        {
+          "context": "service-local-gate-windows"
+        },
+        {
+          "context": "hepta-postgres-integration"
+        },
+        {
+          "context": "gateway-exact-reserve"
+        },
+        {
+          "context": "execution-settlement"
+        },
+        {
+          "context": "provider-reconciliation"
+        },
+        {
+          "context": "rust-toolchain-convergence"
+        },
+        {
+          "context": "sequence54-integration-closure"
+        },
+        {
+          "context": "economy-workspace"
+        },
+        {
+          "context": "trnm-economy-settlement/static-contracts"
+        },
+        {
+          "context": "trnm-economy-settlement/rust-postgresql-contracts"
+        },
+        {
+          "context": "repository-candidate-qualification"
+        }
+      ],
+      "strict_required_status_checks_policy": true
+    }
+  },
+  "ruleset": {
+    "bypass_actors": [],
+    "enforcement": "active",
+    "name": "CEX v12 main admission",
+    "target": "branch"
+  },
+  "schema": "cex.repository-required-contexts.v2",
+  "status": "active"
+}

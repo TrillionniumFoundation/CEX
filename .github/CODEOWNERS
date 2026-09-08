@@ -1,50 +1,29 @@
-# Source ownership routing only. This file is not branch-protection,
-# independent-approval, financial, operational, or production evidence.
-* @Tomasrgbsf @ProfHepta
+* @ProfHepta
 
-# Normative architecture, plans, release evidence, CI trust, migrations and security controls
-/decisions/adr-004-three-module-external-agent-battle-platform.md @ProfHepta @Franksudoman
-/docs/architecture/ @ProfHepta @Franksudoman
-/docs/CEX-DEVELOPMENT-PLAN-* @ProfHepta @Franksudoman
-/docs/development-doc-authority-v1.json @ProfHepta @Franksudoman
-/docs/traceability/ @ProfHepta @Franksudoman
-/docs/module-catalog-v1.json @ProfHepta @Franksudoman
-/docs/modules/ @ProfHepta @Franksudoman
-/docs/external-components/ @ProfHepta @Franksudoman
-/docs/security-threat-model-v1.md @ProfHepta @Franksudoman
-/docs/slo-recovery-contract-v1.md @ProfHepta @Franksudoman
-/docs/release-evidence/ @ProfHepta @Franksudoman
-/.github/workflows/ @ProfHepta @Franksudoman
-/scripts/check-* @ProfHepta @Franksudoman
-/scripts/*release* @ProfHepta @Franksudoman
-/migrations/ @ProfHepta @Franksudoman
+/.github/workflows/ @ProfHepta
+/.github/CODEOWNERS @ProfHepta
+/docs/development-doc-authority-v1.json @ProfHepta
+/docs/traceability/ @ProfHepta
+/docs/module-catalog-v1.json @ProfHepta
+/docs/compatibility/ @ProfHepta
+/PROJECT_BOUNDARY.json @ProfHepta
+/PROJECT_BOUNDARY.md @ProfHepta
+/migrations/ @ProfHepta
+/crates/shared-types/src/money.rs @ProfHepta
+/crates/shared-types/src/ledger_v2.rs @ProfHepta
+/services/ledger-service/ @ProfHepta
+/services/gateway-service/ @ProfHepta
+/services/execution-service/ @ProfHepta
+/services/capability-service/ @ProfHepta
 
-# Exact value, settlement, external-Agent execution evidence, Audit and TRNM boundaries
-/crates/shared-types/ @ProfHepta @Franksudoman
-/services/identity-service/ @ProfHepta @Franksudoman
-/services/ledger-service/ @ProfHepta @Franksudoman
-/services/gateway-service/ @ProfHepta @Franksudoman
-/services/execution-service/ @ProfHepta @Franksudoman
-/services/audit-service/ @ProfHepta @Franksudoman
-/services/trnm-economy-service/ @ProfHepta @Franksudoman
-/services/capability-service/ @ProfHepta @Franksudoman
-
-# Hepta/Paper Raid contracts and runtime
-/crates/hepta-paper-raid-contracts/ @ProfHepta
-/services/hepta-research-league/ @ProfHepta
-/services/paper-raid-bff/ @ProfHepta
-
-# Consumer and Matrix edge/integration surfaces
-/services/consumer-entry-api/ @Tomasrgbsf @ProfHepta
-/services/matrix-entry-adapter/ @Tomasrgbsf @ProfHepta
-/apps/matrix-bot-relay/ @Tomasrgbsf @ProfHepta
-/apps/matrix-bot-poller/ @Tomasrgbsf @ProfHepta
-
-# Repository governance and immutable build-packet implementation
-/LICENSE @ProfHepta @Franksudoman
-/SECURITY.md @ProfHepta @Franksudoman
-/CONTRIBUTING.md @ProfHepta @Franksudoman
-/CHANGELOG.md @ProfHepta @Franksudoman
-/scripts/trnm_build_evidence.py @ProfHepta @Franksudoman
-/scripts/test-trnm-build-evidence.py @ProfHepta @Franksudoman
-/docs/qualification-source-integrity-v1.md @ProfHepta @Franksudoman
+# Temporary supply-chain exception and complete release-surface policy require independent security ownership.
+/docs/security/rust-advisory-exceptions-v1.json @Tomasrgbsf
+/docs/security/rust-release-surfaces-v1.json @Tomasrgbsf
+/docs/security/rust-feature-closure-v1.json @Tomasrgbsf
+/scripts/check-rust-advisory-exceptions.py @Tomasrgbsf
+/scripts/rust_advisory_common_v5.py @Tomasrgbsf
+/scripts/rust_advisory_packages_v5.py @Tomasrgbsf
+/scripts/rust_advisory_gate_v5.py @Tomasrgbsf
+/scripts/rust_advisory_feature_closure_v6.py @Tomasrgbsf
+/deny.toml @Tomasrgbsf
+/.github/workflows/trnm-economy-ci.yml @Tomasrgbsf

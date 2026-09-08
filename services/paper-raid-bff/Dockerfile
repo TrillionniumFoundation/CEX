@@ -1,16 +1,27 @@
 # syntax=docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
 FROM docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb AS builder
 WORKDIR /src
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=false \
+    RUSTUP_TOOLCHAIN=1.98.1
+
+# The immutable bootstrap image contains rustup but predates the patched point
+# release. Install and verify the exact compiler before dependency resolution.
+RUN rustup set profile minimal \
+    && rustup toolchain install 1.98.1 --component rustfmt --component clippy \
+    && rustup default 1.98.1 \
+    && rustup show active-toolchain | tee /rustup-active-toolchain.txt \
+    && rustc --version --verbose | tee /rustc-version.txt \
+    && cargo --version --verbose | tee /cargo-version.txt \
+    && test "$(rustc --version | awk '{print $2}')" = "1.98.1" \
+    && grep -Eq '^1\.98\.1-' /rustup-active-toolchain.txt \
+    && grep -Fx 'commit-hash: 48a229ceaefd4985c50990b14116b6d856af0985' /rustc-version.txt
+
 COPY services/paper-raid-bff/docker/workspace.Cargo.toml Cargo.toml
 COPY services/paper-raid-bff/docker/Cargo.lock Cargo.lock
 COPY crates/hepta-paper-raid-contracts crates/hepta-paper-raid-contracts
 COPY services/paper-raid-bff/Cargo.toml services/paper-raid-bff/Cargo.toml
 COPY services/paper-raid-bff/src services/paper-raid-bff/src
 COPY services/paper-raid-bff/migrations services/paper-raid-bff/migrations
-RUN test "$(rustc --version)" = \
-      "rustc 1.95.0 (59807616e 2026-04-14)" \
-    && test "$(cargo --version)" = \
-      "cargo 1.95.0 (f2d3ce0bd 2026-03-21)"
 RUN CARGO_HTTP_TIMEOUT=600 \
     CARGO_HTTP_LOW_SPEED_LIMIT=1 \
     CARGO_NET_RETRY=5 \
@@ -41,6 +52,10 @@ RUN case "$PAPER_RAID_BFF_RELEASE_EPOCH" in \
     && install -m 0644 -o 65532 -g 65532 \
       /src/services/paper-raid-bff/docker/sbom.cdx.json \
       /release/usr/share/doc/paper-raid-bff/sbom.cdx.json \
+    && install -m 0644 -o 65532 -g 65532 /rustc-version.txt \
+      /release/usr/share/doc/paper-raid-bff/rustc-version.txt \
+    && install -m 0644 -o 65532 -g 65532 /cargo-version.txt \
+      /release/usr/share/doc/paper-raid-bff/cargo-version.txt \
     && find /release -type d -exec touch --date="@$PAPER_RAID_BFF_RELEASE_EPOCH" {} + \
     && find /release -type f -exec touch --date="@$PAPER_RAID_BFF_RELEASE_EPOCH" {} +
 
@@ -63,7 +78,9 @@ LABEL org.opencontainers.image.title="Hepta Paper Raid BFF" \
       org.opencontainers.image.sbom="/usr/share/doc/paper-raid-bff/sbom.cdx.json" \
       org.trillionnium.cargo-lock.sha256="${PAPER_RAID_BFF_CARGO_LOCK_SHA256}" \
       org.trillionnium.sbom.sha256="${PAPER_RAID_BFF_SBOM_SHA256}" \
-      org.trillionnium.runtime-binary.sha256="${PAPER_RAID_BFF_RUNTIME_BINARY_SHA256}"
+      org.trillionnium.runtime-binary.sha256="${PAPER_RAID_BFF_RUNTIME_BINARY_SHA256}" \
+      org.trillionnium.rust-toolchain="1.98.1" \
+      org.trillionnium.rust-release-commit="48a229ceaefd4985c50990b14116b6d856af0985"
 # Copy the complete normalized release tree. Copying lone files lets BuildKit
 # stamp their destination parent directories with wall-clock time, producing a
 # different layer digest even when the Rust binary and SBOM bytes are stable.
