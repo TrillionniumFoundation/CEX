@@ -4,8 +4,19 @@ import json
 
 from rust_advisory_feature_closure_v6 import validate_feature_closure
 from rust_advisory_gate_v5 import main as baseline_main
+from rust_toolchain_convergence_v1 import validate_static
 
 if __name__ == "__main__":
+    toolchain_evidence = validate_static()
     feature_evidence = validate_feature_closure()
-    print(json.dumps({"feature_closure": feature_evidence}, indent=2, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "rust_toolchain": toolchain_evidence,
+                "feature_closure": feature_evidence,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
     raise SystemExit(baseline_main())
