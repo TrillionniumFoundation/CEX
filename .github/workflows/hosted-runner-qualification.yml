@@ -1,0 +1,35 @@
+name: hosted-runner-qualification
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/hosted-runner-qualification.yml'
+      - 'docs/release-evidence/p0-candidate-trigger.json'
+  push:
+    paths:
+      - '.github/workflows/hosted-runner-qualification.yml'
+      - 'docs/release-evidence/p0-candidate-trigger.json'
+
+permissions: {}
+
+concurrency:
+  group: hosted-runner-qualification-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hosted-runner-qualification:
+    name: hosted-runner-qualification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Record allocation identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$RUNNER_NAME"
+          test "$RUNNER_OS" = Linux
+          test "$RUNNER_ARCH" = X64
+          printf 'repository=%s\nsha=%s\nref=%s\nrunner=%s\nos=%s\narch=%s\nproduction_authorization=not_granted\n' \
+            "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_REF" \
+            "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH"
