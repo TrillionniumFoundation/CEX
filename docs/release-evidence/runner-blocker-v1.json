@@ -1,0 +1,15 @@
+{
+  "schema": "cex.runner-blocker.v1",
+  "status": "blocked_until_non_empty_successful_execution",
+  "candidate_branch": "fix/cex-v12-final-closure-v2-20260908",
+  "required": {
+    "runner_assigned": true,
+    "steps_non_empty": true,
+    "conclusion": "success",
+    "logs_retained": true,
+    "artifacts_retained": true,
+    "exact_head_binding": true
+  },
+  "queued_or_pre_step_failure_receives_credit": false,
+  "production_authorization": "not_granted"
+}
