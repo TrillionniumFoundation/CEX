@@ -1,0 +1,125 @@
+name: sequence54-review-rerequest-v1
+
+on:
+  push:
+    branches:
+      - work/sequence54-round2-staging-20260909
+    paths:
+      - '.github/workflows/sequence54-review-rerequest-v1.yml'
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: sequence54-review-rerequest-v1
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+  PULL_REQUEST: '53'
+
+jobs:
+  request:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Wait for repaired exact head
+        id: identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 240); do
+            branch="$(gh api "repos/$GITHUB_REPOSITORY/branches/$TARGET_BRANCH")"
+            sha="$(jq -r '.commit.sha' <<<"$branch")"
+            tree="$(jq -r '.commit.commit.tree.sha' <<<"$branch")"
+            toolchain="$(gh api -H 'Accept: application/vnd.github.raw+json' "repos/$GITHUB_REPOSITORY/contents/scripts/rust_toolchain_convergence_v4.py?ref=$sha" 2>/dev/null || true)"
+            projection="$(gh api -H 'Accept: application/vnd.github.raw+json' "repos/$GITHUB_REPOSITORY/contents/scripts/check-consumer-projection-boundary.py?ref=$sha" 2>/dev/null || true)"
+            if grep -Fq 'unapproved fixed Rust identity' <<<"$toolchain" \
+              && grep -Fq 'source_string_literals' <<<"$projection"; then
+              echo "sha=$sha" >> "$GITHUB_OUTPUT"
+              echo "tree=$tree" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo 'repaired exact head was not observed' >&2
+          exit 1
+
+      - name: Verify reviewer eligibility and request review
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          reviewers=(Franksudoman Tomasrgbsf)
+          actor="${GITHUB_ACTOR,,}"
+          for reviewer in "${reviewers[@]}"; do
+            test "${reviewer,,}" != "$actor"
+            permission="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$reviewer/permission" --jq '.permission')"
+            case "$permission" in
+              admin|maintain|write) ;;
+              *) echo "reviewer $reviewer is not eligible: $permission" >&2; exit 1 ;;
+            esac
+          done
+          jq -n --argjson reviewers '["Franksudoman","Tomasrgbsf"]' \
+            '{reviewers:$reviewers}' >/tmp/reviewers.json
+          gh api --method POST \
+            "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST/requested_reviewers" \
+            --input /tmp/reviewers.json
+
+      - name: Publish exact-subject review packet comment
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.identity.outputs.sha }}
+          HEAD_TREE: ${{ steps.identity.outputs.tree }}
+        run: |
+          set -euo pipefail
+          pr="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST")"
+          base_sha="$(jq -r '.base.sha' <<<"$pr")"
+          merge_sha="$(jq -r '.merge_commit_sha' <<<"$pr")"
+          body="$(cat <<EOF
+          ## Independent review re-request — repaired exact subject
+
+          This request is bound only to:
+
+          - base: \`$base_sha\`
+          - head: \`$HEAD_SHA\`
+          - head tree: \`$HEAD_TREE\`
+          - current prospective merge: \`$merge_sha\`
+
+          Repository repair scope:
+
+          - prospective-merge checkout retains both ordered parents;
+          - Rust toolchain admission binds parsed selector identities and rejects wrong fixed selectors hidden by comments;
+          - Consumer World/League boundary inspection distinguishes executable SQL/network literals from narrative fixture text while retaining real authority guards.
+
+          Review credit requires a fresh eligible decision on this unchanged exact subject. A request, comment, prior-head decision, author review, bot review, queued run, skipped step or source-only claim is not approval.
+
+          Please independently verify the current required workflow runs and retained artifacts before approving. Do not approve production, deployment, release, cutover, governance bypass, cross-repository compatibility or accountable go/no-go through this source review.
+
+          \`production_authorization=not_granted\`  
+          \`merge_authorization=not_granted\`
+          EOF
+          )"
+          gh api --method POST \
+            "repos/$GITHUB_REPOSITORY/issues/$PULL_REQUEST/comments" \
+            -f body="$body"
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## Sequence 54 independent review re-request'
+            echo
+            echo "- Head: \`${{ steps.identity.outputs.sha }}\`"
+            echo "- Tree: \`${{ steps.identity.outputs.tree }}\`"
+            echo '- Requested: `Franksudoman`, `Tomasrgbsf`'
+            echo '- Self-approval: `false`'
+            echo '- Production authorization: `not_granted`'
+          } >> "$GITHUB_STEP_SUMMARY"
