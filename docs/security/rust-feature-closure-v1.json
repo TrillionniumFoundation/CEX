@@ -8,7 +8,10 @@
   "expected_workspace_all_features_execution_reachability": {
     "RUSTSEC-2023-0071": [],
     "RUSTSEC-2026-0214": [],
-    "RUSTSEC-2024-0436": ["hepta-research-league"]
+    "RUSTSEC-2024-0436": [
+      "hepta-research-league",
+      "trnm-finality-verifier"
+    ]
   },
   "hostile_fixtures_required": [
     "optional_dependency",

@@ -62,11 +62,12 @@
       "classification": "unmaintained",
       "execution_graph_must_be_empty": false,
       "expected_workspace_execution_reachability": [
-        "hepta-research-league"
+        "hepta-research-league",
+        "trnm-finality-verifier"
       ],
       "package": "paste",
-      "reason": "paste 1.0.15 is an unmaintained transitive compile-time proc macro in the pinned Tendermint/flex-error path. Measured normal+build execution is permitted only for the hepta-research-league workspace package; any additional package, version, path, target, or source surface fails.",
-      "removal_condition": "Remove when the pinned Tendermint/flex-error stack no longer resolves through paste, no later than the current policy expiry. Any expansion requires a new policy commit and fresh independent exact-head approval.",
+      "reason": "paste 1.0.15 is an unmaintained transitive compile-time proc macro in the pinned Tendermint/flex-error path. Measured normal+build execution is permitted only for the exact hepta-research-league and trnm-finality-verifier workspace packages; any additional package, version, path, target, source surface or missing declared path fails the gate.",
+      "removal_condition": "Remove when the pinned Tendermint/flex-error stack no longer resolves through paste, no later than the current policy expiry. Any reachability change requires a new policy commit and fresh independent exact-head security approval.",
       "required_all_target_markers": [
         "paste v1.0.15",
         "flex-error v0.4.4",
@@ -87,12 +88,18 @@
           "tendermint v0.40.4",
           "flex-error v0.4.4",
           "paste v1.0.15"
+        ],
+        "trnm-finality-verifier": [
+          "trnm-finality-verifier v0.1.0",
+          "tendermint v0.40.4",
+          "flex-error v0.4.4",
+          "paste v1.0.15"
         ]
       },
       "risk_treatment": {
-        "exposure": "compile-time proc-macro execution while building hepta-research-league; no separately shipped paste runtime component",
-        "mitigation": "immutable Cargo.lock, Rust 1.98.1, exact reverse-path markers, all-workspace normal+build closure, no git/external/disconnected packages, and independently owned policy files",
-        "rollback": "remove hepta-research-league from release eligibility and rebuild from the last approved lockfile if the path, version, or package reachability changes",
+        "exposure": "compile-time proc-macro execution while building hepta-research-league or trnm-finality-verifier; no separately shipped paste runtime component",
+        "mitigation": "immutable Cargo.lock, Rust 1.98.1, exact reverse-path markers for both reachable workspace packages, all-workspace normal+build closure, no git/external/disconnected packages, and independently owned policy files",
+        "rollback": "remove both affected packages from release eligibility and rebuild from the last approved lockfile if the path, version or package reachability changes",
         "target_removal_date": "2026-10-08",
         "upstream_replacement_plan": "migrate the pinned Tendermint/flex-error stack to a maintained macro implementation or remove the dependency"
       },
