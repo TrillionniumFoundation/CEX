@@ -78,7 +78,7 @@
     ]
   },
   "external_production_scope": {
-    "self_certifible": false,
+    "self_certifiable": false,
     "status": "blocked_upstream",
     "includes": [
       "nonempty_exact_sha_and_prospective_merge_execution",
