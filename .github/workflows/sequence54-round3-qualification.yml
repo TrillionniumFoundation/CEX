@@ -1,0 +1,125 @@
+name: sequence54-round3-qualification
+
+on:
+  push:
+    branches:
+      - work/sequence54-round2-staging-20260909
+    paths:
+      - '.github/workflows/sequence54-round3-qualification.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sequence54-round3-remediation
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+  MARKER_PATH: docs/release-evidence/sequence54-round3-source-green.json
+
+jobs:
+  qualify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout live PR branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify repairs and run source qualification
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/sequence54-round3-qualification"
+          mkdir -p "$evidence"
+          before="$(git rev-parse HEAD)"
+          tree="$(git rev-parse HEAD^{tree})"
+          printf '%s\n' "$before" > "$evidence/qualified-parent-sha.txt"
+          printf '%s\n' "$tree" > "$evidence/qualified-parent-tree.txt"
+          python3 - <<'PY'
+          from pathlib import Path
+          workflow = Path('.github/workflows/p0-rust-toolchain-convergence.yml').read_text()
+          checker = Path('scripts/rust_toolchain_convergence_v4.py').read_text()
+          projection = Path('scripts/check-consumer-projection-boundary.py').read_text()
+          tests = Path('scripts/test-consumer-route-contract.py').read_text()
+          assert 'selector_binding_self_tests' in checker
+          assert 'unapproved fixed Rust identity' in checker
+          assert 'required_release_commit_comment_only' in checker
+          block = workflow.split('- name: Checkout GitHub prospective merge object', 1)[1].split('- name:', 1)[0]
+          assert 'fetch-depth: 2' in block
+          assert 'decode_string, extract_routes, tokenize' in projection
+          assert 'test_rust_update_set_call_is_not_sql' in tests
+          PY
+          checks=(
+            'python3 scripts/check-rust-toolchain-convergence.py'
+            'python3 scripts/test-consumer-route-contract.py'
+            'python3 scripts/check-consumer-projection-boundary.py'
+            'python3 scripts/generate-repository-semantics.py --check'
+            'python3 scripts/check-development-docs.py'
+            'python3 scripts/check-module-documentation.py'
+            'python3 scripts/check-sequence54-integration.py'
+          )
+          index=0
+          for command in "${checks[@]}"; do
+            index=$((index + 1))
+            log="$evidence/check-${index}.log"
+            printf 'command=%s\n' "$command" > "$log"
+            bash -lc "$command" >> "$log" 2>&1
+            printf 'exit_code=0\n' >> "$log"
+          done
+          python3 - "$MARKER_PATH" "$before" "$tree" <<'PY'
+          from datetime import datetime, timezone
+          from pathlib import Path
+          import json, sys
+          path = Path(sys.argv[1])
+          value = {
+              'schema': 'cex.sequence54-round3-source-qualification.v1',
+              'qualified_parent_sha': sys.argv[2],
+              'qualified_parent_tree': sys.argv[3],
+              'checks': [
+                  'rust-toolchain-selector-identity',
+                  'consumer-route-contract-regressions',
+                  'consumer-projection-boundary',
+                  'repository-semantics-generated-contract',
+                  'development-document-authority',
+                  'module-documentation',
+                  'sequence54-integration-source-admission',
+              ],
+              'qualified_at': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+              'production_authorization': 'not_granted',
+          }
+          path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_text(json.dumps(value, indent=2, sort_keys=True) + '\n')
+          PY
+          git diff --check
+          git config user.name 'Sequence 54 Qualification Bot'
+          git config user.email 'sequence54-qualification@users.noreply.github.com'
+          git add "$MARKER_PATH"
+          git commit -m 'test(sequence54): bind round-3 source qualification' \
+            -m "qualified-parent: $before" \
+            -m "qualified-tree: $tree" \
+            -m 'production-authorization: not_granted'
+          git rev-parse HEAD > "$evidence/marker-commit-sha.txt"
+
+      - name: Push marker only if remote source remains unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="$(cat "$RUNNER_TEMP/sequence54-round3-qualification/qualified-parent-sha.txt")"
+          git fetch --no-tags origin "refs/heads/${TARGET_BRANCH}"
+          test "$(git rev-parse FETCH_HEAD)" = "$expected"
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
+
+      - name: Upload qualification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sequence54-round3-qualification-${{ github.run_id }}
+          path: ${{ runner.temp }}/sequence54-round3-qualification
+          if-no-files-found: warn
+          retention-days: 7
+          compression-level: 6
