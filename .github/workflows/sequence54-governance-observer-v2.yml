@@ -1,0 +1,231 @@
+name: sequence54-governance-observer-v2
+
+on:
+  push:
+    branches:
+      - work/sequence54-round2-staging-20260909
+    paths:
+      - '.github/workflows/sequence54-governance-observer-v2.yml'
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: sequence54-governance-observer-v2
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+  OUTPUT_DIR: run/sequence54-governance-observer
+
+jobs:
+  observe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Wait for repaired exact head
+        id: identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 240); do
+            branch="$(gh api "repos/$GITHUB_REPOSITORY/branches/$TARGET_BRANCH")"
+            sha="$(jq -r '.commit.sha' <<<"$branch")"
+            tree="$(jq -r '.commit.commit.tree.sha' <<<"$branch")"
+            toolchain="$(gh api -H 'Accept: application/vnd.github.raw+json' "repos/$GITHUB_REPOSITORY/contents/scripts/rust_toolchain_convergence_v4.py?ref=$sha" 2>/dev/null || true)"
+            if grep -Fq 'unapproved fixed Rust identity' <<<"$toolchain"; then
+              echo "sha=$sha" >> "$GITHUB_OUTPUT"
+              echo "tree=$tree" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo 'repaired exact head was not observed' >&2
+          exit 1
+
+      - name: Read live repository governance
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.identity.outputs.sha }}
+          HEAD_TREE: ${{ steps.identity.outputs.tree }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_DIR"
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import subprocess
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          repo = os.environ['GITHUB_REPOSITORY']
+          output = Path(os.environ['OUTPUT_DIR'])
+
+          def api(path: str):
+              result = subprocess.run(
+                  ['gh', 'api', path], capture_output=True, text=True
+              )
+              value = {
+                  'exit_code': result.returncode,
+                  'stdout': result.stdout,
+                  'stderr': result.stderr,
+              }
+              if result.returncode == 0:
+                  try:
+                      value['json'] = json.loads(result.stdout)
+                  except json.JSONDecodeError:
+                      pass
+              return value
+
+          rulesets = api(f'repos/{repo}/rulesets?includes_parents=true')
+          branch = api(f'repos/{repo}/branches/main')
+          protection = api(f'repos/{repo}/branches/main/protection')
+
+          rules = rulesets.get('json') if isinstance(rulesets.get('json'), list) else []
+          active = [rule for rule in rules if rule.get('enforcement') == 'active']
+          branch_json = branch.get('json') if isinstance(branch.get('json'), dict) else {}
+          protection_json = protection.get('json') if isinstance(protection.get('json'), dict) else {}
+
+          checks = []
+          required = protection_json.get('required_status_checks')
+          if isinstance(required, dict):
+              checks = sorted({
+                  str(item.get('context'))
+                  for item in required.get('checks', [])
+                  if isinstance(item, dict) and item.get('context')
+              } | {
+                  str(item)
+                  for item in required.get('contexts', [])
+                  if item
+              })
+
+          governance_closed = bool(
+              active
+              and branch_json.get('protected') is True
+              and protection.get('exit_code') == 0
+              and checks
+              and protection_json.get('allow_force_pushes', {}).get('enabled') is False
+              and protection_json.get('allow_deletions', {}).get('enabled') is False
+          )
+
+          result = {
+              'schema': 'cex.sequence54-live-governance-observation.v2',
+              'observed_at': datetime.now(timezone.utc).isoformat().replace('+00:00','Z'),
+              'repository': repo,
+              'candidate_branch': os.environ['TARGET_BRANCH'],
+              'candidate_sha': os.environ['HEAD_SHA'],
+              'candidate_tree': os.environ['HEAD_TREE'],
+              'rulesets_api_exit_code': rulesets['exit_code'],
+              'rulesets_api_error': rulesets['stderr'].strip() or None,
+              'active_ruleset_ids': [item.get('id') for item in active],
+              'main_protected': branch_json.get('protected'),
+              'protection_api_exit_code': protection['exit_code'],
+              'protection_api_error': protection['stderr'].strip() or None,
+              'required_status_checks': checks,
+              'force_pushes_allowed': protection_json.get('allow_force_pushes', {}).get('enabled'),
+              'deletions_allowed': protection_json.get('allow_deletions', {}).get('enabled'),
+              'required_approving_review_count': (
+                  protection_json.get('required_pull_request_reviews', {})
+                  .get('required_approving_review_count')
+              ),
+              'dismiss_stale_reviews': (
+                  protection_json.get('required_pull_request_reviews', {})
+                  .get('dismiss_stale_reviews')
+              ),
+              'require_code_owner_reviews': (
+                  protection_json.get('required_pull_request_reviews', {})
+                  .get('require_code_owner_reviews')
+              ),
+              'governance_source_readback_closed': governance_closed,
+              'same_actor_positive_control_observed': False,
+              'direct_update_rejection_observed': False,
+              'non_fast_forward_rejection_observed': False,
+              'deletion_rejection_observed': False,
+              'independent_readback_observed': False,
+              'all_governance_gaps_closed': False,
+              'production_authorization': 'not_granted',
+              'merge_authorization': 'not_granted',
+          }
+          (output / 'governance-observation.json').write_text(
+              json.dumps(result, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
+          print(json.dumps(result, indent=2, sort_keys=True))
+          PY
+
+      - name: Publish governance observation
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          title='Sequence 54 live governance evidence'
+          marker='<!-- sequence54-governance-observer-v2 -->'
+          if test -f "$OUTPUT_DIR/governance-observation.json"; then
+            body="$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data=json.loads(Path('run/sequence54-governance-observer/governance-observation.json').read_text())
+          lines=[
+            '<!-- sequence54-governance-observer-v2 -->',
+            '## Live readback',
+            '',
+            f"- candidate: `{data['candidate_sha']}` / tree `{data['candidate_tree']}`",
+            f"- Rulesets API exit: `{data['rulesets_api_exit_code']}`",
+            f"- active Rulesets: `{data['active_ruleset_ids']}`",
+            f"- `main` protected: `{data['main_protected']}`",
+            f"- branch-protection API exit: `{data['protection_api_exit_code']}`",
+            f"- required contexts: `{data['required_status_checks']}`",
+            f"- force pushes allowed: `{data['force_pushes_allowed']}`",
+            f"- deletions allowed: `{data['deletions_allowed']}`",
+            f"- required approvals: `{data['required_approving_review_count']}`",
+            f"- stale reviews dismissed: `{data['dismiss_stale_reviews']}`",
+            f"- CODEOWNER review required: `{data['require_code_owner_reviews']}`",
+            '',
+            '## Still required for closure',
+            '',
+            '- independently readable exact policy with no bypass;',
+            '- same-actor positive control;',
+            '- rejected direct update, non-fast-forward update and deletion probes;',
+            '- preservation of required checks, two fresh approvals, CODEOWNERS/latest-push and conversation-resolution rules.',
+            '',
+            'Desired-state JSON or source scripts are not server-side enforcement evidence.',
+            '',
+            '`all_governance_gaps_closed=false`',
+            '`production_authorization=not_granted`',
+            '`merge_authorization=not_granted`',
+          ]
+          print('\n'.join(lines))
+          PY
+          )"
+          else
+            body="$marker
+          
+          Governance readback did not complete. No protection or authorization is inferred.
+          
+          \`all_governance_gaps_closed=false\`
+          \`production_authorization=not_granted\`"
+          fi
+          number="$(gh issue list --state open --search "$title in:title" --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -n1)"
+          if test -n "$number"; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
+
+      - name: Upload governance observation
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sequence54-governance-observation-${{ steps.identity.outputs.sha }}
+          path: run/sequence54-governance-observer
+          if-no-files-found: warn
+          retention-days: 90
+          compression-level: 9
