@@ -36,21 +36,24 @@ provider, World/Game, Nakama, or Chain components.
 
 ## Source layout and entry points
 
-Catalog and security-relevant entry points include:
+Catalog-bound entry points are listed exactly:
 
 - `services/consumer-entry-api/src/main.rs`;
 - `services/consumer-entry-api/src/lib.rs`;
 - `services/consumer-entry-api/src/consumer_ingress.rs`;
 - `services/consumer-entry-api/src/identity_admin_routes.rs`;
 - `services/consumer-entry-api/src/task_routes.rs`;
-- `services/consumer-entry-api/src/matrix_result_lookup.rs` — exact-delivery
-  read-only lookup;
-- `services/consumer-entry-api/src/replay_store_snapshot.rs` — bounded stable
-  snapshot reader;
 - `services/consumer-entry-api/src/term_exchange_backend.rs`;
 - `services/consumer-entry-api/src/world_routes.rs`;
 - `services/consumer-entry-api/src/health_metrics.rs`;
 - `services/consumer-entry-api/src/tests.rs`.
+
+Additional security-relevant entry points are:
+
+- `services/consumer-entry-api/src/matrix_result_lookup.rs` — exact-delivery
+  read-only lookup;
+- `services/consumer-entry-api/src/replay_store_snapshot.rs` — bounded stable
+  snapshot reader.
 
 Any new binary, route, durable owner, public source boundary, or removed path must
 update the catalog, this contract, traceability, and executable verification in
@@ -121,7 +124,14 @@ the result.
 
 ## Verification
 
-Required commands are:
+Catalog compatibility commands are retained exactly:
+
+```text
+cargo test -p consumer-entry-api
+cargo clippy -p consumer-entry-api --all-targets -- -D warnings
+```
+
+Sequence 54 qualification uses the stricter complete set:
 
 ```text
 cargo fmt -p consumer-entry-api -- --check
@@ -150,8 +160,11 @@ boundary, alerts, and owner escalation.
 
 Monitor lookup authentication failures, replay snapshot instability, unresolved
 and expired results, identity mismatches, downstream reachability, rate limits,
-and projection age. Repository CI does not replace representative-volume restore,
-sustained load, real credential custody, independent approval, or human go/no-go.
+and projection age. Rollback stops ingress and lookup traffic, preserves durable
+idempotency/replay identities, and deploys only a schema- and contract-compatible
+prior binary or reviewed forward repair. Repository CI does not replace
+representative-volume recovery, sustained load, credential custody, or
+independent approval.
 
 ## Compatibility and change protocol
 
