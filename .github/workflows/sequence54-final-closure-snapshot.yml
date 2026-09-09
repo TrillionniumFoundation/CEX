@@ -1,0 +1,155 @@
+name: sequence54-final-closure-snapshot
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - work/sequence54-round2-staging-20260909
+    paths:
+      - '.github/workflows/sequence54-final-closure-snapshot.yml'
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: sequence54-final-closure-snapshot
+  cancel-in-progress: false
+
+env:
+  STAGING_BRANCH: work/sequence54-round2-staging-20260909
+  TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+  PULL_REQUEST_NUMBER: '53'
+  EVIDENCE_DIR: ${{ runner.temp }}/sequence54-final-closure-snapshot
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 420
+    steps:
+      - name: Checkout snapshot controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Preserve final validator
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          cp scripts/sequence54_final_closure_snapshot.py "$RUNNER_TEMP/final-snapshot.py"
+          python3 -m py_compile "$RUNNER_TEMP/final-snapshot.py"
+
+      - name: Wait for definitive convergence master and download its evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          encoded_branch="${STAGING_BRANCH//\//%2F}"
+          run_id=''
+          for _ in $(seq 1 240); do
+            run_id="$(gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/sequence54-convergence-master.yml/runs?branch=${encoded_branch}&per_page=20" \
+              --jq '.workflow_runs | sort_by(.created_at) | reverse | .[0].id // empty' 2>/dev/null || true)"
+            [[ -n "$run_id" ]] && break
+            sleep 15
+          done
+          [[ -n "$run_id" ]]
+          for _ in $(seq 1 1700); do
+            value="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+            status="$(jq -r '.status' <<<"$value")"
+            conclusion="$(jq -r '.conclusion // ""' <<<"$value")"
+            [[ "$status" == completed ]] && break
+            sleep 15
+          done
+          [[ "$status" == completed ]]
+          printf '%s\n' "$run_id" > "$EVIDENCE_DIR/master-run-id.txt"
+          printf '%s\n' "$conclusion" > "$EVIDENCE_DIR/master-conclusion.txt"
+          gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" > "$EVIDENCE_DIR/master-jobs.json"
+          gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" > "$EVIDENCE_DIR/master-artifacts.json"
+          artifact_id="$(jq -r '.artifacts[] | select(.name | startswith("sequence54-convergence-master-")) | .id' "$EVIDENCE_DIR/master-artifacts.json" | head -n1)"
+          [[ -n "$artifact_id" && "$artifact_id" != null ]]
+          gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "$RUNNER_TEMP/master.zip"
+          mkdir -p "$EVIDENCE_DIR/master"
+          unzip -q "$RUNNER_TEMP/master.zip" -d "$EVIDENCE_DIR/master"
+          readback="$(find "$EVIDENCE_DIR/master" -name final-readback.json -type f | head -n1)"
+          [[ -n "$readback" ]]
+          cp "$readback" "$EVIDENCE_DIR/master-final-readback.json"
+
+      - name: Checkout current live candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Recompute final closure from live facts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$RUNNER_TEMP/final-snapshot.py" \
+            --root "$GITHUB_WORKSPACE" \
+            --repository "$GITHUB_REPOSITORY" \
+            --pull-request "$PULL_REQUEST_NUMBER" \
+            --master-readback "$EVIDENCE_DIR/master-final-readback.json" \
+            --master-run-id "$(cat "$EVIDENCE_DIR/master-run-id.txt")" \
+            --master-conclusion "$(cat "$EVIDENCE_DIR/master-conclusion.txt")" \
+            --output "$EVIDENCE_DIR/final-closure-snapshot.json"
+
+      - name: Publish exact final status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="$EVIDENCE_DIR/final-closure-snapshot.json"
+          head="$(jq -r '.head_sha' "$report")"
+          tree="$(jq -r '.head_tree' "$report")"
+          internal="$(jq -r '.repository_owned_qualification_bound' "$report")"
+          approvals="$(jq -r '.eligible_current_head_approvals | length' "$report")"
+          conversations="$(jq -r '.review_conversations_closed' "$report")"
+          governance="$(jq -r '.governance.closed' "$report")"
+          cross="$(jq -r '.cross_repository.closed' "$report")"
+          production="$(jq -r '.production.closed' "$report")"
+          all="$(jq -r '.all_gaps_closed' "$report")"
+          authorization="$(jq -r '.production_authorization' "$report")"
+          body="<!-- sequence54-final-closure-snapshot -->
+          ## Sequence 54 final closure snapshot
+
+          \`\`\`text
+          head                              $head
+          head tree                         $tree
+          repository-owned qualification    $internal
+          eligible exact-head approvals     $approvals
+          review conversations closed       $conversations
+          live no-bypass governance         $governance
+          cross-repository acceptance       $cross
+          production authority receipts     $production
+          all gaps closed                   $all
+          production authorization          $authorization
+          \`\`\`
+
+          Every true value is recomputed from live GitHub objects or an exact-head, machine-verifiable receipt. No old-head evidence, issue checkbox, requested review, repository admin role or generated status is promoted into approval."
+          comments="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/issues/${PULL_REQUEST_NUMBER}/comments?per_page=100")"
+          existing="$(jq -r '[.[] | select(.body | contains("<!-- sequence54-final-closure-snapshot -->"))] | sort_by(.created_at) | reverse | .[0].id // empty' <<<"$comments")"
+          if [[ -n "$existing" ]]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" -f body="$body"
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PULL_REQUEST_NUMBER}/comments" -f body="$body"
+          fi
+
+      - name: Upload final closure evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sequence54-final-closure-snapshot-${{ github.run_id }}
+          path: ${{ env.EVIDENCE_DIR }}
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 6
