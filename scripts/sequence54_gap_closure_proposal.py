@@ -235,12 +235,25 @@ def repair_candidate_trigger() -> None:
     )
 
 
+def remove_transient_apply_surface() -> None:
+    paths = (
+        ROOT / ".github/workflows/sequence54-gap-closure-proposal.yml",
+        ROOT / "scripts/sequence54_gap_closure_proposal.py",
+    )
+    for path in paths:
+        if not path.is_file() or path.is_symlink():
+            raise SystemExit(f"transient apply surface is missing or invalid: {path}")
+    for path in paths:
+        path.unlink()
+
+
 def main() -> int:
     repair_build_unblock()
     repair_route_parser()
     repair_matrix_postgres_regression()
     repair_toolchain_workflow()
     repair_candidate_trigger()
+    remove_transient_apply_surface()
     return 0
 
 
