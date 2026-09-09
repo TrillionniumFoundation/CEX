@@ -43,18 +43,24 @@ rights.
 
 ## Source layout and entry points
 
-Primary source boundaries are:
+Catalog-bound entry points are listed exactly:
 
 - `services/matrix-entry-adapter/src/main.rs` — fail-closed process startup;
 - `services/matrix-entry-adapter/src/lib.rs` — validated public facade;
+- `services/matrix-entry-adapter/src/runtime_profile.rs` — shared profile parser
+  compatibility facade;
+- `services/matrix-entry-adapter/migrations/0001_transport_durability.sql`;
+- `services/matrix-entry-adapter/migrations/0002_source_observation_replay.sql`;
+- `services/matrix-entry-adapter/migrations/0003_sync_recovery_and_send_receipts.sql`;
+- `services/matrix-entry-adapter/migrations/0004_stream_scope_binding.sql`;
+- `services/matrix-entry-adapter/migrations/0005_filter_definition_pins.sql`.
+
+Additional security-relevant source boundaries are:
+
 - `services/matrix-entry-adapter/src/implementation.rs` — ingress and forwarding
   implementation;
 - `services/matrix-entry-adapter/src/result_reconciliation.rs` — exact-delivery
   read-only result lookup;
-- `services/matrix-entry-adapter/src/runtime_profile.rs` — shared profile parser
-  compatibility facade;
-- transport migrations `0001` through `0005` under
-  `services/matrix-entry-adapter/migrations/`;
 - operator migrations `0001` through `0005` under
   `services/matrix-entry-adapter/operator-migrations/`;
 - `scripts/reconcile-matrix-adapter-result.py` — one-delivery operator command;
@@ -161,7 +167,15 @@ runner execution, independent review, or production topology.
 
 ## Verification
 
-Required commands are:
+Catalog compatibility commands are retained exactly:
+
+```text
+cargo test -p matrix-entry-adapter
+cargo clippy -p matrix-entry-adapter --all-targets -- -D warnings
+bash scripts/check-matrix-source-observation-postgres.sh
+```
+
+Sequence 54 qualification uses the stricter complete set:
 
 ```text
 python3 scripts/check-matrix-result-reconciliation.py
@@ -170,7 +184,6 @@ python3 scripts/reconcile-matrix-adapter-result.py --self-test
 cargo fmt -p matrix-entry-adapter -- --check
 cargo test --locked -p matrix-entry-adapter --all-targets
 cargo clippy --locked -p matrix-entry-adapter --all-targets -- -D warnings
-bash scripts/check-matrix-source-observation-postgres.sh
 python3 scripts/matrix_operator_postgres_regression.py
 ```
 
@@ -193,6 +206,11 @@ reconciliation success/replay/collision, observation age, poison holds, cursor
 age, send receipt conflicts, and queue age. Readiness distinguishes listener
 health, issuer-registry validity, Consumer Entry reachability, transport schema,
 and operator migration head.
+
+Rollback first stops ingress, polling, relay claims, and reconciliation; it then
+preserves every immutable delivery/result/observation identity and deploys only a
+schema-compatible prior binary or a reviewed forward repair. Replaying or deleting
+migrations is not rollback.
 
 ## Compatibility and change protocol
 
