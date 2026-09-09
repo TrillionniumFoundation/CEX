@@ -1,0 +1,207 @@
+name: sequence54-round4-governance-controller
+
+on:
+  push:
+    branches:
+      - work/sequence54-round2-staging-20260909
+    paths:
+      - '.github/workflows/sequence54-round4-governance-controller.yml'
+
+permissions:
+  contents: read
+  actions: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: sequence54-round4-governance-controller
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+  STAGING_BRANCH: work/sequence54-round2-staging-20260909
+  PULL_REQUEST_NUMBER: '53'
+  EVIDENCE_DIR: ${{ runner.temp }}/sequence54-round4-governance
+
+jobs:
+  governance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 260
+    steps:
+      - name: Wait for source master to settle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          encoded_branch="${STAGING_BRANCH//\//%2F}"
+          master_id=''
+          for _ in $(seq 1 80); do
+            master_id="$(gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/sequence54-round4-master-closure.yml/runs?branch=${encoded_branch}&per_page=20" \
+              --jq '.workflow_runs | sort_by(.created_at) | reverse | .[0].id // empty' 2>/dev/null || true)"
+            [[ -n "$master_id" ]] && break
+            sleep 15
+          done
+          [[ -n "$master_id" ]]
+          for _ in $(seq 1 960); do
+            status="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/runs/${master_id}" --jq '.status')"
+            [[ "$status" == completed ]] && break
+            sleep 15
+          done
+          [[ "$status" == completed ]]
+          printf '%s\n' "$master_id" > "$EVIDENCE_DIR/master-run-id.txt"
+
+      - name: Checkout stable current candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Locate and invoke only the repository canonical governance applicator
+        id: apply
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$EVIDENCE_DIR" <<'PY'
+          from pathlib import Path
+          import json, re, sys
+          output = Path(sys.argv[1])
+          candidates = []
+          for path in sorted(Path('.github/workflows').glob('*.y*ml')):
+              text = path.read_text(encoding='utf-8')
+              low = (path.as_posix() + '\n' + text).lower()
+              if 'workflow_dispatch:' not in text:
+                  continue
+              if not ('ruleset' in low or 'governance' in low):
+                  continue
+              if not ('apply' in low or 'install' in low or 'enforce' in low):
+                  continue
+              if any(word in path.name.lower() for word in ('probe', 'diagnostic', 'observe', 'sequence54-round4')):
+                  continue
+              name_match = re.search(r'(?m)^name:\s*["\']?([^"\'\n]+)', text)
+              candidates.append({
+                  'path': path.as_posix(),
+                  'name': name_match.group(1).strip() if name_match else None,
+              })
+          (output / 'canonical-candidates.json').write_text(
+              json.dumps(candidates, indent=2, sort_keys=True) + '\n'
+          )
+          if len(candidates) != 1:
+              raise SystemExit(f'canonical governance workflow count must be one, got {len(candidates)}')
+          (output / 'canonical-path.txt').write_text(candidates[0]['path'] + '\n')
+          PY
+          workflow="$(cat "$EVIDENCE_DIR/canonical-path.txt")"
+          response_code="$(curl -sS -o "$EVIDENCE_DIR/dispatch-response.json" -w '%{http_code}' \
+            -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            -H 'Content-Type: application/json' \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow//\//%2F}/dispatches" \
+            -d "$(jq -nc --arg ref "$TARGET_BRANCH" '{ref:$ref}')")"
+          printf '%s\n' "$response_code" > "$EVIDENCE_DIR/dispatch-http.txt"
+          [[ "$response_code" =~ ^20[14]$ ]]
+
+          candidate_sha="$(git rev-parse HEAD)"
+          workflow_encoded="${workflow//\//%2F}"
+          run_id=''
+          for _ in $(seq 1 80); do
+            run_id="$(gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_encoded}/runs?per_page=100" \
+              --jq --arg sha "$candidate_sha" '[.workflow_runs[] | select(.head_sha == $sha)] | sort_by(.created_at) | reverse | .[0].id // empty')"
+            [[ -n "$run_id" ]] && break
+            sleep 15
+          done
+          [[ -n "$run_id" ]]
+          printf '%s\n' "$run_id" > "$EVIDENCE_DIR/governance-run-id.txt"
+          for _ in $(seq 1 960); do
+            value="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+            status="$(jq -r '.status' <<<"$value")"
+            conclusion="$(jq -r '.conclusion // ""' <<<"$value")"
+            [[ "$status" == completed ]] && break
+            sleep 15
+          done
+          printf 'status=%s\nconclusion=%s\n' "$status" "$conclusion" > "$EVIDENCE_DIR/governance-run-status.txt"
+          [[ "$status" == completed && "$conclusion" == success ]]
+
+      - name: Independent live governance readback
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPLY_OUTCOME: ${{ steps.apply.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rulesets_http="$(curl -sS -o "$EVIDENCE_DIR/rulesets.json" -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/rulesets?includes_parents=true&per_page=100")"
+          protection_http="$(curl -sS -o "$EVIDENCE_DIR/main-protection.json" -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/branches/main/protection")"
+          printf 'rulesets_http=%s\nprotection_http=%s\n' "$rulesets_http" "$protection_http" \
+            > "$EVIDENCE_DIR/readback-http.txt"
+          python3 - "$EVIDENCE_DIR" "$APPLY_OUTCOME" "$rulesets_http" "$protection_http" <<'PY'
+          from pathlib import Path
+          import json, sys
+          root = Path(sys.argv[1])
+          def load(name):
+              try: return json.loads((root / name).read_text())
+              except Exception: return None
+          rulesets = load('rulesets.json')
+          protection = load('main-protection.json')
+          active = [item for item in rulesets or [] if isinstance(item, dict) and item.get('enforcement') == 'active']
+          closed = sys.argv[3] == '200' and sys.argv[4] == '200' and bool(active)
+          report = {
+              'schema': 'cex.sequence54-round4-governance.v1',
+              'canonical_apply_outcome': sys.argv[2],
+              'rulesets_http': int(sys.argv[3]),
+              'protection_http': int(sys.argv[4]),
+              'active_ruleset_count': len(active),
+              'live_governance_closed': closed,
+              'administrator_bypass_used': False,
+              'production_authorization': 'not_granted',
+          }
+          (root / 'governance.json').write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
+          body = '\n'.join([
+              '<!-- sequence54-round4-governance -->',
+              '## Sequence 54 live governance controller',
+              '',
+              f"- Canonical apply workflow outcome: `{report['canonical_apply_outcome']}`",
+              f"- Rulesets readback HTTP: `{report['rulesets_http']}`",
+              f"- Main protection readback HTTP: `{report['protection_http']}`",
+              f"- Active Rulesets observed: `{report['active_ruleset_count']}`",
+              f"- Live governance closed: `{str(report['live_governance_closed']).lower()}`",
+              '',
+              'No guessed policy, bypass actor, force update or protection weakening was applied. `production_authorization=not_granted` remains binding.',
+          ]) + '\n'
+          (root / 'comment.md').write_text(body)
+          raise SystemExit(0 if closed else 1)
+          PY
+
+      - name: Publish governance observation
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PULL_REQUEST_NUMBER}/comments" \
+            -f body="$(cat "$EVIDENCE_DIR/comment.md")"
+
+      - name: Upload governance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sequence54-round4-governance-${{ github.run_id }}
+          path: ${{ env.EVIDENCE_DIR }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6
