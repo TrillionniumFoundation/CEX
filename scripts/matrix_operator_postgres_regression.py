@@ -35,6 +35,7 @@ BASE_REGRESSIONS = (
 )
 SECURITY_REGRESSIONS = (
     "scripts/test-matrix-result-embedded-binding-postgres.sql",
+    "scripts/test-matrix-result-task-invocation-binding-postgres.sql",
 )
 REGRESSIONS = BASE_REGRESSIONS + SECURITY_REGRESSIONS
 SCHEMA = "cex.matrix-operator-postgres-regression.v4"
