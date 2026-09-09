@@ -25,6 +25,7 @@ const MAX_LOOKUP_BODY_BYTES: usize = 16 * 1024;
 const MAX_ASSERTION_BYTES: usize = 8 * 1024;
 const MAX_REPLAY_STORE_BYTES: u64 = 32 * 1024 * 1024;
 const LOOKUP_SOURCE_KIND: &str = "matrix_result_lookup";
+const DELIVERY_FINGERPRINT_DOMAIN: &str = "cex.matrix.adapter-result-delivery.v1";
 
 #[derive(Clone)]
 struct ResultLookupState {
@@ -37,9 +38,12 @@ struct ValidationError;
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct MatrixResultLookupRequest {
+    delivery_id: String,
     event_id: String,
     matrix_user_id: String,
     room_id: String,
+    payload_sha256: String,
+    request_fingerprint: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -83,11 +87,19 @@ async fn lookup_matrix_result(
     headers: HeaderMap,
     Json(request): Json<MatrixResultLookupRequest>,
 ) -> Response {
-    if validate_matrix_identifier(&request.event_id, '$').is_err()
+    let expected_request_fingerprint = lookup_request_fingerprint(&request);
+    if validate_delivery_id(&request.delivery_id).is_err()
+        || validate_matrix_identifier(&request.event_id, '$').is_err()
         || validate_matrix_identifier(&request.matrix_user_id, '@').is_err()
         || validate_matrix_identifier(&request.room_id, '!').is_err()
+        || validate_sha256(&request.payload_sha256).is_err()
+        || validate_sha256(&request.request_fingerprint).is_err()
+        || request.request_fingerprint != expected_request_fingerprint
     {
-        return lookup_error(StatusCode::BAD_REQUEST, "matrix_result_lookup_invalid_identity");
+        return lookup_error(
+            StatusCode::BAD_REQUEST,
+            "matrix_result_lookup_invalid_delivery_binding",
+        );
     }
 
     if authorize_ingress(&headers, &state.config).is_err() {
@@ -159,9 +171,12 @@ async fn lookup_matrix_result(
         Json(json!({
             "schema": "cex.matrix.result-lookup.v1",
             "resolved": true,
+            "delivery_id": request.delivery_id,
             "event_id": request.event_id,
             "matrix_user_id": request.matrix_user_id,
             "room_id": request.room_id,
+            "payload_sha256": request.payload_sha256,
+            "request_fingerprint": request.request_fingerprint,
             "seen_at_epoch": entry.seen_at_epoch,
             "response": response,
             "production_authorization": "not_granted"
@@ -220,6 +235,7 @@ fn authorize_lookup_principal(
         || claims.org_id.is_some()
         || claims.account_id.is_some()
         || claims.request_fingerprint.as_deref() != Some(expected_fingerprint.as_str())
+        || request.request_fingerprint != expected_fingerprint
     {
         return Err(ValidationError);
     }
@@ -368,7 +384,9 @@ fn validate_cached_result(
 fn lookup_request_fingerprint(request: &MatrixResultLookupRequest) -> String {
     let mut hasher = Sha256::new();
     for value in [
-        "cex.matrix.result-lookup.v1",
+        DELIVERY_FINGERPRINT_DOMAIN,
+        request.delivery_id.as_str(),
+        request.payload_sha256.as_str(),
         request.event_id.as_str(),
         request.matrix_user_id.as_str(),
         request.room_id.as_str(),
@@ -384,6 +402,38 @@ fn lookup_request_fingerprint(request: &MatrixResultLookupRequest) -> String {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>()
     )
+}
+
+fn validate_delivery_id(value: &str) -> ValidationResult<()> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 36 {
+        return Err(ValidationError);
+    }
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        if matches!(index, 8 | 13 | 18 | 23) {
+            if byte != b'-' {
+                return Err(ValidationError);
+            }
+        } else if !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte) {
+            return Err(ValidationError);
+        }
+    }
+    Ok(())
+}
+
+fn validate_sha256(value: &str) -> ValidationResult<()> {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        return Err(ValidationError);
+    };
+    if hex.len() == 64
+        && hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        Ok(())
+    } else {
+        Err(ValidationError)
+    }
 }
 
 fn validate_matrix_identifier(value: &str, prefix: char) -> ValidationResult<()> {
@@ -428,33 +478,51 @@ mod tests {
     use super::*;
 
     fn request() -> MatrixResultLookupRequest {
-        MatrixResultLookupRequest {
+        let mut request = MatrixResultLookupRequest {
+            delivery_id: "61000000-0000-4000-8000-000000000001".to_string(),
             event_id: "$event".to_string(),
             matrix_user_id: "@alice:example".to_string(),
             room_id: "!room:example".to_string(),
-        }
+            payload_sha256: format!("sha256:{}", "2".repeat(64)),
+            request_fingerprint: String::new(),
+        };
+        request.request_fingerprint = lookup_request_fingerprint(&request);
+        request
     }
 
     #[test]
-    fn fingerprint_is_bound_to_every_identity_component() {
+    fn fingerprint_is_bound_to_every_delivery_component() {
         let base = request();
         let expected = lookup_request_fingerprint(&base);
-        for candidate in [
-            MatrixResultLookupRequest {
-                event_id: "$other".to_string(),
-                ..request()
-            },
-            MatrixResultLookupRequest {
-                matrix_user_id: "@other:example".to_string(),
-                ..request()
-            },
-            MatrixResultLookupRequest {
-                room_id: "!other:example".to_string(),
-                ..request()
-            },
-        ] {
-            assert_ne!(lookup_request_fingerprint(&candidate), expected);
-        }
+
+        let mut changed = request();
+        changed.delivery_id = "61000000-0000-4000-8000-000000000002".to_string();
+        assert_ne!(lookup_request_fingerprint(&changed), expected);
+
+        let mut changed = request();
+        changed.payload_sha256 = format!("sha256:{}", "3".repeat(64));
+        assert_ne!(lookup_request_fingerprint(&changed), expected);
+
+        let mut changed = request();
+        changed.event_id = "$other".to_string();
+        assert_ne!(lookup_request_fingerprint(&changed), expected);
+
+        let mut changed = request();
+        changed.matrix_user_id = "@other:example".to_string();
+        assert_ne!(lookup_request_fingerprint(&changed), expected);
+
+        let mut changed = request();
+        changed.room_id = "!other:example".to_string();
+        assert_ne!(lookup_request_fingerprint(&changed), expected);
+    }
+
+    #[test]
+    fn canonical_delivery_and_hash_shapes_are_fail_closed() {
+        assert!(validate_delivery_id("61000000-0000-4000-8000-000000000001").is_ok());
+        assert!(validate_delivery_id("61000000-0000-4000-8000-00000000000A").is_err());
+        assert!(validate_delivery_id("not-a-uuid").is_err());
+        assert!(validate_sha256(&format!("sha256:{}", "a".repeat(64))).is_ok());
+        assert!(validate_sha256(&format!("SHA256:{}", "a".repeat(64))).is_err());
     }
 
     #[test]
