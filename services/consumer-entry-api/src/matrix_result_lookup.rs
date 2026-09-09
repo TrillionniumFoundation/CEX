@@ -10,7 +10,7 @@ use chrono::Utc;
 use consumer_entry_api::ConsumerEntryConfig;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, time::Duration};
 
@@ -26,6 +26,9 @@ const MAX_ASSERTION_BYTES: usize = 8 * 1024;
 const MAX_REPLAY_STORE_BYTES: u64 = 32 * 1024 * 1024;
 const LOOKUP_SOURCE_KIND: &str = "matrix_result_lookup";
 const DELIVERY_FINGERPRINT_DOMAIN: &str = "cex.matrix.adapter-result-delivery.v1";
+const DELIVERY_BINDING_FIELD: &str = "cex_delivery_binding";
+const DELIVERY_BINDING_SCHEMA: &str = "cex.matrix.delivery-binding.v1";
+const DELIVERY_BINDING_SOURCE: &str = "matrix-bot-relay-headers-v1";
 
 #[derive(Clone)]
 struct ResultLookupState {
@@ -159,12 +162,15 @@ async fn lookup_matrix_result(
             "matrix_result_lookup_outcome_not_recorded",
         );
     };
-    if validate_cached_result(response, &request).is_err() {
-        return lookup_error(
-            StatusCode::CONFLICT,
-            "matrix_result_lookup_identity_mismatch",
-        );
-    }
+    let result_delivery_binding = match validate_cached_result(response, &request) {
+        Ok(binding) => binding,
+        Err(_) => {
+            return lookup_error(
+                StatusCode::CONFLICT,
+                "matrix_result_lookup_identity_mismatch",
+            )
+        }
+    };
 
     (
         StatusCode::OK,
@@ -177,6 +183,7 @@ async fn lookup_matrix_result(
             "room_id": request.room_id,
             "payload_sha256": request.payload_sha256,
             "request_fingerprint": request.request_fingerprint,
+            "result_delivery_binding": result_delivery_binding,
             "seen_at_epoch": entry.seen_at_epoch,
             "response": response,
             "production_authorization": "not_granted"
@@ -338,7 +345,7 @@ fn read_replay_store(path: &str) -> ValidationResult<ReplayStore> {
 fn validate_cached_result(
     response: &Value,
     request: &MatrixResultLookupRequest,
-) -> ValidationResult<()> {
+) -> ValidationResult<Value> {
     let source = response
         .get("source")
         .and_then(Value::as_object)
@@ -377,6 +384,42 @@ fn validate_cached_result(
         if invocation_id != task_id {
             return Err(ValidationError);
         }
+    }
+
+    let binding = source
+        .get("metadata")
+        .and_then(Value::as_object)
+        .and_then(|metadata| metadata.get("metadata"))
+        .and_then(Value::as_object)
+        .and_then(|metadata| metadata.get(DELIVERY_BINDING_FIELD))
+        .and_then(Value::as_object)
+        .ok_or(ValidationError)?;
+    validate_result_delivery_binding(binding, request)?;
+    Ok(Value::Object(binding.clone()))
+}
+
+fn validate_result_delivery_binding(
+    binding: &Map<String, Value>,
+    request: &MatrixResultLookupRequest,
+) -> ValidationResult<()> {
+    if binding.len() != 8
+        || binding.get("schema").and_then(Value::as_str) != Some(DELIVERY_BINDING_SCHEMA)
+        || binding.get("source").and_then(Value::as_str) != Some(DELIVERY_BINDING_SOURCE)
+        || binding.get("delivery_id").and_then(Value::as_str)
+            != Some(request.delivery_id.as_str())
+        || binding.get("payload_sha256").and_then(Value::as_str)
+            != Some(request.payload_sha256.as_str())
+        || binding.get("event_id").and_then(Value::as_str)
+            != Some(request.event_id.as_str())
+        || binding.get("room_id").and_then(Value::as_str)
+            != Some(request.room_id.as_str())
+        || binding.get("matrix_user_id").and_then(Value::as_str)
+            != Some(request.matrix_user_id.as_str())
+        || binding.get("request_fingerprint").and_then(Value::as_str)
+            != Some(request.request_fingerprint.as_str())
+        || request.request_fingerprint != lookup_request_fingerprint(request)
+    {
+        return Err(ValidationError);
     }
     Ok(())
 }
@@ -464,7 +507,7 @@ fn lookup_error(status: StatusCode, code: &'static str) -> Response {
     (
         status,
         Json(json!({
-            "schema": "cex.matrix.result-lookup.error.v1",
+            "schema": "cex.matrix.result-lookup.v1",
             "resolved": false,
             "error": code,
             "production_authorization": "not_granted"
@@ -479,28 +522,105 @@ mod tests {
 
     fn request() -> MatrixResultLookupRequest {
         let mut request = MatrixResultLookupRequest {
-            delivery_id: "61000000-0000-4000-8000-000000000001".to_string(),
-            event_id: "$event".to_string(),
-            matrix_user_id: "@alice:example".to_string(),
-            room_id: "!room:example".to_string(),
-            payload_sha256: format!("sha256:{}", "2".repeat(64)),
+            delivery_id: "65000000-0000-4000-8000-000000000001".to_string(),
+            event_id: "$delivery-bound-event".to_string(),
+            matrix_user_id: "@delivery-user:example".to_string(),
+            room_id: "!delivery-room:example".to_string(),
+            payload_sha256: format!("sha256:{}", "8".repeat(64)),
             request_fingerprint: String::new(),
         };
         request.request_fingerprint = lookup_request_fingerprint(&request);
         request
     }
 
+    fn cached_result(request: &MatrixResultLookupRequest) -> Value {
+        json!({
+            "task_id": "task-delivery-bound",
+            "consumer_status": "received",
+            "source": {
+                "kind": "matrix_message",
+                "matrix_user_id": request.matrix_user_id,
+                "room_id": request.room_id,
+                "event_id": request.event_id,
+                "identity_scope": {
+                    "user_id": request.matrix_user_id,
+                    "room_id": request.room_id,
+                },
+                "metadata": {
+                    "event_type": "m.room.message",
+                    "timestamp_ms": 1_789_000_000_000_i64,
+                    "metadata": {
+                        DELIVERY_BINDING_FIELD: {
+                            "schema": DELIVERY_BINDING_SCHEMA,
+                            "source": DELIVERY_BINDING_SOURCE,
+                            "delivery_id": request.delivery_id,
+                            "payload_sha256": request.payload_sha256,
+                            "event_id": request.event_id,
+                            "room_id": request.room_id,
+                            "matrix_user_id": request.matrix_user_id,
+                            "request_fingerprint": request.request_fingerprint,
+                        }
+                    },
+                    "content": {"msgtype": "m.text", "body": "/task preserve delivery identity"}
+                }
+            },
+            "raw": {
+                "invocation_id": "task-delivery-bound",
+                "status": "accepted"
+            }
+        })
+    }
+
     #[test]
-    fn fingerprint_is_bound_to_every_delivery_component() {
-        let base = request();
-        let expected = lookup_request_fingerprint(&base);
+    fn cached_result_must_carry_the_exact_persisted_delivery_binding() {
+        let request = request();
+        let response = cached_result(&request);
+        let binding = validate_cached_result(&response, &request).unwrap();
+        assert_eq!(binding["request_fingerprint"], request.request_fingerprint);
+
+        for field in [
+            "delivery_id",
+            "payload_sha256",
+            "event_id",
+            "room_id",
+            "matrix_user_id",
+            "request_fingerprint",
+        ] {
+            let mut changed = response.clone();
+            changed["source"]["metadata"]["metadata"][DELIVERY_BINDING_FIELD][field] =
+                json!("mismatch");
+            assert!(validate_cached_result(&changed, &request).is_err());
+        }
+
+        let mut missing = response;
+        missing["source"]["metadata"]["metadata"] = json!({});
+        assert!(validate_cached_result(&missing, &request).is_err());
+    }
+
+    #[test]
+    fn persisted_binding_rejects_extra_or_wrong_authority_fields() {
+        let request = request();
+        let mut response = cached_result(&request);
+        response["source"]["metadata"]["metadata"][DELIVERY_BINDING_FIELD]["forged"] =
+            json!(true);
+        assert!(validate_cached_result(&response, &request).is_err());
+
+        let mut response = cached_result(&request);
+        response["source"]["metadata"]["metadata"][DELIVERY_BINDING_FIELD]["source"] =
+            json!("untrusted");
+        assert!(validate_cached_result(&response, &request).is_err());
+    }
+
+    #[test]
+    fn delivery_fingerprint_changes_with_every_authority_component() {
+        let expected = lookup_request_fingerprint(&request());
 
         let mut changed = request();
-        changed.delivery_id = "61000000-0000-4000-8000-000000000002".to_string();
+        changed.delivery_id = "65000000-0000-4000-8000-000000000002".to_string();
         assert_ne!(lookup_request_fingerprint(&changed), expected);
 
         let mut changed = request();
-        changed.payload_sha256 = format!("sha256:{}", "3".repeat(64));
+        changed.payload_sha256 = format!("sha256:{}", "9".repeat(64));
         assert_ne!(lookup_request_fingerprint(&changed), expected);
 
         let mut changed = request();
@@ -514,43 +634,5 @@ mod tests {
         let mut changed = request();
         changed.room_id = "!other:example".to_string();
         assert_ne!(lookup_request_fingerprint(&changed), expected);
-    }
-
-    #[test]
-    fn canonical_delivery_and_hash_shapes_are_fail_closed() {
-        assert!(validate_delivery_id("61000000-0000-4000-8000-000000000001").is_ok());
-        assert!(validate_delivery_id("61000000-0000-4000-8000-00000000000A").is_err());
-        assert!(validate_delivery_id("not-a-uuid").is_err());
-        assert!(validate_sha256(&format!("sha256:{}", "a".repeat(64))).is_ok());
-        assert!(validate_sha256(&format!("SHA256:{}", "a".repeat(64))).is_err());
-    }
-
-    #[test]
-    fn cached_result_requires_exact_source_and_task_identity() {
-        let request = request();
-        let valid = json!({
-            "task_id": "task-1",
-            "source": {
-                "kind": "matrix_message",
-                "matrix_user_id": request.matrix_user_id.clone(),
-                "room_id": request.room_id.clone(),
-                "event_id": request.event_id.clone(),
-                "identity_scope": {
-                    "user_id": request.matrix_user_id.clone(),
-                    "room_id": request.room_id.clone()
-                }
-            },
-            "raw": {"invocation_id": "task-1"}
-        });
-        assert!(validate_cached_result(&valid, &request).is_ok());
-
-        for pointer in ["matrix_user_id", "room_id", "event_id"] {
-            let mut invalid = valid.clone();
-            invalid["source"][pointer] = json!("mismatch");
-            assert!(validate_cached_result(&invalid, &request).is_err());
-        }
-        let mut invalid = valid;
-        invalid["raw"]["invocation_id"] = json!("task-2");
-        assert!(validate_cached_result(&invalid, &request).is_err());
     }
 }

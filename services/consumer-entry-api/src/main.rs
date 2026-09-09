@@ -2,7 +2,7 @@ use axum::Router;
 use consumer_entry_api::{build_router, AppState};
 use shared_tracing::init_tracing;
 
-mod matrix_result_lookup_v2;
+mod matrix_result_lookup;
 
 #[tokio::main]
 async fn main() {
@@ -16,7 +16,7 @@ async fn main() {
         }
     };
     let app: Router = build_router(state.clone())
-        .merge(matrix_result_lookup_v2::router(state.config().clone()));
+        .merge(matrix_result_lookup::router(state.config().clone()));
 
     let listener = tokio::net::TcpListener::bind(&state.config().bind_addr)
         .await
