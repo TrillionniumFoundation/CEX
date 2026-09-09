@@ -16,20 +16,28 @@ from typing import Callable
 import matrix_postgres_regression as base
 
 ROOT = Path(__file__).resolve().parents[1]
-MIGRATIONS = (
+BASE_MIGRATIONS = (
     "0001_adapter_result_reconciliation.sql",
     "0002_runtime_roles.sql",
     "0003_adapter_result_evidence_binding.sql",
     "0004_adapter_result_runtime_reconciliation.sql",
     "0005_adapter_result_causal_binding.sql",
 )
-REGRESSIONS = (
+SECURITY_MIGRATIONS = (
+    "0006_adapter_result_embedded_delivery_binding.sql",
+)
+MIGRATIONS = BASE_MIGRATIONS + SECURITY_MIGRATIONS
+BASE_REGRESSIONS = (
     "scripts/test-matrix-result-reconciliation-postgres.sql",
     "scripts/test-matrix-result-evidence-hardening-postgres.sql",
     "scripts/test-matrix-result-runtime-reconciliation-postgres.sql",
     "scripts/test-matrix-result-causal-binding-postgres.sql",
 )
-SCHEMA = "cex.matrix-operator-postgres-regression.v3"
+SECURITY_REGRESSIONS = (
+    "scripts/test-matrix-result-embedded-binding-postgres.sql",
+)
+REGRESSIONS = BASE_REGRESSIONS + SECURITY_REGRESSIONS
+SCHEMA = "cex.matrix-operator-postgres-regression.v4"
 MAX_RUN_SECONDS = 900
 
 
@@ -52,24 +60,37 @@ def acquired_inputs(root: Path) -> tuple[list[tuple[str, str]], dict[str, str]]:
 
     inputs: dict[str, str] = {}
     stages: list[tuple[str, str]] = []
-    for pass_number in (1, 2):
-        for name in MIGRATIONS:
-            relative = (
-                f"services/matrix-entry-adapter/operator-migrations/{name}"
-            )
-            if relative not in inputs:
-                inputs[relative] = base.read_input(root, relative)
-            sql = inputs[relative]
-            if (
-                not sql.lstrip().startswith("begin;")
-                or not sql.rstrip().endswith("commit;")
-            ):
-                raise OperatorRegressionError(
-                    f"nontransactional operator migration: {name}"
-                )
-            stages.append((f"operator-migration-{pass_number}-{name}", sql))
 
-    for relative in REGRESSIONS:
+    def migration_stage(pass_number: int, name: str) -> None:
+        relative = f"services/matrix-entry-adapter/operator-migrations/{name}"
+        if relative not in inputs:
+            inputs[relative] = base.read_input(root, relative)
+        sql = inputs[relative]
+        if (
+            not sql.lstrip().startswith("begin;")
+            or not sql.rstrip().endswith("commit;")
+        ):
+            raise OperatorRegressionError(
+                f"nontransactional operator migration: {name}"
+            )
+        stages.append((f"operator-migration-{pass_number}-{name}", sql))
+
+    for pass_number in (1, 2):
+        for name in BASE_MIGRATIONS:
+            migration_stage(pass_number, name)
+
+    # Preserve the historical v1/v2 regressions before v3 deliberately revokes
+    # runtime access to v2. This proves that the additive migration does not
+    # rewrite or conceal the earlier contract.
+    for relative in BASE_REGRESSIONS:
+        inputs[relative] = base.read_input(root, relative)
+        stages.append((Path(relative).stem, inputs[relative]))
+
+    for pass_number in (1, 2):
+        for name in SECURITY_MIGRATIONS:
+            migration_stage(pass_number, name)
+
+    for relative in SECURITY_REGRESSIONS:
         inputs[relative] = base.read_input(root, relative)
         stages.append((Path(relative).stem, inputs[relative]))
 
