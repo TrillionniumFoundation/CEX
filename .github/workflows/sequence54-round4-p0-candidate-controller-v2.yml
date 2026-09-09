@@ -1,0 +1,197 @@
+name: sequence54-round4-p0-candidate-controller-v2
+
+on:
+  push:
+    branches:
+      - work/sequence54-round2-staging-20260909
+    paths:
+      - '.github/workflows/sequence54-round4-p0-candidate-controller-v2.yml'
+
+permissions:
+  contents: read
+  actions: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: sequence54-round4-p0-candidate-controller-v2
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+  STAGING_BRANCH: work/sequence54-round2-staging-20260909
+  PULL_REQUEST_NUMBER: '53'
+  EVIDENCE_DIR: ${{ runner.temp }}/sequence54-round4-p0-candidate-v2
+
+jobs:
+  qualify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Wait for master-v2 exact-head success
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          encoded_branch="${STAGING_BRANCH//\//%2F}"
+          master_id=''
+          for _ in $(seq 1 120); do
+            master_id="$(gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/sequence54-round4-master-v2.yml/runs?branch=${encoded_branch}&per_page=20" \
+              --jq '.workflow_runs | sort_by(.created_at) | reverse | .[0].id // empty' 2>/dev/null || true)"
+            [[ -n "$master_id" ]] && break
+            sleep 15
+          done
+          [[ -n "$master_id" ]]
+          for _ in $(seq 1 1400); do
+            value="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/runs/${master_id}")"
+            status="$(jq -r '.status' <<<"$value")"
+            conclusion="$(jq -r '.conclusion // ""' <<<"$value")"
+            [[ "$status" == completed ]] && break
+            sleep 15
+          done
+          printf 'master_id=%s\nstatus=%s\nconclusion=%s\n' "$master_id" "$status" "$conclusion" \
+            > "$EVIDENCE_DIR/master-v2.txt"
+          [[ "$status" == completed && "$conclusion" == success ]]
+
+      - name: Checkout unchanged exact candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Dispatch fresh aggregate P0 candidate run and verify artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          head="$(git rev-parse HEAD)"
+          tree="$(git rev-parse HEAD^{tree})"
+          printf '%s\n' "$head" > "$EVIDENCE_DIR/head-sha.txt"
+          printf '%s\n' "$tree" > "$EVIDENCE_DIR/head-tree.txt"
+          branch_head="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/branches/${TARGET_BRANCH//\//%2F}" --jq '.commit.sha')"
+          [[ "$branch_head" == "$head" ]]
+
+          workflow='p0-release-candidate-gate.yml'
+          baseline="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?per_page=100")"
+          existing_success="$(jq -r --arg sha "$head" '[.workflow_runs[] | select(.head_sha == $sha and .status == "completed" and .conclusion == "success")] | sort_by(.created_at) | reverse | .[0].id // empty' <<<"$baseline")"
+          if [[ -n "$existing_success" ]]; then
+            run_id="$existing_success"
+            action='reuse_exact_success'
+          else
+            active="$(jq -r --arg sha "$head" '[.workflow_runs[] | select(.head_sha == $sha and (.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending" or .status == "requested"))] | sort_by(.created_at) | reverse | .[0].id // empty' <<<"$baseline")"
+            if [[ -n "$active" ]]; then
+              run_id="$active"
+              action='adopt_exact_active'
+            else
+              baseline_ids="$(jq -r --arg sha "$head" '.workflow_runs[] | select(.head_sha == $sha) | .id' <<<"$baseline")"
+              payload="$(jq -nc --arg ref "$TARGET_BRANCH" '{ref:$ref}')"
+              http="$(curl -sS -o "$EVIDENCE_DIR/dispatch-response.json" -w '%{http_code}' \
+                -X POST \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H 'Accept: application/vnd.github+json' \
+                -H 'X-GitHub-Api-Version: 2022-11-28' \
+                -H 'Content-Type: application/json' \
+                "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/dispatches" \
+                -d "$payload")"
+              printf '%s\n' "$http" > "$EVIDENCE_DIR/dispatch-http.txt"
+              [[ "$http" =~ ^20[14]$ ]]
+              run_id=''
+              for _ in $(seq 1 100); do
+                current="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?per_page=100")"
+                while read -r candidate_id; do
+                  [[ -n "$candidate_id" ]] || continue
+                  if ! grep -Fxq "$candidate_id" <<<"$baseline_ids"; then
+                    run_id="$candidate_id"
+                    break
+                  fi
+                done < <(jq -r --arg sha "$head" '[.workflow_runs[] | select(.head_sha == $sha)] | sort_by(.created_at) | reverse | .[].id' <<<"$current")
+                [[ -n "$run_id" ]] && break
+                sleep 15
+              done
+              [[ -n "$run_id" ]]
+              action='dispatch_new_exact_run'
+            fi
+          fi
+          printf 'run_id=%s\naction=%s\n' "$run_id" "$action" > "$EVIDENCE_DIR/run-identity.txt"
+
+          for _ in $(seq 1 1400); do
+            value="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+            status="$(jq -r '.status' <<<"$value")"
+            conclusion="$(jq -r '.conclusion // ""' <<<"$value")"
+            [[ "$status" == completed ]] && break
+            current_head="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/branches/${TARGET_BRANCH//\//%2F}" --jq '.commit.sha')"
+            [[ "$current_head" == "$head" ]]
+            sleep 15
+          done
+          printf 'status=%s\nconclusion=%s\n' "$status" "$conclusion" > "$EVIDENCE_DIR/run-status.txt"
+          gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" > "$EVIDENCE_DIR/jobs.json"
+          gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" > "$EVIDENCE_DIR/artifacts.json"
+
+          python3 - "$EVIDENCE_DIR" "$head" "$tree" "$run_id" "$status" "$conclusion" "$action" <<'PY'
+          from pathlib import Path
+          import json, sys
+          root = Path(sys.argv[1])
+          jobs = json.loads((root / 'jobs.json').read_text()).get('jobs', [])
+          executed = [job for job in jobs if job.get('conclusion') != 'skipped']
+          nonempty = bool(executed) and all(job.get('steps') for job in executed)
+          artifacts = json.loads((root / 'artifacts.json').read_text()).get('artifacts', [])
+          expected = [
+              item for item in artifacts
+              if item.get('name', '').startswith('cex-p0-evidence-')
+              or item.get('name', '').startswith('cex-p0-candidate-manifest-')
+          ]
+          ok = sys.argv[5] == 'completed' and sys.argv[6] == 'success' and nonempty and len(expected) >= 2
+          report = {
+              'schema': 'cex.sequence54-round4-p0-candidate.v2',
+              'head_sha': sys.argv[2], 'head_tree': sys.argv[3],
+              'run_id': int(sys.argv[4]), 'status': sys.argv[5],
+              'conclusion': sys.argv[6], 'action': sys.argv[7],
+              'nonempty_executed_jobs': nonempty,
+              'candidate_artifacts': [
+                  {'id': item.get('id'), 'name': item.get('name'), 'digest': item.get('digest')}
+                  for item in expected
+              ],
+              'repository_candidate_qualified': ok,
+              'production_authorization': 'not_granted',
+          }
+          (root / 'p0-candidate-v2.json').write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
+          lines = [
+              '<!-- sequence54-round4-p0-candidate-v2 -->',
+              '## Sequence 54 aggregate P0 candidate qualification v2',
+              '',
+              f"- Exact head/tree: `{report['head_sha']}` / `{report['head_tree']}`",
+              f"- Run identity: `{report['run_id']}` (`{report['action']}`)",
+              f"- Conclusion: `{report['conclusion']}`",
+              f"- Non-empty executed jobs: `{str(report['nonempty_executed_jobs']).lower()}`",
+              f"- Bound evidence/manifest artifacts: `{len(report['candidate_artifacts'])}`",
+              f"- Repository candidate qualified: `{str(report['repository_candidate_qualified']).lower()}`",
+              '',
+              'No production, deployment, cutover, release or merge authority is inferred. `production_authorization=not_granted`.',
+          ]
+          (root / 'comment.md').write_text('\n'.join(lines) + '\n')
+          raise SystemExit(0 if ok else 1)
+          PY
+
+      - name: Publish aggregate result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ -f "$EVIDENCE_DIR/comment.md" ]]; then
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PULL_REQUEST_NUMBER}/comments" -f body="$(cat "$EVIDENCE_DIR/comment.md")"
+          fi
+
+      - name: Upload P0 candidate v2 evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sequence54-round4-p0-candidate-v2-${{ github.run_id }}
+          path: ${{ env.EVIDENCE_DIR }}
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 6
