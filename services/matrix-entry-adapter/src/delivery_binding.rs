@@ -42,8 +42,14 @@ pub(super) async fn enforce_delivery_binding(
         return next.run(request).await;
     }
 
-    let delivery_id = header_text(&request, "x-cex-delivery-id");
-    let payload_sha256 = header_text(&request, "x-cex-payload-sha256");
+    let delivery_id = match unique_header_text(&request, "x-cex-delivery-id") {
+        Ok(value) => value,
+        Err(code) => return binding_error(StatusCode::BAD_REQUEST, code),
+    };
+    let payload_sha256 = match unique_header_text(&request, "x-cex-payload-sha256") {
+        Ok(value) => value,
+        Err(code) => return binding_error(StatusCode::BAD_REQUEST, code),
+    };
     match (delivery_id.as_deref(), payload_sha256.as_deref()) {
         (None, None) if !policy.require_headers => return next.run(request).await,
         (Some(_), Some(_)) => {}
@@ -55,8 +61,12 @@ pub(super) async fn enforce_delivery_binding(
         }
     }
 
-    let delivery_id = delivery_id.expect("complete delivery headers were checked");
-    let payload_sha256 = payload_sha256.expect("complete delivery headers were checked");
+    let (Some(delivery_id), Some(payload_sha256)) = (delivery_id, payload_sha256) else {
+        return binding_error(
+            StatusCode::BAD_REQUEST,
+            "matrix_delivery_binding_headers_incomplete",
+        );
+    };
     if !valid_delivery_id(&delivery_id) || !valid_sha256(&payload_sha256) {
         return binding_error(
             StatusCode::BAD_REQUEST,
@@ -65,15 +75,15 @@ pub(super) async fn enforce_delivery_binding(
     }
 
     for header_name in ["x-idempotency-key", "idempotency-key"] {
-        match header_text(&request, header_name) {
-            Some(value) if value == delivery_id => {}
-            None if !policy.require_headers => {}
-            _ => {
+        match unique_header_text(&request, header_name) {
+            Ok(Some(value)) if value == delivery_id => {}
+            Ok(_) => {
                 return binding_error(
                     StatusCode::CONFLICT,
                     "matrix_delivery_idempotency_binding_mismatch",
                 )
             }
+            Err(code) => return binding_error(StatusCode::BAD_REQUEST, code),
         }
     }
 
@@ -95,14 +105,24 @@ pub(super) async fn enforce_delivery_binding(
     next.run(Request::from_parts(parts, Body::from(bound))).await
 }
 
-fn header_text(request: &Request, name: &'static str) -> Option<String> {
-    request
-        .headers()
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
+fn unique_header_text(
+    request: &Request,
+    name: &'static str,
+) -> Result<Option<String>, &'static str> {
+    let mut values = request.headers().get_all(name).iter();
+    let Some(first) = values.next() else {
+        return Ok(None);
+    };
+    if values.next().is_some() {
+        return Err("matrix_delivery_binding_header_duplicated");
+    }
+    let value = first
+        .to_str()
+        .map_err(|_| "matrix_delivery_binding_header_invalid")?;
+    if value.is_empty() || value != value.trim() {
+        return Err("matrix_delivery_binding_header_invalid");
+    }
+    Ok(Some(value.to_string()))
 }
 
 fn bind_event_body(
@@ -239,14 +259,12 @@ fn valid_delivery_id(value: &str) -> bool {
 }
 
 fn valid_sha256(value: &str) -> bool {
-    value
-        .strip_prefix("sha256:")
-        .is_some_and(|hex| {
-            hex.len() == 64
-                && hex
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        })
+    value.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
 }
 
 fn binding_error(status: StatusCode, code: &'static str) -> Response {
@@ -265,6 +283,10 @@ fn binding_error(status: StatusCode, code: &'static str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{routing::post, Router};
+    use tower::ServiceExt;
+
+    const DELIVERY_ID: &str = "65000000-0000-4000-8000-000000000001";
 
     fn event() -> Value {
         json!({
@@ -279,18 +301,44 @@ mod tests {
         })
     }
 
+    fn event_request(value: &Value, include_binding_headers: bool) -> Request {
+        let raw = serde_json::to_vec(value).unwrap();
+        let mut builder = Request::builder()
+            .method(Method::POST)
+            .uri(MATRIX_EVENT_PATH)
+            .header("content-type", "application/json");
+        if include_binding_headers {
+            builder = builder
+                .header("x-cex-delivery-id", DELIVERY_ID)
+                .header("x-cex-payload-sha256", sha256_prefixed(&raw))
+                .header("x-idempotency-key", DELIVERY_ID)
+                .header("idempotency-key", DELIVERY_ID);
+        }
+        builder.body(Body::from(raw)).unwrap()
+    }
+
+    fn test_router(policy: DeliveryBindingPolicy) -> Router {
+        Router::new()
+            .route(MATRIX_EVENT_PATH, post(|Json(value): Json<Value>| async move {
+                Json(value)
+            }))
+            .layer(axum::middleware::from_fn_with_state(
+                policy,
+                enforce_delivery_binding,
+            ))
+    }
+
     #[test]
     fn trusted_headers_become_durable_reserved_metadata() {
         let value = event();
         let raw = serde_json::to_vec(&value).unwrap();
         let payload_sha256 = sha256_prefixed(&raw);
-        let delivery_id = "65000000-0000-4000-8000-000000000001";
-        let bound = bind_event_body(&raw, delivery_id, &payload_sha256).unwrap();
+        let bound = bind_event_body(&raw, DELIVERY_ID, &payload_sha256).unwrap();
         let bound: Value = serde_json::from_slice(&bound).unwrap();
         let binding = &bound["metadata"][DELIVERY_BINDING_FIELD];
         assert_eq!(binding["schema"], DELIVERY_BINDING_SCHEMA);
         assert_eq!(binding["source"], DELIVERY_BINDING_SOURCE);
-        assert_eq!(binding["delivery_id"], delivery_id);
+        assert_eq!(binding["delivery_id"], DELIVERY_ID);
         assert_eq!(binding["payload_sha256"], payload_sha256);
         assert_eq!(binding["event_id"], "$delivery-bound-event");
         assert_eq!(binding["room_id"], "!delivery-room:example");
@@ -298,7 +346,7 @@ mod tests {
         assert_eq!(
             binding["request_fingerprint"],
             delivery_request_fingerprint(
-                delivery_id,
+                DELIVERY_ID,
                 binding["payload_sha256"].as_str().unwrap(),
                 "$delivery-bound-event",
                 "@delivery-user:example",
@@ -312,13 +360,12 @@ mod tests {
         let value = event();
         let raw = serde_json::to_vec(&value).unwrap();
         let payload_sha256 = sha256_prefixed(&raw);
-        let delivery_id = "65000000-0000-4000-8000-000000000001";
 
         let mut changed = value.clone();
         changed["text"] = json!("changed after durable admission");
         let changed = serde_json::to_vec(&changed).unwrap();
         assert_eq!(
-            bind_event_body(&changed, delivery_id, &payload_sha256),
+            bind_event_body(&changed, DELIVERY_ID, &payload_sha256),
             Err("matrix_delivery_payload_hash_mismatch")
         );
 
@@ -327,15 +374,98 @@ mod tests {
         let reserved = serde_json::to_vec(&reserved).unwrap();
         let reserved_hash = sha256_prefixed(&reserved);
         assert_eq!(
-            bind_event_body(&reserved, delivery_id, &reserved_hash),
+            bind_event_body(&reserved, DELIVERY_ID, &reserved_hash),
             Err("matrix_delivery_binding_reserved_field_present")
         );
+    }
+
+    #[tokio::test]
+    async fn production_rejects_missing_headers_and_accepts_complete_binding() {
+        let production = DeliveryBindingPolicy {
+            require_headers: true,
+        };
+        let missing = test_router(production)
+            .oneshot(event_request(&event(), false))
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::BAD_REQUEST);
+
+        let accepted = test_router(production)
+            .oneshot(event_request(&event(), true))
+            .await
+            .unwrap();
+        assert_eq!(accepted.status(), StatusCode::OK);
+        let body = to_bytes(accepted.into_body(), MAX_EVENT_BODY_BYTES)
+            .await
+            .unwrap();
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            value["metadata"][DELIVERY_BINDING_FIELD]["delivery_id"],
+            DELIVERY_ID
+        );
+    }
+
+    #[tokio::test]
+    async fn local_unbound_request_passes_but_partial_binding_is_rejected() {
+        let local = DeliveryBindingPolicy {
+            require_headers: false,
+        };
+        let unbound = test_router(local)
+            .oneshot(event_request(&event(), false))
+            .await
+            .unwrap();
+        assert_eq!(unbound.status(), StatusCode::OK);
+
+        let raw = serde_json::to_vec(&event()).unwrap();
+        let partial = Request::builder()
+            .method(Method::POST)
+            .uri(MATRIX_EVENT_PATH)
+            .header("content-type", "application/json")
+            .header("x-cex-delivery-id", DELIVERY_ID)
+            .body(Body::from(raw))
+            .unwrap();
+        let rejected = test_router(local).oneshot(partial).await.unwrap();
+        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn duplicate_or_mismatched_idempotency_headers_fail_closed() {
+        let local = DeliveryBindingPolicy {
+            require_headers: false,
+        };
+        let raw = serde_json::to_vec(&event()).unwrap();
+        let duplicated = Request::builder()
+            .method(Method::POST)
+            .uri(MATRIX_EVENT_PATH)
+            .header("content-type", "application/json")
+            .header("x-cex-delivery-id", DELIVERY_ID)
+            .append_header("x-cex-delivery-id", "65000000-0000-4000-8000-000000000002")
+            .header("x-cex-payload-sha256", sha256_prefixed(&raw))
+            .header("x-idempotency-key", DELIVERY_ID)
+            .header("idempotency-key", DELIVERY_ID)
+            .body(Body::from(raw.clone()))
+            .unwrap();
+        let rejected = test_router(local).oneshot(duplicated).await.unwrap();
+        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+
+        let mismatched = Request::builder()
+            .method(Method::POST)
+            .uri(MATRIX_EVENT_PATH)
+            .header("content-type", "application/json")
+            .header("x-cex-delivery-id", DELIVERY_ID)
+            .header("x-cex-payload-sha256", sha256_prefixed(&raw))
+            .header("x-idempotency-key", "65000000-0000-4000-8000-000000000002")
+            .header("idempotency-key", DELIVERY_ID)
+            .body(Body::from(raw))
+            .unwrap();
+        let rejected = test_router(local).oneshot(mismatched).await.unwrap();
+        assert_eq!(rejected.status(), StatusCode::CONFLICT);
     }
 
     #[test]
     fn fingerprints_change_with_each_authority_component() {
         let base = delivery_request_fingerprint(
-            "65000000-0000-4000-8000-000000000001",
+            DELIVERY_ID,
             &format!("sha256:{}", "1".repeat(64)),
             "$event",
             "@alice:example",
@@ -350,28 +480,28 @@ mod tests {
                 "!room:example",
             ),
             delivery_request_fingerprint(
-                "65000000-0000-4000-8000-000000000001",
+                DELIVERY_ID,
                 &format!("sha256:{}", "2".repeat(64)),
                 "$event",
                 "@alice:example",
                 "!room:example",
             ),
             delivery_request_fingerprint(
-                "65000000-0000-4000-8000-000000000001",
+                DELIVERY_ID,
                 &format!("sha256:{}", "1".repeat(64)),
                 "$other",
                 "@alice:example",
                 "!room:example",
             ),
             delivery_request_fingerprint(
-                "65000000-0000-4000-8000-000000000001",
+                DELIVERY_ID,
                 &format!("sha256:{}", "1".repeat(64)),
                 "$event",
                 "@bob:example",
                 "!room:example",
             ),
             delivery_request_fingerprint(
-                "65000000-0000-4000-8000-000000000001",
+                DELIVERY_ID,
                 &format!("sha256:{}", "1".repeat(64)),
                 "$event",
                 "@alice:example",
