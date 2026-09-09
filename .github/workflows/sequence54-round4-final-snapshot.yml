@@ -1,0 +1,265 @@
+name: sequence54-round4-final-snapshot
+
+on:
+  push:
+    branches:
+      - work/sequence54-round2-staging-20260909
+    paths:
+      - '.github/workflows/sequence54-round4-final-snapshot.yml'
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: sequence54-round4-final-snapshot
+  cancel-in-progress: false
+
+env:
+  STAGING_BRANCH: work/sequence54-round2-staging-20260909
+  TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+  PULL_REQUEST_NUMBER: '53'
+  EVIDENCE_DIR: ${{ runner.temp }}/sequence54-round4-final-snapshot
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Wait for all round-4 controller denominators
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          encoded_branch="${STAGING_BRANCH//\//%2F}"
+          workflows=(
+            sequence54-round4-master-v2.yml
+            sequence54-round4-governance-controller.yml
+            sequence54-round4-p0-candidate-controller.yml
+            sequence54-round4-authority-ledger.yml
+          )
+          for workflow in "${workflows[@]}"; do
+            run_id=''
+            for _ in $(seq 1 120); do
+              run_id="$(gh api --method GET \
+                "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?branch=${encoded_branch}&per_page=20" \
+                --jq '.workflow_runs | sort_by(.created_at) | reverse | .[0].id // empty' 2>/dev/null || true)"
+              [[ -n "$run_id" ]] && break
+              sleep 15
+            done
+            [[ -n "$run_id" ]]
+            for _ in $(seq 1 1400); do
+              value="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+              status="$(jq -r '.status' <<<"$value")"
+              conclusion="$(jq -r '.conclusion // ""' <<<"$value")"
+              [[ "$status" == completed ]] && break
+              sleep 15
+            done
+            [[ "$status" == completed ]]
+            printf '%s\t%s\t%s\t%s\n' "$workflow" "$run_id" "$status" "$conclusion" \
+              >> "$EVIDENCE_DIR/controller-runs.tsv"
+          done
+
+      - name: Checkout final observed candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Build fail-closed final gap snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$EVIDENCE_DIR" <<'PY'
+          from __future__ import annotations
+          import json, os, re, subprocess, sys
+          from datetime import datetime, timezone
+          from pathlib import Path
+          from urllib.error import HTTPError
+          from urllib.parse import quote
+          from urllib.request import Request, urlopen
+
+          root = Path(sys.argv[1])
+          repository = os.environ['GITHUB_REPOSITORY']
+          pr_number = int(os.environ['PULL_REQUEST_NUMBER'])
+          token = os.environ['GH_TOKEN']
+          api = os.environ.get('GITHUB_API_URL', 'https://api.github.com')
+
+          def call(path, *, method='GET', payload=None, allow_error=False):
+              data = None if payload is None else json.dumps(payload).encode()
+              request = Request(
+                  api + path, method=method, data=data,
+                  headers={
+                      'Authorization': f'Bearer {token}',
+                      'Accept': 'application/vnd.github+json',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'User-Agent': 'sequence54-round4-final-snapshot',
+                      'Content-Type': 'application/json',
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=30) as response:
+                      body = response.read()
+                      return {'status': response.status, 'value': json.loads(body) if body else None}
+              except HTTPError as error:
+                  body = error.read().decode('utf-8', errors='replace')
+                  if allow_error:
+                      return {'status': error.code, 'error': body[:2000]}
+                  raise RuntimeError(f'{method} {path}: {error.code}: {body[:1000]}') from error
+
+          pr = call(f'/repos/{repository}/pulls/{pr_number}')['value']
+          head = pr['head']['sha']
+          tree = subprocess.check_output(['git','rev-parse','HEAD^{tree}'], text=True).strip()
+          if subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip() != head:
+              raise SystemExit('final snapshot checkout drift')
+
+          controller_runs = []
+          for line in (root / 'controller-runs.tsv').read_text().splitlines():
+              workflow, run_id, status, conclusion = line.split('\t')
+              controller_runs.append({
+                  'workflow': workflow, 'run_id': int(run_id),
+                  'status': status, 'conclusion': conclusion,
+              })
+          master_green = next(
+              (item['conclusion'] == 'success' for item in controller_runs if item['workflow'] == 'sequence54-round4-master-v2.yml'),
+              False,
+          )
+          p0_green = next(
+              (item['conclusion'] == 'success' for item in controller_runs if item['workflow'] == 'sequence54-round4-p0-candidate-controller.yml'),
+              False,
+          )
+
+          rulesets = call(
+              f'/repos/{repository}/rulesets?includes_parents=true&per_page=100',
+              allow_error=True,
+          )
+          protection = call(
+              f'/repos/{repository}/branches/main/protection',
+              allow_error=True,
+          )
+          active_rulesets = []
+          if rulesets.get('status') == 200 and isinstance(rulesets.get('value'), list):
+              active_rulesets = [item for item in rulesets['value'] if item.get('enforcement') == 'active']
+          governance_closed = bool(active_rulesets) and protection.get('status') == 200
+
+          reviews = call(f'/repos/{repository}/pulls/{pr_number}/reviews?per_page=100')['value']
+          latest = {}
+          for review in reviews:
+              login = (review.get('user') or {}).get('login')
+              if login and (login not in latest or (review.get('submitted_at') or '') >= (latest[login].get('submitted_at') or '')):
+                  latest[login] = review
+          author = pr['user']['login']
+          approvals = sorted(
+              login for login, review in latest.items()
+              if login != author
+              and review.get('state') == 'APPROVED'
+              and review.get('commit_id') == head
+              and (review.get('user') or {}).get('type') != 'Bot'
+          )
+          approvals_closed = len(approvals) >= 2
+
+          # Authority ledgers coordinate external evidence but do not convert an
+          # unchecked issue box into acceptance. These remain false unless a
+          # separately validated receipt contract is added to the release gate.
+          cross_repository_acceptance = False
+          production_evidence_closed = False
+          all_closed = (
+              master_green
+              and p0_green
+              and governance_closed
+              and approvals_closed
+              and cross_repository_acceptance
+              and production_evidence_closed
+          )
+          report = {
+              'schema': 'cex.sequence54-round4-final-gap-snapshot.v1',
+              'observed_at': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+              'repository': repository,
+              'pull_request': pr_number,
+              'head_sha': head,
+              'head_tree': tree,
+              'base_sha': pr['base']['sha'],
+              'prospective_merge_sha': pr.get('merge_commit_sha'),
+              'draft': pr.get('draft'),
+              'controller_runs': controller_runs,
+              'repository_internal_exact_head_green': master_green,
+              'aggregate_p0_candidate_green': p0_green,
+              'live_governance_closed': governance_closed,
+              'eligible_current_head_approvals': approvals,
+              'independent_approvals_closed': approvals_closed,
+              'cross_repository_acceptance_closed': cross_repository_acceptance,
+              'production_evidence_closed': production_evidence_closed,
+              'all_gaps_closed': all_closed,
+              'merge_authorized': all_closed,
+              'production_authorization': 'granted' if all_closed else 'not_granted',
+              'force_push_used': False,
+              'administrator_bypass_used': False,
+              'synthetic_status_used': False,
+              'self_approval_used': False,
+          }
+          (root / 'final-gap-snapshot.json').write_text(
+              json.dumps(report, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
+
+          lines = [
+              '<!-- sequence54-round4-final-snapshot -->',
+              '## Sequence 54 round-4 final gap snapshot',
+              '',
+              '```text',
+              f'head                              {head}',
+              f'head tree                         {tree}',
+              f'base                              {pr["base"]["sha"]}',
+              f'prospective merge                 {pr.get("merge_commit_sha")}',
+              '```',
+              '',
+              f'- Repository internal exact-head gates: `{str(master_green).lower()}`',
+              f'- Aggregate P0 candidate: `{str(p0_green).lower()}`',
+              f'- Live protected-main governance: `{str(governance_closed).lower()}`',
+              f'- Eligible exact-head approvals: `{len(approvals)}` ({", ".join(approvals) or "none"})',
+              f'- Cross-repository acceptance: `{str(cross_repository_acceptance).lower()}`',
+              f'- Production evidence/accountable go-no-go: `{str(production_evidence_closed).lower()}`',
+              '',
+              '```text',
+              f'all_gaps_closed={str(all_closed).lower()}',
+              f'merge_authorized={str(all_closed).lower()}',
+              f'production_authorization={report["production_authorization"]}',
+              'force_push_used=false',
+              'administrator_bypass_used=false',
+              'synthetic_status_used=false',
+              'self_approval_used=false',
+              '```',
+          ]
+          body = '\n'.join(lines) + '\n'
+          comments = call(f'/repos/{repository}/issues/{pr_number}/comments?per_page=100')['value']
+          existing = next(
+              (item for item in reversed(comments) if '<!-- sequence54-round4-final-snapshot -->' in (item.get('body') or '')),
+              None,
+          )
+          if existing:
+              call(
+                  f'/repos/{repository}/issues/comments/{existing["id"]}',
+                  method='PATCH', payload={'body': body},
+              )
+          else:
+              call(
+                  f'/repos/{repository}/issues/{pr_number}/comments',
+                  method='POST', payload={'body': body},
+              )
+          PY
+
+      - name: Upload final snapshot
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sequence54-round4-final-snapshot-${{ github.run_id }}
+          path: ${{ env.EVIDENCE_DIR }}
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 6
