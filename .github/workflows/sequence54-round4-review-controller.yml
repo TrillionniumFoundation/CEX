@@ -1,0 +1,109 @@
+name: sequence54-round4-review-controller
+
+on:
+  push:
+    branches:
+      - work/sequence54-round2-staging-20260909
+    paths:
+      - '.github/workflows/sequence54-round4-review-controller.yml'
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: sequence54-round4-review-controller
+  cancel-in-progress: false
+
+env:
+  STAGING_BRANCH: work/sequence54-round2-staging-20260909
+  TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+  PULL_REQUEST_NUMBER: '53'
+  EVIDENCE_DIR: ${{ runner.temp }}/sequence54-round4-review-controller
+
+jobs:
+  request:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 320
+    steps:
+      - name: Wait for master-v2 exact-head qualification
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          encoded_branch="${STAGING_BRANCH//\//%2F}"
+          run_id=''
+          for _ in $(seq 1 100); do
+            run_id="$(gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/sequence54-round4-master-v2.yml/runs?branch=${encoded_branch}&per_page=20" \
+              --jq '.workflow_runs | sort_by(.created_at) | reverse | .[0].id // empty' 2>/dev/null || true)"
+            [[ -n "$run_id" ]] && break
+            sleep 15
+          done
+          [[ -n "$run_id" ]]
+          for _ in $(seq 1 1200); do
+            value="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+            status="$(jq -r '.status' <<<"$value")"
+            conclusion="$(jq -r '.conclusion // ""' <<<"$value")"
+            [[ "$status" == completed ]] && break
+            sleep 15
+          done
+          printf 'run_id=%s\nstatus=%s\nconclusion=%s\n' "$run_id" "$status" "$conclusion" \
+            > "$EVIDENCE_DIR/master-v2.txt"
+          [[ "$status" == completed && "$conclusion" == success ]]
+
+      - name: Bind review request to exact unchanged head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pr="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PULL_REQUEST_NUMBER}")"
+          head="$(jq -r '.head.sha' <<<"$pr")"
+          author="$(jq -r '.user.login' <<<"$pr")"
+          branch_head="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/branches/${TARGET_BRANCH//\//%2F}" --jq '.commit.sha')"
+          [[ "$head" == "$branch_head" ]]
+          [[ "Franksudoman" != "$author" && "Tomasrgbsf" != "$author" ]]
+
+          gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PULL_REQUEST_NUMBER}/reviews?per_page=100" \
+            > "$EVIDENCE_DIR/reviews-before.json"
+          payload='{"reviewers":["Franksudoman","Tomasrgbsf"]}'
+          http="$(curl -sS -o "$EVIDENCE_DIR/request-response.json" -w '%{http_code}' \
+            -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            -H 'Content-Type: application/json' \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pulls/${PULL_REQUEST_NUMBER}/requested_reviewers" \
+            -d "$payload")"
+          printf '%s\n' "$http" > "$EVIDENCE_DIR/request-http.txt"
+          [[ "$http" =~ ^20[01]$ ]]
+          gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PULL_REQUEST_NUMBER}" \
+            > "$EVIDENCE_DIR/pr-after.json"
+          jq -n --arg head "$head" --arg author "$author" --arg http "$http" \
+            '{schema:"cex.sequence54-round4-review-request.v1",head_sha:$head,author:$author,http_status:($http|tonumber),requested_reviewers:["Franksudoman","Tomasrgbsf"],approval_inferred:false,production_authorization:"not_granted"}' \
+            > "$EVIDENCE_DIR/review-request.json"
+
+          body="<!-- sequence54-round4-review-controller -->
+          ## Sequence 54 final-head independent review requested
+
+          - Exact head: \`$head\`
+          - Requested reviewers: \`Franksudoman\`, \`Tomasrgbsf\`
+          - Request HTTP: \`$http\`
+
+          This records a review request only. It is not an approval, does not dismiss prior substantive decisions, and grants no merge or production authority."
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PULL_REQUEST_NUMBER}/comments" -f body="$body"
+
+      - name: Upload review-request evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sequence54-round4-review-controller-${{ github.run_id }}
+          path: ${{ env.EVIDENCE_DIR }}
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 6
