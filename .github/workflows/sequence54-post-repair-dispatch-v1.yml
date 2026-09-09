@@ -1,0 +1,103 @@
+name: sequence54-post-repair-dispatch-v1
+
+on:
+  push:
+    branches:
+      - work/sequence54-round2-staging-20260909
+    paths:
+      - '.github/workflows/sequence54-post-repair-dispatch-v1.yml'
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: sequence54-post-repair-dispatch-v1
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+
+jobs:
+  verify-and-dispatch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Wait for fail-closed repair publication
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 240); do
+            sha="$(gh api "repos/$GITHUB_REPOSITORY/branches/$TARGET_BRANCH" --jq '.commit.sha')"
+            toolchain="$(gh api -H 'Accept: application/vnd.github.raw+json' "repos/$GITHUB_REPOSITORY/contents/scripts/rust_toolchain_convergence_v4.py?ref=$sha" 2>/dev/null || true)"
+            workflow="$(gh api -H 'Accept: application/vnd.github.raw+json' "repos/$GITHUB_REPOSITORY/contents/.github/workflows/p0-rust-toolchain-convergence.yml?ref=$sha" 2>/dev/null || true)"
+            projection="$(gh api -H 'Accept: application/vnd.github.raw+json' "repos/$GITHUB_REPOSITORY/contents/scripts/check-consumer-projection-boundary.py?ref=$sha" 2>/dev/null || true)"
+            if grep -Fq 'unapproved fixed Rust identity' <<<"$toolchain" \
+              && grep -Fq 'source_string_literals' <<<"$projection" \
+              && awk '
+                   /name: Checkout GitHub prospective merge object/ {inside=1}
+                   inside && /path: \.candidate-identity\/merge/ {path=1}
+                   inside && path && /fetch-depth: 2/ {ok=1}
+                   inside && /^      - name:/ && !/Checkout GitHub prospective merge object/ {inside=0; path=0}
+                   END {exit(ok ? 0 : 1)}
+                 ' <<<"$workflow"; then
+              printf 'verified_repair_sha=%s\n' "$sha" | tee /tmp/verified-repair.txt
+              exit 0
+            fi
+            sleep 15
+          done
+          echo 'verified repair did not publish within the bounded poll window' >&2
+          exit 1
+
+      - name: Dispatch exact-branch qualification families
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          workflows=(
+            p0-rust-toolchain-convergence.yml
+            repository-semantic-contract-gate.yml
+            p0-sequence54-integration.yml
+            cex-v12-native-minimal.yml
+            consumer-projection-boundary-gate.yml
+            execution-lifecycle-gate.yml
+            matrix-review-repair-regression.yml
+            trnm-economy-ci.yml
+            trnm-economy-settlement.yml
+            world-settlement-external-evidence.yml
+          )
+          dispatched=0
+          for workflow in "${workflows[@]}"; do
+            if ! gh api "repos/$GITHUB_REPOSITORY/contents/.github/workflows/$workflow?ref=$TARGET_BRANCH" >/dev/null 2>&1; then
+              echo "skip missing workflow: $workflow"
+              continue
+            fi
+            definition="$(gh api -H 'Accept: application/vnd.github.raw+json' "repos/$GITHUB_REPOSITORY/contents/.github/workflows/$workflow?ref=$TARGET_BRANCH")"
+            if ! grep -Eq '^[[:space:]]*workflow_dispatch:' <<<"$definition"; then
+              echo "skip workflow without workflow_dispatch: $workflow"
+              continue
+            fi
+            gh api --method POST \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/dispatches" \
+              -f ref="$TARGET_BRANCH"
+            echo "dispatched: $workflow"
+            dispatched=$((dispatched + 1))
+          done
+          test "$dispatched" -gt 0
+          printf 'dispatched=%s\nproduction_authorization=not_granted\n' "$dispatched" | tee /tmp/dispatch-summary.txt
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## Sequence 54 post-repair qualification dispatch'
+            echo
+            test -f /tmp/verified-repair.txt && sed 's/^/- /' /tmp/verified-repair.txt || true
+            test -f /tmp/dispatch-summary.txt && sed 's/^/- /' /tmp/dispatch-summary.txt || true
+            echo '- Production authorization: `not_granted`'
+            echo '- Merge authorization: `not_granted`'
+          } >> "$GITHUB_STEP_SUMMARY"
