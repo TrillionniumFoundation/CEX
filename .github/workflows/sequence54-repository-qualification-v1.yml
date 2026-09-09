@@ -1,0 +1,250 @@
+name: sequence54-repository-qualification-v1
+
+on:
+  push:
+    branches:
+      - work/sequence54-round2-staging-20260909
+    paths:
+      - '.github/workflows/sequence54-repository-qualification-v1.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: sequence54-repository-qualification-v1
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+  DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/cex_ci
+  HEPTA_TEST_DATABASE_URL: postgres://cex:cex_ci_password@127.0.0.1:5432/cex_ci
+  HEPTA_REQUIRE_POSTGRES_TESTS: '1'
+  RUST_TOOLCHAIN: '1.98.1'
+  RUST_RELEASE_COMMIT: '48a229ceaefd4985c50990b14116b6d856af0985'
+  CARGO_INCREMENTAL: '0'
+  CARGO_TERM_COLOR: never
+  RUST_BACKTRACE: '1'
+  RUST_TEST_THREADS: '1'
+  EVIDENCE_DIR: run/sequence54-repository-qualification
+
+jobs:
+  exact-source-qualification:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    services:
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_USER: cex
+          POSTGRES_PASSWORD: cex_ci_password
+          POSTGRES_DB: cex_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cex -d cex_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - name: Wait for verified repaired target source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 240); do
+            sha="$(gh api "repos/$GITHUB_REPOSITORY/branches/$TARGET_BRANCH" --jq '.commit.sha')"
+            toolchain="$(gh api -H 'Accept: application/vnd.github.raw+json' "repos/$GITHUB_REPOSITORY/contents/scripts/rust_toolchain_convergence_v4.py?ref=$sha" 2>/dev/null || true)"
+            projection="$(gh api -H 'Accept: application/vnd.github.raw+json' "repos/$GITHUB_REPOSITORY/contents/scripts/check-consumer-projection-boundary.py?ref=$sha" 2>/dev/null || true)"
+            if grep -Fq 'unapproved fixed Rust identity' <<<"$toolchain" \
+              && grep -Fq 'source_string_literals' <<<"$projection"; then
+              printf '%s\n' "$sha" > /tmp/target-sha
+              exit 0
+            fi
+            sleep 15
+          done
+          echo 'verified repair did not publish within bounded poll window' >&2
+          exit 1
+
+      - name: Checkout exact repaired target branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Bind immutable source identity
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="$(cat /tmp/target-sha)"
+          actual="$(git rev-parse HEAD)"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          test "$actual" = "$expected"
+          [[ "$actual" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$tree" =~ ^[0-9a-f]{40}$ ]]
+          mkdir -p "$EVIDENCE_DIR"
+          printf '%s\n' "$actual" > "$EVIDENCE_DIR/commit-sha.txt"
+          printf '%s\n' "$tree" > "$EVIDENCE_DIR/tree-sha.txt"
+          printf 'sha=%s\ntree=%s\n' "$actual" "$tree" | tee "$EVIDENCE_DIR/source-identity.txt"
+          echo "sha=$actual" >> "$GITHUB_OUTPUT"
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+
+      - name: Install native dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ca-certificates clang cmake jq libpq-dev libssl-dev \
+            perl pkg-config protobuf-compiler postgresql-client
+
+      - name: Repository and source-contract qualification
+        shell: bash
+        run: |
+          set -euo pipefail
+          exec > >(tee "$EVIDENCE_DIR/source-contracts.log") 2>&1
+          python3 scripts/check-p0-release-candidate-hygiene.py
+          python3 scripts/check-development-docs.py
+          python3 scripts/check-module-documentation.py
+          python3 scripts/check-repository-integrity.py \
+            --expected-sha '${{ steps.identity.outputs.sha }}' \
+            --expected-tree '${{ steps.identity.outputs.tree }}' \
+            --output "$EVIDENCE_DIR/repository-integrity.json"
+          python3 scripts/check-rust-toolchain-convergence.py
+          python3 scripts/check-sequence54-integration.py
+          python3 scripts/check-sequence54-rustsec-admission.py
+          python3 scripts/check-rust-advisory-exceptions.py > "$EVIDENCE_DIR/rust-advisory-exceptions.json"
+          python3 scripts/test-rust-route-contract.py
+          python3 scripts/test-semantic-source-integration.py
+          python3 scripts/test-consumer-route-contract.py
+          python3 scripts/generate-repository-semantics.py --check
+          python3 scripts/check-consumer-projection-boundary.py
+          python3 scripts/check-invocation-ledger-contract-static.py
+          python3 scripts/check-gateway-exact-reserve.py
+          python3 scripts/check-execution-settlement-commands.py
+          python3 scripts/check-consumer-exact-money.py
+          python3 scripts/check-trnm-settlement-receipt-lookup.py
+          python3 scripts/check-trnm-economy-settlement-contract.py
+          python3 scripts/test-trnm-economy-settlement-status-negative.py
+          python3 scripts/check-strict-release-evidence-wiring.py
+          python3 scripts/test-p0-release-evidence-strict.py
+          bash scripts/test-runtime-profile-wiring.sh
+          bash services/paper-raid-bff/scripts/check-boundaries.sh
+          git diff --exit-code HEAD --
+
+      - name: PostgreSQL migration and fault-matrix qualification
+        shell: bash
+        run: |
+          set -euo pipefail
+          exec > >(tee "$EVIDENCE_DIR/postgresql-contracts.log") 2>&1
+          bash scripts/check-p0-migrations-postgres.sh
+          bash scripts/check-audit-source-baseline-postgres.sh
+          bash scripts/check-ledger-operation-identity-postgres.sh
+          bash scripts/check-invocation-ledger-contract-postgres.sh
+          bash scripts/check-invocation-ledger-terminal-postgres.sh
+          bash scripts/check-gateway-exact-reserve-postgres.sh
+          bash scripts/check-execution-settlement-commands-postgres.sh
+          bash scripts/check-provider-reconciliation-postgres.sh
+          bash scripts/check-hepta-postgres-integration.sh --mode recovery-only \
+            --evidence "$EVIDENCE_DIR/hepta-postgres-integration.json"
+          bash scripts/check-term-exchange-receipt-partial-upgrade-postgres.sh
+          bash scripts/check-p0-exact-ledger-soak-postgres.sh
+          bash scripts/check-p0-backup-restore-postgres.sh
+          git diff --exit-code HEAD --
+
+      - name: Install exact Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+
+      - name: Rust identity, test, lint and build qualification
+        shell: bash
+        run: |
+          set -euo pipefail
+          exec > >(tee "$EVIDENCE_DIR/rust-qualification.log") 2>&1
+          rustup show active-toolchain
+          rustc --version --verbose | tee "$EVIDENCE_DIR/rustc-version.txt"
+          cargo --version --verbose | tee "$EVIDENCE_DIR/cargo-version.txt"
+          test "$(rustc --version | awk '{print $2}')" = "$RUST_TOOLCHAIN"
+          grep -Fx "commit-hash: $RUST_RELEASE_COMMIT" "$EVIDENCE_DIR/rustc-version.txt"
+          cargo metadata --locked --format-version 1 > "$EVIDENCE_DIR/cargo-metadata.json"
+          cargo fmt --all -- --check
+          cargo test --workspace --all-targets --locked --no-fail-fast
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo build --workspace --all-targets --locked
+          git diff --exit-code HEAD --
+
+      - name: Freeze qualification receipt
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from datetime import datetime, timezone
+          from pathlib import Path
+          import hashlib
+          import json
+          import os
+          import subprocess
+
+          root = Path(os.environ['EVIDENCE_DIR'])
+          entries = []
+          for path in sorted(root.rglob('*')):
+              if path.is_file():
+                  raw = path.read_bytes()
+                  entries.append({
+                      'path': path.relative_to(root).as_posix(),
+                      'bytes': len(raw),
+                      'sha256': hashlib.sha256(raw).hexdigest(),
+                  })
+          receipt = {
+              'schema': 'cex.sequence54-repository-qualification.v1',
+              'status': 'success',
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'branch': os.environ['TARGET_BRANCH'],
+              'commit_sha': subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip(),
+              'tree_sha': subprocess.check_output(['git','rev-parse','HEAD^{tree}'], text=True).strip(),
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'completed_at': datetime.now(timezone.utc).isoformat().replace('+00:00','Z'),
+              'checks': [
+                  'repository-and-source-contracts',
+                  'postgresql-migration-and-fault-matrices',
+                  'rust-1.98.1-workspace-test-clippy-build',
+              ],
+              'files': entries,
+              'production_authorization': 'not_granted',
+              'merge_authorization': 'not_granted',
+          }
+          (root / 'qualification-receipt.json').write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
+          PY
+
+      - name: Upload immutable qualification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sequence54-repository-qualification-${{ steps.identity.outputs.sha }}-attempt-${{ github.run_attempt }}
+          path: run/sequence54-repository-qualification
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 9
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## Sequence 54 exact-source repository qualification'
+            echo
+            echo "- Commit: \`${{ steps.identity.outputs.sha }}\`"
+            echo "- Tree: \`${{ steps.identity.outputs.tree }}\`"
+            echo '- Scope: source contracts + PostgreSQL fault matrices + full Rust workspace test/Clippy/build'
+            echo '- Production authorization: `not_granted`'
+            echo '- Merge authorization: `not_granted`'
+          } >> "$GITHUB_STEP_SUMMARY"
