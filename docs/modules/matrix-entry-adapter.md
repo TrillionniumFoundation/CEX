@@ -59,8 +59,8 @@ The public facade creates a private-field
 `ValidatedMatrixAdapterEnvironment` only through
 `validate_process_environment`, and `AppState::from_validated_env` consumes that
 proof before `implementation.rs` can construct runtime state. This preserves the
-reviewed pre-runtime profile-validation boundary while the new delivery-binding
-middleware remains private to the facade.
+reviewed pre-runtime profile-validation boundary while delivery and response
+binding middleware remain private to the facade.
 
 Additional security-relevant implementation boundaries are:
 
@@ -70,13 +70,19 @@ Additional security-relevant implementation boundaries are:
   canonical payload commitment middleware;
 - `services/matrix-entry-adapter/src/result_reconciliation.rs` — authenticated
   read-only result lookup;
+- `services/matrix-entry-adapter/src/reconciliation_response_binding.rs` —
+  bounded success-response middleware requiring the complete reconciliation
+envelope, exact persisted delivery binding, and non-empty
+  `task_id == raw.invocation_id` before 2xx leaves the adapter;
 - operator migrations `0001` through `0006` below
   `services/matrix-entry-adapter/operator-migrations/`;
 - `scripts/reconcile-matrix-adapter-result-v3.py` — canonical operator command;
 - `scripts/matrix_operator_postgres_regression.py` — staged migration and
   PostgreSQL regression runner;
 - `scripts/test-matrix-result-embedded-binding-postgres.sql` — honest retry,
-  privilege, and hostile binding regression.
+  privilege, and hostile delivery-binding regression;
+- `scripts/test-matrix-result-task-invocation-binding-postgres.sql` — missing and
+  changed invocation regression for the v3 SQL boundary.
 
 Any new route, target, durable object, migration, or authority must update this
 contract, traceability, catalog metadata where applicable, and executable
@@ -91,12 +97,20 @@ metrics surfaces. The event route accepts the relay payload only after its
 canonical JSON bytes match `x-cex-payload-sha256` and its delivery ID matches both
 idempotency headers in beta and production.
 
-The middleware rejects caller-provided `cex_delivery_binding`, then injects the
-exact schema, relay source marker, delivery ID, payload commitment, event, room,
-Matrix principal, and length-prefixed domain-separated request fingerprint. The
-lookup independently recomputes the same fingerprint, signs every authority
-component for Consumer Entry, accepts only an already durable bound task result,
-and always returns `projected_reply=null` without enqueueing a Matrix message.
+The delivery middleware rejects caller-provided `cex_delivery_binding`, then
+injects the exact schema, relay source marker, delivery ID, payload commitment,
+event, room, Matrix principal, and length-prefixed domain-separated request
+fingerprint. The lookup independently recomputes the same fingerprint, signs
+every authority component for Consumer Entry, accepts only an already durable
+bound task result, and always returns `projected_reply=null` without enqueueing a
+Matrix message.
+
+A second facade middleware buffers only bounded reconciliation requests and
+successful responses. It preserves inner authentication failures unchanged, but
+replaces any malformed success with a fail-closed hold unless the response has
+the exact read-only reconciliation envelope, `production_authorization` remains
+`not_granted`, the task equals the raw invocation, Matrix identity scope matches,
+and the embedded eight-field binding independently recomputes to the request.
 
 ## Persistence, concurrency, and recovery
 
@@ -116,11 +130,12 @@ Apply operator migrations exactly in this order:
 
 Migration 0005 separates stable result identity from append-only lookup
 observations and installs the row-locking v2 core. Migration 0006 installs v3,
-revokes runtime access to v2, requires the persisted Consumer Entry result to
-contain the exact eight-field relay binding, recomputes the fingerprint, and
-then delegates to the owner-only v2 core. A valid first repair writes one
-`dead_letter -> sent` transition; an exact retry appends an observation and
-returns `replay`; changed identity, task, result, or binding collides.
+revokes runtime access to v2, requires non-empty `task_id == raw.invocation_id`,
+requires the persisted Consumer Entry result to contain the exact eight-field
+relay binding, recomputes the fingerprint, and then delegates to the owner-only
+v2 core. A valid first repair writes one `dead_letter -> sent` transition; an
+exact retry appends an observation and returns `replay`; changed identity, task,
+invocation, result, or binding fails closed.
 
 ## Configuration and secrets
 
@@ -146,15 +161,16 @@ issues, traces, or repository fixtures.
 A parseable Matrix sender or HTTP success is not identity or result authority.
 Ingress credentials, relay delivery headers, payload hashing, reserved-field
 rejection, signed assertions, issuer/key selection, exact persisted result
-binding, bounded response parsing, and the PostgreSQL row lock are independent
-checks. Event ID is only a candidate locator and cannot authorize reconciliation.
+binding, task-to-invocation equality, bounded response parsing, and the
+PostgreSQL row lock are independent checks. Event ID is only a candidate locator
+and cannot authorize reconciliation.
 
 The operator refuses redirects, duplicate JSON keys, oversized responses,
 noncanonical delivery IDs, changed commitments, cross-room or cross-principal
-results, changed tasks, unbound cached results, remote plaintext databases,
-untrusted CA or executable paths, and inherited hostile PG configuration. It
-performs one read-only lookup and one v3 function call and never sends a Matrix
-event or recreates the business request.
+results, changed or missing task invocation, unbound cached results, remote
+plaintext databases, untrusted CA or executable paths, and inherited hostile PG
+configuration. It performs one read-only lookup and one v3 function call and
+never sends a Matrix event or recreates the business request.
 
 Runtime roles receive no DDL, TRUNCATE, ownership, trigger-disable, blanket DML,
 or direct transport-table privileges. Repository source checks do not prove real
@@ -188,8 +204,10 @@ python3 scripts/matrix_operator_postgres_regression.py
 
 The operator runner executes historical migrations and regressions before the v3
 runtime revocation, then applies migration 0006 twice and executes missing,
-changed, extended, replay, privilege, transition-count, and observation-count
-checks against disposable PostgreSQL 16. A source checker or zero-step hosted job
+changed, extended, replay, privilege, transition-count, observation-count, and
+task/invocation checks against disposable PostgreSQL 16. Adapter package tests
+also prove that malformed success envelopes and missing, changed, or extended
+bindings cannot leave the facade as 2xx. A source checker or zero-step hosted job
 cannot substitute for a non-empty executed qualification result.
 
 ## Deployment and operations
@@ -201,20 +219,22 @@ operator migration head 0006. Record image, source/tree, profile, credential IDs
 delivery fingerprint, result digest, and observation digest without secrets.
 
 Monitor ingress failures, payload-hash conflicts, reserved-binding rejection,
-unknown-outcome age, dead letters, lookup failures, reconciliation success,
-replay, collision, observation age, poison holds, cursor age, receipt conflicts,
-and queue age. Rollback first stops ingress, polling, relay claims, and
-reconciliation; preserves every immutable delivery/result/observation identity;
-and deploys only a schema-compatible prior binary or reviewed forward repair.
-Deleting or replaying migrations is not rollback.
+unknown-outcome age, dead letters, lookup failures, reconciliation
+success-response holds, task/invocation mismatches, replay, collision,
+observation age, poison holds, cursor age, receipt conflicts, and queue age.
+Rollback first stops ingress, polling, relay claims, and reconciliation; preserves
+every immutable delivery/result/observation identity; and deploys only a
+schema-compatible prior binary or reviewed forward repair. Deleting or replaying
+migrations is not rollback.
 
 ## Compatibility and change protocol
 
 The validated facade remains the only construction path. Re-exposing private
 constructors, restoring local provider execution, weakening profile conflict
-handling, accepting identity-only or unbound results, or restoring runtime
-access to v1/v2 is a breaking security change. Historical functions remain only
-for owner-controlled compatibility and regression ordering.
+handling, accepting identity-only or unbound results, accepting a task without
+its exact raw invocation, or restoring runtime access to v1/v2 is a breaking
+security change. Historical functions remain only for owner-controlled
+compatibility and regression ordering.
 
 Changes to fingerprint encoding, relay binding fields, result/evidence schemas,
 reconcilable error classes, grants, assertion semantics, cursor/filter scope, or
