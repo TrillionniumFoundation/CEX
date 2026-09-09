@@ -5,7 +5,7 @@ Candidate sequence: `54`
 Workspace: `23` Cargo members (`18` first-party + `5` vendored TRNM packages)  
 Migration head: `0088_enforce_provider_terminal_evidence_binding.sql`  
 Matrix transport head: `0005_filter_definition_pins.sql`  
-Matrix operator head: `0004_adapter_result_runtime_reconciliation.sql`  
+Matrix operator head: `0006_adapter_result_embedded_delivery_binding.sql`  
 Repository qualification: `PENDING_EXACT_SHA_HOSTED_EVIDENCE`  
 Production authorization: `not_granted`
 
@@ -47,11 +47,11 @@ Agent declaration and no active OpenClaw/Ollama/provider-dispatch configuration.
 | `execution-service` | repository candidate | lifecycle, external-Agent evidence and settlement | default local execution absent | compile/test, external Agent integration and settlement recovery |
 | `audit-service` | repository candidate | authenticated append, hash chain and outbox | source/migration/docs present | recovery, custody/retention and independent review |
 | `capability-service` | supporting alpha | strict read-only external Agent declarations | external-only registry implemented | hosted tests and external issuer governance |
-| `consumer-entry-api` | supporting alpha | sessions, identity mapping and bounded projections | broad source documented | bounded-context decomposition, route/schema inventory and authority rehearsal |
+| `consumer-entry-api` | supporting alpha | sessions, identity mapping, bounded projections and read-only result recovery | v3 persisted delivery plus task/invocation response boundary documented | exact-SHA tests, recovery rehearsal and authority review |
 | `hepta-research-league` | functional alpha | research facts, consent, evidence and review | PostgreSQL/lint contracts present | hosted recovery, representative load and independent review |
 | `paper-raid-bff` | supporting alpha | browser sessions, CSRF and invite-alpha edge | boundary/runbook/tests present | real IdP/deployment, accessibility/load and custody |
-| `matrix-entry-adapter` | supporting alpha | Matrix validation, normalization and read-only recovery | lookup plus operator migrations `0001`–`0004` implemented | PostgreSQL 16, real response-loss and homeserver qualification |
-| `matrix-bot-relay` | supporting alpha | durable relay and scoped Matrix sends | unknown outcomes hold; one-delivery reconciler implemented | hosted PostgreSQL and end-to-end response-loss rehearsal |
+| `matrix-entry-adapter` | supporting alpha | Matrix validation, normalization and read-only recovery | relay binding, dual response guards and operator migrations `0001`–`0006` implemented | PostgreSQL 16, exact-SHA compile/test, real response-loss and homeserver qualification |
+| `matrix-bot-relay` | supporting alpha | durable relay and scoped Matrix sends | unknown outcomes hold; delivery ID and payload digest propagated | hosted PostgreSQL and end-to-end response-loss rehearsal |
 | `matrix-bot-poller` | supporting alpha | polling, cursor and stream-scope transport | durable fencing/filter contracts present | real homeserver and long-gap recovery evidence |
 | `trnm-economy-protocol` | supporting alpha vendor | economy policy and entitlement wire shapes | catalog/documented | independent provenance and consumer conformance |
 | `trnm-finality-types` | supporting alpha vendor | receipt/quorum/proof types | pinned/documented | trust-anchor lifecycle and hosted vectors |
@@ -67,9 +67,16 @@ Sequence 54 source contains:
 - external-Agent-only Capability and Execution boundaries;
 - exact Ledger, Gateway, Execution, Audit and TRNM identities and recovery paths;
 - durable Matrix transport, cursor, filter, poison, send-binding and receipt state;
-- read-only principal-bound Matrix result lookup;
-- operator migration 0004 fixing first-success result-payload persistence;
-- a one-delivery reconciliation command that never replays the business request;
+- relay-origin canonical payload hashing and reserved eight-field delivery binding;
+- authenticated read-only Consumer Entry result lookup whose event key is only a
+  candidate locator;
+- independent Consumer and Adapter success-response guards requiring exact
+  top-level/nested delivery bindings and `task_id == raw.invocation_id`;
+- operator migrations 0004–0006 covering payload persistence, stable retry,
+  append-only observations, row-locked causal binding, v2 runtime revocation and
+  v3 embedded result/task validation;
+- a one-delivery v3 reconciliation command with closed PostgreSQL transport that
+  never replays the business request or sends a Matrix event;
 - bounded vendor provenance and the test-only finality-verifier patch ledger;
 - Rust 1.98.1, advisory policy and exact candidate evidence machinery.
 
@@ -104,9 +111,10 @@ approval. A desired ruleset JSON is not live enforcement.
 Any source, workflow, migration, security, test, module contract, external
 component contract, traceability or normative-document change creates a new
 candidate tree. Update the sole shared trigger once after the complete change,
-run every authoritative context on the unchanged final tuple, retain the generated
-manifest and obtain fresh independent review.
+run every authoritative context on the unchanged final tuple, retain the
+generated manifest and obtain fresh independent review.
 
 `production_authorization` remains `not_granted` unless the external evidence
-bundle and final human decision explicitly grant activation. Repository automation
-may reject or qualify a candidate; it may not manufacture production authority.
+bundle and final human decision explicitly grant activation. Repository
+automation may reject or qualify a candidate; it may not manufacture production
+authority.
