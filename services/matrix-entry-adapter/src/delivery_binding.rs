@@ -319,9 +319,10 @@ mod tests {
 
     fn test_router(policy: DeliveryBindingPolicy) -> Router {
         Router::new()
-            .route(MATRIX_EVENT_PATH, post(|Json(value): Json<Value>| async move {
-                Json(value)
-            }))
+            .route(
+                MATRIX_EVENT_PATH,
+                post(|Json(value): Json<Value>| async move { Json(value) }),
+            )
             .layer(axum::middleware::from_fn_with_state(
                 policy,
                 enforce_delivery_binding,
@@ -439,7 +440,10 @@ mod tests {
             .uri(MATRIX_EVENT_PATH)
             .header("content-type", "application/json")
             .header("x-cex-delivery-id", DELIVERY_ID)
-            .append_header("x-cex-delivery-id", "65000000-0000-4000-8000-000000000002")
+            .header(
+                "x-cex-delivery-id",
+                "65000000-0000-4000-8000-000000000002",
+            )
             .header("x-cex-payload-sha256", sha256_prefixed(&raw))
             .header("x-idempotency-key", DELIVERY_ID)
             .header("idempotency-key", DELIVERY_ID)
@@ -454,7 +458,10 @@ mod tests {
             .header("content-type", "application/json")
             .header("x-cex-delivery-id", DELIVERY_ID)
             .header("x-cex-payload-sha256", sha256_prefixed(&raw))
-            .header("x-idempotency-key", "65000000-0000-4000-8000-000000000002")
+            .header(
+                "x-idempotency-key",
+                "65000000-0000-4000-8000-000000000002",
+            )
             .header("idempotency-key", DELIVERY_ID)
             .body(Body::from(raw))
             .unwrap();
