@@ -17,6 +17,7 @@
   "postgres_runner": "scripts/matrix_operator_postgres_regression.py",
   "operator_migration_head": "services/matrix-entry-adapter/operator-migrations/0006_adapter_result_embedded_delivery_binding.sql",
   "hosted_gate": ".github/workflows/matrix-review-repair-regression.yml",
+  "review_packet": "docs/traceability/sequence54-matrix-security-v3-review-packet.json",
   "production_authorization": "not_granted",
   "requirements": [
     {
