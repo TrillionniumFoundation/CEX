@@ -12,13 +12,22 @@ ROOT = Path(__file__).resolve().parents[1]
 FILES = {
     "adapter_facade": "services/matrix-entry-adapter/src/lib.rs",
     "adapter_binding": "services/matrix-entry-adapter/src/delivery_binding.rs",
+    "adapter_response_binding": (
+        "services/matrix-entry-adapter/src/reconciliation_response_binding.rs"
+    ),
     "consumer_main": "services/consumer-entry-api/src/main.rs",
     "consumer_lookup": "services/consumer-entry-api/src/matrix_result_lookup.rs",
+    "consumer_response_binding": (
+        "services/consumer-entry-api/src/matrix_result_response_binding.rs"
+    ),
     "migration": (
         "services/matrix-entry-adapter/operator-migrations/"
         "0006_adapter_result_embedded_delivery_binding.sql"
     ),
     "regression": "scripts/test-matrix-result-embedded-binding-postgres.sql",
+    "task_regression": (
+        "scripts/test-matrix-result-task-invocation-binding-postgres.sql"
+    ),
     "runner": "scripts/matrix_operator_postgres_regression.py",
     "command": "scripts/reconcile-matrix-adapter-result-v3.py",
     "workflow": ".github/workflows/matrix-review-repair-regression.yml",
@@ -106,11 +115,13 @@ def main() -> int:
         sources["adapter_facade"],
         (
             "mod delivery_binding;",
+            "mod reconciliation_response_binding;",
             "DeliveryBindingPolicy::from_config",
             "middleware::from_fn_with_state",
             "delivery_binding::enforce_delivery_binding",
+            "reconciliation_response_binding::enforce_reconciliation_response_binding",
         ),
-        "adapter facade delivery-binding layer",
+        "adapter facade delivery/result-binding layers",
     )
     failures += require(
         sources["adapter_binding"],
@@ -139,12 +150,37 @@ def main() -> int:
         ),
         "adapter relay-header binding",
     )
+    failures += require(
+        sources["adapter_response_binding"],
+        (
+            'const RECONCILIATION_PATH: &str = "/v1/matrix/results/lookup";',
+            "enforce_reconciliation_response_binding",
+            'Some("task_result_reconciled")',
+            "RECONCILIATION_SCHEMA",
+            "RECONCILIATION_SOURCE",
+            "RECONCILIATION_CAUSAL_BINDING",
+            '.and_then(|raw| raw.get("invocation_id"))',
+            "if invocation_id != task_id",
+            ".and_then(|metadata| metadata.get(DELIVERY_BINDING_FIELD))",
+            "binding.len() != 8",
+            "task_invocation_and_response_envelope_are_mandatory",
+            "changed_or_extended_binding_is_rejected",
+        ),
+        "adapter success response binding",
+    )
+    failures += forbid(
+        sources["adapter_response_binding"],
+        ("unwrap_or_default()", "shell=True", "unsafe {"),
+        "adapter success response binding",
+    )
 
     failures += require(
         sources["consumer_main"],
         (
             "mod matrix_result_lookup;",
+            "mod matrix_result_response_binding;",
             "matrix_result_lookup::router",
+            "matrix_result_response_binding::enforce_matrix_result_response_binding",
         ),
         "consumer canonical lookup router",
     )
@@ -172,11 +208,33 @@ def main() -> int:
         ),
         "consumer persisted result binding",
     )
+    failures += require(
+        sources["consumer_response_binding"],
+        (
+            'const LOOKUP_PATH: &str = "/v1/matrix/messages/result";',
+            "enforce_matrix_result_response_binding",
+            'Some("cex.matrix.result-lookup.v1")',
+            'value.get("result_delivery_binding")',
+            '.and_then(|raw| raw.get("invocation_id"))',
+            "if invocation_id != task_id",
+            "if nested_binding != top_binding",
+            "missing_or_changed_invocation_fails_closed",
+            "changed_top_or_nested_delivery_binding_fails_closed",
+        ),
+        "consumer lookup success response binding",
+    )
+    failures += forbid(
+        sources["consumer_response_binding"],
+        ("unwrap_or_default()", "shell=True", "unsafe {"),
+        "consumer lookup success response binding",
+    )
 
     failures += require(
         sources["migration"],
         (
             "cex_matrix_reconcile_adapter_result_v3",
+            "matrix_adapter_result_task_invocation_mismatch_v3",
+            "p_result_payload -> 'raw' ->> 'invocation_id'",
             "{source,metadata,metadata,cex_delivery_binding}",
             "jsonb_object_length(embedded_binding) <> 8",
             "matrix-bot-relay-headers-v1",
@@ -208,10 +266,22 @@ def main() -> int:
         "embedded-binding PostgreSQL regression",
     )
     failures += require(
+        sources["task_regression"],
+        (
+            "matrix_task_invocation_missing_accepted",
+            "matrix_task_invocation_mismatch_accepted",
+            "matrix_adapter_result_task_invocation_mismatch_v3",
+            "matrix_missing_delivery_binding_accepted",
+            "matrix_adapter_result_embedded_binding_invalid_v3",
+        ),
+        "task invocation PostgreSQL regression",
+    )
+    failures += require(
         sources["runner"],
         (
             '"0006_adapter_result_embedded_delivery_binding.sql"',
             '"scripts/test-matrix-result-embedded-binding-postgres.sql"',
+            '"scripts/test-matrix-result-task-invocation-binding-postgres.sql"',
             'SCHEMA = "cex.matrix-operator-postgres-regression.v4"',
             "BASE_MIGRATIONS",
             "SECURITY_MIGRATIONS",
@@ -230,11 +300,14 @@ def main() -> int:
             'BINDING_SCHEMA = "cex.matrix.delivery-binding.v1"',
             'BINDING_SOURCE = "matrix-bot-relay-headers-v1"',
             "validate_persisted_binding(",
+            'raw.get("invocation_id") != task_id',
+            "lookup_forwarded_task_invocation_mismatch_v3",
             "if set(binding) != required",
             "V2_FUNCTION",
             "V3_FUNCTION",
             "rewritten.count(V3_FUNCTION) != 1",
             "changed persisted delivery binding accepted",
+            "missing or changed task invocation accepted",
         ),
         "operator command v3",
     )
@@ -262,6 +335,7 @@ def main() -> int:
             "x-cex-delivery-id",
             "x-cex-payload-sha256",
             "unbound cache entry fails closed",
+            "reconciliation_response_binding.rs",
             "cex_matrix_reconcile_adapter_result_v3",
             "production_authorization=not_granted",
         ),
@@ -282,12 +356,15 @@ def main() -> int:
         json.dumps(
             {
                 "schema": (
-                    "cex.matrix.result-reconciliation-security-source-check.v2"
+                    "cex.matrix.result-reconciliation-security-source-check.v3"
                 ),
                 "status": "ok",
                 "relay_payload_hash_verified": True,
                 "reserved_binding_injected": True,
                 "persisted_result_binding_required": True,
+                "consumer_success_boundary_revalidated": True,
+                "adapter_success_boundary_revalidated": True,
+                "task_invocation_binding_required": True,
                 "database_embedded_binding_required": True,
                 "runtime_v2_execute_revoked": True,
                 "runtime_v3_execute_granted": True,
