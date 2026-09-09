@@ -1,0 +1,183 @@
+name: sequence54-known-blocker-fallback-v4
+
+on:
+  push:
+    branches:
+      - work/sequence54-round2-staging-20260909
+    paths:
+      - '.github/workflows/sequence54-known-blocker-fallback-v4.yml'
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: sequence54-known-blocker-fallback-v4
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+  STAGING_BRANCH: work/sequence54-round2-staging-20260909
+  RUST_TOOLCHAIN: '1.98.1'
+  RUST_RELEASE_COMMIT: '48a229ceaefd4985c50990b14116b6d856af0985'
+  CARGO_INCREMENTAL: '0'
+  CARGO_TERM_COLOR: never
+
+jobs:
+  fallback:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 210
+    steps:
+      - name: Wait for primary controller terminal state
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          workflow='sequence54-known-blocker-autoclose-v3.yml'
+          for attempt in $(seq 1 360); do
+            item="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs?branch=$STAGING_BRANCH&per_page=1" --jq '.workflow_runs[0] // {}')"
+            run_id="$(jq -r '.id // empty' <<<"$item")"
+            status="$(jq -r '.status // empty' <<<"$item")"
+            conclusion="$(jq -r '.conclusion // empty' <<<"$item")"
+            if test -n "$run_id" && test "$status" = completed; then
+              printf 'primary_run_id=%s\nprimary_conclusion=%s\n' "$run_id" "$conclusion" | tee /tmp/primary-result.txt
+              exit 0
+            fi
+            sleep 15
+          done
+          echo 'primary controller did not reach a terminal state' >&2
+          exit 1
+
+      - name: Checkout target branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          path: target
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Checkout staging helper
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.STAGING_BRANCH }}
+          path: staging
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Determine whether fallback is required
+        id: decision
+        shell: bash
+        run: |
+          set -euo pipefail
+          start_sha="$(git -C target rev-parse HEAD)"
+          start_tree="$(git -C target rev-parse 'HEAD^{tree}')"
+          echo "sha=$start_sha" >> "$GITHUB_OUTPUT"
+          echo "tree=$start_tree" >> "$GITHUB_OUTPUT"
+          if grep -Fq 'unapproved fixed Rust identity' target/scripts/rust_toolchain_convergence_v4.py \
+            && grep -Fq 'source_string_literals' target/scripts/check-consumer-projection-boundary.py \
+            && awk '
+                 /name: Checkout GitHub prospective merge object/ {inside=1}
+                 inside && /path: \.candidate-identity\/merge/ {path=1}
+                 inside && path && /fetch-depth: 2/ {ok=1}
+                 inside && /^      - name:/ && !/Checkout GitHub prospective merge object/ {inside=0; path=0}
+                 END {exit(ok ? 0 : 1)}
+               ' target/.github/workflows/p0-rust-toolchain-convergence.yml; then
+            echo 'required=false' >> "$GITHUB_OUTPUT"
+            echo 'Primary repair is already present; fallback will only requalify.'
+          else
+            echo 'required=true' >> "$GITHUB_OUTPUT"
+            echo 'Primary repair is absent; applying idempotent fallback.'
+          fi
+
+      - name: Apply fallback repair
+        if: steps.decision.outputs.required == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 staging/scripts/sequence54_known_blocker_repair_v4.py \
+            target \
+            --report /tmp/sequence54-fallback-repair.json
+
+      - name: Source-contract qualification
+        working-directory: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            scripts/rust_toolchain_convergence_v4.py \
+            scripts/check-consumer-projection-boundary.py \
+            scripts/test-consumer-route-contract.py
+          python3 scripts/check-rust-toolchain-convergence.py
+          python3 scripts/test-consumer-route-contract.py
+          python3 scripts/test-semantic-source-integration.py
+          python3 scripts/generate-repository-semantics.py --check
+          python3 scripts/check-consumer-projection-boundary.py
+          python3 scripts/check-sequence54-integration.py
+          python3 scripts/check-sequence54-rustsec-admission.py
+          python3 scripts/check-development-docs.py
+          python3 scripts/check-module-documentation.py
+          git diff --check
+
+      - name: Install exact Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+
+      - name: Locked-workspace qualification
+        working-directory: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(rustc --version | awk '{print $2}')" = "$RUST_TOOLCHAIN"
+          rustc --version --verbose | tee /tmp/rustc-version.txt
+          grep -Fx "commit-hash: $RUST_RELEASE_COMMIT" /tmp/rustc-version.txt
+          cargo metadata --locked --format-version 1 >/tmp/cargo-metadata.json
+          test -s /tmp/cargo-metadata.json
+          cargo fmt --all -- --check
+          cargo check --workspace --all-targets --locked
+          cargo test --locked -p consumer-entry-api --all-targets --no-fail-fast
+          git diff --check
+
+      - name: Compare-and-swap publish fallback
+        if: steps.decision.outputs.required == 'true'
+        working-directory: target
+        shell: bash
+        env:
+          START_SHA: ${{ steps.decision.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git add \
+            .github/workflows/p0-rust-toolchain-convergence.yml \
+            scripts/rust_toolchain_convergence_v4.py \
+            docs/security/rust-toolchain-surfaces-v1.json \
+            scripts/check-consumer-projection-boundary.py \
+            scripts/test-consumer-route-contract.py \
+            docs/modules/consumer-entry-api.md
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          git config user.name 'sequence54-fallback[bot]'
+          git config user.email 'sequence54-fallback[bot]@users.noreply.github.com'
+          git commit -m 'fix(sequence54): close admission blockers with fallback v4' \
+            -m 'Idempotent fallback for syntax-bound Rust identities, prospective-merge parent visibility and executable-literal Consumer projection guards.' \
+            -m 'production-authorization: not_granted'
+          git fetch --no-tags origin "$TARGET_BRANCH"
+          test "$(git rev-parse FETCH_HEAD)" = "$START_SHA"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## Sequence 54 known-blocker fallback v4'
+            echo
+            test -f /tmp/primary-result.txt && sed 's/^/- /' /tmp/primary-result.txt || true
+            echo "- Start SHA: \`${{ steps.decision.outputs.sha }}\`"
+            echo "- Fallback required: \`${{ steps.decision.outputs.required }}\`"
+            echo '- Force push: `false`'
+            echo '- Administrator bypass: `false`'
+            echo '- Production authorization: `not_granted`'
+            echo '- Merge authorization: `not_granted`'
+          } >> "$GITHUB_STEP_SUMMARY"
