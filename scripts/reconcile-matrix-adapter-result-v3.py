@@ -42,6 +42,16 @@ def validate_persisted_binding(
     forwarded: dict[str, Any],
     expected: dict[str, str],
 ) -> dict[str, str]:
+    task_id = forwarded.get("task_id")
+    raw = forwarded.get("raw")
+    if (
+        not isinstance(task_id, str)
+        or not 1 <= len(task_id.encode("utf-8")) <= 128
+        or not isinstance(raw, dict)
+        or raw.get("invocation_id") != task_id
+    ):
+        raise V3BindingError("lookup_forwarded_task_invocation_mismatch_v3")
+
     source = forwarded.get("source")
     if not isinstance(source, dict):
         raise V3BindingError("lookup_forwarded_source_invalid_v3")
@@ -191,6 +201,19 @@ def self_test(core: ModuleType) -> None:
         pass
     else:
         raise AssertionError("changed persisted delivery binding accepted")
+
+    for raw_value in ({}, {"invocation_id": "other-task"}):
+        changed = json.loads(raw)
+        changed["forwarded"]["raw"] = raw_value
+        try:
+            core.parse_lookup_response(
+                json.dumps(changed, separators=(",", ":"), sort_keys=True).encode(),
+                expected,
+            )
+        except (V3BindingError, core.ReconciliationError):
+            pass
+        else:
+            raise AssertionError("missing or changed task invocation accepted")
 
     args = argparse.Namespace(
         delivery_id=expected["delivery_id"],
