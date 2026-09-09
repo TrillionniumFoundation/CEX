@@ -71,7 +71,9 @@ jobs:
           tool: cargo-audit@0.22.2,cargo-deny@0.20.2
 
       - name: Validate Sequence 54 non-regression contract
-        run: python3 scripts/check-sequence54-integration.py
+        run: |
+          python3 scripts/check-sequence54-integration.py
+          python3 scripts/check-sequence54-matrix-v3-admission.py
 
       - name: Validate Sequence 54 RustSec admission wiring
         run: python3 scripts/check-sequence54-rustsec-admission.py
