@@ -57,6 +57,9 @@ Supported actions are nonblank bounded `m.room.message` / `m.text`. Known other
 message types are ignored, edits (`m.replace`) do not create another invocation,
 and malformed supported messages become poison. Normal message normalization
 and delivery-ID derivation are unchanged, preserving existing healthy replays.
+Durable source-event dedupe is keyed by the immutable Matrix event identity and
+payload commitment; an exact replay is harmless, while changed bytes under the
+same identity fail closed as a collision rather than creating a second task.
 
 ## Persistence, concurrency, and recovery
 
