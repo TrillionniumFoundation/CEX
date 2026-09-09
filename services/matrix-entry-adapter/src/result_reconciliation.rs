@@ -21,6 +21,7 @@ type ValidationResult<T> = Result<T, ValidationError>;
 const RECONCILIATION_PATH: &str = "/v1/matrix/results/lookup";
 const CONSUMER_LOOKUP_PATH: &str = "/v1/matrix/messages/result";
 const LOOKUP_SOURCE_KIND: &str = "matrix_result_lookup";
+const DELIVERY_FINGERPRINT_DOMAIN: &str = "cex.matrix.adapter-result-delivery.v1";
 const MAX_REQUEST_BYTES: usize = 16 * 1024;
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 
@@ -44,9 +45,12 @@ struct ValidationError;
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct MatrixResultReconciliationRequest {
+    delivery_id: String,
     event_id: String,
     room_id: String,
     sender: String,
+    payload_sha256: String,
+    request_fingerprint: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -96,13 +100,18 @@ async fn reconcile_matrix_result(
     headers: HeaderMap,
     Json(request): Json<MatrixResultReconciliationRequest>,
 ) -> Response {
-    if validate_matrix_identifier(&request.event_id, '$').is_err()
+    let expected_fingerprint = lookup_request_fingerprint(&request);
+    if validate_delivery_id(&request.delivery_id).is_err()
+        || validate_matrix_identifier(&request.event_id, '$').is_err()
         || validate_matrix_identifier(&request.room_id, '!').is_err()
         || validate_matrix_identifier(&request.sender, '@').is_err()
+        || validate_sha256(&request.payload_sha256).is_err()
+        || validate_sha256(&request.request_fingerprint).is_err()
+        || request.request_fingerprint != expected_fingerprint
     {
         return reconciliation_error(
             StatusCode::BAD_REQUEST,
-            "matrix_result_reconciliation_invalid_identity",
+            "matrix_result_reconciliation_invalid_delivery_binding",
             Some(&request),
         );
     }
@@ -142,9 +151,12 @@ async fn reconcile_matrix_result(
     };
 
     let lookup_body = json!({
+        "delivery_id": &request.delivery_id,
         "event_id": &request.event_id,
         "matrix_user_id": &request.sender,
         "room_id": &request.room_id,
+        "payload_sha256": &request.payload_sha256,
+        "request_fingerprint": &request.request_fingerprint,
     });
     let (assertion, signature) = match sign_lookup_assertion(&state, &request, signing_secret) {
         Ok(value) => value,
@@ -243,15 +255,19 @@ async fn reconcile_matrix_result(
         Json(json!({
             "accepted": true,
             "action": "task_result_reconciled",
+            "delivery_id": request.delivery_id,
             "event_id": request.event_id,
             "room_id": request.room_id,
             "sender": request.sender,
+            "payload_sha256": request.payload_sha256,
+            "request_fingerprint": request.request_fingerprint,
             "forwarded": forwarded,
             "projected_reply": null,
             "reconciliation": {
-                "schema": "cex.matrix.adapter-result-reconciliation.v1",
+                "schema": "cex.matrix.adapter-result-reconciliation.v2",
                 "source": "consumer_entry_durable_replay",
-                "read_only": true
+                "read_only": true,
+                "causal_binding": "delivery_payload_fingerprint"
             },
             "generated_at": Utc::now().to_rfc3339(),
             "production_authorization": "not_granted"
@@ -268,14 +284,13 @@ fn sign_lookup_assertion(
     if state.issuer.is_empty() || state.audience.is_empty() || state.ttl_secs == 0 {
         return Err(ValidationError);
     }
+    let fingerprint = lookup_request_fingerprint(request);
+    if request.request_fingerprint != fingerprint {
+        return Err(ValidationError);
+    }
     let issued_at_epoch = Utc::now().timestamp();
     let ttl = i64::try_from(state.ttl_secs).map_err(|_| ValidationError)?;
     let expires_at_epoch = issued_at_epoch.checked_add(ttl).ok_or(ValidationError)?;
-    let lookup = MatrixResultLookupIdentity {
-        event_id: &request.event_id,
-        matrix_user_id: &request.sender,
-        room_id: &request.room_id,
-    };
     let claims = LookupSessionClaims {
         version: 1,
         issuer: &state.issuer,
@@ -283,7 +298,7 @@ fn sign_lookup_assertion(
         subject: &request.sender,
         source_kind: LOOKUP_SOURCE_KIND,
         audience: Some(&state.audience),
-        request_fingerprint: Some(lookup_request_fingerprint(&lookup)),
+        request_fingerprint: Some(fingerprint),
         room_id: Some(&request.room_id),
         session_id: None,
         org_id: None,
@@ -291,9 +306,8 @@ fn sign_lookup_assertion(
         issued_at_epoch,
         expires_at_epoch,
     };
-    let assertion = URL_SAFE_NO_PAD.encode(
-        serde_json::to_vec(&claims).map_err(|_| ValidationError)?,
-    );
+    let assertion =
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).map_err(|_| ValidationError)?);
     let mut mac =
         HmacSha256::new_from_slice(secret.as_bytes()).map_err(|_| ValidationError)?;
     mac.update(assertion.as_bytes());
@@ -301,19 +315,15 @@ fn sign_lookup_assertion(
     Ok((assertion, signature))
 }
 
-struct MatrixResultLookupIdentity<'a> {
-    event_id: &'a str,
-    matrix_user_id: &'a str,
-    room_id: &'a str,
-}
-
-fn lookup_request_fingerprint(request: &MatrixResultLookupIdentity<'_>) -> String {
+fn lookup_request_fingerprint(request: &MatrixResultReconciliationRequest) -> String {
     let mut hasher = Sha256::new();
     for value in [
-        "cex.matrix.result-lookup.v1",
-        request.event_id,
-        request.matrix_user_id,
-        request.room_id,
+        DELIVERY_FINGERPRINT_DOMAIN,
+        request.delivery_id.as_str(),
+        request.payload_sha256.as_str(),
+        request.event_id.as_str(),
+        request.sender.as_str(),
+        request.room_id.as_str(),
     ] {
         hasher.update((value.len() as u64).to_be_bytes());
         hasher.update(value.as_bytes());
@@ -371,16 +381,19 @@ fn validate_lookup_response(
 ) -> ValidationResult<Value> {
     if value.get("schema").and_then(Value::as_str) != Some("cex.matrix.result-lookup.v1")
         || value.get("resolved").and_then(Value::as_bool) != Some(true)
+        || value.get("delivery_id").and_then(Value::as_str) != Some(request.delivery_id.as_str())
         || value.get("event_id").and_then(Value::as_str) != Some(request.event_id.as_str())
         || value.get("matrix_user_id").and_then(Value::as_str) != Some(request.sender.as_str())
         || value.get("room_id").and_then(Value::as_str) != Some(request.room_id.as_str())
+        || value.get("payload_sha256").and_then(Value::as_str)
+            != Some(request.payload_sha256.as_str())
+        || value.get("request_fingerprint").and_then(Value::as_str)
+            != Some(request.request_fingerprint.as_str())
+        || request.request_fingerprint != lookup_request_fingerprint(request)
     {
         return Err(ValidationError);
     }
-    let response = value
-        .get("response")
-        .cloned()
-        .ok_or(ValidationError)?;
+    let response = value.get("response").cloned().ok_or(ValidationError)?;
     let source = response
         .get("source")
         .and_then(Value::as_object)
@@ -392,12 +405,55 @@ fn validate_lookup_response(
     {
         return Err(ValidationError);
     }
+    let identity_scope = source
+        .get("identity_scope")
+        .and_then(Value::as_object)
+        .ok_or(ValidationError)?;
+    if identity_scope.get("user_id").and_then(Value::as_str)
+        != Some(request.sender.as_str())
+        || identity_scope.get("room_id").and_then(Value::as_str)
+            != Some(request.room_id.as_str())
+    {
+        return Err(ValidationError);
+    }
     response
         .get("task_id")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty() && value.len() <= 128)
         .ok_or(ValidationError)?;
     Ok(response)
+}
+
+fn validate_delivery_id(value: &str) -> ValidationResult<()> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 36 {
+        return Err(ValidationError);
+    }
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        if matches!(index, 8 | 13 | 18 | 23) {
+            if byte != b'-' {
+                return Err(ValidationError);
+            }
+        } else if !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte) {
+            return Err(ValidationError);
+        }
+    }
+    Ok(())
+}
+
+fn validate_sha256(value: &str) -> ValidationResult<()> {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        return Err(ValidationError);
+    };
+    if hex.len() == 64
+        && hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        Ok(())
+    } else {
+        Err(ValidationError)
+    }
 }
 
 fn validate_matrix_identifier(value: &str, prefix: char) -> ValidationResult<()> {
@@ -431,9 +487,12 @@ fn reconciliation_error(
 ) -> Response {
     let identity = request.map(|request| {
         json!({
+            "delivery_id": &request.delivery_id,
             "event_id": &request.event_id,
             "room_id": &request.room_id,
             "sender": &request.sender,
+            "payload_sha256": &request.payload_sha256,
+            "request_fingerprint": &request.request_fingerprint,
         })
     });
     (
@@ -455,11 +514,16 @@ mod tests {
     use super::*;
 
     fn request() -> MatrixResultReconciliationRequest {
-        MatrixResultReconciliationRequest {
+        let mut request = MatrixResultReconciliationRequest {
+            delivery_id: "61000000-0000-4000-8000-000000000001".to_string(),
             event_id: "$event".to_string(),
             room_id: "!room:example".to_string(),
             sender: "@alice:example".to_string(),
-        }
+            payload_sha256: format!("sha256:{}", "2".repeat(64)),
+            request_fingerprint: String::new(),
+        };
+        request.request_fingerprint = lookup_request_fingerprint(&request);
+        request
     }
 
     #[test]
@@ -479,26 +543,65 @@ mod tests {
     }
 
     #[test]
-    fn lookup_response_is_bound_to_the_original_matrix_principal() {
+    fn delivery_fingerprint_changes_with_every_authority_component() {
+        let expected = lookup_request_fingerprint(&request());
+
+        let mut changed = request();
+        changed.delivery_id = "61000000-0000-4000-8000-000000000002".to_string();
+        assert_ne!(lookup_request_fingerprint(&changed), expected);
+
+        let mut changed = request();
+        changed.payload_sha256 = format!("sha256:{}", "3".repeat(64));
+        assert_ne!(lookup_request_fingerprint(&changed), expected);
+
+        let mut changed = request();
+        changed.event_id = "$other".to_string();
+        assert_ne!(lookup_request_fingerprint(&changed), expected);
+
+        let mut changed = request();
+        changed.sender = "@other:example".to_string();
+        assert_ne!(lookup_request_fingerprint(&changed), expected);
+
+        let mut changed = request();
+        changed.room_id = "!other:example".to_string();
+        assert_ne!(lookup_request_fingerprint(&changed), expected);
+    }
+
+    #[test]
+    fn lookup_response_is_bound_to_the_exact_delivery_payload() {
         let request = request();
         let value = json!({
             "schema": "cex.matrix.result-lookup.v1",
             "resolved": true,
+            "delivery_id": request.delivery_id.clone(),
             "event_id": request.event_id.clone(),
             "matrix_user_id": request.sender.clone(),
             "room_id": request.room_id.clone(),
+            "payload_sha256": request.payload_sha256.clone(),
+            "request_fingerprint": request.request_fingerprint.clone(),
             "response": {
                 "task_id": "task-1",
                 "source": {
                     "kind": "matrix_message",
                     "event_id": request.event_id.clone(),
                     "matrix_user_id": request.sender.clone(),
-                    "room_id": request.room_id.clone()
+                    "room_id": request.room_id.clone(),
+                    "identity_scope": {
+                        "user_id": request.sender.clone(),
+                        "room_id": request.room_id.clone()
+                    }
                 }
             }
         });
         assert!(validate_lookup_response(&value, &request).is_ok());
-        for field in ["event_id", "matrix_user_id", "room_id"] {
+        for field in [
+            "delivery_id",
+            "event_id",
+            "matrix_user_id",
+            "room_id",
+            "payload_sha256",
+            "request_fingerprint",
+        ] {
             let mut invalid = value.clone();
             invalid[field] = json!("mismatch");
             assert!(validate_lookup_response(&invalid, &request).is_err());
