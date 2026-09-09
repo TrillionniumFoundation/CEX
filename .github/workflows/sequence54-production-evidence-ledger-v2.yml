@@ -1,0 +1,180 @@
+name: sequence54-production-evidence-ledger-v2
+
+on:
+  push:
+    branches:
+      - work/sequence54-round2-staging-20260909
+    paths:
+      - '.github/workflows/sequence54-production-evidence-ledger-v2.yml'
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: sequence54-production-evidence-ledger-v2
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+  OUTPUT_DIR: run/sequence54-production-evidence
+
+jobs:
+  ledger:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Wait for repaired exact head
+        id: identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 240); do
+            branch="$(gh api "repos/$GITHUB_REPOSITORY/branches/$TARGET_BRANCH")"
+            sha="$(jq -r '.commit.sha' <<<"$branch")"
+            tree="$(jq -r '.commit.commit.tree.sha' <<<"$branch")"
+            toolchain="$(gh api -H 'Accept: application/vnd.github.raw+json' "repos/$GITHUB_REPOSITORY/contents/scripts/rust_toolchain_convergence_v4.py?ref=$sha" 2>/dev/null || true)"
+            if grep -Fq 'unapproved fixed Rust identity' <<<"$toolchain"; then
+              echo "sha=$sha" >> "$GITHUB_OUTPUT"
+              echo "tree=$tree" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo 'repaired exact head was not observed' >&2
+          exit 1
+
+      - name: Create fail-closed production evidence ledger
+        shell: bash
+        env:
+          HEAD_SHA: ${{ steps.identity.outputs.sha }}
+          HEAD_TREE: ${{ steps.identity.outputs.tree }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_DIR"
+          python3 - <<'PY'
+          from datetime import datetime, timezone
+          from pathlib import Path
+          import json
+          import os
+
+          required = {
+              'real_restore_and_pitr': {
+                  'owner_role': 'database_and_disaster_recovery_owner',
+                  'required': ['environment_identity','backup_digest','restore_digest','rpo','rto','data_integrity_result'],
+              },
+              'deployment_cutover_and_rollback': {
+                  'owner_role': 'release_and_operations_owner',
+                  'required': ['release_candidate_digest','deployment_receipt','cutover_receipt','rollback_receipt','rollback_result'],
+              },
+              'world_no_dual_writer': {
+                  'owner_role': 'world_authority_owner',
+                  'required': ['writer_inventory','fencing_receipt','negative_probe','cutover_window','rollback_binding'],
+              },
+              'provider_unknown_outcome': {
+                  'owner_role': 'provider_integration_owner',
+                  'required': ['provider_identity','request_fingerprint','response_loss_receipt','reconciliation_receipt','collision_negative_test'],
+              },
+              'kms_hsm_and_secret_custody': {
+                  'owner_role': 'security_and_key_custody_owner',
+                  'required': ['key_ids','custodian_roles','rotation_receipt','revocation_receipt','break_glass_audit'],
+              },
+              'ha_endurance_and_slo': {
+                  'owner_role': 'sre_owner',
+                  'required': ['ha_topology','failover_receipt','endurance_window','latency_slo','error_budget','alert_receipt'],
+              },
+              'security_acceptance': {
+                  'owner_role': 'independent_security_owner',
+                  'required': ['threat_model_digest','test_scope','findings_disposition','approval_identity'],
+              },
+              'financial_legal_support_commercial': {
+                  'owner_role': 'accountable_business_owners',
+                  'required': ['financial_signoff','legal_signoff','support_readiness','commercial_readiness'],
+              },
+              'accountable_human_go_no_go': {
+                  'owner_role': 'named_release_accountable_human',
+                  'required': ['identity','role','decision','decision_time','exact_subject','evidence_digest'],
+              },
+          }
+          for value in required.values():
+              value['status'] = 'open'
+              value['evidence'] = []
+          ledger = {
+              'schema': 'cex.sequence54-production-evidence-ledger.v2',
+              'generated_at': datetime.now(timezone.utc).isoformat().replace('+00:00','Z'),
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'branch': os.environ['TARGET_BRANCH'],
+              'head_sha': os.environ['HEAD_SHA'],
+              'head_tree': os.environ['HEAD_TREE'],
+              'requirements': required,
+              'all_production_evidence_closed': False,
+              'production_authorization': 'not_granted',
+              'merge_authorization': 'not_granted',
+              'note': 'Disposable CI evidence cannot satisfy real-environment authority requirements.',
+          }
+          Path(os.environ['OUTPUT_DIR'], 'production-evidence-ledger.json').write_text(
+              json.dumps(ledger, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
+          print(json.dumps(ledger, indent=2, sort_keys=True))
+          PY
+
+      - name: Publish accountable evidence request
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          title='Sequence 54 production authority evidence — accountable owners required'
+          body="$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data=json.loads(Path('run/sequence54-production-evidence/production-evidence-ledger.json').read_text())
+          lines=[
+            '<!-- sequence54-production-evidence-ledger-v2 -->',
+            '## Exact subject',
+            '',
+            f"- head: `{data['head_sha']}`",
+            f"- tree: `{data['head_tree']}`",
+            '',
+            '## Required accountable evidence',
+            '',
+            '| Requirement | Accountable role | Status | Required fields |',
+            '|---|---|---|---|',
+          ]
+          for key,item in data['requirements'].items():
+            lines.append(
+                f"| `{key}` | `{item['owner_role']}` | **OPEN** | "
+                f"`{', '.join(item['required'])}` |"
+            )
+          lines += [
+            '',
+            'A CI backup/restore, mock provider, source checker, generated JSON or administrator statement is not real-environment evidence.',
+            '',
+            'Each owner must post an immutable receipt that binds this exact head/tree, the actual environment or authority identity, timestamps, evidence digests, result and signer identity. Changed source invalidates prior receipts.',
+            '',
+            '`all_production_evidence_closed=false`',
+            '`production_authorization=not_granted`',
+            '`merge_authorization=not_granted`',
+          ]
+          print('\n'.join(lines))
+          PY
+          )"
+          number="$(gh issue list --state open --search "$title in:title" --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -n1)"
+          if test -n "$number"; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
+
+      - name: Upload production evidence ledger
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sequence54-production-evidence-ledger-${{ steps.identity.outputs.sha }}
+          path: run/sequence54-production-evidence
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 9
