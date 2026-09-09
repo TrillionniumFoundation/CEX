@@ -13,6 +13,7 @@ concurrency:
 
 env:
   RUSTUP_TOOLCHAIN: '1.98.1'
+  EXPECTED_RUST_RELEASE_COMMIT: '48a229ceaefd4985c50990b14116b6d856af0985'
   CARGO_INCREMENTAL: '0'
   RUST_BACKTRACE: '1'
   RUST_TEST_THREADS: '1'
@@ -79,7 +80,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential ca-certificates clang cmake libpq-dev libssl-dev \
             perl pkg-config protobuf-compiler
-          rustc --version --verbose
+          rustc --version --verbose | tee "$RUNNER_TEMP/cex-rustc-version.txt"
+          grep -Fx "commit-hash: $EXPECTED_RUST_RELEASE_COMMIT" "$RUNNER_TEMP/cex-rustc-version.txt"
           cargo --version --verbose
           rustfmt --version
 

@@ -34,13 +34,11 @@ cleanup() {
 trap cleanup EXIT
 mkdir "$WORK/build" "$WORK/output" "$WORK/cache" "$WORK/context"
 cat > "$WORK/context/Dockerfile" <<'DOCKER'
-FROM rust:1.98.0-bookworm
+FROM rust:1.98.1-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends python3 postgresql-client ca-certificates && rm -rf /var/lib/apt/lists/*
-# This published image is only a bootstrap. Do not compile candidate code with
-# its original 1.98.0 compiler (upstream vtable miscompilation).
+# Keep the container compiler on the repository's exact 1.98.1 policy.
 RUN rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy \
-    && rustup default 1.98.1 \
-    && rustup toolchain uninstall 1.98.0
+    && rustup default 1.98.1
 ENV RUST_VERSION=1.98.1
 DOCKER
 # No repository code or credentials are included in the image build context.

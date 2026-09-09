@@ -80,13 +80,12 @@ DB="cex-trusted-matrix-pg-$SUFFIX"
 IMAGE="cex-trusted-matrix:$SUFFIX"
 
 cat > "$WORK/context/Dockerfile" <<'DOCKER'
-FROM rust:1.98.0-bookworm
+FROM rust:1.98.1-bookworm
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 postgresql-client ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 RUN rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy \
-    && rustup default 1.98.1 \
-    && rustup toolchain uninstall 1.98.0
+    && rustup default 1.98.1
 ENV RUST_VERSION=1.98.1 \
     CARGO_TERM_COLOR=never \
     CARGO_INCREMENTAL=0 \

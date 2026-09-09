@@ -51,6 +51,7 @@ env:
   CARGO_INCREMENTAL: '0'
   RUST_BACKTRACE: '1'
   RUST_TEST_THREADS: '1'
+  EXPECTED_RUST_RELEASE_COMMIT: '48a229ceaefd4985c50990b14116b6d856af0985'
   EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
@@ -128,7 +129,8 @@ jobs:
         run: |
           rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy
           rustup default 1.98.1
-          rustc --version --verbose
+          rustc --version --verbose | tee "$RUNNER_TEMP/trnm-rustc-version.txt"
+          grep -Fx "commit-hash: $EXPECTED_RUST_RELEASE_COMMIT" "$RUNNER_TEMP/trnm-rustc-version.txt"
           cargo --version --verbose
       - name: Enforce committed dependency lock
         id: lock
