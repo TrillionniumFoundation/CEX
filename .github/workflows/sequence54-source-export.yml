@@ -1,0 +1,56 @@
+name: sequence54-source-export
+
+on:
+  push:
+    branches:
+      - work/sequence54-round2-staging-20260909
+    paths:
+      - '.github/workflows/sequence54-source-export.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sequence54-source-export
+  cancel-in-progress: false
+
+env:
+  SOURCE_SHA: 9c3ad1f6ab1bf4414682eec2668710c59dcc9a73
+  SOURCE_TREE: f9ba40e20ddbcf366c7cd642c974b8301065e136
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout immutable Sequence 54 source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify and archive tracked source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+          archive="$RUNNER_TEMP/cex-${SOURCE_SHA}.tar.gz"
+          manifest="$RUNNER_TEMP/cex-${SOURCE_SHA}.manifest.txt"
+          git archive --format=tar.gz --output="$archive" HEAD
+          {
+            printf 'source_sha=%s\n' "$SOURCE_SHA"
+            printf 'source_tree=%s\n' "$SOURCE_TREE"
+            sha256sum "$archive"
+            printf 'production_authorization=not_granted\n'
+          } > "$manifest"
+      - name: Upload immutable source archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cex-sequence54-source-${{ env.SOURCE_SHA }}
+          path: |
+            ${{ runner.temp }}/cex-${{ env.SOURCE_SHA }}.tar.gz
+            ${{ runner.temp }}/cex-${{ env.SOURCE_SHA }}.manifest.txt
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
