@@ -308,8 +308,7 @@ fn sign_lookup_assertion(
     };
     let assertion =
         URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).map_err(|_| ValidationError)?);
-    let mut mac =
-        HmacSha256::new_from_slice(secret.as_bytes()).map_err(|_| ValidationError)?;
+    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).map_err(|_| ValidationError)?;
     mac.update(assertion.as_bytes());
     let signature = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
     Ok((assertion, signature))
@@ -409,10 +408,8 @@ fn validate_lookup_response(
         .get("identity_scope")
         .and_then(Value::as_object)
         .ok_or(ValidationError)?;
-    if identity_scope.get("user_id").and_then(Value::as_str)
-        != Some(request.sender.as_str())
-        || identity_scope.get("room_id").and_then(Value::as_str)
-            != Some(request.room_id.as_str())
+    if identity_scope.get("user_id").and_then(Value::as_str) != Some(request.sender.as_str())
+        || identity_scope.get("room_id").and_then(Value::as_str) != Some(request.room_id.as_str())
     {
         return Err(ValidationError);
     }

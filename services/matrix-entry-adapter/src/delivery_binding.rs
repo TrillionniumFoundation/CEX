@@ -102,7 +102,8 @@ pub(super) async fn enforce_delivery_binding(
         Err(code) => return binding_error(StatusCode::CONFLICT, code),
     };
     parts.headers.remove(CONTENT_LENGTH);
-    next.run(Request::from_parts(parts, Body::from(bound))).await
+    next.run(Request::from_parts(parts, Body::from(bound)))
+        .await
 }
 
 fn unique_header_text(
@@ -130,8 +131,8 @@ fn bind_event_body(
     delivery_id: &str,
     payload_sha256: &str,
 ) -> Result<Vec<u8>, &'static str> {
-    let mut event: Value = serde_json::from_slice(raw)
-        .map_err(|_| "matrix_delivery_binding_invalid_json")?;
+    let mut event: Value =
+        serde_json::from_slice(raw).map_err(|_| "matrix_delivery_binding_invalid_json")?;
     let event_object = event
         .as_object_mut()
         .ok_or("matrix_delivery_binding_event_not_object")?;
@@ -179,8 +180,8 @@ fn bind_event_body(
         }),
     );
 
-    let bound = serde_json::to_vec(&event)
-        .map_err(|_| "matrix_delivery_binding_serialization_failed")?;
+    let bound =
+        serde_json::to_vec(&event).map_err(|_| "matrix_delivery_binding_serialization_failed")?;
     if bound.len() > MAX_EVENT_BODY_BYTES {
         return Err("matrix_delivery_binding_body_too_large");
     }
@@ -440,10 +441,7 @@ mod tests {
             .uri(MATRIX_EVENT_PATH)
             .header("content-type", "application/json")
             .header("x-cex-delivery-id", DELIVERY_ID)
-            .header(
-                "x-cex-delivery-id",
-                "65000000-0000-4000-8000-000000000002",
-            )
+            .header("x-cex-delivery-id", "65000000-0000-4000-8000-000000000002")
             .header("x-cex-payload-sha256", sha256_prefixed(&raw))
             .header("x-idempotency-key", DELIVERY_ID)
             .header("idempotency-key", DELIVERY_ID)
@@ -458,10 +456,7 @@ mod tests {
             .header("content-type", "application/json")
             .header("x-cex-delivery-id", DELIVERY_ID)
             .header("x-cex-payload-sha256", sha256_prefixed(&raw))
-            .header(
-                "x-idempotency-key",
-                "65000000-0000-4000-8000-000000000002",
-            )
+            .header("x-idempotency-key", "65000000-0000-4000-8000-000000000002")
             .header("idempotency-key", DELIVERY_ID)
             .body(Body::from(raw))
             .unwrap();

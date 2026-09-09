@@ -126,7 +126,10 @@ mod tests {
     #[test]
     fn valid_envelope_preserves_values_and_integer_precision() {
         let raw = br#"{"u":18446744073709551615,"i":-9223372036854775808,"f":1.25,"b":true,"v":[false,null,"x",{}]}"#;
-        assert_eq!(decode::<Value>(raw).unwrap(), serde_json::from_slice::<Value>(raw).unwrap());
+        assert_eq!(
+            decode::<Value>(raw).unwrap(),
+            serde_json::from_slice::<Value>(raw).unwrap()
+        );
     }
 
     #[test]
@@ -193,7 +196,11 @@ mod tests {
 
     #[test]
     fn successful_prefix_cannot_hide_a_second_json_value() {
-        for raw in [br#"{} {}"#.as_slice(), br#"{} null"#.as_slice(), br#"{}garbage"#.as_slice()] {
+        for raw in [
+            br#"{} {}"#.as_slice(),
+            br#"{} null"#.as_slice(),
+            br#"{}garbage"#.as_slice(),
+        ] {
             assert!(decode::<Value>(raw).is_err());
         }
         assert!(decode::<Value>(b"{} \r\n\t").is_ok());
@@ -215,14 +222,21 @@ mod tests {
     #[test]
     fn size_and_recursion_limits_remain_active() {
         let too_large = vec![b' '; MAX_RESPONSE_BYTES + 1];
-        assert_eq!(decode::<Value>(&too_large).unwrap_err(), "matrix_response_body_too_large");
+        assert_eq!(
+            decode::<Value>(&too_large).unwrap_err(),
+            "matrix_response_body_too_large"
+        );
         let deep = format!("{{\"nested\":{}null{}}}", "[".repeat(256), "]".repeat(256));
         assert!(decode::<Value>(deep.as_bytes()).is_err());
     }
 
     #[test]
     fn invalid_utf8_and_truncated_objects_fail() {
-        for raw in [b"{\"x\":\"\xff\"}".as_slice(), b"{\"x\":", b"{\"x\":\"\\uD800\"}"] {
+        for raw in [
+            b"{\"x\":\"\xff\"}".as_slice(),
+            b"{\"x\":",
+            b"{\"x\":\"\\uD800\"}",
+        ] {
             assert!(decode::<Value>(raw).is_err());
         }
     }

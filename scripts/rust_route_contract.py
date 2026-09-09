@@ -309,6 +309,11 @@ def extract_routes(source: str) -> list[RouteDeclaration]:
             continue
         end = pairs[begin]
         args = _arguments(tokens, pairs, begin + 1, end)
+        # A zero-argument application method named `route` cannot be an Axum
+        # route registration, whose API requires both path and method-router
+        # arguments. Keep malformed one/three-argument registrations fatal.
+        if not args:
+            continue
         if len(args) != 2 or any(lo >= hi for lo, hi in args):
             raise _error(source, tokens[index].offset, 'route registration must have two arguments')
         lo, hi = _unwrap(tokens, pairs, *args[0])

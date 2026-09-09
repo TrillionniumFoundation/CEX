@@ -92,8 +92,8 @@ pub fn parse_provider_target(provider_target: &str) -> Option<(&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_provider_target, dispatch_via_provider, parse_provider_target,
-        OpenClawCliEnvScope, ProviderDispatchInput, LEGACY_LOCAL_DISPATCH_STATUS, RUNTIME_POLICY,
+        build_provider_target, dispatch_via_provider, parse_provider_target, OpenClawCliEnvScope,
+        ProviderDispatchInput, LEGACY_LOCAL_DISPATCH_STATUS, RUNTIME_POLICY,
     };
     use reqwest::Client;
 

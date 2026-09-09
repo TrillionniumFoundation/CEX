@@ -128,8 +128,8 @@ impl AppState {
             ));
         }
 
-        let value: Value = serde_json::from_str(raw)
-            .map_err(|error| format!("decode {REGISTRY_ENV}: {error}"))?;
+        let value: Value =
+            serde_json::from_str(raw).map_err(|error| format!("decode {REGISTRY_ENV}: {error}"))?;
         let entries = value
             .as_array()
             .ok_or_else(|| format!("{REGISTRY_ENV} must be a JSON array"))?;
@@ -168,10 +168,7 @@ impl AppState {
         let mut map = HashMap::with_capacity(records.len());
         for (index, record) in records.into_iter().enumerate() {
             validate_record(index, &record)?;
-            if map
-                .insert(record.capability_id.clone(), record)
-                .is_some()
-            {
+            if map.insert(record.capability_id.clone(), record).is_some() {
                 return Err(format!(
                     "capability registry contains a duplicate capability_id at index {index}"
                 ));
@@ -343,16 +340,21 @@ fn validate_entry_shape(index: usize, entry: &Value) -> Result<(), String> {
 }
 
 fn validate_record(index: usize, record: &CapabilityRecord) -> Result<(), String> {
-    validate_text(
-        index,
-        "capability_id",
-        &record.capability_id,
-        MAX_ID_BYTES,
-    )?;
+    validate_text(index, "capability_id", &record.capability_id, MAX_ID_BYTES)?;
     validate_text(index, "kind", &record.kind, MAX_ID_BYTES)?;
     validate_text(index, "provider", &record.provider, MAX_ID_BYTES)?;
-    validate_text(index, "provider_ref", &record.provider_ref, MAX_REFERENCE_BYTES)?;
-    validate_text(index, "display_name", &record.display_name, MAX_DISPLAY_BYTES)?;
+    validate_text(
+        index,
+        "provider_ref",
+        &record.provider_ref,
+        MAX_REFERENCE_BYTES,
+    )?;
+    validate_text(
+        index,
+        "display_name",
+        &record.display_name,
+        MAX_DISPLAY_BYTES,
+    )?;
     validate_text(index, "version", &record.version, MAX_VERSION_BYTES)?;
     if let Some(description) = record.description.as_deref() {
         validate_text(index, "description", description, MAX_DESCRIPTION_BYTES)?;
@@ -427,7 +429,14 @@ mod tests {
 
     #[test]
     fn production_aliases_are_production_like() {
-        for raw in ["beta", "stage", "staging", "prod", "production", "trnm-economy"] {
+        for raw in [
+            "beta",
+            "stage",
+            "staging",
+            "prod",
+            "production",
+            "trnm-economy",
+        ] {
             let profile = resolve_profile_values(Some(raw), None, false)
                 .expect("production-like profile must parse");
             assert!(profile.is_production_like());

@@ -192,10 +192,7 @@ async fn lookup_matrix_result(
         .into_response()
 }
 
-fn authorize_ingress(
-    headers: &HeaderMap,
-    config: &ConsumerEntryConfig,
-) -> ValidationResult<()> {
+fn authorize_ingress(headers: &HeaderMap, config: &ConsumerEntryConfig) -> ValidationResult<()> {
     let expected = config.ingress_token.as_deref().ok_or(ValidationError)?;
     let supplied = headers
         .get("x-entry-token")
@@ -263,10 +260,9 @@ fn authorize_lookup_principal(
     }
 
     let now = Utc::now().timestamp();
-    let skew = i64::try_from(config.session_auth_max_clock_skew_secs)
-        .map_err(|_| ValidationError)?;
-    let max_ttl =
-        i64::try_from(config.session_auth_max_ttl_secs).map_err(|_| ValidationError)?;
+    let skew =
+        i64::try_from(config.session_auth_max_clock_skew_secs).map_err(|_| ValidationError)?;
+    let max_ttl = i64::try_from(config.session_auth_max_ttl_secs).map_err(|_| ValidationError)?;
     if claims.issued_at_epoch > now.saturating_add(skew)
         || claims.expires_at_epoch <= claims.issued_at_epoch
         || claims.expires_at_epoch < now.saturating_sub(skew)
@@ -279,8 +275,7 @@ fn authorize_lookup_principal(
     }
 
     let secret = resolve_lookup_secret(config, &claims).ok_or(ValidationError)?;
-    let mut mac =
-        HmacSha256::new_from_slice(secret.as_bytes()).map_err(|_| ValidationError)?;
+    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).map_err(|_| ValidationError)?;
     mac.update(assertion.as_bytes());
     let expected_signature = mac.finalize().into_bytes();
     let supplied_signature = URL_SAFE_NO_PAD
@@ -365,8 +360,7 @@ fn validate_cached_result(
         .ok_or(ValidationError)?;
     if identity_scope.get("user_id").and_then(Value::as_str)
         != Some(request.matrix_user_id.as_str())
-        || identity_scope.get("room_id").and_then(Value::as_str)
-            != Some(request.room_id.as_str())
+        || identity_scope.get("room_id").and_then(Value::as_str) != Some(request.room_id.as_str())
     {
         return Err(ValidationError);
     }
@@ -405,14 +399,11 @@ fn validate_result_delivery_binding(
     if binding.len() != 8
         || binding.get("schema").and_then(Value::as_str) != Some(DELIVERY_BINDING_SCHEMA)
         || binding.get("source").and_then(Value::as_str) != Some(DELIVERY_BINDING_SOURCE)
-        || binding.get("delivery_id").and_then(Value::as_str)
-            != Some(request.delivery_id.as_str())
+        || binding.get("delivery_id").and_then(Value::as_str) != Some(request.delivery_id.as_str())
         || binding.get("payload_sha256").and_then(Value::as_str)
             != Some(request.payload_sha256.as_str())
-        || binding.get("event_id").and_then(Value::as_str)
-            != Some(request.event_id.as_str())
-        || binding.get("room_id").and_then(Value::as_str)
-            != Some(request.room_id.as_str())
+        || binding.get("event_id").and_then(Value::as_str) != Some(request.event_id.as_str())
+        || binding.get("room_id").and_then(Value::as_str) != Some(request.room_id.as_str())
         || binding.get("matrix_user_id").and_then(Value::as_str)
             != Some(request.matrix_user_id.as_str())
         || binding.get("request_fingerprint").and_then(Value::as_str)
@@ -601,8 +592,7 @@ mod tests {
     fn persisted_binding_rejects_extra_or_wrong_authority_fields() {
         let request = request();
         let mut response = cached_result(&request);
-        response["source"]["metadata"]["metadata"][DELIVERY_BINDING_FIELD]["forged"] =
-            json!(true);
+        response["source"]["metadata"]["metadata"][DELIVERY_BINDING_FIELD]["forged"] = json!(true);
         assert!(validate_cached_result(&response, &request).is_err());
 
         let mut response = cached_result(&request);

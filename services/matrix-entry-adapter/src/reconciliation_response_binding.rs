@@ -125,18 +125,18 @@ fn validate_success_response(raw: &[u8], expected: &ExpectedBinding) -> Result<(
     let value: Value = serde_json::from_slice(raw).map_err(|_| ())?;
     if value.get("accepted").and_then(Value::as_bool) != Some(true)
         || value.get("action").and_then(Value::as_str) != Some("task_result_reconciled")
-        || value.get("delivery_id").and_then(Value::as_str)
-            != Some(expected.delivery_id.as_str())
+        || value.get("delivery_id").and_then(Value::as_str) != Some(expected.delivery_id.as_str())
         || value.get("event_id").and_then(Value::as_str) != Some(expected.event_id.as_str())
         || value.get("room_id").and_then(Value::as_str) != Some(expected.room_id.as_str())
-        || value.get("sender").and_then(Value::as_str)
-            != Some(expected.matrix_user_id.as_str())
+        || value.get("sender").and_then(Value::as_str) != Some(expected.matrix_user_id.as_str())
         || value.get("payload_sha256").and_then(Value::as_str)
             != Some(expected.payload_sha256.as_str())
         || value.get("request_fingerprint").and_then(Value::as_str)
             != Some(expected.request_fingerprint.as_str())
         || value.get("projected_reply") != Some(&Value::Null)
-        || value.get("production_authorization").and_then(Value::as_str)
+        || value
+            .get("production_authorization")
+            .and_then(Value::as_str)
             != Some("not_granted")
     {
         return Err(());
@@ -147,10 +147,8 @@ fn validate_success_response(raw: &[u8], expected: &ExpectedBinding) -> Result<(
         .and_then(Value::as_object)
         .ok_or(())?;
     if reconciliation.len() != 4
-        || reconciliation.get("schema").and_then(Value::as_str)
-            != Some(RECONCILIATION_SCHEMA)
-        || reconciliation.get("source").and_then(Value::as_str)
-            != Some(RECONCILIATION_SOURCE)
+        || reconciliation.get("schema").and_then(Value::as_str) != Some(RECONCILIATION_SCHEMA)
+        || reconciliation.get("source").and_then(Value::as_str) != Some(RECONCILIATION_SOURCE)
         || reconciliation.get("read_only").and_then(Value::as_bool) != Some(true)
         || reconciliation.get("causal_binding").and_then(Value::as_str)
             != Some(RECONCILIATION_CAUSAL_BINDING)
@@ -158,7 +156,10 @@ fn validate_success_response(raw: &[u8], expected: &ExpectedBinding) -> Result<(
         return Err(());
     }
 
-    let forwarded = value.get("forwarded").and_then(Value::as_object).ok_or(())?;
+    let forwarded = value
+        .get("forwarded")
+        .and_then(Value::as_object)
+        .ok_or(())?;
     let task_id = forwarded
         .get("task_id")
         .and_then(Value::as_str)
@@ -175,12 +176,13 @@ fn validate_success_response(raw: &[u8], expected: &ExpectedBinding) -> Result<(
         return Err(());
     }
 
-    let source = forwarded.get("source").and_then(Value::as_object).ok_or(())?;
+    let source = forwarded
+        .get("source")
+        .and_then(Value::as_object)
+        .ok_or(())?;
     if source.get("kind").and_then(Value::as_str) != Some("matrix_message")
-        || source.get("event_id").and_then(Value::as_str)
-            != Some(expected.event_id.as_str())
-        || source.get("room_id").and_then(Value::as_str)
-            != Some(expected.room_id.as_str())
+        || source.get("event_id").and_then(Value::as_str) != Some(expected.event_id.as_str())
+        || source.get("room_id").and_then(Value::as_str) != Some(expected.room_id.as_str())
         || source.get("matrix_user_id").and_then(Value::as_str)
             != Some(expected.matrix_user_id.as_str())
     {
@@ -192,8 +194,7 @@ fn validate_success_response(raw: &[u8], expected: &ExpectedBinding) -> Result<(
         .ok_or(())?;
     if identity_scope.get("user_id").and_then(Value::as_str)
         != Some(expected.matrix_user_id.as_str())
-        || identity_scope.get("room_id").and_then(Value::as_str)
-            != Some(expected.room_id.as_str())
+        || identity_scope.get("room_id").and_then(Value::as_str) != Some(expected.room_id.as_str())
     {
         return Err(());
     }
@@ -216,14 +217,11 @@ fn validate_embedded_binding(
     if binding.len() != 8
         || binding.get("schema").and_then(Value::as_str) != Some(DELIVERY_BINDING_SCHEMA)
         || binding.get("source").and_then(Value::as_str) != Some(DELIVERY_BINDING_SOURCE)
-        || binding.get("delivery_id").and_then(Value::as_str)
-            != Some(expected.delivery_id.as_str())
+        || binding.get("delivery_id").and_then(Value::as_str) != Some(expected.delivery_id.as_str())
         || binding.get("payload_sha256").and_then(Value::as_str)
             != Some(expected.payload_sha256.as_str())
-        || binding.get("event_id").and_then(Value::as_str)
-            != Some(expected.event_id.as_str())
-        || binding.get("room_id").and_then(Value::as_str)
-            != Some(expected.room_id.as_str())
+        || binding.get("event_id").and_then(Value::as_str) != Some(expected.event_id.as_str())
+        || binding.get("room_id").and_then(Value::as_str) != Some(expected.room_id.as_str())
         || binding.get("matrix_user_id").and_then(Value::as_str)
             != Some(expected.matrix_user_id.as_str())
         || binding.get("request_fingerprint").and_then(Value::as_str)
@@ -235,10 +233,7 @@ fn validate_embedded_binding(
     Ok(())
 }
 
-fn required_text<'a>(
-    object: &'a Map<String, Value>,
-    field: &str,
-) -> Result<&'a str, &'static str> {
+fn required_text<'a>(object: &'a Map<String, Value>, field: &str) -> Result<&'a str, &'static str> {
     object
         .get(field)
         .and_then(Value::as_str)
@@ -437,9 +432,8 @@ mod tests {
     async fn changed_or_extended_binding_is_rejected() {
         let expected = expected();
         let mut changed = successful_response(&expected);
-        changed["forwarded"]["source"]["metadata"]["metadata"]
-            [DELIVERY_BINDING_FIELD]["payload_sha256"] =
-            json!(format!("sha256:{}", "9".repeat(64)));
+        changed["forwarded"]["source"]["metadata"]["metadata"][DELIVERY_BINDING_FIELD]
+            ["payload_sha256"] = json!(format!("sha256:{}", "9".repeat(64)));
         let response = test_router(changed)
             .oneshot(request(&expected))
             .await
@@ -447,8 +441,8 @@ mod tests {
         assert_eq!(response.status(), StatusCode::CONFLICT);
 
         let mut extended = successful_response(&expected);
-        extended["forwarded"]["source"]["metadata"]["metadata"]
-            [DELIVERY_BINDING_FIELD]["forged"] = json!(true);
+        extended["forwarded"]["source"]["metadata"]["metadata"][DELIVERY_BINDING_FIELD]["forged"] =
+            json!(true);
         let response = test_router(extended)
             .oneshot(request(&expected))
             .await

@@ -98,7 +98,7 @@ begin
         raise exception 'matrix_result_wrong_principal_was_accepted';
     exception
         when others then
-            if sqlerrm not like '%matrix_adapter_result_principal_mismatch%' then
+            if sqlerrm not like '%matrix_adapter_result_identity_mismatch%' then
                 raise;
             end if;
     end;

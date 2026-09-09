@@ -156,6 +156,9 @@ class RouteExtractionTests(unittest.TestCase):
             with self.assertRaises(R.RouteSyntaxError):
                 R.extract_routes('.route("' + path + '", get(h))')
 
+    def test_zero_argument_application_route_method_is_not_registration(self):
+        self.assertEqual(R.extract_routes('let route = command.route()?;'), [])
+
     def test_malformed_registration_is_not_silently_accepted(self):
         for expr in ['.route("/a")', '.route("/a",,get(h))', '.route("/a",get(h),other)', '.route::<State>("/a",get(h))']:
             with self.assertRaises(R.RouteSyntaxError):

@@ -75,7 +75,7 @@ class CompilerSelectionTests(unittest.TestCase):
         self.assertEqual(set(toolchain['components']), {'rustfmt', 'clippy'})
 
     def test_known_workflows_select_corrected_rust(self):
-        for filename, expected in [('matrix-review-repair-regression.yml', 2), ('rust-service-gate.yml', 3)]:
+        for filename, expected in [('matrix-review-repair-regression.yml', 4), ('rust-service-gate.yml', 3)]:
             workflow = (ROOT / '.github/workflows' / filename).read_text()
             self.assertEqual(workflow.count('toolchain: 1.98.1'), expected)
         trnm = (ROOT / '.github/workflows/trnm-economy-settlement.yml').read_text()
@@ -129,7 +129,7 @@ class AuthoritativeWorkflowTests(unittest.TestCase):
 
     def matrix_sequence(self):
         import textwrap
-        section = self.rust.split('      - name: Complete Matrix package and current-schema regression\n', 1)[1]
+        section = self.rust.split('      - name: Complete Matrix package and current-schema/operator regression\n', 1)[1]
         section = section.split('\n      - name:', 1)[0]
         return textwrap.dedent(section.split('        run: |\n', 1)[1])
 
@@ -147,6 +147,8 @@ class AuthoritativeWorkflowTests(unittest.TestCase):
                 path = tools / tool; path.write_text(body); path.chmod(0o755)
             (scripts / 'check-matrix-source-observation-postgres.sh').write_text(
                 '#!/bin/sh\nprintf "%s\\n" database >> "$TRACE"\n[ "$FAIL" != database ] || exit 71\n')
+            (scripts / 'check-matrix-operator-postgres.sh').write_text(
+                '#!/bin/sh\nprintf "%s\\n" operator >> "$TRACE"\n[ "$FAIL" != operator ] || exit 71\n')
             env = {**os.environ, 'PATH': str(tools) + os.pathsep + os.environ['PATH'],
                    'TRACE': str(trace), 'FAIL': failure}
             result = subprocess.run(['bash', '-c', self.matrix_sequence()], cwd=root, env=env,
@@ -155,7 +157,7 @@ class AuthoritativeWorkflowTests(unittest.TestCase):
 
     def test_matrix_is_in_existing_authoritative_job(self):
         job = self.rust.split('  hepta-postgres-integration:\n', 1)[1]
-        for name in ('Complete Matrix package and current-schema regression',
+        for name in ('Complete Matrix package and current-schema/operator regression',
                      'Strict Hepta PostgreSQL package gate', 'Upload Hepta PostgreSQL evidence'):
             self.assertIn(name, job)
         self.assertNotIn('continue-on-error:', job)
@@ -173,7 +175,9 @@ class AuthoritativeWorkflowTests(unittest.TestCase):
     def test_matrix_report_is_retained_with_sha_and_attempt(self):
         self.assertIn('--evidence run/matrix-transport-postgres.json', self.rust)
         self.assertIn('cex-matrix-postgres-${{ github.sha }}-attempt-${{ github.run_attempt }}', self.rust)
-        self.assertIn('path: run/matrix-transport-postgres.json', self.rust)
+        self.assertIn('path: |', self.rust)
+        self.assertIn('run/matrix-transport-postgres.json', self.rust)
+        self.assertIn('run/matrix-operator-postgres.json', self.rust)
         self.assertIn('if-no-files-found: error', self.rust)
 
     def test_format_failure_does_not_reach_tests_or_database(self):
@@ -194,7 +198,7 @@ class AuthoritativeWorkflowTests(unittest.TestCase):
     def test_success_fixture_executes_all_steps_in_order(self):
         code, trace = self.execute_matrix_sequence()
         self.assertEqual(code, 0)
-        self.assertEqual(trace, ['python3', 'fmt', 'test', 'clippy', 'database', 'git'])
+        self.assertEqual(trace, ['python3', 'fmt', 'test', 'clippy', 'database', 'operator', 'git'])
 
     def test_execution_authority_retains_and_deepens_complete_coverage(self):
         for command in ('cargo test --locked -p execution-service --all-targets --no-fail-fast',

@@ -28,7 +28,10 @@ impl FilterDefinition {
 
 fn valid_digest(value: &str) -> bool {
     value.strip_prefix("sha256:").is_some_and(|hex| {
-        hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
     })
 }
 
@@ -64,7 +67,10 @@ pub(super) fn definition_url(base: &str, user: &str, id: &str) -> Result<Url, &'
     Ok(url)
 }
 
-pub(super) fn verify_definition(bytes: &[u8], expected: &str) -> Result<FilterDefinition, &'static str> {
+pub(super) fn verify_definition(
+    bytes: &[u8],
+    expected: &str,
+) -> Result<FilterDefinition, &'static str> {
     if bytes.is_empty() || bytes.len() > DEFINITION_MAX_BYTES || !valid_digest(expected) {
         return Err("matrix_filter_definition_invalid");
     }
@@ -75,7 +81,10 @@ pub(super) fn verify_definition(bytes: &[u8], expected: &str) -> Result<FilterDe
     let raw = std::str::from_utf8(bytes).map_err(|_| "matrix_filter_definition_invalid")?;
     // Includes identity-projection, duplicate-field and unsupported-shape checks.
     stream_scope::validate_inline(raw)?;
-    Ok(FilterDefinition { bytes: raw.to_owned(), sha256: digest })
+    Ok(FilterDefinition {
+        bytes: raw.to_owned(),
+        sha256: digest,
+    })
 }
 
 pub(super) async fn resolve(
@@ -97,15 +106,24 @@ pub(super) async fn resolve(
     let id = configured.ok_or_else(|| anyhow!("matrix_filter_definition_id_invalid"))?;
     let url = definition_url(base, user, id).map_err(|code| anyhow!(code))?;
     timeout(Duration::from_secs(10), async {
-        let response = http.get(url).bearer_auth(token).send().await
+        let response = http
+            .get(url)
+            .bearer_auth(token)
+            .send()
+            .await
             .map_err(|_| anyhow!("matrix_filter_definition_transport_failure"))?;
         if response.status() != StatusCode::OK {
             bail!("matrix_filter_definition_http_rejected");
         }
-        let bytes = crate::read_bounded_body(response, DEFINITION_MAX_BYTES).await
+        let bytes = crate::read_bounded_body(response, DEFINITION_MAX_BYTES)
+            .await
             .map_err(|_| anyhow!("matrix_filter_definition_body_failure"))?;
-        verify_definition(&bytes, expected).map(Some).map_err(|code| anyhow!(code))
-    }).await.map_err(|_| anyhow!("matrix_filter_definition_timeout"))?
+        verify_definition(&bytes, expected)
+            .map(Some)
+            .map_err(|code| anyhow!(code))
+    })
+    .await
+    .map_err(|_| anyhow!("matrix_filter_definition_timeout"))?
 }
 
 /// All cursor-bearing sync and gap requests use this same immutable selection.
@@ -120,7 +138,9 @@ pub(super) fn effective_filter<'a>(
             stream_scope::validate_inline(raw)?;
             Ok(Some(raw))
         }
-        (Some(raw), Some(definition)) if !raw.trim_start().starts_with('{') => Ok(Some(definition.bytes())),
+        (Some(raw), Some(definition)) if !raw.trim_start().starts_with('{') => {
+            Ok(Some(definition.bytes()))
+        }
         (Some(_), None) => Err("matrix_filter_definition_unresolved"),
         _ => Err("matrix_filter_definition_unexpected"),
     }
@@ -140,7 +160,10 @@ mod tests {
         let pin = digest(b"{}");
         for id in ["0", "opaque-id"] {
             assert!(configured_digest(Some(id), Err(VarError::NotPresent)).is_err());
-            assert_eq!(configured_digest(Some(id), Ok(pin.clone())), Ok(Some(pin.clone())));
+            assert_eq!(
+                configured_digest(Some(id), Ok(pin.clone())),
+                Ok(Some(pin.clone()))
+            );
         }
         for raw in [None, Some("{}"), Some(" {} ")] {
             assert!(configured_digest(raw, Ok(pin.clone())).is_err());
@@ -150,7 +173,12 @@ mod tests {
 
     #[test]
     fn malformed_and_nonunicode_commitments_fail() {
-        for value in ["", "sha256:abc", &format!("sha256:{}", "A".repeat(64)), &format!(" {}", digest(b"{}"))] {
+        for value in [
+            "",
+            "sha256:abc",
+            &format!("sha256:{}", "A".repeat(64)),
+            &format!(" {}", digest(b"{}")),
+        ] {
             assert!(configured_digest(Some("0"), Ok(value.to_owned())).is_err());
         }
         assert!(configured_digest(Some("0"), Err(VarError::NotUnicode("fixture".into()))).is_err());
@@ -162,7 +190,9 @@ mod tests {
         let pin = verify_definition(bytes, &digest(bytes)).unwrap();
         let effective = effective_filter(Some("0"), Some(&pin)).unwrap();
         assert_eq!(effective, Some(std::str::from_utf8(bytes).unwrap()));
-        let gap = stream_scope::backfill_filter(effective, "!r:e").unwrap().unwrap();
+        let gap = stream_scope::backfill_filter(effective, "!r:e")
+            .unwrap()
+            .unwrap();
         let actual: Value = serde_json::from_str(&gap).unwrap();
         assert_eq!(actual["senders"][0], "@a:e");
         assert_eq!(actual["limit"], 9);
@@ -178,8 +208,16 @@ mod tests {
 
     #[test]
     fn matching_hash_does_not_authorize_an_unsupported_definition() {
-        for raw in [b"{\"event_fields\":[\"content\"]}".as_slice(), b"{\"room\":null}",
-            b"{\"room\":{},\"room\":{}}", b"{\"errcode\":\"M_FORBIDDEN\"}", b" {}", b"[]", b"null", b"\xff"] {
+        for raw in [
+            b"{\"event_fields\":[\"content\"]}".as_slice(),
+            b"{\"room\":null}",
+            b"{\"room\":{},\"room\":{}}",
+            b"{\"errcode\":\"M_FORBIDDEN\"}",
+            b" {}",
+            b"[]",
+            b"null",
+            b"\xff",
+        ] {
             assert!(verify_definition(raw, &digest(raw)).is_err());
         }
         let large = vec![b' '; DEFINITION_MAX_BYTES + 1];
@@ -215,9 +253,16 @@ mod tests {
 #[cfg(test)]
 mod http_tests {
     use super::*;
-    use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpListener};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
 
-    async fn serve_once(status: u16, body: &'static str, declared: usize) -> (String, tokio::task::JoinHandle<String>) {
+    async fn serve_once(
+        status: u16,
+        body: &'static str,
+        declared: usize,
+    ) -> (String, tokio::task::JoinHandle<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}/proxy", listener.local_addr().unwrap());
         let task = tokio::spawn(async move {
@@ -240,8 +285,12 @@ mod http_tests {
     }
 
     fn client() -> Client {
-        Client::builder().redirect(reqwest::redirect::Policy::none())
-            .no_proxy().timeout(Duration::from_secs(2)).build().unwrap()
+        Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap()
     }
 
     #[tokio::test]
@@ -249,11 +298,22 @@ mod http_tests {
         let body = r#"{"room":{"timeline":{"types":["m.room.message"]}}}"#;
         let digest = format!("sha256:{:x}", Sha256::digest(body.as_bytes()));
         let (base, task) = serve_once(200, body, body.len()).await;
-        let def = resolve(&client(), &base, "@bot:example", "fixture-token", Some("0"), Some(&digest))
-            .await.unwrap().unwrap();
+        let def = resolve(
+            &client(),
+            &base,
+            "@bot:example",
+            "fixture-token",
+            Some("0"),
+            Some(&digest),
+        )
+        .await
+        .unwrap()
+        .unwrap();
         let request = task.await.unwrap();
         assert!(request.starts_with("GET /proxy/_matrix/client/v3/user/@bot:example/filter/0 "));
-        assert!(request.to_ascii_lowercase().contains("authorization: bearer fixture-token"));
+        assert!(request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer fixture-token"));
         assert_eq!(def.bytes(), body);
         assert_eq!(effective_filter(Some("0"), Some(&def)).unwrap(), Some(body));
     }
@@ -268,9 +328,20 @@ mod http_tests {
             (200, "{} ", 3, "matrix_filter_definition_digest_mismatch"),
         ] {
             let (base, task) = serve_once(status, body, length).await;
-            let outcome = resolve(&client(), &base, "@bot:example", "fixture-token", Some("0"), Some(&digest)).await;
+            let outcome = resolve(
+                &client(),
+                &base,
+                "@bot:example",
+                "fixture-token",
+                Some("0"),
+                Some(&digest),
+            )
+            .await;
             // Do not require Debug for private definition contents.
-            let error = match outcome { Err(error) => error, Ok(_) => panic!("unverified definition accepted") };
+            let error = match outcome {
+                Err(error) => error,
+                Ok(_) => panic!("unverified definition accepted"),
+            };
             assert_eq!(error.to_string(), expected);
             task.await.unwrap();
         }

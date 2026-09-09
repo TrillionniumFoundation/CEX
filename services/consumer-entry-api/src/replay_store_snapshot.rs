@@ -44,11 +44,16 @@ impl std::fmt::Display for SnapshotError {
         match self {
             Self::Io(error) => write!(formatter, "{error}"),
             Self::NonRegular => formatter.write_str("replay store is not a regular file"),
-            Self::LinkedFile => formatter.write_str("replay store has an unsafe link count or reparse identity"),
-            Self::Oversized => formatter.write_str("replay store exceeds its bounded snapshot budget"),
+            Self::LinkedFile => {
+                formatter.write_str("replay store has an unsafe link count or reparse identity")
+            }
+            Self::Oversized => {
+                formatter.write_str("replay store exceeds its bounded snapshot budget")
+            }
             Self::Changed => formatter.write_str("replay store changed while it was being read"),
             Self::UnsafePath => formatter.write_str("replay store path is not descriptor-safe"),
-            Self::UnsupportedPlatform => formatter.write_str("descriptor-safe replay snapshots are unsupported on this platform"),
+            Self::UnsupportedPlatform => formatter
+                .write_str("descriptor-safe replay snapshots are unsupported on this platform"),
         }
     }
 }
@@ -274,10 +279,7 @@ fn open_descriptor(_path: &Path) -> Result<File, SnapshotError> {
     Err(SnapshotError::UnsupportedPlatform)
 }
 
-pub fn read_stable_regular_file(
-    path: &Path,
-    max_bytes: usize,
-) -> Result<Vec<u8>, SnapshotError> {
+pub fn read_stable_regular_file(path: &Path, max_bytes: usize) -> Result<Vec<u8>, SnapshotError> {
     let mut file = open_descriptor(path)?;
     let before = file.metadata()?;
     validate_regular(&before)?;

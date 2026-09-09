@@ -110,14 +110,11 @@ async fn main() -> Result<()> {
         .context("failed to connect to Matrix transport PostgreSQL")?;
     verify_schema(&pool).await?;
 
-    let http_timeout_ms = config
-        .sync_timeout_ms
-        .saturating_add(10_000)
-        .min(
-            (config.cursor_lease_seconds as u64)
-                .saturating_mul(1_000)
-                .saturating_sub(5_000),
-        );
+    let http_timeout_ms = config.sync_timeout_ms.saturating_add(10_000).min(
+        (config.cursor_lease_seconds as u64)
+            .saturating_mul(1_000)
+            .saturating_sub(5_000),
+    );
     let http = Client::builder()
         .redirect(Policy::none())
         .timeout(Duration::from_millis(http_timeout_ms))
@@ -136,21 +133,33 @@ async fn main() -> Result<()> {
 
     verify_homeserver_account(&http, &config).await?;
     config.resolved_filter = filter_definition::resolve(
-        &http, &config.homeserver_base_url, &config.bot_user_id,
-        &config.matrix_access_token, config.sync_filter.as_deref(),
+        &http,
+        &config.homeserver_base_url,
+        &config.bot_user_id,
+        &config.matrix_access_token,
+        config.sync_filter.as_deref(),
         config.sync_filter_definition_sha256.as_deref(),
-    ).await?;
+    )
+    .await?;
     run(config, pool, http).await
 }
 
 async fn verify_homeserver_account(http: &Client, config: &PollerConfig) -> Result<()> {
     // This bounded read verifies the token's account; no token is persisted.
-    stream_scope::describe(&config.homeserver_base_url, &config.bot_user_id,
-        config.sync_filter.as_deref()).map_err(|code| anyhow!(code))?;
-    let url = stream_scope::whoami_url(&config.homeserver_base_url)
-        .map_err(|code| anyhow!(code))?;
+    stream_scope::describe(
+        &config.homeserver_base_url,
+        &config.bot_user_id,
+        config.sync_filter.as_deref(),
+    )
+    .map_err(|code| anyhow!(code))?;
+    let url =
+        stream_scope::whoami_url(&config.homeserver_base_url).map_err(|code| anyhow!(code))?;
     timeout(Duration::from_secs(10), async {
-        let response = http.get(url).bearer_auth(&config.matrix_access_token).send().await
+        let response = http
+            .get(url)
+            .bearer_auth(&config.matrix_access_token)
+            .send()
+            .await
             .map_err(|_| anyhow!("matrix_stream_account_transport_failure"))?;
         if response.status() != reqwest::StatusCode::OK {
             bail!("matrix_stream_account_http_rejected");
@@ -159,7 +168,9 @@ async fn verify_homeserver_account(http: &Client, config: &PollerConfig) -> Resu
         let body: Value = serde_json::from_slice(&bytes)
             .map_err(|_| anyhow!("matrix_stream_account_invalid_json"))?;
         stream_scope::verify_account(&body, &config.bot_user_id).map_err(|code| anyhow!(code))
-    }).await.map_err(|_| anyhow!("matrix_stream_account_timeout"))?
+    })
+    .await
+    .map_err(|_| anyhow!("matrix_stream_account_timeout"))?
 }
 
 async fn bind_stream_scope(
@@ -167,45 +178,69 @@ async fn bind_stream_scope(
     config: &PollerConfig,
     lease: &CursorLease,
 ) -> Result<()> {
-    let scope = stream_scope::describe(&config.homeserver_base_url, &config.bot_user_id,
-        config.sync_filter.as_deref()).map_err(|code| anyhow!(code))?;
-    let disposition: String = sqlx::query_scalar(
-        "select public.cex_matrix_bind_stream_scope_v1($1,$2,$3,$4,$5)",
+    let scope = stream_scope::describe(
+        &config.homeserver_base_url,
+        &config.bot_user_id,
+        config.sync_filter.as_deref(),
     )
-    .bind(&config.partition_id).bind(&config.worker_id)
-    .bind(lease.lease_fence).bind(lease.cursor_revision).bind(sqlx::types::Json(scope))
-    .fetch_one(&mut **tx).await.map_err(|error| {
-        let code = error.as_database_error().map(|db| db.message());
-        anyhow!(match code {
-            Some("matrix_stream_scope_mismatch") => "matrix_stream_scope_mismatch",
-            Some("matrix_stream_scope_legacy_review_required") => "matrix_stream_scope_legacy_review_required",
-            Some("matrix_cursor_lease_or_revision_mismatch") => "matrix_cursor_lease_or_revision_mismatch",
-            _ => "matrix_stream_binding_unverified",
-        })
-    })?;
+    .map_err(|code| anyhow!(code))?;
+    let disposition: String =
+        sqlx::query_scalar("select public.cex_matrix_bind_stream_scope_v1($1,$2,$3,$4,$5)")
+            .bind(&config.partition_id)
+            .bind(&config.worker_id)
+            .bind(lease.lease_fence)
+            .bind(lease.cursor_revision)
+            .bind(sqlx::types::Json(scope))
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(|error| {
+                let code = error.as_database_error().map(|db| db.message());
+                anyhow!(match code {
+                    Some("matrix_stream_scope_mismatch") => "matrix_stream_scope_mismatch",
+                    Some("matrix_stream_scope_legacy_review_required") =>
+                        "matrix_stream_scope_legacy_review_required",
+                    Some("matrix_cursor_lease_or_revision_mismatch") =>
+                        "matrix_cursor_lease_or_revision_mismatch",
+                    _ => "matrix_stream_binding_unverified",
+                })
+            })?;
     if !matches!(disposition.as_str(), "bound" | "replay") {
         bail!("matrix_stream_binding_unverified");
     }
     // Scope and definition pin are committed together before a cursor is sent.
     // The same checks repeat inside the ordinary admission transaction.
-    filter_definition::effective_filter(config.sync_filter.as_deref(), config.resolved_filter.as_ref())
-        .map_err(|code| anyhow!(code))?;
+    filter_definition::effective_filter(
+        config.sync_filter.as_deref(),
+        config.resolved_filter.as_ref(),
+    )
+    .map_err(|code| anyhow!(code))?;
     if let Some(definition) = config.resolved_filter.as_ref() {
-        let filter_id = config.sync_filter.as_deref()
+        let filter_id = config
+            .sync_filter
+            .as_deref()
             .ok_or_else(|| anyhow!("matrix_filter_definition_unresolved"))?;
         let result: String = sqlx::query_scalar(
             "select public.cex_matrix_bind_filter_definition_v1($1,$2,$3,$4,$5,$6,$7)",
         )
-        .bind(&config.partition_id).bind(&config.worker_id)
-        .bind(lease.lease_fence).bind(lease.cursor_revision).bind(filter_id)
-        .bind(definition.bytes()).bind(definition.sha256())
-        .fetch_one(&mut **tx).await.map_err(|error| {
+        .bind(&config.partition_id)
+        .bind(&config.worker_id)
+        .bind(lease.lease_fence)
+        .bind(lease.cursor_revision)
+        .bind(filter_id)
+        .bind(definition.bytes())
+        .bind(definition.sha256())
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|error| {
             let message = error.as_database_error().map(|db| db.message());
             anyhow!(match message {
                 Some("matrix_filter_definition_mismatch") => "matrix_filter_definition_mismatch",
-                Some("matrix_filter_definition_legacy_review_required") => "matrix_filter_definition_legacy_review_required",
-                Some("matrix_filter_definition_scope_mismatch") => "matrix_filter_definition_scope_mismatch",
-                Some("matrix_cursor_lease_or_revision_mismatch") => "matrix_cursor_lease_or_revision_mismatch",
+                Some("matrix_filter_definition_legacy_review_required") =>
+                    "matrix_filter_definition_legacy_review_required",
+                Some("matrix_filter_definition_scope_mismatch") =>
+                    "matrix_filter_definition_scope_mismatch",
+                Some("matrix_cursor_lease_or_revision_mismatch") =>
+                    "matrix_cursor_lease_or_revision_mismatch",
                 _ => "matrix_filter_definition_binding_unverified",
             })
         })?;
@@ -225,15 +260,27 @@ async fn run(config: PollerConfig, pool: PgPool, http: Client) -> Result<()> {
                     // endpoint strings, opaque cursors or message bodies.
                     let code = match error.to_string().as_str() {
                         "matrix_stream_scope_mismatch" => "matrix_stream_scope_mismatch",
-                        "matrix_stream_scope_legacy_review_required" => "matrix_stream_scope_legacy_review_required",
+                        "matrix_stream_scope_legacy_review_required" => {
+                            "matrix_stream_scope_legacy_review_required"
+                        }
                         "matrix_stream_binding_unverified" => "matrix_stream_binding_unverified",
-                        "matrix_gap_filter_id_requires_resolution" => "matrix_gap_filter_id_requires_resolution",
-                        "matrix_gap_room_excluded_by_filter" => "matrix_gap_room_excluded_by_filter",
+                        "matrix_gap_filter_id_requires_resolution" => {
+                            "matrix_gap_filter_id_requires_resolution"
+                        }
+                        "matrix_gap_room_excluded_by_filter" => {
+                            "matrix_gap_room_excluded_by_filter"
+                        }
                         "matrix_sync_filter_unsupported" => "matrix_sync_filter_unsupported",
                         "matrix_filter_definition_mismatch" => "matrix_filter_definition_mismatch",
-                        "matrix_filter_definition_legacy_review_required" => "matrix_filter_definition_legacy_review_required",
-                        "matrix_filter_definition_scope_mismatch" => "matrix_filter_definition_scope_mismatch",
-                        "matrix_filter_definition_binding_unverified" => "matrix_filter_definition_binding_unverified",
+                        "matrix_filter_definition_legacy_review_required" => {
+                            "matrix_filter_definition_legacy_review_required"
+                        }
+                        "matrix_filter_definition_scope_mismatch" => {
+                            "matrix_filter_definition_scope_mismatch"
+                        }
+                        "matrix_filter_definition_binding_unverified" => {
+                            "matrix_filter_definition_binding_unverified"
+                        }
                         _ => "matrix_sync_not_accepted",
                     };
                     warn!(error_code = code, "Matrix sync held at last committed cursor; inspect protected recovery evidence");
@@ -262,9 +309,7 @@ async fn poll_once(
     bind_stream_scope(&mut scope_tx, config, &lease).await?;
     scope_tx.commit().await?;
     let sync_url = build_sync_url(config, lease.opaque_cursor.as_deref())?;
-    let request = http
-        .get(sync_url)
-        .bearer_auth(&config.matrix_access_token);
+    let request = http.get(sync_url).bearer_auth(&config.matrix_access_token);
     let response = timeout(
         Duration::from_millis(config.sync_timeout_ms.saturating_add(10_000)),
         request.send(),
@@ -278,8 +323,7 @@ async fn poll_once(
     }
 
     let bytes = read_bounded_body(response, config.sync_max_bytes).await?;
-    let mut body: SyncResponse = wire_response::decode(&bytes)
-        .map_err(|code| anyhow!(code))?;
+    let mut body: SyncResponse = wire_response::decode(&bytes).map_err(|code| anyhow!(code))?;
     sync_recovery::validate_token(&body.next_batch)?;
 
     if lease.opaque_cursor.is_none() {
@@ -292,9 +336,12 @@ async fn poll_once(
         info!("Matrix initial start-now boundary committed; no historical commands admitted");
         return Ok(());
     }
-    timeout(Duration::from_secs(GAP_DEADLINE_SECONDS),
-        recover_limited_timelines(pool, http, config, &lease, &mut body))
-        .await.map_err(|_| anyhow!("matrix_gap_recovery_deadline"))??;
+    timeout(
+        Duration::from_secs(GAP_DEADLINE_SECONDS),
+        recover_limited_timelines(pool, http, config, &lease, &mut body),
+    )
+    .await
+    .map_err(|_| anyhow!("matrix_gap_recovery_deadline"))??;
     let admissions = prepare_admissions(&body, config)?;
     persist_poison_observations(pool, config, &lease, &admissions).await?;
     persist_batch(pool, config, &lease, &body.next_batch, admissions).await?;
@@ -321,8 +368,11 @@ fn build_sync_url(config: &PollerConfig, cursor: Option<&str>) -> Result<Url> {
             query.append_pair("since", cursor);
         }
         if let Some(filter) = filter_definition::effective_filter(
-            config.sync_filter.as_deref(), config.resolved_filter.as_ref(),
-        ).map_err(|code| anyhow!(code))? {
+            config.sync_filter.as_deref(),
+            config.resolved_filter.as_ref(),
+        )
+        .map_err(|code| anyhow!(code))?
+        {
             query.append_pair("filter", filter);
         }
     }
@@ -417,16 +467,31 @@ fn prepare_admissions(body: &SyncResponse, config: &PollerConfig) -> Result<Vec<
                 .get("content")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            if content.get("m.relates_to")
+            if content
+                .get("m.relates_to")
                 .and_then(|relation| relation.get("rel_type"))
-                .and_then(Value::as_str) == Some("m.replace")
+                .and_then(Value::as_str)
+                == Some("m.replace")
             {
                 // Edits cannot create a second privileged invocation.
                 continue;
             }
-            if content.get("msgtype").and_then(Value::as_str).is_some_and(|kind| {
-                matches!(kind, "m.image" | "m.video" | "m.audio" | "m.file" | "m.location" | "m.notice" | "m.emote")
-            }) {
+            if content
+                .get("msgtype")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| {
+                    matches!(
+                        kind,
+                        "m.image"
+                            | "m.video"
+                            | "m.audio"
+                            | "m.file"
+                            | "m.location"
+                            | "m.notice"
+                            | "m.emote"
+                    )
+                })
+            {
                 continue;
             }
             if content.get("msgtype").and_then(Value::as_str) != Some("m.text") {
@@ -525,9 +590,7 @@ async fn persist_batch(
     let Some((owner, fence, revision)) = locked else {
         bail!("matrix_cursor_lease_or_revision_mismatch");
     };
-    if owner != config.worker_id
-        || fence != lease.lease_fence
-        || revision != lease.cursor_revision
+    if owner != config.worker_id || fence != lease.lease_fence || revision != lease.cursor_revision
     {
         bail!("matrix_cursor_lease_or_revision_mismatch");
     }
@@ -582,16 +645,15 @@ async fn persist_batch(
         }
     }
 
-    let advanced: bool = sqlx::query_scalar(
-        "select public.cex_matrix_advance_cursor_v1($1, $2, $3, $4, $5)",
-    )
-    .bind(&config.partition_id)
-    .bind(&config.worker_id)
-    .bind(lease.lease_fence)
-    .bind(lease.cursor_revision)
-    .bind(next_cursor)
-    .fetch_one(&mut *tx)
-    .await?;
+    let advanced: bool =
+        sqlx::query_scalar("select public.cex_matrix_advance_cursor_v1($1, $2, $3, $4, $5)")
+            .bind(&config.partition_id)
+            .bind(&config.worker_id)
+            .bind(lease.lease_fence)
+            .bind(lease.cursor_revision)
+            .bind(next_cursor)
+            .fetch_one(&mut *tx)
+            .await?;
     if !advanced {
         bail!("matrix_cursor_lease_or_revision_mismatch");
     }
@@ -600,13 +662,20 @@ async fn persist_batch(
     Ok(())
 }
 
-async fn renew_cursor_lease(pool: &PgPool, config: &PollerConfig, lease: &CursorLease) -> Result<()> {
-    let renewed: bool = sqlx::query_scalar(
-        "select public.cex_matrix_renew_cursor_lease_v1($1,$2,$3,$4,$5)",
-    )
-    .bind(&config.partition_id).bind(&config.worker_id).bind(lease.lease_fence)
-    .bind(lease.cursor_revision).bind(config.cursor_lease_seconds)
-    .fetch_one(pool).await?;
+async fn renew_cursor_lease(
+    pool: &PgPool,
+    config: &PollerConfig,
+    lease: &CursorLease,
+) -> Result<()> {
+    let renewed: bool =
+        sqlx::query_scalar("select public.cex_matrix_renew_cursor_lease_v1($1,$2,$3,$4,$5)")
+            .bind(&config.partition_id)
+            .bind(&config.worker_id)
+            .bind(lease.lease_fence)
+            .bind(lease.cursor_revision)
+            .bind(config.cursor_lease_seconds)
+            .fetch_one(pool)
+            .await?;
     if !renewed {
         bail!("matrix_cursor_lease_or_revision_mismatch");
     }
@@ -620,10 +689,18 @@ async fn recover_limited_timelines(
     lease: &CursorLease,
     body: &mut SyncResponse,
 ) -> Result<()> {
-    let stop = lease.opaque_cursor.as_deref().ok_or_else(|| anyhow!("matrix_initial_cursor_required"))?;
+    let stop = lease
+        .opaque_cursor
+        .as_deref()
+        .ok_or_else(|| anyhow!("matrix_initial_cursor_required"))?;
     let deadline = Instant::now() + Duration::from_secs(GAP_DEADLINE_SECONDS);
     let mut page_count = 0_usize;
-    let mut event_count: usize = body.rooms.join.values().map(|room| room.timeline.events.len()).sum();
+    let mut event_count: usize = body
+        .rooms
+        .join
+        .values()
+        .map(|room| room.timeline.events.len())
+        .sum();
     let mut byte_count = 0_usize;
     if event_count > GAP_EVENT_BUDGET {
         bail!("matrix_sync_event_budget_exceeded");
@@ -632,16 +709,21 @@ async fn recover_limited_timelines(
         if !room.timeline.limited {
             continue;
         }
-        let from = room.timeline.prev_batch.as_deref().ok_or_else(|| anyhow!("matrix_gap_boundary_missing"))?;
+        let from = room
+            .timeline
+            .prev_batch
+            .as_deref()
+            .ok_or_else(|| anyhow!("matrix_gap_boundary_missing"))?;
         let mut pager = sync_recovery::GapPager::new(from, stop)?;
         let message_filter = if pager.complete() {
             None
         } else {
             let effective = filter_definition::effective_filter(
-                config.sync_filter.as_deref(), config.resolved_filter.as_ref(),
-            ).map_err(|code| anyhow!(code))?;
-            stream_scope::backfill_filter(effective, room_id)
-                .map_err(|code| anyhow!(code))?
+                config.sync_filter.as_deref(),
+                config.resolved_filter.as_ref(),
+            )
+            .map_err(|code| anyhow!(code))?;
+            stream_scope::backfill_filter(effective, room_id).map_err(|code| anyhow!(code))?
         };
         let mut backwards = Vec::new();
         while !pager.complete() {
@@ -652,32 +734,49 @@ async fn recover_limited_timelines(
             // renew an expired/stolen fence or hold a SQL transaction over I/O.
             renew_cursor_lease(pool, config, lease).await?;
             let url = sync_recovery::messages_url(
-                &config.homeserver_base_url, room_id, pager.cursor(), stop, GAP_PAGE_LIMIT,
+                &config.homeserver_base_url,
+                room_id,
+                pager.cursor(),
+                stop,
+                GAP_PAGE_LIMIT,
                 message_filter.as_deref(),
             )?;
             let remaining = deadline.saturating_duration_since(Instant::now());
             let bytes = timeout(remaining, async {
-                let response = http.get(url).bearer_auth(&config.matrix_access_token).send().await
+                let response = http
+                    .get(url)
+                    .bearer_auth(&config.matrix_access_token)
+                    .send()
+                    .await
                     .map_err(|_| anyhow!("matrix_gap_transport_failure"))?;
                 if response.status() != reqwest::StatusCode::OK {
                     bail!("matrix_gap_http_rejected");
                 }
                 read_bounded_body(response, config.sync_max_bytes).await
-            }).await.map_err(|_| anyhow!("matrix_gap_recovery_deadline"))??;
-            byte_count = byte_count.checked_add(bytes.len()).ok_or_else(|| anyhow!("matrix_gap_byte_budget_exceeded"))?;
+            })
+            .await
+            .map_err(|_| anyhow!("matrix_gap_recovery_deadline"))??;
+            byte_count = byte_count
+                .checked_add(bytes.len())
+                .ok_or_else(|| anyhow!("matrix_gap_byte_budget_exceeded"))?;
             if byte_count > GAP_BYTE_BUDGET {
                 bail!("matrix_gap_byte_budget_exceeded");
             }
-            let page: sync_recovery::MessagePage = wire_response::decode(&bytes)
-                .map_err(|code| anyhow!(code))?;
+            let page: sync_recovery::MessagePage =
+                wire_response::decode(&bytes).map_err(|code| anyhow!(code))?;
             pager.accept(&page, GAP_PAGE_LIMIT)?;
             page_count += 1;
-            event_count = event_count.checked_add(page.chunk.len()).ok_or_else(|| anyhow!("matrix_gap_event_budget_exceeded"))?;
+            event_count = event_count
+                .checked_add(page.chunk.len())
+                .ok_or_else(|| anyhow!("matrix_gap_event_budget_exceeded"))?;
             if event_count > GAP_EVENT_BUDGET {
                 bail!("matrix_gap_event_budget_exceeded");
             }
             for event in &page.chunk {
-                if event.get("room_id").is_some_and(|room| room.as_str() != Some(room_id.as_str())) {
+                if event
+                    .get("room_id")
+                    .is_some_and(|room| room.as_str() != Some(room_id.as_str()))
+                {
                     bail!("matrix_gap_room_identity_mismatch");
                 }
             }
@@ -698,32 +797,52 @@ async fn persist_poison_observations(
     lease: &CursorLease,
     admissions: &[Admission],
 ) -> Result<()> {
-    if !admissions.iter().any(|item| matches!(item, Admission::Poison { .. })) {
+    if !admissions
+        .iter()
+        .any(|item| matches!(item, Admission::Poison { .. }))
+    {
         return Ok(());
     }
     let mut tx = pool.begin().await?;
-    let owned: bool = sqlx::query_scalar(
-        "select public.cex_matrix_renew_cursor_lease_v1($1,$2,$3,$4,$5)",
-    )
-    .bind(&config.partition_id).bind(&config.worker_id).bind(lease.lease_fence)
-    .bind(lease.cursor_revision).bind(config.cursor_lease_seconds)
-    .fetch_one(&mut *tx).await?;
+    let owned: bool =
+        sqlx::query_scalar("select public.cex_matrix_renew_cursor_lease_v1($1,$2,$3,$4,$5)")
+            .bind(&config.partition_id)
+            .bind(&config.worker_id)
+            .bind(lease.lease_fence)
+            .bind(lease.cursor_revision)
+            .bind(config.cursor_lease_seconds)
+            .fetch_one(&mut *tx)
+            .await?;
     if !owned {
         bail!("matrix_cursor_lease_or_revision_mismatch");
     }
     for item in admissions {
-        if let Admission::Poison { source_event_id, source_event_sha256, failure_code, room_id, source_payload } = item {
-            let _: i64 = sqlx::query_scalar(
-                "select public.cex_matrix_record_poison_event_v1($1,$2,$3,$4)",
-            )
-            .bind(source_event_id).bind(source_event_sha256).bind(&config.partition_id)
-            .bind(*failure_code).fetch_one(&mut *tx).await?;
+        if let Admission::Poison {
+            source_event_id,
+            source_event_sha256,
+            failure_code,
+            room_id,
+            source_payload,
+        } = item
+        {
+            let _: i64 =
+                sqlx::query_scalar("select public.cex_matrix_record_poison_event_v1($1,$2,$3,$4)")
+                    .bind(source_event_id)
+                    .bind(source_event_sha256)
+                    .bind(&config.partition_id)
+                    .bind(*failure_code)
+                    .fetch_one(&mut *tx)
+                    .await?;
             let _: String = sqlx::query_scalar(
                 "select public.cex_matrix_store_poison_payload_v1($1,$2,$3,$4,$5)",
             )
-            .bind(source_event_id).bind(source_event_sha256).bind(&config.partition_id)
-            .bind(room_id).bind(sqlx::types::Json(source_payload.clone()))
-            .fetch_one(&mut *tx).await?;
+            .bind(source_event_id)
+            .bind(source_event_sha256)
+            .bind(&config.partition_id)
+            .bind(room_id)
+            .bind(sqlx::types::Json(source_payload.clone()))
+            .fetch_one(&mut *tx)
+            .await?;
         }
     }
     // Poison evidence survives even though the subsequent admission/cursor
@@ -732,10 +851,7 @@ async fn persist_poison_observations(
     Ok(())
 }
 
-async fn acquire_cursor_lease(
-    pool: &PgPool,
-    config: &PollerConfig,
-) -> Result<Option<CursorLease>> {
+async fn acquire_cursor_lease(pool: &PgPool, config: &PollerConfig) -> Result<Option<CursorLease>> {
     let row: Option<(Option<String>, i64, i64)> = sqlx::query_as(
         "select opaque_cursor, cursor_revision, lease_fence \
          from public.cex_matrix_acquire_cursor_lease_v1($1, $2, $3)",
@@ -783,8 +899,11 @@ async fn read_bounded_body(mut response: Response, max_bytes: usize) -> Result<V
     }
 
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await
-        .map_err(|_| anyhow!("matrix_sync_body_interrupted"))? {
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| anyhow!("matrix_sync_body_interrupted"))?
+    {
         if bytes.len().saturating_add(chunk.len()) > max_bytes {
             bail!("Matrix sync response exceeds MATRIX_POLL_SYNC_MAX_BYTES");
         }
@@ -825,24 +944,23 @@ impl PollerConfig {
             .unwrap_or_else(|_| "http://127.0.0.1:8008".to_string());
         let matrix_access_token = required_env("MATRIX_ACCESS_TOKEN", None)?;
         let bot_user_id = required_env("MATRIX_BOT_USER_ID", None)?;
-        let database_url =
-            required_env("MATRIX_TRANSPORT_DATABASE_URL", Some("DATABASE_URL"))?;
+        let database_url = required_env("MATRIX_TRANSPORT_DATABASE_URL", Some("DATABASE_URL"))?;
         let partition_id = required_env("MATRIX_POLL_PARTITION_ID", None)?;
         let worker_id = required_env("MATRIX_POLL_WORKER_ID", None)?;
-        let cursor_lease_seconds =
-            parse_env("MATRIX_POLL_CURSOR_LEASE_SECONDS", 60_i32)?;
+        let cursor_lease_seconds = parse_env("MATRIX_POLL_CURSOR_LEASE_SECONDS", 60_i32)?;
         let poll_interval_ms = parse_env("MATRIX_POLL_INTERVAL_MS", 3_000_u64)?;
         let sync_timeout_ms = parse_env("MATRIX_POLL_SYNC_TIMEOUT_MS", 30_000_u64)?;
         let sync_max_bytes = parse_env("MATRIX_POLL_SYNC_MAX_BYTES", 2_097_152_usize)?;
-        let delivery_max_attempts =
-            parse_env("MATRIX_POLL_DELIVERY_MAX_ATTEMPTS", 8_i32)?;
+        let delivery_max_attempts = parse_env("MATRIX_POLL_DELIVERY_MAX_ATTEMPTS", 8_i32)?;
         let sync_filter = stream_scope::configured_filter(env::var("MATRIX_SYNC_FILTER"))
             .map_err(|code| anyhow!(code))?;
         stream_scope::describe(&homeserver_base_url, &bot_user_id, sync_filter.as_deref())
             .map_err(|code| anyhow!(code))?;
         let sync_filter_definition_sha256 = filter_definition::configured_digest(
-            sync_filter.as_deref(), env::var("MATRIX_SYNC_FILTER_DEFINITION_SHA256"),
-        ).map_err(|code| anyhow!(code))?;
+            sync_filter.as_deref(),
+            env::var("MATRIX_SYNC_FILTER_DEFINITION_SHA256"),
+        )
+        .map_err(|code| anyhow!(code))?;
 
         if !(5..=3_600).contains(&cursor_lease_seconds) {
             bail!("MATRIX_POLL_CURSOR_LEASE_SECONDS must be between 5 and 3600");
@@ -865,9 +983,12 @@ impl PollerConfig {
 
         let url = Url::parse(&homeserver_base_url)
             .context("MATRIX_POLL_HOMESERVER is not a valid URL")?;
-        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none()
-            || !url.username().is_empty() || url.password().is_some()
-            || url.query().is_some() || url.fragment().is_some()
+        if !matches!(url.scheme(), "http" | "https")
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
         {
             bail!("invalid_matrix_homeserver_authority");
         }
@@ -924,10 +1045,7 @@ where
 }
 
 fn validate_identifier(name: &str, value: &str, max_bytes: usize) -> Result<()> {
-    if value.trim().is_empty()
-        || value.len() > max_bytes
-        || value.chars().any(char::is_control)
-    {
+    if value.trim().is_empty() || value.len() > max_bytes || value.chars().any(char::is_control) {
         bail!("{name} is empty, too long, or contains control characters");
     }
     Ok(())
@@ -1002,7 +1120,8 @@ mod tests {
         serde_json::from_value(json!({
             "next_batch": "next",
             "rooms": {"join": {"!room:example": {"timeline": {"events": [event]}}}}
-        })).unwrap()
+        }))
+        .unwrap()
     }
 
     #[test]
@@ -1014,8 +1133,18 @@ mod tests {
         event["unsigned"] = json!({"age": 999});
         let second = prepare_admissions(&test_batch(event), &test_config()).unwrap();
         match (&first[0], &second[0]) {
-            (Admission::Delivery { delivery_id: a, payload_sha256: ah, .. },
-             Admission::Delivery { delivery_id: b, payload_sha256: bh, .. }) => {
+            (
+                Admission::Delivery {
+                    delivery_id: a,
+                    payload_sha256: ah,
+                    ..
+                },
+                Admission::Delivery {
+                    delivery_id: b,
+                    payload_sha256: bh,
+                    ..
+                },
+            ) => {
                 assert_eq!(a, b);
                 assert_eq!(ah, bh);
             }
@@ -1030,7 +1159,12 @@ mod tests {
             "content":{"msgtype":"m.text"}});
         let admissions = prepare_admissions(&test_batch(event), &test_config()).unwrap();
         match &admissions[0] {
-            Admission::Poison { failure_code, source_payload, room_id, .. } => {
+            Admission::Poison {
+                failure_code,
+                source_payload,
+                room_id,
+                ..
+            } => {
                 assert_eq!(*failure_code, "missing_message_body");
                 assert_eq!(room_id, "!room:example");
                 assert!(source_payload.get("unsigned").is_none());
@@ -1045,7 +1179,9 @@ mod tests {
         let event = json!({"type":"m.room.message", "event_id":"$edit",
             "sender":"@human:example", "content":{"msgtype":"m.text","body":"replacement",
             "m.relates_to":{"rel_type":"m.replace","event_id":"$one"}}});
-        assert!(prepare_admissions(&test_batch(event), &test_config()).unwrap().is_empty());
+        assert!(prepare_admissions(&test_batch(event), &test_config())
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -1053,7 +1189,9 @@ mod tests {
         for (sender, kind) in [("@human:example", "m.image"), ("@bot:example", "m.text")] {
             let event = json!({"type":"m.room.message", "event_id":"$one",
                 "sender":sender, "content":{"msgtype":kind,"body":"ignored"}});
-            assert!(prepare_admissions(&test_batch(event), &test_config()).unwrap().is_empty());
+            assert!(prepare_admissions(&test_batch(event), &test_config())
+                .unwrap()
+                .is_empty());
         }
     }
 
@@ -1064,12 +1202,23 @@ mod tests {
         assert!(build_sync_url(&config, Some("cursor")).is_err());
         let bytes = br#"{"room":{"timeline":{"not_senders":["@excluded:example"]}}}"#;
         let digest = sha256_prefixed(bytes);
-        config.resolved_filter = Some(filter_definition::verify_definition(bytes, &digest).unwrap());
+        config.resolved_filter =
+            Some(filter_definition::verify_definition(bytes, &digest).unwrap());
         let url = build_sync_url(&config, Some("cursor")).unwrap();
-        let actual = url.query_pairs().find(|(key, _)| key == "filter").unwrap().1;
+        let actual = url
+            .query_pairs()
+            .find(|(key, _)| key == "filter")
+            .unwrap()
+            .1;
         assert_eq!(actual, std::str::from_utf8(bytes).unwrap());
-        assert_eq!(url.query_pairs().filter(|(key, _)| key == "filter").count(), 1);
-        assert_eq!(url.query_pairs().find(|(key, _)| key == "since").unwrap().1, "cursor");
+        assert_eq!(
+            url.query_pairs().filter(|(key, _)| key == "filter").count(),
+            1
+        );
+        assert_eq!(
+            url.query_pairs().find(|(key, _)| key == "since").unwrap().1,
+            "cursor"
+        );
     }
 
     #[test]
@@ -1082,10 +1231,16 @@ mod tests {
             json!({"event_id":"$one","type":42}),
             json!({"event_id":"$one","type":""}),
         ] {
-            let admissions = prepare_admissions(&test_batch(event.clone()), &test_config()).unwrap();
+            let admissions =
+                prepare_admissions(&test_batch(event.clone()), &test_config()).unwrap();
             assert_eq!(admissions.len(), 1);
             match &admissions[0] {
-                Admission::Poison { failure_code, source_payload, source_event_id, .. } => {
+                Admission::Poison {
+                    failure_code,
+                    source_payload,
+                    source_event_id,
+                    ..
+                } => {
                     assert_eq!(*failure_code, "invalid_event_type");
                     assert_eq!(source_payload, &event);
                     assert!(!source_event_id.is_empty());
@@ -1099,7 +1254,9 @@ mod tests {
     fn well_formed_unsupported_event_types_still_do_not_become_commands() {
         for kind in ["m.room.member", "m.room.encrypted", "org.example.custom"] {
             let event = json!({"type":kind,"event_id":"$one","content":{}});
-            assert!(prepare_admissions(&test_batch(event), &test_config()).unwrap().is_empty());
+            assert!(prepare_admissions(&test_batch(event), &test_config())
+                .unwrap()
+                .is_empty());
         }
     }
 
@@ -1108,7 +1265,8 @@ mod tests {
         for bytes in [
             br#"{"next_batch":"new","errcode":null}"#.as_slice(),
             br#"{"next_batch":"new","rooms":{"join":{"!r:e":{},"!r:e":{}}}}"#.as_slice(),
-            br#"{"next_batch":"new","rooms":{"join":{"!r:e":{"timeline":{"prev_batch":null}}}}}"#.as_slice(),
+            br#"{"next_batch":"new","rooms":{"join":{"!r:e":{"timeline":{"prev_batch":null}}}}}"#
+                .as_slice(),
         ] {
             assert!(wire_response::decode::<SyncResponse>(bytes).is_err());
         }
@@ -1123,17 +1281,27 @@ mod tests {
         let direct = prepare_admissions(&test_batch(event.clone()), &test_config()).unwrap();
         let wire = serde_json::to_vec(&json!({"next_batch":"next","rooms":{"join":{
             "!room:example":{"timeline":{"events":[event]}}
-        }}})).unwrap();
+        }}}))
+        .unwrap();
         let decoded: SyncResponse = wire_response::decode(&wire).unwrap();
         let checked = prepare_admissions(&decoded, &test_config()).unwrap();
         match (&direct[0], &checked[0]) {
-            (Admission::Delivery { delivery_id: a, payload_sha256: ah, .. },
-             Admission::Delivery { delivery_id: b, payload_sha256: bh, .. }) => {
+            (
+                Admission::Delivery {
+                    delivery_id: a,
+                    payload_sha256: ah,
+                    ..
+                },
+                Admission::Delivery {
+                    delivery_id: b,
+                    payload_sha256: bh,
+                    ..
+                },
+            ) => {
                 assert_eq!(a, b);
                 assert_eq!(ah, bh);
             }
             _ => panic!("healthy wire decoding must preserve normal delivery identity"),
         }
     }
-
 }

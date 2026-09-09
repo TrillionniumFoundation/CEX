@@ -14,27 +14,44 @@ pub(super) enum MatrixDecision {
     Hold(&'static str),
 }
 
-pub(super) fn classify_matrix_response(status: u16, body: Result<Vec<u8>, BodyFailure>) -> MatrixDecision {
+pub(super) fn classify_matrix_response(
+    status: u16,
+    body: Result<Vec<u8>, BodyFailure>,
+) -> MatrixDecision {
     let bytes = match body {
         Ok(bytes) => bytes,
-        Err(BodyFailure::Interrupted) => return MatrixDecision::Retry("matrix_response_unknown_interrupted"),
-        Err(BodyFailure::TooLarge) => return MatrixDecision::Hold("matrix_unverified_oversized_response"),
+        Err(BodyFailure::Interrupted) => {
+            return MatrixDecision::Retry("matrix_response_unknown_interrupted")
+        }
+        Err(BodyFailure::TooLarge) => {
+            return MatrixDecision::Hold("matrix_unverified_oversized_response")
+        }
     };
     if status == 200 {
         let receipt = match serde_json::from_slice::<Value>(&bytes) {
             Ok(value) => value,
             Err(_) => return MatrixDecision::Retry("matrix_response_unknown_invalid_json"),
         };
-        let valid = receipt.get("event_id").and_then(Value::as_str).is_some_and(|id| {
-            id.starts_with('$') && id.len() > 1 && id.len() <= 512 && !id.chars().any(char::is_whitespace)
-                && !id.chars().any(char::is_control)
-        });
+        let valid = receipt
+            .get("event_id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| {
+                id.starts_with('$')
+                    && id.len() > 1
+                    && id.len() <= 512
+                    && !id.chars().any(char::is_whitespace)
+                    && !id.chars().any(char::is_control)
+            });
         if valid && receipt.get("errcode").is_none() {
             return MatrixDecision::Accepted(receipt);
         }
         return MatrixDecision::Retry("matrix_response_unknown_missing_receipt");
     }
-    if status == 408 || status == 429 || (500..=599).contains(&status) || (200..=299).contains(&status) {
+    if status == 408
+        || status == 429
+        || (500..=599).contains(&status)
+        || (200..=299).contains(&status)
+    {
         return MatrixDecision::Retry("matrix_response_unknown_status");
     }
     MatrixDecision::Hold("matrix_send_rejected_status")
@@ -58,7 +75,9 @@ pub(super) fn validate_adapter_response(
         .filter(|value| {
             !value.is_empty()
                 && value.len() <= 128
-                && value.bytes().all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
         })
         .ok_or("adapter_response_invalid_action")?;
     if upstream.get("error").is_some() || upstream.get("errcode").is_some() {
@@ -80,9 +99,16 @@ pub(super) fn validate_adapter_response(
         .filter(|value| !value.is_empty())
         .ok_or("adapter_source_identity_missing")?;
     let expected_event = if action == "status_lookup" {
-        let text = source.get("text").and_then(Value::as_str).or_else(|| {
-            source.get("content").and_then(|content| content.get("body")).and_then(Value::as_str)
-        }).ok_or("adapter_status_request_mismatch")?;
+        let text = source
+            .get("text")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                source
+                    .get("content")
+                    .and_then(|content| content.get("body"))
+                    .and_then(Value::as_str)
+            })
+            .ok_or("adapter_status_request_mismatch")?;
         let mut words = text.split_whitespace();
         if words.next() != Some("/status") {
             return Err("adapter_status_request_mismatch");
@@ -107,7 +133,10 @@ pub(super) fn validate_adapter_response(
     Ok(())
 }
 
-pub(super) fn bound_reply(upstream: &Value, original_room: &str) -> Result<Option<Value>, &'static str> {
+pub(super) fn bound_reply(
+    upstream: &Value,
+    original_room: &str,
+) -> Result<Option<Value>, &'static str> {
     if !upstream.is_object() {
         return Err("adapter_response_unknown_shape");
     }
@@ -118,13 +147,22 @@ pub(super) fn bound_reply(upstream: &Value, original_room: &str) -> Result<Optio
     }
     match upstream.get("projected_reply") {
         None | Some(Value::Null) => Ok(None),
-        Some(reply) if reply.as_object().is_some_and(|object| {
-            object.keys().all(|key| matches!(key.as_str(), "msgtype" | "body"))
-        })
-            && reply.get("msgtype").and_then(Value::as_str).is_some_and(|kind| matches!(kind, "m.text" | "m.notice"))
-            && reply.get("body").and_then(Value::as_str).is_some_and(|body| {
-                !body.trim().is_empty() && body.len() <= 65_536
-            }) => Ok(Some(reply.clone())),
+        Some(reply)
+            if reply.as_object().is_some_and(|object| {
+                object
+                    .keys()
+                    .all(|key| matches!(key.as_str(), "msgtype" | "body"))
+            }) && reply
+                .get("msgtype")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| matches!(kind, "m.text" | "m.notice"))
+                && reply
+                    .get("body")
+                    .and_then(Value::as_str)
+                    .is_some_and(|body| !body.trim().is_empty() && body.len() <= 65_536) =>
+        {
+            Ok(Some(reply.clone()))
+        }
         Some(_) => Err("adapter_reply_contract_mismatch"),
     }
 }
@@ -136,52 +174,97 @@ mod tests {
 
     #[test]
     fn send_requires_a_real_event_id() {
-        for body in [r#"{}"#, r#"{"event_id":""}"#, r#"{"event_id":"not-an-event"}"#, r#"{"event_id":"$x","errcode":"bad"}"#] {
-            assert!(matches!(classify_matrix_response(200, Ok(body.as_bytes().to_vec())), MatrixDecision::Retry(_)));
+        for body in [
+            r#"{}"#,
+            r#"{"event_id":""}"#,
+            r#"{"event_id":"not-an-event"}"#,
+            r#"{"event_id":"$x","errcode":"bad"}"#,
+        ] {
+            assert!(matches!(
+                classify_matrix_response(200, Ok(body.as_bytes().to_vec())),
+                MatrixDecision::Retry(_)
+            ));
         }
-        assert!(matches!(classify_matrix_response(200, Ok(br#"{"event_id":"$valid"}"#.to_vec())), MatrixDecision::Accepted(_)));
+        assert!(matches!(
+            classify_matrix_response(200, Ok(br#"{"event_id":"$valid"}"#.to_vec())),
+            MatrixDecision::Accepted(_)
+        ));
     }
 
     #[test]
     fn malformed_and_interrupted_responses_are_unknown_not_success() {
-        assert!(matches!(classify_matrix_response(200, Ok(b"{".to_vec())), MatrixDecision::Retry(_)));
-        assert!(matches!(classify_matrix_response(200, Err(BodyFailure::Interrupted)), MatrixDecision::Retry(_)));
-        assert!(matches!(classify_matrix_response(200, Err(BodyFailure::TooLarge)), MatrixDecision::Hold(_)));
+        assert!(matches!(
+            classify_matrix_response(200, Ok(b"{".to_vec())),
+            MatrixDecision::Retry(_)
+        ));
+        assert!(matches!(
+            classify_matrix_response(200, Err(BodyFailure::Interrupted)),
+            MatrixDecision::Retry(_)
+        ));
+        assert!(matches!(
+            classify_matrix_response(200, Err(BodyFailure::TooLarge)),
+            MatrixDecision::Hold(_)
+        ));
     }
 
     #[test]
     fn status_alone_never_completes_a_send() {
         for status in [201, 202, 204, 408, 429, 500, 503] {
-            assert!(matches!(classify_matrix_response(status, Ok(Vec::new())), MatrixDecision::Retry(_)));
+            assert!(matches!(
+                classify_matrix_response(status, Ok(Vec::new())),
+                MatrixDecision::Retry(_)
+            ));
         }
         for status in [301, 400, 401, 403, 404] {
-            assert!(matches!(classify_matrix_response(status, Ok(Vec::new())), MatrixDecision::Hold(_)));
+            assert!(matches!(
+                classify_matrix_response(status, Ok(Vec::new())),
+                MatrixDecision::Hold(_)
+            ));
         }
     }
 
     #[test]
     fn replies_cannot_target_another_room() {
-        let reply = json!({"room_id":"!other:e", "projected_reply":{"msgtype":"m.text","body":"private"}});
-        assert_eq!(bound_reply(&reply, "!original:e"), Err("adapter_reply_room_mismatch"));
+        let reply =
+            json!({"room_id":"!other:e", "projected_reply":{"msgtype":"m.text","body":"private"}});
+        assert_eq!(
+            bound_reply(&reply, "!original:e"),
+            Err("adapter_reply_room_mismatch")
+        );
         let reply = json!({"room_id": null});
-        assert_eq!(bound_reply(&reply, "!original:e"), Err("adapter_reply_room_mismatch"));
+        assert_eq!(
+            bound_reply(&reply, "!original:e"),
+            Err("adapter_reply_room_mismatch")
+        );
     }
 
     #[test]
     fn presentation_reply_cannot_carry_edit_html_or_mention_control_fields() {
-        for field in ["m.relates_to", "m.new_content", "m.mentions", "format", "formatted_body", "url"] {
+        for field in [
+            "m.relates_to",
+            "m.new_content",
+            "m.mentions",
+            "format",
+            "formatted_body",
+            "url",
+        ] {
             let mut reply = json!({"msgtype":"m.text", "body":"bounded"});
             reply[field] = json!({"unexpected":true});
-            assert_eq!(bound_reply(&json!({"projected_reply":reply}), "!r:e"),
-                Err("adapter_reply_contract_mismatch"));
+            assert_eq!(
+                bound_reply(&json!({"projected_reply":reply}), "!r:e"),
+                Err("adapter_reply_contract_mismatch")
+            );
         }
     }
 
     #[test]
     fn reply_shape_is_bounded_and_explicit() {
-        for value in [json!({"projected_reply":42}), json!({"projected_reply":"text"}),
+        for value in [
+            json!({"projected_reply":42}),
+            json!({"projected_reply":"text"}),
             json!({"projected_reply":{"msgtype":"m.text","body":" "}}),
-            json!({"projected_reply":{"msgtype":"m.text","body":"x".repeat(65_537)}})] {
+            json!({"projected_reply":{"msgtype":"m.text","body":"x".repeat(65_537)}}),
+        ] {
             assert!(bound_reply(&value, "!r:e").is_err());
         }
         let value = json!({"projected_reply":{"msgtype":"m.text","body":"bounded"}});
@@ -247,7 +330,10 @@ mod adapter_tests {
         let mut value = response();
         value["action"] = json!("duplicate_event");
         value["accepted"] = json!(false);
-        assert_eq!(validate_adapter_response(&value, &source()), Err("adapter_duplicate_outcome_unknown"));
+        assert_eq!(
+            validate_adapter_response(&value, &source()),
+            Err("adapter_duplicate_outcome_unknown")
+        );
     }
 
     #[test]

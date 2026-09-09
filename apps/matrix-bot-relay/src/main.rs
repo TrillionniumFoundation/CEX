@@ -1,5 +1,5 @@
-mod runtime_profile;
 mod response_contract;
+mod runtime_profile;
 
 use anyhow::{anyhow, bail, Context, Result};
 use axum::{
@@ -114,10 +114,7 @@ async fn main() -> Result<()> {
 
     let app = Router::new()
         .route("/health", get(health))
-        .route(
-            "/v1/inbound/matrix-event",
-            post(compatibility_ingress),
-        )
+        .route("/v1/inbound/matrix-event", post(compatibility_ingress))
         .layer(DefaultBodyLimit::max(state.config.ingress_max_bytes))
         .with_state(state.clone());
 
@@ -224,15 +221,7 @@ async fn compatibility_ingress(
         ),
     };
 
-    match admit_compatibility_event(
-        &state,
-        event_id,
-        delivery_id,
-        &payload_sha256,
-        payload,
-    )
-    .await
-    {
+    match admit_compatibility_event(&state, event_id, delivery_id, &payload_sha256, payload).await {
         Ok((event_disposition, delivery_disposition)) => (
             StatusCode::ACCEPTED,
             Json(json!({
@@ -262,26 +251,24 @@ async fn admit_compatibility_event(
     payload: Value,
 ) -> Result<(String, String)> {
     let mut tx: Transaction<'_, Postgres> = state.pool.begin().await?;
-    let event_disposition: String = sqlx::query_scalar(
-        "select public.cex_matrix_accept_source_event_v1($1, $2, $3, $4)",
-    )
-    .bind(event_id)
-    .bind(payload_sha256)
-    .bind("matrix-relay-http-v1")
-    .bind(Option::<&str>::None)
-    .fetch_one(&mut *tx)
-    .await?;
-    let delivery_disposition: String = sqlx::query_scalar(
-        "select public.cex_matrix_enqueue_delivery_v1($1, $2, $3, $4, $5, $6)",
-    )
-    .bind(delivery_id)
-    .bind(event_id)
-    .bind(ADAPTER_DESTINATION)
-    .bind(payload_sha256)
-    .bind(sqlx::types::Json(payload))
-    .bind(state.config.delivery_max_attempts)
-    .fetch_one(&mut *tx)
-    .await?;
+    let event_disposition: String =
+        sqlx::query_scalar("select public.cex_matrix_accept_source_event_v1($1, $2, $3, $4)")
+            .bind(event_id)
+            .bind(payload_sha256)
+            .bind("matrix-relay-http-v1")
+            .bind(Option::<&str>::None)
+            .fetch_one(&mut *tx)
+            .await?;
+    let delivery_disposition: String =
+        sqlx::query_scalar("select public.cex_matrix_enqueue_delivery_v1($1, $2, $3, $4, $5, $6)")
+            .bind(delivery_id)
+            .bind(event_id)
+            .bind(ADAPTER_DESTINATION)
+            .bind(payload_sha256)
+            .bind(sqlx::types::Json(payload))
+            .bind(state.config.delivery_max_attempts)
+            .fetch_one(&mut *tx)
+            .await?;
     tx.commit().await?;
     Ok((event_disposition, delivery_disposition))
 }
@@ -443,17 +430,23 @@ async fn call_adapter(state: &AppState, delivery: &ClaimedDelivery) -> Result<Re
     let body = match read_bounded_body(response, state.config.max_response_bytes).await {
         Ok(body) => body,
         Err(response_contract::BodyFailure::TooLarge) => {
-            return Ok(RemoteOutcome::Permanent("adapter_unverified_oversized_response"));
+            return Ok(RemoteOutcome::Permanent(
+                "adapter_unverified_oversized_response",
+            ));
         }
         Err(response_contract::BodyFailure::Interrupted) => {
-            return Ok(RemoteOutcome::Permanent("adapter_response_unknown_interrupted"));
+            return Ok(RemoteOutcome::Permanent(
+                "adapter_response_unknown_interrupted",
+            ));
         }
     };
 
     if status.is_success() {
         return match serde_json::from_slice::<Value>(&body) {
             Ok(value) if value.is_object() => Ok(RemoteOutcome::Success(value)),
-            _ => Ok(RemoteOutcome::Permanent("adapter_response_unknown_invalid_json")),
+            _ => Ok(RemoteOutcome::Permanent(
+                "adapter_response_unknown_invalid_json",
+            )),
         };
     }
     if is_retryable_status(status) {
@@ -484,8 +477,15 @@ async fn complete_adapter_success(
     let projected_reply = match response_contract::bound_reply(&upstream, &event.room_id) {
         Ok(reply) => reply,
         Err(code) => {
-            finish_delivery(&state.pool, &state.config.worker_id, delivery.delivery_id,
-                delivery.lease_fence, "permanent_failure", Some(code)).await?;
+            finish_delivery(
+                &state.pool,
+                &state.config.worker_id,
+                delivery.delivery_id,
+                delivery.lease_fence,
+                "permanent_failure",
+                Some(code),
+            )
+            .await?;
             return Ok(());
         }
     };
@@ -526,14 +526,13 @@ async fn complete_adapter_success(
         .await?;
     }
 
-    let _: String = sqlx::query_scalar(
-        "select public.cex_matrix_finish_delivery_v1($1, $2, $3, 'sent', null)",
-    )
-    .bind(delivery.delivery_id)
-    .bind(&state.config.worker_id)
-    .bind(delivery.lease_fence)
-    .fetch_one(&mut *tx)
-    .await?;
+    let _: String =
+        sqlx::query_scalar("select public.cex_matrix_finish_delivery_v1($1, $2, $3, 'sent', null)")
+            .bind(delivery.delivery_id)
+            .bind(&state.config.worker_id)
+            .bind(delivery.lease_fence)
+            .fetch_one(&mut *tx)
+            .await?;
     tx.commit().await?;
     Ok(())
 }
@@ -554,7 +553,9 @@ async fn process_matrix_delivery(state: &AppState, delivery: &ClaimedDelivery) -
     let outcome = call_matrix_homeserver(state, delivery, &envelope).await?;
     match outcome {
         RemoteOutcome::Success(receipt) => {
-            let event_id = receipt.get("event_id").and_then(Value::as_str)
+            let event_id = receipt
+                .get("event_id")
+                .and_then(Value::as_str)
                 .ok_or_else(|| anyhow!("matrix_receipt_contract_mismatch"))?;
             let mut tx = state.pool.begin().await?;
             let _: String = sqlx::query_scalar(
@@ -566,14 +567,16 @@ async fn process_matrix_delivery(state: &AppState, delivery: &ClaimedDelivery) -
             .bind(&delivery.payload_sha256)
             .bind(&envelope.room_id)
             .bind(event_id)
-            .fetch_one(&mut *tx).await?;
+            .fetch_one(&mut *tx)
+            .await?;
             let _: String = sqlx::query_scalar(
                 "select public.cex_matrix_finish_delivery_v1($1,$2,$3,'sent',null)",
             )
             .bind(delivery.delivery_id)
             .bind(&state.config.worker_id)
             .bind(delivery.lease_fence)
-            .fetch_one(&mut *tx).await?;
+            .fetch_one(&mut *tx)
+            .await?;
             tx.commit().await?;
         }
         RemoteOutcome::Retryable(code) => {
@@ -610,13 +613,17 @@ async fn call_matrix_homeserver(
     // Bind the credential scope before network I/O. A replacement access token
     // or homeserver must not silently turn a retry into a new Matrix operation.
     let credential_tag = sha256_prefixed(state.config.matrix_access_token.as_bytes());
-    let binding: std::result::Result<String, sqlx::Error> = sqlx::query_scalar(
-        "select public.cex_matrix_bind_send_attempt_v1($1,$2,$3,$4,$5,$6,$7)",
-    )
-    .bind(delivery.delivery_id).bind(&state.config.worker_id).bind(delivery.lease_fence)
-    .bind(&delivery.payload_sha256).bind(&envelope.room_id)
-    .bind(&state.config.matrix_homeserver_base_url).bind(&credential_tag)
-    .fetch_one(&state.pool).await;
+    let binding: std::result::Result<String, sqlx::Error> =
+        sqlx::query_scalar("select public.cex_matrix_bind_send_attempt_v1($1,$2,$3,$4,$5,$6,$7)")
+            .bind(delivery.delivery_id)
+            .bind(&state.config.worker_id)
+            .bind(delivery.lease_fence)
+            .bind(&delivery.payload_sha256)
+            .bind(&envelope.room_id)
+            .bind(&state.config.matrix_homeserver_base_url)
+            .bind(&credential_tag)
+            .fetch_one(&state.pool)
+            .await;
     if binding.is_err() {
         return Ok(RemoteOutcome::Permanent("matrix_send_binding_unverified"));
     }
@@ -664,16 +671,15 @@ async fn finish_delivery(
     outcome: &str,
     error_code: Option<&str>,
 ) -> Result<String> {
-    let status: String = sqlx::query_scalar(
-        "select public.cex_matrix_finish_delivery_v1($1, $2, $3, $4, $5)",
-    )
-    .bind(delivery_id)
-    .bind(owner)
-    .bind(lease_fence)
-    .bind(outcome)
-    .bind(error_code)
-    .fetch_one(pool)
-    .await?;
+    let status: String =
+        sqlx::query_scalar("select public.cex_matrix_finish_delivery_v1($1, $2, $3, $4, $5)")
+            .bind(delivery_id)
+            .bind(owner)
+            .bind(lease_fence)
+            .bind(outcome)
+            .bind(error_code)
+            .fetch_one(pool)
+            .await?;
     Ok(status)
 }
 
@@ -695,15 +701,14 @@ async fn poison_and_finish(
     .bind(&delivery.source_event_id)
     .fetch_one(&mut *tx)
     .await?;
-    let _: i64 = sqlx::query_scalar(
-        "select public.cex_matrix_record_poison_event_v1($1, $2, $3, $4)",
-    )
-    .bind(&delivery.source_event_id)
-    .bind(&source_hash)
-    .bind(&partition_id)
-    .bind(failure_code)
-    .fetch_one(&mut *tx)
-    .await?;
+    let _: i64 =
+        sqlx::query_scalar("select public.cex_matrix_record_poison_event_v1($1, $2, $3, $4)")
+            .bind(&delivery.source_event_id)
+            .bind(&source_hash)
+            .bind(&partition_id)
+            .bind(failure_code)
+            .fetch_one(&mut *tx)
+            .await?;
     let _: String = sqlx::query_scalar(
         "select public.cex_matrix_finish_delivery_v1($1, $2, $3, 'permanent_failure', $4)",
     )
@@ -736,12 +741,18 @@ async fn read_bounded_body(
     mut response: ReqwestResponse,
     max_bytes: usize,
 ) -> std::result::Result<Vec<u8>, response_contract::BodyFailure> {
-    if response.content_length().is_some_and(|length| length > max_bytes as u64) {
+    if response
+        .content_length()
+        .is_some_and(|length| length > max_bytes as u64)
+    {
         return Err(response_contract::BodyFailure::TooLarge);
     }
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await
-        .map_err(|_| response_contract::BodyFailure::Interrupted)? {
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| response_contract::BodyFailure::Interrupted)?
+    {
         if bytes.len().saturating_add(chunk.len()) > max_bytes {
             return Err(response_contract::BodyFailure::TooLarge);
         }
@@ -823,10 +834,7 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 }
 
 fn validate_identifier(value: &str, max_bytes: usize) -> Result<()> {
-    if value.trim().is_empty()
-        || value.len() > max_bytes
-        || value.chars().any(char::is_control)
-    {
+    if value.trim().is_empty() || value.len() > max_bytes || value.chars().any(char::is_control) {
         bail!("identifier is empty, too long, or contains control characters");
     }
     Ok(())
@@ -842,20 +850,17 @@ impl RelayConfig {
         let bind_addr = env::var("MATRIX_BOT_RELAY_BIND")
             .or_else(|_| env::var("MATRIX_BOT_RELAY_BIND_ADDR"))
             .unwrap_or_else(|_| "127.0.0.1:8092".to_string());
-        let database_url =
-            required_env("MATRIX_TRANSPORT_DATABASE_URL", Some("DATABASE_URL"))?;
+        let database_url = required_env("MATRIX_TRANSPORT_DATABASE_URL", Some("DATABASE_URL"))?;
         let worker_id = required_env("MATRIX_RELAY_WORKER_ID", None)?;
         let claim_lease_seconds = parse_env_with_alias(
             "MATRIX_RELAY_CLAIM_LEASE_SECONDS",
             "MATRIX_RELAY_LEASE_SECONDS",
             60_i32,
         )?;
-        let http_timeout_seconds =
-            parse_env("MATRIX_RELAY_HTTP_TIMEOUT_SECONDS", 20_u64)?;
+        let http_timeout_seconds = parse_env("MATRIX_RELAY_HTTP_TIMEOUT_SECONDS", 20_u64)?;
         let poll_interval_ms = parse_env("MATRIX_RELAY_POLL_INTERVAL_MS", 500_u64)?.max(50);
         let ingress_token = required_env("MATRIX_RELAY_INGRESS_TOKEN", None)?;
-        let ingress_max_bytes =
-            parse_env("MATRIX_RELAY_INGRESS_MAX_BYTES", 1_048_576_usize)?;
+        let ingress_max_bytes = parse_env("MATRIX_RELAY_INGRESS_MAX_BYTES", 1_048_576_usize)?;
         let adapter_base_url = env::var("MATRIX_ADAPTER_BASE_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:8091".to_string());
         let adapter_token = required_env(
@@ -865,10 +870,8 @@ impl RelayConfig {
         let matrix_homeserver_base_url = env::var("MATRIX_HOMESERVER_BASE_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:8008".to_string());
         let matrix_access_token = required_env("MATRIX_ACCESS_TOKEN", None)?;
-        let max_response_bytes =
-            parse_env("MATRIX_RELAY_MAX_RESPONSE_BYTES", 1_048_576_usize)?;
-        let delivery_max_attempts =
-            parse_env("MATRIX_RELAY_DELIVERY_MAX_ATTEMPTS", 8_i32)?;
+        let max_response_bytes = parse_env("MATRIX_RELAY_MAX_RESPONSE_BYTES", 1_048_576_usize)?;
+        let delivery_max_attempts = parse_env("MATRIX_RELAY_DELIVERY_MAX_ATTEMPTS", 8_i32)?;
 
         if !(5..=3_600).contains(&claim_lease_seconds) {
             bail!("MATRIX_RELAY_CLAIM_LEASE_SECONDS must be between 5 and 3600");
@@ -888,14 +891,17 @@ impl RelayConfig {
         }
         validate_identifier(&worker_id, 256)?;
 
-        let adapter_url = Url::parse(&adapter_base_url)
-            .context("MATRIX_ADAPTER_BASE_URL is not a valid URL")?;
+        let adapter_url =
+            Url::parse(&adapter_base_url).context("MATRIX_ADAPTER_BASE_URL is not a valid URL")?;
         let homeserver_url = Url::parse(&matrix_homeserver_base_url)
             .context("MATRIX_HOMESERVER_BASE_URL is not a valid URL")?;
         for url in [&adapter_url, &homeserver_url] {
-            if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none()
-                || !url.username().is_empty() || url.password().is_some()
-                || url.query().is_some() || url.fragment().is_some()
+            if !matches!(url.scheme(), "http" | "https")
+                || url.host_str().is_none()
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.query().is_some()
+                || url.fragment().is_some()
             {
                 bail!("invalid_matrix_relay_endpoint_authority");
             }
@@ -1018,12 +1024,7 @@ mod tests {
     #[test]
     fn matrix_transaction_url_uses_stable_delivery_id() {
         let delivery_id = Uuid::parse_str("00000000-0000-5000-8000-000000000001").unwrap();
-        let url = matrix_send_url(
-            "https://matrix.example",
-            "!room:example",
-            delivery_id,
-        )
-        .unwrap();
+        let url = matrix_send_url("https://matrix.example", "!room:example", delivery_id).unwrap();
         assert!(url.as_str().contains("%21room%3Aexample"));
         assert!(url.as_str().ends_with(&delivery_id.to_string()));
     }
@@ -1049,9 +1050,12 @@ mod tests {
         assert!(url.path().starts_with("/proxy/_matrix/client/v3/rooms/"));
         assert!(url.path().contains("%21r%2F%3F%3Aexample"));
         assert!(url.query().is_none());
-        for base in ["file:///not-a-network-endpoint", "https://u:p@matrix.example", "https://matrix.example?q=secret"] {
+        for base in [
+            "file:///not-a-network-endpoint",
+            "https://u:p@matrix.example",
+            "https://matrix.example?q=secret",
+        ] {
             assert!(matrix_send_url(base, "!r:e", id).is_err());
         }
     }
-
 }

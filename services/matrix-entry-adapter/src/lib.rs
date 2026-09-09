@@ -9,10 +9,10 @@ use shared_config::runtime_guard::matrix_profile::resolve_profiles;
 // crate-level recursion attribute into a module is intentionally ignored; the
 // active limit is declared above at this crate root. Its legacy public surface
 // is retained only for its own regression tests and this facade.
+mod delivery_binding;
 #[allow(dead_code, unused_attributes)]
 #[path = "implementation.rs"]
 mod implementation;
-mod delivery_binding;
 mod reconciliation_response_binding;
 mod result_reconciliation;
 
@@ -74,11 +74,10 @@ impl AppState {
 
 /// Build the production router while keeping implementation constructors private.
 pub fn build_router(state: AppState) -> Router {
-    let reconciliation = result_reconciliation::router(state.inner.config()).layer(
-        middleware::from_fn(
+    let reconciliation =
+        result_reconciliation::router(state.inner.config()).layer(middleware::from_fn(
             reconciliation_response_binding::enforce_reconciliation_response_binding,
-        ),
-    );
+        ));
     let delivery_binding_policy =
         delivery_binding::DeliveryBindingPolicy::from_config(state.inner.config());
     implementation::build_router(state.inner)

@@ -17,9 +17,7 @@ async fn main() {
         }
     };
     let result_lookup = matrix_result_lookup::router(state.config().clone()).layer(
-        middleware::from_fn(
-            matrix_result_response_binding::enforce_matrix_result_response_binding,
-        ),
+        middleware::from_fn(matrix_result_response_binding::enforce_matrix_result_response_binding),
     );
     let app: Router = build_router(state.clone()).merge(result_lookup);
 

@@ -347,8 +347,8 @@ impl AppState {
         // Legacy local-provider configuration is compiled into meaningful
         // values only when the explicit compatibility feature is selected.
         #[cfg(feature = "legacy-local-provider-dispatch")]
-        let ollama_base_url = env::var("OLLAMA_BASE_URL")
-            .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
+        let ollama_base_url =
+            env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
         #[cfg(not(feature = "legacy-local-provider-dispatch"))]
         let ollama_base_url = String::new();
         #[cfg(feature = "legacy-local-provider-dispatch")]

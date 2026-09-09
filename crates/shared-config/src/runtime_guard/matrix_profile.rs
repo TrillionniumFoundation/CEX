@@ -122,21 +122,34 @@ mod tests {
     fn invalid_source_cannot_be_hidden_in_any_position() {
         for index in 0..3 {
             for invalid in ["", "unknown", "prod\0"] {
-                let mut values = [Some("prod".into()), Some("prod".into()), Some("prod".into())];
+                let mut values = [
+                    Some("prod".into()),
+                    Some("prod".into()),
+                    Some("prod".into()),
+                ];
                 values[index] = Some(invalid.into());
-                assert_eq!(resolve_profiles(&values), Err("invalid_matrix_runtime_profile"));
+                assert_eq!(
+                    resolve_profiles(&values),
+                    Err("invalid_matrix_runtime_profile")
+                );
             }
         }
     }
 
     #[test]
     fn staging_and_production_are_distinct_before_legacy_mapping() {
-        assert_eq!(AdapterProfile::Staging.legacy_value(), AdapterProfile::Production.legacy_value());
+        assert_eq!(
+            AdapterProfile::Staging.legacy_value(),
+            AdapterProfile::Production.legacy_value()
+        );
         for values in [
             [Some("stage".into()), Some("prod".into())],
             [Some("prod".into()), Some("stage".into())],
         ] {
-            assert_eq!(resolve_profiles(&values), Err("conflicting_matrix_runtime_profiles"));
+            assert_eq!(
+                resolve_profiles(&values),
+                Err("conflicting_matrix_runtime_profiles")
+            );
         }
     }
 

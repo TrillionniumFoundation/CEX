@@ -5,8 +5,8 @@ use axum::{
 use execution_service::{
     build_router,
     providers::{
-        build_provider_target, dispatch_via_provider, parse_provider_target,
-        OpenClawCliEnvScope, ProviderDispatchInput, LEGACY_LOCAL_DISPATCH_STATUS, RUNTIME_POLICY,
+        build_provider_target, dispatch_via_provider, parse_provider_target, OpenClawCliEnvScope,
+        ProviderDispatchInput, LEGACY_LOCAL_DISPATCH_STATUS, RUNTIME_POLICY,
     },
     state::AppState,
 };
@@ -100,12 +100,13 @@ async fn default_state_discards_retired_provider_prompt_material() {
 #[test]
 fn default_state_source_feature_gates_local_provider_environment_reads() {
     let source = include_str!("../src/state.rs");
-    assert!(source.contains("Default builds assign inert values and never read local-provider env vars"));
+    assert!(source
+        .contains("Default builds assign inert values and never read local-provider env vars"));
     assert!(source.contains("Legacy local-provider configuration is compiled into meaningful"));
     assert!(source.contains("ProviderInputStore"));
-    assert!(!source.contains(
-        "pub provider_inputs: Arc<RwLock<HashMap<Uuid, ProviderDispatchInput>>>"
-    ));
+    assert!(
+        !source.contains("pub provider_inputs: Arc<RwLock<HashMap<Uuid, ProviderDispatchInput>>>")
+    );
 }
 
 #[tokio::test]
@@ -147,5 +148,8 @@ fn provider_identity_helpers_are_pure_and_bounded_by_canonical_shape() {
     );
     assert_eq!(parse_provider_target("external-agent://"), None);
     assert_eq!(parse_provider_target(" external-agent://did:trnm:a"), None);
-    assert_eq!(parse_provider_target("external-agent://did:trnm:a\nsecret"), None);
+    assert_eq!(
+        parse_provider_target("external-agent://did:trnm:a\nsecret"),
+        None
+    );
 }

@@ -27,10 +27,7 @@ struct ExpectedBinding {
     request_fingerprint: String,
 }
 
-pub async fn enforce_matrix_result_response_binding(
-    request: Request,
-    next: Next,
-) -> Response {
+pub async fn enforce_matrix_result_response_binding(request: Request, next: Next) -> Response {
     if request.method() != Method::POST || request.uri().path() != LOOKUP_PATH {
         return next.run(request).await;
     }
@@ -117,8 +114,7 @@ fn validate_success_response(raw: &[u8], expected: &ExpectedBinding) -> Result<(
     let value: Value = serde_json::from_slice(raw).map_err(|_| ())?;
     if value.get("schema").and_then(Value::as_str) != Some("cex.matrix.result-lookup.v1")
         || value.get("resolved").and_then(Value::as_bool) != Some(true)
-        || value.get("delivery_id").and_then(Value::as_str)
-            != Some(expected.delivery_id.as_str())
+        || value.get("delivery_id").and_then(Value::as_str) != Some(expected.delivery_id.as_str())
         || value.get("event_id").and_then(Value::as_str) != Some(expected.event_id.as_str())
         || value.get("matrix_user_id").and_then(Value::as_str)
             != Some(expected.matrix_user_id.as_str())
@@ -128,7 +124,9 @@ fn validate_success_response(raw: &[u8], expected: &ExpectedBinding) -> Result<(
         || value.get("request_fingerprint").and_then(Value::as_str)
             != Some(expected.request_fingerprint.as_str())
         || value.get("seen_at_epoch").and_then(Value::as_i64).is_none()
-        || value.get("production_authorization").and_then(Value::as_str)
+        || value
+            .get("production_authorization")
+            .and_then(Value::as_str)
             != Some("not_granted")
     {
         return Err(());
@@ -157,12 +155,13 @@ fn validate_success_response(raw: &[u8], expected: &ExpectedBinding) -> Result<(
         return Err(());
     }
 
-    let source = response.get("source").and_then(Value::as_object).ok_or(())?;
+    let source = response
+        .get("source")
+        .and_then(Value::as_object)
+        .ok_or(())?;
     if source.get("kind").and_then(Value::as_str) != Some("matrix_message")
-        || source.get("event_id").and_then(Value::as_str)
-            != Some(expected.event_id.as_str())
-        || source.get("room_id").and_then(Value::as_str)
-            != Some(expected.room_id.as_str())
+        || source.get("event_id").and_then(Value::as_str) != Some(expected.event_id.as_str())
+        || source.get("room_id").and_then(Value::as_str) != Some(expected.room_id.as_str())
         || source.get("matrix_user_id").and_then(Value::as_str)
             != Some(expected.matrix_user_id.as_str())
     {
@@ -174,8 +173,7 @@ fn validate_success_response(raw: &[u8], expected: &ExpectedBinding) -> Result<(
         .ok_or(())?;
     if identity_scope.get("user_id").and_then(Value::as_str)
         != Some(expected.matrix_user_id.as_str())
-        || identity_scope.get("room_id").and_then(Value::as_str)
-            != Some(expected.room_id.as_str())
+        || identity_scope.get("room_id").and_then(Value::as_str) != Some(expected.room_id.as_str())
     {
         return Err(());
     }
@@ -201,14 +199,11 @@ fn validate_embedded_binding(
     if binding.len() != 8
         || binding.get("schema").and_then(Value::as_str) != Some(DELIVERY_BINDING_SCHEMA)
         || binding.get("source").and_then(Value::as_str) != Some(DELIVERY_BINDING_SOURCE)
-        || binding.get("delivery_id").and_then(Value::as_str)
-            != Some(expected.delivery_id.as_str())
+        || binding.get("delivery_id").and_then(Value::as_str) != Some(expected.delivery_id.as_str())
         || binding.get("payload_sha256").and_then(Value::as_str)
             != Some(expected.payload_sha256.as_str())
-        || binding.get("event_id").and_then(Value::as_str)
-            != Some(expected.event_id.as_str())
-        || binding.get("room_id").and_then(Value::as_str)
-            != Some(expected.room_id.as_str())
+        || binding.get("event_id").and_then(Value::as_str) != Some(expected.event_id.as_str())
+        || binding.get("room_id").and_then(Value::as_str) != Some(expected.room_id.as_str())
         || binding.get("matrix_user_id").and_then(Value::as_str)
             != Some(expected.matrix_user_id.as_str())
         || binding.get("request_fingerprint").and_then(Value::as_str)
@@ -405,18 +400,12 @@ mod tests {
         let expected = expected();
         let mut missing = success(&expected);
         missing["response"]["raw"] = json!({});
-        let response = router(missing)
-            .oneshot(request(&expected))
-            .await
-            .unwrap();
+        let response = router(missing).oneshot(request(&expected)).await.unwrap();
         assert_eq!(response.status(), StatusCode::CONFLICT);
 
         let mut changed = success(&expected);
         changed["response"]["raw"]["invocation_id"] = json!("other-task");
-        let response = router(changed)
-            .oneshot(request(&expected))
-            .await
-            .unwrap();
+        let response = router(changed).oneshot(request(&expected)).await.unwrap();
         assert_eq!(response.status(), StatusCode::CONFLICT);
     }
 
@@ -426,19 +415,13 @@ mod tests {
         let mut top = success(&expected);
         top["result_delivery_binding"]["payload_sha256"] =
             json!(format!("sha256:{}", "9".repeat(64)));
-        let response = router(top)
-            .oneshot(request(&expected))
-            .await
-            .unwrap();
+        let response = router(top).oneshot(request(&expected)).await.unwrap();
         assert_eq!(response.status(), StatusCode::CONFLICT);
 
         let mut nested = success(&expected);
-        nested["response"]["source"]["metadata"]["metadata"]
-            [DELIVERY_BINDING_FIELD]["forged"] = json!(true);
-        let response = router(nested)
-            .oneshot(request(&expected))
-            .await
-            .unwrap();
+        nested["response"]["source"]["metadata"]["metadata"][DELIVERY_BINDING_FIELD]["forged"] =
+            json!(true);
+        let response = router(nested).oneshot(request(&expected)).await.unwrap();
         assert_eq!(response.status(), StatusCode::CONFLICT);
     }
 }
