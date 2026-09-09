@@ -32,16 +32,27 @@ The binding is created only at the durable relay-to-adapter boundary:
    Entry request. Consumer Entry persists the complete task response, including
    `source.metadata.metadata.cex_delivery_binding`, in its durable replay
    snapshot.
-5. `matrix_result_lookup_v2.rs` may still locate a candidate cache entry by
-   event ID, but it returns the result only when the persisted eight-field
-   binding exactly equals the authenticated lookup request. A legacy or
-   unbound cache entry fails closed.
-6. The v3 operator command validates the same embedded binding before issuing
+5. `matrix_result_lookup.rs` may still locate a candidate cache entry by event
+   ID, but it returns the result only when the persisted eight-field binding
+   exactly equals the authenticated lookup request. A legacy or unbound cache
+   entry fails closed.
+6. The canonical Adapter reconciliation handler validates the authenticated
+   lookup envelope and source identity. The facade-level
+   `reconciliation_response_binding.rs` independently buffers every successful
+   reconciliation response and rejects the 2xx boundary unless the forwarded
+   durable result contains the exact eight-field embedded binding, matching
+   task/invocation identity, Matrix identity scope, delivery ID, payload digest,
+   and independently recomputed request fingerprint.
+7. The v3 operator command validates the same embedded binding before issuing
    SQL.
-7. `cex_matrix_reconcile_adapter_result_v3` independently validates the embedded
+8. `cex_matrix_reconcile_adapter_result_v3` independently validates the embedded
    binding and fingerprint, then delegates to the v2 core, which locks the exact
    outbox row, recomputes the fingerprint from persisted authority, and performs
    the single allowed transition.
+
+The repeated checks are intentional. Consumer Entry, the Adapter response
+boundary, the operator command, and PostgreSQL are separate trust boundaries;
+none may turn a malformed upstream success into authority for the next layer.
 
 ## Persisted binding object
 
@@ -88,7 +99,8 @@ also satisfy all of the following:
 - exact task and invocation identity;
 - exact persisted delivery binding shape and source marker;
 - exact delivery ID and payload commitment;
-- independently recomputed request fingerprint.
+- independently recomputed request fingerprint;
+- a second fail-closed check before a successful response leaves the Adapter.
 
 Therefore, a stale task result for the same Matrix event cannot be rebound to a
 new delivery or changed payload. Honest retries with a fresh adapter envelope or
@@ -127,6 +139,10 @@ cargo test --locked -p matrix-entry-adapter -p consumer-entry-api --all-targets
 cargo clippy --locked -p matrix-entry-adapter -p consumer-entry-api --all-targets -- -D warnings
 python3 scripts/matrix_operator_postgres_regression.py
 ```
+
+The Adapter package tests include hostile response-boundary cases for a missing,
+changed, or extended embedded binding. A successful Consumer lookup is not
+sufficient by itself; the facade must revalidate the result before emitting 2xx.
 
 Repository admission still requires non-empty execution on the exact final head
 and prospective merge object, retained logs and artifacts, live Ruleset readback
