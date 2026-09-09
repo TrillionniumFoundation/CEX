@@ -33,32 +33,36 @@
     },
     {
       "id": "MRR3-2",
-      "requirement": "Before event handling, the adapter recomputes the canonical payload digest, rejects a forged reserved binding and injects the exact eight-field delivery binding only from authenticated relay headers.",
+      "requirement": "Before event handling, the adapter recomputes the canonical payload digest, rejects a forged reserved binding and injects the exact eight-field delivery binding only from authenticated relay headers; before emitting reconciliation success it independently validates the complete response envelope and embedded binding.",
       "implementation": [
         "services/matrix-entry-adapter/src/delivery_binding.rs",
+        "services/matrix-entry-adapter/src/reconciliation_response_binding.rs",
         "services/matrix-entry-adapter/src/lib.rs"
       ],
       "verification": [
         "services/matrix-entry-adapter/src/delivery_binding.rs",
+        "services/matrix-entry-adapter/src/reconciliation_response_binding.rs",
         "scripts/check-matrix-result-reconciliation-security-v3.py"
       ]
     },
     {
       "id": "MRR3-3",
-      "requirement": "Consumer Entry treats event ID as a candidate locator only and requires the durable cached result to contain the exact delivery, payload, event, room, principal and request-fingerprint binding.",
+      "requirement": "Consumer Entry treats event ID as a candidate locator only and requires the durable cached result, its task-to-raw invocation identity and both returned binding copies to match the exact delivery, payload, event, room, principal and request fingerprint before a successful response leaves the service.",
       "implementation": [
         "services/consumer-entry-api/src/matrix_result_lookup.rs",
+        "services/consumer-entry-api/src/matrix_result_response_binding.rs",
         "services/consumer-entry-api/src/replay_store_snapshot.rs",
         "services/consumer-entry-api/src/main.rs"
       ],
       "verification": [
         "services/consumer-entry-api/src/matrix_result_lookup.rs",
+        "services/consumer-entry-api/src/matrix_result_response_binding.rs",
         "scripts/check-matrix-result-reconciliation-security-v3.py"
       ]
     },
     {
       "id": "MRR3-4",
-      "requirement": "The operator validates the embedded cached-result binding before SQL and invokes only the v3 database entrypoint while retaining every v2 HTTPS, TLS, executable-custody and closed-environment control.",
+      "requirement": "The operator validates the embedded cached-result binding and exact task-to-raw invocation identity before SQL and invokes only the v3 database entrypoint while retaining every v2 HTTPS, TLS, executable-custody and closed-environment control.",
       "implementation": [
         "scripts/reconcile-matrix-adapter-result.py",
         "scripts/reconcile-matrix-adapter-result-v3.py"
@@ -71,7 +75,7 @@
     },
     {
       "id": "MRR3-5",
-      "requirement": "The runtime role cannot call v1 or v2; v3 verifies the result-embedded binding, independently recomputes the fingerprint and then delegates to the owner-only v2 row-locking core.",
+      "requirement": "The runtime role cannot call v1 or v2; v3 verifies task-to-raw invocation identity and the result-embedded delivery binding, independently recomputes the fingerprint and then delegates to the owner-only v2 row-locking core.",
       "implementation": [
         "services/matrix-entry-adapter/operator-migrations/0005_adapter_result_causal_binding.sql",
         "services/matrix-entry-adapter/operator-migrations/0006_adapter_result_embedded_delivery_binding.sql"
@@ -79,17 +83,24 @@
       "verification": [
         "scripts/test-matrix-result-causal-binding-postgres.sql",
         "scripts/test-matrix-result-embedded-binding-postgres.sql",
+        "scripts/test-matrix-result-task-invocation-binding-postgres.sql",
         "scripts/matrix_operator_postgres_regression.py"
       ]
     },
     {
       "id": "MRR3-6",
-      "requirement": "Honest retry remains idempotent across observation timestamps while missing, changed or extended embedded bindings fail before state transition or observation insertion.",
+      "requirement": "Honest retry remains idempotent across observation timestamps while missing, changed or extended embedded bindings, missing or changed task invocation identity, and malformed success envelopes fail before state transition or observation insertion.",
       "implementation": [
-        "services/matrix-entry-adapter/operator-migrations/0006_adapter_result_embedded_delivery_binding.sql"
+        "services/consumer-entry-api/src/matrix_result_response_binding.rs",
+        "services/matrix-entry-adapter/src/reconciliation_response_binding.rs",
+        "services/matrix-entry-adapter/operator-migrations/0006_adapter_result_embedded_delivery_binding.sql",
+        "scripts/reconcile-matrix-adapter-result-v3.py"
       ],
       "verification": [
+        "services/consumer-entry-api/src/matrix_result_response_binding.rs",
+        "services/matrix-entry-adapter/src/reconciliation_response_binding.rs",
         "scripts/test-matrix-result-embedded-binding-postgres.sql",
+        "scripts/test-matrix-result-task-invocation-binding-postgres.sql",
         "scripts/reconcile-matrix-adapter-result-v3.py"
       ]
     },
