@@ -16,11 +16,13 @@ on:
       - services/matrix-entry-adapter/**
       - services/consumer-entry-api/src/main.rs
       - services/consumer-entry-api/src/matrix_result_lookup.rs
+      - services/consumer-entry-api/src/matrix_result_response_binding.rs
       - apps/matrix-bot-*/**
       - docs/module-catalog-v1.json
       - docs/repository-contract-semantics-v1.json
       - docs/modules/**
       - docs/traceability/sequence54-matrix-result-reconciliation-v3.json
+      - docs/traceability/sequence54-matrix-security-v3-review-packet.json
       - docs/matrix-adapter-validated-construction-v1.md
       - docs/matrix-result-reconciliation-v1.md
       - docs/matrix-result-reconciliation-v2.md
