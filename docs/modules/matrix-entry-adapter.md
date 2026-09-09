@@ -55,6 +55,13 @@ Catalog-bound entry points remain exact:
 - `services/matrix-entry-adapter/migrations/0004_stream_scope_binding.sql`;
 - `services/matrix-entry-adapter/migrations/0005_filter_definition_pins.sql`.
 
+The public facade creates a private-field
+`ValidatedMatrixAdapterEnvironment` only through
+`validate_process_environment`, and `AppState::from_validated_env` consumes that
+proof before `implementation.rs` can construct runtime state. This preserves the
+reviewed pre-runtime profile-validation boundary while the new delivery-binding
+middleware remains private to the facade.
+
 Additional security-relevant implementation boundaries are:
 
 - `services/matrix-entry-adapter/src/implementation.rs` — event and forwarding
@@ -170,7 +177,9 @@ Sequence 54 qualification uses the complete set:
 python3 scripts/check-matrix-result-reconciliation.py
 python3 scripts/check-matrix-result-reconciliation-security-v2.py
 python3 scripts/check-matrix-result-reconciliation-security-v3.py
+python3 scripts/check-matrix-result-reconciliation-traceability-v3.py
 python3 scripts/reconcile-matrix-adapter-result-v3.py --self-test
+python3 scripts/test-matrix-operator-postgres-runner-v4.py
 cargo fmt -p matrix-entry-adapter -- --check
 cargo test --locked -p matrix-entry-adapter --all-targets
 cargo clippy --locked -p matrix-entry-adapter --all-targets -- -D warnings
