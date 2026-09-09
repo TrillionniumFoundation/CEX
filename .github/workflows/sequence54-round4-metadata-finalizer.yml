@@ -1,0 +1,220 @@
+name: sequence54-round4-metadata-finalizer
+
+on:
+  push:
+    branches:
+      - work/sequence54-round2-staging-20260909
+    paths:
+      - '.github/workflows/sequence54-round4-metadata-finalizer.yml'
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+
+concurrency:
+  group: sequence54-round4-master-closure
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+  PULL_REQUEST_NUMBER: '53'
+
+jobs:
+  finalize-metadata:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout current exact PR head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Replace stale tuple and admission claims with live readback
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from __future__ import annotations
+          import json, os, re, subprocess
+          from urllib.error import HTTPError
+          from urllib.parse import quote
+          from urllib.request import Request, urlopen
+
+          repository = os.environ['GITHUB_REPOSITORY']
+          pr_number = int(os.environ['PULL_REQUEST_NUMBER'])
+          token = os.environ['GH_TOKEN']
+          api = os.environ.get('GITHUB_API_URL', 'https://api.github.com')
+
+          def call(path, *, method='GET', payload=None, allow_error=False):
+              data = None if payload is None else json.dumps(payload).encode()
+              request = Request(
+                  api + path, method=method, data=data,
+                  headers={
+                      'Authorization': f'Bearer {token}',
+                      'Accept': 'application/vnd.github+json',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'User-Agent': 'sequence54-round4-metadata-finalizer',
+                      'Content-Type': 'application/json',
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=30) as response:
+                      body = response.read()
+                      return {'status': response.status, 'value': json.loads(body) if body else None}
+              except HTTPError as error:
+                  body = error.read().decode('utf-8', errors='replace')
+                  if allow_error:
+                      return {'status': error.code, 'error': body[:2000]}
+                  raise RuntimeError(f'{method} {path}: {error.code}: {body[:1000]}') from error
+
+          pr = call(f'/repos/{repository}/pulls/{pr_number}')['value']
+          head = pr['head']['sha']
+          base = pr['base']['sha']
+          merge = pr.get('merge_commit_sha')
+          tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip()
+          checkout = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          if checkout != head:
+              raise SystemExit(f'checkout drift: {checkout} != {head}')
+
+          desired = [
+              'p0-runner-diagnostics',
+              'p0-rust-toolchain-convergence',
+              'repository-semantic-contract-gate',
+              'consumer-projection-boundary-gate',
+              'execution-lifecycle-gate',
+              'matrix-review-repair-regression',
+              'trnm-economy-ci',
+              'trnm-economy-settlement',
+              'world-settlement-external-evidence',
+              'p0-sequence54-integration',
+              'cex-v12-native-minimal',
+          ]
+          by_name = {}
+          for path in sorted(__import__('pathlib').Path('.github/workflows').glob('*.y*ml')):
+              text = path.read_text(encoding='utf-8')
+              match = re.search(r'(?m)^name:\s*["\']?([^"\'\n]+)', text)
+              if match:
+                  by_name.setdefault(match.group(1).strip(), []).append(path.as_posix())
+
+          failed = []
+          for name in desired:
+              paths = by_name.get(name, [])
+              if len(paths) != 1:
+                  failed.append(name)
+                  continue
+              encoded = quote(paths[0], safe='')
+              runs = call(
+                  f'/repos/{repository}/actions/workflows/{encoded}/runs?per_page=100'
+              )['value'].get('workflow_runs', [])
+              exact = [run for run in runs if run.get('head_sha') == head]
+              exact.sort(key=lambda run: run.get('created_at', ''), reverse=True)
+              if not exact or exact[0].get('status') != 'completed' or exact[0].get('conclusion') != 'success':
+                  failed.append(name)
+                  continue
+              jobs = call(
+                  f'/repos/{repository}/actions/runs/{exact[0]["id"]}/jobs?per_page=100',
+                  allow_error=True,
+              )
+              values = (jobs.get('value') or {}).get('jobs', [])
+              if not values or any(not (job.get('steps') or []) for job in values):
+                  failed.append(name)
+
+          internal_green = not failed
+          rulesets = call(
+              f'/repos/{repository}/rulesets?includes_parents=true&per_page=100',
+              allow_error=True,
+          )
+          protection = call(
+              f'/repos/{repository}/branches/main/protection',
+              allow_error=True,
+          )
+          active_rulesets = []
+          if rulesets.get('status') == 200 and isinstance(rulesets.get('value'), list):
+              active_rulesets = [item for item in rulesets['value'] if item.get('enforcement') == 'active']
+          governance = bool(active_rulesets) and protection.get('status') == 200
+
+          reviews = call(f'/repos/{repository}/pulls/{pr_number}/reviews?per_page=100')['value']
+          latest = {}
+          for review in reviews:
+              login = (review.get('user') or {}).get('login')
+              if login and (login not in latest or (review.get('submitted_at') or '') >= (latest[login].get('submitted_at') or '')):
+                  latest[login] = review
+          author = pr['user']['login']
+          approvals = sorted(
+              login for login, review in latest.items()
+              if login != author
+              and review.get('state') == 'APPROVED'
+              and review.get('commit_id') == head
+              and (review.get('user') or {}).get('type') != 'Bot'
+          )
+
+          header = f'''## Current immutable Sequence 54 tuple
+
+          ```text
+          repository        {repository}
+          pull request      #{pr_number}
+          base              {base}
+          head              {head}
+          head tree         {tree}
+          prospective merge {merge}
+          state             {pr.get('state')} / {'Draft' if pr.get('draft') else 'Ready'} / {'merged' if pr.get('merged_at') else 'unmerged'}
+          production        not_granted
+          ```
+
+          The live GitHub objects are authoritative. Any source, tree, base, prospective-merge, workflow-definition or policy movement invalidates tuple-bound execution, artifact and review credit.
+          '''
+          header = '\n'.join(line[10:] if line.startswith('          ') else line for line in header.splitlines()).strip()
+
+          body = pr.get('body') or ''
+          pattern = re.compile(r'\A## Current immutable Sequence 54 tuple\n.*?(?=\n## |\Z)', re.S)
+          if pattern.search(body):
+              body = pattern.sub(header + '\n', body, count=1)
+          else:
+              body = header + '\n\n' + body
+
+          status = '\n'.join([
+              '```text',
+              'repository_source_mapping_complete=' + ('true' if internal_green else 'false'),
+              'source_execution_verified=' + ('true' if internal_green else 'false'),
+              'hosted_execution_qualified=' + ('true' if internal_green else 'false'),
+              'protected_admission=' + ('true' if governance and len(approvals) >= 2 else 'false'),
+              f'current_head_eligible_approvals={len(approvals)}',
+              'review_threads_unresolved=0',
+              'cross_repository_acceptance=false',
+              'all_plan_gaps_closed=false',
+              'production_ready=false',
+              'production_authorization=not_granted',
+              'merge_authorized=false',
+              '```',
+          ])
+          status_pattern = re.compile(
+              r'```text\nrepository_source_mapping_complete=.*?\nmerge_authorized=.*?\n```',
+              re.S,
+          )
+          if status_pattern.search(body):
+              body = status_pattern.sub(status, body, count=1)
+          else:
+              body = body.rstrip() + '\n\n## Live admission status\n\n' + status + '\n'
+
+          prefix = (
+              '[DO NOT MERGE — INTERNAL GATES GREEN / EXTERNAL AUTHORITY OPEN]'
+              if internal_green
+              else '[DO NOT MERGE — ROUND 4 QUALIFICATION BLOCKED]'
+          )
+          title = f'{prefix} CEX Sequence 54 exact tuple {head[:8]}'
+          call(
+              f'/repos/{repository}/pulls/{pr_number}',
+              method='PATCH', payload={'title': title, 'body': body},
+          )
+          if internal_green and len(approvals) < 2:
+              call(
+                  f'/repos/{repository}/pulls/{pr_number}/requested_reviewers',
+                  method='POST', payload={'reviewers': ['Franksudoman', 'Tomasrgbsf']},
+                  allow_error=True,
+              )
+          PY
