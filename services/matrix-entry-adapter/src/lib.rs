@@ -13,6 +13,7 @@ use shared_config::runtime_guard::matrix_profile::resolve_profiles;
 #[path = "implementation.rs"]
 mod implementation;
 mod delivery_binding;
+mod reconciliation_response_binding;
 mod result_reconciliation;
 
 const PROFILE_ENV_NAMES: [&str; 3] = [
@@ -73,7 +74,11 @@ impl AppState {
 
 /// Build the production router while keeping implementation constructors private.
 pub fn build_router(state: AppState) -> Router {
-    let reconciliation = result_reconciliation::router(state.inner.config());
+    let reconciliation = result_reconciliation::router(state.inner.config()).layer(
+        middleware::from_fn(
+            reconciliation_response_binding::enforce_reconciliation_response_binding,
+        ),
+    );
     let delivery_binding_policy =
         delivery_binding::DeliveryBindingPolicy::from_config(state.inner.config());
     implementation::build_router(state.inner)
