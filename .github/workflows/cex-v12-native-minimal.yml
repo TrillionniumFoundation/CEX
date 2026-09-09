@@ -35,7 +35,9 @@ jobs:
           test -n "$SOURCE_SHA"
           test -n "$BASE_SHA"
           test -n "$MERGE_SHA"
-          auth="AUTHORIZATION: bearer $GH_READ_TOKEN"
+          test -n "$GH_READ_TOKEN"
+          auth_payload="$(printf 'x-access-token:%s' "$GH_READ_TOKEN" | base64 -w0)"
+          auth="AUTHORIZATION: basic $auth_payload"
           head_dir="$RUNNER_TEMP/cex-head"
           merge_dir="$RUNNER_TEMP/cex-merge"
           rm -rf "$head_dir" "$merge_dir"
@@ -50,6 +52,7 @@ jobs:
           else
             git -C "$merge_dir" -c http.extraheader="$auth" fetch --no-tags --depth=2 origin "$MERGE_SHA"
           fi
+          unset GH_READ_TOKEN auth auth_payload
           git -C "$merge_dir" checkout --detach FETCH_HEAD
           test "$(git -C "$head_dir" rev-parse HEAD)" = "$SOURCE_SHA"
           test "$(git -C "$merge_dir" rev-parse HEAD)" = "$MERGE_SHA"
