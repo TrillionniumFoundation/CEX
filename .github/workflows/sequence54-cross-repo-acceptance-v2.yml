@@ -1,0 +1,261 @@
+name: sequence54-cross-repo-acceptance-v2
+
+on:
+  push:
+    branches:
+      - work/sequence54-round2-staging-20260909
+    paths:
+      - '.github/workflows/sequence54-cross-repo-acceptance-v2.yml'
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: sequence54-cross-repo-acceptance-v2
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+  CEX_PULL_REQUEST: '53'
+  OUTPUT_DIR: run/sequence54-cross-repo-acceptance
+  ORG: TrillionniumFoundation
+  ORG_WRITE_TOKEN: ${{ secrets.TRILLIONNIUM_ORG_TOKEN || secrets.CEX_CROSS_REPO_TOKEN || secrets.GH_ORG_TOKEN }}
+
+jobs:
+  coordinate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Wait for repaired exact CEX head
+        id: cex
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 240); do
+            branch="$(gh api "repos/$GITHUB_REPOSITORY/branches/$TARGET_BRANCH")"
+            sha="$(jq -r '.commit.sha' <<<"$branch")"
+            tree="$(jq -r '.commit.commit.tree.sha' <<<"$branch")"
+            toolchain="$(gh api -H 'Accept: application/vnd.github.raw+json' "repos/$GITHUB_REPOSITORY/contents/scripts/rust_toolchain_convergence_v4.py?ref=$sha" 2>/dev/null || true)"
+            if grep -Fq 'unapproved fixed Rust identity' <<<"$toolchain"; then
+              echo "sha=$sha" >> "$GITHUB_OUTPUT"
+              echo "tree=$tree" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo 'repaired CEX head was not observed' >&2
+          exit 1
+
+      - name: Discover component pull requests and publish requests when authorized
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CEX_SHA: ${{ steps.cex.outputs.sha }}
+          CEX_TREE: ${{ steps.cex.outputs.tree }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_DIR"
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import subprocess
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          org = os.environ['ORG']
+          cex_repo = os.environ['GITHUB_REPOSITORY']
+          cex_sha = os.environ['CEX_SHA']
+          cex_tree = os.environ['CEX_TREE']
+          output = Path(os.environ['OUTPUT_DIR'])
+          write_token = os.environ.get('ORG_WRITE_TOKEN', '')
+
+          targets = {
+              'world': {'number': 104, 'terms': ('world',)},
+              'game_nakama': {'number': 150, 'terms': ('game', 'nakama')},
+              'chain': {'number': 62, 'terms': ('chain', 'trnm')},
+              'integration': {'number': 8, 'terms': ('integration', 'coordination')},
+          }
+
+          def command(args, *, token=None):
+              env = os.environ.copy()
+              env['GH_TOKEN'] = token if token is not None else env['GH_TOKEN']
+              return subprocess.run(args, capture_output=True, text=True, env=env)
+
+          repos = []
+          page = 1
+          while True:
+              result = command([
+                  'gh','api',f'orgs/{org}/repos?per_page=100&page={page}',
+              ])
+              if result.returncode:
+                  raise SystemExit(result.stderr.strip() or result.stdout.strip())
+              batch = json.loads(result.stdout)
+              repos.extend(item['full_name'] for item in batch if not item.get('archived'))
+              if len(batch) < 100:
+                  break
+              page += 1
+
+          found = {}
+          for key, spec in targets.items():
+              candidates = []
+              for repo in repos:
+                  result = command(['gh','api',f'repos/{repo}/pulls/{spec["number"]}'])
+                  if result.returncode:
+                      continue
+                  pr = json.loads(result.stdout)
+                  haystack = ' '.join([
+                      repo,
+                      str(pr.get('title') or ''),
+                      str(pr.get('body') or ''),
+                      str(pr.get('head', {}).get('ref') or ''),
+                  ]).lower()
+                  score = sum(term in haystack for term in spec['terms'])
+                  if score:
+                      candidates.append((score, repo, pr))
+              if not candidates:
+                  found[key] = {'status': 'not_discovered', 'pr_number': spec['number']}
+                  continue
+              candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+              score, repo, pr = candidates[0]
+              found[key] = {
+                  'status': 'discovered',
+                  'repository': repo,
+                  'pr_number': spec['number'],
+                  'pr_state': pr.get('state'),
+                  'pr_draft': pr.get('draft'),
+                  'head_sha': pr.get('head', {}).get('sha'),
+                  'base_sha': pr.get('base', {}).get('sha'),
+                  'title': pr.get('title'),
+                  'html_url': pr.get('html_url'),
+                  'acceptance_requested': False,
+                  'acceptance_observed': False,
+              }
+
+          request_body = (
+              '<!-- sequence54-cross-repo-acceptance-request-v2 -->\n'
+              '## Exact-tuple compatibility acceptance requested\n\n'
+              f'CEX source: `{cex_repo}@{cex_sha}`  \n'
+              f'CEX tree: `{cex_tree}`  \n\n'
+              'Please run this component repository’s canonical compatibility, restart, '
+              'response-loss, fencing, cutover and rollback corpus against the exact CEX '
+              'source/tree and the other live component heads. Acceptance must be posted by '
+              'an eligible owner on an unchanged tuple and must identify the tested contract '
+              'digests. A pin, issue comment, green source-only check or request is not acceptance.\n\n'
+              'Do not infer production authorization, deployment approval, governance bypass '
+              'or final human go/no-go from this request.\n\n'
+              '`production_authorization=not_granted`\n'
+              '`merge_authorization=not_granted`'
+          )
+
+          if write_token:
+              for item in found.values():
+                  if item.get('status') != 'discovered' or item.get('pr_state') != 'open':
+                      continue
+                  result = command([
+                      'gh','api','--method','POST',
+                      f"repos/{item['repository']}/issues/{item['pr_number']}/comments",
+                      '-f',f'body={request_body}',
+                  ], token=write_token)
+                  item['acceptance_requested'] = result.returncode == 0
+                  if result.returncode:
+                      item['request_error'] = result.stderr.strip() or result.stdout.strip()
+
+          # An acceptance is deliberately not inferred. It requires an explicit later
+          # owner decision that binds this exact CEX SHA/tree and tested contract bytes.
+          result = {
+              'schema': 'cex.sequence54-cross-repository-acceptance.v2',
+              'observed_at': datetime.now(timezone.utc).isoformat().replace('+00:00','Z'),
+              'cex_repository': cex_repo,
+              'cex_sha': cex_sha,
+              'cex_tree': cex_tree,
+              'organization_write_token_available': bool(write_token),
+              'components': found,
+              'all_components_discovered': all(
+                  item.get('status') == 'discovered' for item in found.values()
+              ),
+              'all_acceptances_observed': False,
+              'all_cross_repository_gaps_closed': False,
+              'production_authorization': 'not_granted',
+              'merge_authorization': 'not_granted',
+          }
+          (output / 'cross-repo-acceptance.json').write_text(
+              json.dumps(result, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
+          print(json.dumps(result, indent=2, sort_keys=True))
+          PY
+
+      - name: Publish CEX coordination ledger
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          title='Sequence 54 cross-repository exact-tuple acceptance'
+          marker='<!-- sequence54-cross-repo-acceptance-v2 -->'
+          if test -f "$OUTPUT_DIR/cross-repo-acceptance.json"; then
+            body="$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data=json.loads(Path('run/sequence54-cross-repo-acceptance/cross-repo-acceptance.json').read_text())
+          lines=[
+            '<!-- sequence54-cross-repo-acceptance-v2 -->',
+            '## CEX exact subject',
+            '',
+            f"- commit: `{data['cex_sha']}`",
+            f"- tree: `{data['cex_tree']}`",
+            f"- organization write token available: `{str(data['organization_write_token_available']).lower()}`",
+            '',
+            '## Component coordinates',
+            '',
+            '| Component | Repository / PR | Head | Request sent | Acceptance observed |',
+            '|---|---|---|---|---|',
+          ]
+          for key,item in data['components'].items():
+            location=(f"{item.get('repository')}#{item.get('pr_number')}" if item.get('repository') else f"PR #{item.get('pr_number')}")
+            lines.append(
+                f"| `{key}` | `{location}` | `{item.get('head_sha') or ''}` | "
+                f"`{str(item.get('acceptance_requested',False)).lower()}` | "
+                f"`{str(item.get('acceptance_observed',False)).lower()}` |"
+            )
+          lines += [
+            '',
+            'Every acceptance remains open until an eligible repository owner posts a decision that binds the same CEX commit/tree and tested canonical contract bytes.',
+            '',
+            '`all_cross_repository_gaps_closed=false`',
+            '`production_authorization=not_granted`',
+            '`merge_authorization=not_granted`',
+          ]
+          print('\n'.join(lines))
+          PY
+          )"
+          else
+            body="$marker
+          
+          Cross-repository discovery did not complete. No acceptance is inferred.
+          
+          \`all_cross_repository_gaps_closed=false\`
+          \`production_authorization=not_granted\`"
+          fi
+          number="$(gh issue list --state open --search "$title in:title" --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -n1)"
+          if test -n "$number"; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
+
+      - name: Upload coordination evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sequence54-cross-repo-acceptance-${{ steps.cex.outputs.sha }}
+          path: run/sequence54-cross-repo-acceptance
+          if-no-files-found: warn
+          retention-days: 90
+          compression-level: 9
