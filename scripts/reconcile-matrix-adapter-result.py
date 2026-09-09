@@ -104,7 +104,7 @@ def validate_inputs(args: argparse.Namespace) -> None:
         parsed_delivery = uuid.UUID(args.delivery_id)
     except (ValueError, AttributeError):
         raise ReconciliationError("invalid_delivery_id") from None
-    if str(parsed_delivery) != args.delivery_id.lower():
+    if str(parsed_delivery) != args.delivery_id:
         raise ReconciliationError("noncanonical_delivery_id")
     validate_matrix_identifier(args.event_id, "$")
     validate_matrix_identifier(args.room_id, "!")
@@ -267,8 +267,6 @@ def parse_lookup_response(raw: bytes, expected: dict[str, str]) -> dict[str, Any
 
 
 def is_loopback_host(host: str) -> bool:
-    if host.lower() == "localhost":
-        return True
     try:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
@@ -283,15 +281,24 @@ def trusted_regular_path(
     executable: bool = False,
 ) -> str:
     path = Path(raw)
+    if not path.is_absolute():
+        raise ReconciliationError(error_code)
     try:
+        resolved = path.resolve(strict=True)
         metadata = path.lstat()
+        parent = path.parent.stat()
     except OSError:
         raise ReconciliationError(error_code) from None
+    trusted_owners = {0, os.geteuid()}
     if (
-        not path.is_absolute()
+        resolved != path
         or not stat.S_ISREG(metadata.st_mode)
         or metadata.st_nlink != 1
+        or metadata.st_uid not in trusted_owners
         or metadata.st_mode & 0o022
+        or not stat.S_ISDIR(parent.st_mode)
+        or parent.st_uid not in trusted_owners
+        or parent.st_mode & 0o022
         or (max_bytes is not None and not 1 <= metadata.st_size <= max_bytes)
         or (executable and not os.access(path, os.X_OK))
     ):
@@ -616,6 +623,16 @@ def self_test() -> None:
         assert local["PGSSLMODE"] == "disable"
         try:
             parse_database_url(
+                "postgresql://user:pass@localhost:5432/cex",
+                "",
+                True,
+            )
+        except ReconciliationError:
+            pass
+        else:
+            raise AssertionError("non-literal loopback database accepted")
+        try:
+            parse_database_url(
                 "postgresql://user:pass@db.example:5432/cex",
                 "",
                 False,
@@ -634,6 +651,25 @@ def self_test() -> None:
             pass
         else:
             raise AssertionError("empty database password accepted")
+
+    invalid_args = argparse.Namespace(
+        delivery_id="61000000-0000-4000-8000-00000000000A",
+        event_id=expected["event_id"],
+        room_id=expected["room_id"],
+        sender=expected["sender"],
+        payload_sha256=expected["payload_sha256"],
+        candidate_sha="a" * 40,
+        timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
+        psql_timeout_seconds=DEFAULT_PSQL_TIMEOUT_SECONDS,
+        adapter_token_env="MATRIX_ENTRY_INGRESS_TOKEN",
+        database_url_env="MATRIX_RECONCILIATION_DATABASE_URL",
+    )
+    try:
+        validate_inputs(invalid_args)
+    except ReconciliationError:
+        pass
+    else:
+        raise AssertionError("noncanonical uppercase delivery UUID accepted")
 
     args = argparse.Namespace(
         delivery_id=expected["delivery_id"],
