@@ -1,7 +1,7 @@
 #![recursion_limit = "256"]
 #![forbid(unsafe_code)]
 
-use axum::Router;
+use axum::{middleware, Router};
 use shared_config::runtime_guard::matrix_profile::resolve_profiles;
 
 // The implementation is the byte-identical former crate root. It is private so
@@ -12,6 +12,7 @@ use shared_config::runtime_guard::matrix_profile::resolve_profiles;
 #[allow(dead_code, unused_attributes)]
 #[path = "implementation.rs"]
 mod implementation;
+mod delivery_binding;
 mod result_reconciliation;
 
 const PROFILE_ENV_NAMES: [&str; 3] = [
@@ -73,5 +74,12 @@ impl AppState {
 /// Build the production router while keeping implementation constructors private.
 pub fn build_router(state: AppState) -> Router {
     let reconciliation = result_reconciliation::router(state.inner.config());
-    implementation::build_router(state.inner).merge(reconciliation)
+    let delivery_binding_policy =
+        delivery_binding::DeliveryBindingPolicy::from_config(state.inner.config());
+    implementation::build_router(state.inner)
+        .layer(middleware::from_fn_with_state(
+            delivery_binding_policy,
+            delivery_binding::enforce_delivery_binding,
+        ))
+        .merge(reconciliation)
 }
