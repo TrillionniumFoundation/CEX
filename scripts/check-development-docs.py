@@ -20,6 +20,15 @@ EXECUTION_STATE_BOUNDARY = ROOT / "scripts/check-execution-default-state-boundar
 EXTERNAL = ROOT / "scripts/check-external-production-evidence-contract.py"
 MATRIX_ADAPTER_API_BOUNDARY = ROOT / "scripts/check-matrix-adapter-api-boundary.py"
 MATRIX_RESULT_RECONCILIATION = ROOT / "scripts/check-matrix-result-reconciliation.py"
+MATRIX_RESULT_RECONCILIATION_V2 = (
+    ROOT / "scripts/check-matrix-result-reconciliation-security-v2.py"
+)
+MATRIX_RESULT_RECONCILIATION_V3 = (
+    ROOT / "scripts/check-matrix-result-reconciliation-security-v3.py"
+)
+MATRIX_RESULT_TRACEABILITY_V3 = (
+    ROOT / "scripts/check-matrix-result-reconciliation-traceability-v3.py"
+)
 EXTERNAL_AGENT_CONFIG = ROOT / "scripts/check-production-external-agent-config.py"
 VENDOR_PROVENANCE = ROOT / "scripts/check-vendor-provenance.py"
 MAX_OUTPUT_BYTES = 1_048_576
@@ -49,8 +58,10 @@ def stop_process(process: subprocess.Popen[bytes]) -> None:
         try:
             subprocess.run(
                 ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                timeout=5, check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                check=False,
             )
         except (OSError, subprocess.TimeoutExpired):
             process.kill()
@@ -59,11 +70,18 @@ def stop_process(process: subprocess.Popen[bytes]) -> None:
     process.wait(timeout=5)
 
 
-def run_json(arguments: list[str], label: str) -> tuple[int, dict[str, Any] | None, str]:
+def run_json(
+    arguments: list[str],
+    label: str,
+) -> tuple[int, dict[str, Any] | None, str]:
     try:
         with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
             process = subprocess.Popen(
-                arguments, cwd=ROOT, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
+                arguments,
+                cwd=ROOT,
+                stdin=subprocess.DEVNULL,
+                stdout=stdout,
+                stderr=stderr,
                 start_new_session=os.name == "posix",
             )
             deadline = time.monotonic() + CHECK_TIMEOUT_SECONDS
@@ -86,8 +104,15 @@ def run_json(arguments: list[str], label: str) -> tuple[int, dict[str, Any] | No
             if os.fstat(stdout.fileno()).st_size + os.fstat(stderr.fileno()).st_size > MAX_OUTPUT_BYTES:
                 return 1, None, f"{label}: output limit exceeded"
             stdout.seek(0)
-            raw = stdout.read(MAX_OUTPUT_BYTES + 1).decode("utf-8", errors="strict").strip()
-        value = json.loads(raw, object_pairs_hook=unique_object, parse_constant=reject_constant)
+            raw = stdout.read(MAX_OUTPUT_BYTES + 1).decode(
+                "utf-8",
+                errors="strict",
+            ).strip()
+        value = json.loads(
+            raw,
+            object_pairs_hook=unique_object,
+            parse_constant=reject_constant,
+        )
         if not isinstance(value, dict):
             return code, None, f"{label}: JSON root must be an object"
         return code, value, ""
@@ -100,7 +125,9 @@ def fallback_result(problem_text: str) -> dict[str, Any]:
         "schema": "cex.development-doc-check.v1",
         "status": "failed",
         "active_plan": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12.md",
-        "active_addendum": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md",
+        "active_addendum": (
+            "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-IMPLEMENTATION-ADDENDUM.md"
+        ),
         "migration_head": "0088_enforce_provider_terminal_evidence_binding.sql",
         "requirements": 18,
         "repository_qualification_result": "PENDING_EXACT_SHA_HOSTED_EVIDENCE",
@@ -130,11 +157,19 @@ def validate_result(
         problems.append(f"{label}: unexpected schema")
     if result.get("production_authorization") != "not_granted":
         problems.append(f"{label}: invalid production authorization")
-    if require_denial_flag and result.get("checker_may_grant_production_authorization") is not False:
-        problems.append(f"{label}: missing explicit authorization denial")
+    if require_denial_flag:
+        denial = result.get("checker_may_grant_production_authorization")
+        if denial is None:
+            # Historical Matrix checkers shipped the more restrictive `max`
+            # spelling. Accept only an explicit false value; absence or true
+            # remains a hard failure.
+            denial = result.get("checker_max_grant_production_authorization")
+        if denial is not False:
+            problems.append(f"{label}: missing explicit authorization denial")
     children = result.get("problems")
     if not isinstance(children, list) or len(children) > 200 or any(
-        not isinstance(item, str) or not item.strip() or len(item) > 4096 for item in children
+        not isinstance(item, str) or not item.strip() or len(item) > 4096
+        for item in children
     ):
         problems.append(f"{label}: invalid problems array")
     else:
@@ -143,20 +178,37 @@ def validate_result(
 
 
 def append_check(
-    problems: list[object], *, arguments: list[str], label: str, expected_schema: str
+    problems: list[object],
+    *,
+    arguments: list[str],
+    label: str,
+    expected_schema: str,
 ) -> int:
     code, result, diagnostic = run_json(arguments, label)
-    problems.extend(validate_result(
-        code, result, diagnostic, label=label, expected_schema=expected_schema,
-    ))
+    problems.extend(
+        validate_result(
+            code,
+            result,
+            diagnostic,
+            label=label,
+            expected_schema=expected_schema,
+        )
+    )
     return code
 
 
 def main() -> int:
-    core_code, core, diagnostic = run_json([sys.executable, str(CORE)], "documentation core")
+    core_code, core, diagnostic = run_json(
+        [sys.executable, str(CORE)],
+        "documentation core",
+    )
     problems = validate_result(
-        core_code, core, diagnostic, label="documentation core",
-        expected_schema="cex.development-doc-check.v1", require_denial_flag=False,
+        core_code,
+        core,
+        diagnostic,
+        label="documentation core",
+        expected_schema="cex.development-doc-check.v1",
+        require_denial_flag=False,
     )
     result = fallback_result("")
     if core is not None:
@@ -166,17 +218,80 @@ def main() -> int:
             ):
                 problems.append(f"documentation core: invalid {key}")
     checks = (
-        (AGENT_BOUNDARY, [], "external Agent runtime boundary", "cex.external-agent-runtime-boundary-check.v1"),
-        (EXECUTION_STATE_BOUNDARY, [], "Execution default-state privacy boundary", "cex.execution-default-state-boundary-check.v1"),
-        (MATRIX_ADAPTER_API_BOUNDARY, [], "Matrix adapter public API boundary", "cex.matrix-adapter-api-boundary-check.v1"),
-        (MATRIX_RESULT_RECONCILIATION, [], "Matrix result reconciliation", "cex.matrix.result-reconciliation-source-check.v2"),
-        (EXTERNAL_AGENT_CONFIG, [], "external Agent production configuration", "cex.external-agent-config-boundary-check.v1"),
-        (VENDOR_PROVENANCE, [], "TRNM vendor provenance", "cex.vendor-provenance-check.v1"),
-        (EXTERNAL, ["--contract-only"], "external evidence contract", "cex.external-production-evidence-contract-check.v1"),
-        (EXTERNAL, ["--self-test"], "external evidence binding self-test", "cex.external-production-evidence-binding-self-test.v1"),
+        (
+            AGENT_BOUNDARY,
+            [],
+            "external Agent runtime boundary",
+            "cex.external-agent-runtime-boundary-check.v1",
+        ),
+        (
+            EXECUTION_STATE_BOUNDARY,
+            [],
+            "Execution default-state privacy boundary",
+            "cex.execution-default-state-boundary-check.v1",
+        ),
+        (
+            MATRIX_ADAPTER_API_BOUNDARY,
+            [],
+            "Matrix adapter public API boundary",
+            "cex.matrix-adapter-api-boundary-check.v1",
+        ),
+        (
+            MATRIX_RESULT_RECONCILIATION,
+            [],
+            "Matrix result reconciliation base contract",
+            "cex.matrix.result-reconciliation-source-check.v2",
+        ),
+        (
+            MATRIX_RESULT_RECONCILIATION_V2,
+            [],
+            "Matrix result reconciliation security v2",
+            "cex.matrix.result-reconciliation-security-source-check.v1",
+        ),
+        (
+            MATRIX_RESULT_RECONCILIATION_V3,
+            [],
+            "Matrix result reconciliation security v3",
+            "cex.matrix.result-reconciliation-security-source-check.v2",
+        ),
+        (
+            MATRIX_RESULT_TRACEABILITY_V3,
+            [],
+            "Matrix result reconciliation traceability v3",
+            "cex.matrix.result-reconciliation-traceability-check.v1",
+        ),
+        (
+            EXTERNAL_AGENT_CONFIG,
+            [],
+            "external Agent production configuration",
+            "cex.external-agent-config-boundary-check.v1",
+        ),
+        (
+            VENDOR_PROVENANCE,
+            [],
+            "TRNM vendor provenance",
+            "cex.vendor-provenance-check.v1",
+        ),
+        (
+            EXTERNAL,
+            ["--contract-only"],
+            "external evidence contract",
+            "cex.external-production-evidence-contract-check.v1",
+        ),
+        (
+            EXTERNAL,
+            ["--self-test"],
+            "external evidence binding self-test",
+            "cex.external-production-evidence-binding-self-test.v1",
+        ),
     )
     for path, flags, label, schema in checks:
-        append_check(problems, arguments=[sys.executable, str(path), *flags], label=label, expected_schema=schema)
+        append_check(
+            problems,
+            arguments=[sys.executable, str(path), *flags],
+            label=label,
+            expected_schema=schema,
+        )
     result["problems"] = problems
     result["status"] = "failed" if problems else "ok"
     print(json.dumps(result, indent=2, ensure_ascii=False, sort_keys=True))
