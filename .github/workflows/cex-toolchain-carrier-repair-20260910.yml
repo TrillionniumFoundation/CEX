@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  EXPECTED_PARENT_SHA: 9c3ad1f6ab1bf4414682eec2668710c59dcc9a73
+  EXPECTED_PARENT_SHA: 2f73e9f9d4c665e1cfe9986de65457f5584be175
   TARGET_BRANCH: integration/cex-v12-sequence54-20260908
   EXPECTED_RUST_TOOLCHAIN: '1.98.1'
   EXPECTED_RUST_RELEASE_COMMIT: 48a229ceaefd4985c50990b14116b6d856af0985
@@ -55,6 +55,7 @@ jobs:
 
           root = Path.cwd()
           expected_version = "1.98.1"
+          obsolete_version = "1.98." + "0"
           release_commit = "48a229ceaefd4985c50990b14116b6d856af0985"
 
           def replace_once(path: str, old: str, new: str) -> None:
@@ -88,76 +89,54 @@ jobs:
                   f'    "{action}",\n    "toolchain: {expected_version}",\n    "Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",',
               )
 
+          isolated = "scripts/run-isolated-matrix-tests.sh"
+          replace_once(isolated, f"FROM rust:{obsolete_version}-bookworm", f"FROM rust:{expected_version}-bookworm")
           replace_once(
-              "scripts/run-isolated-matrix-tests.sh",
-              "FROM rust:1.98.0-bookworm",
-              "FROM rust:1.98.1-bookworm",
+              isolated,
+              f"# This published image is only a bootstrap. Do not compile candidate code with\n# its original {obsolete_version} compiler (upstream vtable miscompilation).\n",
+              f"# Keep the container compiler on the repository's exact {expected_version} policy.\n",
           )
           replace_once(
-              "scripts/run-isolated-matrix-tests.sh",
-              "# This published image is only a bootstrap. Do not compile candidate code with\n# its original 1.98.0 compiler (upstream vtable miscompilation).\n",
-              "# Keep the container compiler on the repository's exact 1.98.1 policy.\n",
-          )
-          replace_once(
-              "scripts/run-isolated-matrix-tests.sh",
-              "    && rustup default 1.98.1 \\\n    && rustup toolchain uninstall 1.98.0\n",
-              "    && rustup default 1.98.1\n",
-          )
-          replace_once(
-              "scripts/trusted-matrix-pr-target.sh",
-              "FROM rust:1.98.0-bookworm",
-              "FROM rust:1.98.1-bookworm",
-          )
-          replace_once(
-              "scripts/trusted-matrix-pr-target.sh",
-              "    && rustup default 1.98.1 \\\n    && rustup toolchain uninstall 1.98.0\n",
-              "    && rustup default 1.98.1\n",
+              isolated,
+              f"    && rustup default {expected_version} \\\n    && rustup toolchain uninstall {obsolete_version}\n",
+              f"    && rustup default {expected_version}\n",
           )
 
+          trusted = "scripts/trusted-matrix-pr-target.sh"
+          replace_once(trusted, f"FROM rust:{obsolete_version}-bookworm", f"FROM rust:{expected_version}-bookworm")
           replace_once(
-              ".github/workflows/cex-v12-native-minimal.yml",
-              "  RUSTUP_TOOLCHAIN: '1.98.1'\n",
+              trusted,
+              f"    && rustup default {expected_version} \\\n    && rustup toolchain uninstall {obsolete_version}\n",
+              f"    && rustup default {expected_version}\n",
+          )
+
+          native = ".github/workflows/cex-v12-native-minimal.yml"
+          replace_once(
+              native,
+              f"  RUSTUP_TOOLCHAIN: '{expected_version}'\n",
               f"  RUSTUP_TOOLCHAIN: '{expected_version}'\n  EXPECTED_RUST_RELEASE_COMMIT: '{release_commit}'\n",
           )
           replace_once(
-              ".github/workflows/cex-v12-native-minimal.yml",
+              native,
               "          rustc --version --verbose\n          cargo --version --verbose\n",
               "          rustc --version --verbose | tee \"$RUNNER_TEMP/cex-rustc-version.txt\"\n          grep -Fx \"commit-hash: $EXPECTED_RUST_RELEASE_COMMIT\" \"$RUNNER_TEMP/cex-rustc-version.txt\"\n          cargo --version --verbose\n",
           )
 
+          settlement = ".github/workflows/trnm-economy-settlement.yml"
           replace_once(
-              ".github/workflows/trnm-economy-settlement.yml",
+              settlement,
               "  RUST_TEST_THREADS: '1'\n",
               f"  RUST_TEST_THREADS: '1'\n  EXPECTED_RUST_RELEASE_COMMIT: '{release_commit}'\n",
           )
           replace_once(
-              ".github/workflows/trnm-economy-settlement.yml",
+              settlement,
               "          rustc --version --verbose\n          cargo --version --verbose\n",
               "          rustc --version --verbose | tee \"$RUNNER_TEMP/trnm-rustc-version.txt\"\n          grep -Fx \"commit-hash: $EXPECTED_RUST_RELEASE_COMMIT\" \"$RUNNER_TEMP/trnm-rustc-version.txt\"\n          cargo --version --verbose\n",
           )
           PY
-
-      - name: Validate repaired source before commit
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 scripts/check-rust-toolchain-convergence.py
-          python3 scripts/check-sequence54-integration.py
-          python3 scripts/check-sequence54-rustsec-admission.py
           git diff --check
-          test -z "$(git grep -n '1\.98\.0' -- \
-            .github/workflows/p0-gateway-exact-reserve-gate.yml \
-            .github/workflows/p0-release-candidate-gate.yml \
-            .github/workflows/rust-full-gate-self-hosted.yml \
-            .github/workflows/rust-self-hosted-preflight-hygiene.yml \
-            scripts/check-execution-settlement-commands.py \
-            scripts/check-gateway-exact-reserve.py \
-            scripts/run-isolated-matrix-tests.sh \
-            scripts/trusted-matrix-pr-target.sh \
-            .github/workflows/cex-v12-native-minimal.yml \
-            .github/workflows/trnm-economy-settlement.yml || true)"
 
-      - name: Remove helper and commit exact repair set
+      - name: Remove helper and create unpushed candidate commit
         shell: bash
         run: |
           set -euo pipefail
@@ -189,7 +168,21 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add --all
           git commit -m "fix(ci): converge every active Rust carrier on 1.98.1" \
-            -m "Bind four workflow selectors and two static checker contracts to Rust 1.98.1, remove obsolete 1.98.0 bootstrap identities from the isolated Matrix harnesses, and verify rustc's exact release commit in both verbose-observer workflows. Delete the temporary repair workflow in the same auditable commit. No production authorization is granted."
+            -m "Bind four workflow selectors and two static checker contracts to Rust 1.98.1, remove obsolete bootstrap identities from the isolated Matrix harnesses, and verify rustc's exact release commit in both verbose-observer workflows. Delete the temporary repair workflow in the same auditable commit. No production authorization is granted."
+          test "$(git rev-parse HEAD^)" = "$GITHUB_SHA"
+
+      - name: Validate exact committed candidate tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e .github/workflows/cex-toolchain-carrier-repair-20260910.yml
+          python3 scripts/check-rust-toolchain-convergence.py
+          python3 scripts/check-sequence54-integration.py
+          python3 scripts/check-sequence54-rustsec-admission.py
+          python3 scripts/check-execution-settlement-commands.py
+          python3 scripts/check-gateway-exact-reserve.py
+          git diff --check HEAD^
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
 
       - name: Push only as a fast-forward from the trigger
         shell: bash
