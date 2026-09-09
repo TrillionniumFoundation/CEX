@@ -19,6 +19,22 @@ def replace_exact(relative: str, old: str, new: str, expected: int = 1) -> None:
     path.write_text(text.replace(old, new), encoding="utf-8")
 
 
+def insert_before_exact(
+    relative: str, marker: str, addition: str, expected: int = 1
+) -> None:
+    path = ROOT / relative
+    text = path.read_text(encoding="utf-8")
+    actual = text.count(marker)
+    if actual != expected:
+        raise SystemExit(
+            f"{relative}: expected {expected} insertion markers, found {actual}: "
+            f"{marker[:100]!r}"
+        )
+    if addition in text:
+        raise SystemExit(f"{relative}: insertion already present")
+    path.write_text(text.replace(marker, addition + marker), encoding="utf-8")
+
+
 def repair_build_unblock() -> None:
     relative = "scripts/test-build-unblock.py"
     replace_exact(
@@ -32,15 +48,13 @@ def repair_build_unblock() -> None:
         "Complete Matrix package and current-schema/operator regression",
         expected=2,
     )
-    replace_exact(
+    insert_before_exact(
         relative,
-        """            (scripts / 'check-matrix-source-observation-postgres.sh').write_text(
-                '#!/bin/sh\nprintf \"%s\\n\" database >> \"$TRACE\"\n[ \"$FAIL\" != database ] || exit 71\n')
+        """            env = {**os.environ, 'PATH': str(tools) + os.pathsep + os.environ['PATH'],
+                   'TRACE': str(trace), 'FAIL': failure}
 """,
-        """            (scripts / 'check-matrix-source-observation-postgres.sh').write_text(
-                '#!/bin/sh\nprintf \"%s\\n\" database >> \"$TRACE\"\n[ \"$FAIL\" != database ] || exit 71\n')
-            (scripts / 'check-matrix-operator-postgres.sh').write_text(
-                '#!/bin/sh\nprintf \"%s\\n\" operator >> \"$TRACE\"\n[ \"$FAIL\" != operator ] || exit 71\n')
+        """            (scripts / 'check-matrix-operator-postgres.sh').write_text(
+                '#!/bin/sh\nprintf "%s\\n" operator >> "$TRACE"\n[ "$FAIL" != operator ] || exit 71\n')
 """,
     )
     replace_exact(
@@ -105,7 +119,7 @@ def repair_toolchain_workflow() -> None:
     end = text.find(end_marker, start + len(start_marker))
     if start < 0 or end < 0:
         raise SystemExit("toolchain identity step boundary is missing")
-    replacement = '''      - name: Bind source, base and prospective merge identities
+    replacement = """      - name: Bind source, base and prospective merge identities
         id: identity
         shell: bash
         run: |
@@ -198,7 +212,7 @@ def repair_toolchain_workflow() -> None:
           print(f'merge_tree={merge_tree or ""}')
           PYTHON
 
-'''
+"""
     path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
 
 
