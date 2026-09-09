@@ -1,0 +1,305 @@
+name: sequence54-round3-admission-controller
+
+on:
+  push:
+    branches:
+      - work/sequence54-round2-staging-20260909
+    paths:
+      - '.github/workflows/sequence54-round3-admission-controller.yml'
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: sequence54-round3-remediation
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+  PULL_REQUEST_NUMBER: '53'
+
+jobs:
+  admission:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact live PR branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Read live execution, governance and review denominators
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/sequence54-round3-admission"
+          mkdir -p "$evidence"
+          python3 - "$evidence" <<'PY'
+          from __future__ import annotations
+          import json, os, re, sys
+          from datetime import datetime, timezone
+          from pathlib import Path
+          from urllib.error import HTTPError
+          from urllib.parse import quote
+          from urllib.request import Request, urlopen
+
+          output = Path(sys.argv[1])
+          repository = os.environ['GITHUB_REPOSITORY']
+          branch = os.environ['TARGET_BRANCH']
+          pr_number = int(os.environ['PULL_REQUEST_NUMBER'])
+          token = os.environ['GH_TOKEN']
+          api = os.environ.get('GITHUB_API_URL', 'https://api.github.com')
+
+          def call(path: str, *, method='GET', payload=None, allow_error=False):
+              data = None if payload is None else json.dumps(payload).encode()
+              request = Request(
+                  api + path,
+                  method=method,
+                  data=data,
+                  headers={
+                      'Authorization': f'Bearer {token}',
+                      'Accept': 'application/vnd.github+json',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'User-Agent': 'sequence54-round3-admission-controller',
+                      'Content-Type': 'application/json',
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=30) as response:
+                      body = response.read()
+                      return {'status': response.status, 'value': json.loads(body) if body else None}
+              except HTTPError as error:
+                  body = error.read().decode('utf-8', errors='replace')
+                  if allow_error:
+                      return {'status': error.code, 'error': body[:2000]}
+                  raise RuntimeError(f'{method} {path}: {error.code}: {body[:1000]}') from error
+
+          pr = call(f'/repos/{repository}/pulls/{pr_number}')['value']
+          head = pr['head']['sha']
+          base_sha = pr['base']['sha']
+          merge_sha = pr.get('merge_commit_sha')
+          author = pr['user']['login']
+          checked_out = os.popen('git rev-parse HEAD').read().strip()
+          if checked_out != head:
+              raise SystemExit(f'checkout/head drift: {checked_out} != {head}')
+
+          desired_names = [
+              'p0-runner-diagnostics',
+              'p0-rust-toolchain-convergence',
+              'repository-semantic-contract-gate',
+              'consumer-projection-boundary-gate',
+              'execution-lifecycle-gate',
+              'matrix-review-repair-regression',
+              'trnm-economy-ci',
+              'trnm-economy-settlement',
+              'world-settlement-external-evidence',
+              'p0-sequence54-integration',
+              'cex-v12-native-minimal',
+          ]
+          workflow_map = {}
+          for path in sorted(Path('.github/workflows').glob('*.y*ml')):
+              text = path.read_text(encoding='utf-8')
+              match = re.search(r'(?m)^name:\s*["\']?([^"\'\n]+)', text)
+              if match:
+                  workflow_map.setdefault(match.group(1).strip(), []).append(path.as_posix())
+
+          workflow_state = {}
+          internal_failures = []
+          for name in desired_names:
+              paths = workflow_map.get(name, [])
+              if len(paths) != 1:
+                  workflow_state[name] = {'status': 'missing_or_ambiguous', 'paths': paths}
+                  internal_failures.append(name)
+                  continue
+              path = paths[0]
+              encoded = quote(path, safe='')
+              runs = call(
+                  f'/repos/{repository}/actions/workflows/{encoded}/runs?per_page=100'
+              )['value'].get('workflow_runs', [])
+              exact = [run for run in runs if run.get('head_sha') == head]
+              exact.sort(key=lambda run: run.get('created_at', ''), reverse=True)
+              if not exact:
+                  workflow_state[name] = {'status': 'missing', 'path': path}
+                  internal_failures.append(name)
+                  continue
+              run = exact[0]
+              jobs_response = call(
+                  f'/repos/{repository}/actions/runs/{run["id"]}/jobs?per_page=100',
+                  allow_error=True,
+              )
+              jobs = []
+              if jobs_response.get('status') == 200:
+                  for job in jobs_response['value'].get('jobs', []):
+                      jobs.append({
+                          'id': job.get('id'),
+                          'name': job.get('name'),
+                          'status': job.get('status'),
+                          'conclusion': job.get('conclusion'),
+                          'runner_name': job.get('runner_name'),
+                          'step_count': len(job.get('steps') or []),
+                      })
+              workflow_state[name] = {
+                  'path': path,
+                  'run_id': run.get('id'),
+                  'event': run.get('event'),
+                  'status': run.get('status'),
+                  'conclusion': run.get('conclusion'),
+                  'run_attempt': run.get('run_attempt'),
+                  'jobs': jobs,
+              }
+              nonempty = bool(jobs) and all(job['step_count'] > 0 for job in jobs)
+              if (
+                  run.get('status') != 'completed'
+                  or run.get('conclusion') != 'success'
+                  or not nonempty
+              ):
+                  internal_failures.append(name)
+
+          rulesets = call(
+              f'/repos/{repository}/rulesets?includes_parents=true&per_page=100',
+              allow_error=True,
+          )
+          main_branch = call(f'/repos/{repository}/branches/main', allow_error=True)
+          protection = call(
+              f'/repos/{repository}/branches/main/protection',
+              allow_error=True,
+          )
+          governance_closed = False
+          if rulesets.get('status') == 200 and isinstance(rulesets.get('value'), list):
+              active = [
+                  item for item in rulesets['value']
+                  if item.get('enforcement') == 'active'
+              ]
+              governance_closed = bool(active)
+          if protection.get('status') != 200:
+              governance_closed = False
+
+          reviews = call(
+              f'/repos/{repository}/pulls/{pr_number}/reviews?per_page=100'
+          )['value']
+          latest_by_author = {}
+          for review in reviews:
+              login = (review.get('user') or {}).get('login')
+              if not login:
+                  continue
+              submitted = review.get('submitted_at') or ''
+              if login not in latest_by_author or submitted >= latest_by_author[login].get('submitted_at', ''):
+                  latest_by_author[login] = review
+          eligible_approvals = [
+              login for login, review in latest_by_author.items()
+              if login != author
+              and review.get('state') == 'APPROVED'
+              and review.get('commit_id') == head
+              and (review.get('user') or {}).get('type') != 'Bot'
+          ]
+
+          internal_green = not internal_failures
+          review_request = None
+          if internal_green and len(eligible_approvals) < 2:
+              review_request = call(
+                  f'/repos/{repository}/pulls/{pr_number}/requested_reviewers',
+                  method='POST',
+                  payload={'reviewers': ['Franksudoman', 'Tomasrgbsf']},
+                  allow_error=True,
+              )
+
+          report = {
+              'schema': 'cex.sequence54-round3-admission-readback.v1',
+              'observed_at': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+              'repository': repository,
+              'pull_request': pr_number,
+              'draft': pr.get('draft'),
+              'head_sha': head,
+              'base_sha': base_sha,
+              'prospective_merge_sha': merge_sha,
+              'workflow_state': workflow_state,
+              'internal_failures': sorted(set(internal_failures)),
+              'exact_head_internal_gates_green': internal_green,
+              'rulesets_readback': rulesets,
+              'main_branch_readback': main_branch,
+              'branch_protection_readback': protection,
+              'live_governance_closed': governance_closed,
+              'eligible_current_head_approvals': sorted(eligible_approvals),
+              'review_request': review_request,
+              'cross_repository_acceptance_closed': False,
+              'production_evidence_closed': False,
+              'all_gaps_closed': False,
+              'merge_authorized': False,
+              'production_authorization': 'not_granted',
+          }
+          (output / 'admission-readback.json').write_text(
+              json.dumps(report, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
+
+          failures = ', '.join(sorted(set(internal_failures))) or 'none'
+          approvals = ', '.join(sorted(eligible_approvals)) or 'none'
+          governance = 'closed' if governance_closed else 'open/unproved'
+          body = f'''<!-- sequence54-round3-admission-controller -->
+          ## Sequence 54 round-3 live admission readback
+
+          Exact tuple observed by the controller:
+
+          ```text
+          head                 {head}
+          base                 {base_sha}
+          prospective merge    {merge_sha}
+          draft                {pr.get('draft')}
+          ```
+
+          - Exact-head required workflow blockers: `{failures}`
+          - Live protected-main governance: `{governance}`
+          - Eligible approvals bound to this exact head: `{approvals}`
+          - Cross-repository exact-tuple acceptance: `open`
+          - Production restore/cutover/custody/HA/SLO/human go-no-go evidence: `open`
+
+          The controller requests independent reviewers only after every listed exact-head workflow has a real non-empty terminal success. It does not dismiss historical or substantive reviews, self-approve, synthesize status, weaken required checks, leave Draft, merge, deploy, release, or use administrator bypass.
+
+          ```text
+          all_gaps_closed=false
+          merge_authorized=false
+          production_authorization=not_granted
+          ```
+          '''
+          body = '\n'.join(line[10:] if line.startswith('          ') else line for line in body.splitlines()).strip() + '\n'
+
+          comments = call(
+              f'/repos/{repository}/issues/{pr_number}/comments?per_page=100'
+          )['value']
+          existing = next(
+              (
+                  item for item in reversed(comments)
+                  if '<!-- sequence54-round3-admission-controller -->' in (item.get('body') or '')
+                  and (item.get('user') or {}).get('login') == os.environ.get('GITHUB_ACTOR')
+              ),
+              None,
+          )
+          if existing:
+              call(
+                  f'/repos/{repository}/issues/comments/{existing["id"]}',
+                  method='PATCH',
+                  payload={'body': body},
+              )
+          else:
+              call(
+                  f'/repos/{repository}/issues/{pr_number}/comments',
+                  method='POST',
+                  payload={'body': body},
+              )
+          PY
+
+      - name: Upload admission readback
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sequence54-round3-admission-${{ github.run_id }}
+          path: ${{ runner.temp }}/sequence54-round3-admission
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6
