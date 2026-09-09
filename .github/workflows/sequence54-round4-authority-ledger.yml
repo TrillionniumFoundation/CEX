@@ -1,0 +1,313 @@
+name: sequence54-round4-authority-ledger
+
+on:
+  push:
+    branches:
+      - work/sequence54-round2-staging-20260909
+    paths:
+      - '.github/workflows/sequence54-round4-authority-ledger.yml'
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+  issues: write
+
+concurrency:
+  group: sequence54-round4-authority-ledger
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+  STAGING_BRANCH: work/sequence54-round2-staging-20260909
+  PULL_REQUEST_NUMBER: '53'
+  EVIDENCE_DIR: ${{ runner.temp }}/sequence54-round4-authority-ledger
+
+jobs:
+  ledger:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 260
+    steps:
+      - name: Wait for the master source attempt to become terminal
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          encoded_branch="${STAGING_BRANCH//\//%2F}"
+          master_id=''
+          for _ in $(seq 1 80); do
+            master_id="$(gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/sequence54-round4-master-closure.yml/runs?branch=${encoded_branch}&per_page=20" \
+              --jq '.workflow_runs | sort_by(.created_at) | reverse | .[0].id // empty' 2>/dev/null || true)"
+            [[ -n "$master_id" ]] && break
+            sleep 15
+          done
+          [[ -n "$master_id" ]]
+          for _ in $(seq 1 960); do
+            value="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/runs/${master_id}")"
+            status="$(jq -r '.status' <<<"$value")"
+            conclusion="$(jq -r '.conclusion // ""' <<<"$value")"
+            [[ "$status" == completed ]] && break
+            sleep 15
+          done
+          [[ "$status" == completed ]]
+          printf 'master_id=%s\nconclusion=%s\n' "$master_id" "$conclusion" > "$EVIDENCE_DIR/master.txt"
+
+      - name: Checkout final observed candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Build and publish the authority-bound closure ledger
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$EVIDENCE_DIR" <<'PY'
+          from __future__ import annotations
+          import json, os, subprocess, sys
+          from datetime import datetime, timezone
+          from pathlib import Path
+          from urllib.error import HTTPError
+          from urllib.parse import quote
+          from urllib.request import Request, urlopen
+
+          output = Path(sys.argv[1])
+          repository = os.environ['GITHUB_REPOSITORY']
+          organization = repository.split('/', 1)[0]
+          pr_number = int(os.environ['PULL_REQUEST_NUMBER'])
+          token = os.environ['GH_TOKEN']
+          api = os.environ.get('GITHUB_API_URL', 'https://api.github.com')
+
+          def call(path, *, method='GET', payload=None, allow_error=False):
+              data = None if payload is None else json.dumps(payload).encode()
+              request = Request(
+                  api + path, method=method, data=data,
+                  headers={
+                      'Authorization': f'Bearer {token}',
+                      'Accept': 'application/vnd.github+json',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'User-Agent': 'sequence54-authority-ledger',
+                      'Content-Type': 'application/json',
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=30) as response:
+                      body = response.read()
+                      return {'status': response.status, 'value': json.loads(body) if body else None}
+              except HTTPError as error:
+                  body = error.read().decode('utf-8', errors='replace')
+                  if allow_error:
+                      return {'status': error.code, 'error': body[:2000]}
+                  raise RuntimeError(f'{method} {path}: {error.code}: {body[:1000]}') from error
+
+          pr = call(f'/repos/{repository}/pulls/{pr_number}')['value']
+          head = pr['head']['sha']
+          tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip()
+          if subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip() != head:
+              raise SystemExit('authority ledger checkout is stale')
+
+          reviews = call(f'/repos/{repository}/pulls/{pr_number}/reviews?per_page=100')['value']
+          latest = {}
+          for review in reviews:
+              login = (review.get('user') or {}).get('login')
+              if login and (login not in latest or (review.get('submitted_at') or '') >= (latest[login].get('submitted_at') or '')):
+                  latest[login] = review
+          author = pr['user']['login']
+          approvals = sorted(
+              login for login, review in latest.items()
+              if login != author
+              and review.get('state') == 'APPROVED'
+              and review.get('commit_id') == head
+              and (review.get('user') or {}).get('type') != 'Bot'
+          )
+
+          rulesets = call(
+              f'/repos/{repository}/rulesets?includes_parents=true&per_page=100',
+              allow_error=True,
+          )
+          protection = call(
+              f'/repos/{repository}/branches/main/protection',
+              allow_error=True,
+          )
+          active_rulesets = []
+          if rulesets.get('status') == 200 and isinstance(rulesets.get('value'), list):
+              active_rulesets = [item for item in rulesets['value'] if item.get('enforcement') == 'active']
+          governance_closed = bool(active_rulesets) and protection.get('status') == 200
+
+          # Locate the live PR-number tuple without guessing repository names.
+          target_numbers = {104: 'World', 150: 'Game/Nakama', 62: 'Chain', 8: 'Integration'}
+          repos = []
+          for page in range(1, 6):
+              result = call(f'/orgs/{organization}/repos?type=all&per_page=100&page={page}', allow_error=True)
+              if result.get('status') != 200:
+                  break
+              values = result.get('value') or []
+              repos.extend(values)
+              if len(values) < 100:
+                  break
+          tuple_items = []
+          for number, role in target_numbers.items():
+              matches = []
+              for repo in repos:
+                  full_name = repo.get('full_name')
+                  if not full_name or full_name == repository:
+                      continue
+                  result = call(f'/repos/{full_name}/pulls/{number}', allow_error=True)
+                  if result.get('status') != 200:
+                      continue
+                  value = result['value']
+                  haystack = ' '.join([
+                      value.get('title') or '',
+                      value.get('body') or '',
+                      full_name,
+                  ]).lower()
+                  role_terms = {
+                      'World': ('world',),
+                      'Game/Nakama': ('game', 'nakama'),
+                      'Chain': ('chain', 'trnm'),
+                      'Integration': ('integration',),
+                  }[role]
+                  if any(term.lower() in haystack for term in role_terms):
+                      matches.append({
+                          'repository': full_name,
+                          'number': number,
+                          'state': value.get('state'),
+                          'draft': value.get('draft'),
+                          'head_sha': (value.get('head') or {}).get('sha'),
+                          'base_sha': (value.get('base') or {}).get('sha'),
+                          'merged': value.get('merged_at') is not None,
+                          'title': value.get('title'),
+                      })
+              tuple_items.append({'role': role, 'matches': matches})
+
+          evidence_categories = [
+              'independent security and code approvals on the unchanged final head',
+              'active no-bypass main Ruleset and branch-protection readback',
+              'same-actor positive control plus rejected direct-update, non-fast-forward and deletion probes',
+              'World/Game/Nakama/Chain/Integration owner acceptance of one exact tuple and canonical bytes',
+              'verified restore and point-in-time recovery rehearsal',
+              'deployment, cutover and rollback rehearsal with immutable evidence',
+              'World authority transfer and no-dual-writer proof',
+              'provider unknown-outcome and response-loss reconciliation evidence',
+              'KMS/HSM custody, rotation and break-glass evidence',
+              'high-availability, failover, endurance and sustained SLO evidence',
+              'security, operations, support, financial, legal and commercial sign-offs',
+              'accountable human go/no-go decision bound to the exact release manifest',
+          ]
+          report = {
+              'schema': 'cex.sequence54-round4-authority-ledger.v1',
+              'observed_at': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+              'repository': repository,
+              'pull_request': pr_number,
+              'head_sha': head,
+              'head_tree': tree,
+              'base_sha': pr['base']['sha'],
+              'prospective_merge_sha': pr.get('merge_commit_sha'),
+              'eligible_current_head_approvals': approvals,
+              'live_governance_closed': governance_closed,
+              'cross_repository_tuple_discovery': tuple_items,
+              'required_authority_evidence': evidence_categories,
+              'cross_repository_acceptance_closed': False,
+              'production_evidence_closed': False,
+              'all_gaps_closed': False,
+              'merge_authorized': False,
+              'production_authorization': 'not_granted',
+          }
+          (output / 'authority-ledger.json').write_text(
+              json.dumps(report, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
+
+          marker = '<!-- sequence54-round4-authority-ledger -->'
+          lines = [
+              marker,
+              '# Sequence 54 final authority-bound closure ledger',
+              '',
+              'This ledger is bound to the live CEX tuple:',
+              '',
+              '```text',
+              f'repository         {repository}',
+              f'pull request       #{pr_number}',
+              f'head               {head}',
+              f'head tree          {tree}',
+              f'base               {pr["base"]["sha"]}',
+              f'prospective merge  {pr.get("merge_commit_sha")}',
+              'production          not_granted',
+              '```',
+              '',
+              '## Current independent denominators',
+              '',
+              f'- Eligible approvals on this exact head: `{len(approvals)}` ({", ".join(approvals) or "none"})',
+              f'- Active protected-main governance read back: `{str(governance_closed).lower()}`',
+              '',
+              '## Cross-repository tuple discovery',
+              '',
+          ]
+          for item in tuple_items:
+              if len(item['matches']) == 1:
+                  match = item['matches'][0]
+                  lines.append(
+                      f"- [ ] **{item['role']} owner acceptance** — `{match['repository']}#{match['number']}` @ `{match['head_sha']}`"
+                  )
+              else:
+                  lines.append(
+                      f"- [ ] **{item['role']} owner acceptance** — discovery is {'ambiguous' if item['matches'] else 'unresolved'}; no acceptance inferred"
+                  )
+          lines += ['', '## Required authority evidence', '']
+          for value in evidence_categories:
+              lines.append(f'- [ ] {value}')
+          lines += [
+              '',
+              'Checking a box requires an immutable receipt that names this exact head/tree or its final successor and the accountable signer. Creating or editing this issue, triggering a workflow, pinning a SHA, or holding repository admin permission does **not** itself constitute approval, cross-repository acceptance, production evidence or human go/no-go.',
+              '',
+              '```text',
+              'cross_repository_acceptance=false',
+              'production_evidence_closed=false',
+              'all_gaps_closed=false',
+              'merge_authorized=false',
+              'production_authorization=not_granted',
+              '```',
+          ]
+          body = '\n'.join(lines) + '\n'
+
+          issues = call(
+              f'/repos/{repository}/issues?state=all&per_page=100&sort=updated&direction=desc'
+          )['value']
+          existing = next(
+              (
+                  issue for issue in issues
+                  if marker in (issue.get('body') or '')
+                  and 'pull_request' not in issue
+              ),
+              None,
+          )
+          title = f'[Sequence 54 authority closure] exact tuple {head[:8]}'
+          if existing:
+              result = call(
+                  f'/repos/{repository}/issues/{existing["number"]}',
+                  method='PATCH', payload={'title': title, 'body': body, 'state': 'open'},
+              )['value']
+          else:
+              result = call(
+                  f'/repos/{repository}/issues',
+                  method='POST', payload={'title': title, 'body': body},
+              )['value']
+          (output / 'issue.json').write_text(
+              json.dumps({'number': result.get('number'), 'url': result.get('html_url')}, indent=2) + '\n'
+          )
+          PY
+
+      - name: Upload authority ledger
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sequence54-round4-authority-ledger-${{ github.run_id }}
+          path: ${{ env.EVIDENCE_DIR }}
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 6
