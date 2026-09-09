@@ -2,7 +2,9 @@ name: matrix-review-repair-regression
 
 on:
   push:
-    branches: [fix/cex-v12-audit-remediation-20260905]
+    branches:
+      - fix/cex-v12-audit-remediation-20260905
+      - integration/cex-v12-sequence54-20260908
   pull_request:
     paths:
       - Cargo.toml
@@ -20,6 +22,7 @@ on:
       - docs/modules/**
       - docs/matrix-adapter-validated-construction-v1.md
       - docs/matrix-result-reconciliation-v1.md
+      - docs/matrix-result-reconciliation-v2.md
       - scripts/*matrix*
       - .github/workflows/matrix-review-repair-regression.yml
 
@@ -90,8 +93,10 @@ jobs:
         run: |
           python3 scripts/test-matrix-adapter-api-boundary.py
           python3 scripts/check-matrix-adapter-api-boundary.py
-      - name: Durable result reconciliation source contract
-        run: python3 scripts/check-matrix-result-reconciliation.py
+      - name: Durable result reconciliation source contracts
+        run: |
+          python3 scripts/check-matrix-result-reconciliation.py
+          python3 scripts/check-matrix-result-reconciliation-security-v2.py
       - name: Recovery contract mutation regressions
         run: |
           python3 scripts/test-matrix-recovery-contract.py
@@ -175,7 +180,7 @@ jobs:
   matrix-postgres:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       MATRIX_TEST_DATABASE_URL: postgres://cex:disposable_ci_only@127.0.0.1:5432/matrix_review_ci
       MATRIX_TEST_ALLOW_SCHEMA_RESET: '1'
@@ -199,8 +204,10 @@ jobs:
           persist-credentials: false
       - name: Require PostgreSQL client
         run: command -v psql
-      - name: Existing durability plus additive observation regression
+      - name: Existing transport durability regressions
         run: bash scripts/check-matrix-source-observation-postgres.sh
+      - name: Operator reconciliation migrations and causal-binding regression
+        run: python3 scripts/matrix_operator_postgres_regression.py
       - name: No source mutation
         run: git diff --exit-code
 
