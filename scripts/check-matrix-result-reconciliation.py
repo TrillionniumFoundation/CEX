@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Fail closed unless Matrix result reconciliation is read-only and principal-bound."""
+"""Fail closed unless Matrix result reconciliation is principal-bound and executable."""
 from __future__ import annotations
 
 import json
 from pathlib import Path
 import stat
+import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,8 +20,16 @@ FILES = {
         "services/matrix-entry-adapter/operator-migrations/"
         "0003_adapter_result_evidence_binding.sql"
     ),
+    "operator_runtime": (
+        "services/matrix-entry-adapter/operator-migrations/"
+        "0004_adapter_result_runtime_reconciliation.sql"
+    ),
     "operator_runner": "scripts/matrix_operator_postgres_regression.py",
     "operator_regression": "scripts/test-matrix-result-evidence-hardening-postgres.sql",
+    "runtime_regression": "scripts/test-matrix-result-runtime-reconciliation-postgres.sql",
+    "runtime_reconciler": "scripts/reconcile-matrix-adapter-result.py",
+    "traceability": "docs/traceability/sequence54-matrix-result-reconciliation-v1.json",
+    "design": "docs/matrix-result-reconciliation-v1.md",
 }
 
 
@@ -44,6 +53,36 @@ def require(source: str, tokens: tuple[str, ...], label: str) -> list[str]:
 
 def forbid(source: str, tokens: tuple[str, ...], label: str) -> list[str]:
     return [f"{label}: forbidden {token!r}" for token in tokens if token in source]
+
+
+def runtime_self_test() -> list[str]:
+    path = ROOT / FILES["runtime_reconciler"]
+    try:
+        result = subprocess.run(
+            [sys.executable, str(path), "--self-test"],
+            cwd=ROOT,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ["runtime reconciler: self-test could not execute"]
+    if result.returncode != 0:
+        return ["runtime reconciler: self-test failed"]
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return ["runtime reconciler: self-test output is not JSON"]
+    if (
+        payload.get("schema") != "cex.matrix.adapter-result-reconciler.v1"
+        or payload.get("status") != "ok"
+        or payload.get("self_test") is not True
+        or payload.get("production_authorization") != "not_granted"
+    ):
+        return ["runtime reconciler: self-test output contract mismatch"]
+    return []
 
 
 def main() -> int:
@@ -176,16 +215,36 @@ def main() -> int:
         ),
         "operator reconciliation hardening",
     )
-    failures += forbid(
-        sources["operator_hardening"].lower(),
-        ("grant all", " to public;"),
-        "operator reconciliation least privilege",
+    failures += require(
+        sources["operator_runtime"],
+        (
+            "0003. The previous replacement",
+            "result_payload,",
+            "p_result_payload,",
+            "existing.result_payload is distinct from p_result_payload",
+            "delivery_row.last_error_code like 'adapter_response_unknown_%'",
+            "adapter_unverified_oversized_response",
+            "adapter_duplicate_outcome_unknown",
+            "relay_internal_unknown_outcome",
+            "matrix_adapter_delivery_reconciliation_race",
+            "owner to cex_matrix_api_owner;",
+            "to cex_matrix_reconciler_runtime;",
+        ),
+        "runtime reconciliation migration",
     )
+    failures += forbid(
+        sources["operator_runtime"].lower(),
+        ("grant all", " to public;"),
+        "runtime reconciliation least privilege",
+    )
+
     failures += require(
         sources["operator_runner"],
         (
             '"0003_adapter_result_evidence_binding.sql"',
+            '"0004_adapter_result_runtime_reconciliation.sql"',
             '"scripts/test-matrix-result-evidence-hardening-postgres.sql"',
+            '"scripts/test-matrix-result-runtime-reconciliation-postgres.sql"',
             "for pass_number in (1, 2):",
             "base.validate_sql_source(sql)",
             "base.bounded_client",
@@ -204,6 +263,71 @@ def main() -> int:
         ),
         "operator hostile PostgreSQL regression",
     )
+    failures += require(
+        sources["runtime_regression"],
+        (
+            "adapter_response_unknown_network",
+            "matrix_runtime_reconciliation_payload_not_persisted",
+            "matrix_runtime_reconciliation_replay_wrote_history",
+            "matrix_runtime_reconciliation_collision_not_rejected",
+        ),
+        "runtime PostgreSQL reconciliation regression",
+    )
+
+    failures += require(
+        sources["runtime_reconciler"],
+        (
+            'SCHEMA = "cex.matrix.adapter-result-reconciler.v1"',
+            'LOOKUP_PATH = "/v1/matrix/results/lookup"',
+            "class NoRedirect(HTTPRedirectHandler)",
+            "unique_object",
+            "lookup_response_identity_mismatch",
+            "lookup_forwarded_scope_mismatch",
+            "MATRIX_ENTRY_INGRESS_TOKEN",
+            "MATRIX_RECONCILIATION_DATABASE_URL",
+            "environment.pop(\"DATABASE_URL\", None)",
+            "cex_matrix_reconcile_adapter_result_v1",
+            "production_authorization",
+            "--self-test",
+        ),
+        "runtime reconciliation command",
+    )
+    failures += forbid(
+        sources["runtime_reconciler"],
+        (
+            "shell=True",
+            "requests.",
+            "verify=False",
+            "allow_redirects=True",
+            "--password",
+        ),
+        "runtime reconciliation command safety",
+    )
+    failures += require(
+        sources["traceability"],
+        (
+            '"schema": "cex.sequence54-matrix-result-reconciliation-traceability.v1"',
+            '"candidate_sequence": 54',
+            '"operator_migration_head": "services/matrix-entry-adapter/operator-migrations/0004_adapter_result_runtime_reconciliation.sql"',
+            '"runtime_command": "scripts/reconcile-matrix-adapter-result.py"',
+            '"id": "MRR-1"',
+            '"id": "MRR-6"',
+            '"production_authorization": "not_granted"',
+        ),
+        "Matrix result reconciliation traceability",
+    )
+    failures += require(
+        sources["design"],
+        (
+            "Migration 0004 fixes a concrete runtime defect",
+            "scripts/reconcile-matrix-adapter-result.py",
+            "result_payload",
+            "all_plan_gaps_closed=false",
+            "production_authorization=not_granted",
+        ),
+        "Matrix result reconciliation design contract",
+    )
+    failures += runtime_self_test()
 
     if failures:
         print("Matrix result reconciliation contract failed:", file=sys.stderr)
@@ -214,15 +338,20 @@ def main() -> int:
     print(
         json.dumps(
             {
-                "schema": "cex.matrix.result-reconciliation-source-check.v1",
+                "schema": "cex.matrix.result-reconciliation-source-check.v2",
                 "status": "ok",
                 "consumer_lookup": "/v1/matrix/messages/result",
                 "adapter_lookup": "/v1/matrix/results/lookup",
-                "read_only": True,
+                "read_only_lookup": True,
                 "principal_bound": True,
                 "stable_replay_snapshot": True,
                 "operator_evidence_bound": True,
+                "runtime_reconciler_present": True,
+                "runtime_reconciler_self_test": True,
+                "runtime_payload_persistence_fix_present": True,
                 "operator_postgres_runner_present": True,
+                "problems": [],
+                "checker_max_grant_production_authorization": False,
                 "production_authorization": "not_granted",
             },
             sort_keys=True,

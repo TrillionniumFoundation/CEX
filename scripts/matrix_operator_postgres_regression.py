@@ -20,12 +20,14 @@ MIGRATIONS = (
     "0001_adapter_result_reconciliation.sql",
     "0002_runtime_roles.sql",
     "0003_adapter_result_evidence_binding.sql",
+    "0004_adapter_result_runtime_reconciliation.sql",
 )
 REGRESSIONS = (
     "scripts/test-matrix-result-reconciliation-postgres.sql",
     "scripts/test-matrix-result-evidence-hardening-postgres.sql",
+    "scripts/test-matrix-result-runtime-reconciliation-postgres.sql",
 )
-SCHEMA = "cex.matrix-operator-postgres-regression.v1"
+SCHEMA = "cex.matrix-operator-postgres-regression.v2"
 MAX_RUN_SECONDS = 900
 
 

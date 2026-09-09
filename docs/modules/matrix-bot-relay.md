@@ -9,183 +9,175 @@ Deployable: yes
 Owner role: `matrix-integration`  
 Production authorization: `not_granted`
 
-This contract defines unqualified source behavior. It is not real homeserver,
-PostgreSQL recovery, exact-SHA hosted or production evidence.
+This contract defines the Sequence 54 source boundary. It is not real homeserver,
+PostgreSQL, exact-SHA hosted or production evidence.
 
 ## Purpose and non-goals
 
-Relay the durable Matrix outbox to the entry adapter and deliver bounded replies
-to the original room. The relay does not grant user, research, financial,
-World/Game or Chain finality authority and does not execute participating Agents.
-Transport acknowledgement is not a proof of the downstream business result.
+The relay persists incoming Matrix events, claims durable deliveries, calls the
+entry adapter and sends bounded replies to the original Matrix room. It does not
+grant user, research, financial, World/Game or Chain authority and does not host
+or execute participating Agents.
+
+Transport acknowledgement is not a downstream business result. When the adapter
+may have completed but its response is lost, the relay holds the delivery. A
+separate principal-bound lookup and least-privilege operator transition can close
+that exact held delivery without replaying the business request.
 
 ## Authority and owned state
 
-Own delivery claims, bounded attempts, immutable delivery history, outgoing
-Matrix idempotency-scope bindings and validated send receipts. The same delivery
-UUID remains the Matrix transaction ID. External services retain their business
-and messaging authority. Dead-letter can mean unresolved remote effect; it is
-never a declaration that the downstream operation definitely did not execute.
+The relay owns delivery claims, bounded attempts, immutable delivery history,
+outgoing send-scope bindings and validated Matrix send receipts. The same delivery
+UUID remains the Matrix transaction ID. External services retain business and
+messaging authority.
+
+Dead-letter means no automatic retry is authorized. It may represent an unknown
+remote effect rather than definite non-execution. Only the reconciliation
+function may transform an eligible adapter unknown-outcome hold to `sent`, and it
+must atomically store the exact durable result and lookup evidence.
 
 ## Source layout and entry points
 
 Catalog-bound entry points:
 
-- `apps/matrix-bot-relay/src/main.rs`: ingress, durable claims, fixed destinations,
-  transaction boundaries, credential-scope binding, send receipts and recovery.
-- `apps/matrix-bot-relay/src/response_contract.rs`: bounded response classification
-  and original-room reply validation, with hostile response fixtures.
-- `apps/matrix-bot-relay/src/runtime_profile.rs`: two-line compatibility re-export
-  of the strict parser owned by shared-config; there is no local parser logic.
+- `apps/matrix-bot-relay/src/main.rs` — ingress, claim, dispatch, completion,
+  send binding and receipt handling;
+- `apps/matrix-bot-relay/src/response_contract.rs` — bounded response and reply
+  validation;
+- `apps/matrix-bot-relay/src/runtime_profile.rs` — shared profile re-export.
 
-Use shared transport migrations 0001, 0002, 0003, 0004 and 0005 in the adapter-owned directory.
-Changing destination, receipt or source identity requires catalog and protocol review.
+Shared transport migrations `0001` through `0005` and operator migrations `0001`
+through `0004` are owned under `services/matrix-entry-adapter/`. The operator
+command is `scripts/reconcile-matrix-adapter-result.py`.
 
 ## Interfaces and contracts
 
-Authenticated compatibility ingress `POST /v1/inbound/matrix-event` persists
-source and adapter-delivery intent before `202`. Adapter delivery calls
-`/v1/matrix/events` with immutable delivery/hash/idempotency headers. Unknown
-destinations remain rejected. Replies may not change the original room, even
-when a response supplies a different or malformed `room_id`. Only bounded
-`m.text` or `m.notice` reply objects with a nonblank body are sent.
+`POST /v1/inbound/matrix-event` authenticates before persistence and returns `202`
+only after source and adapter-delivery intent are durable. Adapter calls use exact
+delivery, payload-hash and idempotency headers. Unknown destinations fail closed.
 
-Matrix delivery uses Client-Server v3 send with the immutable delivery UUID as
-transaction ID. Only HTTP 200 plus a bounded valid `$...` event ID and no errcode
-is accepted. Empty, partial, malformed or receipt-free 2xx responses are not
-success. The complete accepted event identity is durably recorded before `sent`.
+Matrix send uses Client-Server v3 with immutable delivery UUID as transaction ID.
+Only HTTP 200 plus a bounded valid event ID and no Matrix error is accepted.
+Partial, malformed, oversized or receipt-free responses are not success. Reply
+objects may contain only `msgtype` and `body`, use `m.text` or `m.notice`, and
+remain bound to the original room.
+
+The response-loss recovery contract is documented in
+`docs/matrix-result-reconciliation-v1.md`. The relay does not automatically call
+it from its main claim loop; this avoids creating an implicit authority that
+could convert an ambiguous effect to success without operator intent.
 
 ## Persistence, concurrency, and recovery
 
-Claims commit before I/O. Reply enqueue and adapter-delivery completion share a
-transaction. Before a Matrix send, durably bind delivery, payload hash, room,
-homeserver and a SHA-256 credential fingerprint. A changed credential or endpoint
-holds the operation rather than silently creating a different deduplication scope.
-Do not rotate unresolved send credentials without an explicit reconciliation plan.
+Claims commit before network I/O. Reply enqueue and adapter completion share one
+transaction. Before a Matrix send, the relay binds delivery, payload hash, room,
+homeserver and credential fingerprint. A changed credential or endpoint holds the
+operation rather than creating a new deduplication scope.
 
-Record the validated send receipt and mark `sent` in one transaction. Database
-triggers reject new Matrix sent transitions without a matching immutable receipt.
-Repeated identical receipts replay; conflicting event IDs are rejected. Partial
-body reads are distinguished from size violations. Ambiguous Matrix transport
-may retry only the same bound scope, ID and bytes within the attempt budget.
+Validated Matrix send receipt and `sent` completion commit atomically. Database
+triggers reject send completion without matching immutable receipt. Identical
+receipt replay is safe; a different event ID collides.
 
-Adapter durable business replay is not yet qualified. Timeouts, transport/body
-loss and ambiguous error statuses therefore enter an operator hold rather than
-being blindly resent. Expired adapter claims are dead-lettered with an explicit
-unknown-outcome reason and prior-owner provenance. This conservative safety
-control does not close adapter end-to-end availability or response-recovery gaps.
-A runtime internal failure likewise holds rather than risking another effect.
+Adapter timeout, network loss, interrupted body, invalid JSON, unknown HTTP status,
+oversized response, duplicate outcome and internal post-I/O failure are recorded
+as explicit unknown-outcome dead letters. They are not blindly reclaimed. The
+operator reconciliation path queries Consumer Entry through the adapter, verifies
+the exact principal scope and stores the recovered result before closing the
+adapter leg.
+
+Rollback stops claims, fences workers and retains identities, bindings, receipts,
+unknown holds and reconciliation records. Older workers that automatically retry
+unknown adapter effects must not be restarted against the current schema.
 
 ## Configuration and secrets
 
-Required settings: `MATRIX_TRANSPORT_DATABASE_URL` or `DATABASE_URL`,
+Required relay settings include `MATRIX_TRANSPORT_DATABASE_URL` or `DATABASE_URL`,
 `MATRIX_RELAY_WORKER_ID`, `MATRIX_RELAY_INGRESS_TOKEN`,
-`MATRIX_ENTRY_ADAPTER_TOKEN` or `MATRIX_ENTRY_INGRESS_TOKEN`, and `MATRIX_ACCESS_TOKEN`.
-Profile sources `MATRIX_RELAY_RUNTIME_PROFILE`, `CEX_RUNTIME_PROFILE`, `APP_ENV`
-reject unknown, empty, non-Unicode or conflicting explicit values. Beta, staging
-and production are production-like, with HTTPS and separated credentials.
+`MATRIX_ENTRY_ADAPTER_TOKEN` or `MATRIX_ENTRY_INGRESS_TOKEN`, and
+`MATRIX_ACCESS_TOKEN`.
 
 | Key | Default / bounds |
 |---|---|
 | `MATRIX_BOT_RELAY_BIND` / `MATRIX_BOT_RELAY_BIND_ADDR` | `127.0.0.1:8092` |
 | `MATRIX_ADAPTER_BASE_URL` | local `http://127.0.0.1:8091` |
 | `MATRIX_HOMESERVER_BASE_URL` | local `http://127.0.0.1:8008` |
-| `MATRIX_RELAY_CLAIM_LEASE_SECONDS` / `MATRIX_RELAY_LEASE_SECONDS` | 60; 5–3600 |
-| `MATRIX_RELAY_HTTP_TIMEOUT_SECONDS` | 20; positive and more than 5 seconds below lease |
-| `MATRIX_RELAY_POLL_INTERVAL_MS` | 500; effective minimum 50 |
-| `MATRIX_RELAY_INGRESS_MAX_BYTES` | 1048576; maximum 1048576 |
-| `MATRIX_RELAY_MAX_RESPONSE_BYTES` | 1048576; maximum 4194304 |
+| `MATRIX_RELAY_CLAIM_LEASE_SECONDS` | 60; 5–3600 |
+| `MATRIX_RELAY_HTTP_TIMEOUT_SECONDS` | 20; at least five seconds below lease |
+| `MATRIX_RELAY_POLL_INTERVAL_MS` | 500; minimum 50 |
+| `MATRIX_RELAY_INGRESS_MAX_BYTES` | maximum 1048576 |
+| `MATRIX_RELAY_MAX_RESPONSE_BYTES` | maximum 4194304 |
 | `MATRIX_RELAY_DELIVERY_MAX_ATTEMPTS` | 8; 1–100 |
 
-Claims remain single-delivery per iteration. Endpoint userinfo, query and fragment
-are rejected. Secrets must not enter committed fixtures, logs, request snapshots
-or receipts. The credential fingerprint is restricted operational binding data,
-not a credential source or public identifier.
+Production-like endpoints require HTTPS and credentials are pairwise distinct.
+Secrets must not enter logs, snapshots, receipts, command arguments or evidence.
+The credential fingerprint is operational binding data, not a credential source.
 
 ## Security and trust boundaries
 
-Authenticate ingress before persistence, disable redirects and bound bodies.
-Original-room binding prevents the adapter from turning the relay into a cross-room
-sender. Server responses remain untrusted until the receipt shape and configured
-transport authority validate. The Matrix event receipt proves a messaging response,
-not Ledger value, scientific quality or Chain finality. Do not expose raw SQL
-errors that may include private source payloads.
+Ingress is authenticated before persistence; redirects and unbounded bodies are
+disabled. Original-room binding prevents cross-room sends. Server status and
+payload remain untrusted until the complete receipt validates.
+
+The reconciliation operator must use a separate database login inheriting only
+`cex_matrix_reconciler_runtime`. The runtime command reads its adapter token and
+database URL from environment variables, validates duplicate-free JSON and exact
+outer/source/principal/task identities, and sends result bytes to psql only over
+stdin. It cannot claim deliveries or perform direct table DML.
+
+A Matrix event receipt proves a messaging response, not Ledger value, research
+quality or Chain finality. A recovered Consumer Entry result proves only that the
+exact principal-bound operation result was durably recorded.
 
 ## Verification
+
+Required catalog commands:
 
 ```text
 cargo test --locked -p matrix-bot-relay --all-targets
 cargo clippy --locked -p matrix-bot-relay --all-targets -- -D warnings
 python3 scripts/check-matrix-recovery-contract.py
-python3 scripts/check-matrix-lock-coherence.py
 python3 scripts/test-matrix-recovery-contract.py
+python3 scripts/check-matrix-lock-coherence.py
 ```
 
-Database regression must cover wrong owner/fence, receipt-required completion,
-receipt replay/collision, binding drift, expired adapter hold, Matrix scoped retry,
-poison byte immutability and history. Source checks and pure response fixtures do
-not substitute for executed PostgreSQL and real homeserver failure injection.
-Existing full v12 authority gates and the aggregate remain independently required.
+Additional reconciliation checks:
+
+```text
+python3 scripts/check-matrix-result-reconciliation.py
+python3 scripts/reconcile-matrix-adapter-result.py --self-test
+bash scripts/check-matrix-operator-postgres.sh
+```
+
+Database regression must cover wrong role/fence, receipt-required completion,
+receipt collision, endpoint binding drift, each adapter unknown-outcome class,
+exact recovered payload persistence, side-effect-free replay and changed-payload
+collision. Source checks do not replace PostgreSQL or real response-loss testing.
 
 ## Deployment and operations
 
-Apply migrations under the schema owner, remove that credential from resident
-processes and use reviewed least-privilege grants. Readiness requires the new
-receipt/binding functions, not simply a reachable database. Monitor pending age,
-unknown-outcome holds, scoped-retry failures, receipt conflicts and dead letters.
-An operator must distinguish an effect-unknown hold from confirmed rejection.
+Apply transport and operator migrations under the schema owner, then remove that
+credential. Resident relay processes use the relay runtime role. Reconciliation
+runs use a separate short-lived reconciler identity and an approved operator
+surface.
 
-Rollback stops claims, fences workers and retains all immutable identities,
-bindings and receipts. Do not resume an older worker that automatically reclaims
-adapter side effects or marks sends complete from status alone. Use a reviewed
-forward migration for any semantic reversal. Production authorization is not granted.
+Readiness requires transport functions, receipt/binding functions and the current
+operator reconciliation function. Monitor pending age, unknown-outcome age,
+reconciliation failures, receipt conflicts and dead letters. Operators must
+distinguish effect-unknown holds from confirmed rejection.
+
+A response-loss rehearsal must demonstrate: Consumer Entry commits the exact
+result, the adapter response is lost, the relay holds, the operator lookup returns
+the same result, PostgreSQL stores evidence and closes the adapter delivery once,
+and no second business request or cross-room reply occurs.
 
 ## Compatibility and change protocol
 
-Destination strings, healthy payload hashes and delivery UUIDs remain unchanged.
-Older terminal rows are preserved as historical evidence, not upgraded to verified
-receipts. API/credential rotation, bounds, retry classification, schema and
-quarantine changes require this contract, module catalog, protocol review,
-positive/hostile tests and fresh exact-tree evidence. No document self-qualifies.
+Destination strings, payload hashes and delivery UUIDs remain unchanged. Existing
+terminal rows are preserved; no history is rewritten. Operator migration 0004
+retains the v1 reconciliation function signature while fixing result-payload
+persistence and replay comparison.
 
-## Bound adapter response compatibility
-
-Before any completion transaction, the relay validates `accepted`, `action`,
-source event, sender and room from the actual adapter envelope. Help and ignored
-events may have `accepted=false`; this is a transport disposition, not a business
-success. An explicit null projected reply is valid and sends no message. The
-existing status endpoint's task-ID response is accepted only for the identical
-`/status` argument in the source bytes. Missing/mismatched IDs and duplicate-cache
-hits are unknown-result holds, not proof that a prior effect completed. Typed
-replies and original-room binding still apply. Send endpoints now retain a
-configured reverse-proxy path; embedded endpoint credentials and query/fragment
-values are rejected. Full durable adapter result reconciliation remains open.
-
-## Compiler and committed lock repair
-
-`rust-toolchain.toml` selects Rust 1.98.1. The Matrix direct-dependency lock
-preflight checks the two workspace package entries against their manifests; it
-does not resolve the complete dependency graph or prove compilation. Preserve
-`--locked` and execute the full package gates after applying the reviewed lock
-patch. See `docs/build-unblock-round6.md` for the preimage and remaining evidence.
-
-## Plain-reply extension boundary
-
-`response_contract::bound_reply` now rejects every reply key except `msgtype` and
-`body`. An adapter cannot attach structured edits, replacement content, HTML,
-mentions, relations or unknown extensions to a nominal plain-text reply. Rich
-reply extensions now hold and need explicit protocol review; this does not
-sanitize the plain text itself or promise client notification behavior. See
-`docs/matrix-stream-scope-v1.md`; Rust/real homeserver tests remain required.
-
-## Shared profile linkage (round 15)
-
-This package now depends on the existing local `shared-config` crate, and the
-profile compatibility file re-exports its resolver without any local policy.
-The three explicit environment sources, non-Unicode rejection and startup order
-are unchanged. `Cargo.lock` adds only that existing local direct edge. No registry
-package/version/checksum or protocol/schema change is part of this refactor.
-The original semantic tests are retained once in shared-config and must execute
-there; testing only this dependent package does not run dependency unit tests.
-See `docs/matrix-profile-sharing-v1.md`. Actual locked resolution, compilation,
-formatting, lint and black-box startup verification remain required.
+Changes to error classification, result schema, role grants, retry scope, endpoint
+or credential binding, payload bounds or reply fields require this contract,
+Matrix reconciliation contract, migrations, positive/hostile tests and fresh
+exact-tree evidence. No repository document grants production authorization.

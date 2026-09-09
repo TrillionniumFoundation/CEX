@@ -1,0 +1,100 @@
+{
+  "schema": "cex.sequence54-matrix-result-reconciliation-traceability.v1",
+  "status": "active",
+  "candidate_sequence": 54,
+  "architecture_decision": "decisions/adr-004-three-module-external-agent-battle-platform.md",
+  "design_contract": "docs/matrix-result-reconciliation-v1.md",
+  "source_checker": "scripts/check-matrix-result-reconciliation.py",
+  "runtime_command": "scripts/reconcile-matrix-adapter-result.py",
+  "postgres_runner": "scripts/matrix_operator_postgres_regression.py",
+  "operator_migration_head": "services/matrix-entry-adapter/operator-migrations/0004_adapter_result_runtime_reconciliation.sql",
+  "hosted_gate": ".github/workflows/p0-sequence54-integration.yml",
+  "production_authorization": "not_granted",
+  "requirements": [
+    {
+      "id": "MRR-1",
+      "requirement": "Consumer Entry exposes a read-only replay lookup bound to the exact Matrix event, principal, room, signed issuer/key assertion and replay-store snapshot; it never recreates the business request.",
+      "implementation": [
+        "services/consumer-entry-api/src/matrix_result_lookup.rs",
+        "services/consumer-entry-api/src/replay_store_snapshot.rs",
+        "services/consumer-entry-api/src/main.rs"
+      ],
+      "verification": [
+        "scripts/check-matrix-result-reconciliation.py",
+        "services/consumer-entry-api/src/matrix_result_lookup.rs"
+      ]
+    },
+    {
+      "id": "MRR-2",
+      "requirement": "The Matrix adapter exposes only an authenticated read-only reconciliation lookup, validates exact outer and cached source identities, and returns no projected reply or mutation authority.",
+      "implementation": [
+        "services/matrix-entry-adapter/src/result_reconciliation.rs",
+        "services/matrix-entry-adapter/src/lib.rs"
+      ],
+      "verification": [
+        "scripts/check-matrix-result-reconciliation.py",
+        "services/matrix-entry-adapter/src/result_reconciliation.rs"
+      ]
+    },
+    {
+      "id": "MRR-3",
+      "requirement": "A first successful database reconciliation persists the exact validated result payload and its hash, while identical replay is side-effect free and changed content under the same delivery identity collides.",
+      "implementation": [
+        "services/matrix-entry-adapter/operator-migrations/0004_adapter_result_runtime_reconciliation.sql"
+      ],
+      "verification": [
+        "scripts/test-matrix-result-runtime-reconciliation-postgres.sql",
+        "scripts/matrix_operator_postgres_regression.py"
+      ]
+    },
+    {
+      "id": "MRR-4",
+      "requirement": "Only adapter outcomes explicitly classified as unknown can be reconciled; definite rejection, wrong principal, wrong payload, unsupported role and direct table mutation fail closed.",
+      "implementation": [
+        "services/matrix-entry-adapter/operator-migrations/0002_runtime_roles.sql",
+        "services/matrix-entry-adapter/operator-migrations/0004_adapter_result_runtime_reconciliation.sql",
+        "apps/matrix-bot-relay/src/main.rs",
+        "apps/matrix-bot-relay/src/response_contract.rs"
+      ],
+      "verification": [
+        "scripts/test-matrix-result-reconciliation-postgres.sql",
+        "scripts/test-matrix-result-evidence-hardening-postgres.sql",
+        "scripts/test-matrix-result-runtime-reconciliation-postgres.sql"
+      ]
+    },
+    {
+      "id": "MRR-5",
+      "requirement": "The operator command performs exactly one HTTPS read-only lookup and one least-privilege PostgreSQL function invocation, keeps secrets out of process arguments and outputs, rejects redirects and duplicate JSON keys, and never repeats the original business request.",
+      "implementation": [
+        "scripts/reconcile-matrix-adapter-result.py"
+      ],
+      "verification": [
+        "scripts/reconcile-matrix-adapter-result.py",
+        "scripts/check-matrix-result-reconciliation.py"
+      ]
+    },
+    {
+      "id": "MRR-6",
+      "requirement": "Repository source closure remains distinct from PostgreSQL, hosted runner, real Matrix response-loss, secret custody, protected-main, independent approval and final production evidence.",
+      "implementation": [
+        "docs/matrix-result-reconciliation-v1.md",
+        "docs/status/component-status-v1.md",
+        "docs/release-evidence/p0-candidate-trigger.json"
+      ],
+      "verification": [
+        "scripts/check-development-docs.py",
+        ".github/workflows/p0-sequence54-integration.yml"
+      ]
+    }
+  ],
+  "external_evidence_required": [
+    "nonempty_exact_sha_hosted_execution",
+    "disposable_postgresql_16_operator_chain",
+    "real_matrix_response_loss_rehearsal",
+    "least_privilege_runtime_identity_readback",
+    "protected_main_ruleset_and_negative_probes",
+    "fresh_independent_security_approval",
+    "production_secret_custody",
+    "final_human_go_no_go"
+  ]
+}

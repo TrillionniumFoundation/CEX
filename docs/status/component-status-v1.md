@@ -1,88 +1,112 @@
 # CEX component and qualification status
 
 Status: active canonical component-status document  
-Candidate sequence: `52`  
+Candidate sequence: `54`  
+Workspace: `23` Cargo members (`18` first-party + `5` vendored TRNM packages)  
 Migration head: `0088_enforce_provider_terminal_evidence_binding.sql`  
+Matrix transport head: `0005_filter_definition_pins.sql`  
+Matrix operator head: `0004_adapter_result_runtime_reconciliation.sql`  
 Repository qualification: `PENDING_EXACT_SHA_HOSTED_EVIDENCE`  
 Production authorization: `not_granted`
 
-This document reports source and maturity posture only. It is not exact-SHA hosted evidence, branch-protection evidence, runner-execution evidence, independent review, external production evidence, or a human release decision.
+This document reports source and maturity posture only. It is not exact-SHA
+hosted evidence, branch-protection evidence, independent review, external
+production evidence or a human release decision.
 
 ## Architecture status
 
-Accepted ADR-004 defines three top-level domains: Hepta, Nakama, and TRNM. Participating Agents and model/provider runtimes remain external. Sequence 52 completes the repository-side correction by removing the retired `/v1/executions/:id/process` route from the default Execution router, retaining only a fail-closed compatibility provider surface, and binding the correction to executable tests and machine traceability.
+Accepted ADR-004 defines Hepta, Nakama and TRNM as the top-level domains.
+Participating Agents and model/provider runtimes remain external. The immutable
+Sequence 52 architecture baseline removes the retired local process route and
+local inference authority; Sequence 54 non-regressively integrates that boundary
+with current money, Matrix, toolchain, supply-chain and governance controls.
 
-The default Execution build routes lifecycle operations through the external-Agent control/evidence boundary. The retained provider-command database, reconciliation logic, and migration-0088 terminal-evidence guards remain historical compatibility and recovery facts. The legacy worker is excluded from the default build, rejects every production-like profile, and its provider compatibility function performs no local inference.
+Execution owns admitted work lifecycle, external-Agent evidence correlation and
+exact terminal Ledger settlement. It does not host participating Agents. The
+legacy provider worker remains feature-gated, absent from the default build and
+rejected in production-like profiles. Capability Service consumes only a strict
+`CAPABILITY_EXTERNAL_AGENT_REGISTRY_JSON` snapshot and performs no local model
+or CLI discovery.
 
-Capability Service accepts a bounded, strict `CAPABILITY_EXTERNAL_AGENT_REGISTRY_JSON` snapshot containing external Agent declarations only. Missing registry is non-ready in local development and a startup failure in production-like profiles. Local model scanning, OpenClaw CLI execution, implicit demo capabilities, and provider-availability authority are not part of the active component.
-
-Executable architecture status is determined by `scripts/check-external-agent-runtime-boundary.py` and the M1–M10 ledger in `docs/traceability/sequence-52-architecture-v1.json`, never by this prose alone.
+`.env.production.example` follows the same authority: it contains an external
+Agent declaration and no active OpenClaw/Ollama/provider-dispatch configuration.
 
 ## Workspace component status
 
 | Component | Maturity | Authority posture | Current repository status | Promotion blockers |
 |---|---|---|---|---|
-| `shared-types` | active library | versioned cross-service value/receipt/event types; no durable state | documented and catalog-bound | hosted exact-SHA workspace tests and compatibility evidence |
-| `shared-errors` | active library | shared typed error vocabulary only | documented and catalog-bound | stable error-code/mapping regression on exact candidate |
-| `shared-tracing` | active library | tracing initialization/field conventions; no business authority | documented and catalog-bound | production collector, retention, and redaction evidence |
-| `shared-config` | active library | runtime-profile, service-auth, and fail-closed configuration semantics | documented and catalog-bound | exact-SHA cross-service startup regression |
-| `hepta-paper-raid-contracts` | contract-qualified | canonical signed-byte and cryptographic contract surface | repository contract present | exact-head hosted vectors and downstream compatibility binding |
-| `identity-service` | repository candidate | tenant, actor, and API-key lifecycle | source/documentation present | exact-head PostgreSQL/startup tests, credential custody, and operational review |
-| `ledger-service` | repository candidate | exact minor-unit Ledger effects and immutable receipts | migration/test/document contracts present | exact-head hosted qualification, real recovery/load, and financial-control review |
-| `trnm-economy-service` | repository candidate | signed economic-intent admission and settlement projection | source/config/credential contracts present | Chain/downstream binding, real credentials, recovery, and independent approval |
-| `gateway-service` | repository candidate | invocation normalization and durable exact-reserve commands | source/migration/test contracts present | exact-head hosted reserve/reconciliation evidence and production rollout proof |
-| `execution-service` | repository candidate | execution lifecycle, external-Agent evidence correlation, and terminal settlement | local inference and retired process route absent from default build; historical evidence retained | exact-head compile/test, external Agent integration evidence, and real reconciliation |
-| `audit-service` | repository candidate | authenticated append, hash chain, and durable outbox evidence | source/migration/test contracts present | exact-head hosted recovery, external custody/retention, and independent review |
-| `capability-service` | supporting alpha | validated external Agent capability declarations only | strict registry/readiness implementation present | exact-head Rust tests, authenticated distribution if required, and external issuer governance |
-| `consumer-entry-api` | supporting alpha | sessions, identity mapping, and bounded product projections | broad source surface documented | bounded-context decomposition, route/schema inventory, and World/Game ownership enforcement |
-| `hepta-research-league` | functional alpha | durable research facts, Agent bindings, consent, evidence, and review | strict PostgreSQL recovery/lint contracts present | non-empty exact-SHA hosted execution, representative load, and independent release review |
-| `paper-raid-bff` | supporting alpha | browser sessions, CSRF, invite-alpha access, and edge assertions | boundary/runbook/test contracts present | real IdP/deployment, accessibility/load, credential custody, and release approval |
-| `matrix-entry-adapter` | supporting alpha | Matrix validation, normalization, cursor/dedup, and delivery observations | detailed durability/fencing contract present | durable cursor implementation, restart/multi-instance evidence, and real homeserver tests |
-| `matrix-bot-relay` | supporting alpha | relay transport only | module contract present | durable outbox/dead-letter semantics, readiness, and response-loss evidence |
-| `matrix-bot-poller` | supporting alpha | polling/cursor transport only | detailed cursor/fencing contract present | durable cursor CAS/fencing, poison-event, and real Matrix recovery evidence |
-
-## External components
-
-Nakama, Trillionnium Chain, Matrix homeserver, content-addressed object storage, external providers/Agents, the pinned Trillionnium World fixture, and the pinned Trillionnium Game/Nakama runtime are external components. Their repository pins or protocol contracts do not make them Cargo members or transfer their authority to CEX.
-
-World fixture checks establish only deterministic compatibility for an exact source identity. Game/Nakama exact-source checks establish only the recorded source/build/test facts. Public online, public market, authoritative deployment, cutover, rollback, and commercial release remain denied without independent external evidence.
+| `shared-types` | active library | versioned value, receipt and event types | documented/catalog-bound | exact-SHA tests and compatibility evidence |
+| `shared-errors` | active library | typed error vocabulary | documented/catalog-bound | stable mapping regression |
+| `shared-tracing` | active library | tracing initialization and field rules | documented/catalog-bound | collector, retention and redaction evidence |
+| `shared-config` | active library | profile, service-auth and client configuration | documented/catalog-bound | cross-service startup regression |
+| `hepta-paper-raid-contracts` | contract-qualified | canonical signed frames and identifiers | repository contract present | hosted vectors and downstream binding |
+| `identity-service` | repository candidate | tenant, actor and API-key lifecycle | source/migration/docs present | PostgreSQL/startup, custody and operations review |
+| `ledger-service` | repository candidate | exact minor-unit effects and receipts | source/migration/docs present | hosted qualification, recovery/load and financial review |
+| `trnm-economy-service` | repository candidate | authenticated economy intent and receipt projection | source/config/docs present | Chain binding, real credentials and independent review |
+| `gateway-service` | repository candidate | invocation ingress and exact reserve commands | source/migration/docs present | hosted reserve/reconciliation and rollout proof |
+| `execution-service` | repository candidate | lifecycle, external-Agent evidence and settlement | default local execution absent | compile/test, external Agent integration and settlement recovery |
+| `audit-service` | repository candidate | authenticated append, hash chain and outbox | source/migration/docs present | recovery, custody/retention and independent review |
+| `capability-service` | supporting alpha | strict read-only external Agent declarations | external-only registry implemented | hosted tests and external issuer governance |
+| `consumer-entry-api` | supporting alpha | sessions, identity mapping and bounded projections | broad source documented | bounded-context decomposition, route/schema inventory and authority rehearsal |
+| `hepta-research-league` | functional alpha | research facts, consent, evidence and review | PostgreSQL/lint contracts present | hosted recovery, representative load and independent review |
+| `paper-raid-bff` | supporting alpha | browser sessions, CSRF and invite-alpha edge | boundary/runbook/tests present | real IdP/deployment, accessibility/load and custody |
+| `matrix-entry-adapter` | supporting alpha | Matrix validation, normalization and read-only recovery | lookup plus operator migrations `0001`–`0004` implemented | PostgreSQL 16, real response-loss and homeserver qualification |
+| `matrix-bot-relay` | supporting alpha | durable relay and scoped Matrix sends | unknown outcomes hold; one-delivery reconciler implemented | hosted PostgreSQL and end-to-end response-loss rehearsal |
+| `matrix-bot-poller` | supporting alpha | polling, cursor and stream-scope transport | durable fencing/filter contracts present | real homeserver and long-gap recovery evidence |
+| `trnm-economy-protocol` | supporting alpha vendor | economy policy and entitlement wire shapes | catalog/documented | independent provenance and consumer conformance |
+| `trnm-finality-types` | supporting alpha vendor | receipt/quorum/proof types | pinned/documented | trust-anchor lifecycle and hosted vectors |
+| `trnm-finality-verifier` | supporting alpha vendor | node-independent receipt verification | downstream test-only patch ledgered | pinned upstream rebase and hosted compile/tests |
+| `trnm-protocol` | supporting alpha vendor | canonical transaction encoding | pinned/documented | cross-language conformance and migration policy |
+| `trnm-research-protocol` | supporting alpha vendor | signed research commands/state transitions | pinned/documented | external authority integration and cross-language tests |
 
 ## Repository-actionable closure status
 
-Sequence 52 contains repository-side implementations for:
+Sequence 54 source contains:
 
-- complete 18-member module documentation and source-fact validation;
-- explicit external authority/integration catalog coverage;
-- ADR-004 external-Agent-only runtime enforcement;
-- strict Capability registry validation and truthful readiness;
-- removal of executable local Ollama/OpenClaw inference and the retired process route from the default Execution surface;
-- historical provider terminal-evidence and reconciliation preservation;
-- architecture source-to-test-to-gate traceability;
-- bounded manual runner probe definitions that cannot masquerade as execution evidence;
-- existing exact Ledger, Gateway, Execution settlement, Audit, TRNM, and Hepta durability controls;
-- exact-byte external-evidence intake isolation and anti-self-certification.
+- exact 23-member workspace/catalog/module-document correspondence;
+- external-Agent-only Capability and Execution boundaries;
+- exact Ledger, Gateway, Execution, Audit and TRNM identities and recovery paths;
+- durable Matrix transport, cursor, filter, poison, send-binding and receipt state;
+- read-only principal-bound Matrix result lookup;
+- operator migration 0004 fixing first-success result-payload persistence;
+- a one-delivery reconciliation command that never replays the business request;
+- bounded vendor provenance and the test-only finality-verifier patch ledger;
+- Rust 1.98.1, advisory policy and exact candidate evidence machinery.
 
-These changes are a repository candidate only until all authoritative workflows execute real non-empty jobs and succeed on one unchanged exact head and the generated candidate manifest validates that head/tree.
+Repository source presence is not repository qualification. The current candidate
+remains pending until required workflows execute non-empty and succeed on one
+unchanged source and prospective merge tuple, artifacts are retained and the
+candidate manifest validates them.
 
-## Independent blockers
+## Current independent blockers
 
-The following cannot be closed by another source commit or repository-owned pseudo-evidence:
+The following facts cannot be created by another repository commit:
 
-1. runner allocation and non-empty exact-SHA hosted execution;
-2. enforceable protected-main/ruleset governance with all required contexts and no administrator bypass;
-3. independent approval by a reviewer other than the final pusher on the unchanged candidate;
-4. downstream World/Game immutable revision binding and zero unexplained receipt divergence;
+1. allocated runners and non-empty exact-SHA/prospective-merge execution;
+2. effective protected-main/ruleset enforcement and negative probes;
+3. two fresh eligible approvals, including independent security approval;
+4. accepted immutable World, Game/Nakama, Chain and CEX component tuple;
 5. V12-X1 representative-volume disaster recovery;
-6. V12-X2 real deployment/cutover/rollback;
-7. V12-X3 real external Agent/provider reconciliation;
-8. V12-X4 credential custody, separation, rotation, and revocation;
-9. V12-X5 sustained production-like soak;
-10. V12-X6 independent security, operations, and financial-control review;
-11. V12-X7 legal, commercial, and provider approval;
-12. V12-X8 final human go/no-go bound to the exact qualified candidate.
+6. V12-X2 real deployment, cutover and rollback;
+7. V12-X3 real external-Agent/provider and Matrix response-loss reconciliation;
+8. V12-X4 credential custody, rotation and revocation;
+9. V12-X5 sustained production-like soak and SLO evidence;
+10. V12-X6 independent security, operations and financial-control review;
+11. V12-X7 applicable legal, commercial and provider approval;
+12. V12-X8 final accountable human go/no-go.
 
-Open issues #17 and #20 remain the operational tracking surfaces for these independent authorities. Their existence is not closure evidence.
+A workflow with `runner_id=0`, no runner name and no steps is a control-plane or
+entitlement failure, not source qualification. A requested reviewer is not an
+approval. A desired ruleset JSON is not live enforcement.
 
 ## Change protocol
 
-Any source, workflow, migration, security, test, module contract, external-component contract, authority, traceability, or normative-document change creates a new candidate tree and invalidates earlier exact-SHA evidence. Update the shared trigger once, run all authoritative contexts on the unchanged final head, generate a new immutable candidate manifest, and retain `production_authorization=not_granted` unless the independent final decision explicitly grants activation.
+Any source, workflow, migration, security, test, module contract, external
+component contract, traceability or normative-document change creates a new
+candidate tree. Update the sole shared trigger once after the complete change,
+run every authoritative context on the unchanged final tuple, retain the generated
+manifest and obtain fresh independent review.
+
+`production_authorization` remains `not_granted` unless the external evidence
+bundle and final human decision explicitly grant activation. Repository automation
+may reject or qualify a candidate; it may not manufacture production authority.

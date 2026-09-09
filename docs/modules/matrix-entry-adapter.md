@@ -9,129 +9,159 @@ Deployable: yes
 Owner role: `matrix-integration`  
 Production authorization: `not_granted`
 
-This contract describes the current repository source boundary and required
-verification. It is not hosted qualification, production approval or evidence
-that queued jobs executed. The catalog authority is
-`docs/module-catalog-v1.json`.
+This contract describes the current Sequence 54 repository source boundary. It
+is not hosted qualification, production approval or evidence that a queued job
+executed. Catalog authority is `docs/module-catalog-v1.json`.
 
 ## Purpose and non-goals
 
 The adapter authenticates Matrix ingress, validates bounded event envelopes,
-normalizes supported text commands and forwards requests to Consumer Entry. It
-returns protocol-shaped Matrix responses and maintains transport observations.
-It does not authorize research, account value, World or Game state, Chain
-finality, room membership or human identity. Matrix sender and room fields are
-untrusted source claims until the configured ingress and downstream identity
-boundaries validate them. The adapter does not host Agents or perform model
+normalizes supported commands, forwards requests to Consumer Entry and exposes a
+read-only result lookup for response-loss recovery. It does not authorize
+research, account value, World or Game state, Chain finality, room membership or
+human identity. It does not host Agents, discover local models or perform model
 inference.
+
+The response-loss lookup never repeats the original business request. It asks
+Consumer Entry for an already durable result bound to the exact event, principal
+and room. Delivery-state repair is performed only by the separate least-privilege
+PostgreSQL reconciliation authority.
 
 ## Authority and owned state
 
 The process owns HTTP normalization, ingress rate limiting, recent-event
-suppression, session-auth issuer selection and local reply construction. Its
-legacy local file/cache state is not authoritative multi-instance exactly-once
-storage. Consumer Entry owns business idempotency and principal authorization.
-The shared Matrix PostgreSQL schema is located under this package, while the
-poller owns cursor leases/admission and the relay owns claimed outbox dispatch.
-Schema ownership does not transfer those runtime responsibilities or grant the
-adapter permission to repair transport history.
+suppression, session-auth issuer selection, local reply construction and the
+validation of Consumer Entry lookup responses. Consumer Entry owns business
+idempotency and principal authorization. The poller owns cursor leases and event
+admission. The relay owns durable outbox claims and Matrix sends.
+
+The package owns the shared Matrix transport schema source and the operator
+reconciliation migrations, but schema ownership does not grant resident adapter
+processes permission to edit transport history. `cex_matrix_reconciler_runtime`
+is a separate NOLOGIN capability role. Reconciliation evidence is immutable and
+cannot be updated or deleted through normal runtime roles.
 
 ## Source layout and entry points
 
-`services/matrix-entry-adapter/src/main.rs` performs synchronous profile
-validation, consumes the resulting token, constructs Tokio, builds validated
-state and starts the listener. `services/matrix-entry-adapter/src/lib.rs` is the
-only public facade. `services/matrix-entry-adapter/src/implementation.rs` is the
-private byte-preserved route/state implementation and original unit-test body.
-`services/matrix-entry-adapter/src/runtime_profile.rs` remains an exact
-compatibility re-export of the shared parser; it contains no policy.
+Catalog-bound entry points are:
 
-The persistence chain is
-`services/matrix-entry-adapter/migrations/0001_transport_durability.sql`,
-`services/matrix-entry-adapter/migrations/0002_source_observation_replay.sql`,
-`services/matrix-entry-adapter/migrations/0003_sync_recovery_and_send_receipts.sql`,
-`services/matrix-entry-adapter/migrations/0004_stream_scope_binding.sql`, then
-`services/matrix-entry-adapter/migrations/0005_filter_definition_pins.sql`.
-New targets, routes or durable objects require same-change catalog, contract,
-migration and regression updates.
+- `services/matrix-entry-adapter/src/main.rs` — validates process profile before
+  Tokio and starts the listener;
+- `services/matrix-entry-adapter/src/lib.rs` — public validated facade and router;
+- `services/matrix-entry-adapter/src/runtime_profile.rs` — compatibility re-export
+  of the shared profile parser;
+- transport migrations `0001` through `0005` under
+  `services/matrix-entry-adapter/migrations/`.
+
+Additional authoritative source used by this module includes:
+
+- `src/implementation.rs` — private route/state implementation;
+- `src/result_reconciliation.rs` — authenticated read-only lookup adapter;
+- operator migrations `0001` through `0004` under
+  `services/matrix-entry-adapter/operator-migrations/`;
+- `scripts/reconcile-matrix-adapter-result.py` — one-delivery operator command;
+- `scripts/matrix_operator_postgres_regression.py` — exact operator-chain runner.
+
+Any new route, target, durable object or authority must update this contract,
+module catalog where applicable, traceability and executable verification in the
+same change.
 
 ## Interfaces and contracts
 
-The public Rust construction API is deliberately narrow.
-`validate_process_environment` reads every supported profile source and returns
-`ValidatedMatrixAdapterEnvironment` only after strict shared parsing succeeds.
-The token has a private field and is consumed by
-`AppState::from_validated_env`. The facade exposes neither raw
-`MatrixAdapterConfig` nor legacy `new`/`from_env` state constructors, and it
-keeps `implementation.rs` private. `build_router` consumes the validated facade
-state. See `docs/matrix-adapter-validated-construction-v1.md`.
+`validate_process_environment` reads `MATRIX_ENTRY_RUNTIME_PROFILE`,
+`CEX_RUNTIME_PROFILE` and `APP_ENV`, rejects conflicting or malformed values and
+returns a non-inventible `ValidatedMatrixAdapterEnvironment`. The token is
+consumed by `AppState::from_validated_env`; callers cannot construct the private
+implementation state directly.
 
-At HTTP ingress, `/v1/matrix/events` accepts only the documented bounded Matrix
-event shape and configured transport credentials. Downstream calls carry stable
-source-event and scoped idempotency identities. HTTP success is not proof that a
-research, account, settlement or finality transition occurred. The replay SQL
-function `cex_matrix_accept_source_event_v1(text,text,text,text) -> text`
-returns `accepted` for first admission and `replay` only for identical event,
-content hash and partition; conflicting content or partition fails closed.
+Primary routes include:
+
+- `POST /v1/matrix/events` — authenticated bounded Matrix event admission;
+- `GET /v1/matrix/tasks/:id/projection` — bounded projection read;
+- `POST /v1/matrix/results/lookup` — authenticated read-only result recovery;
+- session-auth governance status, validate and reload routes;
+- `/health` and `/metrics`.
+
+`POST /v1/matrix/results/lookup` accepts exact `event_id`, `room_id` and `sender`.
+It signs a request-fingerprint-bound assertion and calls only Consumer Entry
+`POST /v1/matrix/messages/result`. Success requires exact outer identities, exact
+cached source identity, exact identity scope, non-empty task identity and
+`reconciliation.read_only=true`. The route always returns
+`projected_reply=null`; it does not enqueue a Matrix message or change outbox
+state.
 
 ## Persistence, concurrency, and recovery
 
-Apply migrations 0001 through 0005 in order under the schema owner. Inbox,
-source-observation, delivery-history, poison-payload, send-binding, send-receipt,
-stream-scope and filter-definition evidence is immutable under the defined
-triggers. Cursor advance requires the current lease owner, fence and exact next
-revision. Poison observations hold the partition until exact operator
-quarantine acknowledgement; acknowledgement is not successful reprocessing.
-Expired ambiguous adapter claims are dead-lettered rather than blindly resent.
-Matrix sends bind delivery, payload, room, homeserver and credential identities
-before network I/O and require a matching event receipt before `sent`.
+Apply transport migrations `0001` through `0005` in order. Inbox,
+source-observation, history, poison payload, send binding, send receipt,
+stream-scope and filter-definition evidence is immutable. Cursor advance requires
+current owner, fence, revision and unexpired lease. Poison observations hold a
+partition until explicit acknowledgement; acknowledgement is not successful
+reprocessing.
 
-Runtime roles must not receive DDL, TRUNCATE, trigger-disable, owner or blanket
-table privileges. Migration replay is not rollback. Rollback stops new
-admission and claims, preserves all durable identities, and deploys a
-schema-compatible binary or reviewed forward repair. Durable adapter
-result-lookup and principal-bound response-loss reconciliation remain separately
-required; current unknown effects hold safely instead of being declared complete.
+Apply operator migrations in this order:
+
+1. `0001_adapter_result_reconciliation.sql`;
+2. `0002_runtime_roles.sql`;
+3. `0003_adapter_result_evidence_binding.sql`;
+4. `0004_adapter_result_runtime_reconciliation.sql`.
+
+Migration 0004 corrects the prior first-success failure by inserting the validated
+`result_payload` into its NOT NULL evidence column. Exact replay compares the
+payload, hash, evidence and delivery terminal state and writes no second history
+row. Changed content under the same delivery identity collides.
+
+Only adapter outcomes explicitly classified as unknown are reconcilable. A
+permanent rejection cannot be rewritten as success. The operator command performs
+one lookup, computes the exact lookup-response digest and calls only the security-
+definer reconciliation function using credentials supplied through the
+environment. It never directly reads or updates Matrix tables.
+
+Rollback first stops ingress, polling, relay claims and operator reconciliation.
+It preserves all immutable identities and evidence, then deploys a schema-
+compatible binary or reviewed forward repair. Migration replay is not rollback.
 
 ## Configuration and secrets
 
-Before tracing, Tokio or worker creation, the executable validates
-`MATRIX_ENTRY_RUNTIME_PROFILE`, `CEX_RUNTIME_PROFILE` and `APP_ENV`. Accepted
-local aliases are `test`, `local`, `local_dev`, `dev`, `development`; beta is
-`beta`; staging is `stage` or `staging`; production is `prod`, `production`,
-`trnm-economy` or `trnm_economy`. Whitespace and case normalize. Explicit empty,
-unknown, non-Unicode or conflicting values fail with exit 78. All absent values
-select explicit local development. Staging and production remain distinct before
-both map to the legacy production policy.
+The adapter validates profile, ingress token, Consumer Entry endpoint/token,
+session-auth issuer/key/secret, approved issuer-registry revision, bot identity,
+rate-limit path, recent-event path and bounded limits. Production-like profiles
+must fail closed on missing or conflicting authority.
 
-The facade owns this strict read through `validate_process_environment`; the
-binary passes the non-inventible `ValidatedMatrixAdapterEnvironment` into
-`from_validated_env`. Embedded callers can no longer name the legacy public
-configuration/state constructors through this package. Existing ingress tokens,
-session-auth secrets, issuer/key identifiers, approved registry revisions,
-downstream endpoints, cache paths and limits still require their profile-specific
-validation. Secrets, database URLs and opaque cursors must not be emitted in
-errors or evidence.
+Result-reconciliation runtime uses:
+
+- `MATRIX_ENTRY_ADAPTER_BASE_URL` — adapter base URL; HTTPS outside explicit
+  loopback tests;
+- `MATRIX_ENTRY_INGRESS_TOKEN` — adapter lookup credential;
+- `MATRIX_RECONCILIATION_DATABASE_URL` — dedicated reconciler login URL;
+- optional `MATRIX_RECONCILIATION_PSQL` — reviewed psql executable path.
+
+Tokens, database URLs, raw result payloads, replay-store bytes and session secrets
+must not appear in process arguments, result JSON, logs, traces, metrics, issues or
+repository fixtures. The reconciler command moves database credentials into libpq
+environment variables before spawning psql.
 
 ## Security and trust boundaries
 
-A valid runtime profile does not authenticate a Matrix sender or authorize a
-business effect. The ingress credential, session issuer/key selection, tenant
-mapping, bounded request body, redirect policy, reply identity and downstream
-receipt all remain independent checks. Unknown configuration cannot silently
-select local authority in either the binary or public facade. The private
-implementation module is not a security sandbox; its safety derives from the
-facade visibility boundary, source checker and exact compiled package.
+A valid Matrix sender field is not authenticated merely because it parses. The
+ingress credential, signed session assertion, issuer/key selection, tenant
+mapping, replay fingerprint, bounded body, redirect policy, exact source identity
+and database transition are independent checks.
 
-Operators must protect Matrix access tokens and issuer secrets, separate schema
-ownership from runtime execution, and avoid raw message bodies or high-cardinality
-principal identifiers in logs and metrics. Redaction/edit/membership semantics,
-poison retention/erasure and credential rotation require explicit operational
-policy and real homeserver/database evidence before promotion.
+The adapter lookup disables redirects and bounds response bytes. Duplicate JSON
+keys, cross-room or cross-user responses, changed task identity, invalid source
+scope and non-read-only envelopes fail closed. HTTP status alone never proves a
+business result.
+
+Runtime roles receive no DDL, TRUNCATE, trigger-disable, ownership or blanket
+DML. The reconciliation function verifies the held delivery's immutable payload,
+source, room, principal, hash and unknown-outcome reason before atomically storing
+evidence and closing the delivery. Repository tests do not prove secret custody,
+real homeserver authority or production topology.
 
 ## Verification
 
-Required catalog commands are:
+Required catalog commands:
 
 ```text
 cargo test -p matrix-entry-adapter
@@ -139,52 +169,51 @@ cargo clippy -p matrix-entry-adapter --all-targets -- -D warnings
 bash scripts/check-matrix-source-observation-postgres.sh
 ```
 
-The stricter exact-head lanes also run:
+Additional Sequence 54 checks:
 
 ```text
-python3 scripts/test-matrix-adapter-api-boundary.py
-python3 scripts/check-matrix-adapter-api-boundary.py
+python3 scripts/check-matrix-result-reconciliation.py
+python3 scripts/reconcile-matrix-adapter-result.py --self-test
+bash scripts/check-matrix-operator-postgres.sh
 cargo fmt -p matrix-entry-adapter -- --check
 cargo test --locked -p matrix-entry-adapter --all-targets
 cargo clippy --locked -p matrix-entry-adapter --all-targets -- -D warnings
 ```
 
-The SQL wrapper requires a disposable PostgreSQL 16 database, explicit
-`MATRIX_TEST_ALLOW_SCHEMA_RESET=1`, one guarded client session and the complete
-0001–0005 chain twice before all preserved and additive assertions. Source and
-Python mutation checks do not prove Rust compilation, PostgreSQL behavior or
-black-box startup. Missing tools, nonzero child status, absent steps or queued
-jobs are failures or unexecuted states, never skips or passes.
+The operator PostgreSQL runner applies all four migrations twice and executes
+baseline, hostile evidence and runtime payload-persistence regressions. It must
+run against disposable PostgreSQL 16 with non-empty hosted steps. Source checks,
+self-tests or zero-step jobs cannot substitute for that execution.
 
 ## Deployment and operations
 
-Deploy the adapter privately with a dedicated least-privilege identity and a
-validated nonlocal profile where applicable. Readiness must distinguish listener
-health from downstream authentication, issuer-registry validity, database
-transport health, queue age and successful receipt reconciliation. Record exact
-image, commit/tree, schema chain, normalized profile, credential identifiers,
-cache mode and Consumer Entry endpoint. Monitor ingress failures, duplicate
-suppression, delivery age, poison holds, dead letters and response-unknown volume.
+Deploy privately with a dedicated runtime identity. Keep schema-owner credentials
+outside resident processes. Use a separate login inheriting only
+`cex_matrix_reconciler_runtime` for the reconciliation command. Record exact
+image, commit/tree, transport and operator migration heads, normalized profile,
+credential identifiers and Consumer Entry endpoint.
 
-Rollback first stops ingress/admission and new outbox claims, then preserves
-inbox, observations, cursor history, send bindings/receipts and poison evidence.
-Never restore an image that requires weaker constructors or an earlier migration
-semantic against the current schema. Real restart, credential rotation,
-least-privilege role, retention, SLO and homeserver drills remain required before
-production authorization can change from `not_granted`.
+Monitor ingress failures, replay lookup failures, unknown-outcome age, dead-letter
+count, reconciliation success/collision, poison holds, cursor age, send receipt
+conflicts and queue age. Every reconciliation must retain delivery ID, event ID,
+principal, room, candidate SHA and lookup-response digest without retaining
+secrets in the operational record.
+
+Readiness must distinguish listener health from issuer-registry validity,
+Consumer Entry reachability, transport schema availability and operator migration
+head. Real restart, credential rotation, least-privilege inspection, retention,
+SLO and homeserver drills remain promotion requirements.
 
 ## Compatibility and change protocol
 
-The facade split preserves the existing route/state implementation blob and its
-unit tests but intentionally removes direct external access to legacy config and
-state constructors. Embedded callers must migrate to
-`validate_process_environment` plus `ValidatedMatrixAdapterEnvironment` and
-`from_validated_env`. Re-exposing `implementation.rs`, adding a caller-inventible
-token, accepting parser precedence, or restoring `AppState::from_env` at the
-facade is a security regression.
+The validated facade remains the only construction path. Re-exposing private
+configuration/state constructors, restoring local model execution, weakening
+profile conflict handling or accepting an unbound result is a breaking security
+change.
 
-Protocol, partition, normalization, cursor, filter, credential-scope or reply
-changes require versioned fixtures, migration compatibility, replay/rollback
-rules and exact-head evidence. Update this module contract, focused design
-records, source gates and catalog together. No document, source checker or local
-commit can grant repository qualification or production approval.
+The reconciliation function retains its v1 signature. Migration 0004 is additive
+and replaces only function behavior; existing immutable evidence rows are
+preserved. Changes to result schema, evidence keys, reconcilable error classes,
+role grants, session assertion, cursor/filter scope or reply protocol require
+versioned fixtures, migrations, hostile tests, traceability and fresh exact-tree
+evidence. No document or source checker grants production authorization.
