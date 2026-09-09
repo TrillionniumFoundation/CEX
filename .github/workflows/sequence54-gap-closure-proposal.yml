@@ -173,3 +173,133 @@ jobs:
         run: |
           test '${{ steps.semantics.outcome }}' = success
           test '${{ steps.static.outcome }}' = success
+
+  apply:
+    needs: proposal
+    if: >-
+      github.repository == 'TrillionniumFoundation/CEX' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/integration/cex-v12-sequence54-20260908' &&
+      github.event.head_commit.message == 'chore(ci): authorize verified Sequence 54 fast-forward apply' &&
+      needs.proposal.result == 'success'
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+      PROPOSAL_RUN_ID: '34350911707'
+      PROPOSAL_ARTIFACT_DIGEST: 'sha256:0eea9b7aac99e2c50e0683959e688a4267a86c39219e25598e795b51e0436d58'
+    steps:
+      - name: Checkout exact authorized source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install exact Rust formatter
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.1
+          components: rustfmt
+
+      - name: Reproduce, validate and constrain repair tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          python3 scripts/sequence54_gap_closure_proposal.py
+          cargo fmt --all
+          python3 scripts/generate-repository-semantics.py --write
+          python3 scripts/generate-repository-semantics.py --check
+          python3 scripts/test-build-unblock.py
+          python3 scripts/test-rust-route-contract.py
+          python3 scripts/check-sequence54-integration.py
+          python3 scripts/check-sequence54-matrix-v3-admission.py
+          cargo fmt --all -- --check
+          git diff --check
+          rm -f scripts/sequence54_gap_closure_proposal.py
+          rm -f .github/workflows/sequence54-gap-closure-proposal.yml
+          python3 - <<'PY'
+          import subprocess
+
+          expected = {
+              '.github/workflows/p0-rust-toolchain-convergence.yml',
+              '.github/workflows/sequence54-gap-closure-proposal.yml',
+              'apps/matrix-bot-poller/src/filter_definition.rs',
+              'apps/matrix-bot-poller/src/main.rs',
+              'apps/matrix-bot-poller/src/stream_scope.rs',
+              'apps/matrix-bot-poller/src/sync_recovery.rs',
+              'apps/matrix-bot-poller/src/wire_response.rs',
+              'apps/matrix-bot-relay/src/main.rs',
+              'apps/matrix-bot-relay/src/response_contract.rs',
+              'crates/shared-config/src/runtime_guard/matrix_profile.rs',
+              'docs/release-evidence/p0-candidate-trigger.json',
+              'docs/repository-contract-semantics-v1.json',
+              'scripts/rust_route_contract.py',
+              'scripts/sequence54_gap_closure_proposal.py',
+              'scripts/test-build-unblock.py',
+              'scripts/test-matrix-result-reconciliation-postgres.sql',
+              'scripts/test-rust-route-contract.py',
+              'services/capability-service/src/lib.rs',
+              'services/consumer-entry-api/src/main.rs',
+              'services/consumer-entry-api/src/matrix_result_lookup.rs',
+              'services/consumer-entry-api/src/matrix_result_response_binding.rs',
+              'services/consumer-entry-api/src/replay_store_snapshot.rs',
+              'services/execution-service/src/providers.rs',
+              'services/execution-service/src/state.rs',
+              'services/execution-service/tests/external_agent_boundary.rs',
+              'services/matrix-entry-adapter/src/delivery_binding.rs',
+              'services/matrix-entry-adapter/src/lib.rs',
+              'services/matrix-entry-adapter/src/reconciliation_response_binding.rs',
+              'services/matrix-entry-adapter/src/result_reconciliation.rs',
+          }
+          changed = set(filter(None, subprocess.check_output(
+              ['git', 'diff', '--name-only', '--diff-filter=ACMRTUXBD'],
+              text=True,
+          ).splitlines()))
+          changed.update(filter(None, subprocess.check_output(
+              ['git', 'ls-files', '--others', '--exclude-standard'],
+              text=True,
+          ).splitlines()))
+          if changed != expected:
+              missing = sorted(expected - changed)
+              extra = sorted(changed - expected)
+              raise SystemExit(f'change-set mismatch; missing={missing}; extra={extra}')
+          print(f'authorized change-set: {len(changed)} paths')
+          PY
+          git diff --check
+
+      - name: Create single auditable repair commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_tree="$(git rev-parse HEAD^{tree})"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          git commit \
+            -m 'fix(sequence54): close source and CI blockers' \
+            -m "authorized-source: $SOURCE_SHA" \
+            -m "authorized-source-tree: $source_tree" \
+            -m "proposal-run: $PROPOSAL_RUN_ID" \
+            -m "proposal-artifact-digest: $PROPOSAL_ARTIFACT_DIGEST" \
+            -m 'production-authorization: not_granted'
+          echo "REPAIR_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Fast-forward push exact repair commit
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          remote_head="$(git ls-remote --exit-code origin "refs/heads/$TARGET_BRANCH" | awk '{print $1}')"
+          test "$remote_head" = "$SOURCE_SHA"
+          authorization="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $authorization" \
+            push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          test "$(git rev-parse HEAD)" = "$REPAIR_COMMIT"
