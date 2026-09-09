@@ -16,6 +16,9 @@ const DELIVERY_BINDING_FIELD: &str = "cex_delivery_binding";
 const DELIVERY_BINDING_SCHEMA: &str = "cex.matrix.delivery-binding.v1";
 const DELIVERY_BINDING_SOURCE: &str = "matrix-bot-relay-headers-v1";
 const DELIVERY_FINGERPRINT_DOMAIN: &str = "cex.matrix.adapter-result-delivery.v1";
+const RECONCILIATION_SCHEMA: &str = "cex.matrix.adapter-result-reconciliation.v2";
+const RECONCILIATION_SOURCE: &str = "consumer_entry_durable_replay";
+const RECONCILIATION_CAUSAL_BINDING: &str = "delivery_payload_fingerprint";
 
 #[derive(Debug)]
 struct ExpectedBinding {
@@ -45,10 +48,10 @@ pub(super) async fn enforce_reconciliation_response_binding(
             )
         }
     };
-    let expected = match parse_expected_binding(&request_bytes) {
-        Ok(expected) => expected,
-        Err(code) => return binding_error(StatusCode::BAD_REQUEST, code),
-    };
+    // Preserve the handler's authentication/error semantics. An invalid request
+    // is remembered here but is only relevant if an inner layer incorrectly
+    // attempts to emit a success response for it.
+    let expected = parse_expected_binding(&request_bytes);
     request_parts.headers.remove(CONTENT_LENGTH);
 
     let response = next
@@ -60,6 +63,15 @@ pub(super) async fn enforce_reconciliation_response_binding(
     if !response.status().is_success() {
         return response;
     }
+    let expected = match expected {
+        Ok(expected) => expected,
+        Err(_) => {
+            return binding_error(
+                StatusCode::CONFLICT,
+                "matrix_result_reconciliation_success_for_invalid_request",
+            )
+        }
+    };
 
     let (mut response_parts, response_body) = response.into_parts();
     let response_bytes = match to_bytes(response_body, MAX_RESPONSE_BYTES).await {
@@ -123,6 +135,25 @@ fn validate_success_response(raw: &[u8], expected: &ExpectedBinding) -> Result<(
             != Some(expected.payload_sha256.as_str())
         || value.get("request_fingerprint").and_then(Value::as_str)
             != Some(expected.request_fingerprint.as_str())
+        || value.get("projected_reply") != Some(&Value::Null)
+        || value.get("production_authorization").and_then(Value::as_str)
+            != Some("not_granted")
+    {
+        return Err(());
+    }
+
+    let reconciliation = value
+        .get("reconciliation")
+        .and_then(Value::as_object)
+        .ok_or(())?;
+    if reconciliation.len() != 4
+        || reconciliation.get("schema").and_then(Value::as_str)
+            != Some(RECONCILIATION_SCHEMA)
+        || reconciliation.get("source").and_then(Value::as_str)
+            != Some(RECONCILIATION_SOURCE)
+        || reconciliation.get("read_only").and_then(Value::as_bool) != Some(true)
+        || reconciliation.get("causal_binding").and_then(Value::as_str)
+            != Some(RECONCILIATION_CAUSAL_BINDING)
     {
         return Err(());
     }
@@ -133,12 +164,14 @@ fn validate_success_response(raw: &[u8], expected: &ExpectedBinding) -> Result<(
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty() && value.len() <= 128)
         .ok_or(())?;
-    if forwarded
+    let invocation_id = forwarded
         .get("raw")
+        .and_then(Value::as_object)
         .and_then(|raw| raw.get("invocation_id"))
         .and_then(Value::as_str)
-        .is_some_and(|invocation_id| invocation_id != task_id)
-    {
+        .filter(|value| !value.is_empty() && value.len() <= 128)
+        .ok_or(())?;
+    if invocation_id != task_id {
         return Err(());
     }
 
@@ -358,6 +391,12 @@ mod tests {
                 "raw": {"invocation_id": "task-delivery-bound"}
             },
             "projected_reply": null,
+            "reconciliation": {
+                "schema": RECONCILIATION_SCHEMA,
+                "source": RECONCILIATION_SOURCE,
+                "read_only": true,
+                "causal_binding": RECONCILIATION_CAUSAL_BINDING
+            },
             "production_authorization": "not_granted"
         })
     }
@@ -399,7 +438,8 @@ mod tests {
         let expected = expected();
         let mut changed = successful_response(&expected);
         changed["forwarded"]["source"]["metadata"]["metadata"]
-            [DELIVERY_BINDING_FIELD]["payload_sha256"] = json!(format!("sha256:{}", "9".repeat(64)));
+            [DELIVERY_BINDING_FIELD]["payload_sha256"] =
+            json!(format!("sha256:{}", "9".repeat(64)));
         let response = test_router(changed)
             .oneshot(request(&expected))
             .await
@@ -410,6 +450,34 @@ mod tests {
         extended["forwarded"]["source"]["metadata"]["metadata"]
             [DELIVERY_BINDING_FIELD]["forged"] = json!(true);
         let response = test_router(extended)
+            .oneshot(request(&expected))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn task_invocation_and_response_envelope_are_mandatory() {
+        let expected = expected();
+        let mut missing_invocation = successful_response(&expected);
+        missing_invocation["forwarded"]["raw"] = json!({});
+        let response = test_router(missing_invocation)
+            .oneshot(request(&expected))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let mut wrong_invocation = successful_response(&expected);
+        wrong_invocation["forwarded"]["raw"]["invocation_id"] = json!("other-task");
+        let response = test_router(wrong_invocation)
+            .oneshot(request(&expected))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let mut wrong_contract = successful_response(&expected);
+        wrong_contract["reconciliation"]["read_only"] = json!(false);
+        let response = test_router(wrong_contract)
             .oneshot(request(&expected))
             .await
             .unwrap();
