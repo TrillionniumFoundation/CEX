@@ -100,6 +100,7 @@ jobs:
           python3 scripts/check-matrix-adapter-api-boundary.py
       - name: Durable result reconciliation source contracts
         run: |
+          python3 scripts/check-sequence54-matrix-v3-admission.py
           python3 scripts/check-matrix-result-reconciliation.py
           python3 scripts/check-matrix-result-reconciliation-security-v2.py
           python3 scripts/check-matrix-result-reconciliation-security-v3.py
