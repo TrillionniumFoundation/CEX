@@ -13,7 +13,7 @@ FILES = {
     "adapter_facade": "services/matrix-entry-adapter/src/lib.rs",
     "adapter_binding": "services/matrix-entry-adapter/src/delivery_binding.rs",
     "consumer_main": "services/consumer-entry-api/src/main.rs",
-    "consumer_lookup": "services/consumer-entry-api/src/matrix_result_lookup_v2.rs",
+    "consumer_lookup": "services/consumer-entry-api/src/matrix_result_lookup.rs",
     "migration": (
         "services/matrix-entry-adapter/operator-migrations/"
         "0006_adapter_result_embedded_delivery_binding.sql"
@@ -143,15 +143,15 @@ def main() -> int:
     failures += require(
         sources["consumer_main"],
         (
-            "mod matrix_result_lookup_v2;",
-            "matrix_result_lookup_v2::router",
+            "mod matrix_result_lookup;",
+            "matrix_result_lookup::router",
         ),
         "consumer canonical lookup router",
     )
     failures += forbid(
         sources["consumer_main"],
-        ("mod matrix_result_lookup;", "matrix_result_lookup::router"),
-        "consumer legacy lookup router",
+        ("mod matrix_result_lookup_v2;", "matrix_result_lookup_v2::router"),
+        "consumer temporary lookup router",
     )
     failures += require(
         sources["consumer_lookup"],
@@ -249,7 +249,7 @@ def main() -> int:
         (
             "python3 scripts/check-matrix-result-reconciliation-security-v3.py",
             "python3 scripts/matrix_operator_postgres_regression.py",
-            "services/consumer-entry-api/src/matrix_result_lookup_v2.rs",
+            "services/consumer-entry-api/src/matrix_result_lookup.rs",
             "docs/matrix-result-reconciliation-v3.md",
         ),
         "hosted Matrix v3 gate wiring",
@@ -261,7 +261,7 @@ def main() -> int:
             "source.metadata.metadata.cex_delivery_binding",
             "x-cex-delivery-id",
             "x-cex-payload-sha256",
-            "legacy or unbound cache entry fails closed",
+            "unbound cache entry fails closed",
             "cex_matrix_reconcile_adapter_result_v3",
             "production_authorization=not_granted",
         ),
