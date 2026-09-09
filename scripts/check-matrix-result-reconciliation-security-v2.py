@@ -148,6 +148,10 @@ def main() -> int:
             '"PGCHANNELBINDING"] = "require"',
             "pinned_psql_path_required",
             "pinned_psql_unavailable_or_unsafe",
+            "resolved = path.resolve(strict=True)",
+            "metadata.st_uid not in trusted_owners",
+            "parent.st_mode & 0o022",
+            "ipaddress.ip_address(host).is_loopback",
             "def psql_environment(",
             '"PGPASSFILE": os.devnull',
             '"PSQLRC": os.devnull',
@@ -167,6 +171,7 @@ def main() -> int:
             "sslmode=require",
             "verify=False",
             "shell=True",
+            'host.lower() == "localhost"',
         ),
         "operator command fail-closed transport",
     )
