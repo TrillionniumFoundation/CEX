@@ -28,6 +28,10 @@ MIGRATION = (
 )
 OPERATOR_HEAD = "0006_adapter_result_embedded_delivery_binding.sql"
 RUNTIME_ENTRYPOINT = "cex_matrix_reconcile_adapter_result_v3"
+QUALIFICATION_SCOPE = (
+    "sequence54-non-regressive-23-module-migration-0088-matrix-operator-0006-"
+    "v3-four-boundary-functional-security-toolchain-governance-integration"
+)
 
 
 def problem(message: str) -> None:
@@ -150,6 +154,7 @@ def main() -> int:
     trigger = load_json(TRIGGER)
     require_equal(trigger, "schema", "cex.p0-candidate-trigger.v1", "trigger")
     require_equal(trigger, "sequence", 54, "trigger")
+    require_equal(trigger, "qualification_scope", QUALIFICATION_SCOPE, "trigger")
     require_equal(trigger, "integration_traceability", INTEGRATION, "trigger")
     require_equal(
         trigger,
@@ -227,11 +232,16 @@ def main() -> int:
         "matrix_traceability",
     )
     requirements = traceability.get("requirements")
-    ids = {
-        item.get("id")
-        for item in requirements
-        if isinstance(requirements, list) and isinstance(item, dict)
-    }
+    requirement_items: list[dict[str, Any]] = []
+    if not isinstance(requirements, list):
+        problem("Matrix v3 traceability requirements must be an array")
+    else:
+        for index, item in enumerate(requirements):
+            if not isinstance(item, dict):
+                problem(f"Matrix v3 traceability requirement {index} is not an object")
+            else:
+                requirement_items.append(item)
+    ids = {item.get("id") for item in requirement_items}
     if ids != {f"MRR3-{index}" for index in range(1, 8)}:
         problem("Matrix v3 traceability requirements are incomplete")
 
