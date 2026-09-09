@@ -1,0 +1,361 @@
+name: sequence54-round4-master-v2
+
+on:
+  push:
+    branches:
+      - work/sequence54-round2-staging-20260909
+    paths:
+      - '.github/workflows/sequence54-round4-master-v2.yml'
+
+permissions:
+  contents: write
+  actions: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: sequence54-round4-master-v2
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+  PULL_REQUEST_NUMBER: '53'
+  EVIDENCE_DIR: ${{ runner.temp }}/sequence54-round4-master-v2
+
+jobs:
+  close:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - name: Checkout controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Preserve repair program
+        run: |
+          mkdir -p "$EVIDENCE_DIR"
+          cp scripts/sequence54_round3_remediate.py "$RUNNER_TEMP/remediate.py"
+
+      - name: Checkout current candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Race-safe source convergence
+        id: local
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Sequence 54 Closure Bot'
+          git config user.email 'sequence54-closure@users.noreply.github.com'
+          converged=false
+          for attempt in 1 2 3; do
+            git fetch --no-tags origin "refs/heads/${TARGET_BRANCH}"
+            git reset --hard FETCH_HEAD
+            git clean -fdx
+            before="$(git rev-parse HEAD)"
+            printf 'attempt=%s before=%s\n' "$attempt" "$before" >> "$EVIDENCE_DIR/source-attempts.txt"
+
+            if ! grep -q 'def selector_binding_self_tests' scripts/rust_toolchain_convergence_v4.py; then
+              python3 "$RUNNER_TEMP/remediate.py" "$GITHUB_WORKSPACE"
+            fi
+            python3 -m py_compile \
+              scripts/rust_toolchain_convergence_v4.py \
+              scripts/check-consumer-projection-boundary.py \
+              scripts/test-consumer-route-contract.py
+            git diff --check
+            if ! git diff --quiet; then
+              git add \
+                .github/workflows/p0-rust-toolchain-convergence.yml \
+                scripts/rust_toolchain_convergence_v4.py \
+                docs/security/rust-toolchain-surfaces-v1.json \
+                scripts/check-consumer-projection-boundary.py \
+                scripts/test-consumer-route-contract.py \
+                docs/modules/consumer-entry-api.md
+              git commit -m 'fix(sequence54): close toolchain and projection gate blockers' \
+                -m 'production-authorization: not_granted'
+            fi
+            candidate="$(git rev-parse HEAD)"
+            tree="$(git rev-parse HEAD^{tree})"
+
+            checks=(
+              'python3 scripts/check-rust-toolchain-convergence.py'
+              'python3 scripts/test-consumer-route-contract.py'
+              'python3 scripts/check-consumer-projection-boundary.py'
+              'python3 scripts/generate-repository-semantics.py --check'
+              'python3 scripts/check-development-docs.py'
+              'python3 scripts/check-module-documentation.py'
+              'python3 scripts/check-sequence54-integration.py'
+            )
+            overall=0
+            index=0
+            for command in "${checks[@]}"; do
+              index=$((index + 1))
+              log="$EVIDENCE_DIR/local-${attempt}-${index}.log"
+              printf 'command=%s\n' "$command" > "$log"
+              set +e
+              bash -lc "$command" >> "$log" 2>&1
+              rc=$?
+              set -e
+              printf 'exit_code=%s\n' "$rc" >> "$log"
+              if [[ "$rc" -ne 0 ]]; then overall=1; fi
+            done
+            test "$overall" -eq 0
+
+            if [[ "$candidate" == "$before" ]]; then
+              converged=true
+              break
+            fi
+            git fetch --no-tags origin "refs/heads/${TARGET_BRANCH}"
+            if [[ "$(git rev-parse FETCH_HEAD)" == "$before" ]]; then
+              git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
+              converged=true
+              break
+            fi
+          done
+          [[ "$converged" == true ]]
+          printf '%s\n' "$(git rev-parse HEAD)" > "$EVIDENCE_DIR/head-sha.txt"
+          printf '%s\n' "$(git rev-parse HEAD^{tree})" > "$EVIDENCE_DIR/head-tree.txt"
+
+      - name: Qualify exact new workflow run identities
+        id: gates
+        if: steps.local.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$EVIDENCE_DIR" <<'PY'
+          from __future__ import annotations
+          import json, os, re, sys, time
+          from datetime import datetime, timezone
+          from pathlib import Path
+          from urllib.error import HTTPError
+          from urllib.parse import quote
+          from urllib.request import Request, urlopen
+
+          root = Path(sys.argv[1])
+          repository = os.environ['GITHUB_REPOSITORY']
+          branch = os.environ['TARGET_BRANCH']
+          token = os.environ['GH_TOKEN']
+          api = os.environ.get('GITHUB_API_URL', 'https://api.github.com')
+          head = (root / 'head-sha.txt').read_text().strip()
+          tree = (root / 'head-tree.txt').read_text().strip()
+
+          def call(path, *, method='GET', payload=None, allow_error=False):
+              data = None if payload is None else json.dumps(payload).encode()
+              request = Request(
+                  api + path, method=method, data=data,
+                  headers={
+                      'Authorization': f'Bearer {token}',
+                      'Accept': 'application/vnd.github+json',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'User-Agent': 'sequence54-round4-master-v2',
+                      'Content-Type': 'application/json',
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=30) as response:
+                      body = response.read()
+                      return response.status, json.loads(body) if body else None
+              except HTTPError as error:
+                  body = error.read().decode('utf-8', errors='replace')
+                  if allow_error:
+                      return error.code, {'error': body[:2000]}
+                  raise RuntimeError(f'{method} {path}: {error.code}: {body[:1000]}') from error
+
+          def branch_sha():
+              _status, value = call(f'/repos/{repository}/branches/{quote(branch, safe="")}')
+              return value['commit']['sha']
+
+          if branch_sha() != head:
+              raise SystemExit('head drift before qualification')
+
+          desired = [
+              'p0-runner-diagnostics',
+              'p0-rust-toolchain-convergence',
+              'repository-semantic-contract-gate',
+              'consumer-projection-boundary-gate',
+              'execution-lifecycle-gate',
+              'matrix-review-repair-regression',
+              'trnm-economy-ci',
+              'trnm-economy-settlement',
+              'world-settlement-external-evidence',
+              'p0-sequence54-integration',
+              'cex-v12-native-minimal',
+          ]
+          by_name = {}
+          for path in sorted(Path('.github/workflows').glob('*.y*ml')):
+              text = path.read_text(encoding='utf-8')
+              match = re.search(r'(?m)^name:\s*["\']?([^"\'\n]+)', text)
+              if match:
+                  by_name.setdefault(match.group(1).strip(), []).append(path.as_posix())
+          selected = {}
+          for name in desired:
+              values = by_name.get(name, [])
+              if len(values) != 1:
+                  raise SystemExit(f'workflow name resolution failed for {name}: {values!r}')
+              selected[name] = values[0]
+
+          dispatch_log = []
+
+          def list_exact(path):
+              encoded = quote(path, safe='')
+              _status, value = call(
+                  f'/repos/{repository}/actions/workflows/{encoded}/runs?per_page=100'
+              )
+              exact = [run for run in value.get('workflow_runs', []) if run.get('head_sha') == head]
+              exact.sort(key=lambda run: run.get('created_at', ''), reverse=True)
+              return exact
+
+          def wait_run(run_id):
+              deadline = time.time() + 9000
+              while time.time() < deadline:
+                  if branch_sha() != head:
+                      raise SystemExit('head drift while waiting for workflow')
+                  _status, run = call(f'/repos/{repository}/actions/runs/{run_id}')
+                  if run.get('status') == 'completed':
+                      return run
+                  time.sleep(15)
+              raise SystemExit(f'workflow run {run_id} timed out')
+
+          def obtain_run(name, path):
+              for attempt in range(1, 4):
+                  exact = list_exact(path)
+                  success = next(
+                      (run for run in exact if run.get('status') == 'completed' and run.get('conclusion') == 'success'),
+                      None,
+                  )
+                  if success:
+                      dispatch_log.append({'name': name, 'attempt': attempt, 'action': 'reuse_success', 'run_id': success['id']})
+                      return success
+                  active = next(
+                      (run for run in exact if run.get('status') in {'queued', 'in_progress', 'waiting', 'pending', 'requested'}),
+                      None,
+                  )
+                  if active:
+                      dispatch_log.append({'name': name, 'attempt': attempt, 'action': 'adopt_active', 'run_id': active['id']})
+                      run = wait_run(active['id'])
+                  else:
+                      text = Path(path).read_text(encoding='utf-8')
+                      if 'workflow_dispatch:' not in text:
+                          raise SystemExit(f'{name} has no workflow_dispatch and no exact active/success run')
+                      baseline = {run['id'] for run in exact}
+                      encoded = quote(path, safe='')
+                      status, body = call(
+                          f'/repos/{repository}/actions/workflows/{encoded}/dispatches',
+                          method='POST', payload={'ref': branch}, allow_error=True,
+                      )
+                      if status not in (201, 204):
+                          raise SystemExit(f'{name} dispatch failed: {status}: {body}')
+                      run = None
+                      for _ in range(80):
+                          new = [value for value in list_exact(path) if value['id'] not in baseline]
+                          if new:
+                              run = wait_run(new[0]['id'])
+                              dispatch_log.append({'name': name, 'attempt': attempt, 'action': 'dispatch_new', 'run_id': run['id']})
+                              break
+                          time.sleep(15)
+                      if run is None:
+                          raise SystemExit(f'{name} dispatched run identity did not appear')
+                  if run.get('conclusion') == 'success':
+                      return run
+                  if run.get('conclusion') != 'cancelled' or attempt == 3:
+                      return run
+              raise AssertionError('unreachable')
+
+          final = {name: obtain_run(name, path) for name, path in selected.items()}
+          (root / 'dispatch-log.json').write_text(json.dumps(dispatch_log, indent=2, sort_keys=True) + '\n')
+
+          failed = []
+          details = {}
+          for name, run in final.items():
+              run_id = run['id']
+              _status, value = call(f'/repos/{repository}/actions/runs/{run_id}/jobs?per_page=100')
+              jobs = []
+              for job in value.get('jobs', []):
+                  steps = [
+                      {'name': step.get('name'), 'status': step.get('status'), 'conclusion': step.get('conclusion')}
+                      for step in (job.get('steps') or [])
+                  ]
+                  jobs.append({
+                      'id': job.get('id'), 'name': job.get('name'),
+                      'status': job.get('status'), 'conclusion': job.get('conclusion'),
+                      'runner_name': job.get('runner_name'), 'steps': steps,
+                  })
+              executed = [job for job in jobs if job.get('conclusion') != 'skipped']
+              nonempty = bool(executed) and all(job['steps'] for job in executed)
+              details[name] = {
+                  'path': selected[name], 'run_id': run_id,
+                  'event': run.get('event'), 'status': run.get('status'),
+                  'conclusion': run.get('conclusion'), 'nonempty_executed_jobs': nonempty,
+                  'jobs': jobs,
+              }
+              if run.get('conclusion') != 'success' or not nonempty:
+                  failed.append(name)
+
+          report = {
+              'schema': 'cex.sequence54-round4-exact-head-gates.v2',
+              'repository': repository, 'branch': branch,
+              'head_sha': head, 'tree_sha': tree,
+              'observed_at': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+              'workflows': details, 'failed': sorted(failed),
+              'all_required_gate_families_green': not failed,
+              'production_authorization': 'not_granted',
+          }
+          (root / 'exact-head-gates-v2.json').write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
+          if failed:
+              raise SystemExit(f'exact-head failures: {sorted(failed)!r}')
+          PY
+
+      - name: Publish live v2 admission state
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LOCAL_OUTCOME: ${{ steps.local.outcome }}
+          GATE_OUTCOME: ${{ steps.gates.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          head="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PULL_REQUEST_NUMBER}" --jq '.head.sha')"
+          failed='none'
+          if [[ -f "$EVIDENCE_DIR/exact-head-gates-v2.json" ]]; then
+            failed="$(jq -r '.failed | if length == 0 then "none" else join(", ") end' "$EVIDENCE_DIR/exact-head-gates-v2.json")"
+          fi
+          body="<!-- sequence54-round4-master-v2 -->
+          ## Sequence 54 round-4 master v2
+
+          - Exact head: \`$head\`
+          - Local source qualification: \`$LOCAL_OUTCOME\`
+          - Exact new/adopted run qualification: \`$GATE_OUTCOME\`
+          - Failed families: \`$failed\`
+
+          Old same-SHA failures are not reused after a dispatch. Every credited run has a concrete run ID, terminal success and non-empty executed jobs. No review dismissal, status synthesis, force push, merge, deploy, release or administrator bypass was performed.
+
+          \`production_authorization=not_granted\`"
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PULL_REQUEST_NUMBER}/comments" -f body="$body"
+
+      - name: Enforce exact-head repository qualification
+        if: always()
+        env:
+          LOCAL_OUTCOME: ${{ steps.local.outcome }}
+          GATE_OUTCOME: ${{ steps.gates.outcome }}
+        run: |
+          test "$LOCAL_OUTCOME" = success
+          test "$GATE_OUTCOME" = success
+
+      - name: Upload v2 evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sequence54-round4-master-v2-${{ github.run_id }}
+          path: ${{ env.EVIDENCE_DIR }}
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 6
