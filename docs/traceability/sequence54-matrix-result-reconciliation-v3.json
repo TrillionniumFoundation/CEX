@@ -1,0 +1,121 @@
+{
+  "schema": "cex.sequence54-matrix-result-reconciliation-traceability.v3",
+  "status": "active",
+  "candidate_sequence": 54,
+  "supersedes_source_contract": "docs/traceability/sequence54-matrix-result-reconciliation-v1.json",
+  "design_contracts": [
+    "docs/matrix-result-reconciliation-v1.md",
+    "docs/matrix-result-reconciliation-v2.md",
+    "docs/matrix-result-reconciliation-v3.md"
+  ],
+  "source_checkers": [
+    "scripts/check-matrix-result-reconciliation.py",
+    "scripts/check-matrix-result-reconciliation-security-v2.py",
+    "scripts/check-matrix-result-reconciliation-security-v3.py"
+  ],
+  "runtime_command": "scripts/reconcile-matrix-adapter-result-v3.py",
+  "postgres_runner": "scripts/matrix_operator_postgres_regression.py",
+  "operator_migration_head": "services/matrix-entry-adapter/operator-migrations/0006_adapter_result_embedded_delivery_binding.sql",
+  "hosted_gate": ".github/workflows/matrix-review-repair-regression.yml",
+  "production_authorization": "not_granted",
+  "requirements": [
+    {
+      "id": "MRR3-1",
+      "requirement": "The durable relay transmits the exact outbox delivery identifier, payload commitment and matching idempotency identities to the adapter.",
+      "implementation": [
+        "apps/matrix-bot-relay/src/main.rs",
+        "services/matrix-entry-adapter/src/delivery_binding.rs"
+      ],
+      "verification": [
+        "services/matrix-entry-adapter/src/delivery_binding.rs",
+        "scripts/check-matrix-result-reconciliation-security-v3.py"
+      ]
+    },
+    {
+      "id": "MRR3-2",
+      "requirement": "Before event handling, the adapter recomputes the canonical payload digest, rejects a forged reserved binding and injects the exact eight-field delivery binding only from authenticated relay headers.",
+      "implementation": [
+        "services/matrix-entry-adapter/src/delivery_binding.rs",
+        "services/matrix-entry-adapter/src/lib.rs"
+      ],
+      "verification": [
+        "services/matrix-entry-adapter/src/delivery_binding.rs",
+        "scripts/check-matrix-result-reconciliation-security-v3.py"
+      ]
+    },
+    {
+      "id": "MRR3-3",
+      "requirement": "Consumer Entry treats event ID as a candidate locator only and requires the durable cached result to contain the exact delivery, payload, event, room, principal and request-fingerprint binding.",
+      "implementation": [
+        "services/consumer-entry-api/src/matrix_result_lookup.rs",
+        "services/consumer-entry-api/src/replay_store_snapshot.rs",
+        "services/consumer-entry-api/src/main.rs"
+      ],
+      "verification": [
+        "services/consumer-entry-api/src/matrix_result_lookup.rs",
+        "scripts/check-matrix-result-reconciliation-security-v3.py"
+      ]
+    },
+    {
+      "id": "MRR3-4",
+      "requirement": "The operator validates the embedded cached-result binding before SQL and invokes only the v3 database entrypoint while retaining every v2 HTTPS, TLS, executable-custody and closed-environment control.",
+      "implementation": [
+        "scripts/reconcile-matrix-adapter-result.py",
+        "scripts/reconcile-matrix-adapter-result-v3.py"
+      ],
+      "verification": [
+        "scripts/reconcile-matrix-adapter-result-v3.py",
+        "scripts/check-matrix-result-reconciliation-security-v2.py",
+        "scripts/check-matrix-result-reconciliation-security-v3.py"
+      ]
+    },
+    {
+      "id": "MRR3-5",
+      "requirement": "The runtime role cannot call v1 or v2; v3 verifies the result-embedded binding, independently recomputes the fingerprint and then delegates to the owner-only v2 row-locking core.",
+      "implementation": [
+        "services/matrix-entry-adapter/operator-migrations/0005_adapter_result_causal_binding.sql",
+        "services/matrix-entry-adapter/operator-migrations/0006_adapter_result_embedded_delivery_binding.sql"
+      ],
+      "verification": [
+        "scripts/test-matrix-result-causal-binding-postgres.sql",
+        "scripts/test-matrix-result-embedded-binding-postgres.sql",
+        "scripts/matrix_operator_postgres_regression.py"
+      ]
+    },
+    {
+      "id": "MRR3-6",
+      "requirement": "Honest retry remains idempotent across observation timestamps while missing, changed or extended embedded bindings fail before state transition or observation insertion.",
+      "implementation": [
+        "services/matrix-entry-adapter/operator-migrations/0006_adapter_result_embedded_delivery_binding.sql"
+      ],
+      "verification": [
+        "scripts/test-matrix-result-embedded-binding-postgres.sql",
+        "scripts/reconcile-matrix-adapter-result-v3.py"
+      ]
+    },
+    {
+      "id": "MRR3-7",
+      "requirement": "Repository source evidence remains distinct from hosted execution, live protected-main policy, independent review, external component acceptance and production authorization.",
+      "implementation": [
+        "docs/matrix-result-reconciliation-v3.md",
+        "docs/status/component-status-v1.md",
+        "docs/release-evidence/p0-candidate-trigger.json"
+      ],
+      "verification": [
+        ".github/workflows/matrix-review-repair-regression.yml",
+        ".github/workflows/p0-sequence54-integration.yml"
+      ]
+    }
+  ],
+  "external_evidence_required": [
+    "nonempty_exact_sha_hosted_execution",
+    "disposable_postgresql_16_operator_chain",
+    "real_matrix_response_loss_rehearsal",
+    "least_privilege_runtime_identity_readback",
+    "protected_main_ruleset_and_negative_probes",
+    "two_fresh_eligible_final_head_approvals",
+    "production_secret_custody",
+    "cross_repository_component_tuple_acceptance",
+    "final_human_go_no_go"
+  ]
+}
