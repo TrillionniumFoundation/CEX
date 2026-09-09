@@ -1,0 +1,290 @@
+name: sequence54-live-ledger-v2
+
+on:
+  push:
+    branches:
+      - work/sequence54-round2-staging-20260909
+    paths:
+      - '.github/workflows/sequence54-live-ledger-v2.yml'
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: sequence54-live-ledger-v2
+  cancel-in-progress: false
+
+env:
+  TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+  PULL_REQUEST: '53'
+  OUTPUT_DIR: run/sequence54-live-ledger
+
+jobs:
+  ledger:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 210
+    steps:
+      - name: Observe exact tuple and required workflow families
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_DIR"
+          cat > /tmp/observe.py <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import subprocess
+          import time
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          REPO = os.environ['GITHUB_REPOSITORY']
+          BRANCH = os.environ['TARGET_BRANCH']
+          PR = int(os.environ['PULL_REQUEST'])
+          OUT = Path(os.environ['OUTPUT_DIR'])
+          WORKFLOWS = [
+              'p0-rust-toolchain-convergence.yml',
+              'repository-semantic-contract-gate.yml',
+              'p0-sequence54-integration.yml',
+              'cex-v12-native-minimal.yml',
+              'consumer-projection-boundary-gate.yml',
+              'execution-lifecycle-gate.yml',
+              'matrix-review-repair-regression.yml',
+              'trnm-economy-ci.yml',
+              'trnm-economy-settlement.yml',
+              'world-settlement-external-evidence.yml',
+          ]
+
+          def gh(path: str, *, jq: str | None = None):
+              command = ['gh', 'api', path]
+              if jq:
+                  command.extend(['--jq', jq])
+              result = subprocess.run(command, capture_output=True, text=True)
+              if result.returncode:
+                  raise RuntimeError(result.stderr.strip() or result.stdout.strip())
+              if jq:
+                  return result.stdout.strip()
+              return json.loads(result.stdout)
+
+          def branch_sha() -> str:
+              return str(gh(f'repos/{REPO}/branches/{BRANCH}', jq='.commit.sha'))
+
+          deadline = time.monotonic() + 180 * 60
+          stable_since = None
+          observed_sha = None
+          final_runs = None
+          while time.monotonic() < deadline:
+              sha = branch_sha()
+              toolchain = subprocess.run(
+                  ['gh','api','-H','Accept: application/vnd.github.raw+json',
+                   f'repos/{REPO}/contents/scripts/rust_toolchain_convergence_v4.py?ref={sha}'],
+                  capture_output=True, text=True,
+              ).stdout
+              projection = subprocess.run(
+                  ['gh','api','-H','Accept: application/vnd.github.raw+json',
+                   f'repos/{REPO}/contents/scripts/check-consumer-projection-boundary.py?ref={sha}'],
+                  capture_output=True, text=True,
+              ).stdout
+              repaired = (
+                  'unapproved fixed Rust identity' in toolchain
+                  and 'source_string_literals' in projection
+              )
+              if not repaired:
+                  stable_since = None
+                  time.sleep(15)
+                  continue
+              if sha != observed_sha:
+                  observed_sha = sha
+                  stable_since = time.monotonic()
+              runs = {}
+              all_terminal = True
+              all_present = True
+              for workflow in WORKFLOWS:
+                  try:
+                      payload = gh(
+                          f'repos/{REPO}/actions/workflows/{workflow}/runs'
+                          f'?branch={BRANCH}&per_page=30'
+                      )
+                  except RuntimeError as error:
+                      runs[workflow] = {'status':'missing_or_inaccessible','error':str(error)}
+                      all_present = False
+                      all_terminal = False
+                      continue
+                  candidates = [
+                      item for item in payload.get('workflow_runs', [])
+                      if item.get('head_sha') == sha
+                  ]
+                  if not candidates:
+                      runs[workflow] = {'status':'not_observed'}
+                      all_present = False
+                      all_terminal = False
+                      continue
+                  item = sorted(candidates, key=lambda value: value.get('id', 0), reverse=True)[0]
+                  runs[workflow] = {
+                      'run_id': item.get('id'),
+                      'status': item.get('status'),
+                      'conclusion': item.get('conclusion'),
+                      'event': item.get('event'),
+                      'attempt': item.get('run_attempt'),
+                      'html_url': item.get('html_url'),
+                  }
+                  if item.get('status') != 'completed':
+                      all_terminal = False
+              final_runs = runs
+              if all_present and all_terminal and stable_since is not None \
+                  and time.monotonic() - stable_since >= 60:
+                  break
+              time.sleep(20)
+
+          if observed_sha is None or final_runs is None:
+              raise SystemExit('no repaired exact head observed')
+
+          branch = gh(f'repos/{REPO}/branches/{BRANCH}')
+          tree_sha = branch['commit']['commit']['tree']['sha']
+          pr = gh(f'repos/{REPO}/pulls/{PR}')
+          merge_sha = pr.get('merge_commit_sha')
+          base_sha = pr.get('base', {}).get('sha')
+
+          for workflow, item in final_runs.items():
+              run_id = item.get('run_id')
+              if not run_id or item.get('status') != 'completed':
+                  continue
+              try:
+                  jobs = gh(f'repos/{REPO}/actions/runs/{run_id}/jobs?per_page=100').get('jobs', [])
+              except RuntimeError as error:
+                  item['jobs_error'] = str(error)
+                  continue
+              item['job_count'] = len(jobs)
+              item['jobs'] = []
+              for job in jobs:
+                  failed = next(
+                      (
+                          step for step in job.get('steps') or []
+                          if step.get('conclusion') == 'failure'
+                      ),
+                      None,
+                  )
+                  item['jobs'].append({
+                      'job_id': job.get('id'),
+                      'name': job.get('name'),
+                      'status': job.get('status'),
+                      'conclusion': job.get('conclusion'),
+                      'runner_name': job.get('runner_name'),
+                      'step_count': len(job.get('steps') or []),
+                      'first_failed_step': failed.get('name') if failed else None,
+                  })
+
+          repository_green = all(
+              item.get('status') == 'completed' and item.get('conclusion') == 'success'
+              for item in final_runs.values()
+          )
+          result = {
+              'schema': 'cex.sequence54-live-closure-ledger.v2',
+              'observed_at': datetime.now(timezone.utc).isoformat().replace('+00:00','Z'),
+              'repository': REPO,
+              'pull_request': PR,
+              'branch': BRANCH,
+              'base_sha': base_sha,
+              'head_sha': observed_sha,
+              'head_tree': tree_sha,
+              'prospective_merge_sha': merge_sha,
+              'pr_state': pr.get('state'),
+              'pr_draft': pr.get('draft'),
+              'mergeable': pr.get('mergeable'),
+              'required_workflows': final_runs,
+              'repository_required_families_green': repository_green,
+              'authority_bound_gaps': {
+                  'live_no_bypass_main_governance': 'requires_admin_readback_and_negative_probes',
+                  'independent_current_head_approvals': 'requires_eligible_human_reviewers',
+                  'cross_repository_exact_tuple_acceptance': 'requires_each_repository_owner',
+                  'production_environment_evidence': 'requires_accountable_operators_and_real_environment',
+              },
+              'all_gaps_closed': False,
+              'production_authorization': 'not_granted',
+              'merge_authorization': 'not_granted',
+          }
+          (OUT / 'live-ledger.json').write_text(
+              json.dumps(result, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
+          print(json.dumps(result, indent=2, sort_keys=True))
+          PY
+          python3 /tmp/observe.py
+
+      - name: Publish or update authority-bound ledger issue
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          title='Sequence 54 live closure ledger — authority-bound blockers'
+          marker='<!-- sequence54-live-closure-ledger-v2 -->'
+          if test -f "$OUTPUT_DIR/live-ledger.json"; then
+            summary="$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data=json.loads(Path('run/sequence54-live-ledger/live-ledger.json').read_text())
+          lines=[
+            '<!-- sequence54-live-closure-ledger-v2 -->',
+            '## Exact tuple',
+            '',
+            f"- base: `{data.get('base_sha')}`",
+            f"- head: `{data.get('head_sha')}`",
+            f"- head tree: `{data.get('head_tree')}`",
+            f"- prospective merge: `{data.get('prospective_merge_sha')}`",
+            '',
+            '## Required workflow families',
+            '',
+            '| Workflow | Status | Conclusion | First failed step |',
+            '|---|---|---|---|',
+          ]
+          for name,item in data['required_workflows'].items():
+            failed=next((job.get('first_failed_step') for job in item.get('jobs',[]) if job.get('first_failed_step')),None)
+            lines.append(f"| `{name}` | `{item.get('status')}` | `{item.get('conclusion')}` | `{failed or ''}` |")
+          lines += [
+            '',
+            f"Repository required families green: `{str(data['repository_required_families_green']).lower()}`",
+            '',
+            '## Authority-bound blockers',
+            '',
+            '- live no-bypass `main` governance readback and rejected direct/non-fast-forward/delete probes;',
+            '- fresh eligible approvals on this unchanged head, including independent security approval;',
+            '- exact-tuple acceptance by every cross-repository owner;',
+            '- real restore/PITR, rollback, no-dual-writer, provider, custody, HA/endurance/SLO and accountable human go/no-go evidence.',
+            '',
+            '`production_authorization=not_granted`',
+            '`merge_authorization=not_granted`',
+          ]
+          print('\n'.join(lines))
+          PY
+          )"
+          else
+            summary="$marker
+          
+          Ledger collection failed before a complete exact-head observation. Inspect the workflow run; no qualification or authority is inferred.
+          
+          \`production_authorization=not_granted\`
+          \`merge_authorization=not_granted\`"
+          fi
+          number="$(gh issue list --state open --search "$title in:title" --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -n1)"
+          if test -n "$number"; then
+            gh issue comment "$number" --body "$summary"
+          else
+            gh issue create --title "$title" --body "$summary"
+          fi
+
+      - name: Upload live ledger
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sequence54-live-closure-ledger-${{ github.run_id }}
+          path: run/sequence54-live-ledger
+          if-no-files-found: warn
+          retention-days: 90
+          compression-level: 9
