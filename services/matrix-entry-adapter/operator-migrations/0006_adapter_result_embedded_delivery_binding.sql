@@ -41,6 +41,14 @@ begin
         raise exception 'matrix_adapter_result_embedded_binding_invalid_v3';
     end if;
 
+    if jsonb_typeof(p_result_payload -> 'raw') is distinct from 'object'
+        or p_result_payload -> 'raw' ->> 'invocation_id' is null
+        or p_result_payload -> 'raw' ->> 'invocation_id'
+            is distinct from p_task_id
+    then
+        raise exception 'matrix_adapter_result_task_invocation_mismatch_v3';
+    end if;
+
     embedded_binding := p_result_payload #>
         '{source,metadata,metadata,cex_delivery_binding}';
     if jsonb_typeof(embedded_binding) is distinct from 'object'
@@ -182,6 +190,6 @@ comment on function public.cex_matrix_reconcile_adapter_result_v3(
     text,
     jsonb
 ) is
-'Validates the relay-origin delivery binding embedded in the durable consumer result, then delegates to the row-locking v2 reconciliation core. Runtime access to v2 is revoked.';
+'Validates the task-to-raw invocation identity and relay-origin delivery binding embedded in the durable consumer result, then delegates to the row-locking v2 reconciliation core. Runtime access to v2 is revoked.';
 
 commit;
