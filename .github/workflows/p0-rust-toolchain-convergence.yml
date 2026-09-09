@@ -125,54 +125,92 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p run/rust-toolchain-convergence
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          source_tree="$(git rev-parse 'HEAD^{tree}')"
-          [[ "$source_tree" =~ ^[0-9a-f]{40}$ ]]
-          base_tree=''
-          merge_tree=''
-          merge_parents=''
-          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
-            test "$(git -C .candidate-identity/base rev-parse HEAD)" = "$BASE_SHA"
-            test "$(git -C .candidate-identity/merge rev-parse HEAD)" = "$PROSPECTIVE_MERGE_SHA"
-            base_tree="$(git -C .candidate-identity/base rev-parse 'HEAD^{tree}')"
-            merge_tree="$(git -C .candidate-identity/merge rev-parse 'HEAD^{tree}')"
-            merge_parents="$(git -C .candidate-identity/merge show -s --format=%P HEAD)"
-            read -r first_parent second_parent extra_parent <<<"$merge_parents"
-            test -z "${extra_parent:-}"
-            test "$first_parent" = "$BASE_SHA"
-            test "$second_parent" = "$SOURCE_SHA"
-          fi
-          {
-            echo "source_tree=$source_tree"
-            echo "base_tree=$base_tree"
-            echo "merge_tree=$merge_tree"
-          } >> "$GITHUB_OUTPUT"
-          SOURCE_TREE="$source_tree" BASE_TREE="$base_tree" MERGE_TREE="$merge_tree" MERGE_PARENTS="$merge_parents" \
-            python3 - <<'PY'
-          import json, os, pathlib
+          python3 - <<'PYTHON' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import pathlib
+          import re
+          import subprocess
+
+          SHA40 = re.compile(r'^[0-9a-f]{40}$')
+          root = pathlib.Path.cwd()
+
+          def require(condition, message):
+              if not condition:
+                  raise SystemExit(message)
+
+          def git(cwd, *arguments):
+              result = subprocess.run(
+                  ['git', '-C', str(cwd), *arguments],
+                  capture_output=True,
+                  text=True,
+                  check=False,
+              )
+              require(
+                  result.returncode == 0,
+                  f"git {' '.join(arguments)} failed in {cwd}: "
+                  f"{result.stderr.strip() or result.stdout.strip()}",
+              )
+              return result.stdout.strip()
+
+          source_sha = os.environ['SOURCE_SHA']
+          base_sha = os.environ['BASE_SHA']
+          merge_sha = os.environ.get('PROSPECTIVE_MERGE_SHA', '')
+          event_name = os.environ['GITHUB_EVENT_NAME']
+          require(SHA40.fullmatch(source_sha), 'source SHA is not canonical')
+          require(SHA40.fullmatch(base_sha), 'base SHA is not canonical')
+          require(git(root, 'rev-parse', 'HEAD') == source_sha, 'source checkout identity mismatch')
+          source_tree = git(root, 'rev-parse', 'HEAD^{tree}')
+          require(SHA40.fullmatch(source_tree), 'source tree is not canonical')
+
+          base_tree = None
+          merge_tree = None
+          merge_parents = None
+          if event_name == 'pull_request':
+              require(SHA40.fullmatch(merge_sha), 'prospective merge SHA is not canonical')
+              base_dir = root / '.candidate-identity/base'
+              merge_dir = root / '.candidate-identity/merge'
+              require(git(base_dir, 'rev-parse', 'HEAD') == base_sha, 'base checkout identity mismatch')
+              require(git(merge_dir, 'rev-parse', 'HEAD') == merge_sha, 'merge checkout identity mismatch')
+              base_tree = git(base_dir, 'rev-parse', 'HEAD^{tree}')
+              merge_tree = git(merge_dir, 'rev-parse', 'HEAD^{tree}')
+              require(SHA40.fullmatch(base_tree), 'base tree is not canonical')
+              require(SHA40.fullmatch(merge_tree), 'merge tree is not canonical')
+              merge_parents = git(merge_dir, 'show', '-s', '--format=%P', 'HEAD').split()
+              require(
+                  merge_parents == [base_sha, source_sha],
+                  f'prospective merge parent order mismatch: {merge_parents!r}',
+              )
+          else:
+              merge_sha = ''
+
           value = {
               'schema': 'cex.rust-toolchain-candidate-identity.v2',
               'repository': os.environ['GITHUB_REPOSITORY'],
-              'repository_id': os.environ['GITHUB_REPOSITORY_ID'],
-              'event_name': os.environ['GITHUB_EVENT_NAME'],
+              'repository_id': os.environ['SOURCE_REPOSITORY_ID'],
+              'event_name': event_name,
               'pull_request_number': int(os.environ['PULL_REQUEST_NUMBER']),
               'source_repository': os.environ['SOURCE_REPOSITORY'],
               'source_repository_id': os.environ['SOURCE_REPOSITORY_ID'],
-              'source_sha': os.environ['SOURCE_SHA'],
-              'source_tree': os.environ['SOURCE_TREE'],
-              'base_sha': os.environ['BASE_SHA'],
-              'base_tree': os.environ['BASE_TREE'] or None,
-              'prospective_merge_sha': os.environ['PROSPECTIVE_MERGE_SHA'] or None,
-              'prospective_merge_tree': os.environ['MERGE_TREE'] or None,
-              'prospective_merge_parents': os.environ['MERGE_PARENTS'].split() or None,
+              'source_sha': source_sha,
+              'source_tree': source_tree,
+              'base_sha': base_sha,
+              'base_tree': base_tree,
+              'prospective_merge_sha': merge_sha or None,
+              'prospective_merge_tree': merge_tree,
+              'prospective_merge_parents': merge_parents,
               'run_id': os.environ['GITHUB_RUN_ID'],
               'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
               'production_authorization': 'not_granted',
           }
           pathlib.Path('run/rust-toolchain-convergence/candidate-identity.json').write_text(
-              json.dumps(value, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+              json.dumps(value, indent=2, sort_keys=True) + '\n',
+              encoding='utf-8',
           )
-          PY
+          print(f'source_tree={source_tree}')
+          print(f'base_tree={base_tree or ""}')
+          print(f'merge_tree={merge_tree or ""}')
+          PYTHON
 
       - name: Install exact Rust toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
