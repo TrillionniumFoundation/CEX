@@ -1,0 +1,467 @@
+name: sequence54-round4-final-snapshot-v3
+
+on:
+  push:
+    branches:
+      - work/sequence54-round2-staging-20260909
+    paths:
+      - '.github/workflows/sequence54-round4-final-snapshot-v3.yml'
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: sequence54-round4-final-snapshot-v3
+  cancel-in-progress: false
+
+env:
+  STAGING_BRANCH: work/sequence54-round2-staging-20260909
+  TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+  PULL_REQUEST_NUMBER: '53'
+  EVIDENCE_DIR: ${{ runner.temp }}/sequence54-round4-final-snapshot-v3
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 480
+    steps:
+      - name: Wait for corrected controller denominators
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          encoded_branch="${STAGING_BRANCH//\//%2F}"
+          workflows=(
+            sequence54-round4-master-v2.yml
+            sequence54-round4-p0-candidate-controller-v2.yml
+            sequence54-round4-governance-controller.yml
+            sequence54-round4-review-controller.yml
+            sequence54-round4-authority-ledger.yml
+          )
+          for workflow in "${workflows[@]}"; do
+            run_id=''
+            for _ in $(seq 1 200); do
+              run_id="$(gh api --method GET \
+                "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?branch=${encoded_branch}&per_page=20" \
+                --jq '.workflow_runs | sort_by(.created_at) | reverse | .[0].id // empty' 2>/dev/null || true)"
+              [[ -n "$run_id" ]] && break
+              sleep 15
+            done
+            [[ -n "$run_id" ]]
+            for _ in $(seq 1 1900); do
+              value="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+              status="$(jq -r '.status' <<<"$value")"
+              conclusion="$(jq -r '.conclusion // ""' <<<"$value")"
+              [[ "$status" == completed ]] && break
+              sleep 15
+            done
+            [[ "$status" == completed ]]
+            printf '%s\t%s\t%s\t%s\n' "$workflow" "$run_id" "$status" "$conclusion" >> "$EVIDENCE_DIR/controller-runs.tsv"
+          done
+
+      - name: Checkout final candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Compute live governance, review, cross-repository and production denominators
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$EVIDENCE_DIR" <<'PY'
+          from __future__ import annotations
+          import json, os, re, subprocess, sys
+          from datetime import datetime, timezone
+          from pathlib import Path
+          from urllib.error import HTTPError
+          from urllib.parse import quote
+          from urllib.request import Request, urlopen
+
+          root = Path(sys.argv[1])
+          repository = os.environ['GITHUB_REPOSITORY']
+          owner, repo_name = repository.split('/', 1)
+          pr_number = int(os.environ['PULL_REQUEST_NUMBER'])
+          token = os.environ['GH_TOKEN']
+          api = os.environ.get('GITHUB_API_URL', 'https://api.github.com')
+          graphql_url = os.environ.get('GITHUB_GRAPHQL_URL', 'https://api.github.com/graphql')
+
+          def call(path, *, method='GET', payload=None, allow_error=False, accept='application/vnd.github+json'):
+              data = None if payload is None else json.dumps(payload).encode()
+              req = Request(
+                  api + path, method=method, data=data,
+                  headers={
+                      'Authorization': f'Bearer {token}',
+                      'Accept': accept,
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'User-Agent': 'sequence54-final-snapshot-v3',
+                      'Content-Type': 'application/json',
+                  },
+              )
+              try:
+                  with urlopen(req, timeout=30) as response:
+                      body = response.read()
+                      return {'status': response.status, 'value': json.loads(body) if body else None}
+              except HTTPError as error:
+                  body = error.read().decode('utf-8', errors='replace')
+                  if allow_error:
+                      return {'status': error.code, 'error': body[:4000]}
+                  raise RuntimeError(f'{method} {path}: {error.code}: {body[:1200]}') from error
+
+          def graphql(query, variables, allow_error=False):
+              data = json.dumps({'query': query, 'variables': variables}).encode()
+              req = Request(
+                  graphql_url, method='POST', data=data,
+                  headers={
+                      'Authorization': f'Bearer {token}',
+                      'Accept': 'application/vnd.github+json',
+                      'User-Agent': 'sequence54-final-snapshot-v3',
+                      'Content-Type': 'application/json',
+                  },
+              )
+              try:
+                  with urlopen(req, timeout=30) as response:
+                      return {'status': response.status, 'value': json.loads(response.read())}
+              except HTTPError as error:
+                  body = error.read().decode('utf-8', errors='replace')
+                  if allow_error:
+                      return {'status': error.code, 'error': body[:4000]}
+                  raise
+
+          pr = call(f'/repos/{repository}/pulls/{pr_number}')['value']
+          head = pr['head']['sha']
+          checkout = subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip()
+          tree = subprocess.check_output(['git','rev-parse','HEAD^{tree}'], text=True).strip()
+          if checkout != head:
+              raise SystemExit(f'final checkout drift: {checkout} != {head}')
+
+          controllers = {}
+          for line in (root / 'controller-runs.tsv').read_text().splitlines():
+              workflow, run_id, status, conclusion = line.split('\t')
+              controllers[workflow] = {'run_id': int(run_id), 'status': status, 'conclusion': conclusion}
+          internal_green = controllers.get('sequence54-round4-master-v2.yml', {}).get('conclusion') == 'success'
+          p0_green = controllers.get('sequence54-round4-p0-candidate-controller-v2.yml', {}).get('conclusion') == 'success'
+
+          # Exact current-head reviews.
+          reviews = call(f'/repos/{repository}/pulls/{pr_number}/reviews?per_page=100')['value']
+          latest = {}
+          for review in reviews:
+              login = (review.get('user') or {}).get('login')
+              if login and (login not in latest or (review.get('submitted_at') or '') >= (latest[login].get('submitted_at') or '')):
+                  latest[login] = review
+          author = pr['user']['login']
+          approvals = sorted(
+              login for login, review in latest.items()
+              if login != author
+              and review.get('state') == 'APPROVED'
+              and review.get('commit_id') == head
+              and (review.get('user') or {}).get('type') != 'Bot'
+          )
+          approvals_closed = len(approvals) >= 2
+
+          # GraphQL review-thread resolution, including pagination.
+          thread_query = '''
+          query($owner:String!,$name:String!,$number:Int!,$after:String){
+            repository(owner:$owner,name:$name){
+              pullRequest(number:$number){
+                reviewThreads(first:100,after:$after){
+                  nodes{isResolved}
+                  pageInfo{hasNextPage endCursor}
+                }
+              }
+            }
+          }
+          '''
+          thread_values = []
+          after = None
+          thread_error = None
+          for _ in range(20):
+              result = graphql(thread_query, {'owner': owner, 'name': repo_name, 'number': pr_number, 'after': after}, allow_error=True)
+              if result.get('status') != 200 or (result.get('value') or {}).get('errors'):
+                  thread_error = result
+                  break
+              block = result['value']['data']['repository']['pullRequest']['reviewThreads']
+              thread_values.extend(bool(node['isResolved']) for node in block['nodes'])
+              if not block['pageInfo']['hasNextPage']:
+                  break
+              after = block['pageInfo']['endCursor']
+          conversations_closed = thread_error is None and all(thread_values)
+
+          # Full active ruleset detail, with no bypass and exact rule requirements.
+          ruleset_list = call(f'/repos/{repository}/rulesets?includes_parents=true&per_page=100', allow_error=True)
+          ruleset_details = []
+          governance_shape_closed = False
+          if ruleset_list.get('status') == 200 and isinstance(ruleset_list.get('value'), list):
+              for summary in ruleset_list['value']:
+                  if summary.get('enforcement') != 'active':
+                      continue
+                  detail = call(f'/repos/{repository}/rulesets/{summary["id"]}', allow_error=True)
+                  if detail.get('status') == 200:
+                      ruleset_details.append(detail['value'])
+              for detail in ruleset_details:
+                  include = (((detail.get('conditions') or {}).get('ref_name') or {}).get('include') or [])
+                  applies_main = '~DEFAULT_BRANCH' in include or 'refs/heads/main' in include
+                  if not applies_main or detail.get('target') != 'branch' or detail.get('bypass_actors'):
+                      continue
+                  rules = {rule.get('type'): rule for rule in detail.get('rules') or []}
+                  required = {'deletion', 'non_fast_forward', 'pull_request', 'required_status_checks'}
+                  if not required.issubset(rules):
+                      continue
+                  pull = (rules['pull_request'].get('parameters') or {})
+                  checks = ((rules['required_status_checks'].get('parameters') or {}).get('required_status_checks') or [])
+                  if (
+                      int(pull.get('required_approving_review_count') or 0) >= 2
+                      and pull.get('dismiss_stale_reviews_on_push') is True
+                      and pull.get('require_code_owner_review') is True
+                      and pull.get('require_last_push_approval') is True
+                      and pull.get('required_review_thread_resolution') is True
+                      and checks
+                  ):
+                      governance_shape_closed = True
+                      break
+          protection = call(f'/repos/{repository}/branches/main/protection', allow_error=True)
+
+          probe_path = Path('docs/release-evidence/sequence54-governance-negative-probes-v1.json')
+          governance_probes_closed = False
+          governance_probe = None
+          if probe_path.is_file():
+              try:
+                  governance_probe = json.loads(probe_path.read_text(encoding='utf-8'))
+                  governance_probes_closed = (
+                      governance_probe.get('schema') == 'cex.sequence54-governance-negative-probes.v1'
+                      and governance_probe.get('head_sha') == head
+                      and governance_probe.get('direct_update_rejected') is True
+                      and governance_probe.get('non_fast_forward_rejected') is True
+                      and governance_probe.get('deletion_rejected') is True
+                      and governance_probe.get('same_actor_positive_control') is True
+                      and governance_probe.get('administrator_bypass_used') is False
+                  )
+              except Exception as error:
+                  governance_probe = {'parse_error': str(error)}
+          governance_closed = (
+              governance_shape_closed
+              and protection.get('status') == 200
+              and governance_probes_closed
+          )
+
+          # Cross-repository exact-tuple acceptance from unique live PRs.
+          target_numbers = {104: 'World', 150: 'Game/Nakama', 62: 'Chain', 8: 'Integration'}
+          role_terms = {
+              'World': ('world',),
+              'Game/Nakama': ('game', 'nakama'),
+              'Chain': ('chain', 'trnm'),
+              'Integration': ('integration',),
+          }
+          repositories = []
+          for page in range(1, 8):
+              result = call(f'/orgs/{owner}/repos?type=all&per_page=100&page={page}', allow_error=True)
+              if result.get('status') != 200:
+                  break
+              values = result.get('value') or []
+              repositories.extend(values)
+              if len(values) < 100:
+                  break
+          cross_items = []
+          component_heads = []
+          for number, role in target_numbers.items():
+              matches = []
+              for repo in repositories:
+                  full_name = repo.get('full_name')
+                  if not full_name or full_name == repository:
+                      continue
+                  result = call(f'/repos/{full_name}/pulls/{number}', allow_error=True)
+                  if result.get('status') != 200:
+                      continue
+                  value = result['value']
+                  haystack = ' '.join([full_name, value.get('title') or '', value.get('body') or '']).lower()
+                  if not any(term in haystack for term in role_terms[role]):
+                      continue
+                  pr_head = (value.get('head') or {}).get('sha')
+                  pr_author = (value.get('user') or {}).get('login')
+                  rev_result = call(f'/repos/{full_name}/pulls/{number}/reviews?per_page=100', allow_error=True)
+                  latest_review = {}
+                  if rev_result.get('status') == 200:
+                      for review in rev_result.get('value') or []:
+                          login = (review.get('user') or {}).get('login')
+                          if login and (login not in latest_review or (review.get('submitted_at') or '') >= (latest_review[login].get('submitted_at') or '')):
+                              latest_review[login] = review
+                  exact_approvals = sorted(
+                      login for login, review in latest_review.items()
+                      if login != pr_author
+                      and review.get('state') == 'APPROVED'
+                      and review.get('commit_id') == pr_head
+                      and (review.get('user') or {}).get('type') != 'Bot'
+                  )
+                  check_result = call(
+                      f'/repos/{full_name}/commits/{pr_head}/check-runs?per_page=100&filter=latest',
+                      allow_error=True,
+                      accept='application/vnd.github+json',
+                  )
+                  check_runs = (check_result.get('value') or {}).get('check_runs', []) if check_result.get('status') == 200 else []
+                  check_green = bool(check_runs) and all(
+                      item.get('status') == 'completed'
+                      and item.get('conclusion') in {'success', 'neutral', 'skipped'}
+                      for item in check_runs
+                  )
+                  matches.append({
+                      'repository': full_name, 'number': number,
+                      'head_sha': pr_head, 'draft': value.get('draft'),
+                      'state': value.get('state'), 'body': value.get('body') or '',
+                      'eligible_exact_head_approvals': exact_approvals,
+                      'latest_check_runs_green': check_green,
+                      'accepted': (
+                          value.get('draft') is False
+                          and bool(exact_approvals)
+                          and check_green
+                      ),
+                  })
+              item = {'role': role, 'matches': matches, 'unique': len(matches) == 1}
+              if len(matches) == 1 and role != 'Integration':
+                  component_heads.append(matches[0]['head_sha'])
+              cross_items.append(item)
+          integration_item = next(item for item in cross_items if item['role'] == 'Integration')
+          integration_pins = False
+          if integration_item['unique']:
+              body = integration_item['matches'][0]['body']
+              integration_pins = head in body and all(value and value in body for value in component_heads)
+              integration_item['matches'][0]['pins_exact_tuple'] = integration_pins
+              integration_item['matches'][0]['accepted'] = integration_item['matches'][0]['accepted'] and integration_pins
+          cross_repository_closed = all(
+              item['unique'] and item['matches'][0]['accepted']
+              for item in cross_items
+          )
+          for item in cross_items:
+              for match in item['matches']:
+                  match.pop('body', None)
+
+          # Production authority can close only through a machine-verifiable,
+          # exact-head receipt catalog. Absence or malformed receipts fail closed.
+          production_path = Path('docs/release-evidence/sequence54-production-authority-v1.json')
+          required_categories = {
+              'restore_pitr', 'deployment_cutover_rollback', 'world_no_dual_writer',
+              'provider_unknown_outcome', 'kms_hsm_custody', 'ha_endurance_slo',
+              'security_operations_support', 'financial_legal_commercial',
+              'accountable_human_go_no_go',
+          }
+          production_receipt = None
+          production_closed = False
+          if production_path.is_file():
+              try:
+                  production_receipt = json.loads(production_path.read_text(encoding='utf-8'))
+                  receipts = production_receipt.get('receipts') or []
+                  categories = {item.get('category') for item in receipts if isinstance(item, dict)}
+                  actors = {item.get('actor') for item in receipts if isinstance(item, dict)}
+                  production_closed = (
+                      production_receipt.get('schema') == 'cex.sequence54-production-authority.v1'
+                      and production_receipt.get('head_sha') == head
+                      and production_receipt.get('head_tree') == tree
+                      and production_receipt.get('production_authorization') == 'granted'
+                      and required_categories.issubset(categories)
+                      and len(actors - {None, '', author}) >= 3
+                      and all(
+                          isinstance(item.get('evidence_url'), str)
+                          and item['evidence_url'].startswith('https://github.com/')
+                          and item.get('accepted') is True
+                          for item in receipts
+                      )
+                  )
+              except Exception as error:
+                  production_receipt = {'parse_error': str(error)}
+
+          all_closed = all([
+              internal_green, p0_green, governance_closed,
+              approvals_closed, conversations_closed,
+              cross_repository_closed, production_closed,
+          ])
+          report = {
+              'schema': 'cex.sequence54-round4-final-gap-snapshot.v3',
+              'observed_at': datetime.now(timezone.utc).isoformat().replace('+00:00','Z'),
+              'repository': repository, 'pull_request': pr_number,
+              'head_sha': head, 'head_tree': tree,
+              'base_sha': pr['base']['sha'],
+              'prospective_merge_sha': pr.get('merge_commit_sha'),
+              'draft': pr.get('draft'),
+              'controller_runs': controllers,
+              'repository_internal_exact_head_green': internal_green,
+              'aggregate_p0_candidate_green': p0_green,
+              'governance_ruleset_shape_closed': governance_shape_closed,
+              'governance_negative_probes_closed': governance_probes_closed,
+              'live_governance_closed': governance_closed,
+              'ruleset_details': ruleset_details,
+              'branch_protection_readback': protection,
+              'eligible_current_head_approvals': approvals,
+              'independent_approvals_closed': approvals_closed,
+              'review_thread_count': len(thread_values),
+              'unresolved_review_thread_count': sum(not value for value in thread_values),
+              'review_thread_error': thread_error,
+              'review_conversations_closed': conversations_closed,
+              'cross_repository': cross_items,
+              'cross_repository_acceptance_closed': cross_repository_closed,
+              'production_receipt': production_receipt,
+              'production_evidence_closed': production_closed,
+              'all_gaps_closed': all_closed,
+              'merge_authorized': all_closed,
+              'production_authorization': 'granted' if all_closed else 'not_granted',
+              'force_push_used': False,
+              'administrator_bypass_used': False,
+              'synthetic_status_used': False,
+              'self_approval_used': False,
+          }
+          (root / 'final-gap-snapshot-v3.json').write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
+
+          lines = [
+              '<!-- sequence54-round4-final-snapshot-v3 -->',
+              '## Sequence 54 final gap snapshot v3',
+              '',
+              '```text',
+              f'head                              {head}',
+              f'head tree                         {tree}',
+              f'base                              {pr["base"]["sha"]}',
+              f'prospective merge                 {pr.get("merge_commit_sha")}',
+              '```',
+              '',
+              f'- Repository internal exact-head gates: `{str(internal_green).lower()}`',
+              f'- Aggregate P0 candidate: `{str(p0_green).lower()}`',
+              f'- Governance ruleset shape: `{str(governance_shape_closed).lower()}`',
+              f'- Governance negative probes: `{str(governance_probes_closed).lower()}`',
+              f'- Eligible current-head approvals: `{len(approvals)}` ({", ".join(approvals) or "none"})',
+              f'- Unresolved review threads: `{sum(not value for value in thread_values)}`',
+              f'- Cross-repository exact-tuple acceptance: `{str(cross_repository_closed).lower()}`',
+              f'- Production authority receipts: `{str(production_closed).lower()}`',
+              '',
+              '```text',
+              f'all_gaps_closed={str(all_closed).lower()}',
+              f'merge_authorized={str(all_closed).lower()}',
+              f'production_authorization={report["production_authorization"]}',
+              'force_push_used=false',
+              'administrator_bypass_used=false',
+              'synthetic_status_used=false',
+              'self_approval_used=false',
+              '```',
+          ]
+          body = '\n'.join(lines) + '\n'
+          comments = call(f'/repos/{repository}/issues/{pr_number}/comments?per_page=100')['value']
+          existing = next((item for item in reversed(comments) if '<!-- sequence54-round4-final-snapshot-v3 -->' in (item.get('body') or '')), None)
+          if existing:
+              call(f'/repos/{repository}/issues/comments/{existing["id"]}', method='PATCH', payload={'body': body})
+          else:
+              call(f'/repos/{repository}/issues/{pr_number}/comments', method='POST', payload={'body': body})
+          PY
+
+      - name: Upload final snapshot v3
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sequence54-round4-final-snapshot-v3-${{ github.run_id }}
+          path: ${{ env.EVIDENCE_DIR }}
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 6
