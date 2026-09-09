@@ -80,6 +80,7 @@ def main() -> int:
             "postgres_runner",
             "operator_migration_head",
             "hosted_gate",
+            "review_packet",
         )
         for field in singleton_paths:
             try:
