@@ -58,6 +58,10 @@ Additional security-relevant entry points are:
 
 - `services/consumer-entry-api/src/matrix_result_lookup.rs` — canonical
   exact-delivery read-only lookup and persisted-binding validator;
+- `services/consumer-entry-api/src/matrix_result_response_binding.rs` — bounded
+  success-response middleware requiring exact top-level and nested delivery
+  bindings plus non-empty `task_id == raw.invocation_id` before 2xx leaves the
+  service;
 - `services/consumer-entry-api/src/replay_store_snapshot.rs` — bounded stable
   snapshot reader;
 - `scripts/check-matrix-result-reconciliation-security-v3.py` — source and
@@ -82,11 +86,14 @@ that fingerprint before reading replay state and requires the signed
 issuer, audience, issuance, expiry, and approved key.
 
 A successful response returns only an existing replay result whose source kind,
-event, user, room, identity scope, task ID, and optional invocation ID are
-consistent. It additionally requires the cached result's nested
+event, user, room, identity scope, non-empty task ID, and non-empty raw invocation
+ID are mutually consistent. It additionally requires the cached result's nested
 `source.metadata.metadata.cex_delivery_binding` object to have exactly eight
 fields and to match the delivery, payload, event, room, principal, fingerprint,
-schema, and relay source marker. Legacy or unbound entries fail closed.
+schema, and relay source marker. The route returns a cloned top-level
+`result_delivery_binding`; the response middleware requires it to equal the
+nested object before 2xx. Legacy, unbound, missing-invocation, or internally
+inconsistent entries fail closed.
 
 ## Persistence, concurrency, and recovery
 
@@ -98,9 +105,10 @@ outcome-less, hard-linked, or symbolic inputs fail closed.
 The replay map remains keyed by original Matrix event for task idempotency, but a
 cache hit is only a candidate. The persisted binding injected before the initial
 Consumer Entry admission must exactly match the later authenticated recovery
-request. The Adapter and PostgreSQL v3 function perform independent checks
-before any delivery-state repair, while Consumer Entry itself never writes that
-repair.
+request. The Consumer result-response middleware, Adapter reconciliation
+response middleware, operator v3 command, and PostgreSQL v3 function perform
+independent checks before any delivery-state repair, while Consumer Entry itself
+never writes that repair.
 
 Remote effects occur only after durable intent or claim commit and before a
 separate outcome transaction. Possible-side-effect timeouts remain pending or
@@ -133,11 +141,11 @@ are not proof that a cached result belongs to the requested delivery payload.
 
 Unknown JSON fields, noncanonical delivery IDs, invalid hashes, changed request
 fingerprints, cross-user, cross-room or cross-event results, expired assertions,
-unapproved issuers or keys, oversized bodies, unstable replay files, inconsistent
-task or invocation IDs, missing delivery binding, extra binding fields, and a
-wrong relay source marker fail closed. The response retains
-`production_authorization=not_granted` as an authority boundary rather than a
-runtime release switch.
+unapproved issuers or keys, oversized bodies, unstable replay files, missing or
+inconsistent task/invocation IDs, missing delivery binding, extra binding fields,
+different top-level and nested binding copies, and a wrong relay source marker
+fail closed. The response retains `production_authorization=not_granted` as an
+authority boundary rather than a runtime release switch.
 
 ## Verification
 
@@ -157,12 +165,14 @@ cargo clippy --locked -p consumer-entry-api --all-targets -- -D warnings
 python3 scripts/check-matrix-result-reconciliation.py
 python3 scripts/check-matrix-result-reconciliation-security-v2.py
 python3 scripts/check-matrix-result-reconciliation-security-v3.py
+python3 scripts/check-matrix-result-reconciliation-traceability-v3.py
 python3 scripts/reconcile-matrix-adapter-result-v3.py --self-test
 ```
 
 Behavioral verification covers signed ingress and sessions, identity governance,
 bounded replay snapshots, fingerprint changes for every component, exact
-persisted binding shape, source, scope and task matching, downstream failure
+persisted binding shape, identical top-level/nested binding copies, mandatory
+`task_id == raw.invocation_id`, source and scope matching, downstream failure
 translation, and prevention of World or League projections becoming CEX
 authority. The exact source SHA must also pass non-empty hosted workflows and
 appear in the immutable candidate manifest; a source checker or zero-step job is
@@ -179,21 +189,22 @@ replay-store retention, dependency identities, and rollback boundary without
 retaining secrets.
 
 Monitor lookup authentication failures, unstable snapshots, unresolved or
-expired results, missing and mismatched persisted bindings, downstream
-reachability, rate limits, and projection age. Rollback stops ingress and lookup
-traffic, preserves durable idempotency and replay identities, and deploys only a
-schema- and contract-compatible prior binary or reviewed forward repair.
-Repository CI does not replace representative-volume recovery, sustained load,
-credential custody, or independent approval.
+expired results, missing and mismatched persisted bindings, task/invocation
+mismatches, success-response holds, downstream reachability, rate limits, and
+projection age. Rollback stops ingress and lookup traffic, preserves durable
+idempotency and replay identities, and deploys only a schema- and
+contract-compatible prior binary or reviewed forward repair. Repository CI does
+not replace representative-volume recovery, sustained load, credential custody,
+or independent approval.
 
 ## Compatibility and change protocol
 
 Consumer terms remain projections of backend contracts. New product surfaces
 must declare their owner and may not silently expand the edge into another
-authority. The Matrix delivery fingerprint and persisted eight-field binding are
-versioned security contracts; changing component order, byte encoding, source
-marker, assertion binding, replay semantics, or retirement conditions is
-breaking.
+authority. The Matrix delivery fingerprint, persisted eight-field binding, and
+task-to-invocation equality are versioned security contracts; changing component
+order, byte encoding, source marker, assertion binding, replay semantics, or
+retirement conditions is breaking.
 
 Changes to authority, routes, public types, persistence, configuration, retry
 semantics, or topology require this contract, catalog metadata where applicable,
