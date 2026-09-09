@@ -40,7 +40,8 @@
   ],
   "policy_definition_paths": [
     "docs/security/rust-toolchain-surfaces-v1.json",
-    "scripts/check-rust-toolchain-convergence.py"
+    "scripts/check-rust-toolchain-convergence.py",
+    "scripts/rust_toolchain_convergence_v4.py"
   ],
   "registered_text_extensions": [
     "",
@@ -50,6 +51,7 @@
     ".conf",
     ".js",
     ".json",
+    ".manifest",
     ".md",
     ".mjs",
     ".mk",
