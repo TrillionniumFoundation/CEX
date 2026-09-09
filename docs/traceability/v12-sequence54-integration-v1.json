@@ -26,6 +26,7 @@
   },
   "verification": [
     "scripts/check-sequence54-integration.py",
+    "scripts/check-sequence54-matrix-v3-admission.py",
     "scripts/check-sequence54-rustsec-admission.py",
     "scripts/check-rust-advisory-exceptions.py",
     "scripts/check-rust-toolchain-convergence.py",
