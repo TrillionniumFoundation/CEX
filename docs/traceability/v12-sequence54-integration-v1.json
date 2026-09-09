@@ -16,13 +16,27 @@
   },
   "integration_branch": "integration/cex-v12-sequence54-20260908",
   "normative_document": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-SEQUENCE54-INTEGRATION.md",
+  "matrix_result_reconciliation": {
+    "security_contract": "docs/matrix-result-reconciliation-v3.md",
+    "traceability": "docs/traceability/sequence54-matrix-result-reconciliation-v3.json",
+    "review_packet": "docs/traceability/sequence54-matrix-security-v3-review-packet.json",
+    "operator_migration_head": "0006_adapter_result_embedded_delivery_binding.sql",
+    "runtime_entrypoint": "cex_matrix_reconcile_adapter_result_v3",
+    "production_authorization": "not_granted"
+  },
   "verification": [
     "scripts/check-sequence54-integration.py",
     "scripts/check-sequence54-rustsec-admission.py",
     "scripts/check-rust-advisory-exceptions.py",
     "scripts/check-rust-toolchain-convergence.py",
     "scripts/check-development-docs.py",
-    "scripts/check-module-documentation.py"
+    "scripts/check-module-documentation.py",
+    "scripts/check-matrix-result-reconciliation.py",
+    "scripts/check-matrix-result-reconciliation-security-v2.py",
+    "scripts/check-matrix-result-reconciliation-security-v3.py",
+    "scripts/check-matrix-result-reconciliation-traceability-v3.py",
+    "scripts/test-matrix-operator-postgres-runner-v4.py",
+    "scripts/matrix_operator_postgres_regression.py"
   ],
   "rustsec_admission": {
     "policy": "docs/security/rust-advisory-exceptions-v1.json",
@@ -45,6 +59,10 @@
     "migration_head_0088_preserved",
     "external_agent_only_runtime_preserved",
     "matrix_durability_preserved",
+    "matrix_operator_0006_and_v3_runtime_preserved",
+    "matrix_delivery_payload_binding_preserved",
+    "matrix_consumer_and_adapter_success_response_guards_preserved",
+    "matrix_task_to_raw_invocation_binding_preserved",
     "paper_raid_sequence52_assertions_preserved",
     "rust_1_98_1_recursive_active_surface_convergence",
     "bounded_rustsec_policy_and_all_feature_release_surface_closure_preserved",
