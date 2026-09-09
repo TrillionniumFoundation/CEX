@@ -345,7 +345,7 @@ mod tests {
     }
 
     fn success(expected: &ExpectedBinding) -> Value {
-        let binding = binding(expected);
+        let delivery_binding = binding(expected);
         json!({
             "schema": "cex.matrix.result-lookup.v1",
             "resolved": true,
@@ -355,7 +355,7 @@ mod tests {
             "room_id": expected.room_id,
             "payload_sha256": expected.payload_sha256,
             "request_fingerprint": expected.request_fingerprint,
-            "result_delivery_binding": binding,
+            "result_delivery_binding": delivery_binding.clone(),
             "seen_at_epoch": 1_789_000_000_i64,
             "response": {
                 "task_id": "task-delivery-bound",
@@ -368,7 +368,7 @@ mod tests {
                         "user_id": expected.matrix_user_id,
                         "room_id": expected.room_id,
                     },
-                    "metadata": {"metadata": {DELIVERY_BINDING_FIELD: binding(expected)}}
+                    "metadata": {"metadata": {DELIVERY_BINDING_FIELD: delivery_binding}}
                 },
                 "raw": {"invocation_id": "task-delivery-bound"}
             },
