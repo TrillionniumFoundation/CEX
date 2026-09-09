@@ -16,11 +16,11 @@ on:
       - services/matrix-entry-adapter/**
       - services/consumer-entry-api/src/main.rs
       - services/consumer-entry-api/src/matrix_result_lookup.rs
-      - services/consumer-entry-api/src/matrix_result_lookup_v2.rs
       - apps/matrix-bot-*/**
       - docs/module-catalog-v1.json
       - docs/repository-contract-semantics-v1.json
       - docs/modules/**
+      - docs/traceability/sequence54-matrix-result-reconciliation-v3.json
       - docs/matrix-adapter-validated-construction-v1.md
       - docs/matrix-result-reconciliation-v1.md
       - docs/matrix-result-reconciliation-v2.md
@@ -89,6 +89,7 @@ jobs:
           python3 scripts/test-matrix-postgres-runner.py
           python3 scripts/test-matrix-runner-hardening.py
           python3 scripts/test-matrix-runner-lifecycle.py
+          python3 scripts/test-matrix-operator-postgres-runner-v4.py
       - name: Matrix shared profile linkage regression
         run: python3 scripts/test-matrix-profile-consolidation.py
       - name: Matrix adapter validated construction boundary
@@ -100,6 +101,7 @@ jobs:
           python3 scripts/check-matrix-result-reconciliation.py
           python3 scripts/check-matrix-result-reconciliation-security-v2.py
           python3 scripts/check-matrix-result-reconciliation-security-v3.py
+          python3 scripts/check-matrix-result-reconciliation-traceability-v3.py
       - name: Recovery contract mutation regressions
         run: |
           python3 scripts/test-matrix-recovery-contract.py
