@@ -1,0 +1,162 @@
+name: sequence54-round4-master-v2-analyzer
+
+on:
+  push:
+    branches:
+      - work/sequence54-round2-staging-20260909
+    paths:
+      - '.github/workflows/sequence54-round4-master-v2-analyzer.yml'
+
+permissions:
+  contents: read
+  actions: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: sequence54-round4-master-v2-analyzer
+  cancel-in-progress: false
+
+env:
+  STAGING_BRANCH: work/sequence54-round2-staging-20260909
+  PULL_REQUEST_NUMBER: '53'
+  EVIDENCE_DIR: ${{ runner.temp }}/sequence54-round4-master-v2-analyzer
+
+jobs:
+  analyze:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 320
+    steps:
+      - name: Wait for v2 master and collect exact failure evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          encoded_branch="${STAGING_BRANCH//\//%2F}"
+          run_id=''
+          for _ in $(seq 1 80); do
+            run_id="$(gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/sequence54-round4-master-v2.yml/runs?branch=${encoded_branch}&per_page=20" \
+              --jq '.workflow_runs | sort_by(.created_at) | reverse | .[0].id // empty' 2>/dev/null || true)"
+            [[ -n "$run_id" ]] && break
+            sleep 15
+          done
+          [[ -n "$run_id" ]]
+          printf '%s\n' "$run_id" > "$EVIDENCE_DIR/master-v2-run-id.txt"
+
+          for _ in $(seq 1 1200); do
+            value="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+            status="$(jq -r '.status' <<<"$value")"
+            conclusion="$(jq -r '.conclusion // ""' <<<"$value")"
+            [[ "$status" == completed ]] && break
+            sleep 15
+          done
+          [[ "$status" == completed ]]
+          printf 'status=%s\nconclusion=%s\n' "$status" "$conclusion" > "$EVIDENCE_DIR/master-v2-status.txt"
+
+          gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" \
+            > "$EVIDENCE_DIR/jobs.json"
+          gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" \
+            > "$EVIDENCE_DIR/artifacts.json"
+          artifact_id="$(jq -r '.artifacts[] | select(.name | startswith("sequence54-round4-master-v2-")) | .id' \
+            "$EVIDENCE_DIR/artifacts.json" | head -n1)"
+          if [[ -n "$artifact_id" && "$artifact_id" != null ]]; then
+            gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" \
+              > "$RUNNER_TEMP/master-v2.zip"
+            mkdir -p "$EVIDENCE_DIR/artifact"
+            unzip -q "$RUNNER_TEMP/master-v2.zip" -d "$EVIDENCE_DIR/artifact"
+          fi
+
+          mkdir -p "$EVIDENCE_DIR/job-logs"
+          jq -r '.jobs[] | select(.conclusion != "success") | .id' "$EVIDENCE_DIR/jobs.json" | while read -r job_id; do
+            [[ -n "$job_id" ]] || continue
+            set +e
+            gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/jobs/${job_id}/logs" \
+              > "$EVIDENCE_DIR/job-logs/${job_id}.log" 2> "$EVIDENCE_DIR/job-logs/${job_id}.err"
+            set -e
+          done
+
+          dispatched=false
+          if [[ "$conclusion" != success ]]; then
+            payload="$(jq -nc --arg ref "$STAGING_BRANCH" --arg run "$run_id" '{ref:$ref,inputs:{master_run_id:$run}}')"
+            http="$(curl -sS -o "$EVIDENCE_DIR/round5-response.json" -w '%{http_code}' \
+              -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              -H 'Content-Type: application/json' \
+              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/sequence54-round5-adaptive.yml/dispatches" \
+              -d "$payload")"
+            if [[ "$http" =~ ^20[14]$ ]]; then dispatched=true; fi
+            printf '%s\n' "$http" > "$EVIDENCE_DIR/round5-http.txt"
+          fi
+
+          python3 - "$EVIDENCE_DIR" "$run_id" "$status" "$conclusion" "$dispatched" <<'PY'
+          from pathlib import Path
+          import json, sys
+          root = Path(sys.argv[1])
+          jobs = json.loads((root / 'jobs.json').read_text()).get('jobs', [])
+          failed_jobs = []
+          for job in jobs:
+              if job.get('conclusion') == 'success':
+                  continue
+              failed_jobs.append({
+                  'id': job.get('id'),
+                  'name': job.get('name'),
+                  'conclusion': job.get('conclusion'),
+                  'failed_steps': [
+                      step.get('name') for step in (job.get('steps') or [])
+                      if step.get('conclusion') == 'failure'
+                  ],
+              })
+          local_tails = []
+          for path in sorted((root / 'artifact').rglob('local-*.log')) if (root / 'artifact').exists() else []:
+              text = path.read_text(encoding='utf-8', errors='replace')
+              if text.rstrip().endswith('exit_code=0'):
+                  continue
+              local_tails.append({'path': str(path.relative_to(root)), 'tail': '\n'.join(text.splitlines()[-50:])[-8000:]})
+          report = {
+              'schema': 'cex.sequence54-round4-master-v2-analysis.v1',
+              'run_id': int(sys.argv[2]),
+              'status': sys.argv[3],
+              'conclusion': sys.argv[4],
+              'failed_jobs': failed_jobs,
+              'failed_local_logs': local_tails,
+              'round5_dispatched': sys.argv[5] == 'true',
+              'production_authorization': 'not_granted',
+          }
+          (root / 'analysis.json').write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
+          lines = [
+              '<!-- sequence54-round4-master-v2-analyzer -->',
+              '## Sequence 54 master v2 terminal analysis',
+              '',
+              f"- Run: `{report['run_id']}`",
+              f"- Conclusion: `{report['conclusion']}`",
+              f"- Adaptive round 5 dispatched: `{str(report['round5_dispatched']).lower()}`",
+          ]
+          if failed_jobs:
+              lines += ['', 'Failed workflow jobs:']
+              for item in failed_jobs:
+                  steps = ', '.join(f"`{value}`" for value in item['failed_steps']) or '`none reported`'
+                  lines.append(f"- `{item['name']}` → `{item['conclusion']}`; failed steps: {steps}")
+          if local_tails:
+              lines += ['', 'Failed local checker tails:']
+              for item in local_tails:
+                  lines += [f"### `{item['path']}`", '```text', item['tail'], '```']
+          lines += ['', 'No failure is waived or converted into synthetic success. `production_authorization=not_granted`.']
+          (root / 'comment.md').write_text('\n'.join(lines) + '\n')
+          PY
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PULL_REQUEST_NUMBER}/comments" \
+            -f body="$(cat "$EVIDENCE_DIR/comment.md")"
+
+      - name: Upload analyzer evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sequence54-round4-master-v2-analyzer-${{ github.run_id }}
+          path: ${{ env.EVIDENCE_DIR }}
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 6
