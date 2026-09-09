@@ -83,19 +83,23 @@ For a non-loopback database, the operator command requires all of the following:
 
 - a non-empty password;
 - `PGSSLMODE=verify-full`;
-- an absolute, regular, single-link, non-group/world-writable CA file supplied
+- an absolute, canonical, regular, single-link, trusted-owner,
+  non-group/world-writable CA file whose immediate directory is also under
+  trusted non-writable custody, supplied
   through `MATRIX_RECONCILIATION_DATABASE_CA_FILE`;
 - `PGSSLROOTCERT` bound to that file;
 - required channel binding;
-- an absolute, executable, regular, single-link, non-group/world-writable
-  `psql` path supplied through `MATRIX_RECONCILIATION_PSQL`;
+- an absolute, canonical, executable, regular, single-link, trusted-owner,
+  non-group/world-writable `psql` path under a trusted non-writable immediate
+  directory, supplied through `MATRIX_RECONCILIATION_PSQL`;
 - a closed child environment that does not inherit `PGSERVICE`,
   `PGSERVICEFILE`, `PGSYSCONFDIR`, `PGHOSTADDR`, caller `PGOPTIONS`, or generic
   database URLs.
 
-Plain PostgreSQL is accepted only for an explicitly enabled loopback test
-connection through `--allow-insecure-database-loopback`. That switch cannot make
-a remote host insecure.
+Plain PostgreSQL is accepted only for an explicitly enabled literal loopback IP
+test connection through `--allow-insecure-database-loopback`; the hostname
+`localhost` is deliberately insufficient. That switch cannot make a remote host
+insecure.
 
 Passwords remain in the child environment, not command-line arguments or output.
 The command still uses `-X`, `--no-password`, `ON_ERROR_STOP=1`, bounded
