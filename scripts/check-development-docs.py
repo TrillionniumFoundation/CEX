@@ -29,6 +29,9 @@ MATRIX_RESULT_RECONCILIATION_V3 = (
 MATRIX_RESULT_TRACEABILITY_V3 = (
     ROOT / "scripts/check-matrix-result-reconciliation-traceability-v3.py"
 )
+SEQUENCE54_MATRIX_V3_ADMISSION = (
+    ROOT / "scripts/check-sequence54-matrix-v3-admission.py"
+)
 EXTERNAL_AGENT_CONFIG = ROOT / "scripts/check-production-external-agent-config.py"
 VENDOR_PROVENANCE = ROOT / "scripts/check-vendor-provenance.py"
 MAX_OUTPUT_BYTES = 1_048_576
@@ -237,6 +240,12 @@ def main() -> int:
             "cex.matrix-adapter-api-boundary-check.v1",
         ),
         (
+            SEQUENCE54_MATRIX_V3_ADMISSION,
+            [],
+            "Sequence 54 Matrix v3 authority convergence",
+            "cex.sequence54.matrix-v3-admission-source-check.v1",
+        ),
+        (
             MATRIX_RESULT_RECONCILIATION,
             [],
             "Matrix result reconciliation base contract",
@@ -252,7 +261,7 @@ def main() -> int:
             MATRIX_RESULT_RECONCILIATION_V3,
             [],
             "Matrix result reconciliation security v3",
-            "cex.matrix.result-reconciliation-security-source-check.v2",
+            "cex.matrix.result-reconciliation-security-source-check.v3",
         ),
         (
             MATRIX_RESULT_TRACEABILITY_V3,
