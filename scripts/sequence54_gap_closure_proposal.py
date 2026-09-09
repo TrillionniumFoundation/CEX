@@ -53,7 +53,7 @@ def repair_build_unblock() -> None:
         """            env = {**os.environ, 'PATH': str(tools) + os.pathsep + os.environ['PATH'],
                    'TRACE': str(trace), 'FAIL': failure}
 """,
-        """            (scripts / 'check-matrix-operator-postgres.sh').write_text(
+        r"""            (scripts / 'check-matrix-operator-postgres.sh').write_text(
                 '#!/bin/sh\nprintf "%s\\n" operator >> "$TRACE"\n[ "$FAIL" != operator ] || exit 71\n')
 """,
     )
