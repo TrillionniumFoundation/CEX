@@ -15,6 +15,8 @@ concurrency:
 env:
   SOURCE_SHA: 5104e2242db2134d622e49a5e514b01226412dbe
   SOURCE_TREE: b0f42cfb6d51c908750f2dd354aadd274aa7675b
+  WORLD_SHA: ad0fd6378242992cea4e035efe90174f5f2bc138
+  WORLD_TREE: 25d540f93f2a83133f4f6d1b94d3916b1d7498ee
 
 jobs:
   export:
@@ -49,6 +51,43 @@ jobs:
           path: |
             ${{ runner.temp }}/cex-${{ env.SOURCE_SHA }}.tar.gz
             ${{ runner.temp }}/cex-${{ env.SOURCE_SHA }}.manifest.txt
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  world-export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout immutable World source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: TrillionniumFoundation/Trillionnium-World
+          ref: ${{ env.WORLD_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify and archive exact World tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$WORLD_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$WORLD_TREE"
+          archive="$RUNNER_TEMP/world-${WORLD_SHA}.tar.gz"
+          manifest="$RUNNER_TEMP/world-${WORLD_SHA}.manifest.txt"
+          git archive --format=tar.gz --output="$archive" HEAD
+          {
+            printf 'source_sha=%s\n' "$WORLD_SHA"
+            printf 'source_tree=%s\n' "$WORLD_TREE"
+            sha256sum "$archive"
+            printf 'production_authorization=not_granted\n'
+          } > "$manifest"
+      - name: Upload exact World source archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: world-source-${{ env.WORLD_SHA }}
+          path: |
+            ${{ runner.temp }}/world-${{ env.WORLD_SHA }}.tar.gz
+            ${{ runner.temp }}/world-${{ env.WORLD_SHA }}.manifest.txt
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
