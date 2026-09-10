@@ -82,7 +82,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential ca-certificates clang cmake libpq-dev libssl-dev \
-            perl pkg-config protobuf-compiler
+            perl pkg-config protobuf-compiler ripgrep
           rustc --version --verbose | tee "$RUNNER_TEMP/cex-rustc-version.txt"
           grep -Fx "commit-hash: $EXPECTED_RUST_RELEASE_COMMIT" "$RUNNER_TEMP/cex-rustc-version.txt"
           cargo --version --verbose
