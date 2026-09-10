@@ -94,7 +94,12 @@ class ConsumerProjectionBoundaryTests(unittest.TestCase):
 
     def test_dynamic_authoritative_route_is_fail_closed(self) -> None:
         self.assert_rejected(
-            'fn fixture() { let path = route_path(); let _ = axum::routing::get(handler); use_it(path); }',
+            """
+fn fixture() {
+    let path = route_path();
+    let _ = axum::Router::new().route(path, axum::routing::get(handler));
+}
+""",
             "dynamic projection route path requires explicit reviewed resolution",
         )
 
