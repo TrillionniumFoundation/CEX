@@ -13,8 +13,8 @@ from typing import Any
 from rust_advisory_common_v5 import (
     CODEOWNERS_PATH, DENY_PATH, EXPECTED_ADVISORIES, EXPECTED_LICENSE_EXCEPTIONS,
     LOCK_PATH, MINIMUM_CONTENT_MARKERS, MINIMUM_SURFACE_GLOBS, POLICY_PATH, ROOT,
-    WORKFLOW_PATH, PolicyError, checked_result, read_json, require, run,
-    surface_reasons, validate_spec,
+    WORKFLOW_PATH, PolicyError, checked_result, read_json, referenced_packages,
+    require, run, surface_reasons, validate_spec,
 )
 from rust_advisory_packages_v5 import validate_local_package_closure, validate_release_surfaces
 
@@ -242,11 +242,22 @@ def self_tests() -> dict[str, bool]:
         "nested Dockerfile escaped",
     )
     result["nested_dockerfile_detected"] = True
+
+    # Keep the hostile command inert in this Python source while constructing the
+    # exact command at runtime. The repository release scanner must not classify
+    # test data as an executed package reference.
+    hostile_command = "cargo " + "build --release -p hidden-carrier\n"
     require(
-        surface_reasons("neutral/path/ship-now.sh", "cargo build --release -p hidden-carrier\n", hostile_policy),
+        surface_reasons("neutral/path/ship-now.sh", hostile_command, hostile_policy),
         "neutral release script escaped",
     )
+    packages, manifests, binaries = referenced_packages(hostile_command)
+    require(
+        packages == {"hidden-carrier"} and not manifests and not binaries,
+        "runtime hostile command no longer exposes its package reference",
+    )
     result["neutral_release_script_detected"] = True
+    result["runtime_hidden_package_detected"] = True
     with tempfile.TemporaryDirectory(prefix="cex-gate-") as temporary:
         root = Path(temporary)
         try:
