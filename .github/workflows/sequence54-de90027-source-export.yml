@@ -13,18 +13,16 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  SOURCE_SHA: 5104e2242db2134d622e49a5e514b01226412dbe
-  SOURCE_TREE: b0f42cfb6d51c908750f2dd354aadd274aa7675b
-  WORLD_SHA: ad0fd6378242992cea4e035efe90174f5f2bc138
-  WORLD_TREE: 25d540f93f2a83133f4f6d1b94d3916b1d7498ee
+  SOURCE_SHA: f62727f080d94a7e9e39e0fa294624ae429aba51
+  SOURCE_TREE: 90f5c087bdb1707138fe08da502b5a5a9c1565fe
 
 jobs:
   export:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: Checkout immutable Sequence 54 source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Checkout immutable candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ env.SOURCE_SHA }}
           fetch-depth: 1
@@ -34,7 +32,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$SOURCE_TREE"
           archive="$RUNNER_TEMP/cex-${SOURCE_SHA}.tar.gz"
           manifest="$RUNNER_TEMP/cex-${SOURCE_SHA}.manifest.txt"
           git archive --format=tar.gz --output="$archive" HEAD
@@ -51,110 +49,6 @@ jobs:
           path: |
             ${{ runner.temp }}/cex-${{ env.SOURCE_SHA }}.tar.gz
             ${{ runner.temp }}/cex-${{ env.SOURCE_SHA }}.manifest.txt
-          if-no-files-found: error
-          retention-days: 1
-          compression-level: 0
-
-  world-export:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout immutable World source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          repository: TrillionniumFoundation/Trillionnium-World
-          ref: ${{ env.WORLD_SHA }}
-          fetch-depth: 1
-          persist-credentials: false
-      - name: Verify and archive exact World tree
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$WORLD_SHA"
-          test "$(git rev-parse HEAD^{tree})" = "$WORLD_TREE"
-          archive="$RUNNER_TEMP/world-${WORLD_SHA}.tar.gz"
-          manifest="$RUNNER_TEMP/world-${WORLD_SHA}.manifest.txt"
-          git archive --format=tar.gz --output="$archive" HEAD
-          {
-            printf 'source_sha=%s\n' "$WORLD_SHA"
-            printf 'source_tree=%s\n' "$WORLD_TREE"
-            sha256sum "$archive"
-            printf 'production_authorization=not_granted\n'
-          } > "$manifest"
-      - name: Upload exact World source archive
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: world-source-${{ env.WORLD_SHA }}
-          path: |
-            ${{ runner.temp }}/world-${{ env.WORLD_SHA }}.tar.gz
-            ${{ runner.temp }}/world-${{ env.WORLD_SHA }}.manifest.txt
-          if-no-files-found: error
-          retention-days: 1
-          compression-level: 0
-
-  recover-matrix-v1-doc:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout CEX history without credentials
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: ${{ env.SOURCE_SHA }}
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Recover newest valid UTF-8 historical document
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import hashlib
-          import json
-          from pathlib import Path
-          import subprocess
-
-          source_sha = "5104e2242db2134d622e49a5e514b01226412dbe"
-          path = "docs/matrix-result-reconciliation-v1.md"
-          output = Path("/tmp/recovered-matrix-v1")
-          output.mkdir(mode=0o700)
-          revisions = subprocess.check_output(
-              ["git", "rev-list", source_sha, "--", path], text=True
-          ).splitlines()
-          checked = []
-          for revision in revisions:
-              data = subprocess.check_output(["git", "show", f"{revision}:{path}"])
-              try:
-                  text = data.decode("utf-8")
-              except UnicodeDecodeError as error:
-                  checked.append({"revision": revision, "valid_utf8": False, "error_start": error.start})
-                  continue
-              if "# Matrix Durable Result Lookup and Reconciliation v1" not in text:
-                  checked.append({"revision": revision, "valid_utf8": True, "expected_heading": False})
-                  continue
-              recovered = output / "matrix-result-reconciliation-v1.md"
-              recovered.write_bytes(data)
-              metadata = {
-                  "schema": "cex.matrix-v1-doc-recovery.v1",
-                  "source_head": source_sha,
-                  "path": path,
-                  "recovered_revision": revision,
-                  "sha256": hashlib.sha256(data).hexdigest(),
-                  "byte_length": len(data),
-                  "checked_revisions": checked,
-                  "production_authorization": "not_granted",
-              }
-              (output / "recovery.json").write_text(
-                  json.dumps(metadata, indent=2, sort_keys=True) + "\n",
-                  encoding="utf-8",
-              )
-              break
-          else:
-              raise SystemExit("no valid historical UTF-8 document found")
-          PY
-      - name: Upload recovered document and provenance
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: recovered-matrix-v1-document
-          path: /tmp/recovered-matrix-v1/
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
