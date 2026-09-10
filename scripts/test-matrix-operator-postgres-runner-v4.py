@@ -95,7 +95,9 @@ class OperatorRunnerV4Tests(unittest.TestCase):
             ["server-identity", "base-schema"]
             + [name for name, _ in R.acquired_inputs(ROOT)[0]],
         )
-        self.assertTrue(all(record["status"] == "ok" for record in result["stages"]))
+        self.assertTrue(
+            all(record["status"] == "passed" for record in result["stages"])
+        )
 
     def test_v3_revocation_is_after_every_historical_v2_regression(self) -> None:
         stages, _ = R.acquired_inputs(ROOT)
@@ -103,14 +105,13 @@ class OperatorRunnerV4Tests(unittest.TestCase):
         first_v3 = names.index(
             "operator-migration-1-0006_adapter_result_embedded_delivery_binding.sql"
         )
+        final_v3 = names.index(
+            "operator-migration-2-0006_adapter_result_embedded_delivery_binding.sql"
+        )
         for path in R.BASE_REGRESSIONS:
             self.assertLess(names.index(Path(path).stem), first_v3)
-        self.assertGreater(
-            names.index("test-matrix-result-embedded-binding-postgres"),
-            names.index(
-                "operator-migration-2-0006_adapter_result_embedded_delivery_binding.sql"
-            ),
-        )
+        for path in R.SECURITY_REGRESSIONS:
+            self.assertGreater(names.index(Path(path).stem), final_v3)
 
 
 if __name__ == "__main__":
