@@ -55,8 +55,10 @@ jobs:
                   "docs/matrix-result-reconciliation-v1.md",
               ]
           ).decode("utf-8")
+          clean_recovered = "\n".join(
+              line.rstrip() for line in recovered.splitlines()
+          ).rstrip()
           addition = """
-
           ## 8. Sequence 54 runtime reconciliation correction
 
           Migration 0004 fixes a concrete runtime defect in the earlier reconciliation
@@ -65,8 +67,11 @@ jobs:
           remains `scripts/reconcile-matrix-adapter-result.py`; it does not repeat the
           business operation, and no lookup alone advances transport state.
           """
+          clean_addition = "\n".join(
+              line.rstrip() for line in addition.strip().splitlines()
+          )
           Path("docs/matrix-result-reconciliation-v1.md").write_text(
-              recovered.rstrip() + addition + "\n",
+              clean_recovered + "\n\n" + clean_addition + "\n",
               encoding="utf-8",
           )
 
