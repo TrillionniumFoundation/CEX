@@ -1,0 +1,98 @@
+name: verify-and-bind-cex-current-20260910
+
+on:
+  push:
+    branches:
+      - verify/cex-current-full-20260910
+
+permissions:
+  contents: write
+
+concurrency:
+  group: verify-and-bind-cex-current-20260910
+  cancel-in-progress: false
+
+jobs:
+  verify_bind:
+    name: cex/full-current-and-bind-exact-ref
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cex_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d cex_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+      VERIFIED_BRANCH: verified/cex-current-full-20260910
+      RUSTUP_TOOLCHAIN: '1.98.1'
+      CARGO_INCREMENTAL: '0'
+      RUST_BACKTRACE: '1'
+      RUST_TEST_THREADS: '1'
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cex_test
+      TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cex_test
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Freeze and fetch exact target
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          frozen="$(git ls-remote "$remote_url" refs/heads/${TARGET_BRANCH} | cut -f1)"
+          test "${#frozen}" = 40
+          printf '%s\n' "$frozen" > "$RUNNER_TEMP/frozen"
+          git init "$RUNNER_TEMP/cex"
+          git -C "$RUNNER_TEMP/cex" remote add origin "$remote_url"
+          git -C "$RUNNER_TEMP/cex" fetch --no-tags --depth=1 origin "$frozen"
+          git -C "$RUNNER_TEMP/cex" checkout --detach FETCH_HEAD
+          test "$(git -C "$RUNNER_TEMP/cex" rev-parse HEAD)" = "$frozen"
+      - name: Install pinned toolchain and advisory tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy
+          cargo install cargo-audit --version 0.22.2 --locked
+          cargo install cargo-deny --version 0.20.2 --locked
+      - name: Execute complete repository-owned qualification
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/cex"
+          python3 scripts/check-sequence54-rustsec-admission.py
+          python3 scripts/check-rust-advisory-exceptions.py
+          python3 scripts/test-consumer-route-contract.py
+          python3 scripts/test-consumer-projection-boundary.py
+          python3 scripts/check-consumer-projection-boundary.py
+          python3 scripts/test-trnm-build-evidence.py
+          python3 scripts/generate-repository-semantics.py --stdout > "$RUNNER_TEMP/generated.json"
+          cmp docs/repository-contract-semantics-v1.json "$RUNNER_TEMP/generated.json"
+          cargo fmt --all -- --check
+          cargo test --workspace --all-targets --locked
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo build --release --workspace --locked
+          rm -rf scripts/__pycache__
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+      - name: Refreeze and advance verified pointer without force
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          frozen="$(cat "$RUNNER_TEMP/frozen")"
+          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          test "$(git ls-remote "$remote_url" refs/heads/${TARGET_BRANCH} | cut -f1)" = "$frozen"
+          git -C "$RUNNER_TEMP/cex" push "$remote_url" "$frozen:refs/heads/${VERIFIED_BRANCH}"
+          test "$(git ls-remote "$remote_url" refs/heads/${VERIFIED_BRANCH} | cut -f1)" = "$frozen"
+          printf 'CEX_VERIFIED_SHA=%s\n' "$frozen"
+          printf 'VERIFIED_REF=%s\n' "$VERIFIED_BRANCH"
+          printf 'PRODUCTION_AUTHORIZATION=not_granted\n'
