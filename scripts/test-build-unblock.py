@@ -86,10 +86,11 @@ class CompilerSelectionTests(unittest.TestCase):
 
     def test_container_bootstrap_must_install_and_select_fixed_compiler(self):
         script = (ROOT / 'scripts/run-isolated-matrix-tests.sh').read_text()
-        self.assertIn('FROM rust:1.98.0-bookworm', script)
+        self.assertIn('FROM rust:1.98.1-bookworm', script)
+        self.assertNotIn('FROM rust:1.98.0-bookworm', script)
         self.assertIn('rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy', script)
         self.assertIn('rustup default 1.98.1', script)
-        self.assertIn('rustup toolchain uninstall 1.98.0', script)
+        self.assertNotIn('rustup toolchain uninstall 1.98.0', script)
         self.assertIn('ENV RUST_VERSION=1.98.1', script)
 
     def run_versions(self, rust_output: str, rust_exit: int):
