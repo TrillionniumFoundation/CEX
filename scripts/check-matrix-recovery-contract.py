@@ -113,8 +113,13 @@ def validate(sources: dict[str, str]) -> None:
             'cex_matrix_advance_cursor_v1', 'tx.commit()')
     reject(function(p, 'persist_batch'), '.send()')
     require(function(p, 'prepare_admissions'), 'm.replace', 'source_payload', 'object.remove("unsigned")')
-    ordered(function(r, 'call_matrix_homeserver'), 'cex_matrix_bind_send_attempt_v1',
-            '.fetch_one(&state.pool).await', 'request.send()', 'classify_matrix_response')
+    ordered_ignoring_whitespace(
+        function(r, 'call_matrix_homeserver'),
+        'cex_matrix_bind_send_attempt_v1',
+        '.fetch_one(&state.pool).await',
+        'request.send()',
+        'classify_matrix_response',
+    )
     require(function(r, 'call_matrix_homeserver'), 'matrix_access_token.as_bytes()',
             'matrix_homeserver_base_url', 'matrix_send_binding_unverified')
     ordered(function(r, 'process_matrix_delivery'), 'state.pool.begin()',

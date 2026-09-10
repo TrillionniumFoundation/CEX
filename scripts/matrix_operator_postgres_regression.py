@@ -16,20 +16,24 @@ from typing import Callable
 import matrix_postgres_regression as base
 
 ROOT = Path(__file__).resolve().parents[1]
-BASE_MIGRATIONS = (
+HISTORICAL_MIGRATIONS = (
     "0001_adapter_result_reconciliation.sql",
     "0002_runtime_roles.sql",
     "0003_adapter_result_evidence_binding.sql",
     "0004_adapter_result_runtime_reconciliation.sql",
+)
+CAUSAL_MIGRATIONS = (
     "0005_adapter_result_causal_binding.sql",
 )
 SECURITY_MIGRATIONS = (
     "0006_adapter_result_embedded_delivery_binding.sql",
 )
-MIGRATIONS = BASE_MIGRATIONS + SECURITY_MIGRATIONS
-BASE_REGRESSIONS = (
+MIGRATIONS = HISTORICAL_MIGRATIONS + CAUSAL_MIGRATIONS + SECURITY_MIGRATIONS
+HISTORICAL_REGRESSIONS = (
     "scripts/test-matrix-result-evidence-hardening-postgres.sql",
     "scripts/test-matrix-result-runtime-reconciliation-postgres.sql",
+)
+CAUSAL_REGRESSIONS = (
     "scripts/test-matrix-result-causal-binding-postgres.sql",
 )
 SECURITY_REGRESSIONS = (
@@ -37,7 +41,7 @@ SECURITY_REGRESSIONS = (
     "scripts/test-matrix-result-embedded-binding-postgres.sql",
     "scripts/test-matrix-result-task-invocation-binding-postgres.sql",
 )
-REGRESSIONS = BASE_REGRESSIONS + SECURITY_REGRESSIONS
+REGRESSIONS = HISTORICAL_REGRESSIONS + CAUSAL_REGRESSIONS + SECURITY_REGRESSIONS
 SCHEMA = "cex.matrix-operator-postgres-regression.v4"
 MAX_RUN_SECONDS = 900
 
@@ -76,26 +80,31 @@ def acquired_inputs(root: Path) -> tuple[list[tuple[str, str]], dict[str, str]]:
             )
         stages.append((f"operator-migration-{pass_number}-{name}", sql))
 
-    # Prove the historical v1/v2 chain replay-safe before its own regressions.
-    # Those regressions intentionally execute while v2 remains the runtime API;
-    # applying the v3 privilege/evidence cutover first would invalidate the
-    # historical contract rather than test it. Then replay the security cutover
-    # twice and execute all v3-only regressions against the final schema.
-    for pass_number in (1, 2):
-        for name in BASE_MIGRATIONS:
-            migration_stage(pass_number, name)
-
-    for relative in BASE_REGRESSIONS:
+    def regression_stage(relative: str) -> None:
         inputs[relative] = base.read_input(root, relative)
         stages.append((Path(relative).stem, inputs[relative]))
+
+    # Each API generation is exercised before the next migration revokes it.
+    # Every migration phase is replayed twice before its own regressions so the
+    # runner proves both migration idempotency and the exact v1 -> v2 -> v3
+    # privilege/evidence cutover order in one PostgreSQL session.
+    for pass_number in (1, 2):
+        for name in HISTORICAL_MIGRATIONS:
+            migration_stage(pass_number, name)
+    for relative in HISTORICAL_REGRESSIONS:
+        regression_stage(relative)
+
+    for pass_number in (1, 2):
+        for name in CAUSAL_MIGRATIONS:
+            migration_stage(pass_number, name)
+    for relative in CAUSAL_REGRESSIONS:
+        regression_stage(relative)
 
     for pass_number in (1, 2):
         for name in SECURITY_MIGRATIONS:
             migration_stage(pass_number, name)
-
     for relative in SECURITY_REGRESSIONS:
-        inputs[relative] = base.read_input(root, relative)
-        stages.append((Path(relative).stem, inputs[relative]))
+        regression_stage(relative)
 
     for _, sql in stages:
         base.validate_sql_source(sql)

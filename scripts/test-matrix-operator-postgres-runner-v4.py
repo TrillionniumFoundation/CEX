@@ -45,22 +45,31 @@ class OperatorRunnerV4Tests(unittest.TestCase):
         stages, hashes = R.acquired_inputs(ROOT)
         names = [name for name, _ in stages]
         expected: list[str] = []
-        for pass_number in (1, 2):
-            expected.extend(
-                f"operator-migration-{pass_number}-{name}"
-                for name in R.BASE_MIGRATIONS
-            )
-        expected.extend(Path(path).stem for path in R.BASE_REGRESSIONS)
-        for pass_number in (1, 2):
-            expected.extend(
-                f"operator-migration-{pass_number}-{name}"
-                for name in R.SECURITY_MIGRATIONS
-            )
-        expected.extend(Path(path).stem for path in R.SECURITY_REGRESSIONS)
+        for migrations, regressions in (
+            (R.HISTORICAL_MIGRATIONS, R.HISTORICAL_REGRESSIONS),
+            (R.CAUSAL_MIGRATIONS, R.CAUSAL_REGRESSIONS),
+            (R.SECURITY_MIGRATIONS, R.SECURITY_REGRESSIONS),
+        ):
+            for pass_number in (1, 2):
+                expected.extend(
+                    f"operator-migration-{pass_number}-{name}"
+                    for name in migrations
+                )
+            expected.extend(Path(path).stem for path in regressions)
 
         self.assertEqual(names, expected)
-        self.assertEqual(R.MIGRATIONS, R.BASE_MIGRATIONS + R.SECURITY_MIGRATIONS)
-        self.assertEqual(R.REGRESSIONS, R.BASE_REGRESSIONS + R.SECURITY_REGRESSIONS)
+        self.assertEqual(
+            R.MIGRATIONS,
+            R.HISTORICAL_MIGRATIONS
+            + R.CAUSAL_MIGRATIONS
+            + R.SECURITY_MIGRATIONS,
+        )
+        self.assertEqual(
+            R.REGRESSIONS,
+            R.HISTORICAL_REGRESSIONS
+            + R.CAUSAL_REGRESSIONS
+            + R.SECURITY_REGRESSIONS,
+        )
         self.assertEqual(set(hashes), {
             *(
                 "services/matrix-entry-adapter/operator-migrations/" + name
@@ -99,16 +108,25 @@ class OperatorRunnerV4Tests(unittest.TestCase):
             all(record["status"] == "passed" for record in result["stages"])
         )
 
-    def test_v3_revocation_is_after_every_historical_v2_regression(self) -> None:
+    def test_each_api_cutover_follows_its_historical_regressions(self) -> None:
         stages, _ = R.acquired_inputs(ROOT)
         names = [name for name, _ in stages]
+        first_v2 = names.index(
+            "operator-migration-1-0005_adapter_result_causal_binding.sql"
+        )
+        final_v2 = names.index(
+            "operator-migration-2-0005_adapter_result_causal_binding.sql"
+        )
         first_v3 = names.index(
             "operator-migration-1-0006_adapter_result_embedded_delivery_binding.sql"
         )
         final_v3 = names.index(
             "operator-migration-2-0006_adapter_result_embedded_delivery_binding.sql"
         )
-        for path in R.BASE_REGRESSIONS:
+        for path in R.HISTORICAL_REGRESSIONS:
+            self.assertLess(names.index(Path(path).stem), first_v2)
+        for path in R.CAUSAL_REGRESSIONS:
+            self.assertGreater(names.index(Path(path).stem), final_v2)
             self.assertLess(names.index(Path(path).stem), first_v3)
         for path in R.SECURITY_REGRESSIONS:
             self.assertGreater(names.index(Path(path).stem), final_v3)
