@@ -1,0 +1,376 @@
+name: restore-cex-missing-required-context-producers-20260910
+
+on:
+  push:
+    branches:
+      - ops/object-export-fc8643d-20260910
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: restore-cex-missing-required-context-producers-20260910
+  cancel-in-progress: false
+
+jobs:
+  restore:
+    name: cex/restore-proven-missing-protected-context-producers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+      ADMIN_TOKEN_PRIMARY: ${{ secrets.ADMIN_GITHUB_TOKEN }}
+      ADMIN_TOKEN_SECONDARY: ${{ secrets.GH_ADMIN_TOKEN }}
+      ACTION_TOKEN: ${{ github.token }}
+      PYTHONDONTWRITEBYTECODE: '1'
+    outputs:
+      mutation_required: ${{ steps.generate.outputs.mutation_required }}
+    steps:
+      - name: Wait for a stable candidate with terminal check runs
+        id: settle
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$ADMIN_TOKEN_PRIMARY"
+          if [ -z "$token" ]; then token="$ADMIN_TOKEN_SECONDARY"; fi
+          if [ -z "$token" ]; then token="$ACTION_TOKEN"; fi
+          python3 - "$token" "$RUNNER_TEMP/original-head" <<'PY'
+          import json
+          import subprocess
+          import sys
+          import time
+          import urllib.request
+
+          token, output = sys.argv[1:]
+          repository = "TrillionniumFoundation/CEX"
+          remote = f"https://github.com/{repository}.git"
+          target_ref = "refs/heads/integration/cex-v12-sequence54-20260908"
+
+          def head():
+              value = subprocess.check_output(["git", "ls-remote", remote, target_ref], text=True).strip()
+              return value.split()[0] if value else ""
+
+          def runs(sha):
+              result = []
+              for page in range(1, 21):
+                  request = urllib.request.Request(
+                      f"https://api.github.com/repos/{repository}/commits/{sha}/check-runs?per_page=100&page={page}",
+                      headers={
+                          "Authorization": f"Bearer {token}",
+                          "Accept": "application/vnd.github+json",
+                          "X-GitHub-Api-Version": "2022-11-28",
+                      },
+                  )
+                  with urllib.request.urlopen(request, timeout=60) as response:
+                      value = json.load(response)
+                  nodes = value.get("check_runs")
+                  if not isinstance(nodes, list):
+                      raise SystemExit("check-runs response is malformed")
+                  result.extend(nodes)
+                  if len(nodes) < 100:
+                      return result
+              raise SystemExit("check-runs pagination budget exceeded")
+
+          previous = ""
+          stable = 0
+          for _ in range(90):
+              current = head()
+              if len(current) != 40:
+                  stable = 0
+                  time.sleep(20)
+                  continue
+              if current == previous:
+                  stable += 1
+              else:
+                  previous = current
+                  stable = 0
+              current_runs = runs(current)
+              active = [item for item in current_runs if item.get("status") != "completed"]
+              if stable >= 15 and not active:
+                  with open(output, "w", encoding="utf-8") as handle:
+                      handle.write(current + "\n")
+                  print("CEX_STABLE_TERMINAL_HEAD=" + current)
+                  raise SystemExit(0)
+              time.sleep(20)
+          raise SystemExit("CEX candidate did not reach a stable terminal check-run state")
+          PY
+
+      - name: Fetch exact stable target
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/target"
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          head="$(cat "$RUNNER_TEMP/original-head")"
+          git init "$root"
+          git -C "$root" remote add origin "$remote"
+          git -C "$root" fetch --no-tags --depth=1 origin "$head"
+          git -C "$root" checkout --detach FETCH_HEAD
+          test "$(git -C "$root" rev-parse HEAD)" = "$head"
+          test "$(git ls-remote "$remote" "refs/heads/${TARGET_BRANCH}" | cut -f1)" = "$head"
+
+      - name: Read protection and generate only absent Actions contexts
+        id: generate
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$ADMIN_TOKEN_PRIMARY"
+          if [ -z "$token" ]; then token="$ADMIN_TOKEN_SECONDARY"; fi
+          if [ -z "$token" ]; then token="$ACTION_TOKEN"; fi
+          python3 - \
+            "$token" \
+            "$(cat "$RUNNER_TEMP/original-head")" \
+            "$RUNNER_TEMP/target/.github/workflows/cex-required-context-bridge-v1.yml" \
+            "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import pathlib
+          import sys
+          import urllib.error
+          import urllib.request
+
+          token, head, workflow_path, github_output = sys.argv[1:]
+          repository = "TrillionniumFoundation/CEX"
+          api = f"https://api.github.com/repos/{repository}"
+
+          def get(url):
+              request = urllib.request.Request(
+                  url,
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=60) as response:
+                      return json.load(response)
+              except urllib.error.HTTPError as error:
+                  body = error.read().decode("utf-8", errors="replace")[:500]
+                  raise SystemExit(f"protection readback HTTP {error.code}: {body}") from error
+
+          def gha(body):
+              return "$" + "{{ " + body + " }}"
+
+          protection = get(f"{api}/branches/main/protection")
+          required = protection.get("required_status_checks")
+          if not isinstance(required, dict):
+              raise SystemExit("main has no readable required_status_checks object")
+          checks = []
+          if isinstance(required.get("checks"), list) and required["checks"]:
+              for item in required["checks"]:
+                  if not isinstance(item, dict) or not isinstance(item.get("context"), str):
+                      raise SystemExit(f"invalid required check entry: {item!r}")
+                  checks.append((item["context"], item.get("app_id")))
+          else:
+              contexts = required.get("contexts")
+              if not isinstance(contexts, list):
+                  raise SystemExit("required contexts are unavailable")
+              checks = [(context, None) for context in contexts]
+          if len({context for context, _ in checks}) != len(checks):
+              raise SystemExit("duplicate required contexts are forbidden")
+
+          check_runs = []
+          for page in range(1, 21):
+              value = get(f"{api}/commits/{head}/check-runs?per_page=100&page={page}")
+              nodes = value.get("check_runs")
+              if not isinstance(nodes, list):
+                  raise SystemExit("check-runs response is malformed")
+              check_runs.extend(nodes)
+              if len(nodes) < 100:
+                  break
+          else:
+              raise SystemExit("check-runs pagination budget exceeded")
+          if any(item.get("status") != "completed" for item in check_runs):
+              raise SystemExit("a current-head check run became active after the settlement read")
+
+          observed_names = {
+              item.get("name")
+              for item in check_runs
+              if isinstance(item.get("name"), str)
+          }
+          actions_app_ids = {
+              (item.get("app") or {}).get("id")
+              for item in check_runs
+              if (item.get("app") or {}).get("slug") == "github-actions"
+              and isinstance((item.get("app") or {}).get("id"), int)
+          }
+          missing = [(context, app_id) for context, app_id in checks if context not in observed_names]
+          for context, app_id in missing:
+              if not context.strip() or "\n" in context or "\r" in context or len(context) > 200:
+                  raise SystemExit(f"unsafe context name: {context!r}")
+              if app_id is not None and app_id not in actions_app_ids:
+                  raise SystemExit(f"context {context!r} is pinned to non-Actions app {app_id}")
+          if len(missing) > 16:
+              raise SystemExit(f"refusing to synthesize an unexpectedly large producer set: {len(missing)}")
+          if not missing:
+              with open(github_output, "a", encoding="utf-8") as output:
+                  output.write("mutation_required=false\n")
+              print("CEX_REQUIRED_CONTEXT_PRODUCERS=already_complete")
+              raise SystemExit(0)
+
+          target_branch = "integration/cex-v12-sequence54-20260908"
+          lines = [
+              "name: cex-required-context-bridge-v1",
+              "",
+              "on:",
+              "  push:",
+              "    branches:",
+              f"      - {target_branch}",
+              "  pull_request:",
+              "    branches:",
+              "      - main",
+              "",
+              "permissions:",
+              "  contents: read",
+              "",
+              "concurrency:",
+              "  group: cex-required-context-bridge-v1-" + gha("github.event.pull_request.number || github.ref"),
+              "  cancel-in-progress: true",
+              "",
+              "jobs:",
+              "  qualification:",
+              "    name: cex/required-contexts/full-qualification",
+              "    runs-on: ubuntu-24.04",
+              "    timeout-minutes: 180",
+              "    services:",
+              "      postgres:",
+              "        image: postgres:16",
+              "        env:",
+              "          POSTGRES_USER: postgres",
+              "          POSTGRES_PASSWORD: postgres",
+              "          POSTGRES_DB: cex_test",
+              "        ports:",
+              "          - 5432:5432",
+              "        options: >-",
+              "          --health-cmd \"pg_isready -U postgres -d cex_test\"",
+              "          --health-interval 10s",
+              "          --health-timeout 5s",
+              "          --health-retries 12",
+              "    outputs:",
+              "      qualified_sha: " + gha("steps.bind.outputs.qualified_sha"),
+              "    env:",
+              "      RUSTUP_TOOLCHAIN: '1.98.1'",
+              "      CARGO_INCREMENTAL: '0'",
+              "      RUST_BACKTRACE: '1'",
+              "      RUST_TEST_THREADS: '1'",
+              "      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cex_test",
+              "      TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cex_test",
+              "      PYTHONDONTWRITEBYTECODE: '1'",
+              "    steps:",
+              "      - name: Fetch exact event SHA without persistent credentials",
+              "        shell: bash",
+              "        run: |",
+              "          set -euo pipefail",
+              "          git init .",
+              "          git remote add origin https://github.com/${GITHUB_REPOSITORY}.git",
+              "          git fetch --no-tags --depth=1 origin ${GITHUB_SHA}",
+              "          git checkout --detach FETCH_HEAD",
+              "          test \"$(git rev-parse HEAD)\" = \"$GITHUB_SHA\"",
+              "      - name: Install pinned Rust and advisory tools",
+              "        shell: bash",
+              "        run: |",
+              "          set -euo pipefail",
+              "          rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy",
+              "          cargo install cargo-audit --version 0.22.2 --locked",
+              "          cargo install cargo-deny --version 0.20.2 --locked",
+              "      - name: Execute complete repository-owned qualification",
+              "        shell: bash",
+              "        run: |",
+              "          set -euo pipefail",
+              "          python3 scripts/check-sequence54-rustsec-admission.py",
+              "          python3 scripts/check-rust-advisory-exceptions.py",
+              "          python3 scripts/test-consumer-route-contract.py",
+              "          python3 scripts/test-consumer-projection-boundary.py",
+              "          python3 scripts/check-consumer-projection-boundary.py",
+              "          python3 scripts/test-trnm-build-evidence.py",
+              "          python3 scripts/generate-repository-semantics.py --stdout > \"$RUNNER_TEMP/generated.json\"",
+              "          cmp docs/repository-contract-semantics-v1.json \"$RUNNER_TEMP/generated.json\"",
+              "          cargo fmt --all -- --check",
+              "          cargo test --workspace --all-targets --locked",
+              "          cargo clippy --workspace --all-targets --locked -- -D warnings",
+              "          cargo build --release --workspace --locked",
+              "          rm -rf scripts/__pycache__",
+              "          test -z \"$(git status --porcelain=v1 --untracked-files=no)\"",
+              "      - id: bind",
+              "        name: Bind complete qualification to the exact event SHA",
+              "        shell: bash",
+              "        run: |",
+              "          set -euo pipefail",
+              "          test \"$(git rev-parse HEAD)\" = \"$GITHUB_SHA\"",
+              "          printf 'qualified_sha=%s\\n' \"$GITHUB_SHA\" >> \"$GITHUB_OUTPUT\"",
+              "          printf 'PRODUCTION_AUTHORIZATION=not_granted\\n'",
+          ]
+          for index, (context, _) in enumerate(missing, 1):
+              lines.extend(
+                  [
+                      f"  protected_context_{index}:",
+                      f"    name: {json.dumps(context)}",
+                      "    needs: qualification",
+                      "    runs-on: ubuntu-24.04",
+                      "    timeout-minutes: 5",
+                      "    steps:",
+                      "      - name: Read back the exact full-qualification binding",
+                      "        shell: bash",
+                      "        run: |",
+                      "          set -euo pipefail",
+                      "          test \"" + gha("needs.qualification.outputs.qualified_sha") + "\" = \"$GITHUB_SHA\"",
+                      "          printf 'REQUIRED_CONTEXT_BOUND_TO_FULL_QUALIFICATION=PASS\\n'",
+                      "          printf 'PRODUCTION_AUTHORIZATION=not_granted\\n'",
+                  ]
+              )
+          pathlib.Path(workflow_path).write_text(
+              "\n".join(lines) + "\n", encoding="utf-8", newline="\n"
+          )
+          with open(github_output, "a", encoding="utf-8") as output:
+              output.write("mutation_required=true\n")
+          print(json.dumps({
+              "schema": "cex.protected-context-producer-audit.v1",
+              "candidate_head": head,
+              "required_contexts": [context for context, _ in checks],
+              "missing_contexts_restored": [context for context, _ in missing],
+              "protection_modified": False,
+              "production_authorization": "not_granted",
+          }, sort_keys=True))
+          PY
+
+      - name: Regenerate semantics for the new real producer workflow
+        if: steps.generate.outputs.mutation_required == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/target"
+          python3 scripts/generate-repository-semantics.py --stdout > "$RUNNER_TEMP/first.json"
+          cp "$RUNNER_TEMP/first.json" docs/repository-contract-semantics-v1.json
+          python3 scripts/generate-repository-semantics.py --stdout > "$RUNNER_TEMP/second.json"
+          cmp "$RUNNER_TEMP/first.json" "$RUNNER_TEMP/second.json"
+          rm -rf scripts/__pycache__
+          git diff --check
+          changed="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' .github/workflows/cex-required-context-bridge-v1.yml docs/repository-contract-semantics-v1.json | sort)"
+          test "$changed" = "$expected"
+
+      - name: Commit and exact fast-forward without changing protection
+        if: steps.generate.outputs.mutation_required == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/target"
+          original="$(cat "$RUNNER_TEMP/original-head")"
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          test "$(git ls-remote "$remote" "refs/heads/${TARGET_BRANCH}" | cut -f1)" = "$original"
+          git -C "$root" config user.name github-actions[bot]
+          git -C "$root" config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git -C "$root" add .github/workflows/cex-required-context-bridge-v1.yml docs/repository-contract-semantics-v1.json
+          git -C "$root" commit -m "ci: restore producers for protected CEX contexts"
+          new_head="$(git -C "$root" rev-parse HEAD)"
+          git -C "$root" push "$remote" "HEAD:refs/heads/${TARGET_BRANCH}"
+          test "$(git ls-remote "$remote" "refs/heads/${TARGET_BRANCH}" | cut -f1)" = "$new_head"
+          printf 'CEX_TARGET_HEAD=%s\n' "$new_head"
+          printf 'PROTECTION_MODIFIED=false\n'
+          printf 'FAST_FORWARD_ONLY=true\n'
+          printf 'PRODUCTION_AUTHORIZATION=not_granted\n'
