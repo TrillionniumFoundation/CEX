@@ -180,6 +180,47 @@ REGRESSIONS = V1_REGRESSIONS + V2_REGRESSIONS + V3_REGRESSIONS
     replace_once(path, old_sequence, new_sequence, "operator migration/regression sequence")
 
 
+def patch_embedded_binding_migration(root: Path) -> None:
+    path = root / (
+        "services/matrix-entry-adapter/operator-migrations/"
+        "0006_adapter_result_embedded_delivery_binding.sql"
+    )
+    old = '''    embedded_binding := p_result_payload #>
+        '{source,metadata,metadata,cex_delivery_binding}';
+    if jsonb_typeof(embedded_binding) is distinct from 'object'
+        or jsonb_object_length(embedded_binding) <> 8
+        or not embedded_binding ?& array[
+            'schema',
+            'source',
+            'delivery_id',
+            'payload_sha256',
+            'event_id',
+            'room_id',
+            'matrix_user_id',
+            'request_fingerprint'
+        ]
+'''
+    new = '''    embedded_binding := p_result_payload #>
+        '{source,metadata,metadata,cex_delivery_binding}';
+    if jsonb_typeof(embedded_binding) is distinct from 'object' then
+        raise exception 'matrix_adapter_result_embedded_binding_invalid_v3';
+    end if;
+
+    if (select count(*) from pg_catalog.jsonb_object_keys(embedded_binding)) <> 8
+        or not embedded_binding ?& array[
+            'schema',
+            'source',
+            'delivery_id',
+            'payload_sha256',
+            'event_id',
+            'room_id',
+            'matrix_user_id',
+            'request_fingerprint'
+        ]
+'''
+    replace_once(path, old, new, "PostgreSQL 16 JSON object key count")
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: patch-cex-blocker-batch-28c9.py ROOT", file=sys.stderr)
@@ -188,6 +229,7 @@ def main() -> int:
     patch_build_unblock(root)
     patch_replay_snapshot(root)
     patch_operator_runner(root)
+    patch_embedded_binding_migration(root)
     print("CEX_BLOCKER_BATCH_PATCH=PASS")
     return 0
 
