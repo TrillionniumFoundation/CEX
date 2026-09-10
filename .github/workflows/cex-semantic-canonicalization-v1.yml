@@ -1,0 +1,133 @@
+name: cex-semantic-canonicalization-v1
+
+on:
+  push:
+    branches:
+      - ops/object-export-fc8643d-20260910
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cex-semantic-canonicalization-v1
+  cancel-in-progress: false
+
+jobs:
+  canonicalize:
+    name: cex-semantics/exact-source-canonicalization
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      ORIGINAL_HEAD: fc8643d76e7c9ca2691712e39985c7b2ae06ad74
+      TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Wait for the release-fixture repair and fetch exact head
+        shell: bash
+        env:
+          GH_WRITE_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          remote="https://x-access-token:${GH_WRITE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          ready=false
+          for _ in $(seq 1 180); do
+            current="$(git ls-remote "$remote" "refs/heads/$TARGET_BRANCH" | awk '{print $1}')"
+            test -n "$current"
+            rm -rf "$RUNNER_TEMP/cex"
+            git init -q "$RUNNER_TEMP/cex"
+            git -C "$RUNNER_TEMP/cex" remote add origin "$remote"
+            git -C "$RUNNER_TEMP/cex" fetch -q --no-tags origin "$current" "$ORIGINAL_HEAD"
+            git -C "$RUNNER_TEMP/cex" checkout -q --detach "$current"
+            git -C "$RUNNER_TEMP/cex" merge-base --is-ancestor "$ORIGINAL_HEAD" HEAD
+            if grep -Fq 'external_package = "trnm-game-" + "server"' \
+              "$RUNNER_TEMP/cex/scripts/rust_advisory_packages_v5.py"; then
+              ready=true
+              break
+            fi
+            sleep 20
+          done
+          test "$ready" = true
+          printf 'CEX_SEMANTIC_CANONICALIZATION_INPUT_HEAD=%s\n' "$current"
+
+      - name: Generate, compare, and stage only a legitimate hash refresh
+        id: semantic
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/cex"
+          generated="$RUNNER_TEMP/repository-contract-semantics-v1.json"
+          (
+            cd "$work"
+            python3 scripts/generate-repository-semantics.py --stdout
+          ) > "$generated"
+          python3 - \
+            "$work/docs/repository-contract-semantics-v1.json" \
+            "$generated" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          old_path, new_path = map(Path, sys.argv[1:])
+          old = json.loads(old_path.read_text(encoding='utf-8'))
+          new = json.loads(new_path.read_text(encoding='utf-8'))
+          assert isinstance(old, dict) and isinstance(new, dict)
+          assert old.get('production_authorization') == 'not_granted'
+          assert new.get('production_authorization') == 'not_granted'
+          old_hash = old.pop('source_tree_sha256', None)
+          new_hash = new.pop('source_tree_sha256', None)
+          assert isinstance(old_hash, str) and isinstance(new_hash, str)
+          if old != new:
+              differing = sorted(key for key in set(old) | set(new) if old.get(key) != new.get(key))
+              raise SystemExit(f'semantic content drift outside source_tree_sha256: {differing}')
+          print(f'CEX_OLD_SOURCE_TREE_SHA256={old_hash}')
+          print(f'CEX_NEW_SOURCE_TREE_SHA256={new_hash}')
+          PY
+          if cmp -s "$generated" "$work/docs/repository-contract-semantics-v1.json"; then
+            printf 'changed=false\n' >> "$GITHUB_OUTPUT"
+            printf 'CEX_SEMANTIC_CANONICALIZATION=already_exact\n'
+          else
+            cp "$generated" "$work/docs/repository-contract-semantics-v1.json"
+            git -C "$work" diff --check
+            test "$(git -C "$work" diff --name-only)" = \
+              'docs/repository-contract-semantics-v1.json'
+            printf 'changed=true\n' >> "$GITHUB_OUTPUT"
+            printf 'CEX_SEMANTIC_CANONICALIZATION=staged\n'
+          fi
+
+      - name: Verify regenerated output and admission policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/cex"
+          regenerated="$RUNNER_TEMP/recheck-semantics.json"
+          (
+            cd "$work"
+            python3 scripts/generate-repository-semantics.py --stdout
+          ) > "$regenerated"
+          cmp "$regenerated" "$work/docs/repository-contract-semantics-v1.json"
+          (
+            cd "$work"
+            python3 scripts/check-sequence54-rustsec-admission.py
+            python3 scripts/test-trnm-build-evidence.py
+          )
+
+      - name: Ordinary fast-forward when canonical bytes changed
+        if: steps.semantic.outputs.changed == 'true'
+        shell: bash
+        env:
+          GH_WRITE_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/cex"
+          original="$(git -C "$work" rev-parse HEAD)"
+          remote="https://x-access-token:${GH_WRITE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          test "$(git ls-remote "$remote" "refs/heads/$TARGET_BRANCH" | awk '{print $1}')" = "$original"
+          git -C "$work" config user.name 'ProfHepta'
+          git -C "$work" config user.email '102159240+ProfHepta@users.noreply.github.com'
+          git -C "$work" add docs/repository-contract-semantics-v1.json
+          git -C "$work" commit -m 'chore(semantics): bind snapshot to repaired source tree'
+          new_head="$(git -C "$work" rev-parse HEAD)"
+          git -C "$work" push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          test "$(git ls-remote "$remote" "refs/heads/$TARGET_BRANCH" | awk '{print $1}')" = "$new_head"
+          printf 'CEX_SEMANTIC_CANONICAL_HEAD=%s\n' "$new_head"
+          printf 'FORCE_UPDATE=false\n'
+          printf 'PRODUCTION_AUTHORIZATION=not_granted\n'
