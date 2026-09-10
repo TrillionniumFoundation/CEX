@@ -199,13 +199,13 @@ or independent approval.
 
 ## Compatibility and change protocol
 
-World/League projections must not silently expand the edge into a second
-authoritative monolith. Consumer terms remain projections of backend contracts.
-New product surfaces must declare their owner and may not silently expand the
-edge into another authority. The Matrix delivery fingerprint, persisted
-eight-field binding, and task-to-invocation equality are versioned security
-contracts; changing component order, byte encoding, source marker, assertion
-binding, replay semantics, or retirement conditions is breaking.
+World/League projections must not silently expand the edge into a second authoritative monolith.
+Consumer terms remain projections of backend contracts. New product surfaces must
+declare their owner and may not silently expand the edge into another authority.
+The Matrix delivery fingerprint, persisted eight-field binding, and
+task-to-invocation equality are versioned security contracts; changing component
+order, byte encoding, source marker, assertion binding, replay semantics, or
+retirement conditions is breaking.
 
 Changes to authority, routes, public types, persistence, configuration, retry
 semantics, or topology require this contract, catalog metadata where applicable,
