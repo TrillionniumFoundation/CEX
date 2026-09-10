@@ -19,7 +19,7 @@ EXPECTED_ADVISORIES = {
 EXPECTED_FEATURE_REACHABILITY = {
     "RUSTSEC-2023-0071": [],
     "RUSTSEC-2026-0214": [],
-    "RUSTSEC-2024-0436": ["hepta-research-league"],
+    "RUSTSEC-2024-0436": ["hepta-research-league", "trnm-finality-verifier"],
 }
 PROTECTED_PATHS = (
     "/docs/security/rust-advisory-exceptions-v1.json",
