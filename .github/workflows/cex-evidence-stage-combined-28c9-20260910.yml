@@ -1,0 +1,257 @@
+name: cex-evidence-stage-combined-28c9-20260910
+
+on:
+  push:
+    branches:
+      - ops/cex-evidence-stage-combined-28c9-20260910
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cex-evidence-stage-combined-28c9-20260910
+  cancel-in-progress: true
+
+jobs:
+  validate_export:
+    name: cex-evidence/validate-and-export
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    services:
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cex_settlement
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d cex_settlement"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      CANDIDATE_COMMIT: 28c9d1fe596a762441ddd5795a642d605af2bcd7
+      RUSTUP_TOOLCHAIN: '1.98.1'
+      CARGO_INCREMENTAL: '0'
+      RUST_BACKTRACE: '1'
+      RUST_TEST_THREADS: '1'
+      TRNM_CEX_SETTLEMENT_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cex_settlement
+      TRNM_REQUIRE_CEX_SETTLEMENT_DATABASE_TEST: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Fetch exact candidate and current repair helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate="$RUNNER_TEMP/candidate"
+          helper="$RUNNER_TEMP/helper"
+          rm -rf "$candidate" "$helper"
+          git init "$candidate"
+          git -C "$candidate" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -C "$candidate" fetch --no-tags --depth=1 origin "$CANDIDATE_COMMIT"
+          git -C "$candidate" checkout --detach FETCH_HEAD
+          test "$(git -C "$candidate" rev-parse HEAD)" = "$CANDIDATE_COMMIT"
+          git init "$helper"
+          git -C "$helper" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -C "$helper" fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          git -C "$helper" checkout --detach FETCH_HEAD
+          test "$(git -C "$helper" rev-parse HEAD)" = "$GITHUB_SHA"
+          test -s "$helper/scripts/patch-cex-blocker-batch-28c9.py"
+          test -s "$helper/scripts/patch-cex-evidence-stage.py"
+          test -s "$helper/scripts/test-matrix-filter-definition.py"
+          test -z "$(git -C "$candidate" status --porcelain=v1 --untracked-files=no)"
+
+      - name: Apply combined exact source batch
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate="$RUNNER_TEMP/candidate"
+          helper="$RUNNER_TEMP/helper"
+          cp "$helper/scripts/test-matrix-filter-definition.py" \
+            "$candidate/scripts/test-matrix-filter-definition.py"
+          python3 "$helper/scripts/patch-cex-blocker-batch-28c9.py" "$candidate"
+          python3 "$helper/scripts/patch-cex-evidence-stage.py" "$candidate"
+          git -C "$candidate" diff --check
+          git -C "$candidate" diff --name-only | LC_ALL=C sort > "$RUNNER_TEMP/changed.txt"
+          cat > "$RUNNER_TEMP/expected.txt" <<'EOF'
+          .github/workflows/trnm-economy-settlement.yml
+          scripts/matrix_operator_postgres_regression.py
+          scripts/test-build-unblock.py
+          scripts/test-matrix-filter-definition.py
+          scripts/test-trnm-build-evidence.py
+          scripts/trnm_build_evidence.py
+          services/consumer-entry-api/src/replay_store_snapshot.rs
+          EOF
+          diff -u "$RUNNER_TEMP/expected.txt" "$RUNNER_TEMP/changed.txt"
+
+      - name: Execute source and evidence regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/candidate"
+          python3 -m py_compile \
+            scripts/trnm_build_evidence.py \
+            scripts/test-trnm-build-evidence.py \
+            scripts/test-build-unblock.py \
+            scripts/test-matrix-filter-definition.py \
+            scripts/matrix_operator_postgres_regression.py
+          python3 scripts/test-trnm-build-evidence.py
+          python3 scripts/check-trnm-economy-settlement-contract.py
+          python3 scripts/test-trnm-economy-settlement-status-negative.py
+
+      - name: Commit temporary candidate identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate="$RUNNER_TEMP/candidate"
+          git -C "$candidate" add \
+            .github/workflows/trnm-economy-settlement.yml \
+            scripts/matrix_operator_postgres_regression.py \
+            scripts/test-build-unblock.py \
+            scripts/test-matrix-filter-definition.py \
+            scripts/test-trnm-build-evidence.py \
+            scripts/trnm_build_evidence.py \
+            services/consumer-entry-api/src/replay_store_snapshot.rs
+          git -C "$candidate" -c user.name=exact-validator \
+            -c user.email=exact-validator@example.invalid \
+            -c commit.gpgsign=false commit -m 'temporary exact staged-evidence candidate'
+          test -z "$(git -C "$candidate" status --porcelain=v1 --untracked-files=no)"
+          git -C "$candidate" rev-parse HEAD > "$RUNNER_TEMP/candidate-head.txt"
+
+      - name: Install exact Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.98.1
+          rustc --version --verbose
+          cargo --version --verbose
+
+      - name: Qualify and build settlement service
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/candidate"
+          cargo metadata --locked --no-deps --format-version 1 > /dev/null
+          cargo fmt -p trnm-economy-service -- --check
+          cargo test -p trnm-economy-service --all-targets --locked
+          cargo clippy -p trnm-economy-service --all-targets --locked -- -D warnings
+          cargo build -p trnm-economy-service --release --locked
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+
+      - name: Stage and collect exact packet
+        shell: bash
+        env:
+          TRNM_STATIC_RESULT: success
+          TRNM_LOCK_OUTCOME: success
+          TRNM_FORMAT_OUTCOME: success
+          TRNM_TESTS_OUTCOME: success
+          TRNM_CLIPPY_OUTCOME: success
+          TRNM_BUILD_OUTCOME: success
+          TRNM_STAGE_BINARY_OUTCOME: success
+          TRNM_SOURCE_UNCHANGED_OUTCOME: success
+          TRNM_RUST_TOOLCHAIN: '1.98.1'
+          TRNM_POSTGRES_IMAGE: 'postgres:16.4-alpine'
+        run: |
+          set -euo pipefail
+          candidate="$RUNNER_TEMP/candidate"
+          stage_dir="$RUNNER_TEMP/trnm-economy-stage"
+          rm -rf -- "$stage_dir"
+          install -d -m 0700 "$stage_dir"
+          install -m 0700 \
+            "$candidate/target/release/trnm-economy-service" \
+            "$stage_dir/trnm-economy-service"
+          test "$(stat -c %h "$stage_dir/trnm-economy-service")" = 1
+          cmp --silent -- \
+            "$candidate/target/release/trnm-economy-service" \
+            "$stage_dir/trnm-economy-service"
+          export EXPECTED_HEAD_SHA="$(cat "$RUNNER_TEMP/candidate-head.txt")"
+          packet_dir="$(
+            cd "$candidate"
+            python3 scripts/trnm_build_evidence.py \
+              --root "$candidate" \
+              --output-parent "$RUNNER_TEMP" \
+              --binary "$stage_dir/trnm-economy-service"
+          )"
+          python3 "$candidate/scripts/trnm_build_evidence.py" --verify "$packet_dir"
+          test "$(stat -c %h "$packet_dir/trnm-economy-service")" = 1
+          printf 'CEX_STAGED_BUILD_EVIDENCE=PASS\n'
+          printf 'PRODUCTION_AUTHORIZATION=not_granted\n'
+
+      - name: Generate combined semantic snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate="$RUNNER_TEMP/candidate"
+          semantic="$RUNNER_TEMP/repository-contract-semantics-v1.json"
+          (
+            cd "$candidate"
+            python3 scripts/generate-repository-semantics.py --stdout
+          ) > "$semantic"
+          python3 - "$semantic" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding='utf-8') as handle:
+              value = json.load(handle)
+          assert value['production_authorization'] == 'not_granted'
+          assert value['source_tree_sha256'].startswith('sha256:')
+          print('CEX_EVIDENCE_SEMANTIC_SNAPSHOT=PASS')
+          print('CEX_EVIDENCE_SOURCE_TREE_SHA256=' + value['source_tree_sha256'])
+          PY
+
+      - name: Upload immutable exact evidence blobs
+        shell: bash
+        env:
+          GH_OBJECT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - \
+            "$RUNNER_TEMP/candidate/scripts/trnm_build_evidence.py" \
+            "$RUNNER_TEMP/candidate/scripts/test-trnm-build-evidence.py" \
+            "$RUNNER_TEMP/candidate/.github/workflows/trnm-economy-settlement.yml" \
+            "$RUNNER_TEMP/repository-contract-semantics-v1.json" <<'PY'
+          import base64
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+          import urllib.request
+
+          labels = (
+              'CEX_BUILD_EVIDENCE_COLLECTOR',
+              'CEX_BUILD_EVIDENCE_TESTS',
+              'CEX_SETTLEMENT_WORKFLOW',
+              'CEX_COMBINED_SEMANTIC_SNAPSHOT',
+          )
+          repository = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_OBJECT_TOKEN']
+          for label, raw_path in zip(labels, sys.argv[1:]):
+              path = Path(raw_path)
+              expected = subprocess.check_output(
+                  ['git', 'hash-object', str(path)], text=True
+              ).strip()
+              request = urllib.request.Request(
+                  f'https://api.github.com/repos/{repository}/git/blobs',
+                  data=json.dumps({
+                      'content': base64.b64encode(path.read_bytes()).decode('ascii'),
+                      'encoding': 'base64',
+                  }, separators=(',', ':')).encode('utf-8'),
+                  method='POST',
+                  headers={
+                      'Accept': 'application/vnd.github+json',
+                      'Authorization': f'Bearer {token}',
+                      'Content-Type': 'application/json',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  observed = json.load(response).get('sha')
+              assert observed == expected, (label, expected, observed)
+              print(f'{label}_BLOB_SHA={observed}')
+          print('CEX_EVIDENCE_IMMUTABLE_EXPORT=PASS')
+          print('REFS_MOVED=false')
+          print('PRODUCTION_AUTHORIZATION=not_granted')
+          PY
