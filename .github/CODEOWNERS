@@ -1,3 +1,4 @@
+# CODEOWNERS assigns review responsibility; it is not branch-protection and is not server-side merge enforcement.
 * @ProfHepta
 
 /.github/workflows/ @ProfHepta

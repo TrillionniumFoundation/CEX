@@ -10,9 +10,9 @@
   },
   "module_catalog": {
     "path": "docs/module-catalog-v1.json",
-    "sha256": "sha256:77a0d9683250e306bb8e51cab8c5810225a5ebf5feb9f3543dbd016085e75ac9"
+    "sha256": "sha256:aedf8843cc78e9d78697abadea0a6b60e0daf5431aa19a02d8f5402abe996ec3"
   },
-  "source_tree_sha256": "sha256:2d166161e773b455609b3c1915f0f5e2cd15d18c1bff3accd9d1e9b1bef919a7",
+  "source_tree_sha256": "sha256:155d1d6d5364b7cd5951779c77e26b3d50136fe9db4709b5c109bb1c98a79f11",
   "counts": {
     "route": 441,
     "config": 428,

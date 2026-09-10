@@ -163,7 +163,9 @@ surface.
 Readiness requires transport functions, receipt/binding functions and the current
 operator reconciliation function. Monitor pending age, unknown-outcome age,
 reconciliation failures, receipt conflicts and dead letters. Operators must
-distinguish effect-unknown holds from confirmed rejection.
+distinguish effect-unknown holds from confirmed rejection. Rollback must stop new claims, fence
+resident workers, preserve immutable delivery/receipt/reconciliation evidence, and restore
+only a schema-compatible binary without replaying effect-unknown adapter operations.
 
 A response-loss rehearsal must demonstrate: Consumer Entry commits the exact
 result, the adapter response is lost, the relay holds, the operator lookup returns

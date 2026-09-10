@@ -38,6 +38,7 @@ Catalog-bound entry points:
 
 - `services/hepta-research-league/src/main.rs`
 - `services/hepta-research-league/src/lib.rs`
+- `services/hepta-research-league/src/bin/hepta-trnm-command-signer.rs`
 - `services/hepta-research-league/src/workflows.rs`
 - `services/hepta-research-league/src/paper_raid_v2.rs`
 - `services/hepta-research-league/src/paper_collaboration_v3_body.rs`
