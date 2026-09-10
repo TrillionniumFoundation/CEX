@@ -88,6 +88,18 @@ jobs:
           cargo --version --verbose
           rustfmt --version
 
+      - name: Install pinned advisory tools
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532
+        with:
+          tool: cargo-audit@0.22.2,cargo-deny@0.20.2
+
+      - name: Verify pinned advisory tool identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cargo-audit --version | awk '{print $2}')" = '0.22.2'
+          test "$(cargo-deny --version | awk '{print $2}')" = '0.20.2'
+
       - name: Qualify exact head source
         id: head
         continue-on-error: true
