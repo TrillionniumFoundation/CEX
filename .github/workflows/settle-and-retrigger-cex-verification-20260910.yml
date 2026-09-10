@@ -1,0 +1,82 @@
+name: settle-and-retrigger-cex-verification-20260910
+
+on:
+  push:
+    branches:
+      - ops/object-export-fc8643d-20260910
+
+permissions:
+  contents: write
+
+concurrency:
+  group: settle-and-retrigger-cex-verification-20260910
+  cancel-in-progress: true
+
+jobs:
+  settle_retrigger:
+    name: cex/settle-target-and-retrigger-full-verification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+      VERIFY_BRANCH: verify/cex-current-full-20260910
+    steps:
+      - name: Require a stable target head for ten consecutive minutes
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote="https://github.com/${GITHUB_REPOSITORY}.git"
+          previous=''
+          stable=0
+          for attempt in $(seq 1 120); do
+            current="$(git ls-remote "$remote" "refs/heads/${TARGET_BRANCH}" | cut -f1)"
+            test "${#current}" = 40
+            if [ "$current" = "$previous" ]; then
+              stable=$((stable + 1))
+            else
+              previous="$current"
+              stable=0
+              printf 'CEX_TARGET_MOVED_TO=%s\n' "$current"
+            fi
+            if [ "$stable" -ge 30 ]; then
+              printf '%s\n' "$current" > "$RUNNER_TEMP/settled-head"
+              printf 'CEX_TARGET_SETTLED=%s\n' "$current"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo 'CEX target did not remain stable within the bounded settlement window' >&2
+          exit 1
+
+      - name: Commit a verification trigger bound to the settled target
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          root="$RUNNER_TEMP/verify"
+          git init "$root"
+          git -C "$root" remote add origin "$remote"
+          git -C "$root" fetch --no-tags --depth=1 origin "refs/heads/${VERIFY_BRANCH}"
+          git -C "$root" checkout -B verify FETCH_HEAD
+          mkdir -p "$root/.verification-trigger"
+          cat > "$root/.verification-trigger/cex-current.json" <<EOF
+          {
+            "schema": "cex.verification-trigger.v1",
+            "target_branch": "${TARGET_BRANCH}",
+            "target_sha": "$(cat "$RUNNER_TEMP/settled-head")",
+            "controller_run_id": "${GITHUB_RUN_ID}",
+            "production_authorization": "not_granted"
+          }
+          EOF
+          git -C "$root" config user.name github-actions[bot]
+          git -C "$root" config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git -C "$root" add .verification-trigger/cex-current.json
+          git -C "$root" commit -m "ci: verify settled CEX candidate $(cat "$RUNNER_TEMP/settled-head")"
+          new_verify="$(git -C "$root" rev-parse HEAD)"
+          git -C "$root" push "$remote" "HEAD:refs/heads/${VERIFY_BRANCH}"
+          test "$(git ls-remote "$remote" "refs/heads/${VERIFY_BRANCH}" | cut -f1)" = "$new_verify"
+          test "$(git ls-remote "$remote" "refs/heads/${TARGET_BRANCH}" | cut -f1)" = "$(cat "$RUNNER_TEMP/settled-head")"
+          printf 'CEX_VERIFICATION_RETRIGGERED_FOR=%s\n' "$(cat "$RUNNER_TEMP/settled-head")"
+          printf 'PRODUCTION_AUTHORIZATION=not_granted\n'
