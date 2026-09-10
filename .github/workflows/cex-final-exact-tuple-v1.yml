@@ -1,0 +1,188 @@
+name: cex-final-exact-tuple-v1
+
+on:
+  push:
+    branches:
+      - ops/object-export-fc8643d-20260910
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: cex-final-exact-tuple-v1
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    name: cex-final/head-and-prospective-merge
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cex_exact_tuple_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d cex_exact_tuple_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+      BASE_BRANCH: main
+      ORIGINAL_HEAD: fc8643d76e7c9ca2691712e39985c7b2ae06ad74
+      RUSTUP_TOOLCHAIN: '1.98.1'
+      CARGO_INCREMENTAL: '0'
+      RUST_BACKTRACE: '1'
+      RUST_TEST_THREADS: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      PGPASSWORD: postgres
+    steps:
+      - name: Wait for repaired source, canonical semantics, and evidence staging
+        id: tuple
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote="https://github.com/${GITHUB_REPOSITORY}.git"
+          ready=false
+          for _ in $(seq 1 360); do
+            head="$(git ls-remote "$remote" "refs/heads/$TARGET_BRANCH" | awk '{print $1}')"
+            base="$(git ls-remote "$remote" "refs/heads/$BASE_BRANCH" | awk '{print $1}')"
+            test -n "$head"
+            test -n "$base"
+            rm -rf "$RUNNER_TEMP/probe"
+            git init -q "$RUNNER_TEMP/probe"
+            git -C "$RUNNER_TEMP/probe" remote add origin "$remote"
+            git -C "$RUNNER_TEMP/probe" fetch -q --no-tags origin "$head" "$ORIGINAL_HEAD"
+            git -C "$RUNNER_TEMP/probe" checkout -q --detach "$head"
+            git -C "$RUNNER_TEMP/probe" merge-base --is-ancestor "$ORIGINAL_HEAD" HEAD
+            source="$RUNNER_TEMP/probe/scripts/rust_advisory_packages_v5.py"
+            settlement="$RUNNER_TEMP/probe/.github/workflows/trnm-economy-settlement.yml"
+            generated="$RUNNER_TEMP/probe-semantics.json"
+            if grep -Fq 'external_package = "trnm-game-" + "server"' "$source" \
+              && grep -Fq "# Evidence staging: copy Cargo's hard-linked executable to one private inode." "$settlement" \
+              && (cd "$RUNNER_TEMP/probe" && python3 scripts/generate-repository-semantics.py --stdout) > "$generated" \
+              && cmp -s "$generated" "$RUNNER_TEMP/probe/docs/repository-contract-semantics-v1.json"; then
+              ready=true
+              break
+            fi
+            sleep 20
+          done
+          test "$ready" = true
+          printf 'base=%s\n' "$base" >> "$GITHUB_OUTPUT"
+          printf 'head=%s\n' "$head" >> "$GITHUB_OUTPUT"
+          printf 'CEX_FINAL_BASE_SHA=%s\n' "$base"
+          printf 'CEX_FINAL_HEAD_SHA=%s\n' "$head"
+
+      - name: Fetch exact runner and materialize head plus prospective merge
+        shell: bash
+        env:
+          BASE_SHA: ${{ steps.tuple.outputs.base }}
+          HEAD_SHA: ${{ steps.tuple.outputs.head }}
+        run: |
+          set -euo pipefail
+          runner="$RUNNER_TEMP/run-cex-exact-surface-v1.sh"
+          curl --fail --silent --show-error --location \
+            "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/scripts/run-cex-exact-surface-v1.sh" \
+            > "$runner"
+          chmod 0755 "$runner"
+          remote="https://github.com/${GITHUB_REPOSITORY}.git"
+          for surface in head prospective-merge; do
+            work="$RUNNER_TEMP/$surface"
+            rm -rf "$work"
+            git init -q "$work"
+            git -C "$work" remote add origin "$remote"
+            git -C "$work" fetch -q --no-tags origin "$BASE_SHA" "$HEAD_SHA"
+            if test "$surface" = head; then
+              git -C "$work" checkout -q --detach "$HEAD_SHA"
+            else
+              git -C "$work" config user.name 'CEX final tuple runner'
+              git -C "$work" config user.email 'cex-final@invalid.example'
+              git -C "$work" checkout -q --detach "$BASE_SHA"
+              git -C "$work" merge -q --no-ff --no-edit "$HEAD_SHA"
+              test "$(git -C "$work" show -s --format='%P' HEAD)" = "$BASE_SHA $HEAD_SHA"
+              printf 'CEX_FINAL_MERGE_SHA=%s\n' "$(git -C "$work" rev-parse HEAD)"
+              printf 'CEX_FINAL_MERGE_TREE=%s\n' "$(git -C "$work" rev-parse 'HEAD^{tree}')"
+            fi
+            test -z "$(git -C "$work" status --porcelain=v1 --untracked-files=no)"
+          done
+
+      - name: Install exact Rust and supply-chain tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy
+          cargo install --locked cargo-audit --version 0.22.2
+          cargo install --locked cargo-deny --version 0.20.2
+          pg_isready -h 127.0.0.1 -p 5432 -U postgres -d cex_exact_tuple_test
+          rustc --version
+          cargo-audit --version
+          cargo-deny --version
+
+      - name: Qualify exact final head
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/run-cex-exact-surface-v1.sh" "$RUNNER_TEMP/head" head
+
+      - name: Qualify exact final prospective merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/run-cex-exact-surface-v1.sh" \
+            "$RUNNER_TEMP/prospective-merge" prospective-merge
+
+      - name: Reject tuple movement and record CI-only qualification
+        shell: bash
+        env:
+          BASE_SHA: ${{ steps.tuple.outputs.base }}
+          HEAD_SHA: ${{ steps.tuple.outputs.head }}
+          GH_WRITE_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          remote="https://github.com/${GITHUB_REPOSITORY}.git"
+          live_base="$(git ls-remote "$remote" "refs/heads/$BASE_BRANCH" | awk '{print $1}')"
+          live_head="$(git ls-remote "$remote" "refs/heads/$TARGET_BRANCH" | awk '{print $1}')"
+          test "$live_base" = "$BASE_SHA"
+          test "$live_head" = "$HEAD_SHA"
+          printf 'CEX_FINAL_EXACT_TUPLE_QUALIFICATION=PASS\n'
+          printf 'PRODUCTION_AUTHORIZATION=not_granted\n'
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          repo = os.environ['GITHUB_REPOSITORY']
+          body = (
+              'Final exact-tuple CEX repository execution passed after release-fixture '
+              'classification repair, canonical semantic refresh, and private-inode evidence staging.\n\n'
+              f"- base: `{os.environ['BASE_SHA']}`\n"
+              f"- head: `{os.environ['HEAD_SHA']}`\n"
+              '- exact head: RustSec/admission, semantic and projection hostile tests, full '
+              'workspace test/Clippy/release build, and PostgreSQL-aware tests succeeded\n'
+              '- GitHub-order prospective merge: the same complete set succeeded\n'
+              '- final live base/head read-back: unchanged\n'
+              '- production authorization: `not_granted`\n\n'
+              'Hosted workflow read-back remains an independent repository-CI gate. This '
+              'record is not external approval, deployment evidence, settlement authority, '
+              'or production authorization.'
+          )
+          request = urllib.request.Request(
+              f'https://api.github.com/repos/{repo}/issues/53/comments',
+              data=json.dumps({'body': body}).encode(),
+              method='POST',
+              headers={
+                  'Accept': 'application/vnd.github+json',
+                  'Authorization': f"Bearer {os.environ['GH_WRITE_TOKEN']}",
+                  'Content-Type': 'application/json',
+                  'X-GitHub-Api-Version': '2022-11-28',
+              },
+          )
+          with urllib.request.urlopen(request, timeout=60):
+              pass
+          PY
