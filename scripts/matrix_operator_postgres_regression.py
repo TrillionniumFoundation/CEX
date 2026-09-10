@@ -28,12 +28,12 @@ SECURITY_MIGRATIONS = (
 )
 MIGRATIONS = BASE_MIGRATIONS + SECURITY_MIGRATIONS
 BASE_REGRESSIONS = (
-    "scripts/test-matrix-result-reconciliation-postgres.sql",
     "scripts/test-matrix-result-evidence-hardening-postgres.sql",
     "scripts/test-matrix-result-runtime-reconciliation-postgres.sql",
     "scripts/test-matrix-result-causal-binding-postgres.sql",
 )
 SECURITY_REGRESSIONS = (
+    "scripts/test-matrix-result-reconciliation-postgres.sql",
     "scripts/test-matrix-result-embedded-binding-postgres.sql",
     "scripts/test-matrix-result-task-invocation-binding-postgres.sql",
 )
