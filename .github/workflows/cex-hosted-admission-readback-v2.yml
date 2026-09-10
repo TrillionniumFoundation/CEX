@@ -1,0 +1,223 @@
+name: cex-hosted-admission-readback-v2
+
+on:
+  push:
+    branches:
+      - ops/object-export-fc8643d-20260910
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: cex-hosted-admission-readback-v2
+  cancel-in-progress: false
+
+jobs:
+  readback:
+    name: cex-admission/repository-local-exact-head-readback
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+      BASE_BRANCH: main
+      ORIGINAL_HEAD: fc8643d76e7c9ca2691712e39985c7b2ae06ad74
+      REQUIRED_WORKFLOWS: >-
+        .github/workflows/trnm-economy-ci.yml
+        .github/workflows/rust-service-gate.yml
+        .github/workflows/trnm-economy-settlement.yml
+    steps:
+      - name: Wait for exact repository-local staging and canonical semantics
+        id: tuple
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote="https://github.com/${GITHUB_REPOSITORY}.git"
+          ready=false
+          for _ in $(seq 1 360); do
+            head="$(git ls-remote "$remote" "refs/heads/$TARGET_BRANCH" | awk '{print $1}')"
+            base="$(git ls-remote "$remote" "refs/heads/$BASE_BRANCH" | awk '{print $1}')"
+            test -n "$head"
+            test -n "$base"
+            rm -rf "$RUNNER_TEMP/probe"
+            git init -q "$RUNNER_TEMP/probe"
+            git -C "$RUNNER_TEMP/probe" remote add origin "$remote"
+            git -C "$RUNNER_TEMP/probe" fetch -q --no-tags origin "$head" "$ORIGINAL_HEAD"
+            git -C "$RUNNER_TEMP/probe" checkout -q --detach "$head"
+            git -C "$RUNNER_TEMP/probe" merge-base --is-ancestor "$ORIGINAL_HEAD" HEAD
+
+            workflow="$RUNNER_TEMP/probe/.github/workflows/trnm-economy-settlement.yml"
+            generated="$RUNNER_TEMP/readback-semantics.json"
+            if grep -Fq 'TRNM_EVIDENCE_BINARY="target/evidence/trnm-economy-service"' "$workflow" \
+              && grep -Fq 'mkdir -p -- target/evidence' "$workflow" \
+              && ! grep -Fq '$RUNNER_TEMP/trnm-economy-service-evidence' "$workflow" \
+              && (cd "$RUNNER_TEMP/probe" && python3 scripts/generate-repository-semantics.py --stdout) > "$generated" \
+              && cmp -s "$generated" "$RUNNER_TEMP/probe/docs/repository-contract-semantics-v1.json"; then
+              ready=true
+              break
+            fi
+            sleep 20
+          done
+          test "$ready" = true
+          printf 'head=%s\n' "$head" >> "$GITHUB_OUTPUT"
+          printf 'base=%s\n' "$base" >> "$GITHUB_OUTPUT"
+          printf 'CEX_HOSTED_V2_HEAD=%s\n' "$head"
+          printf 'CEX_HOSTED_V2_BASE=%s\n' "$base"
+
+      - name: Require latest non-empty successful hosted workflows on exact head
+        shell: bash
+        env:
+          GH_READ_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD: ${{ steps.tuple.outputs.head }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.parse
+          import urllib.request
+
+          repo = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GH_READ_TOKEN']
+          head = os.environ['EXPECTED_HEAD']
+          required = os.environ['REQUIRED_WORKFLOWS'].split()
+          headers = {
+              'Accept': 'application/vnd.github+json',
+              'Authorization': f'Bearer {token}',
+              'X-GitHub-Api-Version': '2022-11-28',
+          }
+
+          def get(url):
+              request = urllib.request.Request(url, headers=headers)
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  return json.load(response)
+
+          api = f'https://api.github.com/repos/{repo}'
+          final = None
+          for _ in range(360):
+              query = urllib.parse.urlencode({
+                  'head_sha': head,
+                  'event': 'push',
+                  'per_page': 100,
+              })
+              runs = get(f'{api}/actions/runs?{query}').get('workflow_runs', [])
+              latest = {}
+              for run in runs:
+                  path = run.get('path')
+                  if path not in required:
+                      continue
+                  previous = latest.get(path)
+                  if previous is None or (
+                      run.get('created_at', ''), int(run.get('run_attempt', 1))
+                  ) > (
+                      previous.get('created_at', ''), int(previous.get('run_attempt', 1))
+                  ):
+                      latest[path] = run
+              if set(latest) != set(required):
+                  time.sleep(20)
+                  continue
+              if any(run.get('status') != 'completed' for run in latest.values()):
+                  time.sleep(20)
+                  continue
+              final = latest
+              break
+          if final is None:
+              raise SystemExit('required hosted workflows did not all complete on the exact head')
+
+          failures = []
+          evidence_steps = 0
+          for path in required:
+              run = final[path]
+              if run.get('head_sha') != head:
+                  failures.append(f'{path}: head mismatch')
+                  continue
+              if run.get('conclusion') != 'success':
+                  failures.append(f"{path}: run conclusion={run.get('conclusion')}")
+                  continue
+              jobs = get(run['jobs_url']).get('jobs', [])
+              if not jobs:
+                  failures.append(f'{path}: zero jobs')
+                  continue
+              executed_jobs = 0
+              for job in jobs:
+                  steps = job.get('steps') or []
+                  executed = [
+                      step for step in steps
+                      if step.get('name') not in {'Set up job', 'Complete job'}
+                      and step.get('conclusion') != 'skipped'
+                  ]
+                  if job.get('conclusion') != 'success':
+                      failures.append(
+                          f"{path}: job {job.get('name')} conclusion={job.get('conclusion')}"
+                      )
+                  if not executed:
+                      failures.append(f"{path}: job {job.get('name')} has no executed steps")
+                  else:
+                      executed_jobs += 1
+                      if path.endswith('trnm-economy-settlement.yml'):
+                          evidence_steps += len(executed)
+              if executed_jobs == 0:
+                  failures.append(f'{path}: no executed successful jobs')
+              print(
+                  'CEX_HOSTED_WORKFLOW=PASS',
+                  path,
+                  f"run_id={run.get('id')}",
+                  f"attempt={run.get('run_attempt')}",
+                  f"jobs={len(jobs)}",
+                  f"executed_jobs={executed_jobs}",
+              )
+          if evidence_steps == 0:
+              failures.append('trnm-economy-settlement: no executed evidence steps')
+          if failures:
+              raise SystemExit('hosted admission failures: ' + '; '.join(failures))
+          print(f'CEX_SETTLEMENT_EXECUTED_STEPS={evidence_steps}')
+          print('CEX_HOSTED_ADMISSION_READBACK_V2=PASS')
+          print('PRODUCTION_AUTHORIZATION=not_granted')
+          PY
+
+      - name: Reject tuple movement and record repository-CI-only qualification
+        shell: bash
+        env:
+          GH_WRITE_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD: ${{ steps.tuple.outputs.head }}
+          EXPECTED_BASE: ${{ steps.tuple.outputs.base }}
+        run: |
+          set -euo pipefail
+          remote="https://github.com/${GITHUB_REPOSITORY}.git"
+          test "$(git ls-remote "$remote" "refs/heads/$TARGET_BRANCH" | awk '{print $1}')" = "$EXPECTED_HEAD"
+          test "$(git ls-remote "$remote" "refs/heads/$BASE_BRANCH" | awk '{print $1}')" = "$EXPECTED_BASE"
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          repo = os.environ['GITHUB_REPOSITORY']
+          body = (
+              'Repository-local private-inode CEX hosted admission read-back passed.\n\n'
+              f"- base: `{os.environ['EXPECTED_BASE']}`\n"
+              f"- head: `{os.environ['EXPECTED_HEAD']}`\n"
+              '- settlement evidence binary: `target/evidence/trnm-economy-service`\n'
+              '- old external staging path: absent\n'
+              '- semantic snapshot: exact generator output\n'
+              '- `trnm-economy-ci`, `rust-service-gate`, and '
+              '`trnm-economy-settlement`: non-empty hosted success\n'
+              '- production authorization: `not_granted`\n\n'
+              'This records hosted repository execution only. It is not independent approval, '
+              'deployment evidence, settlement authority, or production authorization.'
+          )
+          request = urllib.request.Request(
+              f'https://api.github.com/repos/{repo}/issues/53/comments',
+              data=json.dumps({'body': body}).encode(),
+              method='POST',
+              headers={
+                  'Accept': 'application/vnd.github+json',
+                  'Authorization': f"Bearer {os.environ['GH_WRITE_TOKEN']}",
+                  'Content-Type': 'application/json',
+                  'X-GitHub-Api-Version': '2022-11-28',
+              },
+          )
+          with urllib.request.urlopen(request, timeout=60):
+              pass
+          PY
