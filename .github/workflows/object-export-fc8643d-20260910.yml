@@ -63,6 +63,9 @@ jobs:
           assert result and all(result.values()), result
           print("CEX_EXTERNAL_WORKFLOW_SELF_TESTS=PASS", result)
           PY
+          )
+          (
+            cd "$candidate"
             python3 scripts/generate-repository-semantics.py --stdout
           ) > "$semantic"
           test "$(sha256sum "$source" | awk '{print $1}')" = "$EXPECTED_SOURCE_SHA256"
