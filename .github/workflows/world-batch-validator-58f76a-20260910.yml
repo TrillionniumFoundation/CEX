@@ -34,8 +34,8 @@ jobs:
     env:
       WORLD_REPOSITORY: TrillionniumFoundation/Trillionnium-World
       WORLD_COMMIT: 58f76a6100bade6e148a56bd429eff34f8a255cd
-      PATCH_COMMIT: a04b611d353b00fcc769cac4a5157014fe1c6889
-      PATCH_BLOB: a49031f17be2eac94a417ff45205aa8938798dbd
+      PATCH_COMMIT: c3851a1e58eba2dd31e7cacff8951fbd493fc110
+      PATCH_BLOB: 0df2e31001b198ec9e8fb5b4a8a2e9d9dbd08c96
       RUSTUP_TOOLCHAIN: '1.98.1'
       CARGO_INCREMENTAL: '0'
       RUST_BACKTRACE: '1'
