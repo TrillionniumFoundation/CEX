@@ -39,6 +39,14 @@ def ordered(text: str, *markers: str) -> None:
         end = position + len(marker)
 
 
+def ordered_ignoring_whitespace(text: str, *markers: str) -> None:
+    """Preserve operation order while tolerating rustfmt-only line wrapping."""
+    ordered(
+        ''.join(text.split()),
+        *(''.join(marker.split()) for marker in markers),
+    )
+
+
 def read_sources(root: Path) -> dict[str, str]:
     names = [POLLER, RELAY, PAGER, RESPONSE, MIGRATION,
              'apps/matrix-bot-poller/src/wire_response.rs',
@@ -83,7 +91,14 @@ def validate(sources: dict[str, str]) -> None:
     require(p, 'deserialize_with = "wire_response::optional_string"',
             'failure_code: "invalid_event_type"')
     recovery = function(p, 'recover_limited_timelines')
-    ordered(recovery, 'renew_cursor_lease(', 'http.get(url)', 'wire_response::decode(&bytes)', 'pager.accept(', 'backwards.reverse()')
+    ordered_ignoring_whitespace(
+        recovery,
+        'renew_cursor_lease(',
+        'http.get(url)',
+        'wire_response::decode(&bytes)',
+        'pager.accept(',
+        'backwards.reverse()',
+    )
     reject(recovery, '.begin()', 'chunk.is_empty()', 'chunk.len() <')
     require(recovery, 'GAP_PAGE_BUDGET', 'GAP_EVENT_BUDGET', 'GAP_BYTE_BUDGET',
             'GAP_DEADLINE_SECONDS', 'matrix_gap_room_identity_mismatch')

@@ -56,19 +56,23 @@ jobs:
           fi
           unset GH_READ_TOKEN auth auth_payload
           git -C "$merge_dir" checkout --detach FETCH_HEAD
+          actual_merge_sha="$(git -C "$merge_dir" rev-parse HEAD)"
           test "$(git -C "$head_dir" rev-parse HEAD)" = "$SOURCE_SHA"
-          test "$(git -C "$merge_dir" rev-parse HEAD)" = "$MERGE_SHA"
           if test "$GITHUB_EVENT_NAME" = pull_request; then
             test "$(git -C "$merge_dir" rev-parse HEAD^1)" = "$BASE_SHA"
             test "$(git -C "$merge_dir" rev-parse HEAD^2)" = "$SOURCE_SHA"
+          else
+            test "$actual_merge_sha" = "$MERGE_SHA"
           fi
+          printf 'QUALIFIED_MERGE_SHA=%s\n' "$actual_merge_sha" >> "$GITHUB_ENV"
           test "$(git -C "$head_dir" cat-file -t "$EXPECTED_PREVIOUS_POLICY_BLOB")" = blob
           test "$(git -C "$merge_dir" cat-file -t "$EXPECTED_PREVIOUS_POLICY_BLOB")" = blob
           test -z "$(git -C "$head_dir" status --porcelain=v1 --untracked-files=no)"
           test -z "$(git -C "$merge_dir" status --porcelain=v1 --untracked-files=no)"
           printf 'source=%s\n' "$SOURCE_SHA"
           printf 'source_tree=%s\n' "$(git -C "$head_dir" rev-parse HEAD^{tree})"
-          printf 'merge=%s\n' "$MERGE_SHA"
+          printf 'event_merge=%s\n' "$MERGE_SHA"
+          printf 'qualified_merge=%s\n' "$actual_merge_sha"
           printf 'merge_tree=%s\n' "$(git -C "$merge_dir" rev-parse HEAD^{tree})"
           printf 'merge_parents=%s\n' "$(git -C "$merge_dir" show -s --format=%P HEAD)"
 
@@ -163,7 +167,8 @@ jobs:
           printf 'repository=%s\n' "$GITHUB_REPOSITORY"
           printf 'source=%s\n' "$SOURCE_SHA"
           printf 'base=%s\n' "$BASE_SHA"
-          printf 'merge=%s\n' "$MERGE_SHA"
+          printf 'event_merge=%s\n' "$MERGE_SHA"
+          printf 'qualified_merge=%s\n' "$QUALIFIED_MERGE_SHA"
           printf 'head_outcome=%s\n' "$HEAD_OUTCOME"
           printf 'merge_outcome=%s\n' "$MERGE_OUTCOME"
           printf 'production_authorization=not_granted\n'
