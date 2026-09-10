@@ -39,6 +39,10 @@ class StreamScopeSourceTests(unittest.TestCase):
     def test_sql_suite_must_be_in_current_chain(self):
         self.reject(C.DRIVER, '0004_stream_scope_binding.sql', 'skip-scope-migration.sql')
     def test_reply_cannot_carry_undeclared_control_fields(self):
-        self.reject(C.REPLY, 'object.keys().all', 'accept_any_key')
+        self.reject(
+            C.REPLY,
+            '.all(|key| matches!(key.as_str(), "msgtype" | "body"))',
+            '.any(|_| true)',
+        )
 
 if __name__ == '__main__': unittest.main(verbosity=2)

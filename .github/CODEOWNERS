@@ -1,5 +1,6 @@
 * @ProfHepta
 
+# CODEOWNERS provides review routing only; it is not branch-protection or server-side merge enforcement.
 /.github/workflows/ @ProfHepta
 /.github/CODEOWNERS @ProfHepta
 /docs/development-doc-authority-v1.json @ProfHepta

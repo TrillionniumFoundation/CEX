@@ -62,7 +62,8 @@ def validate(sources: dict[str, str]) -> None:
     require(sources[TEST], 'legacy cursor was auto-approved', 'live worker scope was approved',
             'wrong legacy cursor was approved', 'changed filter reused cursor',
             'runtime role approved a legacy scope', 'NULL schema bypassed scope shape', 'rollback;')
-    require(fn(sources[REPLY], 'bound_reply'), 'object.keys().all', '"msgtype" | "body"')
+    reply_source = ''.join(fn(sources[REPLY], 'bound_reply').split())
+    require(reply_source, 'object.keys().all', '"msgtype"|"body"')
 
 
 def sources() -> dict[str, str]:

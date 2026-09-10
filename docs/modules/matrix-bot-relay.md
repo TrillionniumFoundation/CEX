@@ -165,6 +165,10 @@ operator reconciliation function. Monitor pending age, unknown-outcome age,
 reconciliation failures, receipt conflicts and dead letters. Operators must
 distinguish effect-unknown holds from confirmed rejection.
 
+Rollback stops ingress and new claims, fences relay workers, restores the previous
+schema-compatible artifact, and preserves delivery identities, receipts,
+unknown-outcome holds and reconciliation evidence for later recovery.
+
 A response-loss rehearsal must demonstrate: Consumer Entry commits the exact
 result, the adapter response is lost, the relay holds, the operator lookup returns
 the same result, PostgreSQL stores evidence and closes the adapter delivery once,

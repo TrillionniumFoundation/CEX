@@ -85,8 +85,8 @@ The checker computes the exact candidate-manifest snapshot SHA-256 and requires
 equality with `repository_candidate_manifest.sha256`. It then runs
 `scripts/check-release-baseline-manifest.py` against that same snapshot. Because
 that authoritative validator intentionally emits child diagnostics before its
-own result, the intake checker parses only the final complete trailing JSON
-object and requires:
+own result, the intake checker parses only the final complete trailing JSON object
+and requires:
 
 - process exit code zero;
 - schema `cex.active-v12-manifest-guard.v1`;

@@ -83,10 +83,20 @@ class GateResultTests(unittest.TestCase):
 
     def run_main(self, core):
         values=[(0, core, '')]
-        schemas=['cex.external-agent-runtime-boundary-check.v1',
-                 'cex.execution-default-state-boundary-check.v1',
-                 'cex.external-production-evidence-contract-check.v1',
-                 'cex.external-production-evidence-binding-self-test.v1']
+        schemas=[
+            'cex.external-agent-runtime-boundary-check.v1',
+            'cex.execution-default-state-boundary-check.v1',
+            'cex.matrix-adapter-api-boundary-check.v1',
+            'cex.sequence54.matrix-v3-admission-source-check.v1',
+            'cex.matrix.result-reconciliation-source-check.v2',
+            'cex.matrix.result-reconciliation-security-source-check.v1',
+            'cex.matrix.result-reconciliation-security-source-check.v3',
+            'cex.matrix.result-reconciliation-traceability-check.v1',
+            'cex.external-agent-config-boundary-check.v1',
+            'cex.vendor-provenance-check.v1',
+            'cex.external-production-evidence-contract-check.v1',
+            'cex.external-production-evidence-binding-self-test.v1',
+        ]
         values.extend((0, child(schema=s), '') for s in schemas)
         output=io.StringIO()
         with patch.object(gate,'run_json',side_effect=values), contextlib.redirect_stdout(output):

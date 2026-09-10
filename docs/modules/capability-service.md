@@ -57,7 +57,7 @@ Registry bytes are limited to 1 MiB, record count to 1,024, and individual text 
 
 ## Security and trust boundaries
 
-Local model discovery is forbidden. The implementation must not inspect `~/.openclaw`, execute a model CLI, contact Ollama, infer an allowlist from local state, or create demo model authority. External declarations are untrusted input until strict validation succeeds and still grant no execution authority.
+Local model discovery is forbidden. For avoidance of doubt, local model discovery is forbidden in every runtime profile. The implementation must not inspect `~/.openclaw`, execute a model CLI, contact Ollama, infer an allowlist from local state, or create demo model authority. External declarations are untrusted input until strict validation succeeds and still grant no execution authority.
 
 Responses and telemetry expose only bounded public metadata and aggregate counts. High-cardinality identities, credentials, private research content and unrestricted descriptions are not valid log or metric fields. Authentication may be added for deployment privacy, but it cannot turn the registry into Agent ownership authority.
 

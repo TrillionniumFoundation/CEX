@@ -21,6 +21,9 @@ Agents run outside CEX. Execution does not host or execute them, discover models
 store their inference credentials, decide scientific truth, mutate Ledger balances,
 or establish World/Game state or Chain consensus finality.
 
+The default workspace build does not compile or route to local provider adapters.
+The retired `/process` route remains absent from every default router.
+
 ## Authority and owned state
 
 Owned durable facts are request identity and snapshots, expected versions,
