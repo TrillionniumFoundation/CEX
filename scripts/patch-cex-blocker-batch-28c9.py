@@ -77,6 +77,14 @@ def patch_replay_snapshot(root: Path) -> None:
 ''',
         "unsupported-platform display arm",
     )
+    replace_once(
+        path,
+        '''        assert!(read_stable_regular_file(&linked.join("snapshot.json"), 64).is_err());
+''',
+        '''        assert!(read_stable_regular_file(linked.join("snapshot.json"), 64).is_err());
+''',
+        "generic path needless borrow",
+    )
 
 
 def patch_operator_runner(root: Path) -> None:
