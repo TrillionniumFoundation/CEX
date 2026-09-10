@@ -1,5 +1,30 @@
 {
   "coverage_strategy": "all_workspace_packages_are_release_candidates",
+  "external_repository_execution": {
+    "unbound_explicit_checkout": "forbidden",
+    "workflows": {
+      ".github/workflows/world-settlement-external-evidence.yml": {
+        "checkouts": [
+          {
+            "allowed_packages": [
+              "trnm-economy-service"
+            ],
+            "path": "cex-owner",
+            "ref": "${{ steps.lock.outputs.cex_commit }}",
+            "repository": "${{ steps.lock.outputs.cex_repository }}"
+          },
+          {
+            "allowed_packages": [
+              "trnm-game-server"
+            ],
+            "path": "world",
+            "ref": "${{ steps.lock.outputs.world_commit }}",
+            "repository": "${{ steps.lock.outputs.world_repository }}"
+          }
+        ]
+      }
+    }
+  },
   "invariants": [
     "every root-workspace package is checked as a possible release candidate",
     "every reachable local path package is recursively parsed",
@@ -7,7 +32,8 @@
     "all inverse and forward Cargo graph commands must exit zero",
     "normal and build edges are checked across all targets",
     "nested Dockerfiles, Containerfiles, Compose, systemd, workflows, build tools, deployment trees, and neutral release scripts are scanned",
-    "unknown explicit package, binary, manifest, git, wildcard, or repository-external path references fail"
+    "unknown explicit local package, binary, manifest, git, wildcard, or repository-external path references fail",
+    "external repository package commands require an exact pinned checkout action, credential persistence disabled, a literal descendant working-directory, exact repository/ref step-output bindings, and a closed package allowlist"
   ],
   "maximum_text_scan_bytes": 8388608,
   "production_authorization": "not_granted",
