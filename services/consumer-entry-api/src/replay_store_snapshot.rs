@@ -1,5 +1,5 @@
 use std::{
-    fs::{File, Metadata, OpenOptions},
+    fs::{File, Metadata},
     io::{self, Read},
     path::{Component, Path},
     time::UNIX_EPOCH,
@@ -8,7 +8,10 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 #[cfg(windows)]
-use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+use std::{
+    fs::OpenOptions,
+    os::windows::fs::{MetadataExt, OpenOptionsExt},
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SnapshotIdentity {
@@ -279,19 +282,25 @@ fn open_descriptor(_path: &Path) -> Result<File, SnapshotError> {
     Err(SnapshotError::UnsupportedPlatform)
 }
 
-pub fn read_stable_regular_file(path: &Path, max_bytes: usize) -> Result<Vec<u8>, SnapshotError> {
+pub fn read_stable_regular_file(
+    path: impl AsRef<Path>,
+    max_bytes: u64,
+) -> Result<Vec<u8>, SnapshotError> {
+    let path = path.as_ref();
+    let max_bytes_usize = usize::try_from(max_bytes).map_err(|_| SnapshotError::Oversized)?;
     let mut file = open_descriptor(path)?;
     let before = file.metadata()?;
     validate_regular(&before)?;
-    if before.len() > max_bytes as u64 {
+    if before.len() > max_bytes {
         return Err(SnapshotError::Oversized);
     }
 
-    let mut bytes = Vec::with_capacity((before.len() as usize).min(max_bytes));
+    let before_bytes = usize::try_from(before.len()).map_err(|_| SnapshotError::Oversized)?;
+    let mut bytes = Vec::with_capacity(before_bytes.min(max_bytes_usize));
     file.by_ref()
-        .take(max_bytes.saturating_add(1) as u64)
+        .take(max_bytes.saturating_add(1))
         .read_to_end(&mut bytes)?;
-    if bytes.len() > max_bytes {
+    if bytes.len() > max_bytes_usize {
         return Err(SnapshotError::Oversized);
     }
 
@@ -332,6 +341,18 @@ mod tests {
         fs::write(&path, b"snapshot").expect("write fixture");
         assert_eq!(
             read_stable_regular_file(&path, 64).expect("read snapshot"),
+            b"snapshot"
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn accepts_string_paths_and_u64_budgets() {
+        let path = temporary_path("string-path");
+        fs::write(&path, b"snapshot").expect("write fixture");
+        let path_text = path.to_str().expect("UTF-8 fixture path");
+        assert_eq!(
+            read_stable_regular_file(path_text, 64_u64).expect("read string path snapshot"),
             b"snapshot"
         );
         let _ = fs::remove_file(path);
