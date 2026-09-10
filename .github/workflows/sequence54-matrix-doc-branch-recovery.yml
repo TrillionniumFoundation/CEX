@@ -1,0 +1,115 @@
+name: sequence54-matrix-doc-branch-recovery
+
+on:
+  push:
+    branches:
+      - tmp/sequence54-source-export-de90027-20260910
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sequence54-matrix-doc-branch-recovery
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 5104e2242db2134d622e49a5e514b01226412dbe
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Search every branch for newest complete UTF-8 contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import subprocess
+
+          path = "docs/matrix-result-reconciliation-v1.md"
+          required = (
+              "# Matrix Durable Result Lookup and Reconciliation v1",
+              "Migration 0004 fixes a concrete runtime defect",
+              "scripts/reconcile-matrix-adapter-result.py",
+              "result_payload",
+              "production_authorization=not_granted",
+          )
+          output = Path("/tmp/recovered-matrix-v1-all-branches")
+          output.mkdir(mode=0o700)
+          revisions = subprocess.check_output(
+              [
+                  "git",
+                  "log",
+                  "--all",
+                  "--format=%ct %H",
+                  "--",
+                  path,
+              ],
+              text=True,
+          ).splitlines()
+          candidates = []
+          seen = set()
+          for line in revisions:
+              timestamp, revision = line.split(" ", 1)
+              if revision in seen:
+                  continue
+              seen.add(revision)
+              try:
+                  data = subprocess.check_output(["git", "show", f"{revision}:{path}"])
+              except subprocess.CalledProcessError:
+                  continue
+              try:
+                  text = data.decode("utf-8")
+              except UnicodeDecodeError:
+                  continue
+              missing = [marker for marker in required if marker not in text]
+              if missing:
+                  candidates.append(
+                      {
+                          "revision": revision,
+                          "timestamp": int(timestamp),
+                          "byte_length": len(data),
+                          "missing": missing,
+                      }
+                  )
+                  continue
+              refs = subprocess.check_output(
+                  ["git", "branch", "-r", "--contains", revision], text=True
+              ).splitlines()
+              (output / "matrix-result-reconciliation-v1.md").write_bytes(data)
+              metadata = {
+                  "schema": "cex.matrix-v1-doc-all-branch-recovery.v1",
+                  "path": path,
+                  "recovered_revision": revision,
+                  "recovered_timestamp": int(timestamp),
+                  "containing_remote_branches": [ref.strip() for ref in refs],
+                  "sha256": hashlib.sha256(data).hexdigest(),
+                  "byte_length": len(data),
+                  "required_markers": list(required),
+                  "newer_valid_but_incomplete": candidates[:50],
+                  "production_authorization": "not_granted",
+              }
+              (output / "recovery.json").write_text(
+                  json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+                  encoding="utf-8",
+              )
+              break
+          else:
+              raise SystemExit("no complete valid UTF-8 contract found on any branch")
+          PY
+      - name: Upload recovered contract and provenance
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: recovered-matrix-v1-all-branches
+          path: /tmp/recovered-matrix-v1-all-branches/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
