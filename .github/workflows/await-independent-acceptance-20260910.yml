@@ -1,0 +1,182 @@
+name: await-independent-acceptance-20260910
+
+on:
+  push:
+    branches:
+      - verify/cex-current-full-20260910
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: await-independent-acceptance-20260910
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    name: cex/real-independent-exact-head-acceptance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+      VERIFIED_BRANCH: verified/cex-current-full-20260910
+      ACCEPTED_BRANCH: accepted/cex-current-full-20260910
+      PULL_REQUEST: '53'
+    steps:
+      - name: Wait only for a real eligible exact-head approval
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - "$GH_TOKEN" "$RUNNER_TEMP/accepted-head" <<'PY'
+          import json
+          import subprocess
+          import sys
+          import time
+          import urllib.request
+
+          token, output_path = sys.argv[1:]
+          repository = "TrillionniumFoundation/CEX"
+          remote = f"https://github.com/{repository}.git"
+          target_ref = "refs/heads/integration/cex-v12-sequence54-20260908"
+          verified_ref = "refs/heads/verified/cex-current-full-20260910"
+          allowed = {"Tomasrgbsf", "Franksudoman"}
+          author = "ProfHepta"
+
+          def ref(name):
+              value = subprocess.check_output(["git", "ls-remote", remote, name], text=True).strip()
+              return value.split()[0] if value else ""
+
+          def rest(path):
+              request = urllib.request.Request(
+                  f"https://api.github.com/repos/{repository}/{path}",
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  return json.load(response)
+
+          def unresolved_threads(exact):
+              query = '''
+              query($cursor:String) {
+                repository(owner:"TrillionniumFoundation", name:"CEX") {
+                  pullRequest(number:53) {
+                    state
+                    isDraft
+                    headRefOid
+                    reviewThreads(first:100, after:$cursor) {
+                      nodes { isResolved }
+                      pageInfo { hasNextPage endCursor }
+                    }
+                  }
+                }
+              }
+              '''
+              cursor = None
+              unresolved = 0
+              for _ in range(100):
+                  payload = json.dumps({"query": query, "variables": {"cursor": cursor}}).encode()
+                  request = urllib.request.Request(
+                      "https://api.github.com/graphql",
+                      data=payload,
+                      method="POST",
+                      headers={
+                          "Authorization": f"Bearer {token}",
+                          "Accept": "application/vnd.github+json",
+                          "Content-Type": "application/json",
+                      },
+                  )
+                  with urllib.request.urlopen(request, timeout=60) as response:
+                      value = json.load(response)
+                  if value.get("errors"):
+                      raise RuntimeError(value["errors"])
+                  pr = value["data"]["repository"]["pullRequest"]
+                  if pr["state"] != "OPEN" or not pr["isDraft"] or pr["headRefOid"] != exact:
+                      return None
+                  threads = pr["reviewThreads"]
+                  unresolved += sum(not node["isResolved"] for node in threads["nodes"])
+                  if not threads["pageInfo"]["hasNextPage"]:
+                      return unresolved
+                  cursor = threads["pageInfo"]["endCursor"]
+                  if not cursor:
+                      raise RuntimeError("missing review-thread cursor")
+              raise RuntimeError("review-thread pagination budget exceeded")
+
+          for attempt in range(120):
+              target = ref(target_ref)
+              verified = ref(verified_ref)
+              if len(target) != 40 or verified != target:
+                  time.sleep(20)
+                  continue
+              pr = rest("pulls/53")
+              if (
+                  pr.get("state") != "open"
+                  or pr.get("draft") is not True
+                  or pr.get("merged") is not False
+                  or pr["head"]["sha"] != target
+                  or pr["user"]["login"] != author
+              ):
+                  time.sleep(20)
+                  continue
+              threads = unresolved_threads(target)
+              if threads != 0:
+                  time.sleep(20)
+                  continue
+              reviews = rest("pulls/53/reviews?per_page=100")
+              latest = {}
+              for review in reviews:
+                  user = review.get("user") or {}
+                  login = user.get("login")
+                  if not login:
+                      continue
+                  order = (review.get("submitted_at") or "", int(review.get("id") or 0))
+                  if login not in latest or order > latest[login][0]:
+                      latest[login] = (order, review)
+              eligible = []
+              for login in sorted(allowed):
+                  entry = latest.get(login)
+                  if not entry:
+                      continue
+                  review = entry[1]
+                  user = review.get("user") or {}
+                  if (
+                      login != author
+                      and user.get("type") == "User"
+                      and review.get("state") == "APPROVED"
+                      and review.get("commit_id") == target
+                  ):
+                      eligible.append(login)
+              if eligible:
+                  with open(output_path, "w", encoding="utf-8") as handle:
+                      handle.write(target + "\n")
+                  print("CEX_REAL_INDEPENDENT_APPROVAL=PASS", eligible)
+                  print("CEX_ACCEPTED_HEAD=" + target)
+                  raise SystemExit(0)
+              time.sleep(20)
+          raise SystemExit("no real eligible exact-head approval observed within the bounded admission run")
+          PY
+
+      - name: Advance the exact accepted pointer without force
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          accepted="$(cat "$RUNNER_TEMP/accepted-head")"
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          test "$(git ls-remote "$remote" "refs/heads/${TARGET_BRANCH}" | cut -f1)" = "$accepted"
+          test "$(git ls-remote "$remote" "refs/heads/${VERIFIED_BRANCH}" | cut -f1)" = "$accepted"
+          git init "$RUNNER_TEMP/ref"
+          git -C "$RUNNER_TEMP/ref" remote add origin "$remote"
+          git -C "$RUNNER_TEMP/ref" fetch --no-tags --depth=1 origin "$accepted"
+          git -C "$RUNNER_TEMP/ref" push origin "$accepted:refs/heads/${ACCEPTED_BRANCH}"
+          test "$(git ls-remote "$remote" "refs/heads/${ACCEPTED_BRANCH}" | cut -f1)" = "$accepted"
+          printf 'CEX_ACCEPTED_SHA=%s\n' "$accepted"
+          printf 'ACCEPTANCE_SOURCE=real_eligible_exact_head_github_review\n'
+          printf 'PR_MERGED=false\n'
+          printf 'PRODUCTION_AUTHORIZATION=not_granted\n'
