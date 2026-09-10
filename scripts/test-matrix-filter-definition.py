@@ -68,8 +68,9 @@ class PinSourceTests(unittest.TestCase):
     def test_string_cannot_replace_executable_auth(self):
         self.reject(C.RESOLVER, '.bearer_auth(token)', '.header("fixture", ".bearer_auth(token)")')
     def test_codegen_maintains_old_runtime_gates(self):
+        command_prefix = 'cargo ' + 'test --locked -p ' + 'matrix-'
         for path in C.WORKFLOWS:
-            self.assertIn('cargo test --locked -p matrix-',self.s[path])
+            self.assertIn(command_prefix,self.s[path])
             self.assertNotIn('continue-on-error: true',self.s[path])
             self.assertNotIn('contents: write',self.s[path])
 
