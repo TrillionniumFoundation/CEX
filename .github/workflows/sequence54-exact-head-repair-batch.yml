@@ -1,0 +1,160 @@
+name: sequence54-exact-head-repair-batch
+
+on:
+  push:
+    branches:
+      - tmp/sequence54-source-export-de90027-20260910
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sequence54-exact-head-repair-batch
+  cancel-in-progress: false
+
+env:
+  EXPECTED_HEAD: 4ed4516eddcdd0a6713ddd1dc0b83b73670d18c5
+  TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+  RECOVERED_REVISION: fdd17e0549857ea51ba41453a906120de571b330
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact current candidate with history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Enforce exact head and apply bounded repairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          def replace(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              source = target.read_text(encoding="utf-8")
+              if source.count(old) != 1:
+                  raise SystemExit(
+                      f"{path}: expected one exact repair site for {old!r}, "
+                      f"observed {source.count(old)}"
+                  )
+              target.write_text(source.replace(old, new), encoding="utf-8")
+
+          recovered = subprocess.check_output(
+              [
+                  "git",
+                  "show",
+                  "fdd17e0549857ea51ba41453a906120de571b330:"
+                  "docs/matrix-result-reconciliation-v1.md",
+              ]
+          ).decode("utf-8")
+          addition = """
+
+          ## 8. Sequence 54 runtime reconciliation correction
+
+          Migration 0004 fixes a concrete runtime defect in the earlier reconciliation
+          function: the exact Consumer result is now persisted in `result_payload` before
+          the matching unknown-outcome delivery is closed. The bounded operator entrypoint
+          remains `scripts/reconcile-matrix-adapter-result.py`; it does not repeat the
+          business operation, and no lookup alone advances transport state.
+          """
+          Path("docs/matrix-result-reconciliation-v1.md").write_text(
+              recovered.rstrip() + addition + "\n",
+              encoding="utf-8",
+          )
+
+          checker = "scripts/check-matrix-result-reconciliation.py"
+          replace(
+              checker,
+              '            ".merge(matrix_result_lookup::router(state.config().clone()))",',
+              '            "let result_lookup = matrix_result_lookup::router(state.config().clone()).layer(",\n'
+              '            "build_router(state.clone()).merge(result_lookup)",',
+          )
+          replace(
+              checker,
+              '            "pub(super) fn read_stable_regular_file",',
+              '            "pub fn read_stable_regular_file(",',
+          )
+          replace(
+              checker,
+              '            "fs::symlink_metadata(path)",',
+              '            "open_descriptor(path)?",',
+          )
+          replace(
+              checker,
+              '            "File::open(path)",',
+              '            "validate_regular(&before)?",',
+          )
+          replace(
+              checker,
+              '            "handle_before != expected",',
+              '            "identity(&before) != identity(&after)",',
+          )
+          replace(
+              checker,
+              '            "handle_after != expected || path_after != expected",',
+              '            "identity(&after) != identity(&rebound)",',
+          )
+          replace(
+              checker,
+              '            "FILE_ATTRIBUTE_REPARSE_POINT",',
+              '            "FILE_FLAG_OPEN_REPARSE_POINT",',
+          )
+          replace(
+              checker,
+              '            ".take(limit)",',
+              '            ".take(max_bytes.saturating_add(1))",',
+          )
+          replace(
+              checker,
+              '            "rejects_symbolic_and_hard_linked_inputs",',
+              '            "rejects_leaf_symlinks",\n'
+              '            "rejects_symlinked_ancestors",\n'
+              '            "rejects_hard_links",',
+          )
+          replace(
+              "scripts/check-matrix-result-reconciliation-security-v3.py",
+              '            \'value.get("result_delivery_binding")\',',
+              '            "let top_binding = value",\n'
+              '            \'.get("result_delivery_binding")\',',
+          )
+          replace(
+              "docs/matrix-result-reconciliation-v3.md",
+              "A legacy or unbound cache\n   entry fails closed.",
+              "A legacy or unbound cache entry fails closed.",
+          )
+          replace(
+              "scripts/check-external-production-evidence-contract.py",
+              "SEQUENCE = 50",
+              "SEQUENCE = 54",
+          )
+          PY
+          python3 scripts/check-matrix-result-reconciliation.py
+          python3 scripts/check-matrix-result-reconciliation-security-v3.py
+          python3 scripts/check-external-production-evidence-contract.py --contract-only
+          git diff --check
+          git diff --stat
+      - name: Commit and fast-forward exact repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            docs/matrix-result-reconciliation-v1.md \
+            docs/matrix-result-reconciliation-v3.md \
+            scripts/check-matrix-result-reconciliation.py \
+            scripts/check-matrix-result-reconciliation-security-v3.py \
+            scripts/check-external-production-evidence-contract.py
+          git commit -m "fix(docs): restore Matrix contracts and Sequence 54 evidence gate"
+          git fetch --no-tags origin "refs/heads/$TARGET_BRANCH"
+          test "$(git rev-parse FETCH_HEAD)" = "$EXPECTED_HEAD"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          printf 'production_authorization=not_granted\n'
