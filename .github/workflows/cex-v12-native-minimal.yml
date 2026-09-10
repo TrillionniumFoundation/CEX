@@ -97,7 +97,10 @@ jobs:
           python3 scripts/check-sequence54-integration.py
           python3 scripts/check-sequence54-rustsec-admission.py
           python3 scripts/check-rust-toolchain-convergence.py
-          python3 scripts/check-rust-advisory-exceptions.py >/tmp/cex-head-advisory.json
+          if ! python3 scripts/check-rust-advisory-exceptions.py >/tmp/cex-head-advisory.json; then
+            cat /tmp/cex-head-advisory.json
+            exit 1
+          fi
           python3 scripts/check-development-docs.py
           python3 scripts/check-module-documentation.py
           bash services/paper-raid-bff/scripts/check-boundaries.sh
@@ -120,7 +123,10 @@ jobs:
           python3 scripts/check-sequence54-integration.py
           python3 scripts/check-sequence54-rustsec-admission.py
           python3 scripts/check-rust-toolchain-convergence.py
-          python3 scripts/check-rust-advisory-exceptions.py >/tmp/cex-merge-advisory.json
+          if ! python3 scripts/check-rust-advisory-exceptions.py >/tmp/cex-merge-advisory.json; then
+            cat /tmp/cex-merge-advisory.json
+            exit 1
+          fi
           python3 scripts/check-development-docs.py
           python3 scripts/check-module-documentation.py
           bash services/paper-raid-bff/scripts/check-boundaries.sh

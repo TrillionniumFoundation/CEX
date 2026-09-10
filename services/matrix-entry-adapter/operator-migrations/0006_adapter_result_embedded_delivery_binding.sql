@@ -52,7 +52,11 @@ begin
     embedded_binding := p_result_payload #>
         '{source,metadata,metadata,cex_delivery_binding}';
     if jsonb_typeof(embedded_binding) is distinct from 'object'
-        or jsonb_object_length(embedded_binding) <> 8
+        or case
+            when jsonb_typeof(embedded_binding) = 'object' then
+                (select count(*) from jsonb_object_keys(embedded_binding))
+            else 0
+        end <> 8
         or not embedded_binding ?& array[
             'schema',
             'source',

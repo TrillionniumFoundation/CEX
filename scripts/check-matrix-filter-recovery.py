@@ -39,6 +39,29 @@ def require(source: str, *markers: str) -> None:
             raise AssertionError('missing filter source contract: ' + marker)
 
 
+def require_ordered_tokens(source: str, *sequences: tuple[str, ...]) -> None:
+    """Require ordered lexical sequences without depending on rustfmt whitespace.
+
+    Rust comments and string literals are single lexical tokens, so they cannot
+    manufacture an executable call sequence. This preserves the source guard
+    while accepting a fluent call split across lines by rustfmt.
+    """
+    tokens = [token.text for token in tokenize(source)]
+    cursor = 0
+    for sequence in sequences:
+        found = -1
+        width = len(sequence)
+        for index in range(cursor, len(tokens) - width + 1):
+            if tuple(tokens[index:index + width]) == sequence:
+                found = index
+                break
+        if found < 0:
+            raise AssertionError(
+                'filter not enforced before recovery I/O: ' + ''.join(sequence)
+            )
+        cursor = found + width
+
+
 def validate(sources: dict[str, str]) -> None:
     policy = sources['policy']
     parse = function_body(policy, 'parse_inline')
@@ -63,13 +86,15 @@ def validate(sources: dict[str, str]) -> None:
     scope = function_body(sources['scope'], 'describe')
     require(scope, 'validate_inline(raw)?')
     recover = function_body(sources['poller'], 'recover_limited_timelines')
-    markers = ['filter_definition::effective_filter(', 'stream_scope::backfill_filter(effective, room_id)', 'renew_cursor_lease(', 'sync_recovery::messages_url(',
-               'message_filter.as_deref()', 'http.get(url)']
-    position = -1
-    for marker in markers:
-        position = recover.find(marker, position + 1)
-        if position < 0:
-            raise AssertionError('filter not enforced before recovery I/O: ' + marker)
+    require_ordered_tokens(
+        recover,
+        ('filter_definition', '::', 'effective_filter'),
+        ('stream_scope', '::', 'backfill_filter'),
+        ('renew_cursor_lease',),
+        ('sync_recovery', '::', 'messages_url'),
+        ('message_filter', '.', 'as_deref', '(', ')'),
+        ('http', '.', 'get', '(', 'url', ')'),
+    )
     urls = function_body(sources['recovery'], 'messages_url')
     require(urls, 'if let Some(filter) = filter', 'filter.len() > 4096',
             'url.query_pairs_mut().append_pair("filter", filter)')
