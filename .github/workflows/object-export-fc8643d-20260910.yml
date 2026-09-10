@@ -68,8 +68,20 @@ jobs:
             cd "$candidate"
             python3 scripts/generate-repository-semantics.py --stdout
           ) > "$semantic"
-          test "$(sha256sum "$source" | awk '{print $1}')" = "$EXPECTED_SOURCE_SHA256"
-          test "$(sha256sum "$semantic" | awk '{print $1}')" = "$EXPECTED_SEMANTIC_SHA256"
+          actual_source="$(sha256sum "$source" | awk '{print $1}')"
+          actual_semantic="$(sha256sum "$semantic" | awk '{print $1}')"
+          printf 'CEX_ACTUAL_SOURCE_SHA256=%s\n' "$actual_source"
+          printf 'CEX_ACTUAL_SEMANTIC_SHA256=%s\n' "$actual_semantic"
+          python3 - "$semantic" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              value = json.load(handle)
+          print("CEX_ACTUAL_SOURCE_TREE_SHA256=" + value["source_tree_sha256"])
+          print("CEX_ACTUAL_PRODUCTION_AUTHORIZATION=" + value["production_authorization"])
+          PY
+          test "$actual_source" = "$EXPECTED_SOURCE_SHA256"
+          test "$actual_semantic" = "$EXPECTED_SEMANTIC_SHA256"
           python3 - "$semantic" "$EXPECTED_SOURCE_TREE_SHA256" <<'PY'
           import json
           import sys
