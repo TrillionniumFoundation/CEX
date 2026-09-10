@@ -1,0 +1,54 @@
+name: sequence54-f62727-exact-source-export
+
+on:
+  push:
+    branches:
+      - tmp/sequence54-source-export-de90027-20260910
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sequence54-f62727-exact-source-export
+  cancel-in-progress: false
+
+env:
+  SOURCE_SHA: f62727f080d94a7e9e39e0fa294624ae429aba51
+  SOURCE_TREE: 90f5c087bdb1707138fe08da502b5a5a9c1565fe
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout immutable candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify and archive exact tracked tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$SOURCE_TREE"
+          archive="$RUNNER_TEMP/cex-${SOURCE_SHA}.tar.gz"
+          manifest="$RUNNER_TEMP/cex-${SOURCE_SHA}.manifest.txt"
+          git archive --format=tar.gz --output="$archive" HEAD
+          {
+            printf 'source_sha=%s\n' "$SOURCE_SHA"
+            printf 'source_tree=%s\n' "$SOURCE_TREE"
+            sha256sum "$archive"
+            printf 'production_authorization=not_granted\n'
+          } > "$manifest"
+      - name: Upload exact source archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cex-source-${{ env.SOURCE_SHA }}
+          path: |
+            ${{ runner.temp }}/cex-${{ env.SOURCE_SHA }}.tar.gz
+            ${{ runner.temp }}/cex-${{ env.SOURCE_SHA }}.manifest.txt
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
