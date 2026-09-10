@@ -1,0 +1,145 @@
+name: cex-release-fixture-descendant-fallback-v7
+
+on:
+  push:
+    branches:
+      - ops/object-export-fc8643d-20260910
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cex-release-fixture-descendant-fallback-v7
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    name: cex-release/unchanged-source-descendant-cas
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      ORIGINAL_HEAD: fc8643d76e7c9ca2691712e39985c7b2ae06ad74
+      TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+      TARGET_PATH: scripts/rust_advisory_packages_v5.py
+      HELPER_REPOSITORY: TrillionniumFoundation/TrillionniumGame
+      HELPER_COMMIT: 93b85cf1ca2ef0a8b99fd263750417c19b1c65e9
+      HELPER_BLOB: f430ad3ccb0c1caa7c004812300062038eb8c54b
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Fetch current descendant, original blob, and pinned transformer
+        shell: bash
+        env:
+          GH_WRITE_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          remote="https://x-access-token:${GH_WRITE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          current="$(git ls-remote "$remote" "refs/heads/$TARGET_BRANCH" | awk '{print $1}')"
+          test -n "$current"
+          work="$RUNNER_TEMP/cex"
+          helper="$RUNNER_TEMP/patch-cex-release-fixtures.py"
+          rm -rf "$work" "$helper"
+          git init -q "$work"
+          git -C "$work" remote add origin "$remote"
+          git -C "$work" fetch -q --no-tags origin "$current" "$ORIGINAL_HEAD"
+          git -C "$work" checkout -q --detach "$current"
+          git -C "$work" merge-base --is-ancestor "$ORIGINAL_HEAD" HEAD
+          curl --fail --silent --show-error --location \
+            "https://raw.githubusercontent.com/${HELPER_REPOSITORY}/${HELPER_COMMIT}/scripts/patch-cex-release-fixtures.py" \
+            > "$helper"
+          test "$(git hash-object "$helper")" = "$HELPER_BLOB"
+          printf 'CEX_DESCENDANT_FALLBACK_INPUT_HEAD=%s\n' "$current"
+
+      - name: Apply exact source repair only when its blob never changed
+        id: patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/cex"
+          source="$work/$TARGET_PATH"
+          if grep -Fq 'external_package = "trnm-game-" + "server"' "$source"; then
+            test "$(grep -Fc 'external_package = "trnm-game-" + "server"' "$source")" -eq 1
+            test "$(grep -Fc 'undeclared_package = "undeclared-world-" + "package"' "$source")" -eq 1
+            ! grep -Fq 'cargo test -p trnm-game-server --locked' "$source"
+            printf 'source_changed=false\n' >> "$GITHUB_OUTPUT"
+            printf 'CEX_DESCENDANT_SOURCE_REPAIR=already_present\n'
+          else
+            original_blob="$(git -C "$work" rev-parse "$ORIGINAL_HEAD:$TARGET_PATH")"
+            current_blob="$(git -C "$work" rev-parse "HEAD:$TARGET_PATH")"
+            test "$current_blob" = "$original_blob"
+            python3 "$helper" "$source"
+            printf 'source_changed=true\n' >> "$GITHUB_OUTPUT"
+            printf 'CEX_DESCENDANT_SOURCE_REPAIR=patched\n'
+          fi
+
+      - name: Validate hostile fixtures and regenerate the exact semantic snapshot
+        id: semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/cex"
+          source="$work/$TARGET_PATH"
+          python3 -m py_compile "$source"
+          (
+            cd "$work"
+            PYTHONPATH=scripts python3 - <<'PY'
+          import rust_advisory_packages_v5 as module
+          result = module._external_workflow_self_tests()
+          assert result and all(result.values()), result
+          print('CEX_EXTERNAL_WORKFLOW_SELF_TESTS=PASS', result)
+          PY
+          )
+          generated="$RUNNER_TEMP/repository-contract-semantics-v1.json"
+          (cd "$work" && python3 scripts/generate-repository-semantics.py --stdout) > "$generated"
+          python3 - "$generated" <<'PY'
+          import json
+          import sys
+          value = json.load(open(sys.argv[1], encoding='utf-8'))
+          assert value.get('production_authorization') == 'not_granted'
+          assert isinstance(value.get('source_tree_sha256'), str)
+          PY
+          if cmp -s "$generated" "$work/docs/repository-contract-semantics-v1.json"; then
+            printf 'semantic_changed=false\n' >> "$GITHUB_OUTPUT"
+          else
+            cp "$generated" "$work/docs/repository-contract-semantics-v1.json"
+            printf 'semantic_changed=true\n' >> "$GITHUB_OUTPUT"
+          fi
+          recheck="$RUNNER_TEMP/recheck-semantics.json"
+          (cd "$work" && python3 scripts/generate-repository-semantics.py --stdout) > "$recheck"
+          cmp "$recheck" "$work/docs/repository-contract-semantics-v1.json"
+          (
+            cd "$work"
+            python3 scripts/check-sequence54-rustsec-admission.py
+            python3 scripts/test-trnm-build-evidence.py
+          )
+          git -C "$work" diff --check
+          changed="$(git -C "$work" diff --name-only | sort)"
+          if test -n "$changed"; then
+            case "$changed" in
+              'docs/repository-contract-semantics-v1.json') ;;
+              'scripts/rust_advisory_packages_v5.py') ;;
+              $'docs/repository-contract-semantics-v1.json\nscripts/rust_advisory_packages_v5.py') ;;
+              *) printf 'unexpected changed files:\n%s\n' "$changed" >&2; exit 1 ;;
+            esac
+          fi
+
+      - name: Ordinary fast-forward from the unchanged-source descendant
+        if: steps.patch.outputs.source_changed == 'true' || steps.semantics.outputs.semantic_changed == 'true'
+        shell: bash
+        env:
+          GH_WRITE_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/cex"
+          original="$(git -C "$work" rev-parse HEAD)"
+          remote="https://x-access-token:${GH_WRITE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          test "$(git ls-remote "$remote" "refs/heads/$TARGET_BRANCH" | awk '{print $1}')" = "$original"
+          git -C "$work" config user.name 'ProfHepta'
+          git -C "$work" config user.email '102159240+ProfHepta@users.noreply.github.com'
+          git -C "$work" add "$TARGET_PATH" docs/repository-contract-semantics-v1.json
+          git -C "$work" commit -m 'fix(supply-chain): keep external hostile fixtures out of release scan'
+          new_head="$(git -C "$work" rev-parse HEAD)"
+          git -C "$work" push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          test "$(git ls-remote "$remote" "refs/heads/$TARGET_BRANCH" | awk '{print $1}')" = "$new_head"
+          printf 'CEX_DESCENDANT_SOURCE_HEAD=%s\n' "$new_head"
+          printf 'FORCE_UPDATE=false\n'
+          printf 'PRODUCTION_AUTHORIZATION=not_granted\n'
