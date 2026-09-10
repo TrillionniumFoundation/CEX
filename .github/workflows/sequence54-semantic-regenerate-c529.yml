@@ -1,0 +1,93 @@
+name: sequence54-semantic-regenerate-c529
+
+on:
+  push:
+    branches:
+      - tmp/sequence54-semantic-regenerate-c529-20260910
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sequence54-semantic-regenerate-c529
+  cancel-in-progress: false
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact temporary regeneration branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Regenerate bounded repository contracts
+        shell: bash
+        env:
+          EXPECTED_PARENT: c529ecc5b403bb3e38b8eee01d05d9a1485bbe2b
+          EXPECTED_BRANCH: tmp/sequence54-semantic-regenerate-c529-20260910
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "$EXPECTED_BRANCH"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT"
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+
+          catalog = Path('docs/module-catalog-v1.json')
+          data = json.loads(catalog.read_text(encoding='utf-8'))
+          entry = 'services/hepta-research-league/src/bin/hepta-trnm-command-signer.rs'
+          for module in data['modules']:
+              if module.get('workspace_member') == 'services/hepta-research-league':
+                  if entry not in module['source_entrypoints']:
+                      index = module['source_entrypoints'].index('services/hepta-research-league/src/lib.rs') + 1
+                      module['source_entrypoints'].insert(index, entry)
+                  break
+          else:
+              raise SystemExit('hepta-research-league module missing')
+          catalog.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+
+          hepta_doc = Path('docs/modules/hepta-research-league.md')
+          text = hepta_doc.read_text(encoding='utf-8')
+          line = '- `services/hepta-research-league/src/bin/hepta-trnm-command-signer.rs`\n'
+          if line not in text:
+              anchor = '- `services/hepta-research-league/src/lib.rs`\n'
+              if anchor not in text:
+                  raise SystemExit('hepta module entrypoint anchor missing')
+              text = text.replace(anchor, anchor + line, 1)
+          hepta_doc.write_text(text, encoding='utf-8')
+
+          relay_doc = Path('docs/modules/matrix-bot-relay.md')
+          text = relay_doc.read_text(encoding='utf-8')
+          marker = 'Rollback must stop new claims'
+          if marker not in text:
+              anchor = 'distinguish effect-unknown holds from confirmed rejection.\n'
+              replacement = ('distinguish effect-unknown holds from confirmed rejection. Rollback must stop new claims, fence\n'
+                             'resident workers, preserve immutable delivery/receipt/reconciliation evidence, and restore\n'
+                             'only a schema-compatible binary without replaying effect-unknown adapter operations.\n')
+              if anchor not in text:
+                  raise SystemExit('matrix relay deployment rollback anchor missing')
+              text = text.replace(anchor, replacement, 1)
+          relay_doc.write_text(text, encoding='utf-8')
+
+          codeowners = Path('.github/CODEOWNERS')
+          text = codeowners.read_text(encoding='utf-8')
+          marker = '# CODEOWNERS assigns review responsibility; it is not branch-protection and is not server-side merge enforcement.\n'
+          if 'not branch-protection' not in text:
+              text = marker + text
+          codeowners.write_text(text, encoding='utf-8')
+          PY
+          python3 scripts/generate-repository-semantics.py --write
+          python3 scripts/generate-repository-semantics.py --check
+          python3 scripts/check-repository-contract-inventory.py
+          python3 scripts/check-module-documentation.py
+          python3 scripts/test-semantic-source-integration.py
+          expected=$'.github/CODEOWNERS\ndocs/module-catalog-v1.json\ndocs/modules/hepta-research-league.md\ndocs/modules/matrix-bot-relay.md\ndocs/repository-contract-semantics-v1.json'
+          actual="$(git diff --name-only | sort)"
+          test "$actual" = "$expected"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -- .github/CODEOWNERS docs/module-catalog-v1.json docs/modules/hepta-research-league.md docs/modules/matrix-bot-relay.md docs/repository-contract-semantics-v1.json
+          git commit -m 'chore(sequence54): regenerate repository contract facts'
+          git push origin "HEAD:${EXPECTED_BRANCH}"
