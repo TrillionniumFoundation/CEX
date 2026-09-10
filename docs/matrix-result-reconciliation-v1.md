@@ -1,7 +1,7 @@
 # Matrix Durable Result Lookup and Reconciliation v1
 
-Status: source implemented; runtime qualification pending
-Candidate branch: `fix/cex-v12-audit-remediation-20260905`
+Status: repository source implemented; exact-SHA runtime qualification pending
+Candidate branch: `integration/cex-v12-sequence54-20260908`
 Production authorization: **not granted**
 
 ## 1. Purpose
