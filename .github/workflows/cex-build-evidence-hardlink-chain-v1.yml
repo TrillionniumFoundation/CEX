@@ -1,0 +1,180 @@
+name: cex-build-evidence-hardlink-chain-v1
+
+on:
+  push:
+    branches:
+      - ops/object-export-fc8643d-20260910
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cex-build-evidence-hardlink-chain-v1
+  cancel-in-progress: false
+
+jobs:
+  prove_repair:
+    name: cex-evidence/prove-stage-and-fast-forward
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      ORIGINAL_HEAD: fc8643d76e7c9ca2691712e39985c7b2ae06ad74
+      TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+      RUSTUP_TOOLCHAIN: '1.98.1'
+      CARGO_INCREMENTAL: '0'
+      RUST_BACKTRACE: '1'
+      RUST_TEST_THREADS: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Wait for the prerequisite release-fixture repair
+        shell: bash
+        env:
+          GH_WRITE_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          remote="https://x-access-token:${GH_WRITE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          ready='false'
+          for _ in $(seq 1 180); do
+            head="$(git ls-remote "$remote" "refs/heads/$TARGET_BRANCH" | awk '{print $1}')"
+            test -n "$head"
+            rm -rf "$RUNNER_TEMP/probe"
+            git init -q "$RUNNER_TEMP/probe"
+            git -C "$RUNNER_TEMP/probe" remote add origin "$remote"
+            git -C "$RUNNER_TEMP/probe" fetch -q --no-tags --depth=1 origin "$head"
+            git -C "$RUNNER_TEMP/probe" checkout -q --detach FETCH_HEAD
+            if grep -Fq 'external_package = "trnm-game-" + "server"' \
+              "$RUNNER_TEMP/probe/scripts/rust_advisory_packages_v5.py"; then
+              ready='true'
+              printf 'CEX_EVIDENCE_CHAIN_INPUT_HEAD=%s\n' "$head"
+              break
+            fi
+            sleep 20
+          done
+          test "$ready" = 'true'
+          rm -rf "$RUNNER_TEMP/cex"
+          mv "$RUNNER_TEMP/probe" "$RUNNER_TEMP/cex"
+
+      - name: Verify descendant and semantic snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/cex"
+          git -C "$work" fetch -q origin "$ORIGINAL_HEAD"
+          git -C "$work" merge-base --is-ancestor "$ORIGINAL_HEAD" HEAD
+          ! grep -Fq 'cargo test -p trnm-game-server --locked' \
+            "$work/scripts/rust_advisory_packages_v5.py"
+          (
+            cd "$work"
+            python3 scripts/generate-repository-semantics.py --check
+            python3 scripts/check-sequence54-rustsec-admission.py
+            python3 scripts/test-trnm-build-evidence.py
+          )
+
+      - name: Build the exact release candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal
+          cd "$RUNNER_TEMP/cex"
+          cargo build --release --workspace --locked
+
+      - name: Prove Cargo hardlink and private-inode staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/cex"
+          binary="$work/target/release/trnm-economy-service"
+          staged="$RUNNER_TEMP/trnm-economy-service-evidence-proof"
+          test -f "$binary"
+          ! test -L "$binary"
+          original_links="$(stat -c %h "$binary")"
+          test "$original_links" -gt 1
+          rm -f -- "$staged"
+          install -m 0755 -- "$binary" "$staged"
+          test -f "$staged"
+          ! test -L "$staged"
+          test "$(stat -c %h "$staged")" = 1
+          test "$(sha256sum "$binary" | awk '{print $1}')" = \
+            "$(sha256sum "$staged" | awk '{print $1}')"
+          test "$(stat -c %s "$binary")" = "$(stat -c %s "$staged")"
+          printf 'CARGO_RELEASE_BINARY_LINK_COUNT=%s\n' "$original_links"
+          printf 'STAGED_EVIDENCE_BINARY_LINK_COUNT=1\n'
+          printf 'STAGED_EVIDENCE_BINARY_BYTES_MATCH=true\n'
+
+      - name: Patch only the evidence collection run block
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/cex"
+          workflow="$work/.github/workflows/trnm-economy-settlement.yml"
+          python3 "$GITHUB_WORKSPACE/scripts/patch-trnm-evidence-staging.py" "$workflow" 2>/dev/null || \
+            python3 - "$workflow" "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/scripts/patch-trnm-evidence-staging.py" <<'PY'
+          import pathlib
+          import subprocess
+          import sys
+          import urllib.request
+          workflow, url = sys.argv[1:]
+          helper = pathlib.Path('/tmp/patch-trnm-evidence-staging.py')
+          helper.write_bytes(urllib.request.urlopen(url, timeout=60).read())
+          subprocess.run([sys.executable, str(helper), workflow], check=True)
+          PY
+          git -C "$work" diff --check
+          test "$(git -C "$work" diff --name-only)" = \
+            '.github/workflows/trnm-economy-settlement.yml'
+
+      - name: Regenerate semantic contract and run policy tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/cex"
+          generated="$RUNNER_TEMP/repository-contract-semantics-v1.json"
+          (
+            cd "$work"
+            python3 scripts/generate-repository-semantics.py --stdout
+          ) > "$generated"
+          python3 - "$generated" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          path = Path(sys.argv[1])
+          value = json.loads(path.read_text(encoding='utf-8'))
+          assert value.get('production_authorization') == 'not_granted'
+          assert isinstance(value.get('source_tree_sha256'), str)
+          path.write_text(json.dumps(value, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+          PY
+          cp "$generated" "$work/docs/repository-contract-semantics-v1.json"
+          (
+            cd "$work"
+            python3 scripts/generate-repository-semantics.py --check
+            python3 scripts/check-sequence54-rustsec-admission.py
+            python3 scripts/test-trnm-build-evidence.py
+          )
+          git -C "$work" diff --check
+          test "$(git -C "$work" diff --name-only | sort)" = \
+            $'.github/workflows/trnm-economy-settlement.yml\ndocs/repository-contract-semantics-v1.json'
+
+      - name: Commit and fast-forward the live PR branch
+        shell: bash
+        env:
+          GH_WRITE_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/cex"
+          original="$(git -C "$work" rev-parse HEAD)"
+          remote="https://x-access-token:${GH_WRITE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          remote_before="$(git ls-remote "$remote" "refs/heads/$TARGET_BRANCH" | awk '{print $1}')"
+          test "$remote_before" = "$original"
+          git -C "$work" config user.name 'ProfHepta'
+          git -C "$work" config user.email '102159240+ProfHepta@users.noreply.github.com'
+          git -C "$work" add \
+            .github/workflows/trnm-economy-settlement.yml \
+            docs/repository-contract-semantics-v1.json
+          git -C "$work" commit -m 'fix(evidence): stage Cargo hardlinks on a private inode'
+          new_head="$(git -C "$work" rev-parse HEAD)"
+          git -C "$work" remote set-url origin "$remote"
+          git -C "$work" push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          remote_after="$(git ls-remote "$remote" "refs/heads/$TARGET_BRANCH" | awk '{print $1}')"
+          test "$remote_after" = "$new_head"
+          printf 'CEX_EVIDENCE_FIX_HEAD=%s\n' "$new_head"
+          printf 'FORCE_UPDATE=false\n'
+          printf 'PRODUCTION_AUTHORIZATION=not_granted\n'
