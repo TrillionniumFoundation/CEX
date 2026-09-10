@@ -33,6 +33,16 @@ pub enum SnapshotError {
     Oversized,
     Changed,
     UnsafePath,
+    #[cfg_attr(
+        any(
+            target_os = "linux",
+            target_os = "android",
+            target_os = "macos",
+            target_os = "ios",
+            windows
+        ),
+        allow(dead_code)
+    )]
     UnsupportedPlatform,
 }
 
@@ -392,7 +402,7 @@ mod tests {
         fs::create_dir_all(&real).expect("create real directory");
         fs::write(real.join("snapshot.json"), b"snapshot").expect("write fixture");
         symlink(&real, &linked).expect("create ancestor link");
-        assert!(read_stable_regular_file(&linked.join("snapshot.json"), 64).is_err());
+        assert!(read_stable_regular_file(linked.join("snapshot.json"), 64).is_err());
         let _ = fs::remove_dir_all(root);
     }
 
