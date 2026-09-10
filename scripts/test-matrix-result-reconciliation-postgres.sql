@@ -156,7 +156,7 @@ begin
         'schema', 'cex.matrix.adapter-result-reconciliation-evidence.v2',
         'lookup_response_sha256', 'sha256:3333333333333333333333333333333333333333333333333333333333333333',
         'observed_at', clock_timestamp(),
-        'candidate_sha', 'test-candidate',
+        'candidate_sha', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         'request_fingerprint', request_fingerprint
     );
 
