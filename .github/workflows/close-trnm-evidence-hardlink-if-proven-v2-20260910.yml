@@ -1,0 +1,104 @@
+name: close-trnm-evidence-hardlink-if-proven-v2-20260910
+
+on:
+  push:
+    branches:
+      - ops/object-export-fc8643d-20260910
+
+permissions:
+  contents: write
+
+concurrency:
+  group: close-trnm-evidence-hardlink-if-proven-v2-20260910
+  cancel-in-progress: false
+
+jobs:
+  reproduce_and_apply:
+    name: cex/reproduce-and-close-evidence-hardlink-v2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+      RUSTUP_TOOLCHAIN: '1.98.1'
+      CARGO_INCREMENTAL: '0'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Fetch current target and exact helper
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          target="$RUNNER_TEMP/target"
+          helper="$RUNNER_TEMP/helper"
+          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          rm -rf "$target" "$helper"
+          git init "$target"
+          git -C "$target" remote add origin "$remote_url"
+          git -C "$target" fetch --no-tags --depth=1 origin "refs/heads/${TARGET_BRANCH}"
+          git -C "$target" checkout --detach FETCH_HEAD
+          git -C "$target" rev-parse HEAD > "$RUNNER_TEMP/original-head"
+          git init "$helper"
+          git -C "$helper" remote add origin "$remote_url"
+          git -C "$helper" fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          git -C "$helper" checkout --detach FETCH_HEAD
+          test "$(git -C "$helper" rev-parse HEAD)" = "$GITHUB_SHA"
+          test -s "$helper/scripts/patch-trnm-evidence-binary-staging-v2.py"
+
+      - name: Reproduce multi-link release artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal
+          cd "$RUNNER_TEMP/target"
+          cargo build --release --locked -p trnm-economy-service
+          binary=target/release/trnm-economy-service
+          test -f "$binary"
+          links="$(stat -c %h "$binary")"
+          printf 'TRNM_EVIDENCE_SOURCE_BINARY_LINKS=%s\n' "$links"
+          printf 'TRNM_EVIDENCE_SOURCE_BINARY_SHA256=%s\n' "$(sha256sum "$binary" | awk '{print $1}')"
+          test "$links" -gt 1
+          printf 'TRNM_EVIDENCE_HARDLINK_REPRODUCED=true\n'
+
+      - name: Patch collector block and regenerate semantic snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="$RUNNER_TEMP/target"
+          python3 "$RUNNER_TEMP/helper/scripts/patch-trnm-evidence-binary-staging-v2.py" \
+            "$target/.github/workflows/trnm-economy-settlement.yml"
+          (
+            cd "$target"
+            python3 scripts/test-trnm-build-evidence.py
+            python3 scripts/generate-repository-semantics.py --stdout \
+              > "$RUNNER_TEMP/repository-contract-semantics-v1.json"
+          )
+          cp "$RUNNER_TEMP/repository-contract-semantics-v1.json" \
+            "$target/docs/repository-contract-semantics-v1.json"
+          rm -rf "$target/scripts/__pycache__"
+          git -C "$target" diff --check
+          changed="$(git -C "$target" diff --name-only | sort)"
+          expected="$(printf '%s\n' .github/workflows/trnm-economy-settlement.yml docs/repository-contract-semantics-v1.json | sort)"
+          test "$changed" = "$expected"
+
+      - name: Exact fast-forward after reproduced proof
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          target="$RUNNER_TEMP/target"
+          original="$(cat "$RUNNER_TEMP/original-head")"
+          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          test "$(git ls-remote "$remote_url" "refs/heads/${TARGET_BRANCH}" | cut -f1)" = "$original"
+          git -C "$target" config user.name github-actions[bot]
+          git -C "$target" config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git -C "$target" add .github/workflows/trnm-economy-settlement.yml docs/repository-contract-semantics-v1.json
+          git -C "$target" commit -m "fix(evidence): stage a single-link release binary for qualification"
+          new_head="$(git -C "$target" rev-parse HEAD)"
+          git -C "$target" push "$remote_url" "HEAD:refs/heads/${TARGET_BRANCH}"
+          test "$(git ls-remote "$remote_url" "refs/heads/${TARGET_BRANCH}" | cut -f1)" = "$new_head"
+          printf 'CEX_TARGET_HEAD=%s\n' "$new_head"
+          printf 'HARDLINK_SCOPE=built_release_binary_only\n'
+          printf 'FAST_FORWARD_ONLY=true\n'
+          printf 'PRODUCTION_AUTHORIZATION=not_granted\n'
