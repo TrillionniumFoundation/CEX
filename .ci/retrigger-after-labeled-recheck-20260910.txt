@@ -1,0 +1,3 @@
+purpose=reconcile final source repairs and semantic snapshot after external labeled-recheck workflow commit
+force_update=false
+production_authorization=not_granted
