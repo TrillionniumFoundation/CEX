@@ -6,8 +6,15 @@ from __future__ import annotations
 from pathlib import Path
 import re
 import sys
+from typing import Iterable
 
-from rust_route_contract import RouteSyntaxError, extract_routes
+from rust_route_contract import (
+    RouteSyntaxError,
+    Token,
+    decode_string,
+    extract_routes,
+    tokenize,
+)
 from semantic_source_snapshot import regular_bytes
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,10 +28,17 @@ SPECIAL_FILES = {
     "trillionnium_world_adapters.rs",
 }
 
-MUTATION_RE = re.compile(
-    r"\b(?:insert\s+into|update|delete\s+from|truncate(?:\s+table)?)\s+"
-    r"(?:(?:public|[a-zA-Z_][a-zA-Z0-9_]*)\.)?[\"`]?([a-zA-Z_][a-zA-Z0-9_]*)",
-    re.IGNORECASE,
+SQL_IDENTIFIER = r'(?:[A-Za-z_][A-Za-z0-9_]*|"[A-Za-z_][A-Za-z0-9_]*"|`[A-Za-z_][A-Za-z0-9_]*`)'
+SQL_TARGET = rf'(?P<target>{SQL_IDENTIFIER}(?:\s*\.\s*{SQL_IDENTIFIER})?)'
+MUTATION_PATTERNS = (
+    re.compile(rf"\binsert\s+into\s+{SQL_TARGET}", re.IGNORECASE),
+    re.compile(
+        rf"\bupdate\s+(?:only\s+)?{SQL_TARGET}"
+        rf"(?:\s+(?:as\s+)?{SQL_IDENTIFIER})?\s+set\b",
+        re.IGNORECASE,
+    ),
+    re.compile(rf"\bdelete\s+from\s+(?:only\s+)?{SQL_TARGET}", re.IGNORECASE),
+    re.compile(rf"\btruncate(?:\s+table)?\s+{SQL_TARGET}", re.IGNORECASE),
 )
 DDL_RE = re.compile(
     r"\b(?:create|alter|drop)\s+(?:table|view|materialized\s+view|function|trigger)\b",
@@ -69,16 +83,43 @@ FORBIDDEN_ROUTE_SEGMENTS = {
     "finality",
     "production-authorize",
 }
-FORBIDDEN_LITERAL_PATTERNS = [
-    re.compile(r'\"authoritative\"\s*:\s*true', re.IGNORECASE),
-    re.compile(r'\"production_authorization\"\s*:\s*\"granted\"', re.IGNORECASE),
-    re.compile(r'\"chain_finality_verified\"\s*:\s*true', re.IGNORECASE),
-    re.compile(r'\"ledger_settled\"\s*:\s*true', re.IGNORECASE),
-]
-FORBIDDEN_INTERNAL_ENDPOINTS = [
-    re.compile(r'/(?:v[0-9]+/)?(?:ledger|audit|executions?|providers?)(?:/|\")', re.IGNORECASE),
-    re.compile(r'/(?:v[0-9]+/)?(?:chain[-_]?finality|finality)(?:/|\")', re.IGNORECASE),
-]
+FORBIDDEN_LITERAL_PATTERNS = (
+    re.compile(r'"authoritative"\s*:\s*true', re.IGNORECASE),
+    re.compile(r'"production_authorization"\s*:\s*"granted"', re.IGNORECASE),
+    re.compile(r'"chain_finality_verified"\s*:\s*true', re.IGNORECASE),
+    re.compile(r'"ledger_settled"\s*:\s*true', re.IGNORECASE),
+)
+FORBIDDEN_INTERNAL_ENDPOINTS = (
+    re.compile(
+        r'(?:^|[\s\'"(=:])/(?:v[0-9]+/)?'
+        r'(?:ledger|audit|executions?|providers?)(?=/|$|[?#{])',
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r'(?:^|[\s\'"(=:])/(?:v[0-9]+/)?'
+        r'(?:chain[-_]?finality|finality)(?=/|$|[?#{])',
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r'/v[0-9]+/(?:ledger|audit|executions?|providers?|chain[-_]?finality|finality)'
+        r'(?=/|$|[?#{])',
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r'https?://[^\s/]+/(?:v[0-9]+/)?'
+        r'(?:ledger|audit|executions?|providers?|chain[-_]?finality|finality)'
+        r'(?=/|$|[?#{])',
+        re.IGNORECASE,
+    ),
+)
+FORBIDDEN_BOOLEAN_KEYS = {
+    "authoritative",
+    "chain_finality_verified",
+    "ledger_settled",
+}
+FORBIDDEN_STRING_VALUES = {
+    "production_authorization": "granted",
+}
 
 
 def projection_files() -> list[Path]:
@@ -96,26 +137,170 @@ def source_line(text: str, offset: int) -> int:
     return text.count("\n", 0, offset) + 1
 
 
+def rust_tokens(text: str, relative: str) -> list[Token]:
+    try:
+        return tokenize(text)
+    except RouteSyntaxError as error:
+        raise AssertionError(
+            f"projection Rust lexical parsing failed in {relative}: {error}"
+        ) from error
+
+
+def decoded_literal(token: Token, relative: str) -> str:
+    try:
+        return decode_string(token)
+    except RouteSyntaxError as error:
+        raise AssertionError(
+            f"projection Rust string decoding failed in {relative}: {error}"
+        ) from error
+
+
+def string_literals(tokens: Iterable[Token], relative: str) -> list[tuple[Token, str]]:
+    return [
+        (token, decoded_literal(token, relative))
+        for token in tokens
+        if token.kind in {"string", "raw_string"}
+    ]
+
+
+def sql_code_mask(text: str) -> str:
+    """Mask SQL comments and quoted values while retaining identifier structure.
+
+    This is deliberately not a SQL parser. It only prevents comments and values
+    inside a Rust string literal from manufacturing mutation/DDL evidence.
+    Double-quoted/backtick identifiers remain visible to the namespace check.
+    """
+
+    output = list(text)
+    length = len(text)
+    index = 0
+    block_depth = 0
+
+    def blank(start: int, end: int) -> None:
+        for offset in range(start, min(end, length)):
+            if output[offset] not in "\r\n":
+                output[offset] = " "
+
+    while index < length:
+        if block_depth:
+            if text.startswith("/*", index):
+                blank(index, index + 2)
+                block_depth += 1
+                index += 2
+            elif text.startswith("*/", index):
+                blank(index, index + 2)
+                block_depth -= 1
+                index += 2
+            else:
+                if output[index] not in "\r\n":
+                    output[index] = " "
+                index += 1
+            continue
+
+        if text.startswith("--", index):
+            end = text.find("\n", index + 2)
+            end = length if end < 0 else end
+            blank(index, end)
+            index = end
+            continue
+        if text.startswith("/*", index):
+            blank(index, index + 2)
+            block_depth = 1
+            index += 2
+            continue
+        if text[index] == "'":
+            cursor = index + 1
+            while cursor < length:
+                if text[cursor] == "'":
+                    if cursor + 1 < length and text[cursor + 1] == "'":
+                        cursor += 2
+                        continue
+                    cursor += 1
+                    break
+                cursor += 1
+            blank(index, cursor)
+            index = cursor
+            continue
+        if text[index] == "$":
+            tag = re.match(r"(?:\$\$|\$[A-Za-z_][A-Za-z0-9_]*\$)", text[index:])
+            if tag:
+                marker = tag.group(0)
+                end = text.find(marker, index + len(marker))
+                end = length if end < 0 else end + len(marker)
+                blank(index, end)
+                index = end
+                continue
+        index += 1
+
+    return "".join(output)
+
+
+def mutation_target(raw: str) -> str:
+    final = re.split(r"\s*\.\s*", raw)[-1]
+    return final.strip('"`').lower()
+
+
+def authority_token_problems(
+    tokens: list[Token], text: str, relative: str
+) -> list[str]:
+    problems: list[str] = []
+    for index, token in enumerate(tokens):
+        if token.kind not in {"string", "raw_string"}:
+            continue
+        key = decoded_literal(token, relative)
+        if key not in FORBIDDEN_BOOLEAN_KEYS and key not in FORBIDDEN_STRING_VALUES:
+            continue
+        if index + 2 >= len(tokens) or tokens[index + 1].text != ":":
+            continue
+        value = tokens[index + 2]
+        forbidden = key in FORBIDDEN_BOOLEAN_KEYS and value.kind == "ident" and value.text == "true"
+        if key in FORBIDDEN_STRING_VALUES and value.kind in {"string", "raw_string"}:
+            forbidden = decoded_literal(value, relative).lower() == FORBIDDEN_STRING_VALUES[key]
+        if forbidden:
+            problems.append(
+                f"{relative}:{source_line(text, token.offset)}: projection code declares an authoritative outcome"
+            )
+    return problems
+
+
 def check_file(path: Path) -> list[str]:
     text = regular_bytes(ROOT, path).decode("utf-8")
     relative = path.relative_to(ROOT).as_posix()
     problems: list[str] = []
+    tokens = rust_tokens(text, relative)
+    literals = string_literals(tokens, relative)
 
-    for match in DDL_RE.finditer(text):
-        problems.append(
-            f"{relative}:{source_line(text, match.start())}: runtime DDL is forbidden in projection code"
-        )
+    for token, value in literals:
+        sql = sql_code_mask(value)
+        for match in DDL_RE.finditer(sql):
+            problems.append(
+                f"{relative}:{source_line(text, token.offset)}: runtime DDL is forbidden in projection code"
+            )
+        for expression in MUTATION_PATTERNS:
+            for match in expression.finditer(sql):
+                table = mutation_target(match.group("target"))
+                if table.startswith(FORBIDDEN_AUTHORITY_PREFIXES):
+                    problems.append(
+                        f"{relative}:{source_line(text, token.offset)}: direct mutation of authoritative table {table!r}"
+                    )
+                elif not table.startswith(ALLOWED_MUTATION_PREFIXES):
+                    problems.append(
+                        f"{relative}:{source_line(text, token.offset)}: mutation target {table!r} lacks an approved projection namespace"
+                    )
 
-    for match in MUTATION_RE.finditer(text):
-        table = match.group(1).lower()
-        if table.startswith(FORBIDDEN_AUTHORITY_PREFIXES):
-            problems.append(
-                f"{relative}:{source_line(text, match.start())}: direct mutation of authoritative table {table!r}"
-            )
-        elif not table.startswith(ALLOWED_MUTATION_PREFIXES):
-            problems.append(
-                f"{relative}:{source_line(text, match.start())}: mutation target {table!r} lacks an approved projection namespace"
-            )
+        for expression in FORBIDDEN_LITERAL_PATTERNS:
+            if expression.search(value):
+                problems.append(
+                    f"{relative}:{source_line(text, token.offset)}: projection code declares an authoritative outcome"
+                )
+
+        for expression in FORBIDDEN_INTERNAL_ENDPOINTS:
+            if expression.search(value):
+                problems.append(
+                    f"{relative}:{source_line(text, token.offset)}: projection code calls an internal authoritative endpoint directly"
+                )
+
+    problems.extend(authority_token_problems(tokens, text, relative))
 
     try:
         declarations = extract_routes(text)
@@ -132,19 +317,7 @@ def check_file(path: Path) -> list[str]:
         if forbidden:
             problems.append(f"{relative}:{line}: projection route {route!r} contains authoritative segment(s) {forbidden}")
 
-    for expression in FORBIDDEN_LITERAL_PATTERNS:
-        for match in expression.finditer(text):
-            problems.append(
-                f"{relative}:{source_line(text, match.start())}: projection code declares an authoritative outcome"
-            )
-
-    for expression in FORBIDDEN_INTERNAL_ENDPOINTS:
-        for match in expression.finditer(text):
-            problems.append(
-                f"{relative}:{source_line(text, match.start())}: projection code calls an internal authoritative endpoint directly"
-            )
-
-    return problems
+    return list(dict.fromkeys(problems))
 
 
 def check_contract_files() -> list[str]:

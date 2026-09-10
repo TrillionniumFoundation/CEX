@@ -57,6 +57,66 @@ class ProjectionRouteTests(unittest.TestCase):
     def test_financial_mutation_guard_is_preserved(self):
         self.assertTrue(self.check('sqlx::query("update ledger_accounts set x=1");'))
 
+    def test_allowed_projection_mutation_remains_allowed(self):
+        self.assertEqual(
+            self.check('sqlx::query("update world_projection_rows set x=1");'),
+            [],
+        )
+
+    def test_on_conflict_update_set_is_not_a_table_named_set(self):
+        self.assertEqual(
+            self.check(
+                'sqlx::query("insert into league_players (id) values (1) '
+                'on conflict (id) do update set id=excluded.id");'
+            ),
+            [],
+        )
+
+    def test_rust_comments_and_sql_comments_cannot_manufacture_mutations(self):
+        self.assertEqual(
+            self.check(
+                '// UPDATE ledger_accounts SET amount=0\n'
+                'sqlx::query(r#"-- UPDATE ledger_accounts SET amount=0\nselect 1"#);'
+            ),
+            [],
+        )
+
+    def test_update_prose_is_not_a_sql_table_reference(self):
+        self.assertEqual(
+            self.check('let note="UPDATE that would trip the append-only guard";'),
+            [],
+        )
+
+    def test_slash_separated_role_prose_is_not_an_endpoint(self):
+        self.assertEqual(
+            self.check('let note="Assign scout/build/audit/close roles";'),
+            [],
+        )
+
+    def test_internal_authority_endpoint_literals_are_rejected(self):
+        for source in (
+            'let endpoint="/v1/ledger/entries";',
+            'let endpoint=r#"https://internal.example/provider/status"#;',
+            'let endpoint="{base}/v2/chain-finality/latest";',
+        ):
+            with self.subTest(source=source):
+                self.assertTrue(self.check(source))
+
+    def test_authoritative_json_tokens_and_embedded_json_are_rejected(self):
+        for source in (
+            'let value=json!({"authoritative": true});',
+            'let value=json!({"production_authorization": "granted"});',
+            'let value=r#"{\"ledger_settled\":true}"#;',
+        ):
+            with self.subTest(source=source):
+                self.assertTrue(self.check(source))
+
+    def test_authoritative_shapes_in_comments_are_ignored(self):
+        self.assertEqual(
+            self.check('// json!({"authoritative": true});\nlet value=false;'),
+            [],
+        )
+
     def test_invalid_rust_does_not_silently_skip(self):
         with self.assertRaises(AssertionError): self.check('.route("PRIVATE_SECRET')
 
