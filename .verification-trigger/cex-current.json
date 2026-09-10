@@ -1,0 +1,7 @@
+{
+  "schema": "cex.verification-trigger.v1",
+  "target_branch": "integration/cex-v12-sequence54-20260908",
+  "target_sha": "6ef191c307f8f20391ed350c704e8498c60962f7",
+  "controller_run_id": "34438304397",
+  "production_authorization": "not_granted"
+}
