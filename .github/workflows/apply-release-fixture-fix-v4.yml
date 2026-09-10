@@ -1,0 +1,216 @@
+name: apply-release-fixture-fix-v4
+
+on:
+  push:
+    branches:
+      - ops/object-export-fc8643d-20260910
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: apply-release-fixture-fix-v4
+  cancel-in-progress: false
+
+jobs:
+  verify_apply:
+    name: cex-release/verify-and-apply-exact-head
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      EXPECTED_HEAD: fc8643d76e7c9ca2691712e39985c7b2ae06ad74
+      TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+      HELPER_REPOSITORY: TrillionniumFoundation/TrillionniumGame
+      HELPER_COMMIT: 93b85cf1ca2ef0a8b99fd263750417c19b1c65e9
+      HELPER_BLOB: f430ad3ccb0c1caa7c004812300062038eb8c54b
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Fetch exact candidate and pinned transformer
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate="$RUNNER_TEMP/candidate"
+          helper="$RUNNER_TEMP/patch-cex-release-fixtures.py"
+          rm -rf "$candidate" "$helper"
+          git init "$candidate"
+          git -C "$candidate" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -C "$candidate" fetch --no-tags --depth=1 origin "$EXPECTED_HEAD"
+          git -C "$candidate" checkout --detach FETCH_HEAD
+          test "$(git -C "$candidate" rev-parse HEAD)" = "$EXPECTED_HEAD"
+          curl --fail --silent --show-error --location \
+            "https://raw.githubusercontent.com/${HELPER_REPOSITORY}/${HELPER_COMMIT}/scripts/patch-cex-release-fixtures.py" \
+            > "$helper"
+          test "$(git hash-object "$helper")" = "$HELPER_BLOB"
+          test -z "$(git -C "$candidate" status --porcelain=v1 --untracked-files=no)"
+
+      - name: Transform and validate release fixture checker
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate="$RUNNER_TEMP/candidate"
+          helper="$RUNNER_TEMP/patch-cex-release-fixtures.py"
+          source="$candidate/scripts/rust_advisory_packages_v5.py"
+          python3 "$helper" "$source"
+          python3 -m py_compile "$source"
+          (
+            cd "$candidate"
+            PYTHONPATH=scripts python3 - <<'PY'
+          import rust_advisory_packages_v5 as module
+          result = module._external_workflow_self_tests()
+          assert result and all(result.values()), result
+          print("CEX_EXTERNAL_WORKFLOW_SELF_TESTS=PASS", result)
+          PY
+          )
+          git -C "$candidate" diff --check
+          test "$(git -C "$candidate" diff --name-only)" = \
+            "scripts/rust_advisory_packages_v5.py"
+
+      - name: Regenerate and validate semantic contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate="$RUNNER_TEMP/candidate"
+          semantic="$candidate/docs/repository-contract-semantics-v1.json"
+          temporary="$RUNNER_TEMP/repository-contract-semantics-v1.json"
+          (
+            cd "$candidate"
+            python3 scripts/generate-repository-semantics.py --stdout
+          ) > "$temporary"
+          python3 - "$temporary" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          path = Path(sys.argv[1])
+          value = json.loads(path.read_text(encoding="utf-8"))
+          assert isinstance(value, dict)
+          assert value.get("production_authorization") == "not_granted"
+          assert isinstance(value.get("source_tree_sha256"), str)
+          path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          print("CEX_GENERATED_SEMANTIC_JSON=PASS")
+          PY
+          cp "$temporary" "$semantic"
+          (
+            cd "$candidate"
+            python3 scripts/check-sequence54-rustsec-admission.py
+          )
+          git -C "$candidate" diff --check
+          test "$(git -C "$candidate" diff --name-only | sort)" = $'docs/repository-contract-semantics-v1.json\nscripts/rust_advisory_packages_v5.py'
+
+      - name: Advance exact CEX PR branch atomically
+        shell: bash
+        env:
+          GH_WRITE_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - \
+            "$RUNNER_TEMP/candidate/scripts/rust_advisory_packages_v5.py" \
+            "$RUNNER_TEMP/candidate/docs/repository-contract-semantics-v1.json" <<'PY'
+          import base64
+          import json
+          import os
+          from pathlib import Path
+          import sys
+          import urllib.parse
+          import urllib.request
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ["GH_WRITE_TOKEN"]
+          expected = os.environ["EXPECTED_HEAD"]
+          branch = os.environ["TARGET_BRANCH"]
+          source = Path(sys.argv[1])
+          semantic = Path(sys.argv[2])
+          api = f"https://api.github.com/repos/{repository}"
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {token}",
+              "Content-Type": "application/json",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+
+          def request(method, suffix, payload=None):
+              data = None if payload is None else json.dumps(payload, separators=(",", ":")).encode()
+              req = urllib.request.Request(api + suffix, data=data, method=method, headers=headers)
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  return json.load(response)
+
+          ref_suffix = "/git/ref/heads/" + urllib.parse.quote(branch, safe="/")
+          current = request("GET", ref_suffix)["object"]["sha"]
+          if current != expected:
+              raise SystemExit(f"target branch drifted: expected {expected}, observed {current}")
+          parent = request("GET", f"/git/commits/{expected}")
+          entries = []
+          for repository_path, path in (
+              ("scripts/rust_advisory_packages_v5.py", source),
+              ("docs/repository-contract-semantics-v1.json", semantic),
+          ):
+              blob = request("POST", "/git/blobs", {
+                  "content": base64.b64encode(path.read_bytes()).decode("ascii"),
+                  "encoding": "base64",
+              })["sha"]
+              entries.append({
+                  "path": repository_path,
+                  "mode": "100644",
+                  "type": "blob",
+                  "sha": blob,
+              })
+          tree = request("POST", "/git/trees", {
+              "base_tree": parent["tree"]["sha"],
+              "tree": entries,
+          })["sha"]
+          commit = request("POST", "/git/commits", {
+              "message": "fix(supply-chain): keep external hostile fixtures out of release scan",
+              "tree": tree,
+              "parents": [expected],
+          })["sha"]
+          current = request("GET", ref_suffix)["object"]["sha"]
+          if current != expected:
+              raise SystemExit(f"target branch moved before update: {current}")
+          updated = request("PATCH", "/git/refs/heads/" + urllib.parse.quote(branch, safe="/"), {
+              "sha": commit,
+              "force": False,
+          })["object"]["sha"]
+          if updated != commit:
+              raise SystemExit("ref update did not bind the created commit")
+          print(f"CEX_PR_BRANCH_ADVANCED={commit}")
+          print("FORCE_UPDATE=false")
+          print("PRODUCTION_AUTHORIZATION=not_granted")
+          PY
+
+      - name: Close accidental temporary-head placeholder pull requests
+        if: always()
+        shell: bash
+        env:
+          GH_WRITE_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ["GH_WRITE_TOKEN"]
+          branch = os.environ["GITHUB_REF_NAME"]
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {token}",
+              "Content-Type": "application/json",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+          owner = repo.split("/", 1)[0]
+          url = f"https://api.github.com/repos/{repo}/pulls?state=open&head={urllib.parse.quote(owner + ':' + branch)}&per_page=100"
+          with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=60) as response:
+              pulls = json.load(response)
+          for pull in pulls:
+              if pull.get("title") not in {"placeholder", "placeholder-cleanup-marker"}:
+                  continue
+              request = urllib.request.Request(
+                  f"https://api.github.com/repos/{repo}/pulls/{pull['number']}",
+                  data=b'{"state":"closed"}', method="PATCH", headers=headers,
+              )
+              with urllib.request.urlopen(request, timeout=60):
+                  pass
+              print(f"CLOSED_PLACEHOLDER_PR={pull['number']}")
+          PY
