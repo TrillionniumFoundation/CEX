@@ -1,4 +1,4 @@
-name: world-batch-validator-58f76a-20260910
+name: world-batch-validator-c3cdd-20260910
 
 on:
   push:
@@ -9,12 +9,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: world-batch-validator-58f76a-20260910
+  group: world-batch-validator-c3cdd-20260910
   cancel-in-progress: true
 
 jobs:
-  validate_world_batch:
-    name: world-batch/exact-rust-postgres
+  validate_world_operator:
+    name: world-current/operator-rust-postgres
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     services:
@@ -23,33 +23,33 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: world_p0_ci
+          POSTGRES_DB: world_operator_ci
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d world_p0_ci"
+          --health-cmd "pg_isready -U postgres -d world_operator_ci"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
     env:
       WORLD_REPOSITORY: TrillionniumFoundation/Trillionnium-World
-      WORLD_COMMIT: 58f76a6100bade6e148a56bd429eff34f8a255cd
-      PATCH_COMMIT: c3851a1e58eba2dd31e7cacff8951fbd493fc110
-      PATCH_BLOB: 0df2e31001b198ec9e8fb5b4a8a2e9d9dbd08c96
+      WORLD_COMMIT: c3cdd793870aab59cdd47068e44860f7b821d212
+      PATCH_COMMIT: d950b438d1256eda2b80f5cd95a4839902d45b93
+      PATCH_BLOB: a692e46805c30bb9c8283cec1c52ec45ec8923cf
       RUSTUP_TOOLCHAIN: '1.98.1'
       CARGO_INCREMENTAL: '0'
       RUST_BACKTRACE: '1'
       RUST_TEST_THREADS: '1'
-      TRNM_SETTLEMENT_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/world_p0_ci
+      TRNM_SETTLEMENT_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/world_operator_ci
       TRNM_REQUIRE_SETTLEMENT_DATABASE_TEST: '1'
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
-      - name: Fetch exact World candidate and pinned helper
+      - name: Fetch exact current World head and pinned helper
         shell: bash
         run: |
           set -euo pipefail
           world="$RUNNER_TEMP/world"
-          helper="$RUNNER_TEMP/patch-p0-statement-let.py"
+          helper="$RUNNER_TEMP/patch-world-operator-only-c3cdd.py"
           rm -rf "$world" "$helper"
           git init "$world"
           git -C "$world" remote add origin "https://github.com/${WORLD_REPOSITORY}.git"
@@ -57,19 +57,26 @@ jobs:
           git -C "$world" checkout --detach FETCH_HEAD
           test "$(git -C "$world" rev-parse HEAD)" = "$WORLD_COMMIT"
           curl --fail --silent --show-error --location \
-            "https://raw.githubusercontent.com/${WORLD_REPOSITORY}/${PATCH_COMMIT}/scripts/patch-p0-statement-let.py" \
+            "https://raw.githubusercontent.com/${WORLD_REPOSITORY}/${PATCH_COMMIT}/scripts/patch-world-operator-only-c3cdd.py" \
             > "$helper"
           test "$(git hash-object "$helper")" = "$PATCH_BLOB"
           test -z "$(git -C "$world" status --porcelain=v1 --untracked-files=no)"
 
-      - name: Apply exact five-file batch
+      - name: Apply exact two-file repair
         shell: bash
         run: |
           set -euo pipefail
-          python3 "$RUNNER_TEMP/patch-p0-statement-let.py" "$RUNNER_TEMP/world"
-          git -C "$RUNNER_TEMP/world" diff --check
+          world="$RUNNER_TEMP/world"
+          python3 "$RUNNER_TEMP/patch-world-operator-only-c3cdd.py" "$world"
+          git -C "$world" diff --check
+          git -C "$world" diff --name-only | LC_ALL=C sort > "$RUNNER_TEMP/changed.txt"
+          cat > "$RUNNER_TEMP/expected.txt" <<'EOF'
+          trillionnium/crates/trnm-game-server/migrations/0018_online_settlement_operator_controls_v1.sql
+          trillionnium/crates/trnm-game-server/tests/settlement_operator_controls_database.rs
+          EOF
+          diff -u "$RUNNER_TEMP/expected.txt" "$RUNNER_TEMP/changed.txt"
 
-      - name: Install exact Rust and canonicalize source
+      - name: Install exact Rust and canonicalize test
         shell: bash
         run: |
           set -euo pipefail
@@ -77,55 +84,11 @@ jobs:
           rustup default 1.98.1
           cd "$RUNNER_TEMP/world"
           cargo fmt --manifest-path trillionnium/Cargo.toml --all
-          python3 - <<'PY'
-          import hashlib
-          import json
-          from pathlib import Path
-
-          root = Path('trillionnium/crates/trnm-game-server/src')
-          source = root / 'lib_parts/configuration_and_migrations/part_01.rs'
-          manifest_path = root / 'lib_parts/manifest.json'
-          manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
-          relative = 'lib_parts/configuration_and_migrations/part_01.rs'
-          matches = [item for item in manifest['parts'] if item['path'] == relative]
-          assert len(matches) == 1
-          data = source.read_bytes()
-          matches[0]['bytes'] = len(data)
-          matches[0]['sha256'] = hashlib.sha256(data).hexdigest()
-          manifest_path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
-          PY
           git diff --check
-          git diff --name-only | LC_ALL=C sort > "$RUNNER_TEMP/changed.txt"
-          cat > "$RUNNER_TEMP/expected.txt" <<'EOF'
-          trillionnium/crates/trnm-game-server/migrations/0018_online_settlement_operator_controls_v1.sql
-          trillionnium/crates/trnm-game-server/src/lib_parts/configuration_and_migrations/part_01.rs
-          trillionnium/crates/trnm-game-server/src/lib_parts/manifest.json
-          trillionnium/crates/trnm-game-server/tests/p0_boundary_contract.rs
-          trillionnium/crates/trnm-game-server/tests/settlement_operator_controls_database.rs
-          EOF
-          diff -u "$RUNNER_TEMP/expected.txt" "$RUNNER_TEMP/changed.txt"
+          git diff --name-only | LC_ALL=C sort > "$RUNNER_TEMP/changed-after-format.txt"
+          diff -u "$RUNNER_TEMP/expected.txt" "$RUNNER_TEMP/changed-after-format.txt"
 
-      - name: Verify direct-source manifest binding
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$RUNNER_TEMP/world"
-          python3 - <<'PY'
-          import hashlib
-          import json
-          from pathlib import Path
-          root = Path('trillionnium/crates/trnm-game-server/src')
-          manifest = json.loads((root / 'lib_parts/manifest.json').read_text())
-          relative = 'lib_parts/configuration_and_migrations/part_01.rs'
-          matches = [item for item in manifest['parts'] if item['path'] == relative]
-          assert len(matches) == 1
-          data = (root / relative).read_bytes()
-          assert matches[0]['bytes'] == len(data)
-          assert matches[0]['sha256'] == hashlib.sha256(data).hexdigest()
-          print('WORLD_DIRECT_SOURCE_MANIFEST_BINDING=PASS')
-          PY
-
-      - name: Execute complete P0 boundary contract
+      - name: Execute complete current-head P0 boundary contract
         shell: bash
         run: |
           set -euo pipefail
@@ -136,7 +99,7 @@ jobs:
             --test p0_boundary_contract \
             --locked -- --nocapture
 
-      - name: Execute settlement operator PostgreSQL contract
+      - name: Execute current-head settlement operator PostgreSQL contract
         shell: bash
         run: |
           set -euo pipefail
@@ -147,34 +110,28 @@ jobs:
             --test settlement_operator_controls_database \
             --locked -- --nocapture
 
-      - name: Assemble exact validated source artifact
+      - name: Assemble exact validated operator files
         shell: bash
         run: |
           set -euo pipefail
           world="$RUNNER_TEMP/world"
-          out="$GITHUB_WORKSPACE/world-p0-batch"
+          out="$GITHUB_WORKSPACE/world-operator-c3cdd"
           rm -rf "$out"
           mkdir -p "$out/trillionnium/crates/trnm-game-server/migrations"
-          mkdir -p "$out/trillionnium/crates/trnm-game-server/src/lib_parts/configuration_and_migrations"
-          mkdir -p "$out/trillionnium/crates/trnm-game-server/src/lib_parts"
           mkdir -p "$out/trillionnium/crates/trnm-game-server/tests"
           cp "$world/trillionnium/crates/trnm-game-server/migrations/0018_online_settlement_operator_controls_v1.sql" \
             "$out/trillionnium/crates/trnm-game-server/migrations/"
-          cp "$world/trillionnium/crates/trnm-game-server/src/lib_parts/configuration_and_migrations/part_01.rs" \
-            "$out/trillionnium/crates/trnm-game-server/src/lib_parts/configuration_and_migrations/"
-          cp "$world/trillionnium/crates/trnm-game-server/src/lib_parts/manifest.json" \
-            "$out/trillionnium/crates/trnm-game-server/src/lib_parts/"
-          cp "$world/trillionnium/crates/trnm-game-server/tests/p0_boundary_contract.rs" \
-            "$world/trillionnium/crates/trnm-game-server/tests/settlement_operator_controls_database.rs" \
+          cp "$world/trillionnium/crates/trnm-game-server/tests/settlement_operator_controls_database.rs" \
             "$out/trillionnium/crates/trnm-game-server/tests/"
           find "$out" -type f -print0 | sort -z | xargs -0 sha256sum
+          printf 'WORLD_SOURCE_HEAD=%s\n' "$WORLD_COMMIT"
           printf 'PRODUCTION_AUTHORIZATION=not_granted\n'
 
-      - name: Upload exact validated World batch
+      - name: Upload exact validated current-head operator files
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: world-p0-batch-58f76a
-          path: world-p0-batch/**
+          name: world-operator-c3cdd
+          path: world-operator-c3cdd/**
           if-no-files-found: error
           retention-days: 1
           compression-level: 9
