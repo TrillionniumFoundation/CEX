@@ -97,7 +97,8 @@ def main() -> int:
         sources["consumer_main"],
         (
             "mod matrix_result_lookup;",
-            ".merge(matrix_result_lookup::router(state.config().clone()))",
+            "let result_lookup = matrix_result_lookup::router(state.config().clone()).layer(",
+            "build_router(state.clone()).merge(result_lookup)",
         ),
         "consumer main",
     )
@@ -136,15 +137,17 @@ def main() -> int:
     failures += require(
         sources["replay_snapshot"],
         (
-            "pub(super) fn read_stable_regular_file",
-            "fs::symlink_metadata(path)",
-            "File::open(path)",
-            "handle_before != expected",
-            "handle_after != expected || path_after != expected",
+            "pub fn read_stable_regular_file(",
+            "open_descriptor(path)?",
+            "validate_regular(&before)?",
+            "identity(&before) != identity(&after)",
+            "identity(&after) != identity(&rebound)",
             "metadata.nlink() != 1",
-            "FILE_ATTRIBUTE_REPARSE_POINT",
-            ".take(limit)",
-            "rejects_symbolic_and_hard_linked_inputs",
+            "FILE_FLAG_OPEN_REPARSE_POINT",
+            ".take(max_bytes.saturating_add(1))",
+            "rejects_leaf_symlinks",
+            "rejects_symlinked_ancestors",
+            "rejects_hard_links",
         ),
         "replay-store stable snapshot",
     )

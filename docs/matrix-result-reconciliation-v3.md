@@ -35,8 +35,7 @@ The binding is created only at the durable relay-to-adapter boundary:
    snapshot.
 5. `matrix_result_lookup.rs` may still locate a candidate cache entry by event
    ID, but it returns the result only when the persisted eight-field binding
-   exactly equals the authenticated lookup request. A legacy or unbound cache
-   entry fails closed.
+   exactly equals the authenticated lookup request. A legacy or unbound cache entry fails closed.
 6. `matrix_result_response_binding.rs` independently buffers every successful
    Consumer result lookup and rejects the 2xx boundary unless the returned
    top-level and nested binding copies are identical and exact, the Matrix

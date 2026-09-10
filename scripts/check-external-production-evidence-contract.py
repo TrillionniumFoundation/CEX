@@ -31,7 +31,7 @@ URI_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
 MAX_BYTES = 64 * 1024 * 1024
 MANIFEST_RESULT_SCHEMA = "cex.active-v12-manifest-guard.v1"
 MIGRATION_HEAD = "0088_enforce_provider_terminal_evidence_binding.sql"
-SEQUENCE = 50
+SEQUENCE = 54
 
 
 class IntakeError(Exception):
