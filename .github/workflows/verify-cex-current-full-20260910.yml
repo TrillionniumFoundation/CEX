@@ -1,0 +1,109 @@
+name: verify-cex-current-full-20260910
+
+on:
+  push:
+    branches:
+      - verify/cex-current-full-20260910
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-cex-current-full-20260910
+  cancel-in-progress: false
+
+jobs:
+  full_repository:
+    name: cex/full-current-repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cex_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d cex_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+      RUSTUP_TOOLCHAIN: '1.98.1'
+      CARGO_INCREMENTAL: '0'
+      RUST_BACKTRACE: '1'
+      RUST_TEST_THREADS: '1'
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cex_test
+      TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/cex_test
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Fetch exact current target
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/cex"
+          target_sha="$(git ls-remote https://github.com/${GITHUB_REPOSITORY}.git refs/heads/${TARGET_BRANCH} | cut -f1)"
+          test "${#target_sha}" = 40
+          printf '%s\n' "$target_sha" > "$RUNNER_TEMP/target-sha"
+          git init "$root"
+          git -C "$root" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -C "$root" fetch --no-tags --depth=1 origin "$target_sha"
+          git -C "$root" checkout --detach FETCH_HEAD
+          test "$(git -C "$root" rev-parse HEAD)" = "$target_sha"
+          test -z "$(git -C "$root" status --porcelain=v1 --untracked-files=no)"
+          printf 'CEX_FROZEN_SHA=%s\n' "$target_sha"
+
+      - name: Install pinned Rust and advisory tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy
+          cargo install cargo-audit --version 0.22.2 --locked
+          cargo install cargo-deny --version 0.20.2 --locked
+          rustc --version
+          cargo-audit --version
+          cargo-deny --version
+
+      - name: Repository semantic and security source gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/cex"
+          python3 scripts/check-sequence54-rustsec-admission.py
+          python3 scripts/check-rust-advisory-exceptions.py
+          python3 scripts/test-consumer-route-contract.py
+          python3 scripts/test-consumer-projection-boundary.py
+          python3 scripts/check-consumer-projection-boundary.py
+          python3 scripts/test-trnm-build-evidence.py
+          python3 scripts/generate-repository-semantics.py --stdout > "$RUNNER_TEMP/generated-semantics.json"
+          cmp docs/repository-contract-semantics-v1.json "$RUNNER_TEMP/generated-semantics.json"
+          rm -rf scripts/__pycache__
+
+      - name: Workspace format, tests, clippy, and release build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/cex"
+          cargo fmt --all -- --check
+          cargo test --workspace --all-targets --locked
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo build --release --workspace --locked
+          test -f target/release/trnm-economy-service
+          printf 'TRNM_ECONOMY_RELEASE_LINKS=%s\n' "$(stat -c %h target/release/trnm-economy-service)"
+          printf 'TRNM_ECONOMY_RELEASE_SHA256=%s\n' "$(sha256sum target/release/trnm-economy-service | awk '{print $1}')"
+
+      - name: Re-read target and reject movement
+        shell: bash
+        run: |
+          set -euo pipefail
+          frozen="$(cat "$RUNNER_TEMP/target-sha")"
+          current="$(git ls-remote https://github.com/${GITHUB_REPOSITORY}.git refs/heads/${TARGET_BRANCH} | cut -f1)"
+          test "$current" = "$frozen"
+          test -z "$(git -C "$RUNNER_TEMP/cex" status --porcelain=v1 --untracked-files=no)"
+          printf 'CEX_FULL_CURRENT_REPOSITORY=PASS\n'
+          printf 'CEX_FROZEN_SHA=%s\n' "$frozen"
+          printf 'PRODUCTION_AUTHORIZATION=not_granted\n'
