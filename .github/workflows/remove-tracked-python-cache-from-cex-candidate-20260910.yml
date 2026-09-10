@@ -1,0 +1,117 @@
+name: remove-tracked-python-cache-from-cex-candidate-20260910
+
+on:
+  push:
+    branches:
+      - ops/object-export-fc8643d-20260910
+
+permissions:
+  contents: write
+
+concurrency:
+  group: remove-tracked-python-cache-from-cex-candidate-20260910
+  cancel-in-progress: false
+
+jobs:
+  sanitize:
+    name: cex/remove-only-tracked-python-cache
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+      PYTHONDONTWRITEBYTECODE: '1'
+      RUSTUP_TOOLCHAIN: '1.98.1'
+      CARGO_INCREMENTAL: '0'
+      RUST_TEST_THREADS: '1'
+    outputs:
+      dirty: ${{ steps.scan.outputs.dirty }}
+    steps:
+      - name: Fetch exact current target
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          head="$(git ls-remote "$remote" "refs/heads/${TARGET_BRANCH}" | cut -f1)"
+          test "${#head}" = 40
+          printf '%s\n' "$head" > "$RUNNER_TEMP/original-head"
+          git init "$RUNNER_TEMP/target"
+          git -C "$RUNNER_TEMP/target" remote add origin "$remote"
+          git -C "$RUNNER_TEMP/target" fetch --no-tags --depth=1 origin "$head"
+          git -C "$RUNNER_TEMP/target" checkout --detach FETCH_HEAD
+
+      - id: scan
+        name: Remove only tracked interpreter cache files
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/target"
+          python3 - "$GITHUB_OUTPUT" <<'PY'
+          from pathlib import PurePosixPath
+          import subprocess
+          import sys
+
+          raw = subprocess.check_output(["git", "ls-files", "-z"])
+          paths = [item.decode("utf-8") for item in raw.split(b"\0") if item]
+          cache = sorted(
+              path
+              for path in paths
+              if "__pycache__" in PurePosixPath(path).parts
+              or path.endswith((".pyc", ".pyo"))
+          )
+          with open(sys.argv[1], "a", encoding="utf-8") as output:
+              output.write(f"dirty={'true' if cache else 'false'}\n")
+          if cache:
+              subprocess.run(["git", "rm", "--", *cache], check=True)
+          print("CEX_TRACKED_PYTHON_CACHE_COUNT=" + str(len(cache)))
+          for path in cache:
+              print("CEX_TRACKED_PYTHON_CACHE_REMOVED=" + path)
+          PY
+          git diff --check
+
+      - name: Regenerate semantics and verify gates after sanitation
+        if: steps.scan.outputs.dirty == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/target"
+          python3 scripts/generate-repository-semantics.py --stdout > "$RUNNER_TEMP/first.json"
+          cp "$RUNNER_TEMP/first.json" docs/repository-contract-semantics-v1.json
+          python3 scripts/generate-repository-semantics.py --stdout > "$RUNNER_TEMP/second.json"
+          cmp "$RUNNER_TEMP/first.json" "$RUNNER_TEMP/second.json"
+          python3 scripts/check-sequence54-rustsec-admission.py
+          python3 scripts/test-consumer-route-contract.py
+          python3 scripts/test-consumer-projection-boundary.py
+          python3 scripts/check-consumer-projection-boundary.py
+          python3 scripts/test-trnm-build-evidence.py
+          test -z "$(git ls-files | grep -E '(^|/)__pycache__/|\.py[co]$' || true)"
+          git diff --check
+
+      - name: Commit and exact fast-forward only when cache existed
+        if: steps.scan.outputs.dirty == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/target"
+          original="$(cat "$RUNNER_TEMP/original-head")"
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          test "$(git ls-remote "$remote" "refs/heads/${TARGET_BRANCH}" | cut -f1)" = "$original"
+          while IFS= read -r path; do
+            case "$path" in
+              */__pycache__/*|*.pyc|*.pyo|docs/repository-contract-semantics-v1.json) ;;
+              *) echo "unexpected sanitation path: $path" >&2; exit 1 ;;
+            esac
+          done < <(git -C "$root" diff --name-only)
+          git -C "$root" config user.name github-actions[bot]
+          git -C "$root" config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git -C "$root" add --all
+          git -C "$root" commit -m "chore: remove tracked Python interpreter cache"
+          new_head="$(git -C "$root" rev-parse HEAD)"
+          git -C "$root" push "$remote" "HEAD:refs/heads/${TARGET_BRANCH}"
+          test "$(git ls-remote "$remote" "refs/heads/${TARGET_BRANCH}" | cut -f1)" = "$new_head"
+          printf 'CEX_TARGET_HEAD=%s\n' "$new_head"
+          printf 'CACHE_AND_SEMANTICS_ONLY_CHANGE=true\n'
+          printf 'PRODUCTION_AUTHORIZATION=not_granted\n'
