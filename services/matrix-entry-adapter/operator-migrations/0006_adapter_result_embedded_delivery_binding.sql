@@ -35,13 +35,14 @@ set search_path = pg_catalog, public
 as $matrix_reconcile_v3$
 declare
     embedded_binding jsonb;
+    embedded_binding_key_count bigint;
     expected_request_fingerprint text;
 begin
-    if jsonb_typeof(p_result_payload) is distinct from 'object' then
+    if pg_catalog.jsonb_typeof(p_result_payload) is distinct from 'object' then
         raise exception 'matrix_adapter_result_embedded_binding_invalid_v3';
     end if;
 
-    if jsonb_typeof(p_result_payload -> 'raw') is distinct from 'object'
+    if pg_catalog.jsonb_typeof(p_result_payload -> 'raw') is distinct from 'object'
         or p_result_payload -> 'raw' ->> 'invocation_id' is null
         or p_result_payload -> 'raw' ->> 'invocation_id'
             is distinct from p_task_id
@@ -51,12 +52,16 @@ begin
 
     embedded_binding := p_result_payload #>
         '{source,metadata,metadata,cex_delivery_binding}';
-    if jsonb_typeof(embedded_binding) is distinct from 'object'
-        or case
-            when jsonb_typeof(embedded_binding) = 'object' then
-                (select count(*) from jsonb_object_keys(embedded_binding))
-            else 0
-        end <> 8
+    if pg_catalog.jsonb_typeof(embedded_binding) = 'object' then
+        select pg_catalog.count(*)
+          into embedded_binding_key_count
+          from pg_catalog.jsonb_object_keys(embedded_binding);
+    else
+        embedded_binding_key_count := 0;
+    end if;
+
+    if pg_catalog.jsonb_typeof(embedded_binding) is distinct from 'object'
+        or embedded_binding_key_count <> 8
         or not embedded_binding ?& array[
             'schema',
             'source',
