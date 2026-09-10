@@ -183,7 +183,12 @@ def referenced_packages(text: str) -> tuple[set[str], set[str], set[str]]:
     packages: set[str] = set()
     manifests: set[str] = set()
     for command in commands:
-        packages.update(re.findall(r"(?:^|\s)(?:-p|--package)(?:=|\s+)([A-Za-z0-9_.-]+)", command))
+        packages.update(
+            re.findall(
+                r"(?:^|\s)(?:-p|--package)(?:=|\s+)([A-Za-z0-9_.-]+)(?=\s|$)",
+                command,
+            )
+        )
         manifests.update(re.findall(r"--manifest-path(?:=|\s+)([^\s'\"\\]+)", command))
     binaries = set(re.findall(r"(?:target/release/|/opt/cex/bin/)([A-Za-z0-9_.-]+)", text))
     return packages, manifests, binaries
