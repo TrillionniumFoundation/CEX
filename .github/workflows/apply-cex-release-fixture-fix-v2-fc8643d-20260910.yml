@@ -1,0 +1,107 @@
+name: apply-cex-release-fixture-fix-v2-fc8643d-20260910
+
+on:
+  push:
+    branches:
+      - ops/object-export-fc8643d-20260910
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-cex-release-fixture-fix-v2-fc8643d-20260910
+  cancel-in-progress: false
+
+jobs:
+  verify_and_apply:
+    name: cex/verify-and-fast-forward-release-fixture-fix-v2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+      EXPECTED_HEAD: fc8643d76e7c9ca2691712e39985c7b2ae06ad74
+      HELPER_REPOSITORY: TrillionniumFoundation/TrillionniumGame
+      HELPER_COMMIT: 93b85cf1ca2ef0a8b99fd263750417c19b1c65e9
+      HELPER_BLOB: f430ad3ccb0c1caa7c004812300062038eb8c54b
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Fetch immutable inputs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          target="$RUNNER_TEMP/target"
+          helper="$RUNNER_TEMP/patch-cex-release-fixtures.py"
+          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          rm -rf "$target" "$helper"
+          git init "$target"
+          git -C "$target" remote add origin "$remote_url"
+          git -C "$target" fetch --no-tags --depth=1 origin "$EXPECTED_HEAD"
+          git -C "$target" checkout --detach FETCH_HEAD
+          test "$(git -C "$target" rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git ls-remote "$remote_url" "refs/heads/${TARGET_BRANCH}" | cut -f1)" = "$EXPECTED_HEAD"
+          curl --fail --silent --show-error --location \
+            "https://raw.githubusercontent.com/${HELPER_REPOSITORY}/${HELPER_COMMIT}/scripts/patch-cex-release-fixtures.py" \
+            > "$helper"
+          test "$(git hash-object "$helper")" = "$HELPER_BLOB"
+
+      - name: Patch, self-test, and generate twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="$RUNNER_TEMP/target"
+          helper="$RUNNER_TEMP/patch-cex-release-fixtures.py"
+          first="$RUNNER_TEMP/semantics-first.json"
+          second="$RUNNER_TEMP/semantics-second.json"
+          python3 "$helper" "$target/scripts/rust_advisory_packages_v5.py"
+          (
+            cd "$target"
+            PYTHONPATH=scripts python3 - <<'PY'
+          import rust_advisory_packages_v5 as module
+          result = module._external_workflow_self_tests()
+          assert result and all(result.values()), result
+          print("CEX_EXTERNAL_WORKFLOW_SELF_TESTS=PASS", result)
+          PY
+            python3 scripts/generate-repository-semantics.py --stdout
+          ) > "$first"
+          python3 - "$first" <<'PY'
+          import json
+          import sys
+          value = json.load(open(sys.argv[1], encoding="utf-8"))
+          assert value["production_authorization"] == "not_granted"
+          assert value["source_tree_sha256"].startswith("sha256:")
+          print("CEX_FIRST_SEMANTIC_GENERATION=PASS")
+          PY
+          cp "$first" "$target/docs/repository-contract-semantics-v1.json"
+          (
+            cd "$target"
+            python3 scripts/generate-repository-semantics.py --stdout
+          ) > "$second"
+          cmp "$first" "$second"
+          rm -rf "$target/scripts/__pycache__"
+          git -C "$target" diff --check
+          changed="$(git -C "$target" diff --name-only | sort)"
+          expected="$(printf '%s\n' docs/repository-contract-semantics-v1.json scripts/rust_advisory_packages_v5.py | sort)"
+          test "$changed" = "$expected"
+          printf 'CEX_SEMANTIC_GENERATION_DETERMINISTIC=true\n'
+
+      - name: Commit and push only as an exact fast-forward
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          target="$RUNNER_TEMP/target"
+          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          test "$(git ls-remote "$remote_url" "refs/heads/${TARGET_BRANCH}" | cut -f1)" = "$EXPECTED_HEAD"
+          git -C "$target" config user.name github-actions[bot]
+          git -C "$target" config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git -C "$target" add scripts/rust_advisory_packages_v5.py docs/repository-contract-semantics-v1.json
+          git -C "$target" commit -m "fix(supply-chain): keep external workflow fixtures out of release scan"
+          new_head="$(git -C "$target" rev-parse HEAD)"
+          git -C "$target" push "$remote_url" "HEAD:refs/heads/${TARGET_BRANCH}"
+          test "$(git ls-remote "$remote_url" "refs/heads/${TARGET_BRANCH}" | cut -f1)" = "$new_head"
+          printf 'CEX_TARGET_HEAD=%s\n' "$new_head"
+          printf 'FAST_FORWARD_ONLY=true\n'
+          printf 'PRODUCTION_AUTHORIZATION=not_granted\n'
