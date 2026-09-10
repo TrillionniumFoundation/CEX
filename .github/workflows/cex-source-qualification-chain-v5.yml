@@ -1,0 +1,155 @@
+name: cex-source-qualification-chain-v5
+
+on:
+  push:
+    branches:
+      - ops/object-export-fc8643d-20260910
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: cex-source-qualification-chain-v5
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    name: cex-source/exact-descendant-qualification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      ORIGINAL_HEAD: fc8643d76e7c9ca2691712e39985c7b2ae06ad74
+      TARGET_BRANCH: integration/cex-v12-sequence54-20260908
+      HELPER_REPOSITORY: TrillionniumFoundation/TrillionniumGame
+      HELPER_COMMIT: 93b85cf1ca2ef0a8b99fd263750417c19b1c65e9
+      HELPER_BLOB: f430ad3ccb0c1caa7c004812300062038eb8c54b
+      RUSTUP_TOOLCHAIN: '1.98.1'
+      CARGO_INCREMENTAL: '0'
+      RUST_BACKTRACE: '1'
+      RUST_TEST_THREADS: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Fetch current target and pinned transformer
+        shell: bash
+        env:
+          GH_WRITE_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/cex"
+          helper="$RUNNER_TEMP/patch-cex-release-fixtures.py"
+          rm -rf "$work" "$helper"
+          git init "$work"
+          git -C "$work" remote add origin "https://x-access-token:${GH_WRITE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git -C "$work" fetch --no-tags origin "$TARGET_BRANCH" "$ORIGINAL_HEAD"
+          git -C "$work" checkout --detach "origin/$TARGET_BRANCH"
+          git -C "$work" merge-base --is-ancestor "$ORIGINAL_HEAD" HEAD
+          curl --fail --silent --show-error --location \
+            "https://raw.githubusercontent.com/${HELPER_REPOSITORY}/${HELPER_COMMIT}/scripts/patch-cex-release-fixtures.py" \
+            > "$helper"
+          test "$(git hash-object "$helper")" = "$HELPER_BLOB"
+          printf 'CEX_CHAIN_INPUT_HEAD=%s\n' "$(git -C "$work" rev-parse HEAD)"
+
+      - name: Ensure exact release-fixture repair and semantic snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/cex"
+          source="$work/scripts/rust_advisory_packages_v5.py"
+          if grep -Fq 'external_package = "trnm-game-" + "server"' "$source"; then
+            test "$(grep -Fc 'external_package = "trnm-game-" + "server"' "$source")" -eq 1
+            test "$(grep -Fc 'undeclared_package = "undeclared-world-" + "package"' "$source")" -eq 1
+            ! grep -Fq 'cargo test -p trnm-game-server --locked' "$source"
+            printf 'CEX_RELEASE_FIXTURE_REPAIR=already_present\n'
+          else
+            test "$(git -C "$work" rev-parse HEAD)" = "$ORIGINAL_HEAD"
+            python3 "$RUNNER_TEMP/patch-cex-release-fixtures.py" "$source"
+            printf 'CEX_RELEASE_FIXTURE_REPAIR=applied_in_chain\n'
+          fi
+          python3 -m py_compile "$source"
+          (
+            cd "$work"
+            PYTHONPATH=scripts python3 - <<'PY'
+          import rust_advisory_packages_v5 as module
+          result = module._external_workflow_self_tests()
+          assert result and all(result.values()), result
+          print("CEX_EXTERNAL_WORKFLOW_SELF_TESTS=PASS", result)
+          PY
+          )
+          generated="$RUNNER_TEMP/repository-contract-semantics-v1.json"
+          (
+            cd "$work"
+            python3 scripts/generate-repository-semantics.py --stdout
+          ) > "$generated"
+          python3 - "$generated" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          path = Path(sys.argv[1])
+          value = json.loads(path.read_text(encoding="utf-8"))
+          assert isinstance(value, dict)
+          assert value.get("production_authorization") == "not_granted"
+          assert isinstance(value.get("source_tree_sha256"), str)
+          path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+          cp "$generated" "$work/docs/repository-contract-semantics-v1.json"
+          git -C "$work" diff --check
+          changed="$(git -C "$work" diff --name-only | sort)"
+          if test -n "$changed"; then
+            test "$changed" = $'docs/repository-contract-semantics-v1.json\nscripts/rust_advisory_packages_v5.py'
+          fi
+
+      - name: Install pinned Rust and supply-chain tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy
+          cargo install --locked cargo-audit --version 0.22.2
+          cargo install --locked cargo-deny --version 0.20.2
+          rustc --version
+          cargo-audit --version
+          cargo-deny --version
+
+      - name: Execute fail-closed RustSec and semantic gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/cex"
+          python3 scripts/check-sequence54-rustsec-admission.py
+          python3 scripts/check-rust-advisory-exceptions.py
+          python3 scripts/generate-repository-semantics.py --check
+          python3 scripts/test-trnm-build-evidence.py
+
+      - name: Execute complete Rust workspace qualification
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/cex"
+          cargo fmt --all -- --check
+          cargo test --workspace --all-targets --locked
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo build --release --workspace --locked
+
+      - name: Fast-forward target only when this run created the repair
+        shell: bash
+        env:
+          GH_WRITE_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/cex"
+          if test -z "$(git -C "$work" status --porcelain)"; then
+            printf 'CEX_TARGET_ALREADY_CONTAINS_REPAIR=true\n'
+            exit 0
+          fi
+          test "$(git -C "$work" rev-parse HEAD)" = "$ORIGINAL_HEAD"
+          git -C "$work" config user.name 'ProfHepta'
+          git -C "$work" config user.email '102159240+ProfHepta@users.noreply.github.com'
+          git -C "$work" add scripts/rust_advisory_packages_v5.py docs/repository-contract-semantics-v1.json
+          git -C "$work" commit -m 'fix(supply-chain): keep external hostile fixtures out of release scan'
+          new_head="$(git -C "$work" rev-parse HEAD)"
+          git -C "$work" push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          remote_head="$(git -C "$work" ls-remote origin "refs/heads/$TARGET_BRANCH" | awk '{print $1}')"
+          test "$remote_head" = "$new_head"
+          printf 'CEX_PR_BRANCH_ADVANCED=%s\n' "$new_head"
+          printf 'FORCE_UPDATE=false\n'
+          printf 'PRODUCTION_AUTHORIZATION=not_granted\n'
