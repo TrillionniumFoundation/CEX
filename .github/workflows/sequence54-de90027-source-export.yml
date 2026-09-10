@@ -91,3 +91,70 @@ jobs:
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
+
+  recover-matrix-v1-doc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout CEX history without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Recover newest valid UTF-8 historical document
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import subprocess
+
+          source_sha = "5104e2242db2134d622e49a5e514b01226412dbe"
+          path = "docs/matrix-result-reconciliation-v1.md"
+          output = Path("/tmp/recovered-matrix-v1")
+          output.mkdir(mode=0o700)
+          revisions = subprocess.check_output(
+              ["git", "rev-list", source_sha, "--", path], text=True
+          ).splitlines()
+          checked = []
+          for revision in revisions:
+              data = subprocess.check_output(["git", "show", f"{revision}:{path}"])
+              try:
+                  text = data.decode("utf-8")
+              except UnicodeDecodeError as error:
+                  checked.append({"revision": revision, "valid_utf8": False, "error_start": error.start})
+                  continue
+              if "# Matrix Durable Result Lookup and Reconciliation v1" not in text:
+                  checked.append({"revision": revision, "valid_utf8": True, "expected_heading": False})
+                  continue
+              recovered = output / "matrix-result-reconciliation-v1.md"
+              recovered.write_bytes(data)
+              metadata = {
+                  "schema": "cex.matrix-v1-doc-recovery.v1",
+                  "source_head": source_sha,
+                  "path": path,
+                  "recovered_revision": revision,
+                  "sha256": hashlib.sha256(data).hexdigest(),
+                  "byte_length": len(data),
+                  "checked_revisions": checked,
+                  "production_authorization": "not_granted",
+              }
+              (output / "recovery.json").write_text(
+                  json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+                  encoding="utf-8",
+              )
+              break
+          else:
+              raise SystemExit("no valid historical UTF-8 document found")
+          PY
+      - name: Upload recovered document and provenance
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: recovered-matrix-v1-document
+          path: /tmp/recovered-matrix-v1/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
