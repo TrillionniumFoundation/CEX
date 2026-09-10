@@ -76,16 +76,24 @@ def acquired_inputs(root: Path) -> tuple[list[tuple[str, str]], dict[str, str]]:
             )
         stages.append((f"operator-migration-{pass_number}-{name}", sql))
 
-    # Apply the complete ordered schema twice before any behavioral regression.
-    # This proves every migration, including the v3 privilege cutover in 0006,
-    # is replay-safe while ensuring all tests execute against the final schema.
-    # Running the base regressions before 0006 would contradict their current
-    # requirement that runtime v1/v2 execution is already revoked.
+    # Prove the historical v1/v2 chain replay-safe before its own regressions.
+    # Those regressions intentionally execute while v2 remains the runtime API;
+    # applying the v3 privilege/evidence cutover first would invalidate the
+    # historical contract rather than test it. Then replay the security cutover
+    # twice and execute all v3-only regressions against the final schema.
     for pass_number in (1, 2):
-        for name in MIGRATIONS:
+        for name in BASE_MIGRATIONS:
             migration_stage(pass_number, name)
 
-    for relative in REGRESSIONS:
+    for relative in BASE_REGRESSIONS:
+        inputs[relative] = base.read_input(root, relative)
+        stages.append((Path(relative).stem, inputs[relative]))
+
+    for pass_number in (1, 2):
+        for name in SECURITY_MIGRATIONS:
+            migration_stage(pass_number, name)
+
+    for relative in SECURITY_REGRESSIONS:
         inputs[relative] = base.read_input(root, relative)
         stages.append((Path(relative).stem, inputs[relative]))
 
