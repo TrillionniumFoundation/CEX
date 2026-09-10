@@ -1,0 +1,3 @@
+purpose=rerun descendant-CAS repair after external native-admission commit
+force_update=false
+production_authorization=not_granted
