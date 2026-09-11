@@ -2,9 +2,9 @@
   "schema": "trnm_world_cex_settlement_external_lock_v1",
   "world": {
     "repository": "TrillionniumFoundation/Trillionnium-World",
-    "branch": "fix/world-settlement-gap-closure-v1",
-    "commit": "ad0fd6378242992cea4e035efe90174f5f2bc138",
-    "tree": "25d540f93f2a83133f4f6d1b94d3916b1d7498ee"
+    "branch": "qualification/sequence54-world-c16c3-20260911",
+    "commit": "c16c3e24599675e8836d8bd6f9067dc88a3545e3",
+    "tree": "598f420f436a6e20185c00689a6561b0f4b32c08"
   },
   "cex_owner": {
     "repository": "TrillionniumFoundation/CEX",
@@ -13,9 +13,9 @@
     "tree": "da130a2b883ff96c3f1aac8eee8f4a47e2f9afaf"
   },
   "manual_rearm": {
-    "actor": "Tomasrgbsf",
-    "generation": 6,
-    "reason": "bind exact PostgreSQL operator replay migration repair and rerun the complete unit, database and strict lint matrix"
+    "actor": "ProfHepta",
+    "generation": 7,
+    "reason": "bind the repaired World operator-policy identity sequence, warning-free strict lint target, pinned rustfmt tree, and current-main ancestry"
   },
   "promotion_effect": "none",
   "native_world_actions_run": false,
