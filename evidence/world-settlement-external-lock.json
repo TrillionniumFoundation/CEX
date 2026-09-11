@@ -3,8 +3,8 @@
   "world": {
     "repository": "TrillionniumFoundation/Trillionnium-World",
     "branch": "qualification/sequence54-world-c45cf-20260911",
-    "commit": "c45cf8c8e2dcc62ea67ea8a5db846cc09bf4eed8",
-    "tree": "f1ae25a367cf58d8ed6814b1345443be9292e7d1"
+    "commit": "1a19f8165f6fb249a5741b9744221dcab01e94bc",
+    "tree": "57390b8b94390d31c7c292383425fd9c12b3d9be"
   },
   "cex_owner": {
     "repository": "TrillionniumFoundation/CEX",
@@ -14,8 +14,8 @@
   },
   "manual_rearm": {
     "actor": "ProfHepta",
-    "generation": 9,
-    "reason": "bind the main-anchored World candidate that passes the precise PostgreSQL settlement contract and removes the final Rust 1.98.1 strict-Clippy warning without a lint allowance"
+    "generation": 10,
+    "reason": "bind the main-anchored World candidate after applying the pinned Rust 1.98.1 format remediation and the unit-returning WebSocket close cleanup required by strict Clippy"
   },
   "promotion_effect": "none",
   "native_world_actions_run": false,
