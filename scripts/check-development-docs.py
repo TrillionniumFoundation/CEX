@@ -249,13 +249,13 @@ def main() -> int:
             MATRIX_RESULT_RECONCILIATION,
             [],
             "Matrix result reconciliation base contract",
-            "cex.matrix.result-reconciliation-source-check.v2",
+            "cex.matrix.result-reconciliation-source-check.v3",
         ),
         (
             MATRIX_RESULT_RECONCILIATION_V2,
             [],
             "Matrix result reconciliation security v2",
-            "cex.matrix.result-reconciliation-security-source-check.v1",
+            "cex.matrix.result-reconciliation-security-source-check.v2",
         ),
         (
             MATRIX_RESULT_RECONCILIATION_V3,
@@ -267,7 +267,7 @@ def main() -> int:
             MATRIX_RESULT_TRACEABILITY_V3,
             [],
             "Matrix result reconciliation traceability v3",
-            "cex.matrix.result-reconciliation-traceability-check.v1",
+            "cex.matrix.result-reconciliation-traceability-check.v2",
         ),
         (
             EXTERNAL_AGENT_CONFIG,
