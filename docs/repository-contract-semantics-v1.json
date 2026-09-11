@@ -12,7 +12,7 @@
     "path": "docs/module-catalog-v1.json",
     "sha256": "sha256:77a0d9683250e306bb8e51cab8c5810225a5ebf5feb9f3543dbd016085e75ac9"
   },
-  "source_tree_sha256": "sha256:155d1d6d5364b7cd5951779c77e26b3d50136fe9db4709b5c109bb1c98a79f11",
+  "source_tree_sha256": "sha256:7eb729da9f058b907de62977076c9a1189de901ac865f31d52c9770081db2705",
   "counts": {
     "route": 441,
     "config": 428,
