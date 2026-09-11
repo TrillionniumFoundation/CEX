@@ -28,6 +28,10 @@ CAUSAL_MIGRATIONS = (
 SECURITY_MIGRATIONS = (
     "0006_adapter_result_embedded_delivery_binding.sql",
 )
+# Compatibility names retained for v2/v3 source-contract consumers. The base
+# phase is exactly the historical v1 migration generation, not the later causal
+# or embedded-binding security phases.
+BASE_MIGRATIONS = HISTORICAL_MIGRATIONS
 MIGRATIONS = HISTORICAL_MIGRATIONS + CAUSAL_MIGRATIONS + SECURITY_MIGRATIONS
 HISTORICAL_REGRESSIONS = (
     "scripts/test-matrix-result-evidence-hardening-postgres.sql",
@@ -41,6 +45,7 @@ SECURITY_REGRESSIONS = (
     "scripts/test-matrix-result-embedded-binding-postgres.sql",
     "scripts/test-matrix-result-task-invocation-binding-postgres.sql",
 )
+BASE_REGRESSIONS = HISTORICAL_REGRESSIONS
 REGRESSIONS = HISTORICAL_REGRESSIONS + CAUSAL_REGRESSIONS + SECURITY_REGRESSIONS
 SCHEMA = "cex.matrix-operator-postgres-regression.v4"
 MAX_RUN_SECONDS = 900
@@ -124,8 +129,6 @@ def session_sql(
         raise OperatorRegressionError(
             "invalid operator regression session identity"
         )
-    # Reuse the established parser's exact closed marker prefix; operator stage
-    # names and evidence schema provide the namespace distinction.
     prefix = "CEX_MATRIX_" + nonce
     safety = f"""do $matrix_operator_identity$
 begin
