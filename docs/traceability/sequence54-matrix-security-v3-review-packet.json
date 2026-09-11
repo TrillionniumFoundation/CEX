@@ -16,26 +16,34 @@
         "services/matrix-entry-adapter/operator-migrations/0005_adapter_result_causal_binding.sql",
         "services/matrix-entry-adapter/operator-migrations/0006_adapter_result_embedded_delivery_binding.sql",
         "services/matrix-entry-adapter/src/result_reconciliation.rs",
-        "scripts/reconcile-matrix-adapter-result-v3.py"
+        "scripts/reconcile-matrix-adapter-result.py",
+        "scripts/reconcile-matrix-adapter-result-v3.py",
+        "scripts/reconcile-matrix-adapter-result-v2-core.py",
+        "scripts/reconcile-matrix-adapter-result-v2-internal.py"
       ],
       "regressions": [
         "scripts/test-matrix-result-causal-binding-postgres.sql",
         "scripts/test-matrix-result-embedded-binding-postgres.sql",
+        "scripts/check-matrix-result-reconciliation.py",
         "scripts/check-matrix-result-reconciliation-security-v3.py"
       ]
     },
     {
       "id": "closed_postgresql_transport",
-      "requirement": "Reconciliation uses a protected literal-loopback transport or certificate- and hostname-verified remote TLS with explicit trust roots, channel binding, a pinned psql executable and a closed allowlisted libpq subprocess environment.",
+      "requirement": "Reconciliation uses a protected literal-loopback transport or certificate- and hostname-verified remote TLS with explicit trust roots, channel binding, a pinned psql executable and a closed allowlisted libpq subprocess environment; only the canonical v3 command can reach that retained implementation.",
       "implementation": [
         "scripts/reconcile-matrix-adapter-result.py",
-        "scripts/reconcile-matrix-adapter-result-v3.py"
+        "scripts/reconcile-matrix-adapter-result-v3.py",
+        "scripts/reconcile-matrix-adapter-result-v2-core.py",
+        "scripts/reconcile-matrix-adapter-result-v2-internal.py"
       ],
       "regressions": [
+        "scripts/check-matrix-result-reconciliation.py",
         "scripts/check-matrix-result-reconciliation-security-v2.py",
         "scripts/check-matrix-result-reconciliation-security-v3.py"
       ],
       "negative_cases": [
+        "direct_v2_runtime_command",
         "empty_or_ambiguous_credentials",
         "remote_plaintext_or_downgrade",
         "missing_trust_root",
@@ -76,10 +84,11 @@
     },
     {
       "id": "task_invocation_and_success_boundary",
-      "requirement": "Consumer Entry, the Adapter reconciliation facade, the v3 operator command and the v3 SQL entrypoint all require non-empty task_id to equal raw.invocation_id and reject malformed or authority-expanding success envelopes before the next trust boundary.",
+      "requirement": "Consumer Entry, the Adapter reconciliation facade, the canonical v3 operator command and the v3 SQL entrypoint all require non-empty task_id to equal raw.invocation_id and reject malformed or authority-expanding success envelopes before the next trust boundary.",
       "implementation": [
         "services/consumer-entry-api/src/matrix_result_response_binding.rs",
         "services/matrix-entry-adapter/src/reconciliation_response_binding.rs",
+        "scripts/reconcile-matrix-adapter-result.py",
         "scripts/reconcile-matrix-adapter-result-v3.py",
         "services/matrix-entry-adapter/operator-migrations/0006_adapter_result_embedded_delivery_binding.sql"
       ],
@@ -87,6 +96,7 @@
         "services/consumer-entry-api/src/matrix_result_response_binding.rs",
         "services/matrix-entry-adapter/src/reconciliation_response_binding.rs",
         "scripts/test-matrix-result-task-invocation-binding-postgres.sql",
+        "scripts/check-matrix-result-reconciliation.py",
         "scripts/check-matrix-result-reconciliation-security-v3.py"
       ],
       "hostile_cases": [
@@ -105,8 +115,10 @@
       "python3 scripts/check-matrix-result-reconciliation-security-v3.py",
       "python3 scripts/check-matrix-result-reconciliation-traceability-v3.py",
       "python3 scripts/check-module-documentation.py",
-      "python3 scripts/check-development-documentation.py",
-      "python3 scripts/reconcile-matrix-adapter-result-v3.py --self-test",
+      "python3 scripts/check-development-docs.py",
+      "python3 scripts/reconcile-matrix-adapter-result.py --self-test",
+      "python3 scripts/reconcile-matrix-adapter-result-v2-core.py --self-test",
+      "python3 scripts/reconcile-matrix-adapter-result-v2-core.py",
       "cargo fmt -p matrix-entry-adapter -p consumer-entry-api -- --check",
       "cargo test --locked -p matrix-entry-adapter -p consumer-entry-api --all-targets",
       "cargo clippy --locked -p matrix-entry-adapter -p consumer-entry-api --all-targets -- -D warnings",
