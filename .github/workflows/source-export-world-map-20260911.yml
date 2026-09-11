@@ -9,30 +9,49 @@ permissions:
   contents: read
 
 jobs:
-  export-exact-source:
+  validate-and-export-repair:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
-      - name: Checkout exact candidate source without retained credentials
+      - name: Checkout tooling branch without retained credentials
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 7abbba861026c84fedebafc52280289205d0afd8
+          fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify exact source identity
+      - name: Apply repair to exact candidate in detached worktree
         shell: bash
         run: |
           set -euo pipefail
+          cp tmp/world-map-delta-tick-race.patch /tmp/world-map-delta-tick-race.patch
+          git checkout --detach 7abbba861026c84fedebafc52280289205d0afd8
           test "$(git rev-parse HEAD)" = "7abbba861026c84fedebafc52280289205d0afd8"
           test "$(git rev-parse 'HEAD^{tree}')" = "3a47a14bd9ce8a8141e6194cda401fb4e7a54316"
+          git apply --check /tmp/world-map-delta-tick-race.patch
+          git apply /tmp/world-map-delta-tick-race.patch
 
-      - name: Upload exact source files
+      - name: Install Rust 1.98.1
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+
+      - name: Format repaired source
+        run: cargo fmt --all
+
+      - name: Verify formatting
+        run: cargo fmt --all --check
+
+      - name: Run consumer entry full target suite
+        run: cargo test --locked -p consumer-entry-api --all-targets --no-fail-fast
+
+      - name: Deny consumer entry Clippy warnings
+        run: cargo clippy --locked -p consumer-entry-api --all-targets -- -D warnings
+
+      - name: Upload validated formatted repair
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: exact-world-map-source-7abbba861026c84fedebafc52280289205d0afd8
-          path: |
-            services/consumer-entry-api/src/world_map_projection.rs
-            services/consumer-entry-api/src/tests.rs
-            services/consumer-entry-api/Cargo.toml
+          name: validated-world-map-repair-7abbba861026c84fedebafc52280289205d0afd8
+          path: services/consumer-entry-api/src/world_map_projection.rs
           if-no-files-found: error
           retention-days: 1
