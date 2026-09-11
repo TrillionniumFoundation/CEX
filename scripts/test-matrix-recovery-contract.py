@@ -3,6 +3,7 @@
 from __future__ import annotations
 import importlib.util
 from pathlib import Path
+import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +22,14 @@ class RecoveryContractTests(unittest.TestCase):
         changed = dict(self.sources)
         self.assertIn(old, changed[path])
         changed[path] = changed[path].replace(old, new, 1)
+        with self.assertRaises(AssertionError):
+            CHECK.validate(changed)
+
+    def mutation_rejected_ignoring_whitespace(self, path, old, new):
+        changed = dict(self.sources)
+        pattern = re.compile(r'\s+'.join(re.escape(token) for token in old.split()))
+        self.assertIsNotNone(pattern.search(changed[path]))
+        changed[path] = pattern.sub(lambda _match: new, changed[path], count=1)
         with self.assertRaises(AssertionError):
             CHECK.validate(changed)
 
@@ -112,12 +121,18 @@ class RecoveryContractTests(unittest.TestCase):
         self.mutation_rejected(CHECK.RELAY, "url.path().trim_end_matches('/')", '""')
 
     def test_sync_wire_decode_precedes_every_cursor_path(self):
-        self.mutation_rejected(CHECK.POLLER, 'let mut body: SyncResponse = wire_response::decode(&bytes)',
-                               'let mut body: SyncResponse = serde_json::from_slice(&bytes)')
+        self.mutation_rejected_ignoring_whitespace(
+            CHECK.POLLER,
+            'let mut body: SyncResponse = wire_response::decode(&bytes)',
+            'let mut body: SyncResponse = serde_json::from_slice(&bytes)',
+        )
 
     def test_gap_wire_decode_is_not_optional(self):
-        self.mutation_rejected(CHECK.POLLER, 'let page: sync_recovery::MessagePage = wire_response::decode(&bytes)',
-                               'let page: sync_recovery::MessagePage = serde_json::from_slice(&bytes)')
+        self.mutation_rejected_ignoring_whitespace(
+            CHECK.POLLER,
+            'let page: sync_recovery::MessagePage = wire_response::decode(&bytes)',
+            'let page: sync_recovery::MessagePage = serde_json::from_slice(&bytes)',
+        )
 
     def test_explicit_null_end_cannot_revert_to_optional_none(self):
         self.mutation_rejected(CHECK.PAGER,
