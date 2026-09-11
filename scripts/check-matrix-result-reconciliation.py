@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed unless Matrix result reconciliation is principal-bound and executable."""
+"""Fail closed unless Matrix result reconciliation is fully cut over to v3."""
 from __future__ import annotations
 
 import json
@@ -7,6 +7,7 @@ from pathlib import Path
 import stat
 import subprocess
 import sys
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = {
@@ -16,24 +17,20 @@ FILES = {
     "adapter_facade": "services/matrix-entry-adapter/src/lib.rs",
     "adapter_reconciliation": "services/matrix-entry-adapter/src/result_reconciliation.rs",
     "relay_response": "apps/matrix-bot-relay/src/response_contract.rs",
-    "operator_hardening": (
-        "services/matrix-entry-adapter/operator-migrations/"
-        "0003_adapter_result_evidence_binding.sql"
-    ),
-    "operator_runtime": (
-        "services/matrix-entry-adapter/operator-migrations/"
-        "0004_adapter_result_runtime_reconciliation.sql"
-    ),
-    "operator_runner": "scripts/matrix_operator_postgres_regression.py",
-    "operator_regression": "scripts/test-matrix-result-evidence-hardening-postgres.sql",
-    "runtime_regression": "scripts/test-matrix-result-runtime-reconciliation-postgres.sql",
-    "runtime_reconciler": "scripts/reconcile-matrix-adapter-result.py",
-    "traceability": "docs/traceability/sequence54-matrix-result-reconciliation-v1.json",
-    "design": "docs/matrix-result-reconciliation-v1.md",
+    "migration_v3": "services/matrix-entry-adapter/operator-migrations/0006_adapter_result_embedded_delivery_binding.sql",
+    "runner": "scripts/matrix_operator_postgres_regression.py",
+    "historical_core": "scripts/reconcile-matrix-adapter-result-v2-core.py",
+    "v3_implementation": "scripts/reconcile-matrix-adapter-result-v3.py",
+    "canonical_command": "scripts/reconcile-matrix-adapter-result.py",
+    "embedded_regression": "scripts/test-matrix-result-embedded-binding-postgres.sql",
+    "task_regression": "scripts/test-matrix-result-task-invocation-binding-postgres.sql",
+    "traceability": "docs/traceability/sequence54-matrix-result-reconciliation-v3.json",
+    "design": "docs/matrix-result-reconciliation-v3.md",
+    "workflow": ".github/workflows/matrix-review-repair-regression.yml",
 }
 
 
-def read_regular(relative: str) -> str:
+def read_regular(relative: str) -> tuple[str, int]:
     path = ROOT / relative
     try:
         metadata = path.lstat()
@@ -42,7 +39,7 @@ def read_regular(relative: str) -> str:
     if not stat.S_ISREG(metadata.st_mode) or path.is_symlink() or metadata.st_size > 2_000_000:
         raise RuntimeError(f"source is not a bounded regular file: {relative}")
     try:
-        return path.read_text(encoding="utf-8")
+        return path.read_text(encoding="utf-8"), metadata.st_mode
     except (OSError, UnicodeError) as error:
         raise RuntimeError(f"source is not readable UTF-8: {relative}: {error}") from None
 
@@ -55,8 +52,17 @@ def forbid(source: str, tokens: tuple[str, ...], label: str) -> list[str]:
     return [f"{label}: forbidden {token!r}" for token in tokens if token in source]
 
 
-def runtime_self_test() -> list[str]:
-    path = ROOT / FILES["runtime_reconciler"]
+def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON member: {key}")
+        value[key] = item
+    return value
+
+
+def canonical_self_test() -> list[str]:
+    path = ROOT / FILES["canonical_command"]
     try:
         result = subprocess.run(
             [sys.executable, str(path), "--self-test"],
@@ -64,302 +70,209 @@ def runtime_self_test() -> list[str]:
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=45,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return ["runtime reconciler: self-test could not execute"]
+        return ["canonical v3 reconciler: self-test could not execute"]
     if result.returncode != 0:
-        return ["runtime reconciler: self-test failed"]
+        return ["canonical v3 reconciler: self-test failed"]
     try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return ["runtime reconciler: self-test output is not JSON"]
-    if (
-        payload.get("schema") != "cex.matrix.adapter-result-reconciler.v1"
-        or payload.get("status") != "ok"
-        or payload.get("self_test") is not True
-        or payload.get("production_authorization") != "not_granted"
-    ):
-        return ["runtime reconciler: self-test output contract mismatch"]
+        payload = json.loads(result.stdout, object_pairs_hook=unique_object)
+    except (json.JSONDecodeError, ValueError):
+        return ["canonical v3 reconciler: self-test output is invalid JSON"]
+    if payload != {
+        "production_authorization": "not_granted",
+        "schema": "cex.matrix.adapter-result-reconciler.v3",
+        "security_contract": "v3",
+        "self_test": True,
+        "status": "ok",
+    }:
+        return ["canonical v3 reconciler: self-test output contract mismatch"]
     return []
 
 
 def main() -> int:
     try:
-        sources = {name: read_regular(path) for name, path in FILES.items()}
+        loaded = {name: read_regular(path) for name, path in FILES.items()}
     except RuntimeError as error:
         print(error, file=sys.stderr)
         return 1
-
+    sources = {name: item[0] for name, item in loaded.items()}
     failures: list[str] = []
-    failures += require(
-        sources["consumer_main"],
-        (
-            "mod matrix_result_lookup;",
-            "let result_lookup = matrix_result_lookup::router(state.config().clone()).layer(",
-            "build_router(state.clone()).merge(result_lookup)",
-        ),
-        "consumer main",
-    )
-    failures += require(
-        sources["consumer_lookup"],
-        (
-            'const LOOKUP_PATH: &str = "/v1/matrix/messages/result";',
-            'const LOOKUP_SOURCE_KIND: &str = "matrix_result_lookup";',
-            'format!("matrix-event:{}", request.event_id)',
-            '#[path = "replay_store_snapshot.rs"]',
-            "read_stable_regular_file(path, MAX_REPLAY_STORE_BYTES)",
-            "x-cex-user-session",
-            "x-cex-user-session-signature",
-            "lookup_request_fingerprint(request)",
-            'source.get("event_id")',
-            'source.get("matrix_user_id")',
-            'source.get("room_id")',
-            '"production_authorization": "not_granted"',
-        ),
-        "consumer lookup",
-    )
-    failures += forbid(
-        sources["consumer_lookup"],
-        (
-            "reqwest::",
-            '"/v1/invocations"',
-            "forward_to_cex_task",
-            "create_matrix_message_task",
-            ".post(url)",
-            "File::open",
-            "std::fs::symlink_metadata",
-            ".read_to_end",
-        ),
-        "consumer lookup must be read-only and use the stable snapshot boundary",
-    )
-    failures += require(
-        sources["replay_snapshot"],
-        (
-            "pub fn read_stable_regular_file(",
-            "open_descriptor(path)?",
-            "validate_regular(&before)?",
-            "identity(&before) != identity(&after)",
-            "identity(&after) != identity(&rebound)",
-            "metadata.nlink() != 1",
-            "FILE_FLAG_OPEN_REPARSE_POINT",
-            ".take(max_bytes.saturating_add(1))",
-            "rejects_leaf_symlinks",
-            "rejects_symlinked_ancestors",
-            "rejects_hard_links",
-        ),
-        "replay-store stable snapshot",
-    )
 
-    failures += require(
-        sources["adapter_facade"],
-        (
-            "mod result_reconciliation;",
-            "result_reconciliation::router(state.inner.config())",
-            ".merge(reconciliation)",
-        ),
-        "adapter facade",
-    )
-    failures += require(
-        sources["adapter_reconciliation"],
-        (
-            'const RECONCILIATION_PATH: &str = "/v1/matrix/results/lookup";',
-            'const CONSUMER_LOOKUP_PATH: &str = "/v1/matrix/messages/result";',
-            'const LOOKUP_SOURCE_KIND: &str = "matrix_result_lookup";',
-            "x-entry-token",
-            "x-cex-user-session",
-            "x-cex-user-session-signature",
-            "sign_lookup_assertion",
-            "validate_lookup_response",
-            '"action": "task_result_reconciled"',
-            '"source": "consumer_entry_durable_replay"',
-            '"read_only": true',
-            '"production_authorization": "not_granted"',
-        ),
-        "adapter reconciliation",
-    )
-    failures += forbid(
-        sources["adapter_reconciliation"],
-        (
-            '"/v1/matrix/messages";',
-            '"/v1/invocations"',
-            "forward_to_consumer_entry",
-        ),
-        "adapter reconciliation must call only lookup",
-    )
+    failures += require(sources["consumer_main"], (
+        "mod matrix_result_lookup;",
+        "mod matrix_result_response_binding;",
+        "matrix_result_lookup::router",
+        "matrix_result_response_binding::enforce_matrix_result_response_binding",
+    ), "consumer lookup router")
+    failures += require(sources["consumer_lookup"], (
+        'const DELIVERY_BINDING_FIELD: &str = "cex_delivery_binding";',
+        'const DELIVERY_BINDING_SCHEMA: &str = "cex.matrix.delivery-binding.v1";',
+        'binding.get("delivery_id")',
+        'binding.get("payload_sha256")',
+        'binding.get("request_fingerprint")',
+        "request.request_fingerprint != lookup_request_fingerprint(request)",
+        "cached_result_must_carry_the_exact_persisted_delivery_binding",
+    ), "consumer persisted delivery binding")
+    failures += forbid(sources["consumer_lookup"], (
+        "forward_to_cex_task",
+        "create_matrix_message_task",
+        ".post(url)",
+    ), "consumer lookup read-only boundary")
+    failures += require(sources["replay_snapshot"], (
+        "read_stable_regular_file(",
+        "identity(&before) != identity(&after)",
+        "metadata.nlink() != 1",
+        "rejects_symlinked_ancestors",
+    ), "stable replay snapshot")
 
-    failures += require(
-        sources["relay_response"],
-        (
-            'if action == "duplicate_event"',
-            'return Err("adapter_duplicate_outcome_unknown")',
-            "byte.is_ascii_lowercase()",
-        ),
-        "relay response contract",
-    )
-    failures += forbid(
-        sources["relay_response"],
-        ('"task_result_reconciled" => Err',),
-        "relay reconciliation response",
-    )
+    failures += require(sources["adapter_facade"], (
+        "mod delivery_binding;",
+        "mod reconciliation_response_binding;",
+        "delivery_binding::enforce_delivery_binding",
+        "reconciliation_response_binding::enforce_reconciliation_response_binding",
+    ), "adapter binding middleware")
+    failures += require(sources["adapter_reconciliation"], (
+        'const RECONCILIATION_PATH: &str = "/v1/matrix/results/lookup";',
+        "sign_lookup_assertion",
+        "validate_lookup_response",
+        '"action": "task_result_reconciled"',
+        '"read_only": true',
+    ), "adapter read-only reconciliation")
+    failures += require(sources["relay_response"], (
+        'if action == "duplicate_event"',
+        'return Err("adapter_duplicate_outcome_unknown")',
+    ), "relay unknown-outcome boundary")
 
-    failures += require(
-        sources["operator_hardening"],
-        (
-            "create or replace function public.cex_matrix_reconcile_adapter_result_v1(",
-            "matrix_adapter_result_identity_scope_mismatch",
-            "matrix_adapter_result_raw_task_mismatch",
-            "not p_evidence_context ?& array[",
-            "p_evidence_context - array[",
-            "::timestamptz",
-            "not isfinite(observed_at)",
-            "to cex_matrix_reconciler_runtime;",
-        ),
-        "operator reconciliation hardening",
-    )
-    failures += require(
-        sources["operator_runtime"],
-        (
-            "0003. The previous replacement",
-            "result_payload,",
-            "p_result_payload,",
-            "existing.result_payload is distinct from p_result_payload",
-            "delivery_row.last_error_code like 'adapter_response_unknown_%'",
-            "adapter_unverified_oversized_response",
-            "adapter_duplicate_outcome_unknown",
-            "relay_internal_unknown_outcome",
-            "matrix_adapter_delivery_reconciliation_race",
-            "owner to cex_matrix_api_owner;",
-            "to cex_matrix_reconciler_runtime;",
-        ),
-        "runtime reconciliation migration",
-    )
-    failures += forbid(
-        sources["operator_runtime"].lower(),
-        ("grant all", " to public;"),
-        "runtime reconciliation least privilege",
-    )
+    failures += require(sources["migration_v3"], (
+        "create or replace function public.cex_matrix_reconcile_adapter_result_v3(",
+        "matrix_adapter_result_task_invocation_mismatch_v3",
+        "{source,metadata,metadata,cex_delivery_binding}",
+        "embedded_binding_key_count <> 8",
+        "matrix_adapter_result_request_fingerprint_mismatch_v3",
+        "revoke all on function public.cex_matrix_reconcile_adapter_result_v2(",
+        "from public, cex_matrix_reconciler_runtime",
+        "grant execute on function public.cex_matrix_reconcile_adapter_result_v3(",
+        "to cex_matrix_reconciler_runtime",
+    ), "operator migration v3")
+    failures += forbid(sources["migration_v3"], ("grant all", " to public;"), "operator migration v3")
+    failures += require(sources["runner"], (
+        '"0006_adapter_result_embedded_delivery_binding.sql"',
+        '"scripts/test-matrix-result-embedded-binding-postgres.sql"',
+        '"scripts/test-matrix-result-task-invocation-binding-postgres.sql"',
+        'SCHEMA = "cex.matrix-operator-postgres-regression.v4"',
+        "SECURITY_MIGRATIONS",
+        "SECURITY_REGRESSIONS",
+    ), "operator runner v4")
+    failures += require(sources["embedded_regression"], (
+        "matrix_embedded_binding_v2_runtime_execute_not_revoked",
+        "matrix_embedded_binding_v3_runtime_execute_missing",
+        "matrix_embedded_binding_extra_field_accepted",
+    ), "embedded binding regression")
+    failures += require(sources["task_regression"], (
+        "matrix_task_invocation_missing_accepted",
+        "matrix_task_invocation_mismatch_accepted",
+        "matrix_adapter_result_task_invocation_mismatch_v3",
+    ), "task invocation regression")
 
-    failures += require(
-        sources["operator_runner"],
-        (
-            '"0003_adapter_result_evidence_binding.sql"',
-            '"0004_adapter_result_runtime_reconciliation.sql"',
-            '"scripts/test-matrix-result-evidence-hardening-postgres.sql"',
-            '"scripts/test-matrix-result-runtime-reconciliation-postgres.sql"',
-            "for pass_number in (1, 2):",
-            "base.validate_sql_source(sql)",
-            "base.bounded_client",
-            '"production_authorization": "not_granted"',
-        ),
-        "operator PostgreSQL runner",
-    )
-    failures += require(
-        sources["operator_regression"],
-        (
-            "matrix_result_identity_scope_mismatch_not_rejected",
-            "matrix_result_raw_task_mismatch_not_rejected",
-            "matrix_result_extra_evidence_key_not_rejected",
-            "matrix_result_invalid_observed_at_not_rejected",
-            "matrix_result_infinite_observed_at_not_rejected",
-        ),
-        "operator hostile PostgreSQL regression",
-    )
-    failures += require(
-        sources["runtime_regression"],
-        (
-            "adapter_response_unknown_network",
-            "matrix_runtime_reconciliation_payload_not_persisted",
-            "matrix_runtime_reconciliation_replay_wrote_history",
-            "matrix_runtime_reconciliation_collision_not_rejected",
-        ),
-        "runtime PostgreSQL reconciliation regression",
-    )
+    failures += require(sources["historical_core"], (
+        'SECURITY_CONTRACT = "v2"',
+        "cex_matrix_reconcile_adapter_result_v2",
+        '"PGSSLMODE"] = "verify-full"',
+        '"PGCHANNELBINDING"] = "require"',
+    ), "historical v2 core")
+    if loaded["historical_core"][1] & 0o111:
+        failures.append("historical v2 core: executable bit must remain cleared")
 
-    failures += require(
-        sources["runtime_reconciler"],
-        (
-            'SCHEMA = "cex.matrix.adapter-result-reconciler.v1"',
-            'LOOKUP_PATH = "/v1/matrix/results/lookup"',
-            "class NoRedirect(HTTPRedirectHandler)",
-            "unique_object",
-            "lookup_response_identity_mismatch",
-            "lookup_forwarded_scope_mismatch",
-            "MATRIX_ENTRY_INGRESS_TOKEN",
-            "MATRIX_RECONCILIATION_DATABASE_URL",
-            "environment.pop(\"DATABASE_URL\", None)",
-            "cex_matrix_reconcile_adapter_result_v1",
-            "production_authorization",
-            "--self-test",
-        ),
-        "runtime reconciliation command",
-    )
-    failures += forbid(
-        sources["runtime_reconciler"],
-        (
-            "shell=True",
-            "requests.",
-            "verify=False",
-            "allow_redirects=True",
-            "--password",
-        ),
-        "runtime reconciliation command safety",
-    )
-    failures += require(
-        sources["traceability"],
-        (
-            '"schema": "cex.sequence54-matrix-result-reconciliation-traceability.v1"',
-            '"candidate_sequence": 54',
-            '"operator_migration_head": "services/matrix-entry-adapter/operator-migrations/0004_adapter_result_runtime_reconciliation.sql"',
-            '"runtime_command": "scripts/reconcile-matrix-adapter-result.py"',
-            '"id": "MRR-1"',
-            '"id": "MRR-6"',
-            '"production_authorization": "not_granted"',
-        ),
-        "Matrix result reconciliation traceability",
-    )
-    failures += require(
-        sources["design"],
-        (
-            "Migration 0004 fixes a concrete runtime defect",
-            "scripts/reconcile-matrix-adapter-result.py",
-            "result_payload",
-            "all_plan_gaps_closed=false",
-            "production_authorization=not_granted",
-        ),
-        "Matrix result reconciliation design contract",
-    )
-    failures += runtime_self_test()
+    failures += require(sources["v3_implementation"], (
+        'CORE_PATH = ROOT / "scripts/reconcile-matrix-adapter-result-v2-core.py"',
+        'SCHEMA = "cex.matrix.adapter-result-reconciler.v3"',
+        'SECURITY_CONTRACT = "v3"',
+        "validate_persisted_binding(",
+        'raw.get("invocation_id") != task_id',
+        "if set(binding) != required",
+        "V2_FUNCTION",
+        "V3_FUNCTION",
+        "rewritten.count(V3_FUNCTION) != 1",
+        "metadata.st_mode & 0o111",
+    ), "v3 reconciler implementation")
+    failures += forbid(sources["v3_implementation"], (
+        'CORE_PATH = ROOT / "scripts/reconcile-matrix-adapter-result.py"',
+        "shell=True",
+        "eval(",
+        "exec(",
+    ), "v3 reconciler implementation")
+
+    failures += require(sources["canonical_command"], (
+        'V3_PATH = ROOT / "scripts/reconcile-matrix-adapter-result-v3.py"',
+        'SCHEMA = "cex.matrix.adapter-result-reconciler.v3"',
+        'SECURITY_CONTRACT = "v3"',
+        "def load_v3()",
+        "reconciler_v3_identity_mismatch",
+    ), "canonical v3 command")
+    failures += forbid(sources["canonical_command"], (
+        "cex_matrix_reconcile_adapter_result_v2",
+        "reconcile-matrix-adapter-result-v2-core.py",
+        "shell=True",
+        "eval(",
+        "exec(",
+    ), "canonical v3 command")
+
+    try:
+        traceability = json.loads(sources["traceability"], object_pairs_hook=unique_object)
+    except (json.JSONDecodeError, ValueError):
+        failures.append("Matrix v3 traceability: invalid JSON")
+    else:
+        if traceability.get("schema") != "cex.sequence54-matrix-result-reconciliation-traceability.v3":
+            failures.append("Matrix v3 traceability: schema mismatch")
+        expected_head = "services/matrix-entry-adapter/operator-migrations/0006_adapter_result_embedded_delivery_binding.sql"
+        if traceability.get("operator_migration_head") != expected_head:
+            failures.append("Matrix v3 traceability: operator migration head mismatch")
+        if traceability.get("production_authorization") != "not_granted":
+            failures.append("Matrix v3 traceability: authorization must remain not_granted")
+    failures += require(sources["design"], (
+        "# Matrix result reconciliation security contract v3",
+        "source.metadata.metadata.cex_delivery_binding",
+        "cex_matrix_reconcile_adapter_result_v3",
+        "production_authorization=not_granted",
+    ), "Matrix v3 design")
+    failures += require(sources["workflow"], (
+        "python3 scripts/check-matrix-result-reconciliation.py",
+        "python3 scripts/check-matrix-result-reconciliation-security-v2.py",
+        "python3 scripts/check-matrix-result-reconciliation-security-v3.py",
+        "python3 scripts/check-matrix-result-reconciliation-traceability-v3.py",
+        "python3 scripts/matrix_operator_postgres_regression.py",
+    ), "hosted Matrix gate")
+    failures += canonical_self_test()
 
     if failures:
-        print("Matrix result reconciliation contract failed:", file=sys.stderr)
+        print("Matrix result reconciliation v3 cutover contract failed:", file=sys.stderr)
         for failure in failures:
             print(f"- {failure}", file=sys.stderr)
         return 1
 
-    print(
-        json.dumps(
-            {
-                "schema": "cex.matrix.result-reconciliation-source-check.v2",
-                "status": "ok",
-                "consumer_lookup": "/v1/matrix/messages/result",
-                "adapter_lookup": "/v1/matrix/results/lookup",
-                "read_only_lookup": True,
-                "principal_bound": True,
-                "stable_replay_snapshot": True,
-                "operator_evidence_bound": True,
-                "runtime_reconciler_present": True,
-                "runtime_reconciler_self_test": True,
-                "runtime_payload_persistence_fix_present": True,
-                "operator_postgres_runner_present": True,
-                "problems": [],
-                "checker_max_grant_production_authorization": False,
-                "production_authorization": "not_granted",
-            },
-            sort_keys=True,
-        )
-    )
+    print(json.dumps({
+        "schema": "cex.matrix.result-reconciliation-source-check.v3",
+        "status": "ok",
+        "consumer_lookup": "/v1/matrix/messages/result",
+        "adapter_lookup": "/v1/matrix/results/lookup",
+        "read_only_lookup": True,
+        "principal_bound": True,
+        "stable_replay_snapshot": True,
+        "embedded_delivery_binding": True,
+        "task_invocation_binding": True,
+        "historical_v2_preserved": True,
+        "historical_v2_executable": False,
+        "runtime_entrypoint": "cex_matrix_reconcile_adapter_result_v3",
+        "canonical_runtime_command": "scripts/reconcile-matrix-adapter-result.py",
+        "runtime_reconciler_self_test": True,
+        "operator_postgres_runner_present": True,
+        "problems": [],
+        "checker_max_grant_production_authorization": False,
+        "production_authorization": "not_granted",
+    }, sort_keys=True))
     return 0
 
 
