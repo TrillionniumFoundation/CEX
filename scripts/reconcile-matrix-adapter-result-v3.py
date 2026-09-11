@@ -11,7 +11,7 @@ from types import ModuleType
 from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parents[1]
-CORE_PATH = ROOT / "scripts/reconcile-matrix-adapter-result.py"
+CORE_PATH = ROOT / "scripts/reconcile-matrix-adapter-result-v2-core.py"
 SCHEMA = "cex.matrix.adapter-result-reconciler.v3"
 SECURITY_CONTRACT = "v3"
 BINDING_FIELD = "cex_delivery_binding"
@@ -26,12 +26,18 @@ class V3BindingError(RuntimeError):
 
 
 def load_core() -> ModuleType:
+    try:
+        metadata = CORE_PATH.lstat()
+    except OSError:
+        raise V3BindingError("reconciler_v2_historical_core_unavailable") from None
+    if CORE_PATH.is_symlink() or not CORE_PATH.is_file() or metadata.st_mode & 0o111:
+        raise V3BindingError("reconciler_v2_historical_core_unsafe")
     spec = importlib.util.spec_from_file_location(
-        "cex_matrix_adapter_result_reconciler_v2_core",
+        "cex_matrix_adapter_result_reconciler_v2_historical_core",
         CORE_PATH,
     )
     if spec is None or spec.loader is None:
-        raise V3BindingError("reconciler_v2_core_unavailable")
+        raise V3BindingError("reconciler_v2_historical_core_unavailable")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
