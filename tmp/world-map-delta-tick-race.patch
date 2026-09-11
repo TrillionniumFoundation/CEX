@@ -1,0 +1,170 @@
+--- a/services/consumer-entry-api/src/world_map_projection.rs
++++ b/services/consumer-entry-api/src/world_map_projection.rs
+@@ -8,14 +8,43 @@
+ const TRILLIONNIUM_WORLD_FUTURE_ENGINE_READINESS_CONTRACT_VERSION: &str =
+     "trillionnium_world_future_engine_readiness_v1";
+ const TRILLIONNIUM_ROUTE_RUNNER_PROJECTION_TICK_SECONDS: i64 = 15;
++const TRILLIONNIUM_ROUTE_RUNNER_CURSOR_GRACE_SECONDS: i64 = 2;
++
++fn route_runner_tick_epoch(now_epoch: i64) -> i64 {
++    now_epoch - now_epoch.rem_euclid(TRILLIONNIUM_ROUTE_RUNNER_PROJECTION_TICK_SECONDS)
++}
+ 
+ fn route_runner_now_epoch() -> i64 {
+-    // Keep Rust-owned route-runner projections stable across adjacent map-delta
+-    // requests. The browser animates between Rust-projected route endpoints; the
+-    // server projection only needs a short authoritative tick so the 304/no-op
+-    // cache contract does not fail just because a wall-clock second advanced.
+-    let now = Utc::now().timestamp();
+-    now - now.rem_euclid(TRILLIONNIUM_ROUTE_RUNNER_PROJECTION_TICK_SECONDS)
++    route_runner_tick_epoch(Utc::now().timestamp())
++}
++
++fn route_runner_epoch_from_cursor(cursor: Option<&str>) -> Option<i64> {
++    let cursor = cursor?;
++    let base = cursor
++        .split_once(";gv=")
++        .map_or(cursor, |(base, _)| base);
++    base.split(';')
++        .find_map(|component| component.strip_prefix("r="))
++        .and_then(|value| value.parse::<i64>().ok())
++        .filter(|value| *value >= 0)
++}
++
++fn route_runner_delta_epoch_for_now(cursor: Option<&str>, now_epoch: i64) -> i64 {
++    let current_tick = route_runner_tick_epoch(now_epoch);
++    let Some(previous_tick) = route_runner_epoch_from_cursor(cursor) else {
++        return current_tick;
++    };
++    let previous_is_immediately_adjacent =
++        current_tick.saturating_sub(previous_tick)
++            == TRILLIONNIUM_ROUTE_RUNNER_PROJECTION_TICK_SECONDS;
++    let boundary_age = now_epoch.saturating_sub(current_tick);
++    if previous_is_immediately_adjacent
++        && (0..TRILLIONNIUM_ROUTE_RUNNER_CURSOR_GRACE_SECONDS).contains(&boundary_age)
++    {
++        previous_tick
++    } else {
++        current_tick
++    }
+ }
+ 
+ fn route_runner_terminal_bucket_status(latest_bucket: &str, latest_status: &str) -> bool {
+@@ -1272,6 +1301,18 @@
+     avatar_task_routes: &[Value],
+     limit: usize,
+ ) -> Vec<Value> {
++    world_map_avatar_route_runners_json_at_epoch(
++        avatar_task_routes,
++        limit,
++        route_runner_now_epoch(),
++    )
++}
++
++fn world_map_avatar_route_runners_json_at_epoch(
++    avatar_task_routes: &[Value],
++    limit: usize,
++    now_epoch: i64,
++) -> Vec<Value> {
+     avatar_task_routes
+         .iter()
+         .take(limit)
+@@ -1305,7 +1346,6 @@
+                 .unwrap_or(0);
+             let distance_meters =
+                 (geo_distance_km(from_lat, from_lng, to_lat, to_lng) * 1000.0).round();
+-            let now_epoch = route_runner_now_epoch();
+             let (
+                 progress_ratio,
+                 lifecycle_started_at_epoch,
+@@ -2742,7 +2782,18 @@
+     limit: Option<usize>,
+     cursor: Option<String>,
+ ) -> Value {
+-    let viewport = world_map_viewport_json(world, matrix_user_id, lat, lng, zoom, radius_km, limit);
++    let route_runner_epoch =
++        route_runner_delta_epoch_for_now(cursor.as_deref(), Utc::now().timestamp());
++    let viewport = world_map_viewport_json_at_epoch(
++        world,
++        matrix_user_id,
++        lat,
++        lng,
++        zoom,
++        radius_km,
++        limit,
++        route_runner_epoch,
++    );
+     let next_cursor = viewport
+         .get("delta_cursor")
+         .and_then(Value::as_str)
+@@ -2831,6 +2882,28 @@
+     radius_km: Option<f64>,
+     limit: Option<usize>,
+ ) -> Value {
++    world_map_viewport_json_at_epoch(
++        world,
++        matrix_user_id,
++        lat,
++        lng,
++        zoom,
++        radius_km,
++        limit,
++        route_runner_now_epoch(),
++    )
++}
++
++fn world_map_viewport_json_at_epoch(
++    world: &WorldState,
++    matrix_user_id: &str,
++    lat: Option<f64>,
++    lng: Option<f64>,
++    zoom: Option<i64>,
++    radius_km: Option<f64>,
++    limit: Option<usize>,
++    route_runner_epoch: i64,
++) -> Value {
+     let indexes = build_world_indexes(world);
+     let route_artifacts = build_world_route_artifacts(world);
+     let map = world_map_json_with_route_artifacts(world, matrix_user_id, &route_artifacts);
+@@ -2978,7 +3051,8 @@
+     let player_avatars = world_map_player_avatars_json(world, matrix_user_id, &visible_markers);
+     let avatar_task_routes =
+         world_map_avatar_task_routes_json(world, &indexes, matrix_user_id, &route_artifacts, 6);
+-    let avatar_route_runners = world_map_avatar_route_runners_json(&avatar_task_routes, 6);
++    let avatar_route_runners =
++        world_map_avatar_route_runners_json_at_epoch(&avatar_task_routes, 6, route_runner_epoch);
+     let prefetch_queue = world_map_prefetch_queue_json(&visible_tile_shards, &player_density, zoom);
+     let live_event_stream = world_map_live_event_stream_json(
+         world,
+@@ -3452,3 +3526,31 @@
+     let route_artifacts = build_world_route_artifacts(&league.world);
+     world_map_json_with_route_artifacts(&league.world, matrix_user_id, &route_artifacts)
+ }
++
++#[cfg(test)]
++mod route_runner_cursor_tests {
++    use super::*;
++
++    #[test]
++    fn cursor_epoch_parser_is_bounded_to_the_runner_component() {
++        assert_eq!(
++            route_runner_epoch_from_cursor(Some(
++                "region=core;tile=t;z=15;e=1;r=90;m=2;a=1;gv=avatar_route_runners:abc"
++            )),
++            Some(90)
++        );
++        assert_eq!(route_runner_epoch_from_cursor(Some("region=core;gv=r=105")), None);
++        assert_eq!(route_runner_epoch_from_cursor(Some("region=core;r=-1;gv=x:y")), None);
++        assert_eq!(route_runner_epoch_from_cursor(Some("region=core;r=bad;gv=x:y")), None);
++    }
++
++    #[test]
++    fn adjacent_tick_uses_a_short_boundary_grace_only() {
++        let cursor = Some("region=core;r=90;gv=avatar_route_runners:abc");
++        assert_eq!(route_runner_delta_epoch_for_now(cursor, 105), 90);
++        assert_eq!(route_runner_delta_epoch_for_now(cursor, 106), 90);
++        assert_eq!(route_runner_delta_epoch_for_now(cursor, 107), 105);
++        assert_eq!(route_runner_delta_epoch_for_now(cursor, 120), 120);
++        assert_eq!(route_runner_delta_epoch_for_now(None, 106), 105);
++    }
++}
