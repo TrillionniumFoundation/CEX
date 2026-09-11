@@ -2,9 +2,9 @@
   "schema": "trnm_world_cex_settlement_external_lock_v1",
   "world": {
     "repository": "TrillionniumFoundation/Trillionnium-World",
-    "branch": "qualification/sequence54-world-f8358-20260911",
-    "commit": "f8358b6f997e07c8f04d5a362ca62544559c18fa",
-    "tree": "2447c254aeaacf5bc3ebbd8fb07f2d7bf4d2ce28"
+    "branch": "qualification/sequence54-world-c45cf-20260911",
+    "commit": "c45cf8c8e2dcc62ea67ea8a5db846cc09bf4eed8",
+    "tree": "f1ae25a367cf58d8ed6814b1345443be9292e7d1"
   },
   "cex_owner": {
     "repository": "TrillionniumFoundation/CEX",
@@ -14,8 +14,8 @@
   },
   "manual_rearm": {
     "actor": "ProfHepta",
-    "generation": 8,
-    "reason": "bind the main-anchored World candidate whose PostgreSQL regression distinguishes native parent-table truncate refusal from append-only trigger refusal and proves audit-row preservation"
+    "generation": 9,
+    "reason": "bind the main-anchored World candidate that passes the precise PostgreSQL settlement contract and removes the final Rust 1.98.1 strict-Clippy warning without a lint allowance"
   },
   "promotion_effect": "none",
   "native_world_actions_run": false,
