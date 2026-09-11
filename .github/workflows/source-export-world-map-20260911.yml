@@ -1,0 +1,38 @@
+name: source-export-world-map-20260911
+
+on:
+  push:
+    branches:
+      - tooling/source-export-world-map-20260911
+
+permissions:
+  contents: read
+
+jobs:
+  export-exact-source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact candidate source without retained credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 7abbba861026c84fedebafc52280289205d0afd8
+          persist-credentials: false
+
+      - name: Verify exact source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "7abbba861026c84fedebafc52280289205d0afd8"
+          test "$(git rev-parse 'HEAD^{tree}')" = "3a47a14bd9ce8a8141e6194cda401fb4e7a54316"
+
+      - name: Upload exact source files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: exact-world-map-source-7abbba861026c84fedebafc52280289205d0afd8
+          path: |
+            services/consumer-entry-api/src/world_map_projection.rs
+            services/consumer-entry-api/src/tests.rs
+            services/consumer-entry-api/Cargo.toml
+          if-no-files-found: error
+          retention-days: 1
