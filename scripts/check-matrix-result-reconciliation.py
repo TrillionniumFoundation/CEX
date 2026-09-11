@@ -13,13 +13,16 @@ ROOT = Path(__file__).resolve().parents[1]
 FILES = {
     "consumer_main": "services/consumer-entry-api/src/main.rs",
     "consumer_lookup": "services/consumer-entry-api/src/matrix_result_lookup.rs",
+    "consumer_response": "services/consumer-entry-api/src/matrix_result_response_binding.rs",
     "replay_snapshot": "services/consumer-entry-api/src/replay_store_snapshot.rs",
     "adapter_facade": "services/matrix-entry-adapter/src/lib.rs",
     "adapter_reconciliation": "services/matrix-entry-adapter/src/result_reconciliation.rs",
+    "adapter_response": "services/matrix-entry-adapter/src/reconciliation_response_binding.rs",
     "relay_response": "apps/matrix-bot-relay/src/response_contract.rs",
     "migration_v3": "services/matrix-entry-adapter/operator-migrations/0006_adapter_result_embedded_delivery_binding.sql",
     "runner": "scripts/matrix_operator_postgres_regression.py",
-    "historical_core": "scripts/reconcile-matrix-adapter-result-v2-core.py",
+    "historical_loader": "scripts/reconcile-matrix-adapter-result-v2-core.py",
+    "historical_implementation": "scripts/reconcile-matrix-adapter-result-v2-internal.py",
     "v3_implementation": "scripts/reconcile-matrix-adapter-result-v3.py",
     "canonical_command": "scripts/reconcile-matrix-adapter-result.py",
     "embedded_regression": "scripts/test-matrix-result-embedded-binding-postgres.sql",
@@ -92,6 +95,27 @@ def canonical_self_test() -> list[str]:
     return []
 
 
+def historical_direct_probe() -> list[str]:
+    try:
+        result = subprocess.run(
+            [sys.executable, str(ROOT / FILES["historical_loader"]), "--delivery-id", "x"],
+            cwd=ROOT,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            env={"PATH": "", "PYTHONPATH": ""},
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ["historical v2 loader: direct-execution probe failed"]
+    if result.returncode == 0:
+        return ["historical v2 loader: direct execution unexpectedly succeeded"]
+    if result.stdout or result.stderr.strip() != "matrix_adapter_result_v2_historical_core_not_runnable":
+        return ["historical v2 loader: direct execution did not fail with bounded code"]
+    return []
+
+
 def main() -> int:
     try:
         loaded = {name: read_regular(path) for name, path in FILES.items()}
@@ -121,6 +145,13 @@ def main() -> int:
         "create_matrix_message_task",
         ".post(url)",
     ), "consumer lookup read-only boundary")
+    failures += require(sources["consumer_response"], (
+        'const LOOKUP_PATH: &str = "/v1/matrix/messages/result";',
+        ".and_then(|raw| raw.get(\"invocation_id\"))",
+        "if invocation_id != task_id",
+        "if nested_binding != top_binding",
+        "missing_or_changed_invocation_fails_closed",
+    ), "consumer response boundary")
     failures += require(sources["replay_snapshot"], (
         "read_stable_regular_file(",
         "identity(&before) != identity(&after)",
@@ -141,6 +172,13 @@ def main() -> int:
         '"action": "task_result_reconciled"',
         '"read_only": true',
     ), "adapter read-only reconciliation")
+    failures += require(sources["adapter_response"], (
+        'const RECONCILIATION_PATH: &str = "/v1/matrix/results/lookup";',
+        '.and_then(|raw| raw.get(\"invocation_id\"))',
+        "if invocation_id != task_id",
+        ".and_then(|metadata| metadata.get(DELIVERY_BINDING_FIELD))",
+        "binding.len() != 8",
+    ), "adapter response boundary")
     failures += require(sources["relay_response"], (
         'if action == "duplicate_event"',
         'return Err("adapter_duplicate_outcome_unknown")',
@@ -177,14 +215,24 @@ def main() -> int:
         "matrix_adapter_result_task_invocation_mismatch_v3",
     ), "task invocation regression")
 
-    failures += require(sources["historical_core"], (
+    failures += require(sources["historical_loader"], (
+        'IMPLEMENTATION_PATH = ROOT / "scripts/reconcile-matrix-adapter-result-v2-internal.py"',
+        'if __name__ == "__main__" and sys.argv[1:] != DIRECT_SELF_TEST',
+        "matrix_adapter_result_v2_historical_core_not_runnable",
+        "metadata.st_mode & 0o111",
+        "_IMPLEMENTATION.parse_lookup_response = parse_lookup_response",
+        "_IMPLEMENTATION.build_sql = build_sql",
+    ), "historical v2 import-only loader")
+    failures += require(sources["historical_implementation"], (
         'SECURITY_CONTRACT = "v2"',
         "cex_matrix_reconcile_adapter_result_v2",
         '"PGSSLMODE"] = "verify-full"',
         '"PGCHANNELBINDING"] = "require"',
-    ), "historical v2 core")
-    if loaded["historical_core"][1] & 0o111:
-        failures.append("historical v2 core: executable bit must remain cleared")
+        "pinned_psql_path_required",
+    ), "historical v2 implementation")
+    for name in ("historical_loader", "historical_implementation"):
+        if loaded[name][1] & 0o111:
+            failures.append(f"{name}: executable bit must remain cleared")
 
     failures += require(sources["v3_implementation"], (
         'CORE_PATH = ROOT / "scripts/reconcile-matrix-adapter-result-v2-core.py"',
@@ -215,6 +263,7 @@ def main() -> int:
     failures += forbid(sources["canonical_command"], (
         "cex_matrix_reconcile_adapter_result_v2",
         "reconcile-matrix-adapter-result-v2-core.py",
+        "reconcile-matrix-adapter-result-v2-internal.py",
         "shell=True",
         "eval(",
         "exec(",
@@ -225,16 +274,25 @@ def main() -> int:
     except (json.JSONDecodeError, ValueError):
         failures.append("Matrix v3 traceability: invalid JSON")
     else:
-        if traceability.get("schema") != "cex.sequence54-matrix-result-reconciliation-traceability.v3":
-            failures.append("Matrix v3 traceability: schema mismatch")
-        expected_head = "services/matrix-entry-adapter/operator-migrations/0006_adapter_result_embedded_delivery_binding.sql"
-        if traceability.get("operator_migration_head") != expected_head:
-            failures.append("Matrix v3 traceability: operator migration head mismatch")
-        if traceability.get("production_authorization") != "not_granted":
-            failures.append("Matrix v3 traceability: authorization must remain not_granted")
+        expected = {
+            "schema": "cex.sequence54-matrix-result-reconciliation-traceability.v3",
+            "runtime_command": "scripts/reconcile-matrix-adapter-result.py",
+            "runtime_implementation": "scripts/reconcile-matrix-adapter-result-v3.py",
+            "historical_v2_loader": "scripts/reconcile-matrix-adapter-result-v2-core.py",
+            "historical_v2_implementation": "scripts/reconcile-matrix-adapter-result-v2-internal.py",
+            "operator_migration_head": "services/matrix-entry-adapter/operator-migrations/0006_adapter_result_embedded_delivery_binding.sql",
+            "production_authorization": "not_granted",
+        }
+        for field, value in expected.items():
+            if traceability.get(field) != value:
+                failures.append(f"Matrix v3 traceability: {field} mismatch")
     failures += require(sources["design"], (
         "# Matrix result reconciliation security contract v3",
         "source.metadata.metadata.cex_delivery_binding",
+        "scripts/reconcile-matrix-adapter-result.py",
+        "scripts/reconcile-matrix-adapter-result-v3.py",
+        "scripts/reconcile-matrix-adapter-result-v2-core.py",
+        "scripts/reconcile-matrix-adapter-result-v2-internal.py",
         "cex_matrix_reconcile_adapter_result_v3",
         "production_authorization=not_granted",
     ), "Matrix v3 design")
@@ -245,6 +303,7 @@ def main() -> int:
         "python3 scripts/check-matrix-result-reconciliation-traceability-v3.py",
         "python3 scripts/matrix_operator_postgres_regression.py",
     ), "hosted Matrix gate")
+    failures += historical_direct_probe()
     failures += canonical_self_test()
 
     if failures:
@@ -264,7 +323,7 @@ def main() -> int:
         "embedded_delivery_binding": True,
         "task_invocation_binding": True,
         "historical_v2_preserved": True,
-        "historical_v2_executable": False,
+        "historical_v2_direct_invocation": "rejected",
         "runtime_entrypoint": "cex_matrix_reconcile_adapter_result_v3",
         "canonical_runtime_command": "scripts/reconcile-matrix-adapter-result.py",
         "runtime_reconciler_self_test": True,

@@ -11,6 +11,12 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 TRACE = ROOT / "docs/traceability/sequence54-matrix-result-reconciliation-v3.json"
 EXPECTED_IDS = {f"MRR3-{index}" for index in range(1, 8)}
+EXPECTED_RUNTIME_PATHS = {
+    "runtime_command": "scripts/reconcile-matrix-adapter-result.py",
+    "runtime_implementation": "scripts/reconcile-matrix-adapter-result-v3.py",
+    "historical_v2_loader": "scripts/reconcile-matrix-adapter-result-v2-core.py",
+    "historical_v2_implementation": "scripts/reconcile-matrix-adapter-result-v2-internal.py",
+}
 EXPECTED_EXTERNAL = {
     "nonempty_exact_sha_hosted_execution",
     "disposable_postgresql_16_operator_chain",
@@ -35,22 +41,15 @@ def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def read_trace() -> dict[str, Any]:
     metadata = TRACE.lstat()
-    if (
-        not stat.S_ISREG(metadata.st_mode)
-        or TRACE.is_symlink()
-        or metadata.st_size > 512_000
-    ):
+    if not stat.S_ISREG(metadata.st_mode) or TRACE.is_symlink() or metadata.st_size > 512_000:
         raise ValueError("traceability source is not a bounded regular file")
-    value = json.loads(
-        TRACE.read_text(encoding="utf-8"),
-        object_pairs_hook=unique_object,
-    )
+    value = json.loads(TRACE.read_text(encoding="utf-8"), object_pairs_hook=unique_object)
     if not isinstance(value, dict):
         raise ValueError("traceability root is not an object")
     return value
 
 
-def repository_file(value: object, label: str) -> str:
+def repository_file(value: object, label: str) -> tuple[str, int]:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{label} is not a repository path")
     path = Path(value)
@@ -60,7 +59,7 @@ def repository_file(value: object, label: str) -> str:
     metadata = absolute.lstat()
     if not stat.S_ISREG(metadata.st_mode) or absolute.is_symlink():
         raise ValueError(f"{label} is not a regular repository file")
-    return value
+    return value, metadata.st_mode
 
 
 def main() -> int:
@@ -74,19 +73,32 @@ def main() -> int:
         if value.get("production_authorization") != "not_granted":
             problems.append("traceability may not grant production authorization")
 
+        for field, expected in EXPECTED_RUNTIME_PATHS.items():
+            if value.get(field) != expected:
+                problems.append(f"{field} does not identify the canonical cutover path")
+
         singleton_paths = (
             "supersedes_source_contract",
-            "runtime_command",
+            *EXPECTED_RUNTIME_PATHS,
             "postgres_runner",
             "operator_migration_head",
             "hosted_gate",
             "review_packet",
         )
+        modes: dict[str, int] = {}
         for field in singleton_paths:
             try:
-                repository_file(value.get(field), field)
+                _, mode = repository_file(value.get(field), field)
+                modes[field] = mode
             except (OSError, ValueError) as error:
                 problems.append(str(error))
+        for field in ("historical_v2_loader", "historical_v2_implementation"):
+            if modes.get(field, 0) & 0o111:
+                problems.append(f"{field} must not be executable")
+        if modes.get("runtime_command", 0) & 0o111 == 0:
+            problems.append("runtime_command must remain executable")
+        if modes.get("runtime_implementation", 0) & 0o111 == 0:
+            problems.append("runtime_implementation must remain executable")
 
         for field in ("design_contracts", "source_checkers"):
             entries = value.get(field)
@@ -136,6 +148,14 @@ def main() -> int:
         if seen_ids != EXPECTED_IDS:
             problems.append("traceability requirement IDs are incomplete")
 
+        operator_requirement = next(
+            (item for item in requirements if isinstance(item, dict) and item.get("id") == "MRR3-4"),
+            {},
+        )
+        operator_paths = set(operator_requirement.get("implementation", []))
+        if operator_paths != set(EXPECTED_RUNTIME_PATHS.values()):
+            problems.append("MRR3-4 does not cover the complete canonical-to-historical command chain")
+
         external = value.get("external_evidence_required")
         if not isinstance(external, list) or set(external) != EXPECTED_EXTERNAL:
             problems.append("external evidence denominator is incomplete")
@@ -143,9 +163,10 @@ def main() -> int:
         problems.append(str(error))
 
     result = {
-        "schema": "cex.matrix.result-reconciliation-traceability-check.v1",
+        "schema": "cex.matrix.result-reconciliation-traceability-check.v2",
         "status": "failed" if problems else "ok",
         "requirements": 7,
+        "runtime_chain_files": len(EXPECTED_RUNTIME_PATHS),
         "external_evidence_classes": len(EXPECTED_EXTERNAL),
         "problems": problems,
         "checker_may_grant_production_authorization": False,

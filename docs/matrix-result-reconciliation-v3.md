@@ -48,8 +48,9 @@ The binding is created only at the durable relay-to-adapter boundary:
    task/invocation identity, Matrix identity scope, delivery ID, payload digest,
    complete read-only response contract, and independently recomputed request
    fingerprint.
-8. The v3 operator command validates the same embedded binding and exact
-   task-to-invocation identity before issuing SQL.
+8. The canonical operator command `scripts/reconcile-matrix-adapter-result.py`
+   resolves only `scripts/reconcile-matrix-adapter-result-v3.py`, which validates
+   the same embedded binding and exact task-to-invocation identity before SQL.
 9. `cex_matrix_reconcile_adapter_result_v3` independently validates the
    task-to-invocation identity, embedded binding and fingerprint, then delegates
    to the v2 core, which locks the exact outbox row, recomputes the fingerprint
@@ -58,6 +59,37 @@ The binding is created only at the durable relay-to-adapter boundary:
 The repeated checks are intentional. Consumer Entry, the Adapter response
 boundary, the operator command, and PostgreSQL are separate trust boundaries;
 none may turn a malformed upstream success into authority for the next layer.
+
+## Canonical operator command cutover
+
+The supported operator surface is exactly:
+
+```text
+scripts/reconcile-matrix-adapter-result.py
+```
+
+It is a fail-closed loader for the v3 implementation and checks that the loaded
+module declares both the v3 schema and security contract. It contains no v2 SQL
+entrypoint and cannot resolve either historical v2 file directly.
+
+`scripts/reconcile-matrix-adapter-result-v3.py` is the implementation layer. It
+loads `scripts/reconcile-matrix-adapter-result-v2-core.py` only as an internal
+module, validates the persisted binding, and rewrites exactly one owner-core v2
+SQL marker to the public v3 entrypoint. Any missing, duplicate, or changed marker
+fails before PostgreSQL execution.
+
+`scripts/reconcile-matrix-adapter-result-v2-core.py` is an import-only loader. A
+direct invocation with anything other than its bounded self-test exits before
+loading transport or database logic with
+`matrix_adapter_result_v2_historical_core_not_runnable`.
+
+The historical implementation remains in
+`scripts/reconcile-matrix-adapter-result-v2-internal.py`. Both historical files
+are regular non-executable repository files. The implementation preserves the
+v2 parser, bounded response, no-redirect HTTPS, verified PostgreSQL TLS, pinned
+`psql`, executable custody, closed environment, and secret-handling controls,
+but it is not the canonical command and the runtime database role cannot execute
+v2 after migration 0006.
 
 ## Persisted binding object
 
@@ -144,13 +176,20 @@ python3 scripts/check-matrix-result-reconciliation.py
 python3 scripts/check-matrix-result-reconciliation-security-v2.py
 python3 scripts/check-matrix-result-reconciliation-security-v3.py
 python3 scripts/check-matrix-result-reconciliation-traceability-v3.py
-python3 scripts/reconcile-matrix-adapter-result-v3.py --self-test
+python3 scripts/reconcile-matrix-adapter-result.py --self-test
+python3 scripts/reconcile-matrix-adapter-result-v2-core.py --self-test
+python3 scripts/reconcile-matrix-adapter-result-v2-core.py
 python3 scripts/test-matrix-operator-postgres-runner-v4.py
 cargo fmt -p matrix-entry-adapter -p consumer-entry-api -- --check
 cargo test --locked -p matrix-entry-adapter -p consumer-entry-api --all-targets
 cargo clippy --locked -p matrix-entry-adapter -p consumer-entry-api --all-targets -- -D warnings
 python3 scripts/matrix_operator_postgres_regression.py
 ```
+
+The bare historical-core command is a negative probe and must fail with the
+bounded direct-invocation rejection code. The canonical command self-test must
+report schema `cex.matrix.adapter-result-reconciler.v3`, security contract `v3`,
+and `production_authorization=not_granted`.
 
 The Consumer and Adapter package tests include hostile response-boundary cases
 for missing or changed invocation identity, a missing, changed, or extended

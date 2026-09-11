@@ -13,7 +13,10 @@
     "scripts/check-matrix-result-reconciliation-security-v2.py",
     "scripts/check-matrix-result-reconciliation-security-v3.py"
   ],
-  "runtime_command": "scripts/reconcile-matrix-adapter-result-v3.py",
+  "runtime_command": "scripts/reconcile-matrix-adapter-result.py",
+  "runtime_implementation": "scripts/reconcile-matrix-adapter-result-v3.py",
+  "historical_v2_loader": "scripts/reconcile-matrix-adapter-result-v2-core.py",
+  "historical_v2_implementation": "scripts/reconcile-matrix-adapter-result-v2-internal.py",
   "postgres_runner": "scripts/matrix_operator_postgres_regression.py",
   "operator_migration_head": "services/matrix-entry-adapter/operator-migrations/0006_adapter_result_embedded_delivery_binding.sql",
   "hosted_gate": ".github/workflows/matrix-review-repair-regression.yml",
@@ -63,13 +66,17 @@
     },
     {
       "id": "MRR3-4",
-      "requirement": "The operator validates the embedded cached-result binding and exact task-to-raw invocation identity before SQL and invokes only the v3 database entrypoint while retaining every v2 HTTPS, TLS, executable-custody and closed-environment control.",
+      "requirement": "The canonical operator command resolves only the v3 implementation, which validates the embedded cached-result binding and exact task-to-raw invocation identity before SQL; the v2 loader is import-only, rejects direct runtime use, and retains the historical HTTPS, TLS, executable-custody and closed-environment controls in a non-executable implementation module.",
       "implementation": [
         "scripts/reconcile-matrix-adapter-result.py",
-        "scripts/reconcile-matrix-adapter-result-v3.py"
+        "scripts/reconcile-matrix-adapter-result-v3.py",
+        "scripts/reconcile-matrix-adapter-result-v2-core.py",
+        "scripts/reconcile-matrix-adapter-result-v2-internal.py"
       ],
       "verification": [
+        "scripts/reconcile-matrix-adapter-result.py",
         "scripts/reconcile-matrix-adapter-result-v3.py",
+        "scripts/check-matrix-result-reconciliation.py",
         "scripts/check-matrix-result-reconciliation-security-v2.py",
         "scripts/check-matrix-result-reconciliation-security-v3.py"
       ]
@@ -90,19 +97,22 @@
     },
     {
       "id": "MRR3-6",
-      "requirement": "Honest retry remains idempotent across observation timestamps while missing, changed or extended embedded bindings, missing or changed task invocation identity, and malformed success envelopes fail before state transition or observation insertion.",
+      "requirement": "Honest retry remains idempotent across observation timestamps while missing, changed or extended embedded bindings, missing or changed task invocation identity, malformed success envelopes, direct v2 command attempts and non-v3 canonical command drift fail before state transition or observation insertion.",
       "implementation": [
         "services/consumer-entry-api/src/matrix_result_response_binding.rs",
         "services/matrix-entry-adapter/src/reconciliation_response_binding.rs",
         "services/matrix-entry-adapter/operator-migrations/0006_adapter_result_embedded_delivery_binding.sql",
-        "scripts/reconcile-matrix-adapter-result-v3.py"
+        "scripts/reconcile-matrix-adapter-result.py",
+        "scripts/reconcile-matrix-adapter-result-v3.py",
+        "scripts/reconcile-matrix-adapter-result-v2-core.py"
       ],
       "verification": [
         "services/consumer-entry-api/src/matrix_result_response_binding.rs",
         "services/matrix-entry-adapter/src/reconciliation_response_binding.rs",
         "scripts/test-matrix-result-embedded-binding-postgres.sql",
         "scripts/test-matrix-result-task-invocation-binding-postgres.sql",
-        "scripts/reconcile-matrix-adapter-result-v3.py"
+        "scripts/check-matrix-result-reconciliation.py",
+        "scripts/check-matrix-result-reconciliation-security-v2.py"
       ]
     },
     {
