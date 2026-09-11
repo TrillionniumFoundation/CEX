@@ -139,8 +139,11 @@ def validate(sources: dict[str, str]) -> None:
             'url.username()', 'url.password()', 'url.query()', 'url.fragment()')
 
     require(response, 'BodyFailure::Interrupted', 'BodyFailure::TooLarge', 'status == 200',
-            'receipt.get("event_id")', "id.starts_with('$')", 'receipt.get("errcode").is_none()',
+            "id.starts_with('$')", 'receipt.get("errcode").is_none()',
             'room.as_str() != Some(original_room)', 'matrix_response_unknown_missing_receipt')
+    # Rustfmt may wrap the receiver and method call across lines. Normalize only
+    # whitespace so comments or a different receiver cannot satisfy this check.
+    require(''.join(response.split()), 'receipt.get("event_id")')
     reject(response, 'unwrap_or(original_room)')
     require(sql, 'matrix_transport_cursor_history', 'matrix_transport_poison_payloads',
             'matrix_transport_send_bindings', 'matrix_transport_send_receipts',
