@@ -279,6 +279,8 @@ def main() -> int:
         "historical_v2_files_executable": False,
         "runtime_entrypoint": "cex_matrix_reconcile_adapter_result_v3",
         "canonical_runtime_command": "scripts/reconcile-matrix-adapter-result.py",
+        "problems": [],
+        "checker_may_grant_production_authorization": False,
         "production_authorization": "not_granted",
     }, sort_keys=True))
     return 0
