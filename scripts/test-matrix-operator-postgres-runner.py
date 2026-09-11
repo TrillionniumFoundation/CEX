@@ -58,25 +58,39 @@ class MatrixOperatorPostgresRunnerTests(unittest.TestCase):
         root = self.make_root()
         stages, hashes = target.acquired_inputs(root)
         self.assertEqual(len(hashes), len(target.MIGRATIONS) + len(target.REGRESSIONS))
+
+        expected: list[str] = []
+        for migrations, regressions in (
+            (target.HISTORICAL_MIGRATIONS, target.HISTORICAL_REGRESSIONS),
+            (target.CAUSAL_MIGRATIONS, target.CAUSAL_REGRESSIONS),
+            (target.SECURITY_MIGRATIONS, target.SECURITY_REGRESSIONS),
+        ):
+            for pass_number in (1, 2):
+                expected.extend(
+                    f"operator-migration-{pass_number}-{name}"
+                    for name in migrations
+                )
+            expected.extend(Path(relative).stem for relative in regressions)
+
+        self.assertEqual([name for name, _ in stages], expected)
         self.assertEqual(
-            [name for name, _ in stages[: len(target.MIGRATIONS)]],
-            [f"operator-migration-1-{name}" for name in target.MIGRATIONS],
+            target.MIGRATIONS,
+            target.HISTORICAL_MIGRATIONS
+            + target.CAUSAL_MIGRATIONS
+            + target.SECURITY_MIGRATIONS,
         )
         self.assertEqual(
-            [
-                name
-                for name, _ in stages[
-                    len(target.MIGRATIONS) : 2 * len(target.MIGRATIONS)
-                ]
-            ],
-            [f"operator-migration-2-{name}" for name in target.MIGRATIONS],
+            target.REGRESSIONS,
+            target.HISTORICAL_REGRESSIONS
+            + target.CAUSAL_REGRESSIONS
+            + target.SECURITY_REGRESSIONS,
         )
 
     def test_extra_migration_is_rejected(self):
         root = self.make_root()
         extra = (
             root
-            / "services/matrix-entry-adapter/operator-migrations/0004_unreviewed.sql"
+            / "services/matrix-entry-adapter/operator-migrations/0007_unreviewed.sql"
         )
         extra.write_text("begin;\ncommit;\n", encoding="utf-8")
         with self.assertRaisesRegex(target.OperatorRegressionError, "manifest"):
