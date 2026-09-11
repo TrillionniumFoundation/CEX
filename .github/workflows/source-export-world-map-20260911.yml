@@ -6,27 +6,32 @@ on:
       - tooling/source-export-world-map-20260911
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  validate-and-export-repair:
+  validate-and-publish-repair:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      BASE_SHA: 7abbba861026c84fedebafc52280289205d0afd8
+      BASE_TREE: 3a47a14bd9ce8a8141e6194cda401fb4e7a54316
+      TARGET_BRANCH: fix/world-map-delta-tick-race-20260911
+      TARGET_PATH: services/consumer-entry-api/src/world_map_projection.rs
     steps:
-      - name: Checkout tooling branch without retained credentials
+      - name: Checkout tooling branch with bounded push credential
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
-          persist-credentials: false
+          persist-credentials: true
 
       - name: Apply repair to exact candidate in detached worktree
         shell: bash
         run: |
           set -euo pipefail
           cp tmp/world-map-delta-tick-race.patch /tmp/world-map-delta-tick-race.patch
-          git checkout --detach 7abbba861026c84fedebafc52280289205d0afd8
-          test "$(git rev-parse HEAD)" = "7abbba861026c84fedebafc52280289205d0afd8"
-          test "$(git rev-parse 'HEAD^{tree}')" = "3a47a14bd9ce8a8141e6194cda401fb4e7a54316"
+          git checkout --detach "$BASE_SHA"
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$BASE_TREE"
           git apply --check /tmp/world-map-delta-tick-race.patch
           git apply /tmp/world-map-delta-tick-race.patch
 
@@ -36,11 +41,15 @@ jobs:
           toolchain: 1.98.1
           components: rustfmt, clippy
 
-      - name: Format repaired source
-        run: cargo fmt --all
-
-      - name: Verify formatting
-        run: cargo fmt --all --check
+      - name: Format and verify repaired source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --all --check
+          git diff --check
+          test "$(git diff --name-only | wc -l | tr -d ' ')" = "1"
+          test "$(git diff --name-only)" = "$TARGET_PATH"
 
       - name: Run consumer entry full target suite
         run: cargo test --locked -p consumer-entry-api --all-targets --no-fail-fast
@@ -48,10 +57,18 @@ jobs:
       - name: Deny consumer entry Clippy warnings
         run: cargo clippy --locked -p consumer-entry-api --all-targets -- -D warnings
 
-      - name: Upload validated formatted repair
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: validated-world-map-repair-7abbba861026c84fedebafc52280289205d0afd8
-          path: services/consumer-entry-api/src/world_map_projection.rs
-          if-no-files-found: error
-          retention-days: 1
+      - name: Publish one validated fast-forward repair commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_target="$(git ls-remote --heads origin "refs/heads/$TARGET_BRANCH" | awk '{print $1}')"
+          test "$remote_target" = "$BASE_SHA"
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          test "$(git diff --name-only)" = "$TARGET_PATH"
+          git config user.name "Qian QI"
+          git config user.email "102159240+ProfHepta@users.noreply.github.com"
+          git add -- "$TARGET_PATH"
+          git diff --cached --check
+          test "$(git diff --cached --name-only)" = "$TARGET_PATH"
+          git commit -m "fix(world-map): stabilize no-op delta at runner tick boundary"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
