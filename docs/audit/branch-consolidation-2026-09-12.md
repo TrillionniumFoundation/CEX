@@ -131,3 +131,10 @@ The following inventory was generated with `git fetch --all --prune` and records
 The audit-record commit follows the provenance merge and is the current local `main` tip. Remote
 push and branch deletion are intentionally performed only after this final content is committed;
 the resulting remote SHA must be read back from GitHub.
+
+## Remote verification
+
+After the consolidation push, `git fetch origin --prune` and the GitHub branches API returned only
+`main` (plus the local symbolic `origin/HEAD` ref). The remote `main` read back as
+`894f19d535a5c829908d015888a95fb1ba3b5a89` before this final documentation-only commit; the next
+push updates it to the commit containing this verification note.
