@@ -1,0 +1,40 @@
+{
+  "schema": "cex.repository-contract-semantics.v1",
+  "status": "active_generated_contract",
+  "production_authorization": "not_granted",
+  "generator": "scripts/generate-repository-semantics.py",
+  "policy": {
+    "path": "docs/repository-semantic-policy-v1.json",
+    "sha256": "sha256:fb1edfe7a71b1e8a96f1de056f62c69a61f6d99656db3ef4a1789e86884aa756",
+    "schema": "cex.repository-semantic-policy.v1"
+  },
+  "module_catalog": {
+    "path": "docs/module-catalog-v1.json",
+    "sha256": "sha256:77a0d9683250e306bb8e51cab8c5810225a5ebf5feb9f3543dbd016085e75ac9"
+  },
+  "source_tree_sha256": "sha256:7eb729da9f058b907de62977076c9a1189de901ac865f31d52c9770081db2705",
+  "counts": {
+    "route": 441,
+    "config": 428,
+    "data": 486,
+    "total": 1355,
+    "unclassified": 0,
+    "unresolved_route_methods": 0,
+    "dynamic_route_paths": 5
+  },
+  "route_extractor": {
+    "path": "scripts/rust_route_contract.py",
+    "sha256": "sha256:5c2f8d4b65c98fcd21932f9edf92436bc1fca1b55b1b2cc0f534a457c1630921",
+    "scope": "explicit_rust_source_declarations",
+    "implicit_head_inferred": false
+  },
+  "input_coverage": {
+    "workspace_members": 23,
+    "source_files": 199,
+    "sql_files": 117,
+    "git_inventory_checked": true,
+    "non_rust_route_sources_not_analyzed": [
+      "services/paper-raid-bff/browser-e2e/e2e.mjs",
+      "services/paper-raid-bff/browser-e2e/mobile-a11y.mjs",
+      "services/paper-raid-bff/browser-e2e/mock-hepta.mjs",
+      "services/paper-raid-bff/scripts/check-browser-crypto.mjs",

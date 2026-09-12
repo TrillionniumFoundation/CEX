@@ -1,4 +1,0 @@
-bootstrap_builder=docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb
-rust_toolchain=1.98.1
-rust_release_commit=48a229ceaefd4985c50990b14116b6d856af0985
-cargo_identity=recorded_from_executed_toolchain
