@@ -9,6 +9,6 @@
   "matrix_result_reconciliation_review_packet": "docs/traceability/sequence54-matrix-security-v3-review-packet.json",
   "matrix_operator_migration_head": "0006_adapter_result_embedded_delivery_binding.sql",
   "matrix_operator_runtime_entrypoint": "cex_matrix_reconcile_adapter_result_v3",
-  "qualification_pulse": "2026-09-12-remediation-round2-cli-postgres-handoff",
+  "qualification_pulse": "2026-09-12-remediation-round3-fault-windows-source-handoff",
   "production_authorization": "not_granted"
 }
