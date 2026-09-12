@@ -33,6 +33,10 @@ QUALIFICATION_SCOPE = (
     "v3-four-boundary-functional-security-toolchain-governance-integration"
 )
 
+MANIFEST_QUALIFICATION_SCOPE = (
+    'repository-exact-money-control-plane-plus-hepta-durability-doc-integrity-full-suite-lint-receipt-recovery-and-trnm-production-config-hardening'
+)
+
 
 def problem(message: str) -> None:
     PROBLEMS.append(message)
@@ -114,7 +118,37 @@ def require_repository_file(relative: object, label: str) -> None:
         problem(f"{label} is not a regular repository file: {relative}")
 
 
+def validate_trigger_scopes(trigger: dict[str, Any]) -> None:
+    # A v12 manifest is bounded evidence; it is not the entire Sequence54 admission.
+    # Keep its backward-compatible schema label and bind the integration separately.
+    require_equal(trigger, "qualification_scope", MANIFEST_QUALIFICATION_SCOPE, "trigger")
+    require_equal(trigger, "integration_qualification_scope", QUALIFICATION_SCOPE, "trigger")
+
+
+def scope_self_test() -> None:
+    valid = {"qualification_scope": MANIFEST_QUALIFICATION_SCOPE,
+             "integration_qualification_scope": QUALIFICATION_SCOPE}
+    before = len(PROBLEMS)
+    validate_trigger_scopes(valid)
+    if len(PROBLEMS) != before:
+        problem("separate manifest/integration scope positive self-test failed")
+    for field in valid:
+        for value in (None, "", "arbitrary-scope", valid[next(k for k in valid if k != field)]):
+            sample = dict(valid)
+            if value is None:
+                del sample[field]
+            else:
+                sample[field] = value
+            start = len(PROBLEMS)
+            validate_trigger_scopes(sample)
+            rejected = len(PROBLEMS) > start
+            del PROBLEMS[start:]
+            if not rejected:
+                problem("missing, changed or swapped scope accepted by self-test")
+
+
 def main() -> int:
+    scope_self_test()
     authority = load_json(AUTHORITY)
     require_equal(authority, "candidate_sequence", 54, "authority")
     require_equal(authority, "integration_plan", PLAN, "authority")
@@ -154,7 +188,7 @@ def main() -> int:
     trigger = load_json(TRIGGER)
     require_equal(trigger, "schema", "cex.p0-candidate-trigger.v1", "trigger")
     require_equal(trigger, "sequence", 54, "trigger")
-    require_equal(trigger, "qualification_scope", QUALIFICATION_SCOPE, "trigger")
+    validate_trigger_scopes(trigger)
     require_equal(trigger, "integration_traceability", INTEGRATION, "trigger")
     require_equal(
         trigger,

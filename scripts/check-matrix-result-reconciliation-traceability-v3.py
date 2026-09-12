@@ -8,6 +8,8 @@ import stat
 import sys
 from typing import Any
 
+from matrix_source_platform import source_mode
+
 ROOT = Path(__file__).resolve().parents[1]
 TRACE = ROOT / "docs/traceability/sequence54-matrix-result-reconciliation-v3.json"
 EXPECTED_IDS = {f"MRR3-{index}" for index in range(1, 8)}
@@ -59,7 +61,7 @@ def repository_file(value: object, label: str) -> tuple[str, int]:
     metadata = absolute.lstat()
     if not stat.S_ISREG(metadata.st_mode) or absolute.is_symlink():
         raise ValueError(f"{label} is not a regular repository file")
-    return value, metadata.st_mode
+    return value, source_mode(ROOT, value, metadata.st_mode)
 
 
 def main() -> int:

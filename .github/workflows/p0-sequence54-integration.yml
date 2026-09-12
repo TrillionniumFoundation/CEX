@@ -50,6 +50,28 @@ jobs:
           printf '%s\n' "$SOURCE_TREE" | tee run/sequence54/source-tree.txt
           printf '%s\n' "$SOURCE_SHA" | tee run/sequence54/source-sha.txt
 
+      - name: Validate original P0 hygiene and evidence wiring before integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check-p0-release-candidate-hygiene.py
+          python3 scripts/check-strict-release-evidence-wiring.py
+
+      - name: Export exact tracked-source handoff input
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/export-development-source.py --self-test
+          python3 scripts/export-development-source.py --output "$PWD/run/development-source"
+
+      - name: Retain exact tracked-source handoff input
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cex-development-source-${{ env.SOURCE_SHA }}-${{ github.run_attempt }}
+          path: run/development-source/**
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Install immutable Rust 1.98.1 toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:

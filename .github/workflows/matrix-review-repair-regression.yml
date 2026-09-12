@@ -92,6 +92,7 @@ jobs:
           python3 scripts/test-matrix-runner-hardening.py
           python3 scripts/test-matrix-runner-lifecycle.py
           python3 scripts/test-matrix-operator-postgres-runner-v4.py
+          python3 scripts/test-matrix-cli-postgres.py --self-test
       - name: Matrix shared profile linkage regression
         run: python3 scripts/test-matrix-profile-consolidation.py
       - name: Matrix adapter validated construction boundary
@@ -298,6 +299,37 @@ jobs:
         run: bash scripts/check-matrix-source-observation-postgres.sh
       - name: Operator reconciliation migrations and causal-binding regression
         run: python3 scripts/matrix_operator_postgres_regression.py
+      - name: Real least-privilege v3 CLI PostgreSQL regression
+        env:
+          MATRIX_CLI_TEST_ALLOW_ROLE_CREATE: '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p run/matrix-cli
+          python3 scripts/test-matrix-cli-postgres.py | tee run/matrix-cli/report.json
+      - name: Retain exact CLI regression observation
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cex-matrix-cli-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
+          path: run/matrix-cli/report.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Real CLI response-loss and simultaneous row-lock regression
+        env:
+          MATRIX_CLI_TEST_ALLOW_ROLE_CREATE: '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/test-matrix-cli-fault-windows.py --self-test
+          python3 scripts/test-matrix-cli-fault-windows.py | tee run/matrix-cli/fault-windows.json
+      - name: Retain exact CLI fault-window observation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cex-matrix-fault-windows-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
+          path: run/matrix-cli/fault-windows.json
+          if-no-files-found: error
+          retention-days: 30
       - name: No source mutation
         run: git diff --exit-code
 

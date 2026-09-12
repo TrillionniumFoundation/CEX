@@ -47,8 +47,16 @@ Catalog-bound entry points:
 - `apps/matrix-bot-relay/src/runtime_profile.rs` — shared profile re-export.
 
 Shared transport migrations `0001` through `0005` and operator migrations `0001`
-through `0004` are owned under `services/matrix-entry-adapter/`. The operator
-command is `scripts/reconcile-matrix-adapter-result.py`.
+through `0006` are owned under `services/matrix-entry-adapter/`. The operator
+command is `scripts/reconcile-matrix-adapter-result.py`, the canonical facade
+that loads only `scripts/reconcile-matrix-adapter-result-v3.py`.
+
+Operator migration head: `0006_adapter_result_embedded_delivery_binding.sql`
+Runtime reconciliation function: `cex_matrix_reconcile_adapter_result_v3`
+Recovery contract: `docs/matrix-result-reconciliation-v3.md`
+
+These declarations describe the current operation, not historical compatibility.
+The v1/v2 contracts and owner-only SQL core cannot authorize runtime repair.
 
 ## Interfaces and contracts
 
@@ -63,7 +71,7 @@ objects may contain only `msgtype` and `body`, use `m.text` or `m.notice`, and
 remain bound to the original room.
 
 The response-loss recovery contract is documented in
-`docs/matrix-result-reconciliation-v1.md`. The relay does not automatically call
+`docs/matrix-result-reconciliation-v3.md`. The relay does not automatically call
 it from its main claim loop; this avoids creating an implicit authority that
 could convert an ambiguous effect to success without operator intent.
 
@@ -83,7 +91,16 @@ oversized response, duplicate outcome and internal post-I/O failure are recorded
 as explicit unknown-outcome dead letters. They are not blindly reclaimed. The
 operator reconciliation path queries Consumer Entry through the adapter, verifies
 the exact principal scope and stores the recovered result before closing the
-adapter leg.
+adapter leg. The v3 result must contain the exact persisted eight-field delivery
+binding and a non-empty `task_id == raw.invocation_id`; event identity alone is
+only a lookup locator. Honest retries retain stable result identity while each
+new observation is append-only. Migration 0006 denies runtime v1/v2 execution.
+
+An adapter delivery repaired to `sent` means that its existing business result
+was recovered. It does not prove a Matrix reply was sent or received. The
+read-only lookup returns no projected reply; the reconciler neither recreates
+the business request nor enqueues or sends a Matrix event. Any later reply
+requires its own reviewed transport intent, original-room binding and receipt.
 
 Rollback stops claims, fences workers and retains identities, bindings, receipts,
 unknown holds and reconciliation records. Older workers that automatically retry
@@ -145,13 +162,23 @@ Additional reconciliation checks:
 ```text
 python3 scripts/check-matrix-result-reconciliation.py
 python3 scripts/reconcile-matrix-adapter-result.py --self-test
+python3 scripts/check-matrix-result-reconciliation-security-v3.py
+python3 scripts/check-matrix-result-reconciliation-traceability-v3.py
+python3 scripts/reconcile-matrix-adapter-result-v3.py --self-test
+python3 scripts/matrix_operator_postgres_regression.py
 bash scripts/check-matrix-operator-postgres.sh
 ```
 
 Database regression must cover wrong role/fence, receipt-required completion,
 receipt collision, endpoint binding drift, each adapter unknown-outcome class,
 exact recovered payload persistence, side-effect-free replay and changed-payload
-collision. Source checks do not replace PostgreSQL or real response-loss testing.
+collision. After the complete 0001–0006 operator chain, the actual canonical CLI
+must execute successfully as the least-privilege reconciler, while direct v1/v2
+calls fail. Changed task/invocation, delivery, payload, event, room, principal,
+fingerprint or embedded binding must not change the delivery state. A second
+honest lookup with fresh timestamps must append an observation without a second
+terminal transition. Source checks do not replace PostgreSQL or real
+response-loss testing.
 
 ## Deployment and operations
 
@@ -178,8 +205,10 @@ and no second business request or cross-room reply occurs.
 
 Destination strings, payload hashes and delivery UUIDs remain unchanged. Existing
 terminal rows are preserved; no history is rewritten. Operator migration 0004
-retains the v1 reconciliation function signature while fixing result-payload
-persistence and replay comparison.
+is historical compatibility only. Migration 0005 separates stable result
+identity from observations. Migration 0006 makes v3 the only runtime repair
+entrypoint; historical v1/v2 functions remain owner-controlled, not operator
+alternatives. Do not restore their runtime grants to make an old client work.
 
 Changes to error classification, result schema, role grants, retry scope, endpoint
 or credential binding, payload bounds or reply fields require this contract,

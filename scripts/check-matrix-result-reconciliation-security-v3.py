@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import stat
 import subprocess
 import sys
+
+from matrix_source_platform import portable_self_test
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = {
@@ -70,6 +73,8 @@ def forbid(source: str, tokens: tuple[str, ...], label: str) -> list[str]:
 
 
 def reconciler_self_test() -> list[str]:
+    if os.name == "nt":
+        return portable_self_test(ROOT)
     path = ROOT / FILES["command"]
     try:
         result = subprocess.run(
@@ -372,7 +377,8 @@ def main() -> int:
                 "runtime_v2_execute_revoked": True,
                 "runtime_v3_execute_granted": True,
                 "operator_migration_head": "0006",
-                "runtime_self_test": True,
+                "runtime_self_test": os.name == "posix",
+                "portable_contract_self_test": os.name == "nt",
                 "problems": [],
                 "checker_max_grant_production_authorization": False,
                 "production_authorization": "not_granted",
