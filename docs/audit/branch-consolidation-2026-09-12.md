@@ -125,3 +125,9 @@ The following inventory was generated with `git fetch --all --prune` and records
 - Resulting tree: `fe367a91829d2aa2ac7fb8eec28af62077d12ce9`
 - Remote heads represented as merge parents: 90 (all fetched remote branches except `main` and the symbolic `HEAD`).
 - The merge used the `ours` strategy for superseded/diagnostic tips so their history is auditable without reintroducing stale or source-writing artifacts.
+
+## Final local tree after audit records
+
+The audit-record commit follows the provenance merge and is the current local `main` tip. Remote
+push and branch deletion are intentionally performed only after this final content is committed;
+the resulting remote SHA must be read back from GitHub.
