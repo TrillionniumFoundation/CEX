@@ -1,51 +1,75 @@
-# Native Windows Python file-identity qualification
+# Native Windows file-identity qualification
 
-Status: environment correction requiring exact-head hosted verification.
+Status: native timestamp repair requiring exact-head hosted verification.
 Production authorization: `not_granted`.
 
-The Windows job on source `fb16531dedbbef30523f79908db438ae028dea47`
+## Observed failures
+
+The Windows job on `fb16531dedbbef30523f79908db438ae028dea47`
 (job `103479691404`) passed development documentation, then failed the original
 candidate-hygiene scratch-file self-test at path/descriptor identity comparison.
-No later Cargo or service-local step executed. This is not evidence that Cargo,
-PostgreSQL or production custody passed, and is not fixed by suppressing the
-file-identity assertion.
+Its image manifest and later interpreter observation identified Python 3.12.10.
 
-The image identified itself as `windows-2025-vs2026/20260907.229.1`; its upstream
-manifest lists Python 3.12.10. The log did not print the mismatching identity
-fields, so the precise CPython/host cause is not asserted from that log alone.
-The Windows lane now selects CPython 3.13.15 explicitly through the immutable
-`actions/setup-python` v7.0.0 commit before any existing Python gate. It records
-the preinstalled interpreter version and checks the selected interpreter's actual
-scratch-file path and descriptor identities. Exact-version selection alone is
-not sufficient: native conformance and every original gate must pass.
+Commit `dd8ba373683ae8eb2d1cc1d187b0377bbb291200` selected CPython 3.13.15 and
+added an actual scratch-file diagnostic. Native job `103489709268` then proved
+that changing Python alone did not resolve the defect. Device, file identifier,
+size and last-write values matched, but path `st_ctime_ns` was
+`1789183249024729800` while descriptor `st_ctime_ns` was
+`1789183249025285900`. Both observations were internally stable. These values
+are recorded observations, not fabricated success evidence or production data.
 
-`scripts/check-python-file-identity.py` compares device, file identity, size and
-nanosecond modification/change values across path-before-open, descriptor-open,
-descriptor-after-read and path-after-close, and checks single-link regular-file
-status plus exact scratch bytes. It never reads a repository credential, uploads
-scratch contents or turns a fixture into release evidence. The output includes
-the measured values so another incompatibility is diagnosable. Missing identity,
-zero file identity, changed fields, or a wrong requested Python version fails.
-The existing hygiene reader, stable-read checks and negative tests are unchanged.
-No filesystem field is dropped merely to make Windows pass.
+Python documents Windows `st_ctime` as deprecated and recommends the distinct
+`st_birthtime` field for creation time. Cross-API comparison must not assume that
+creation time and metadata-change time are interchangeable. Neither removing all
+timestamp checks nor comparing only size is an acceptable repair.
 
-The original four jobs, all existing steps, Rust selectors, database lanes,
-workflow permissions, triggers, concurrency, manifest checks and status names
-are retained. The complete target catalog, actual Cargo metadata, native Windows
-build and original Linux runtime/CLI/database checks remain required separately.
-This change does not port the POSIX operator CLI to Windows or waive the remaining
-module-target catalog repair. Public deployment, live Rulesets, independent
-reviews, custody and final approval remain external requirements.
+## Native identity, without a timestamp fallback
 
-Primary inputs:
+The hygiene bootstrap and byte-bound workflow-trust adapter now obtain Windows
+stamps through `GetFileInformationByHandleEx`: `FileIdInfo` retains the full
+128-bit identifier and volume identity; `FileStandardInfo` provides size, link
+count, directory and deletion state; `FileBasicInfo` provides creation,
+last-write and metadata-change times as distinct native 100-nanosecond integers.
+Each native snapshot reads the record set twice and rejects disagreement.
+Path snapshots use `CreateFileW` with read-attributes access, read sharing,
+`OPEN_EXISTING` and `FILE_FLAG_OPEN_REPARSE_POINT`. The helper never creates,
+truncates, writes, or follows a final reparse point; unsupported native APIs fail
+closed. Existing CRT descriptors are borrowed, not closed by the stamp helper.
 
-- `actions/runner-images` tag `win25-vs2026/20260907.229`,
-  `images/windows/Windows2025-VS2026-Readme.md`.
-- `actions/setup-python` immutable release `v7.0.0`, commit
-  `5fda3b95a4ea91299a34e894583c3862153e4b97`.
-- Python release-team announcement for 3.13.15 dated 2026-08-05.
+Before-open, opened-descriptor, after-read-descriptor and final-path snapshots
+must agree on the complete native stamp, including metadata-change time. Each
+stamp is additionally bound to Python's device, full identifier, size, last-write
+and explicit birthtime values. This retains the original byte/read-size bounds
+and rejects changes between the Python and native observations. Zero identities,
+unavailable times, reparse points, directories, pending deletion and multiple
+links fail. The POSIX five-field stat identity and its ctime checks are unchanged.
 
-Local POSIX fixture tests are not native Windows execution. Close this environment
-subtask only after the actual Windows step and unchanged hygiene complete on the
-new exact subject; close full Windows qualification only when its subsequent
-Cargo and service-local steps also succeed without skipped work.
+The native routines intentionally remain inline in both bootstraps: no new
+repository module is imported before workflow trust. Their three definitions
+are AST-compared with the diagnostic's definitions in the existing Windows
+preflight self-test. Pure record tests cover metadata mismatch, every changed
+stamp field, full-width identifiers and unsafe records. Local POSIX tests are
+not native Windows execution; the unchanged hosted hygiene and later Cargo jobs
+must still execute successfully.
+
+## Scope and retained requirements
+
+The original four workflow jobs, existing steps, Rust selectors, database lanes,
+permissions, triggers, concurrency, manifest checks and status names remain.
+The pinned interpreter is not a waiver. The complete target catalog, actual Cargo
+metadata, Windows builds and Linux runtime/CLI/database tests remain required.
+No production Matrix CLI portability, source qualification, live Ruleset,
+independent review, custody or release approval is granted by this repair.
+The existing workflow-trust implementation blob and all its old corrections and
+negative tests remain intact. Only its bootstrap file-reading boundary changes.
+
+Primary sources: Python `os.stat_result` documentation; Microsoft Learn
+`FILE_BASIC_INFO`, `FILE_STANDARD_INFO`, `FILE_ID_INFO`,
+`FILE_INFO_BY_HANDLE_CLASS`, and `CreateFileW`; `actions/runner-images` tag
+`win25-vs2026/20260907.229`; immutable `actions/setup-python` v7.0.0 commit
+`5fda3b95a4ea91299a34e894583c3862153e4b97`.
+
+Close this subtask only after native conformance and unchanged hygiene pass on
+the repaired head. Full Windows qualification additionally requires subsequent
+Cargo and service-local steps to succeed, not be skipped. The separate target
+catalog repair and all broader plan requirements remain open until accepted.

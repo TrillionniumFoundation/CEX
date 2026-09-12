@@ -55,6 +55,115 @@ exec(compile(source, path, "exec", dont_inherit=True), scope, scope)
 '''
 
 
+def _windows_stamp_records(basic, standard, file_id) -> tuple[int, ...]:
+    """Decode native records; creation and metadata-change times are distinct."""
+    attributes = int(basic.FileAttributes)
+    identifier = int.from_bytes(bytes(file_id.FileId), 'little')
+    if (attributes & (0x400 | 0x10) or standard.Directory or standard.DeletePending
+            or int(standard.NumberOfLinks) != 1 or int(standard.EndOfFile) < 0
+            or not identifier or not int(file_id.VolumeSerialNumber)):
+        raise OSError('windows_stamp_not_single_regular_file')
+    times = (int(basic.LastWriteTime), int(basic.ChangeTime), int(basic.CreationTime))
+    if any(value <= 0 for value in times):
+        raise OSError('windows_stamp_time_unavailable')
+    return (int(file_id.VolumeSerialNumber), identifier, int(standard.EndOfFile),
+            *times, attributes, int(standard.NumberOfLinks))
+
+
+def _windows_stamp(*, path=None, descriptor=None) -> tuple[int, ...]:
+    """Read a no-follow path or existing CRT handle using one native API family.
+
+    Kept inline in the two trust bootstraps: no repository module is imported
+    before workflow trust. The conformance test checks their exact AST equality.
+    No ctime fallback is allowed when native metadata is unavailable.
+    """
+    if os.name != 'nt' or (path is None) == (descriptor is None):
+        raise OSError('windows_stamp_invalid_request')
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+
+    class Basic(ctypes.Structure):
+        _fields_ = [('CreationTime', ctypes.c_longlong),
+                    ('LastAccessTime', ctypes.c_longlong),
+                    ('LastWriteTime', ctypes.c_longlong),
+                    ('ChangeTime', ctypes.c_longlong),
+                    ('FileAttributes', ctypes.c_uint32)]
+
+    class Standard(ctypes.Structure):
+        _fields_ = [('AllocationSize', ctypes.c_longlong),
+                    ('EndOfFile', ctypes.c_longlong),
+                    ('NumberOfLinks', ctypes.c_uint32),
+                    ('DeletePending', ctypes.c_ubyte), ('Directory', ctypes.c_ubyte)]
+
+    class FileId(ctypes.Structure):
+        _fields_ = [('VolumeSerialNumber', ctypes.c_ulonglong),
+                    ('FileId', ctypes.c_ubyte * 16)]
+
+    if (ctypes.sizeof(Basic), ctypes.sizeof(Standard), ctypes.sizeof(FileId)) != (40, 24, 24):
+        raise OSError('windows_stamp_abi_mismatch')
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                       wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+    create.restype = wintypes.HANDLE
+    query = kernel.GetFileInformationByHandleEx
+    query.argtypes = (wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD)
+    query.restype = wintypes.BOOL
+    close = kernel.CloseHandle
+    close.argtypes = (wintypes.HANDLE,)
+    close.restype = wintypes.BOOL
+    file_type = kernel.GetFileType
+    file_type.argtypes = (wintypes.HANDLE,)
+    file_type.restype = wintypes.DWORD
+
+    owned = path is not None
+    # FILE_READ_ATTRIBUTES, FILE_SHARE_READ, OPEN_EXISTING,
+    # FILE_FLAG_OPEN_REPARSE_POINT. Never create, truncate, write or follow links.
+    handle = (create(os.fspath(path), 0x80, 0x1, None, 3, 0x00200000, None)
+              if owned else msvcrt.get_osfhandle(descriptor))
+    if handle in (None, -1, ctypes.c_void_p(-1).value):
+        raise OSError('windows_stamp_open_failed')
+    try:
+        if file_type(handle) != 1:  # FILE_TYPE_DISK
+            raise OSError('windows_stamp_not_disk_file')
+        snapshots = []
+        for _ in range(2):
+            basic, standard, identity = Basic(), Standard(), FileId()
+            for kind, record in ((0, basic), (1, standard), (18, identity)):
+                if not query(handle, kind, ctypes.byref(record), ctypes.sizeof(record)):
+                    raise OSError('windows_stamp_query_failed')
+            snapshots.append(_windows_stamp_records(basic, standard, identity))
+        if snapshots[0] != snapshots[1]:
+            raise OSError('windows_stamp_changed_during_query')
+        return snapshots[0]
+    finally:
+        if owned and not close(handle):
+            raise OSError('windows_stamp_close_failed')
+
+
+def _windows_stamp_matches_metadata(stamp: tuple[int, ...], metadata: os.stat_result) -> None:
+    """Bind the native record to Python's unambiguous fields, retaining read limits."""
+    epoch = 116444736000000000  # FILETIME ticks at 1970-01-01 UTC.
+    expected = (int(metadata.st_dev), int(metadata.st_ino), int(metadata.st_size),
+                int(metadata.st_mtime_ns), int(metadata.st_birthtime_ns))
+    observed = (stamp[0], stamp[1], stamp[2],
+                (stamp[3] - epoch) * 100, (stamp[5] - epoch) * 100)
+    if observed != expected:
+        raise OSError('windows_stamp_python_metadata_mismatch')
+
+
+def _file_stamp(metadata: os.stat_result, *, path=None, descriptor=None) -> tuple[int, ...]:
+    if os.name != "nt":
+        return _identity(metadata)
+    try:
+        stamp = _windows_stamp(path=path, descriptor=descriptor)
+        _windows_stamp_matches_metadata(stamp, metadata)
+        return stamp
+    except (OSError, ValueError, ImportError, AttributeError) as error:
+        raise BootstrapError("cannot obtain native Windows file identity: " + str(error)) from error
+
+
 def _identity(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
     return (
         int(metadata.st_dev),
@@ -106,6 +215,8 @@ def read_stable_regular(path: Path, *, maximum: int = _MAX_SCRIPT_BYTES) -> byte
     if before.st_size < 0 or before.st_size > maximum:
         raise BootstrapError(f"repository script exceeds read boundary: {absolute}")
 
+    before_stamp = _file_stamp(before, path=absolute)
+
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_BINARY", 0)
     nofollow = getattr(os, "O_NOFOLLOW", None)
     if nofollow is not None:
@@ -120,7 +231,8 @@ def read_stable_regular(path: Path, *, maximum: int = _MAX_SCRIPT_BYTES) -> byte
     try:
         opened = os.fstat(descriptor)
         _require_single_regular(opened, f"opened repository script {absolute}")
-        if _identity(opened) != _identity(before):
+        opened_stamp = _file_stamp(opened, descriptor=descriptor)
+        if opened_stamp != before_stamp:
             raise BootstrapError(f"repository script changed during open: {absolute}")
         chunks: list[bytes] = []
         remaining = opened.st_size
@@ -134,7 +246,7 @@ def read_stable_regular(path: Path, *, maximum: int = _MAX_SCRIPT_BYTES) -> byte
             raise BootstrapError(f"repository script grew while reading: {absolute}")
         after = os.fstat(descriptor)
         _require_single_regular(after, f"opened repository script {absolute}")
-        if _identity(after) != _identity(opened):
+        if _file_stamp(after, descriptor=descriptor) != opened_stamp:
             raise BootstrapError(f"repository script changed while reading: {absolute}")
     finally:
         os.close(descriptor)
@@ -144,7 +256,7 @@ def read_stable_regular(path: Path, *, maximum: int = _MAX_SCRIPT_BYTES) -> byte
     except OSError as error:
         raise BootstrapError(f"cannot re-inspect repository script {absolute}: {error}") from error
     _require_single_regular(final, f"repository script {absolute}")
-    if _identity(final) != _identity(before):
+    if _file_stamp(final, path=absolute) != before_stamp:
         raise BootstrapError(f"repository script path changed while reading: {absolute}")
     _check_parent_boundaries(absolute)
     return b"".join(chunks)
