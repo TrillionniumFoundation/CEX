@@ -40,3 +40,5 @@
 优先落地：identity-service、ledger-service、gateway-service、execution-service、audit logging
 第二阶段：policy-risk-service、capability-service
 第三阶段：marketplace-service
+
+> **历史文档标记（2026-09-12）**：本文件描述的 policy-risk-service 与 marketplace-service 不属于当前 CEX workspace，不能作为实现依据。当前边界以 `decisions/adr-004-three-module-external-agent-battle-platform.md`、`docs/modules/index.md` 和 23-member module catalog 为准；Matrix adapter/poller/relay、Hepta Research League、TRNM protocol vendor crates 的责任以各自 `docs/modules/*.md` 为准。

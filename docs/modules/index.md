@@ -89,3 +89,11 @@ Windows Rust authority lanes. The existing full document, semantic inventory,
 compilation and release gates remain separate requirements. No saved metadata
 file can be supplied as a substitute for that invocation. See
 `../cargo-workspace-authority-v1.md` for source-only versus executed evidence.
+
+## Repository-adjacent tool boundary
+
+`tools/paper-raid-agent-bridge` is a Node.js operational bridge and is intentionally outside the
+Cargo workspace and the 23-member module catalog. It is not part of the default CEX release
+candidate. If a future release makes it a shipped component, the change must add a machine
+catalog entry, a dedicated contract covering its daemon/CLI protocol, key custody, upgrade and
+rollback, and corresponding verification gates before it is treated as a module.
