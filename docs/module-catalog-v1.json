@@ -216,7 +216,8 @@
         "services/gateway-service/src/bin/gateway-exact-reserve-api.rs",
         "services/gateway-service/src/bin/gateway-exact-reserve-worker.rs",
         "services/gateway-service/tests/http_flow.rs",
-        "services/gateway-service/tests/runtime_blackbox.rs"
+        "services/gateway-service/tests/runtime_blackbox.rs",
+        "services/gateway-service/tests/runtime_approval_probe.rs"
       ],
       "verification": [
         "cargo test -p gateway-service",
@@ -355,7 +356,16 @@
         "services/hepta-research-league/src/paper_chain_finality_v2.rs",
         "services/hepta-research-league/tests/http_flow.rs",
         "services/hepta-research-league/tests/postgres_recovery.rs",
-        "services/hepta-research-league/README.md"
+        "services/hepta-research-league/README.md",
+        "services/hepta-research-league/src/bin/hepta-trnm-command-signer.rs",
+        "services/hepta-research-league/examples/hepta-paper-raid-fixture.rs",
+        "services/hepta-research-league/tests/nakama_authorization_contract.rs",
+        "services/hepta-research-league/tests/paper_collaboration_contract_golden.rs",
+        "services/hepta-research-league/tests/paper_raid_contract_golden.rs",
+        "services/hepta-research-league/tests/paper_review_contract_golden.rs",
+        "services/hepta-research-league/tests/research_control_golden.rs",
+        "services/hepta-research-league/tests/research_session_golden.rs",
+        "services/hepta-research-league/tests/research_workflows.rs"
       ],
       "verification": [
         "cargo test -p hepta-research-league --all-targets",

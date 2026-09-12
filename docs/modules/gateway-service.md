@@ -50,6 +50,8 @@ Catalog-bound entry points:
 - `services/gateway-service/tests/http_flow.rs`
 - `services/gateway-service/tests/runtime_blackbox.rs`
 
+- `services/gateway-service/tests/runtime_approval_probe.rs`
+
 Any new binary, public source boundary, migration owner, or removed path must update the catalog and this document in the same commit.
 
 ## Interfaces and contracts
@@ -86,6 +88,12 @@ cargo clippy -p gateway-service --all-targets -- -D warnings
 python3 scripts/check-gateway-exact-reserve.py
 bash scripts/check-gateway-exact-reserve-postgres.sh
 ```
+
+The `runtime_approval_probe` target is a retained, ignored local-runtime probe,
+not a default CI success or production admission test. It uses PowerShell runtime
+helpers and local service/database configuration. Do not run it against shared or
+production state. Registration preserves the target and its ignored status; it
+neither re-enables retired provider execution nor grants real approval authority.
 
 Required behavioral focus:
 

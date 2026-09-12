@@ -47,6 +47,16 @@ Catalog-bound entry points:
 - `services/hepta-research-league/tests/postgres_recovery.rs`
 - `services/hepta-research-league/README.md`
 
+- `services/hepta-research-league/src/bin/hepta-trnm-command-signer.rs`
+- `services/hepta-research-league/examples/hepta-paper-raid-fixture.rs`
+- `services/hepta-research-league/tests/nakama_authorization_contract.rs`
+- `services/hepta-research-league/tests/paper_collaboration_contract_golden.rs`
+- `services/hepta-research-league/tests/paper_raid_contract_golden.rs`
+- `services/hepta-research-league/tests/paper_review_contract_golden.rs`
+- `services/hepta-research-league/tests/research_control_golden.rs`
+- `services/hepta-research-league/tests/research_session_golden.rs`
+- `services/hepta-research-league/tests/research_workflows.rs`
+
 Any new binary, public source boundary, migration owner, or removed path must update the catalog and this document in the same commit.
 
 ## Interfaces and contracts
@@ -83,6 +93,22 @@ cargo clippy -p hepta-research-league --all-targets -- -D warnings
 python3 scripts/check-hepta-lint-ownership.py
 bash scripts/check-hepta-postgres-integration.sh --mode full
 ```
+
+The `hepta-trnm-command-signer` binary accepts a JSON signing request from a
+file or stdin; `SigningInputV1` rejects unknown fields and requires the v1 input
+protocol. A signer DID and a 32-byte Base64 seed are separate environment inputs.
+Signing a command does not approve the authority role, consume a nonce or prove
+Chain acceptance; the receiving boundary must validate those independently.
+Do not put real signer seeds in repository fixtures, CLI arguments or logs.
+
+The `hepta-paper-raid-fixture` example emits deterministic public test keys and
+signed-frame fixtures. Its test seeds are intentionally non-secret and must never
+be promoted into deployed credentials. `nakama_authorization_contract` covers
+versioned authorization frames; the three `paper_*_contract_golden` targets cover
+Paper Raid, collaboration and review frame stability. `research_control_golden`
+and `research_session_golden` retain control/session encoding vectors;
+`research_workflows` exercises research orchestration. Registering these targets
+is source coverage, not proof that all target features or real actors executed.
 
 Required behavioral focus:
 
