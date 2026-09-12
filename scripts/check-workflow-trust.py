@@ -2,7 +2,7 @@
 """Byte-bound cross-platform adapter for the workflow trust implementation.
 
 The reviewed implementation is retained verbatim in
-``check-workflow-trust-impl.py``. This adapter applies four exact source
+``check-workflow-trust-impl.py``. This adapter applies exact, counted source
 corrections before execution so the no-symlink self-tests preserve identical
 fail-closed semantics on POSIX and Windows:
 
@@ -10,7 +10,12 @@ fail-closed semantics on POSIX and Windows:
 * local descriptor and path-component mocks patch the concrete ``Path`` type;
 * the immutable-script fallback mock patches the concrete type; and
 * that fallback installs a real method via ``new=`` instead of an unbound
-  ``MagicMock`` ``side_effect``.
+  ``MagicMock`` ``side_effect``; and
+* literal glob and closed non-executable YAML leaf parsing plus hostile tests.
+
+The latter does not admit flow action/event mappings, arbitrary YAML aliases,
+dynamic action references, or mutable action versions. The frozen implementation
+identity and every original negative test remain required.
 """
 
 from __future__ import annotations
@@ -86,6 +91,103 @@ _SOURCE_REWRITES: tuple[tuple[bytes, bytes, str], ...] = (
         "immutable-script concrete-path mock",
     ),
 )
+# The frozen implementation remains unchanged. These bounded corrections repair
+# plain-scalar classification and admit only non-executable, single-line leaves.
+# Missing, repeated or already changed correction sites fail before execution.
+_LITERAL_LEAF_SOURCE = r'''def literal_leaf_collection(line: str) -> bool:
+    """Recognize only closed, non-executable one-line leaf collections.
+
+    This is not a general flow-YAML parser. Empty permissions denies all access.
+    The only admitted lists hold simple literal branch names, runner labels or
+    port bindings. No map entry, quote escape, interpolation, alias, nested
+    collection, continuation, trailing token or uses/event key can enter here.
+    Unknown flow shapes remain fail-closed and action/event checks still inspect
+    the complete surrounding document.
+    """
+    text = strip_yaml_comment(line).strip()
+    if text == "permissions: {}":
+        return True
+    match = re.fullmatch(r"(branches|runs-on|ports):[ \t]*\[([^\r\n]*)\]", text)
+    if match is None:
+        return False
+    key, body = match.groups()
+    values = body.split(",")
+    if not 1 <= len(values) <= 32:
+        return False
+    decoded: list[str] = []
+    for raw in values:
+        value = raw.strip()
+        if value.startswith(("'", '\"')):
+            if len(value) < 2 or value[-1] != value[0]:
+                return False
+            value = value[1:-1]
+        elif key == "ports":
+            # Require a quoted port mapping, avoiding implicit YAML typing.
+            return False
+        if re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.:/-]{0,255}", value) is None:
+            return False
+        if value.lower() in {"null", "true", "false", "yes", "no", "on", "off"}:
+            return False
+        if key == "ports" and re.fullmatch(r"[0-9]{1,5}:[0-9]{1,5}", value) is None:
+            return False
+        decoded.append(value)
+    return len(decoded) == len(set(decoded))
+
+
+'''.encode("utf-8")
+_LITERAL_LEAF_TESTS = r'''    # Literal glob suffixes are plain scalar content, not YAML aliases.
+    # Safe leaf collections must never hide an action or a forbidden event.
+    for leaf in (
+        "paths:\n  - services/example/**\n  - scripts/*matrix*\n",
+        "with:\n  path: run/evidence/**\n",
+        "permissions: {}\n",
+        "branches: [main]\n",
+        "runs-on: [self-hosted, linux, x64]\n",
+        "ports: ['5432:5432']\n",
+    ):
+        before = len(PROBLEMS)
+        found = uses_entries(leaf + f"steps:\n  - uses: {pinned}\n", "<self-test-leaf>")
+        observed = PROBLEMS[before:]
+        del PROBLEMS[before:]
+        if observed or [value for _, value in found] != [pinned]:
+            PROBLEMS.append("workflow trust plain-scalar/leaf collection regression failed")
+        found = uses_entries(leaf + "steps:\n  - uses: actions/checkout@v4\n", "<self-test-leaf-mutable>")
+        if not found or not all(action_pin_problem(value, require_local_exists=False)[0] for _, value in found):
+            PROBLEMS.append("workflow trust leaf form hid mutable action")
+    for hostile in (
+        "permissions: {contents: write}",
+        "permissions: {} , uses: actions/checkout@v4",
+        "runs-on: [linux, {uses: actions/checkout@v4}]",
+        "runs-on: [linux, *runner]",
+        "runs-on: [linux, &runner x64]",
+        "runs-on: [linux, !!str x64]",
+        "runs-on: [linux, ${{ matrix.runner }}]",
+        "runs-on: [linux, 'x64\\nuses: actions/checkout@v4']",
+        "runs-on: [linux, 'x64',]",
+        "branches: [main] uses: actions/checkout@v4",
+        "branches: [main, [pull_request]]",
+        "on: [push, pull_request]",
+        "uses: [actions/checkout@v4]",
+        "anything: {}",
+        "paths: *paths",
+        "- &step",
+    ):
+        if not parser_ambiguities(hostile):
+            PROBLEMS.append("workflow trust unsafe leaf/alias regression failed")
+
+'''.encode("utf-8")
+_SOURCE_REWRITES += (
+    (b'r"(?<![A-Za-z0-9_$])[&*][A-Za-z0-9_.-]*(?=$|[\\s,}\\]])"', b'r"(?:^|[ \\t\\[{,])[&*][A-Za-z0-9_.-]*(?=$|[\\s,}\\]])"',
+     "alias indicator must begin a YAML token, not a glob suffix"),
+    (b'    if FLOW_DELIMITER_RE.search(masked):\n', b'    if FLOW_DELIMITER_RE.search(masked) and not literal_leaf_collection(line):\n',
+     "closed non-executable literal leaf collections"),
+    (b"def parser_ambiguities(", _LITERAL_LEAF_SOURCE + b"def parser_ambiguities(",
+     "literal leaf grammar"),
+    (b'    problem, _ = action_pin_problem("./../escape", require_local_exists=False)\n',
+     _LITERAL_LEAF_TESTS + b'    problem, _ = action_pin_problem("./../escape", require_local_exists=False)\n',
+     "literal leaf positive and hostile regressions"),
+)
+
 _ORIGINAL_MODULE_NAME = __name__
 
 

@@ -50,6 +50,13 @@ jobs:
           printf '%s\n' "$SOURCE_TREE" | tee run/sequence54/source-tree.txt
           printf '%s\n' "$SOURCE_SHA" | tee run/sequence54/source-sha.txt
 
+      - name: Validate original P0 hygiene and evidence wiring before integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check-p0-release-candidate-hygiene.py
+          python3 scripts/check-strict-release-evidence-wiring.py
+
       - name: Export exact tracked-source handoff input
         shell: bash
         run: |
