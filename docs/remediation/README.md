@@ -99,3 +99,11 @@ python3 scripts/check-remediation-acceptance.py --self-test
 检查在既有 development-document 入口中运行，不建立新的 workflow 或 status 来替代原门禁。它只证明清单和两项限定语义规则；不证明完整运行语义。测试命令不读取凭证，不启动服务，不修改数据库，也不自动提交、合并或部署。
 
 新源树仍需原有全量 Cargo、格式、严格 Clippy、数据库、供应链、模块、集成与真实 prospective-merge 门禁，以及新鲜独立审查。最终 production authorization 始终由既有 V12 外部证据与负责人的明确决定控制。
+
+## 8. 第二批交付与执行入口
+
+- [全工作区开发交接](developer-handoff-v1.md)：23 个包的源码/类型、真实构建目标、修改与测试路径；仍需逐模块独立走查。
+- [真实 Matrix CLI / PostgreSQL 回归](matrix-cli-postgres-v1.md)：实际进程与普通 LOGIN，区别于手写 SQL 回归；HTTP 对端明确为合成 fixture。
+- [系统级演练矩阵](system-rehearsal-v1.md)：多 schema、资金、Matrix、研究、产品和容量恢复的具体操作与拒绝条件。
+
+新增回归接入既有 Matrix 工作流，不替代原有全量检查。文档提交、self-test、实际数据库回归、真实服务演练和独立接受分别记账。没有独立生产证据时，所有发布权仍保持原限制。
