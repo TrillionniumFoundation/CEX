@@ -118,3 +118,10 @@ The following inventory was generated with `git fetch --all --prune` and records
 | `verify/pr65-merge-da620412-20260912` | `da620412a33ab8d604ca6e6e6c612754980a7b7c` | 628 | older source/workflow experiment |
 | `work/sequence54-gap-closure-20260909` | `5b9f896ecc39045432c6029396704038e8ff912b` | 458 | older source/workflow experiment |
 | `work/sequence54-round2-staging-20260909` | `9f207140635acb99c0e599c3888b1bb06494bb81` | 604 | older source/workflow experiment |
+
+## Local consolidation result
+
+- Provenance merge commit: `ac4f9ce3d757a8abb795a49ba5a83e038cb99b43`
+- Resulting tree: `fe367a91829d2aa2ac7fb8eec28af62077d12ce9`
+- Remote heads represented as merge parents: 90 (all fetched remote branches except `main` and the symbolic `HEAD`).
+- The merge used the `ours` strategy for superseded/diagnostic tips so their history is auditable without reintroducing stale or source-writing artifacts.
