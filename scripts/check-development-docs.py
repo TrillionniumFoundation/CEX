@@ -34,6 +34,7 @@ SEQUENCE54_MATRIX_V3_ADMISSION = (
 )
 EXTERNAL_AGENT_CONFIG = ROOT / "scripts/check-production-external-agent-config.py"
 VENDOR_PROVENANCE = ROOT / "scripts/check-vendor-provenance.py"
+REMEDIATION_ACCEPTANCE = ROOT / "scripts/check-remediation-acceptance.py"
 MAX_OUTPUT_BYTES = 1_048_576
 CHECK_TIMEOUT_SECONDS = 120.0
 
@@ -221,6 +222,18 @@ def main() -> int:
             ):
                 problems.append(f"documentation core: invalid {key}")
     checks = (
+        (
+            REMEDIATION_ACCEPTANCE,
+            ["--contract-only"],
+            "remediation scope and bounded documentation semantics",
+            "cex.remediation-acceptance-check.v1",
+        ),
+        (
+            REMEDIATION_ACCEPTANCE,
+            ["--self-test"],
+            "remediation contract hostile-fixture self-test",
+            "cex.remediation-acceptance-check.v1",
+        ),
         (
             AGENT_BOUNDARY,
             [],

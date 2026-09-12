@@ -14,10 +14,36 @@ Paper Raid has three independent lifecycles. No implementation may collapse them
 | `experimenting` | run baseline, extension or ablation | data/code/environment manifests frozen for the run | experiment, result and figure lineage | timeout does not invent completion; retry uses a new attempt identity |
 | `drafting` | create paper revisions | research facts exist | immutable revision lineage | controlled return from later review states creates a new revision |
 | `integrity_review` | verify claims, disclosures and lineage | draft bundle complete | review findings and hold/release decision | compromised key or evidence mismatch enters `integrity_hold` |
-| `reproducing` | submit independent reproduction report | reproducible bundle frozen | reproduction decision and artifacts | failure returns to drafting or remains on hold; it does not erase evidence |
+| `reproducing` | freeze author reproducibility-readiness evidence | reproducible bundle and code/data/environment manifests frozen | author-side readiness record and immutable artifact lineage | incomplete material remains in author remediation or hold; it cannot create an independent reproduction decision |
 | `author_approval` | sign authorship and release scope | current human keys valid; author order explicit | immutable signatures and key snapshots | rotation/revocation invalidates forming consent; historical signatures remain auditable |
 | `submission_ready` | freeze `PaperBundleV2` | all required human approvals and checks pass | immutable bundle hash | does not imply publication, Nakama completion, or finality |
 | `integrity_hold` | remediate or explicitly terminate | signed operator/reviewer decision | hold reason, evidence and transition history | no automatic release; remediation produces new versioned evidence |
+
+### Storage, projection and independent reproduction
+
+| Stored phase | Author projection | Independent reproduction owner |
+|---|---|---|
+| `reproducing` | `reproduction_readiness` | `Review Raid` |
+
+`reproducing` remains the stored PaperPhase V1 value for database and SDK read
+compatibility. It is not renamed by this documentation correction. Author Raid
+uses this checkpoint to freeze a complete independently reproducible bundle;
+authors do not perform the independent evaluation or reproduction. Evaluation,
+independent reviewers, reproduction reports and appeals belong to Review Raid,
+with its own assignment, independence, lease and immutable-evidence checks.
+
+The detailed current service behavior is specified in
+`services/hepta-research-league/README.md`. Keep the storage enum, domain state,
+player projection, authorized role and accepted command version distinct.
+Reaching author readiness does not consume a Review Raid assignment, accept a
+reproduction report, release a reward or establish scientific/finality authority.
+A compatibility label must never bypass the non-author independence boundary.
+
+Required regressions preserve stored-value reads, show the author-facing
+`reproduction_readiness` projection, reject an author's independent-review or
+reproduction action, and preserve the independent Review Raid evidence lineage.
+These are required behavioral checks, not executed evidence supplied by this
+text. No migration, wire enum or permission change is implied.
 
 External publication requires a separate `PublicationReleaseV1` signed by every human author.
 
