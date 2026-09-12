@@ -42,10 +42,7 @@
     "clean_deployment_acceptance": "docs/clean-deployment-acceptance-v1.md",
     "slo_recovery": "docs/slo-recovery-contract-v1.md",
     "protocol_compatibility": "docs/protocol/version-compatibility-matrix-v1.md",
-    "trnm_production_credentials": "docs/trnm-production-credential-contract-v1.md",
-    "module_catalog": "docs/module-catalog-v1.json",
-    "module_index": "docs/modules/index.md",
-    "module_contract_checker": "scripts/check-module-documentation.py"
+    "trnm_production_credentials": "docs/trnm-production-credential-contract-v1.md"
   },
   "authoritative_workflows": [
     ".github/workflows/p0-migration-gate.yml",
