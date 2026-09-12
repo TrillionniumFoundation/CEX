@@ -81,26 +81,31 @@ class GateResultTests(unittest.TestCase):
     def test_missing_result_fails_even_on_zero_exit(self):
         self.assertTrue(self.validate(None))
 
-    def run_main(self, core):
+    def run_main(self, core, failed_child=None):
         values=[(0, core, '')]
         schemas=[
+            'cex.remediation-acceptance-check.v1',
+            'cex.remediation-acceptance-check.v1',
             'cex.external-agent-runtime-boundary-check.v1',
             'cex.execution-default-state-boundary-check.v1',
             'cex.matrix-adapter-api-boundary-check.v1',
             'cex.sequence54.matrix-v3-admission-source-check.v1',
-            'cex.matrix.result-reconciliation-source-check.v2',
-            'cex.matrix.result-reconciliation-security-source-check.v1',
+            'cex.matrix.result-reconciliation-source-check.v3',
+            'cex.matrix.result-reconciliation-security-source-check.v2',
             'cex.matrix.result-reconciliation-security-source-check.v3',
-            'cex.matrix.result-reconciliation-traceability-check.v1',
+            'cex.matrix.result-reconciliation-traceability-check.v2',
             'cex.external-agent-config-boundary-check.v1',
             'cex.vendor-provenance-check.v1',
             'cex.external-production-evidence-contract-check.v1',
             'cex.external-production-evidence-binding-self-test.v1',
         ]
         values.extend((0, child(schema=s), '') for s in schemas)
+        if failed_child is not None:
+            values[1 + failed_child] = (1, dict(values[1 + failed_child][1], status='failed', problems=['fixture failure']), '')
         output=io.StringIO()
-        with patch.object(gate,'run_json',side_effect=values), contextlib.redirect_stdout(output):
+        with patch.object(gate,'run_json',side_effect=values) as mocked, contextlib.redirect_stdout(output):
             code=gate.main()
+        self.assertEqual(mocked.call_count, len(values))
         return code,json.loads(output.getvalue())
 
     def test_failed_core_cannot_be_rewritten_to_ok(self):
@@ -120,6 +125,15 @@ class GateResultTests(unittest.TestCase):
         value=gate.fallback_result(''); value.update(status='ok',problems=[])
         code,output=self.run_main(value)
         self.assertEqual(code,0); self.assertEqual(output['status'],'ok')
+
+    def test_every_child_failure_blocks_the_aggregate(self):
+        for index in range(14):
+            with self.subTest(child=index):
+                core=gate.fallback_result(''); core.update(status='ok',problems=[])
+                code,output=self.run_main(core,failed_child=index)
+                self.assertEqual(code,1)
+                self.assertEqual(output['status'],'failed')
+                self.assertTrue(output['problems'])
 
 
 class ChildTransportTests(unittest.TestCase):

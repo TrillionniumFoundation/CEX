@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import stat
 import subprocess
 import sys
 from typing import Any
+
+from matrix_source_platform import source_mode, portable_self_test, probe_environment
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = {
@@ -42,7 +45,7 @@ def read_regular(relative: str) -> tuple[str, int]:
     if not stat.S_ISREG(metadata.st_mode) or path.is_symlink() or metadata.st_size > 2_000_000:
         raise RuntimeError(f"source is not a bounded regular file: {relative}")
     try:
-        return path.read_text(encoding="utf-8"), metadata.st_mode
+        return path.read_text(encoding="utf-8"), source_mode(ROOT, relative, metadata.st_mode)
     except (OSError, UnicodeError) as error:
         raise RuntimeError(f"source is not readable UTF-8: {relative}: {error}") from None
 
@@ -65,6 +68,8 @@ def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def canonical_self_test() -> list[str]:
+    if os.name == "nt":
+        return portable_self_test(ROOT)
     path = ROOT / FILES["canonical_command"]
     try:
         result = subprocess.run(
@@ -105,7 +110,7 @@ def historical_direct_probe() -> list[str]:
             text=True,
             timeout=10,
             check=False,
-            env={"PATH": "", "PYTHONPATH": ""},
+            env=probe_environment(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return ["historical v2 loader: direct-execution probe failed"]
@@ -326,7 +331,8 @@ def main() -> int:
         "historical_v2_direct_invocation": "rejected",
         "runtime_entrypoint": "cex_matrix_reconcile_adapter_result_v3",
         "canonical_runtime_command": "scripts/reconcile-matrix-adapter-result.py",
-        "runtime_reconciler_self_test": True,
+        "runtime_reconciler_self_test": os.name == "posix",
+        "portable_contract_self_test": os.name == "nt",
         "operator_postgres_runner_present": True,
         "problems": [],
         "checker_max_grant_production_authorization": False,

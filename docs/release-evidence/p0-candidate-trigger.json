@@ -9,7 +9,7 @@
   "matrix_result_reconciliation_review_packet": "docs/traceability/sequence54-matrix-security-v3-review-packet.json",
   "matrix_operator_migration_head": "0006_adapter_result_embedded_delivery_binding.sql",
   "matrix_operator_runtime_entrypoint": "cex_matrix_reconcile_adapter_result_v3",
-  "qualification_pulse": "2026-09-12-remediation-round4-workflow-trust-and-scope-binding",
+  "qualification_pulse": "2026-09-12-remediation-round5-detached-fixtures-platform-source",
   "production_authorization": "not_granted",
   "integration_qualification_scope": "sequence54-non-regressive-23-module-migration-0088-matrix-operator-0006-v3-four-boundary-functional-security-toolchain-governance-integration"
 }
