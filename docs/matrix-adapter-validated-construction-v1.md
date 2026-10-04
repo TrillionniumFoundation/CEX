@@ -65,7 +65,7 @@ cargo clippy --locked -p matrix-entry-adapter --all-targets -- -D warnings
 ```
 
 Only the first two are repository source checks. The Cargo commands must run on
-the exact committed head with Rust 1.98.1. A black-box startup test must also
+the exact committed head with Rust 1.99.0. A black-box startup test must also
 show invalid/conflicting profiles fail before a listener appears and accepted
 profiles reach the validated constructor. Queued jobs, source inspection and
 this decision record are not passes.

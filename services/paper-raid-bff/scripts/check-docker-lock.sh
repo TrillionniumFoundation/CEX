@@ -4,8 +4,8 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)
 docker_dir="$repo_root/services/paper-raid-bff/docker"
 scratch_dir=$(mktemp -d)
-expected_rust_toolchain=1.98.1
-expected_rust_release_commit=48a229ceaefd4985c50990b14116b6d856af0985
+expected_rust_toolchain=1.99.0
+expected_rust_release_commit=b940084d7eb6a299eb4bfeb8e34901bc051e7ac4
 
 cleanup() {
   rm -rf "$scratch_dir"

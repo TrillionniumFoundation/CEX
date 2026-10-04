@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  RUSTUP_TOOLCHAIN: '1.98.1'
+  RUSTUP_TOOLCHAIN: '1.99.0'
   CARGO_INCREMENTAL: '0'
   RUST_BACKTRACE: '1'
   RUST_TEST_THREADS: '1'
@@ -67,10 +67,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rustup toolchain install 1.98.1 --profile minimal
+          rustup toolchain install 1.99.0 --profile minimal
           cargo install --locked cargo-audit --version 0.22.2
           cargo install --locked cargo-deny --version 0.20.2
-          test "$(rustc --version | awk '{print $2}')" = '1.98.1'
+          test "$(rustc --version | awk '{print $2}')" = '1.99.0'
           test "$(cargo-audit --version | awk '{print $2}')" = '0.22.2'
           test "$(cargo-deny --version | awk '{print $2}')" = '0.20.2'
           python3 scripts/check-sequence54-rustsec-admission.py
@@ -96,8 +96,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy
-          test "$(rustc --version | awk '{print $2}')" = '1.98.1'
+          rustup toolchain install 1.99.0 --profile minimal --component rustfmt,clippy
+          test "$(rustc --version | awk '{print $2}')" = '1.99.0'
           cargo fmt --all -- --check
           cargo test --workspace --all-targets --locked
           cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -140,8 +140,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rustup toolchain install 1.98.1 --profile minimal
-          test "$(rustc --version | awk '{print $2}')" = '1.98.1'
+          rustup toolchain install 1.99.0 --profile minimal
+          test "$(rustc --version | awk '{print $2}')" = '1.99.0'
           pg_isready -h 127.0.0.1 -p 5432 -U postgres -d cex_labeled_recheck
           cargo test --workspace --all-targets --locked -- --test-threads=1
           test -z "$(git status --porcelain=v1 --untracked-files=no)"
@@ -167,7 +167,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rustup toolchain install 1.98.1 --profile minimal
+          rustup toolchain install 1.99.0 --profile minimal
           cargo build --release --workspace --locked
           python3 scripts/test-trnm-build-evidence.py
           workflow=.github/workflows/trnm-economy-settlement.yml

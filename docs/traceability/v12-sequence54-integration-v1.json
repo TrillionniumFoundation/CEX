@@ -14,6 +14,11 @@
     "rust_toolchain": "1.98.1",
     "rust_release_commit": "48a229ceaefd4985c50990b14116b6d856af0985"
   },
+  "active_toolchain": {
+    "rust_toolchain": "1.99.0",
+    "rust_release_commit": "b940084d7eb6a299eb4bfeb8e34901bc051e7ac4",
+    "upgrade_contract": "docs/rust-toolchain-upgrade-1.99.0.md"
+  },
   "integration_branch": "integration/cex-v12-sequence54-20260908",
   "normative_document": "docs/CEX-DEVELOPMENT-PLAN-2026-08-28-v12-SEQUENCE54-INTEGRATION.md",
   "matrix_result_reconciliation": {
@@ -65,7 +70,7 @@
     "matrix_consumer_and_adapter_success_response_guards_preserved",
     "matrix_task_to_raw_invocation_binding_preserved",
     "paper_raid_sequence52_assertions_preserved",
-    "rust_1_98_1_recursive_active_surface_convergence",
+    "rust_1_99_0_recursive_active_surface_convergence",
     "bounded_rustsec_policy_and_all_feature_release_surface_closure_preserved",
     "rustsec_policy_owned_by_independent_codeowner",
     "obsolete_source_writing_workflows_absent",

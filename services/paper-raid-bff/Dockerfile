@@ -2,19 +2,19 @@
 FROM docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb AS builder
 WORKDIR /src
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=false \
-    RUSTUP_TOOLCHAIN=1.98.1
+    RUSTUP_TOOLCHAIN=1.99.0
 
 # The immutable bootstrap image contains rustup but predates the patched point
 # release. Install and verify the exact compiler before dependency resolution.
 RUN rustup set profile minimal \
-    && rustup toolchain install 1.98.1 --component rustfmt --component clippy \
-    && rustup default 1.98.1 \
+    && rustup toolchain install 1.99.0 --component rustfmt --component clippy \
+    && rustup default 1.99.0 \
     && rustup show active-toolchain | tee /rustup-active-toolchain.txt \
     && rustc --version --verbose | tee /rustc-version.txt \
     && cargo --version --verbose | tee /cargo-version.txt \
-    && test "$(rustc --version | awk '{print $2}')" = "1.98.1" \
-    && grep -Eq '^1\.98\.1-' /rustup-active-toolchain.txt \
-    && grep -Fx 'commit-hash: 48a229ceaefd4985c50990b14116b6d856af0985' /rustc-version.txt
+    && test "$(rustc --version | awk '{print $2}')" = "1.99.0" \
+    && grep -Eq '^1\.99\.0-' /rustup-active-toolchain.txt \
+    && grep -Fx 'commit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4' /rustc-version.txt
 
 COPY services/paper-raid-bff/docker/workspace.Cargo.toml Cargo.toml
 COPY services/paper-raid-bff/docker/Cargo.lock Cargo.lock
@@ -79,8 +79,8 @@ LABEL org.opencontainers.image.title="Hepta Paper Raid BFF" \
       org.trillionnium.cargo-lock.sha256="${PAPER_RAID_BFF_CARGO_LOCK_SHA256}" \
       org.trillionnium.sbom.sha256="${PAPER_RAID_BFF_SBOM_SHA256}" \
       org.trillionnium.runtime-binary.sha256="${PAPER_RAID_BFF_RUNTIME_BINARY_SHA256}" \
-      org.trillionnium.rust-toolchain="1.98.1" \
-      org.trillionnium.rust-release-commit="48a229ceaefd4985c50990b14116b6d856af0985"
+      org.trillionnium.rust-toolchain="1.99.0" \
+      org.trillionnium.rust-release-commit="b940084d7eb6a299eb4bfeb8e34901bc051e7ac4"
 # Copy the complete normalized release tree. Copying lone files lets BuildKit
 # stamp their destination parent directories with wall-clock time, producing a
 # different layer digest even when the Rust binary and SBOM bytes are stable.

@@ -1,5 +1,8 @@
 # Build blocker repairs — rounds 6 and 7 integration
 
+Historical record: current compiler selection is superseded by
+`docs/rust-toolchain-upgrade-1.99.0.md`; the results below retain their original scope.
+
 Base commit: `cc0c7b27085ad3e7960fae34241075555eebd176`  
 Base complete Cargo.lock blob: `75e9ae18ece0a3e58296b75de5b33b623ff3a7c8`  
 State: integrated source candidate; not a candidate freeze or a successful build  

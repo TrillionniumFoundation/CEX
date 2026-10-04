@@ -31,8 +31,9 @@ env:
   CARGO_INCREMENTAL: '0'
   RUST_BACKTRACE: '1'
   RUST_TEST_THREADS: '1'
-  RUST_TOOLCHAIN: '1.98.1'
-  RUST_RELEASE_COMMIT: '48a229ceaefd4985c50990b14116b6d856af0985'
+  RUST_TOOLCHAIN: '1.99.0'
+  RUSTUP_TOOLCHAIN: '1.99.0'
+  RUST_RELEASE_COMMIT: 'b940084d7eb6a299eb4bfeb8e34901bc051e7ac4'
 
 jobs:
   exact-world-cex-contracts:
@@ -56,6 +57,8 @@ jobs:
     steps:
       - name: Checkout evidence definition
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Test nested compiler and immutable lock evidence guards
+        run: python3 scripts/test-external-toolchain-evidence.py
       - name: Load and validate exact component lock
         id: lock
         run: |
@@ -108,16 +111,28 @@ jobs:
           test "$(git -C cex-owner rev-parse 'HEAD^{tree}')" = "$CEX_TREE"
           git -C world diff --exit-code
           git -C cex-owner diff --exit-code
+      - name: Require unchanged committed dependency locks
+        run: |
+          set -euo pipefail
+          for spec in cex-owner:Cargo.lock world:trillionnium/Cargo.lock; do
+            repo=${spec%%:*}
+            path=${spec#*:}
+            git -C "$repo" cat-file -e "HEAD:$path"
+            test -f "$repo/$path"
+            git -C "$repo" show "HEAD:$path" | cmp - "$repo/$path"
+          done
       - name: Install pinned Rust toolchain
         run: |
           set -euo pipefail
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt,clippy
           rustup default "$RUST_TOOLCHAIN"
-          rustup show active-toolchain
-          rustc --version --verbose | tee /tmp/rustc-version.txt
-          cargo --version --verbose
-          test "$(rustc --version | awk '{print $2}')" = "$RUST_TOOLCHAIN"
-          grep -Fx "commit-hash: $RUST_RELEASE_COMMIT" /tmp/rustc-version.txt
+      - name: Verify executed compiler in both build directories
+        run: |
+          set -euo pipefail
+          for directory in cex-owner world/trillionnium; do
+            label=${directory%%/*}
+            (cd "$directory" && python3 "$GITHUB_WORKSPACE/scripts/record-executed-rust-toolchain.py" "$RUNNER_TEMP/$label-toolchain.json")
+          done
       - name: Enforce World source and overclaim boundaries
         working-directory: world
         run: |
@@ -155,68 +170,15 @@ jobs:
         run: |
           python3 scripts/check-trnm-economy-settlement-contract.py
           python3 scripts/test-trnm-economy-settlement-status-negative.py
-          cargo generate-lockfile
           cargo metadata --locked --no-deps --format-version 1 > /dev/null
           cargo fmt -p trnm-economy-service -- --check
           cargo test -p trnm-economy-service --all-targets --locked
           cargo clippy -p trnm-economy-service --all-targets --locked -- -D warnings
-      - name: Apply pinned rustfmt to the exact World worktree
+      - name: Check exact World formatting without source remediation
         working-directory: world/trillionnium
         run: |
           cargo metadata --locked --no-deps --format-version 1 > /dev/null
-          cargo fmt --all
-      - name: Assemble exact World rustfmt remediation
-        run: |
-          set -euo pipefail
-          mkdir -p run/world-rustfmt/formatted-files run/world-rustfmt/generated
-          git -C world diff --binary --full-index > run/world-rustfmt/world-rustfmt.patch
-          git -C world diff --name-only --diff-filter=ACMRT > run/world-rustfmt/changed-files.txt
-          if test -s run/world-rustfmt/changed-files.txt; then
-            while IFS= read -r path; do
-              mkdir -p "run/world-rustfmt/formatted-files/$(dirname "$path")"
-              cp "world/$path" "run/world-rustfmt/formatted-files/$path"
-            done < run/world-rustfmt/changed-files.txt
-          fi
-          generated=$(find world/trillionnium/target -path '*/out/trnm_game_server_lib_generated.rs' -type f -print -quit || true)
-          worker_generated=$(find world/trillionnium/target -path '*/out/trnm_settlement_worker_generated.rs' -type f -print -quit || true)
-          test -z "$generated" || cp "$generated" run/world-rustfmt/generated/trnm_game_server_lib_generated.rs
-          test -z "$worker_generated" || cp "$worker_generated" run/world-rustfmt/generated/trnm_settlement_worker_generated.rs
-          python3 - <<'PY'
-          import hashlib, json, os
-          from pathlib import Path
-          root = Path('run/world-rustfmt')
-          changed = (root / 'changed-files.txt').read_text().splitlines()
-          files = sorted(path for path in root.rglob('*') if path.is_file())
-          payload = {
-              'schema': 'trnm_world_settlement_rustfmt_remediation_v1',
-              'world_commit': os.environ.get('WORLD_COMMIT', '${{ steps.lock.outputs.world_commit }}'),
-              'world_tree': '${{ steps.lock.outputs.world_tree }}',
-              'rust_toolchain': '1.98.1',
-              'rust_release_commit': '48a229ceaefd4985c50990b14116b6d856af0985',
-              'changed_files': changed,
-              'clean_before_tests': not changed,
-              'sha256': {
-                  str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
-                  for path in files
-              },
-          }
-          canonical = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()
-          payload['payload_sha256'] = hashlib.sha256(canonical).hexdigest()
-          (root / 'manifest.json').write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
-          PY
-          (
-            cd run/world-rustfmt
-            find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
-            sha256sum --check SHA256SUMS
-          )
-      - name: Upload World rustfmt remediation
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: world-rustfmt-${{ steps.lock.outputs.world_commit }}
-          path: run/world-rustfmt/
-          if-no-files-found: error
-          retention-days: 7
-          compression-level: 9
+          cargo fmt --all -- --check
       - name: Run World settlement unit and ownership contracts
         working-directory: world/trillionnium
         run: |
@@ -236,8 +198,16 @@ jobs:
       - name: Strict lint for complete World settlement target
         working-directory: world/trillionnium
         run: cargo clippy -p trnm-game-server --all-targets --locked -- -D warnings
-      - name: Require the exact World source to need no remediation
-        run: git -C world diff --exit-code
+      - name: Require both exact sources and locks to remain unchanged
+        run: |
+          set -euo pipefail
+          git -C world diff --exit-code HEAD
+          git -C cex-owner diff --exit-code HEAD
+          for spec in cex-owner:Cargo.lock world:trillionnium/Cargo.lock; do
+            repo=${spec%%:*}
+            path=${spec#*:}
+            git -C "$repo" show "HEAD:$path" | cmp - "$repo/$path"
+          done
       - name: Write exact cross-repository evidence
         env:
           WORLD_REPOSITORY: ${{ steps.lock.outputs.world_repository }}
@@ -251,6 +221,15 @@ jobs:
           python3 - <<'PY'
           import hashlib, json, os
           from pathlib import Path
+          identities = {
+              label: json.loads((Path(os.environ['RUNNER_TEMP']) / f'{label}-toolchain.json').read_text())
+              for label in ('cex-owner', 'world')
+          }
+          cex_identity = identities['cex-owner']
+          world_identity = identities['world']
+          for key in ('rust_toolchain', 'rust_release_commit'):
+              if cex_identity[key] != world_identity[key]:
+                  raise SystemExit(f'component compiler identity differs: {key}')
           payload = {
               'schema': 'trnm_world_cex_settlement_external_ci_evidence_v2',
               'world': {'repository': os.environ['WORLD_REPOSITORY'], 'commit': os.environ['WORLD_COMMIT'], 'tree': os.environ['WORLD_TREE']},
@@ -260,8 +239,13 @@ jobs:
               'run_id': int(os.environ['GITHUB_RUN_ID']),
               'run_attempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
               'postgres_image': 'postgres:16.4-alpine',
-              'rust_toolchain': '1.98.1',
-              'rust_release_commit': '48a229ceaefd4985c50990b14116b6d856af0985',
+              'rust_toolchain': cex_identity['rust_toolchain'],
+              'rust_release_commit': cex_identity['rust_release_commit'],
+              'executed_toolchains': identities,
+              'cargo_lock_sha256': {
+                  'cex_owner': hashlib.sha256(Path('cex-owner/Cargo.lock').read_bytes()).hexdigest(),
+                  'world': hashlib.sha256(Path('world/trillionnium/Cargo.lock').read_bytes()).hexdigest(),
+              },
               'source_and_postgresql_checks_passed': True,
               'native_world_actions_run': False,
               'promotion_effect': 'none',

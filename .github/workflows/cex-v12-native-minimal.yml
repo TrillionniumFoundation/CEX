@@ -12,8 +12,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  RUSTUP_TOOLCHAIN: '1.98.1'
-  EXPECTED_RUST_RELEASE_COMMIT: '48a229ceaefd4985c50990b14116b6d856af0985'
+  RUSTUP_TOOLCHAIN: '1.99.0'
+  EXPECTED_RUST_RELEASE_COMMIT: 'b940084d7eb6a299eb4bfeb8e34901bc051e7ac4'
   EXPECTED_PREVIOUS_POLICY_BLOB: '3c68853d4de6891140290e933f8495e82aeddad7'
   CARGO_INCREMENTAL: '0'
   RUST_BACKTRACE: '1'
@@ -81,8 +81,8 @@ jobs:
         run: |
           set -euo pipefail
           unset GH_READ_TOKEN
-          rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
-          rustup override set 1.98.1
+          rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
+          rustup override set 1.99.0
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential ca-certificates clang cmake libpq-dev libssl-dev \

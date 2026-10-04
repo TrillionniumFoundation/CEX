@@ -718,6 +718,19 @@ def local_evidence_is_successful(name: str, payload: Any) -> bool:
     return False
 
 
+def hosted_gate_context_record(record: dict[str, Any], digest: str) -> dict[str, Any]:
+    """Project immutable run identity into the strict context schema.
+
+    Presentation fields stay in the separately hashed hosted-gate payload.
+    Do not widen the context validator to accommodate producer-only fields.
+    """
+    fields = (
+        "repository", "branch", "head_branch", "head_sha", "workflow_path", "event",
+        "status", "conclusion", "run_id", "run_attempt", "created_at", "updated_at",
+    )
+    return {**{field: record[field] for field in fields}, "sha256": digest}
+
+
 def collect(args: argparse.Namespace) -> int:
     root = args.repo_root.resolve()
     # Keep caller paths lexical until the no-follow boundary has checked every
@@ -816,18 +829,7 @@ def collect(args: argparse.Namespace) -> int:
             raise SystemExit(f"hosted gate {name} has an invalid run identity")
         path_out = gates_dir / f"{name}.json"
         write_json(path_out, record)
-        # Keep the complete immutable run identity in the release context.
-        # The manifest validator intentionally does not trust the per-file
-        # payload alone: it must be able to prove that every selected run is
-        # for this repository, branch, workflow, and exact commit before it
-        # emits a candidate manifest.  Previously only the payload pointer and
-        # URL were retained here, which made the final manifest step reject
-        # every otherwise-successful hosted qualification.
-        gate_records[name] = {
-            **record,
-            "path": path_out.relative_to(evidence_dir).as_posix(),
-            "sha256": sha256_file(path_out),
-        }
+        gate_records[name] = hosted_gate_context_record(record, sha256_file(path_out))
 
     migration_head, migration_chain_sha256 = migration_state(root)
     cargo_sha256 = sha256_file(root / "Cargo.lock")

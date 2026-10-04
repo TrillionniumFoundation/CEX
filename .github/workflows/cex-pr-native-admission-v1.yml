@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 env:
-  RUSTUP_TOOLCHAIN: '1.98.1'
+  RUSTUP_TOOLCHAIN: '1.99.0'
   CARGO_INCREMENTAL: '0'
   RUST_BACKTRACE: '1'
   RUST_TEST_THREADS: '1'
@@ -81,10 +81,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rustup toolchain install 1.98.1 --profile minimal
+          rustup toolchain install 1.99.0 --profile minimal
           cargo install --locked cargo-audit --version 0.22.2
           cargo install --locked cargo-deny --version 0.20.2
-          test "$(rustc --version | awk '{print $2}')" = '1.98.1'
+          test "$(rustc --version | awk '{print $2}')" = '1.99.0'
           test "$(cargo-audit --version | awk '{print $2}')" = '0.22.2'
           test "$(cargo-deny --version | awk '{print $2}')" = '0.20.2'
 
@@ -115,8 +115,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy
-          test "$(rustc --version | awk '{print $2}')" = '1.98.1'
+          rustup toolchain install 1.99.0 --profile minimal --component rustfmt,clippy
+          test "$(rustc --version | awk '{print $2}')" = '1.99.0'
 
       - name: Execute complete workspace source qualification
         shell: bash
@@ -164,8 +164,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rustup toolchain install 1.98.1 --profile minimal
-          test "$(rustc --version | awk '{print $2}')" = '1.98.1'
+          rustup toolchain install 1.99.0 --profile minimal
+          test "$(rustc --version | awk '{print $2}')" = '1.99.0'
           pg_isready -h 127.0.0.1 -p 5432 -U postgres -d cex_native_admission
           psql --version
 
@@ -197,8 +197,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rustup toolchain install 1.98.1 --profile minimal
-          test "$(rustc --version | awk '{print $2}')" = '1.98.1'
+          rustup toolchain install 1.99.0 --profile minimal
+          test "$(rustc --version | awk '{print $2}')" = '1.99.0'
           cargo build --release --workspace --locked
 
       - name: Execute evidence contract and private-inode preconditions

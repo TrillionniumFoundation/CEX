@@ -34,12 +34,12 @@ cleanup() {
 trap cleanup EXIT
 mkdir "$WORK/build" "$WORK/output" "$WORK/cache" "$WORK/context"
 cat > "$WORK/context/Dockerfile" <<'DOCKER'
-FROM rust:1.98.1-bookworm
+FROM rust:1.99.0-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends python3 postgresql-client ca-certificates && rm -rf /var/lib/apt/lists/*
-# Keep the container compiler on the repository's exact 1.98.1 policy.
-RUN rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy \
-    && rustup default 1.98.1
-ENV RUST_VERSION=1.98.1
+# Keep the container compiler on the repository's exact 1.99.0 policy.
+RUN rustup toolchain install 1.99.0 --profile minimal --component rustfmt,clippy \
+    && rustup default 1.99.0
+ENV RUST_VERSION=1.99.0
 DOCKER
 # No repository code or credentials are included in the image build context.
 docker build --pull -t "$IMAGE" "$WORK/context" > "$OUT/image-build.log" 2>&1
@@ -87,7 +87,7 @@ set +e
     mkdir -p "$HOME"
     cd /source
     run() { name="$1"; shift; "$@" > "/output/$name.log" 2>&1; code=$?; printf "%s\n" "$code" > "/output/$name.exit"; }
-    run versions bash -euo pipefail -c '"'"'version="$(rustc --version)"; [[ "$version" == "rustc 1.98.1 "* ]]; cargo --version; rustfmt --version; psql --version'"'"'
+    run versions bash -euo pipefail -c '"'"'version="$(rustc --version)"; [[ "$version" == "rustc 1.99.0 "* ]]; cargo --version; rustfmt --version; psql --version'"'"'
     run source12 python3 scripts/test-matrix-review-repairs.py
     run source29 python3 scripts/test-matrix-recovery-contract.py
     run sql-runner21 python3 scripts/test-matrix-postgres-runner.py

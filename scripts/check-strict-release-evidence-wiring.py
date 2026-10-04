@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run the complete strict-wiring test suite on named or detached checkouts.
 
-The unchanged historical cases are retained as a byte-bound test module. Only the
-synthetic fixture metadata provider is adapted: detached HEAD has no live branch,
+The unchanged historical cases are retained as a byte-bound test module. The
+synthetic fixture metadata and current producer schema are adapted: detached HEAD has no live branch,
 so its in-memory fake-run context uses an explicit self-test namespace. Real
 commit/tree/lock/migration values, all validators and every negative case remain
 unchanged. This entry point neither creates a Git ref nor emits release evidence.
@@ -10,6 +10,8 @@ unchanged. This entry point neither creates a Git ref nor emits release evidence
 from __future__ import annotations
 
 import hashlib
+import copy
+import subprocess
 import json
 from pathlib import Path
 import re
@@ -59,6 +61,18 @@ def load_cases() -> ModuleType:
     # Dependency injection is confined to synthetic fixture construction.
     # No production collector, validator or subprocess behavior is replaced.
     module.checkout_metadata = checkout_metadata
+    historical_local_fixture = module.local_fixture
+
+    def local_fixture(name: str, contract: Any, source: dict[str, str]) -> dict[str, Any]:
+        payload = historical_local_fixture(name, contract, source)
+        if name == 'candidate-hygiene':
+            payload['bootstrap'] = {
+                'status': 'ok', 'self_test_problems': [], 'git_preflight_problems': [],
+                'trust_executed_before_core': True, 'core_executed': True,
+            }
+        return payload
+
+    module.local_fixture = local_fixture
     return module
 
 
@@ -88,10 +102,95 @@ class FixtureMetadataTests(unittest.TestCase):
                 fixture_metadata({'branch': value, 'commit_sha': 'a' * 40})
 
 
+class HostedRunnerGroupTests(unittest.TestCase):
+    def test_builtin_group_preserves_complete_execution_contract(self) -> None:
+        cases = load_cases()
+        contract = cases.load_contract_module()
+        execution = cases.load_execution_module()
+        manifest = cases.valid_manifest(contract)
+        context = cases.valid_context(contract, manifest)
+        source = manifest['source']
+        payload = cases.execution_fixture(contract, execution, context, source)
+        gate = payload['gates']['p0-migration-gate']
+        job = gate['jobs'][0]
+
+        def validate(changes: dict[str, Any]) -> None:
+            candidate = copy.deepcopy(payload)
+            changed_gate = candidate['gates']['p0-migration-gate']
+            changed_gate['jobs'][0].update(changes)
+            changed_job = changed_gate['jobs'][0]
+            changed_job['record_sha256'] = execution.canonical_digest(
+                {key: value for key, value in changed_job.items() if key != 'record_sha256'})
+            changed_gate['jobs_sha256'] = execution.canonical_digest(changed_gate['jobs'])
+            contract.validate_execution_payload(candidate, context, source)
+
+        validate({})
+        validate({'runner_group_id': 0, 'runner_group_name': 'GitHub Actions'})
+        validate({'runner_group_id': 123, 'runner_group_name': 'Governed fixture pool'})
+        invalid = [
+            {'runner_group_id': False, 'runner_group_name': 'GitHub Actions'},
+            {'runner_group_id': True, 'runner_group_name': 'GitHub Actions'},
+            {'runner_group_id': -1, 'runner_group_name': 'GitHub Actions'},
+            {'runner_group_id': '0', 'runner_group_name': 'GitHub Actions'},
+            {'runner_group_id': 0.0, 'runner_group_name': 'GitHub Actions'},
+            {'runner_group_id': 0, 'runner_group_name': None},
+            {'runner_group_id': 0, 'runner_group_name': 'Other pool'},
+            {'runner_group_id': None, 'runner_group_name': 'GitHub Actions'},
+            {'labels': [*job['labels'], 'self-hosted']},
+            {'labels': [*job['labels'], 'SELF-HOSTED']},
+            {'labels': [*job['labels'], 'Self-Hosted']},
+            {'runner_id': 0}, {'runner_name': ''}, {'labels': []},
+            {'status': 'queued'}, {'steps': []},
+        ]
+        for changes in invalid:
+            with self.subTest(changes=changes), self.assertRaises(contract.ContractError):
+                validate({'runner_group_id': 0, 'runner_group_name': 'GitHub Actions', **changes})
+
+
+class CurrentHygieneContractTests(unittest.TestCase):
+    def test_current_v3_producer_and_closed_bootstrap_contract(self) -> None:
+        cases = load_cases()
+        contract = cases.load_contract_module()
+        root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            [sys.executable, str(root / 'scripts/check-p0-release-candidate-hygiene.py')],
+            cwd=root, check=True, capture_output=True, text=True,
+        )
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload['schema'], 'cex.p0-release-candidate-hygiene.v3')
+        source = {key: payload[key] for key in ('commit_sha', 'tree_sha')}
+        contract.validate_local_payload('candidate-hygiene', payload, source, repository_root=root)
+        original = copy.deepcopy(payload)
+        invalid = [True, False, None, [], {},
+                   {**payload['bootstrap'], 'extra': 'forbidden'}]
+        for field in payload['bootstrap']:
+            invalid.append({key: value for key, value in payload['bootstrap'].items() if key != field})
+        for field in ('self_test_problems', 'git_preflight_problems'):
+            for value in (None, False, {}, '', ['failed']):
+                invalid.append({**payload['bootstrap'], field: value})
+        for field in ('trust_executed_before_core', 'core_executed'):
+            for value in (False, 1, 'true', None):
+                invalid.append({**payload['bootstrap'], field: value})
+        for value in ('failed', True, None):
+            invalid.append({**payload['bootstrap'], 'status': value})
+        for bootstrap in invalid:
+            with self.subTest(bootstrap=bootstrap), self.assertRaises(contract.ContractError):
+                contract.validate_local_payload('candidate-hygiene',
+                    {**payload, 'bootstrap': bootstrap}, source, repository_root=root)
+        missing = {key: value for key, value in payload.items() if key != 'bootstrap'}
+        for forged in (missing, {**payload, 'schema': 'cex.p0-release-candidate-hygiene.v2'}):
+            with self.assertRaises(contract.ContractError):
+                contract.validate_local_payload('candidate-hygiene', forged, source, repository_root=root)
+        self.assertEqual(payload, original)
+
+
 def main() -> int:
     try:
         result = unittest.TextTestRunner(stream=sys.stderr, verbosity=1).run(
-            unittest.defaultTestLoader.loadTestsFromTestCase(FixtureMetadataTests))
+            unittest.TestSuite([
+                unittest.defaultTestLoader.loadTestsFromTestCase(FixtureMetadataTests),
+                unittest.defaultTestLoader.loadTestsFromTestCase(CurrentHygieneContractTests),
+                unittest.defaultTestLoader.loadTestsFromTestCase(HostedRunnerGroupTests)]))
         if not result.wasSuccessful():
             raise ValueError('strict_wiring_fixture_tests_failed')
         return int(load_cases().main())

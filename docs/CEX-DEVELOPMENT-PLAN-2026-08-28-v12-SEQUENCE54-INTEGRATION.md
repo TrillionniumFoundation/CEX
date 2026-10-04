@@ -23,9 +23,9 @@ The integrated tree must retain all of the following:
 5. Matrix operator migration head `0006_adapter_result_embedded_delivery_binding.sql`, runtime-only v3 reconciliation, exact relay-origin delivery/payload binding, and fail-closed Consumer, Adapter, CLI and PostgreSQL task-to-invocation checks;
 6. exact Ledger/Gateway/Execution/Audit/TRNM money and receipt-recovery contracts;
 7. Paper Raid authenticated room/review envelopes, v2 Nakama controls, runtime/SBOM custody and real mobile accessibility assertions;
-8. Rust `1.98.1` and release commit `48a229ceaefd4985c50990b14116b6d856af0985` across active host and container selectors;
+8. Rust `1.99.0` and release commit `b940084d7eb6a299eb4bfeb8e34901bc051e7ac4` across active host and container selectors;
 9. no source-writing or automatic convergence workflow;
-10. no active `1.95.0`, `1.98.0`, `stable`, `latest`, `beta` or `nightly` Rust selector;
+10. no active `1.95.0`, `1.98.0`, `1.98.1`, `stable`, `latest`, `beta` or `nightly` Rust selector;
 11. no repository-external Cargo path dependency;
 12. the bounded RustSec policy, all-feature dependency closure, complete release-surface policy, independent CODEOWNERS ownership and pinned supply-chain workflows remain present and mutually consistent.
 

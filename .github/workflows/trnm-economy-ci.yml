@@ -90,7 +90,7 @@ env:
   CARGO_TERM_COLOR: never
   CARGO_INCREMENTAL: '0'
   RUST_TEST_THREADS: '1'
-  RUST_TOOLCHAIN: '1.98.1'
+  RUST_TOOLCHAIN: '1.99.0'
   CARGO_AUDIT_VERSION: '0.22.2'
   CARGO_DENY_VERSION: '0.20.2'
 
@@ -114,9 +114,9 @@ jobs:
           scripts/check-trnm-economy-resource-budgets.sh
 
       - name: Install exact Rust toolchain
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
         with:
-          toolchain: 1.98.1
+          toolchain: 1.99.0
           components: rustfmt, clippy
 
       - name: Verify Rust toolchain
