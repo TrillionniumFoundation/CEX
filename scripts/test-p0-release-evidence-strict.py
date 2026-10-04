@@ -500,5 +500,49 @@ class StrictCollectionRegression(unittest.TestCase):
         self.assertIs(fake_core.collect_gate_runs, original_marker)
 
 
+class HostedContextProjectionTests(unittest.TestCase):
+    def test_production_projection_matches_strict_contract(self) -> None:
+        core = load_wrapper().load_core_module()
+        spec = importlib.util.spec_from_file_location(
+            "cex_release_contract_projection_test", ROOT / "scripts/check-release-evidence-contract.py"
+        )
+        contract = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(contract)
+        identity = {
+            "repository": "TrillionniumFoundation/CEX", "branch": "fixture",
+            "head_branch": "fixture", "head_sha": "a" * 40,
+            "workflow_path": ".github/workflows/p0-migration-gate.yml", "event": "push",
+            "status": "completed", "conclusion": "success", "run_id": 123,
+            "run_attempt": 2, "created_at": "2026-10-04T00:00:00Z",
+            "updated_at": "2026-10-04T00:01:00Z",
+        }
+        record = {**identity, "schema": "cex.hosted-gate-evidence.v1",
+                  "name": "p0-migration-gate", "html_url": "https://github.com/example"}
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "gate.json"
+            core.write_json(path, record)
+            digest = core.sha256_file(path)
+            projected = core.hosted_gate_context_record(record, digest)
+            self.assertEqual(projected, {**identity, "sha256": digest})
+            self.assertEqual(set(projected), contract.CONTEXT_HOSTED_GATE_ALLOWED_FIELDS)
+            contract.reject_unknown(projected, contract.CONTEXT_HOSTED_GATE_ALLOWED_FIELDS, "$context")
+            contract.validate_hosted_gate_payload(
+                json.loads(path.read_text()), "p0-migration-gate",
+                {"hosted_gates": {"p0-migration-gate": projected}},
+                {"repository": identity["repository"], "branch": identity["branch"],
+                 "commit_sha": identity["head_sha"]},
+            )
+            self.assertEqual(json.loads(path.read_text()), record)
+            for field in ("schema", "name", "html_url", "path"):
+                with self.subTest(extra=field), self.assertRaises(contract.ContractError):
+                    contract.reject_unknown(
+                        {**projected, field: "unexpected"},
+                        contract.CONTEXT_HOSTED_GATE_ALLOWED_FIELDS, "$context",
+                    )
+            for field in identity:
+                with self.subTest(missing=field), self.assertRaises(KeyError):
+                    core.hosted_gate_context_record({k: v for k, v in record.items() if k != field}, digest)
+
+
 if __name__ == "__main__":
     unittest.main()
