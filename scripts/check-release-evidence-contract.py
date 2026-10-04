@@ -1860,6 +1860,17 @@ def validate_execution_payload(
                     runner_group_name is None,
                     f"{path}.gates.{gate_name}.{job_name} runner group fields are inconsistent",
                 )
+            elif type(runner_group_id) is int and runner_group_id == 0:
+                # GitHub-hosted job API records use group 0 for the built-in
+                # GitHub Actions pool. The actual runner_id above stays positive.
+                # These API-observed markers are not independent authority:
+                # exact-run collector, job/step/log and digest checks still apply.
+                require(
+                    runner_group_name == "GitHub Actions"
+                    and required_runner_label in {"ubuntu-latest", "windows-latest"}
+                    and "self-hosted" not in {label.casefold() for label in labels},
+                    f"{path}.gates.{gate_name}.{job_name} has an invalid built-in runner group",
+                )
             else:
                 positive_int(
                     runner_group_id,

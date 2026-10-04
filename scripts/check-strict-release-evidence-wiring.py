@@ -102,6 +102,51 @@ class FixtureMetadataTests(unittest.TestCase):
                 fixture_metadata({'branch': value, 'commit_sha': 'a' * 40})
 
 
+class HostedRunnerGroupTests(unittest.TestCase):
+    def test_builtin_group_preserves_complete_execution_contract(self) -> None:
+        cases = load_cases()
+        contract = cases.load_contract_module()
+        execution = cases.load_execution_module()
+        manifest = cases.valid_manifest(contract)
+        context = cases.valid_context(contract, manifest)
+        source = manifest['source']
+        payload = cases.execution_fixture(contract, execution, context, source)
+        gate = payload['gates']['p0-migration-gate']
+        job = gate['jobs'][0]
+
+        def validate(changes: dict[str, Any]) -> None:
+            candidate = copy.deepcopy(payload)
+            changed_gate = candidate['gates']['p0-migration-gate']
+            changed_gate['jobs'][0].update(changes)
+            changed_job = changed_gate['jobs'][0]
+            changed_job['record_sha256'] = execution.canonical_digest(
+                {key: value for key, value in changed_job.items() if key != 'record_sha256'})
+            changed_gate['jobs_sha256'] = execution.canonical_digest(changed_gate['jobs'])
+            contract.validate_execution_payload(candidate, context, source)
+
+        validate({})
+        validate({'runner_group_id': 0, 'runner_group_name': 'GitHub Actions'})
+        validate({'runner_group_id': 123, 'runner_group_name': 'Governed fixture pool'})
+        invalid = [
+            {'runner_group_id': False, 'runner_group_name': 'GitHub Actions'},
+            {'runner_group_id': True, 'runner_group_name': 'GitHub Actions'},
+            {'runner_group_id': -1, 'runner_group_name': 'GitHub Actions'},
+            {'runner_group_id': '0', 'runner_group_name': 'GitHub Actions'},
+            {'runner_group_id': 0.0, 'runner_group_name': 'GitHub Actions'},
+            {'runner_group_id': 0, 'runner_group_name': None},
+            {'runner_group_id': 0, 'runner_group_name': 'Other pool'},
+            {'runner_group_id': None, 'runner_group_name': 'GitHub Actions'},
+            {'labels': [*job['labels'], 'self-hosted']},
+            {'labels': [*job['labels'], 'SELF-HOSTED']},
+            {'labels': [*job['labels'], 'Self-Hosted']},
+            {'runner_id': 0}, {'runner_name': ''}, {'labels': []},
+            {'status': 'queued'}, {'steps': []},
+        ]
+        for changes in invalid:
+            with self.subTest(changes=changes), self.assertRaises(contract.ContractError):
+                validate({'runner_group_id': 0, 'runner_group_name': 'GitHub Actions', **changes})
+
+
 class CurrentHygieneContractTests(unittest.TestCase):
     def test_current_v3_producer_and_closed_bootstrap_contract(self) -> None:
         cases = load_cases()
@@ -144,7 +189,8 @@ def main() -> int:
         result = unittest.TextTestRunner(stream=sys.stderr, verbosity=1).run(
             unittest.TestSuite([
                 unittest.defaultTestLoader.loadTestsFromTestCase(FixtureMetadataTests),
-                unittest.defaultTestLoader.loadTestsFromTestCase(CurrentHygieneContractTests)]))
+                unittest.defaultTestLoader.loadTestsFromTestCase(CurrentHygieneContractTests),
+                unittest.defaultTestLoader.loadTestsFromTestCase(HostedRunnerGroupTests)]))
         if not result.wasSuccessful():
             raise ValueError('strict_wiring_fixture_tests_failed')
         return int(load_cases().main())
