@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
+      - 'Cargo.lock'
       - 'docs/release-evidence/p0-candidate-trigger.json'
       - '.github/workflows/p0-release-candidate-gate.yml'
 

@@ -25,6 +25,7 @@ on:
       - 'docs/security/**'
       - 'PROJECT_BOUNDARY.json'
       - 'Cargo.toml'
+      - '**/Cargo.lock'
   push:
     branches:
       - main
@@ -51,6 +52,7 @@ on:
       - 'docs/security/**'
       - 'PROJECT_BOUNDARY.json'
       - 'Cargo.toml'
+      - '**/Cargo.lock'
 
 permissions:
   contents: read
@@ -232,8 +234,21 @@ jobs:
       - name: Reject mixed or unregistered active toolchain carriers
         run: python3 scripts/check-rust-toolchain-convergence.py | tee run/rust-toolchain-convergence/check.json
 
-      - name: Verify locked workspace resolves
-        run: cargo metadata --locked --format-version 1 > run/rust-toolchain-convergence/cargo-metadata.json
+      - name: Test immutable graph and projection guards
+        run: |
+          python3 scripts/test-external-toolchain-evidence.py
+          python3 scripts/test-locked-build-graphs.py
+
+      - name: Verify all three immutable locked build graphs
+        env:
+          RUSTUP_TOOLCHAIN: '1.99.0'
+          EXPECTED_SOURCE_TREE: ${{ steps.identity.outputs.source_tree }}
+        run: |
+          python3 scripts/check-locked-build-graphs.py \
+            --source-sha "$SOURCE_SHA" \
+            --source-tree "$EXPECTED_SOURCE_TREE" \
+            --output run/rust-toolchain-convergence/build-graphs
+          cp run/rust-toolchain-convergence/build-graphs/root-default.json run/rust-toolchain-convergence/cargo-metadata.json
 
       - name: Reverify immutable source after qualification
         shell: bash
