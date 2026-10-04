@@ -98,7 +98,7 @@
       },
       "risk_treatment": {
         "exposure": "compile-time proc-macro execution while building hepta-research-league or trnm-finality-verifier; no separately shipped paste runtime component",
-        "mitigation": "immutable Cargo.lock, Rust 1.98.1, exact reverse-path markers for both reachable workspace packages, all-workspace normal+build closure, no git/external/disconnected packages, and independently owned policy files",
+        "mitigation": "immutable Cargo.lock, Rust 1.99.0, exact reverse-path markers for both reachable workspace packages, all-workspace normal+build closure, no git/external/disconnected packages, and independently owned policy files",
         "rollback": "remove both affected packages from release eligibility and rebuild from the last approved lockfile if the path, version or package reachability changes",
         "target_removal_date": "2026-10-08",
         "upstream_replacement_plan": "migrate the pinned Tendermint/flex-error stack to a maintained macro implementation or remove the dependency"
@@ -130,7 +130,7 @@
     "repository": "TrillionniumFoundation/CEX",
     "state_required": "open"
   },
-  "rust_toolchain": "1.98.1",
+  "rust_toolchain": "1.99.0",
   "schema": "cex.rust-advisory-exceptions.v3",
   "status": "active_bounded_exceptions"
 }

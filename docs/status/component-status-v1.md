@@ -78,7 +78,7 @@ Sequence 54 source contains:
 - a one-delivery v3 reconciliation command with closed PostgreSQL transport that
   never replays the business request or sends a Matrix event;
 - bounded vendor provenance and the test-only finality-verifier patch ledger;
-- Rust 1.98.1, advisory policy and exact candidate evidence machinery.
+- Rust 1.99.0, advisory policy and exact candidate evidence machinery.
 
 Repository source presence is not repository qualification. The current candidate
 remains pending until required workflows execute non-empty and succeed on one

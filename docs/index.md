@@ -34,6 +34,8 @@ Source presence, prose, a template, a local command, a queued job, a zero-step r
 
 The Sequence 54 layer does not rewrite history. It preserves the later Sequence 52/53 functional tree—23 Cargo members, migration head `0088_enforce_provider_terminal_evidence_binding.sql`, Matrix durability, provider terminal-evidence binding and Paper Raid product controls—while incorporating the later Rust 1.98.1, container, Ruleset and runner-diagnostics security controls.
 
+The active compiler is now Rust 1.99.0; see `docs/rust-toolchain-upgrade-1.99.0.md`. The donor identities above remain historical facts. Current qualification must execute the upgraded compiler on the unchanged candidate.
+
 ## External-Agent architecture boundary
 
 - Accepted decision: `decisions/adr-004-three-module-external-agent-battle-platform.md`

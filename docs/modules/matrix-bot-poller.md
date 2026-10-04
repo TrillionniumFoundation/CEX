@@ -153,7 +153,7 @@ No source document or local result grants repository or production authorization
 
 ## Compiler and committed lock repair
 
-`rust-toolchain.toml` selects Rust 1.98.1. The Matrix direct-dependency lock
+`rust-toolchain.toml` selects Rust 1.99.0. The Matrix direct-dependency lock
 preflight checks the two workspace package entries against their manifests; it
 does not resolve the complete dependency graph or prove compilation. Preserve
 `--locked` and execute the full package gates after applying the reviewed lock

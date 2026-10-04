@@ -213,15 +213,15 @@ for dockerfile in "$bff_dockerfile" "$accessctl_dockerfile"; do
     exit 1
   }
   for marker in \
-    'RUSTUP_TOOLCHAIN=1.98.1' \
-    'rustup toolchain install 1.98.1' \
-    'commit-hash: 48a229ceaefd4985c50990b14116b6d856af0985' \
+    'RUSTUP_TOOLCHAIN=1.99.0' \
+    'rustup toolchain install 1.99.0' \
+    'commit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4' \
     'cargo fetch --locked' \
     'cargo build --locked --offline --release' \
     'runtime-binary-export' \
     'sha256sum --check --status' \
-    'org.trillionnium.rust-toolchain="1.98.1"' \
-    'org.trillionnium.rust-release-commit="48a229ceaefd4985c50990b14116b6d856af0985"'; do
+    'org.trillionnium.rust-toolchain="1.99.0"' \
+    'org.trillionnium.rust-release-commit="b940084d7eb6a299eb4bfeb8e34901bc051e7ac4"'; do
     require_marker "$dockerfile" "$marker"
   done
 done

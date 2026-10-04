@@ -127,7 +127,7 @@ def validate_tools_and_deny(policy: dict[str, Any]) -> tuple[dict[str, str], lis
         "cargo-audit ignore drift",
     )
     require(
-        "cargo-audit@0.22.2,cargo-deny@0.20.2" in workflow and "toolchain: 1.98.1" in workflow,
+        "cargo-audit@0.22.2,cargo-deny@0.20.2" in workflow and "toolchain: 1.99.0" in workflow,
         "tool pins drift",
     )
     require(run("cargo-audit", "--version").split()[1] == policy.get("cargo_audit_version"), "cargo-audit version drift")

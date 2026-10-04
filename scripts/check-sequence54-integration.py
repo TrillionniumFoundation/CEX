@@ -244,8 +244,8 @@ def validate_candidate_authority() -> None:
 def validate_toolchain_and_governance() -> None:
     toolchain = load_json("docs/security/rust-toolchain-surfaces-v1.json")
     expected_toolchain = {
-        "expected_rust_toolchain": "1.98.1",
-        "expected_rust_release_commit": "48a229ceaefd4985c50990b14116b6d856af0985",
+        "expected_rust_toolchain": "1.99.0",
+        "expected_rust_release_commit": "b940084d7eb6a299eb4bfeb8e34901bc051e7ac4",
         "source_inventory": "git_tree_derived",
         "source_inventory_detail": "recursive_git_tree_and_blob_content",
         "production_authorization": "not_granted",
@@ -403,7 +403,7 @@ def main() -> int:
         "status": "failed" if PROBLEMS else "ok",
         "workspace_members": len(EXPECTED_MEMBERS),
         "migration_head": EXPECTED_MIGRATION_HEAD,
-        "rust_toolchain": "1.98.1",
+        "rust_toolchain": "1.99.0",
         "required_status_contexts": len(EXPECTED_CONTEXTS),
         "checker_may_grant_production_authorization": False,
         "production_authorization": "not_granted",

@@ -20,8 +20,8 @@ env:
   CARGO_INCREMENTAL: '0'
   RUST_BACKTRACE: '1'
   RUST_TEST_THREADS: '1'
-  RUST_TOOLCHAIN: '1.98.1'
-  RUST_RELEASE_COMMIT: 48a229ceaefd4985c50990b14116b6d856af0985
+  RUST_TOOLCHAIN: '1.99.0'
+  RUST_RELEASE_COMMIT: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4
   CARGO_AUDIT_VERSION: '0.22.2'
   CARGO_DENY_VERSION: '0.20.2'
   SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -72,10 +72,10 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Install immutable Rust 1.98.1 toolchain
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+      - name: Install immutable Rust 1.99.0 toolchain
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067
         with:
-          toolchain: 1.98.1
+          toolchain: 1.99.0
           components: rustfmt, clippy
 
       - name: Install retained boundary scanner

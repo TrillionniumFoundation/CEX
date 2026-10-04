@@ -203,8 +203,8 @@ require(
 require(
     ".github/workflows/p0-gateway-exact-reserve-gate.yml",
     "actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-    "dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c",
-    "toolchain: 1.98.1",
+    "dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067",
+    "toolchain: 1.99.0",
     "Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
     "scripts/check-gateway-exact-reserve.py",
     "scripts/check-ledger-caller-cutover.py",

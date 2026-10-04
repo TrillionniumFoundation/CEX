@@ -3,21 +3,21 @@ FROM docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd5
 
 WORKDIR /src
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=false \
-    RUSTUP_TOOLCHAIN=1.98.1
+    RUSTUP_TOOLCHAIN=1.99.0
 
 # Bootstrap the patched compiler from the immutable builder base. The exact
 # active toolchain, rustc release commit and executed Cargo identity are
 # recorded; Cargo's own semantic version is not assumed to equal rustc's point
 # release number.
 RUN rustup set profile minimal \
-    && rustup toolchain install 1.98.1 --component rustfmt --component clippy \
-    && rustup default 1.98.1 \
+    && rustup toolchain install 1.99.0 --component rustfmt --component clippy \
+    && rustup default 1.99.0 \
     && rustup show active-toolchain | tee /rustup-active-toolchain.txt \
     && rustc --version --verbose | tee /rustc-version.txt \
     && cargo --version --verbose | tee /cargo-version.txt \
-    && test "$(rustc --version | awk '{print $2}')" = "1.98.1" \
-    && grep -Eq '^1\.98\.1-' /rustup-active-toolchain.txt \
-    && grep -Fx 'commit-hash: 48a229ceaefd4985c50990b14116b6d856af0985' /rustc-version.txt
+    && test "$(rustc --version | awk '{print $2}')" = "1.99.0" \
+    && grep -Eq '^1\.99\.0-' /rustup-active-toolchain.txt \
+    && grep -Fx 'commit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4' /rustc-version.txt
 
 # The compile DAG is deliberately closed. In particular, the tracked SBOM and
 # all release labels/hashes are absent until after the Rust binary exists.
@@ -65,18 +65,18 @@ COPY docs/openapi/hepta-paper-raid-v2.yaml docs/openapi/hepta-paper-raid-v2.yaml
 
 RUN test "$(sed -n '1p' /toolchain/rust-toolchain.manifest)" = \
       "bootstrap_builder=docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb" \
-    && test "$(sed -n '2p' /toolchain/rust-toolchain.manifest)" = "rust_toolchain=1.98.1" \
+    && test "$(sed -n '2p' /toolchain/rust-toolchain.manifest)" = "rust_toolchain=1.99.0" \
     && test "$(sed -n '3p' /toolchain/rust-toolchain.manifest)" = \
-      "rust_release_commit=48a229ceaefd4985c50990b14116b6d856af0985" \
+      "rust_release_commit=b940084d7eb6a299eb4bfeb8e34901bc051e7ac4" \
     && test "$(sed -n '4p' /toolchain/rust-toolchain.manifest)" = \
       "cargo_identity=recorded_from_executed_toolchain" \
     && test "$(wc -l < /toolchain/rust-toolchain.manifest)" -eq 4 \
     && rustup show active-toolchain | tee /toolchain/executed-rustup-active-toolchain.txt \
     && rustc --version --verbose | tee /toolchain/executed-rustc-version.txt \
     && cargo --version --verbose | tee /toolchain/executed-cargo-version.txt \
-    && test "$(rustc --version | awk '{print $2}')" = "1.98.1" \
-    && grep -Eq '^1\.98\.1-' /toolchain/executed-rustup-active-toolchain.txt \
-    && grep -Fx 'commit-hash: 48a229ceaefd4985c50990b14116b6d856af0985' /toolchain/executed-rustc-version.txt
+    && test "$(rustc --version | awk '{print $2}')" = "1.99.0" \
+    && grep -Eq '^1\.99\.0-' /toolchain/executed-rustup-active-toolchain.txt \
+    && grep -Fx 'commit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4' /toolchain/executed-rustc-version.txt
 
 FROM workspace AS lockfile-verifier
 COPY services/hepta-research-league/docker/Cargo.lock Cargo.lock
@@ -156,8 +156,8 @@ LABEL org.opencontainers.image.title="Hepta Research League" \
       org.trillionnium.cargo-lock.sha256="$CARGO_LOCK_SHA256" \
       org.trillionnium.dockerfile.sha256="$DOCKERFILE_SHA256" \
       org.trillionnium.rust-toolchain.sha256="$RUST_TOOLCHAIN_SHA256" \
-      org.trillionnium.rust-toolchain.version="1.98.1" \
-      org.trillionnium.rust-toolchain.release-commit="48a229ceaefd4985c50990b14116b6d856af0985" \
+      org.trillionnium.rust-toolchain.version="1.99.0" \
+      org.trillionnium.rust-toolchain.release-commit="b940084d7eb6a299eb4bfeb8e34901bc051e7ac4" \
       io.trillionnium.hepta.source-tree="$SOURCE_TREE" \
       io.trillionnium.hepta.source-date-epoch="$SOURCE_DATE_EPOCH" \
       io.trillionnium.hepta.application-sbom.path="/usr/share/doc/hepta-research-league/sbom.cdx.json" \
@@ -165,7 +165,7 @@ LABEL org.opencontainers.image.title="Hepta Research League" \
       io.trillionnium.hepta.runtime-binary.sha256="$RUNTIME_BINARY_SHA256" \
       io.trillionnium.hepta.runtime-base="gcr.io/distroless/cc-debian12@sha256:471dbca9cad607b9a32c10e9c31fb09ffaeb2d460e0afbff86c27abbc80b1b98" \
       io.trillionnium.hepta.builder-bootstrap="docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb" \
-      io.trillionnium.hepta.builder-rust="1.98.1"
+      io.trillionnium.hepta.builder-rust="1.99.0"
 
 COPY --from=release /release/ /
 

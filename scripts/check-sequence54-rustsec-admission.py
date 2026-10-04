@@ -38,7 +38,7 @@ PROTECTED_PATHS = (
 )
 WORKFLOW_MARKERS = (
     "cargo-audit@0.22.2,cargo-deny@0.20.2",
-    "toolchain: 1.98.1",
+    "toolchain: 1.99.0",
     "python3 scripts/check-sequence54-rustsec-admission.py",
     "python3 scripts/check-rust-advisory-exceptions.py",
     "--ignore RUSTSEC-2023-0071",
@@ -92,7 +92,7 @@ def validate_policy() -> None:
     require(policy.get("schema") == "cex.rust-advisory-exceptions.v3", "RustSec policy schema drift")
     require(policy.get("status") == "active_bounded_exceptions", "RustSec policy is not active")
     require(policy.get("production_authorization") == "not_granted", "RustSec policy grants production")
-    require(policy.get("rust_toolchain") == "1.98.1", "RustSec policy toolchain drift")
+    require(policy.get("rust_toolchain") == "1.99.0", "RustSec policy toolchain drift")
     require(policy.get("cargo_audit_version") == "0.22.2", "cargo-audit policy pin drift")
     require(policy.get("cargo_deny_version") == "0.20.2", "cargo-deny policy pin drift")
     require(policy.get("created_on") == "2026-09-08", "RustSec policy renewal date drift")

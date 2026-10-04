@@ -80,13 +80,13 @@ DB="cex-trusted-matrix-pg-$SUFFIX"
 IMAGE="cex-trusted-matrix:$SUFFIX"
 
 cat > "$WORK/context/Dockerfile" <<'DOCKER'
-FROM rust:1.98.1-bookworm
+FROM rust:1.99.0-bookworm
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 postgresql-client ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
-RUN rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy \
-    && rustup default 1.98.1
-ENV RUST_VERSION=1.98.1 \
+RUN rustup toolchain install 1.99.0 --profile minimal --component rustfmt,clippy \
+    && rustup default 1.99.0
+ENV RUST_VERSION=1.99.0 \
     CARGO_TERM_COLOR=never \
     CARGO_INCREMENTAL=0 \
     CARGO_NET_GIT_FETCH_WITH_CLI=false \
@@ -178,7 +178,7 @@ set +e
       printf "%s\n" "$code" > "/output/$name.exit"
       return 0
     }
-    run versions bash -euo pipefail -c '\''v="$(rustc --version)"; [[ "$v" == "rustc 1.98.1 "* ]]; cargo --version; rustfmt --version; clippy-driver --version; psql --version'\''
+    run versions bash -euo pipefail -c '\''v="$(rustc --version)"; [[ "$v" == "rustc 1.99.0 "* ]]; cargo --version; rustfmt --version; clippy-driver --version; psql --version'\''
     run cargo_metadata cargo metadata --locked --no-deps --format-version 1
     run source_contracts python3 scripts/test-matrix-review-repairs.py
     run matrix_recovery python3 scripts/test-matrix-recovery-contract.py

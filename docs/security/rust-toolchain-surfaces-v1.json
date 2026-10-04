@@ -1,8 +1,8 @@
 {
   "schema": "cex.rust-toolchain-surfaces.v1",
   "status": "active_fail_closed",
-  "expected_rust_toolchain": "1.98.1",
-  "expected_rust_release_commit": "48a229ceaefd4985c50990b14116b6d856af0985",
+  "expected_rust_toolchain": "1.99.0",
+  "expected_rust_release_commit": "b940084d7eb6a299eb4bfeb8e34901bc051e7ac4",
   "production_authorization": "not_granted",
   "source_inventory": "git_tree_derived",
   "source_inventory_detail": "recursive_git_tree_and_blob_content",
@@ -78,7 +78,8 @@
   ],
   "forbidden_active_versions": [
     "1.95.0",
-    "1.98.0"
+    "1.98.0",
+    "1.98.1"
   ],
   "floating_channels_forbidden": [
     "beta",

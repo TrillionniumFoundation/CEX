@@ -71,27 +71,27 @@ class LockEdgesTests(unittest.TestCase):
 class CompilerSelectionTests(unittest.TestCase):
     def test_root_toolchain_is_the_corrected_release(self):
         toolchain = tomllib.loads((ROOT / 'rust-toolchain.toml').read_text())['toolchain']
-        self.assertEqual(toolchain['channel'], '1.98.1')
+        self.assertEqual(toolchain['channel'], '1.99.0')
         self.assertEqual(set(toolchain['components']), {'rustfmt', 'clippy'})
 
     def test_known_workflows_select_corrected_rust(self):
         for filename, expected in [('matrix-review-repair-regression.yml', 4), ('rust-service-gate.yml', 3)]:
             workflow = (ROOT / '.github/workflows' / filename).read_text()
-            self.assertEqual(workflow.count('toolchain: 1.98.1'), expected)
+            self.assertEqual(workflow.count('toolchain: 1.99.0'), expected)
         trnm = (ROOT / '.github/workflows/trnm-economy-settlement.yml').read_text()
-        self.assertIn('rustup toolchain install 1.98.1', trnm)
-        self.assertIn('rustup default 1.98.1', trnm)
-        self.assertIn("TRNM_RUST_TOOLCHAIN: '1.98.1'", trnm)
+        self.assertIn('rustup toolchain install 1.99.0', trnm)
+        self.assertIn('rustup default 1.99.0', trnm)
+        self.assertIn("TRNM_RUST_TOOLCHAIN: '1.99.0'", trnm)
         self.assertNotIn('1.98.0', trnm)
 
     def test_container_bootstrap_must_install_and_select_fixed_compiler(self):
         script = (ROOT / 'scripts/run-isolated-matrix-tests.sh').read_text()
-        self.assertIn('FROM rust:1.98.1-bookworm', script)
+        self.assertIn('FROM rust:1.99.0-bookworm', script)
         self.assertNotIn('FROM rust:1.98.0-bookworm', script)
-        self.assertIn('rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy', script)
-        self.assertIn('rustup default 1.98.1', script)
+        self.assertIn('rustup toolchain install 1.99.0 --profile minimal --component rustfmt,clippy', script)
+        self.assertIn('rustup default 1.99.0', script)
         self.assertNotIn('rustup toolchain uninstall 1.98.0', script)
-        self.assertIn('ENV RUST_VERSION=1.98.1', script)
+        self.assertIn('ENV RUST_VERSION=1.99.0', script)
 
     def run_versions(self, rust_output: str, rust_exit: int):
         script = (ROOT / 'scripts/run-isolated-matrix-tests.sh').read_text()
@@ -113,14 +113,23 @@ class CompilerSelectionTests(unittest.TestCase):
     def test_original_compiler_is_rejected_even_when_other_tools_pass(self):
         self.assertNotEqual(self.run_versions('rustc 1.98.0 (fixture)', 0).returncode, 0)
 
+    def test_previous_compiler_is_rejected_even_when_other_tools_pass(self):
+        self.assertNotEqual(self.run_versions('rustc 1.98.1 (fixture)', 0).returncode, 0)
+
+    def test_toolchain_actions_honor_the_explicit_version(self):
+        for path in (ROOT / '.github/workflows').glob('*.yml'):
+            for line in path.read_text().splitlines():
+                if 'uses: dtolnay/rust-toolchain@' in line:
+                    self.assertIn('dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067', line, str(path))
+
     def test_missing_compiler_cannot_be_masked_by_successful_psql(self):
         self.assertNotEqual(self.run_versions('', 127).returncode, 0)
 
     def test_compiler_nonzero_cannot_be_hidden_by_a_valid_version_string(self):
-        self.assertNotEqual(self.run_versions('rustc 1.98.1 (fixture)', 1).returncode, 0)
+        self.assertNotEqual(self.run_versions('rustc 1.99.0 (fixture)', 1).returncode, 0)
 
     def test_correct_version_fixture_runs_the_version_probe(self):
-        self.assertEqual(self.run_versions('rustc 1.98.1 (fixture)', 0).returncode, 0)
+        self.assertEqual(self.run_versions('rustc 1.99.0 (fixture)', 0).returncode, 0)
 
 
 class AuthoritativeWorkflowTests(unittest.TestCase):
@@ -216,7 +225,7 @@ class AuthoritativeWorkflowTests(unittest.TestCase):
                         'bash scripts/check-execution-settlement-commands-postgres.sh',
                         'bash scripts/check-provider-reconciliation-postgres.sh'):
             self.assertIn(command, self.execution)
-        self.assertIn('toolchain: 1.98.1', self.execution)
+        self.assertIn('toolchain: 1.99.0', self.execution)
         self.assertIn('components: rustfmt, clippy', self.execution)
         self.assertNotIn('continue-on-error:', self.execution)
         self.assertNotIn('contents: write', self.execution)

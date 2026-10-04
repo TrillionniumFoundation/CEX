@@ -51,7 +51,7 @@ env:
   CARGO_INCREMENTAL: '0'
   RUST_BACKTRACE: '1'
   RUST_TEST_THREADS: '1'
-  EXPECTED_RUST_RELEASE_COMMIT: '48a229ceaefd4985c50990b14116b6d856af0985'
+  EXPECTED_RUST_RELEASE_COMMIT: 'b940084d7eb6a299eb4bfeb8e34901bc051e7ac4'
   EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
@@ -127,8 +127,8 @@ jobs:
           git rev-parse 'HEAD^{tree}'
       - name: Install pinned Rust toolchain
         run: |
-          rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy
-          rustup default 1.98.1
+          rustup toolchain install 1.99.0 --profile minimal --component rustfmt,clippy
+          rustup default 1.99.0
           rustc --version --verbose | tee "$RUNNER_TEMP/trnm-rustc-version.txt"
           grep -Fx "commit-hash: $EXPECTED_RUST_RELEASE_COMMIT" "$RUNNER_TEMP/trnm-rustc-version.txt"
           cargo --version --verbose
@@ -186,7 +186,7 @@ jobs:
           TRNM_CLIPPY_OUTCOME: ${{ steps.clippy.outcome }}
           TRNM_BUILD_OUTCOME: ${{ steps.build.outcome }}
           TRNM_SOURCE_UNCHANGED_OUTCOME: ${{ steps.source_unchanged.outcome }}
-          TRNM_RUST_TOOLCHAIN: '1.98.1'
+          TRNM_RUST_TOOLCHAIN: '1.99.0'
           TRNM_POSTGRES_IMAGE: 'postgres:16.4-alpine'
         run: |
           set -euo pipefail
