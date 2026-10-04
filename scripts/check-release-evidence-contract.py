@@ -268,7 +268,7 @@ HOSTED_GATE_EXECUTION_SCHEMA = "cex.hosted-gate-execution.v1"
 HOSTED_GATE_SELECTION_SCHEMA = "cex.hosted-gate-selection-binding.v1"
 HOSTED_GATE_SELECTION_POLICY = "latest_authoritative_run_is_binding"
 LOCAL_SCHEMAS = {
-    "candidate-hygiene": "cex.p0-release-candidate-hygiene.v2",
+    "candidate-hygiene": "cex.p0-release-candidate-hygiene.v3",
     "repository-integrity": "cex.repository-integrity.v1",
     "hepta-postgres-integration": "cex.hepta-postgres-integration-evidence.v1",
     "migration-and-lifecycle-matrix": "cex.p0-database-lifecycle.v1",
@@ -303,7 +303,7 @@ LOCAL_REQUIRED_FIELDS = {
         "schema", "status", "ok", "problems", "commit_sha", "tree_sha",
         "plan", "addendum", "authoritative_workflows", "release_workflow",
         "workflow_pin_scope", "shared_trigger", "documentation_contract",
-        "migration_head", "workflow_trust", "candidate_trigger_authority",
+        "migration_head", "workflow_trust", "candidate_trigger_authority", "bootstrap",
     },
     "repository-integrity": {
         "schema", "status", "ok", "commit_sha", "tree_sha", "repository_commit_sha",
@@ -336,7 +336,7 @@ LOCAL_ALLOWED_FIELDS = {
         "schema", "status", "ok", "problems", "commit_sha", "tree_sha",
         "plan", "addendum", "authoritative_workflows", "release_workflow",
         "workflow_pin_scope", "shared_trigger", "documentation_contract",
-        "migration_head", "workflow_trust", "candidate_trigger_authority",
+        "migration_head", "workflow_trust", "candidate_trigger_authority", "bootstrap",
     },
     "repository-integrity": {
         "schema", "status", "ok", "commit_sha", "tree_sha",
@@ -1161,6 +1161,19 @@ def validate_local_payload(
     require(payload.get("tree_sha") == source["tree_sha"], f"{path}.tree_sha differs from manifest")
     if name in {"candidate-hygiene", "repository-integrity"}:
         if name == "candidate-hygiene":
+            bootstrap = object_at(payload.get("bootstrap"), f"{path}.bootstrap")
+            bootstrap_fields = {
+                "status", "self_test_problems", "git_preflight_problems",
+                "trust_executed_before_core", "core_executed",
+            }
+            reject_unknown(bootstrap, bootstrap_fields, f"{path}.bootstrap")
+            require_fields(bootstrap, bootstrap_fields, f"{path}.bootstrap")
+            require(bootstrap["status"] == "ok", f"{path}.bootstrap.status must be ok")
+            for field in ("self_test_problems", "git_preflight_problems"):
+                require(isinstance(bootstrap[field], list) and bootstrap[field] == [],
+                        f"{path}.bootstrap.{field} must be an empty array")
+            for field in ("trust_executed_before_core", "core_executed"):
+                require(bootstrap[field] is True, f"{path}.bootstrap.{field} must be true")
             require(isinstance(payload.get("problems"), list), f"{path}.problems must be an array")
             require(payload["problems"] == [], f"{path}.problems must be empty for a passing candidate")
 
